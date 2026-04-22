@@ -10,9 +10,6 @@ import type { IFeedClassifier } from "./interfaces/IFeedClassifier.js";
 import type { IFeedPublisher } from "./interfaces/IFeedPublisher.js";
 import type { RSSProviderConfig } from "./types/index.js";
 
-import { DirectRSSProvider } from "./providers/DirectRSSProvider.js";
-import { RSSHubProvider } from "./providers/RSSHubProvider.js";
-import { CPProxyProvider } from "./providers/CPProxyProvider.js";
 import { CustomProvider } from "./providers/CustomProvider.js";
 import { ISClassifier } from "./classifiers/ISClassifier.js";
 import { KeywordClassifier } from "./classifiers/KeywordClassifier.js";
@@ -41,14 +38,6 @@ export interface FactoryOptions {
  *
  * Central factory for creating feed service components with proper configuration.
  * Handles type-safe instantiation of providers, classifiers, and publishers.
- *
- * @example
- * ```typescript
- * // Create a provider
- * const provider = FeedServiceFactory.createProvider({
- *   type: "rsshub",
- *   url: "https://rsshub.app"
- * });
  *
  * // Create a classifier
  * const classifier = FeedServiceFactory.createClassifier("keyword");
@@ -85,27 +74,6 @@ export class FeedServiceFactory {
    */
   static createProvider(config: RSSProviderConfig): IFeedProvider {
     switch (config.type) {
-      case "direct":
-        return new DirectRSSProvider(this.options.userAgent);
-
-      case "rsshub":
-        return new RSSHubProvider({
-          url: config.url,
-          apiKey: config.apiKey,
-          timeoutMs: config.timeoutMs,
-          retryAttempts: config.retryAttempts,
-          headers: config.headers,
-        });
-
-      case "cpproxy":
-        return new CPProxyProvider({
-          url: config.url,
-          apiKey: config.apiKey,
-          timeoutMs: config.timeoutMs,
-          retryAttempts: config.retryAttempts,
-          headers: config.headers,
-        });
-
       case "custom":
         return new CustomProvider(
           config as import("./config/RSSProviderConfig.js").CustomProviderConfig
@@ -220,7 +188,7 @@ export class FeedServiceFactory {
    * Get available provider types
    */
   static getAvailableProviders(): string[] {
-    return ["direct", "rsshub", "cpproxy", "custom"];
+    return ["custom"];
   }
 
   /**

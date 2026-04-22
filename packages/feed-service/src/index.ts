@@ -67,9 +67,6 @@ export type {
 // Providers
 // ============================================================================
 
-export { DirectRSSProvider } from "./providers/DirectRSSProvider.js";
-export { RSSHubProvider } from "./providers/RSSHubProvider.js";
-export { CPProxyProvider } from "./providers/CPProxyProvider.js";
 export {
   CustomProvider,
   type CustomFetchFunction,
@@ -167,16 +164,8 @@ export {
 } from "./config/FeedConfig.js";
 
 export {
-  type RSSHubProviderConfig,
-  type CPProxyProviderConfig,
   type CustomProviderConfig,
   type ProviderConfigMap,
-  DirectRSSProviderDefaults,
-  DirectRSSProviderCapabilities,
-  RSSHubProviderDefaults,
-  RSSHubProviderCapabilities,
-  CPProxyProviderDefaults,
-  CPProxyProviderCapabilities,
   CustomProviderDefaults,
   CustomProviderCapabilities,
   getProviderDefaults,

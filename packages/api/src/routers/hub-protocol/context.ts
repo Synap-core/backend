@@ -128,7 +128,10 @@ export const contextRouter = router({
           id: threadResult.channel.id,
           userId: threadResult.channel.userId,
           projectId: undefined,
-          agentId: threadResult.channel.agentId || undefined,
+          agentId:
+            (threadResult.channel.assignedAgentId ??
+              threadResult.channel.senderAgentId) ||
+            undefined,
         },
         contextSummary: thread?.contextSummary ?? null,
         metadata: thread?.metadata ?? null,

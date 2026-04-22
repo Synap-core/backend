@@ -4,7 +4,7 @@ RSS/Atom feed ingestion service for Synap. Provides a modular pipeline for fetch
 
 ## Features
 
-- **Multiple Providers**: Direct HTTP, RSSHub, Control Plane proxy, and custom fetchers
+- **Multiple Providers**: Direct HTTP and custom fetchers
 - **AI & Local Classification**: Intelligence Service integration or fast keyword-based classification
 - **Channel Publishing**: Posts feed items as messages to Synap channels
 - **Deduplication**: Content hash-based deduplication with configurable windows
@@ -82,40 +82,6 @@ const provider = new DirectRSSProvider("MyApp/1.0");
 const items = await provider.fetch({
   url: "https://example.com/feed.xml",
   provider: { type: "direct", timeoutMs: 30000, retryAttempts: 3 },
-});
-```
-
-### RSSHubProvider
-
-Connects to RSSHub instances for generating feeds from websites without native RSS.
-
-```typescript
-import { RSSHubProvider } from "@synap/feed-service";
-
-const provider = new RSSHubProvider({
-  url: "https://rsshub.app",
-  enableCache: true,
-  cacheTtlSeconds: 300,
-});
-
-const items = await provider.fetch({
-  url: "https://rsshub.app/github/trending/daily/typescript",
-  provider: { type: "rsshub" },
-});
-```
-
-### CPProxyProvider
-
-Routes requests through the Control Plane proxy for rate-limited feeds.
-
-```typescript
-import { CPProxyProvider } from "@synap/feed-service";
-
-const provider = new CPProxyProvider({
-  url: "https://cp.synap.io/api/feeds/proxy",
-  apiKey: "your-api-key",
-  rateLimitAware: true,
-  region: "us-east",
 });
 ```
 
@@ -250,7 +216,7 @@ const publisher = FeedServiceFactory.createPublisher("channel");
 
 // Or create a complete pipeline
 const pipeline = FeedServiceFactory.createPipeline({
-  provider: { type: "rsshub", url: "https://rsshub.app" },
+  provider: { type: "direct", url: "https://example.com/feed.xml" },
   classifier: "is",
   publisher: "channel",
 });
@@ -281,10 +247,6 @@ const config = RSSProviderConfigSchema.parse({
 # IS Classifier
 IS_SERVICE_URL=https://is.synap.io
 IS_SERVICE_API_KEY=your-api-key
-
-# CP Proxy
-CP_PROXY_URL=https://cp.synap.io/api/feeds/proxy
-CP_PROXY_API_KEY=your-api-key
 ```
 
 ## Error Handling

@@ -187,9 +187,6 @@ export const channels = pgTable(
     branchedFromMessageId: uuid("branched_from_message_id"), // Reference to messages.id
     branchPurpose: text("branch_purpose"), // Task description for branch threads
 
-    // Agent assignment
-    agentId: text("agent_id").notNull().default("orchestrator"),
-
     // Status
     status: text("status", {
       enum: [
@@ -201,16 +198,18 @@ export const channels = pgTable(
       .notNull()
       .default(ChannelStatus.ACTIVE),
 
-    // Agent type for multi-agent system — free string, no DB-level enum constraint.
-    // Use ChannelAgentType.NONE to disable AI for passive threads.
-    agentType: text("agent_type").notNull().default(ChannelAgentType.NONE),
-
-    agentConfig: jsonb("agent_config"), // Custom agent configuration (system prompt, tools, etc.)
+    /** User-configurable overrides (personality, modelTier). Never store systemPrompt or toolsConfig here. */
+    agentConfig: jsonb("agent_config"),
 
     /** MCP servers enabled for this channel. null = inherit no MCPs (opt-in model). */
     mcpServerIds: uuid("mcp_server_id").array(),
 
-    /** UUID of the agent that sent the first/most recent message in this channel. */
+    /** The agent assigned to handle messages in this channel. Set at creation time. */
+    assignedAgentId: uuid("assigned_agent_id").references(() => agents.id, {
+      onDelete: "set null",
+    }),
+
+    /** UUID of the agent that sent the first/most recent message in this channel. @deprecated use assignedAgentId */
     senderAgentId: uuid("sender_agent_id").references(() => agents.id, {
       onDelete: "set null",
     }),
@@ -271,11 +270,9 @@ export interface Channel {
   parentChannelId: string | null;
   branchedFromMessageId: string | null;
   branchPurpose: string | null;
-  agentId: string;
+  assignedAgentId: string | null;
+  senderAgentId: string | null;
   status: ChannelStatus;
-  agentType: string;
-  agentConfig: unknown;
-  mcpServerIds: string[] | null;
   contextSummary: string | null;
   resultSummary: string | null;
   mergedIntoStateId: string | null;

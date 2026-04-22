@@ -27,6 +27,7 @@ import jwt from "jsonwebtoken";
 import { TrustedIssuerService } from "@synap/database";
 import {
   db,
+  sql,
   getDb,
   messages,
   channels,
@@ -53,8 +54,9 @@ import {
   eventRepository,
   ApiKeyRepository,
   WorkspaceRepository,
+  intelligenceServices,
+  agents,
   createWorkspaceFromDefinition,
-  sql,
 } from "@synap/database";
 import { z } from "zod";
 import {
@@ -546,7 +548,7 @@ app.get("/threads", async (c) => {
       .select({
         id: channels.id,
         title: channels.title,
-        agentType: channels.agentType,
+        assignedAgentId: channels.assignedAgentId,
         parentChannelId: channels.parentChannelId,
         branchPurpose: channels.branchPurpose,
         contextSummary: channels.contextSummary,
@@ -1922,19 +1924,11 @@ app.post("/threads", async (c) => {
     workspaceId: string;
     title?: string;
     parentChannelId?: string;
-    agentType?: string;
+    agentId?: string;
     branchPurpose?: string;
     contextObjectType?: string;
     contextObjectId?: string;
   };
-  const rawAgentType = body.agentType;
-  const resolvedAgentType =
-    typeof rawAgentType === "string" &&
-    rawAgentType.length > 0 &&
-    rawAgentType.length <= 100 &&
-    /^[\w:.-]+$/.test(rawAgentType)
-      ? rawAgentType
-      : "meta";
   try {
     const { randomUUID } = await import("crypto");
     const threadId = randomUUID();
@@ -1946,7 +1940,7 @@ app.post("/threads", async (c) => {
         workspaceId: body.workspaceId,
         title: body.title ?? "New Thread",
         parentChannelId: body.parentChannelId ?? null,
-        agentType: resolvedAgentType,
+        assignedAgentId: body.agentId ?? null,
         branchPurpose: body.branchPurpose ?? null,
         contextObjectType: body.contextObjectType ?? null,
         contextObjectId: body.contextObjectId ?? null,
@@ -2109,7 +2103,7 @@ app.post("/threads/:threadId/messages", async (c) => {
               content: body.content,
               userId: channel.userId,
               workspaceId: channel.workspaceId,
-              agentType: (channel.agentType as string) ?? "meta",
+              agentType: "meta",
               sourceAgentUserId: body.userId,
               serviceUrl: resolvedService.endpoint,
               serviceApiKey: resolvedService.serviceApiKey,
@@ -5307,6 +5301,24 @@ app.post("/setup/agent", async (c) => {
 });
 
 /**
+ * Zod payload for POST /agents/sync.
+ */
+const SyncAgentsPayload = z.object({
+  serviceId: z.string(),
+  agents: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      slug: z.string(),
+      description: z.string().nullish().optional(),
+      icon: z.string().nullish().optional(),
+      capabilities: z.array(z.string()),
+      metadata: z.record(z.string(), z.unknown()).nullish().optional(),
+    })
+  ),
+});
+
+/**
  * POST /agents/sync — synchronise an intelligence service's agent registry.
  *
  * Receives a list of agent definitions from the IS / orchestrator and persists
@@ -5330,7 +5342,6 @@ app.post("/agents/sync", async (c) => {
     );
   }
 
-  const userId = c.get("userId") as string;
   const { serviceId, agents: agentsPayload } = body.data;
 
   // Resolve the supplied UUID serviceId to a real intelligence_services row.
@@ -5369,28 +5380,28 @@ app.post("/agents/sync", async (c) => {
         .values({
           id: agent.id,
           name: agent.name,
-          agentSlug: agent.slug,
+          slug: agent.slug,
           description: agent.description ?? null,
           icon: agent.icon ?? null,
           capabilities: agent.capabilities,
           metadata: agent.metadata,
           active: true,
-          ownerType: "internal",
+          ownerType: "provider",
           intelligenceServiceId: resolvedServiceId,
           createdAt: new Date(),
           updatedAt: new Date(),
         })
         .onConflictDoUpdate({
-          target: [agents.intelligenceServiceId, agents.agentSlug],
+          target: [agents.intelligenceServiceId, agents.slug],
           set: {
             id: agent.id,
             name: agent.name,
-            description: agent.description ?? sql`${agents.description}`,
-            icon: agent.icon ?? sql`${agents.icon}`,
+            description: agent.description ?? drizzleSql`${agents.description}`,
+            icon: agent.icon ?? drizzleSql`${agents.icon}`,
             capabilities: agent.capabilities,
             metadata: agent.metadata,
             active: true,
-            ownerType: "internal",
+            ownerType: "provider",
             intelligenceServiceId: resolvedServiceId,
             updatedAt: new Date(),
           },
@@ -5410,9 +5421,9 @@ app.post("/agents/sync", async (c) => {
         and(
           eq(agents.intelligenceServiceId, resolvedServiceId),
           eq(agents.active, true),
-          sql`NOT EXISTS (
-            SELECT 1 FROM (VALUES ${agentsPayload.map((a) => sql`${a.slug}`)}) AS v(slug)
-            WHERE v.slug = agents.agent_slug
+          drizzleSql`NOT EXISTS (
+            SELECT 1 FROM (VALUES ${agentsPayload.map((a) => drizzleSql`${a.slug}`)}) AS v(slug)
+            WHERE v.slug = ${agents.slug}
           )`
         )
       )

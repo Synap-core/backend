@@ -133,34 +133,6 @@ describe("Feed Integration", () => {
       expect(items[0].title).toBe("Cloud Computing Trends");
     });
 
-    it("should handle RSSHub provider with access key", async () => {
-      const config: RSSProviderConfig = {
-        type: "rsshub",
-        url: "https://rsshub.app",
-        apiKey: "test-access-key",
-        timeoutMs: 30000,
-      };
-
-      const provider = FeedServiceFactory.createProvider(config);
-      expect(provider).toBeDefined();
-
-      // Verify provider type
-      expect(provider.getProviderType()).toBe("rsshub");
-    });
-
-    it("should handle CP proxy provider", async () => {
-      const config: RSSProviderConfig = {
-        type: "cpproxy",
-        url: "https://proxy.synap.io",
-        apiKey: "test-api-key",
-        timeoutMs: 30000,
-      };
-
-      const provider = FeedServiceFactory.createProvider(config);
-      expect(provider).toBeDefined();
-      expect(provider.getProviderType()).toBe("cpproxy");
-    });
-
     it("should handle fetch errors gracefully", async () => {
       mockFetch.mockRejectedValueOnce(new Error("Network error"));
 
@@ -337,8 +309,8 @@ describe("Feed Integration", () => {
       });
 
       const fallbackProvider = FeedServiceFactory.createProvider({
-        type: "cpproxy",
-        url: "https://proxy.synap.io",
+        type: "direct",
+        timeoutMs: 5000,
       });
 
       const source: FeedSourceConfig = {
@@ -476,8 +448,6 @@ describe("Feed Integration", () => {
     it("should return available provider types", () => {
       const providers = FeedServiceFactory.getAvailableProviders();
       expect(providers).toContain("direct");
-      expect(providers).toContain("rsshub");
-      expect(providers).toContain("cpproxy");
       expect(providers).toContain("custom");
     });
 

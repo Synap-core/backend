@@ -15,7 +15,6 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 // Setup mocks using hoisted pattern
 const {
-  mockFetchRSSItems,
   mockFetch,
   mockDbQuery,
   mockDbInsert,
@@ -24,12 +23,12 @@ const {
   mockEventRepositoryAppend,
   getLastInsertedValues,
   clearCapturedValues,
+  mockRSSDirectProviderFetch,
 } = vi.hoisted(() => {
   const capturedValues: any[] = [];
   let lastInsertedValues: any = null;
 
   return {
-    mockFetchRSSItems: vi.fn(),
     mockFetch: vi.fn(),
     mockDbQuery: vi.fn(),
     mockDbInsert: vi.fn(() => ({
@@ -48,12 +47,15 @@ const {
       capturedValues.length = 0;
       lastInsertedValues = null;
     },
+    mockRSSDirectProviderFetch: vi.fn(),
   };
 });
 
-// Mock fetchRSSItems
-vi.mock("../fetchers/rss-fetcher.js", () => ({
-  fetchRSSItems: mockFetchRSSItems,
+// Mock @synap/feed-service
+vi.mock("@synap/feed-service", () => ({
+  RSSDirectProvider: vi.fn(() => ({
+    fetch: mockRSSDirectProviderFetch,
+  })),
 }));
 
 // Mock emit-side-effects
@@ -148,7 +150,6 @@ const createMockJob = (
     minRelevanceScore: 50,
     postMode: "individual" as const,
     sources: [{ url: "https://example.com/feed.xml", name: "Example Feed" }],
-    rsshubConfig: { useCpProxy: true },
   };
 
   // Extract config from overrides, then merge separately
@@ -169,22 +170,6 @@ const createMockJob = (
   };
 };
 
-const createMockRSSItem = (id: string, url: string, overrides = {}) => ({
-  id,
-  title: `Item ${id}`,
-  url,
-  content: `<p>Content for item ${id}</p>`,
-  contentText: `Content for item ${id}`,
-  publishedAt: new Date(),
-  author: "Test Author",
-  categories: ["tech", "news"],
-  source: {
-    name: "Example Feed",
-    url: "https://example.com/feed.xml",
-  },
-  ...overrides,
-});
-
 describe("feed-rss-executor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -195,10 +180,16 @@ describe("feed-rss-executor", () => {
 
   describe("RSS fetching", () => {
     it("should fetch RSS items from configured sources", async () => {
-      mockFetchRSSItems.mockResolvedValue({
-        items: [createMockRSSItem("1", "https://example.com/item1")],
-        errors: [],
-        sourceCount: 1,
+      mockRSSDirectProviderFetch.mockResolvedValue({
+        items: [
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+        ],
       });
       mockDbQuery.mockResolvedValue([]); // No existing messages (seen URLs)
       mockFetch.mockResolvedValue({
@@ -212,26 +203,14 @@ describe("feed-rss-executor", () => {
       const job = createMockJob();
       await handleFeedRSSExecute(job);
 
-      expect(mockFetchRSSItems).toHaveBeenCalledWith(
-        [{ url: "https://example.com/feed.xml", name: "Example Feed" }],
-        expect.objectContaining({
-          useCpProxy: true,
-          maxItems: 20, // maxItemsPerRun * 2
-        })
-      );
+      // Fetch via RSSDirectProvider should be called per source
+      expect(mockRSSDirectProviderFetch).toHaveBeenCalled();
     });
 
     it("should handle fetch errors gracefully", async () => {
-      mockFetchRSSItems.mockResolvedValue({
-        items: [],
-        errors: [
-          {
-            source: "https://example.com/feed.xml",
-            error: "Connection timeout",
-          },
-        ],
-        sourceCount: 1,
-      });
+      mockRSSDirectProviderFetch.mockRejectedValue(
+        new Error("Connection timeout")
+      );
       mockDbQuery.mockResolvedValue([]);
 
       const job = createMockJob();
@@ -251,13 +230,23 @@ describe("feed-rss-executor", () => {
         { metadata: { sourceUrl: "https://example.com/other-item" } },
       ]);
 
-      mockFetchRSSItems.mockResolvedValue({
+      mockRSSDirectProviderFetch.mockResolvedValue({
         items: [
-          createMockRSSItem("1", existingUrl),
-          createMockRSSItem("2", "https://example.com/new-item"),
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: existingUrl,
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+          {
+            externalId: "2",
+            title: "Item 2",
+            url: "https://example.com/new-item",
+            excerpt: "Content for item 2",
+            publishedAt: new Date(),
+          },
         ],
-        errors: [],
-        sourceCount: 1,
       });
 
       mockFetch.mockResolvedValue({
@@ -281,10 +270,16 @@ describe("feed-rss-executor", () => {
     it("should respect dedupWindowDays setting", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
-        items: [createMockRSSItem("1", "https://example.com/item1")],
-        errors: [],
-        sourceCount: 1,
+      mockRSSDirectProviderFetch.mockResolvedValue({
+        items: [
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+        ],
       });
 
       mockFetch.mockResolvedValue({
@@ -307,13 +302,23 @@ describe("feed-rss-executor", () => {
     it("should call IS for classification when configured", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
+      mockRSSDirectProviderFetch.mockResolvedValue({
         items: [
-          createMockRSSItem("1", "https://example.com/item1"),
-          createMockRSSItem("2", "https://example.com/item2"),
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+          {
+            externalId: "2",
+            title: "Item 2",
+            url: "https://example.com/item2",
+            excerpt: "Content for item 2",
+            publishedAt: new Date(),
+          },
         ],
-        errors: [],
-        sourceCount: 1,
       });
 
       mockFetch.mockResolvedValue({
@@ -346,10 +351,16 @@ describe("feed-rss-executor", () => {
     it("should use fallback classification when IS fails", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
-        items: [createMockRSSItem("1", "https://example.com/item1")],
-        errors: [],
-        sourceCount: 1,
+      mockRSSDirectProviderFetch.mockResolvedValue({
+        items: [
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+        ],
       });
 
       mockFetch.mockResolvedValue({
@@ -370,10 +381,16 @@ describe("feed-rss-executor", () => {
 
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
-        items: [createMockRSSItem("1", "https://example.com/item1")],
-        errors: [],
-        sourceCount: 1,
+      mockRSSDirectProviderFetch.mockResolvedValue({
+        items: [
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+        ],
       });
 
       const job = createMockJob();
@@ -388,14 +405,30 @@ describe("feed-rss-executor", () => {
     it("should filter items by minRelevanceScore", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
+      mockRSSDirectProviderFetch.mockResolvedValue({
         items: [
-          createMockRSSItem("1", "https://example.com/item1"),
-          createMockRSSItem("2", "https://example.com/item2"),
-          createMockRSSItem("3", "https://example.com/item3"),
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+          {
+            externalId: "2",
+            title: "Item 2",
+            url: "https://example.com/item2",
+            excerpt: "Content for item 2",
+            publishedAt: new Date(),
+          },
+          {
+            externalId: "3",
+            title: "Item 3",
+            url: "https://example.com/item3",
+            excerpt: "Content for item 3",
+            publishedAt: new Date(),
+          },
         ],
-        errors: [],
-        sourceCount: 1,
       });
 
       mockFetch.mockResolvedValue({
@@ -422,13 +455,23 @@ describe("feed-rss-executor", () => {
     it("should post items individually when postMode is 'individual'", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
+      mockRSSDirectProviderFetch.mockResolvedValue({
         items: [
-          createMockRSSItem("1", "https://example.com/item1"),
-          createMockRSSItem("2", "https://example.com/item2"),
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+          {
+            externalId: "2",
+            title: "Item 2",
+            url: "https://example.com/item2",
+            excerpt: "Content for item 2",
+            publishedAt: new Date(),
+          },
         ],
-        errors: [],
-        sourceCount: 1,
       });
 
       mockFetch.mockResolvedValue({
@@ -452,10 +495,16 @@ describe("feed-rss-executor", () => {
     it("should include correct metadata in posted messages", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
-        items: [createMockRSSItem("1", "https://example.com/item1")],
-        errors: [],
-        sourceCount: 1,
+      mockRSSDirectProviderFetch.mockResolvedValue({
+        items: [
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+        ],
       });
 
       mockFetch.mockResolvedValue({
@@ -494,13 +543,23 @@ describe("feed-rss-executor", () => {
     it("should post items as batch when postMode is 'batch'", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
+      mockRSSDirectProviderFetch.mockResolvedValue({
         items: [
-          createMockRSSItem("1", "https://example.com/item1"),
-          createMockRSSItem("2", "https://example.com/item2"),
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+          {
+            externalId: "2",
+            title: "Item 2",
+            url: "https://example.com/item2",
+            excerpt: "Content for item 2",
+            publishedAt: new Date(),
+          },
         ],
-        errors: [],
-        sourceCount: 1,
       });
 
       mockFetch.mockResolvedValue({
@@ -524,13 +583,23 @@ describe("feed-rss-executor", () => {
     it("should include batch metadata in batch posts", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
+      mockRSSDirectProviderFetch.mockResolvedValue({
         items: [
-          createMockRSSItem("1", "https://example.com/item1"),
-          createMockRSSItem("2", "https://example.com/item2"),
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+          {
+            externalId: "2",
+            title: "Item 2",
+            url: "https://example.com/item2",
+            excerpt: "Content for item 2",
+            publishedAt: new Date(),
+          },
         ],
-        errors: [],
-        sourceCount: 1,
       });
 
       mockFetch.mockResolvedValue({
@@ -559,10 +628,16 @@ describe("feed-rss-executor", () => {
     it("should fall back to individual posting for single items in batch mode", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
-        items: [createMockRSSItem("1", "https://example.com/item1")],
-        errors: [],
-        sourceCount: 1,
+      mockRSSDirectProviderFetch.mockResolvedValue({
+        items: [
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+        ],
       });
 
       mockFetch.mockResolvedValue({
@@ -585,10 +660,16 @@ describe("feed-rss-executor", () => {
     it("should track source URLs in message metadata", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
-        items: [createMockRSSItem("1", "https://example.com/item1")],
-        errors: [],
-        sourceCount: 1,
+      mockRSSDirectProviderFetch.mockResolvedValue({
+        items: [
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+        ],
       });
 
       mockFetch.mockResolvedValue({
@@ -611,10 +692,16 @@ describe("feed-rss-executor", () => {
     it("should update feed status on successful completion", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
-        items: [createMockRSSItem("1", "https://example.com/item1")],
-        errors: [],
-        sourceCount: 1,
+      mockRSSDirectProviderFetch.mockResolvedValue({
+        items: [
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+        ],
       });
 
       mockFetch.mockResolvedValue({
@@ -643,13 +730,23 @@ describe("feed-rss-executor", () => {
     it("should set correct item counts in status", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
+      mockRSSDirectProviderFetch.mockResolvedValue({
         items: [
-          createMockRSSItem("1", "https://example.com/item1"),
-          createMockRSSItem("2", "https://example.com/item2"),
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+          {
+            externalId: "2",
+            title: "Item 2",
+            url: "https://example.com/item2",
+            excerpt: "Content for item 2",
+            publishedAt: new Date(),
+          },
         ],
-        errors: [],
-        sourceCount: 1,
       });
 
       mockFetch.mockResolvedValue({
@@ -674,10 +771,16 @@ describe("feed-rss-executor", () => {
     it("should emit side effects after posting", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
-        items: [createMockRSSItem("1", "https://example.com/item1")],
-        errors: [],
-        sourceCount: 1,
+      mockRSSDirectProviderFetch.mockResolvedValue({
+        items: [
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+        ],
       });
 
       mockFetch.mockResolvedValue({
@@ -711,10 +814,16 @@ describe("feed-rss-executor", () => {
     it("should emit feed.execution.completed event", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
-        items: [createMockRSSItem("1", "https://example.com/item1")],
-        errors: [],
-        sourceCount: 1,
+      mockRSSDirectProviderFetch.mockResolvedValue({
+        items: [
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: "https://example.com/item1",
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+        ],
       });
 
       mockFetch.mockResolvedValue({
@@ -749,11 +858,7 @@ describe("feed-rss-executor", () => {
     it("should handle empty RSS results gracefully", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
-        items: [],
-        errors: [],
-        sourceCount: 1,
-      });
+      mockRSSDirectProviderFetch.mockResolvedValue({ items: [] });
 
       const job = createMockJob();
       await handleFeedRSSExecute(job);
@@ -769,10 +874,16 @@ describe("feed-rss-executor", () => {
 
       mockDbQuery.mockResolvedValue([{ metadata: { sourceUrl: seenUrl } }]);
 
-      mockFetchRSSItems.mockResolvedValue({
-        items: [createMockRSSItem("1", seenUrl)],
-        errors: [],
-        sourceCount: 1,
+      mockRSSDirectProviderFetch.mockResolvedValue({
+        items: [
+          {
+            externalId: "1",
+            title: "Item 1",
+            url: seenUrl,
+            excerpt: "Content for item 1",
+            publishedAt: new Date(),
+          },
+        ],
       });
 
       const job = createMockJob();
@@ -785,15 +896,15 @@ describe("feed-rss-executor", () => {
     it("should respect maxItemsPerRun limit", async () => {
       mockDbQuery.mockResolvedValue([]);
 
-      const items = Array.from({ length: 20 }, (_, i) =>
-        createMockRSSItem(String(i), `https://example.com/item${i}`)
-      );
+      const feedItems = Array.from({ length: 20 }, (_, i) => ({
+        externalId: String(i),
+        title: `Item ${i}`,
+        url: `https://example.com/item${i}`,
+        excerpt: `Content for item ${i}`,
+        publishedAt: new Date(Date.now() - i * 60000),
+      }));
 
-      mockFetchRSSItems.mockResolvedValue({
-        items,
-        errors: [],
-        sourceCount: 1,
-      });
+      mockRSSDirectProviderFetch.mockResolvedValue({ items: feedItems });
 
       mockFetch.mockResolvedValue({
         ok: true,

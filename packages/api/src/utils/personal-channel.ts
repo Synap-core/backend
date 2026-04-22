@@ -15,15 +15,24 @@ import {
   FeedScope,
   ThreadKind,
   ChannelStatus,
-  ChannelAgentType,
   MessageRole,
   MessageAuthorType,
   MessageCategory,
+  agents,
 } from "@synap/database/schema";
 import type { Channel } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "personal-channel" });
+
+async function getSyncAgentId(slug: string): Promise<string | null> {
+  const [agent] = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(and(eq(agents.slug, slug), eq(agents.active, true)))
+    .limit(1);
+  return agent?.id ?? null;
+}
 
 /**
  * Static hydration-style greeting seeded on the truly-first-ever personal
@@ -109,8 +118,7 @@ export async function ensurePersonalChannel(
       threadKind: ThreadKind.PERSONAL,
       scope: ChannelScope.POD,
       status: ChannelStatus.ACTIVE,
-      agentId: "personal",
-      agentType: ChannelAgentType.PERSONAL,
+      assignedAgentId: await getSyncAgentId("orchestrator"),
     })
     .returning();
 
@@ -149,8 +157,7 @@ export async function ensureProactiveFeedChannel(
       scope: ChannelScope.POD,
       feedScope: FeedScope.USER,
       status: ChannelStatus.ACTIVE,
-      agentId: "proactive",
-      agentType: ChannelAgentType.PERSONAL,
+      assignedAgentId: await getSyncAgentId("orchestrator"),
     })
     .returning();
 

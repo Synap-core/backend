@@ -11,7 +11,7 @@
  * - documents: Document operations
  * - branches: Branch operations
  * - linking: Context linking operations
- * - signals: Signal feed operations (RSSHub fetch, classify, capture, feed, subscriptions)
+ * - signals: Signal feed operations (fetch, classify, capture, feed, subscriptions)
  */
 
 import { router, publicProcedure } from "../../trpc.js";

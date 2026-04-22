@@ -60,6 +60,8 @@ export interface IntelligenceHubRequest {
   contextObjectId?: string;
   /** Billing channel: browser (included in subscription) | api (billable per-token) | relay */
   billingChannel?: "browser" | "api" | "relay";
+  /** Channel kind: pm = private message / personal, group = workspace-shared channel */
+  channelKind?: "pm" | "group";
 }
 
 // Re-export from types package
@@ -213,6 +215,7 @@ export class IntelligenceHubClient {
                 request.dataPodApiKey || process.env.HUB_PROTOCOL_API_KEY || "",
               mcpServers: request.mcpServers,
               workspaceSettings: request.workspaceSettings,
+              channelKind: request.channelKind,
             }),
           }
         );
@@ -336,6 +339,7 @@ export class IntelligenceHubClient {
             mcpServers: request.mcpServers,
             deepAnalysis: request.deepAnalysis,
             workspaceSettings: request.workspaceSettings,
+            channelKind: request.channelKind,
           }),
         },
         STREAM_TIMEOUT_MS

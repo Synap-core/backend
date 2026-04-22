@@ -81,7 +81,7 @@ export interface IFeedProvider {
   /**
    * Get the provider type identifier
    *
-   * @returns Provider type string (e.g., "direct", "rsshub", "cpproxy")
+   * @returns Provider type string (e.g., "direct", "custom")
    *
    * @example
    * ```typescript

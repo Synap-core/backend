@@ -534,15 +534,6 @@ export const proposalsRouter = router({
           parentChannelId: data.parentChannelId as string,
           branchPurpose: data.branchPurpose as string,
           agentId: data.agentId as string | undefined,
-          agentType: data.agentType as
-            | "default"
-            | "meta"
-            | "prompting"
-            | "knowledge-search"
-            | "code"
-            | "writing"
-            | "action"
-            | undefined,
           agentConfig: data.agentConfig as Record<string, unknown> | undefined,
           inheritContext: (data.inheritContext as boolean) ?? true,
         });

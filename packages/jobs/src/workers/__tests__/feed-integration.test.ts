@@ -21,7 +21,7 @@ const mockBossSend = vi.fn();
 const mockDbQuery = vi.fn();
 const mockDbInsert = vi.fn();
 const mockDbUpdate = vi.fn();
-const mockFetchRSSItems = vi.fn();
+const mockFetchRSSProviderFetch = vi.fn();
 const mockFetch = vi.fn();
 const mockEmitSideEffects = vi.fn();
 const mockEventRepositoryAppend = vi.fn();
@@ -39,8 +39,10 @@ vi.mock("@synap/events", () => ({
   })),
 }));
 
-vi.mock("../fetchers/rss-fetcher.js", () => ({
-  fetchRSSItems: mockFetchRSSItems,
+vi.mock("@synap/feed-service", () => ({
+  RSSDirectProvider: vi.fn(() => ({
+    fetch: mockFetchRSSProviderFetch,
+  })),
 }));
 
 vi.mock("../emit-side-effects.js", () => ({
@@ -198,7 +200,6 @@ const createMockJob = (overrides: Record<string, unknown> = {}) => ({
       minRelevanceScore: 50,
       postMode: "individual" as const,
       sources: [{ url: "https://example.com/feed.xml", name: "Example Feed" }],
-      rsshubConfig: { useCpProxy: true },
     },
     ...overrides,
   },
@@ -348,7 +349,7 @@ describe("Feed Jobs Integration", () => {
       mockDbQuery.mockResolvedValue([]);
 
       // Mock RSS fetch
-      mockFetchRSSItems.mockResolvedValue({
+      mockFetchRSSProviderFetch.mockResolvedValue({
         items: [
           createMockRSSItem("1", "https://example.com/item1"),
           createMockRSSItem("2", "https://example.com/item2"),
@@ -385,7 +386,7 @@ describe("Feed Jobs Integration", () => {
       await handleFeedRSSExecute(job);
 
       // Verify items were fetched
-      expect(mockFetchRSSItems).toHaveBeenCalled();
+      expect(mockFetchRSSProviderFetch).toHaveBeenCalled();
 
       // Verify classification was called
       expect(mockFetch).toHaveBeenCalledWith(
@@ -405,7 +406,7 @@ describe("Feed Jobs Integration", () => {
 
       mockDbQuery.mockResolvedValue([{ metadata: { sourceUrl: seenUrl } }]);
 
-      mockFetchRSSItems.mockResolvedValue({
+      mockFetchRSSProviderFetch.mockResolvedValue({
         items: [
           createMockRSSItem("1", seenUrl),
           createMockRSSItem("2", "https://example.com/new-item"),
@@ -448,7 +449,7 @@ describe("Feed Jobs Integration", () => {
 
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
+      mockFetchRSSProviderFetch.mockResolvedValue({
         items: [
           createMockRSSItem("1", "https://example.com/item1"),
           createMockRSSItem("2", "https://example.com/item2"),
@@ -582,7 +583,7 @@ describe("Feed Jobs Integration", () => {
 
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
+      mockFetchRSSProviderFetch.mockResolvedValue({
         items: [createMockRSSItem("1", "https://example.com/item1")],
         errors: [],
         sourceCount: 1,
@@ -632,7 +633,7 @@ describe("Feed Jobs Integration", () => {
 
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
+      mockFetchRSSProviderFetch.mockResolvedValue({
         items: [createMockRSSItem("1", "https://example.com/item1")],
         errors: [],
         sourceCount: 1,
@@ -676,7 +677,7 @@ describe("Feed Jobs Integration", () => {
 
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
+      mockFetchRSSProviderFetch.mockResolvedValue({
         items: [createMockRSSItem("1", "https://example.com/item1")],
         errors: [],
         sourceCount: 1,
@@ -743,7 +744,7 @@ describe("Feed Jobs Integration", () => {
       // 3. Executor fetches and processes
       mockDbQuery.mockResolvedValue([]);
 
-      mockFetchRSSItems.mockResolvedValue({
+      mockFetchRSSProviderFetch.mockResolvedValue({
         items: [
           createMockRSSItem("1", "https://example.com/item1"),
           createMockRSSItem("2", "https://example.com/item2"),

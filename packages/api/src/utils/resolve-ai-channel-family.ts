@@ -2,15 +2,28 @@ import { TRPCError } from "@trpc/server";
 import { db, and, desc, eq } from "@synap/database";
 import {
   channels,
-  ChannelAgentType,
   ChannelStatus,
   ChannelType,
   ThreadKind,
+  agents,
+  type Channel,
 } from "@synap/database/schema";
-import type { Channel } from "@synap/database/schema";
 import type { AIChannelFamily } from "@synap-core/types";
 import { ensurePersonalChannel } from "./personal-channel.js";
 import { randomUUID } from "crypto";
+
+/**
+ * Resolve a slug to a canonical agent UUID by querying the agents table.
+ * Returns null if no active agent matches.
+ */
+async function resolveSlugToAgentId(slug: string): Promise<string | null> {
+  const [agent] = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(and(eq(agents.slug, slug), eq(agents.active, true)))
+    .limit(1);
+  return agent?.id ?? null;
+}
 
 export type ContextObjectType = "entity" | "document" | "view";
 
@@ -22,7 +35,8 @@ interface ResolveAiChannelByFamilyParams {
   contextObjectType?: ContextObjectType;
   parentChannelId?: string;
   branchPurpose?: string;
-  agentType?: string;
+  /** Agent slug to assign when creating the channel (e.g. "networking"). Falls back to orchestrator. */
+  agentSlug?: string;
 }
 
 export async function resolveAiChannelByFamily(
@@ -36,8 +50,16 @@ export async function resolveAiChannelByFamily(
     contextObjectType,
     parentChannelId,
     branchPurpose,
-    agentType,
+    agentSlug,
   } = params;
+
+  // Resolve the agent ID: prefer explicit agentSlug, fall back to orchestrator
+  const resolvedAgentId = agentSlug
+    ? ((await resolveSlugToAgentId(agentSlug)) ??
+      (await resolveSlugToAgentId("orchestrator")))
+    : await resolveSlugToAgentId("orchestrator");
+  // Kept for backward compat — orchestratorAgentId is used in non-personal channel inserts
+  const orchestratorAgentId = resolvedAgentId;
 
   if (family === "personal") {
     return ensurePersonalChannel(userId, workspaceId);
@@ -81,8 +103,7 @@ export async function resolveAiChannelByFamily(
         workspaceId,
         parentChannelId,
         branchPurpose: branchPurpose ?? "Branch from personal AI",
-        agentId: "orchestrator",
-        agentType: agentType ?? ChannelAgentType.META,
+        assignedAgentId: orchestratorAgentId,
         channelType: ChannelType.THREAD,
         threadKind: ThreadKind.BRANCH,
         status: ChannelStatus.ACTIVE,
@@ -143,8 +164,7 @@ export async function resolveAiChannelByFamily(
       contextObjectId,
       contextObjectType,
       status: ChannelStatus.ACTIVE,
-      agentId: "orchestrator",
-      agentType: agentType ?? ChannelAgentType.META,
+      assignedAgentId: orchestratorAgentId,
       metadata: { origin: "family:context" },
     })
     .returning();

@@ -1,8 +1,8 @@
 /**
  * Hub Protocol — Signals Router
  *
- * Signal feed operations for RSSHub content:
- * - Fetch: Get raw RSSHub data via CP proxy
+ * Signal feed operations for RSS/feed content:
+ * - Fetch: Get raw feed data
  * - Classify: AI classification of signal items
  * - Capture: Create signal_item entities from signals
  * - Feed: Personalized signal feed
@@ -160,7 +160,7 @@ export const signalsRouter = router({
         const forceRefresh = input.options?.forceRefresh ?? false;
         const timeoutMs = input.options?.timeoutMs ?? 30000;
 
-        let proxyUrl = `${cpUrl}/api/rsshub-proxy${input.sourceRoute}`;
+        let proxyUrl = `${cpUrl}/api/sources/relay${input.sourceRoute}`;
         const params = new URLSearchParams();
         if (limit !== 50) params.set("limit", String(limit));
         if (forceRefresh) params.set("forceRefresh", "1");
@@ -187,8 +187,8 @@ export const signalsRouter = router({
           if (!response.ok) {
             return {
               ...formatErrorResponse(
-                `RSSHub proxy returned ${response.status}`,
-                "RSSHUB_PROXY_ERROR",
+                `CP proxy returned ${response.status}`,
+                "CP_PROXY_ERROR",
                 { status: response.status, statusText: response.statusText }
               ),
               items: [],
@@ -225,7 +225,7 @@ export const signalsRouter = router({
               workspaceId,
               sourceRoute: input.sourceRoute,
               sourcePlatform: input.sourcePlatform,
-              fetchType: "rsshub",
+              fetchType: "cp-relay",
               itemCount: items.length,
               cacheHit: !forceRefresh,
               durationMs: Date.now() - startTime,
@@ -249,8 +249,8 @@ export const signalsRouter = router({
           if (error instanceof Error && error.name === "AbortError") {
             return {
               ...formatErrorResponse(
-                "RSSHub request timed out",
-                "RSSHUB_TIMEOUT"
+                "CP proxy request timed out",
+                "CP_PROXY_TIMEOUT"
               ),
               items: [],
               metadata: {

@@ -14,6 +14,7 @@ import {
   intelligenceServices,
   users,
   workspaceMembers,
+  agents,
 } from "@synap/database/schema";
 import { IntelligenceHubClient } from "./intelligence-hub-client.js";
 import { resolveServiceKey } from "@synap/database";
@@ -357,6 +358,43 @@ function createClient(service: any): ResolvedService {
 
 /** @alias resolveIntelligenceService */
 export const resolveAgent = resolveIntelligenceService;
+
+/**
+ * Resolve IS by agentId — looks up agents.intelligenceServiceId FK to find the
+ * exact IS that owns this agent. Falls back to resolveIntelligenceService() when
+ * the agent is local (no intelligenceServiceId) or not found.
+ */
+export async function resolveIntelligenceServiceByAgentId(
+  agentId: string,
+  ctx: ServiceResolutionContext
+): Promise<ResolvedService> {
+  try {
+    const [agent] = await db
+      .select({ intelligenceServiceId: agents.intelligenceServiceId })
+      .from(agents)
+      .where(and(eq(agents.id, agentId), eq(agents.active, true)))
+      .limit(1);
+
+    if (agent?.intelligenceServiceId) {
+      const service = await getActiveService(agent.intelligenceServiceId);
+      if (service) {
+        const agentUserId = await lookupAgentUser(ctx.userId, ctx.workspaceId);
+        logger.info(
+          { agentId, serviceId: service.serviceId },
+          "IS resolved via agent → intelligenceServiceId"
+        );
+        return { ...createClient(service), agentUserId };
+      }
+    }
+  } catch (err) {
+    logger.warn(
+      { agentId, err },
+      "Agent→IS lookup failed, falling back to workspace routing"
+    );
+  }
+
+  return resolveIntelligenceService(ctx);
+}
 
 /**
  * Return the endpoint + API key for the first active registered intelligence service,

@@ -47,7 +47,6 @@ import {
   FeedScope,
   ThreadKind,
   ChannelStatus,
-  ChannelAgentType,
 } from "@synap/database/schema";
 import type {
   FlowDefinition,
@@ -549,15 +548,14 @@ async function executeOutputStep(
               threadKind: ThreadKind.PERSONAL,
               scope: ChannelScope.POD,
               status: ChannelStatus.ACTIVE,
-              agentId: "personal",
-              agentType: ChannelAgentType.PERSONAL,
+              senderAgentId: null,
             })
             .returning({ id: channels.id });
           channelId = newChannel.id;
         }
       }
 
-      // Resolve proactive feed channel (channelType='feed', feedScope='user')
+      // Resolve proactive feed channel
       if (!channelId && config.channelType === "proactive") {
         const proactiveChannel = await db.query.channels.findFirst({
           where: and(
@@ -580,8 +578,7 @@ async function executeOutputStep(
               scope: ChannelScope.POD,
               feedScope: FeedScope.USER,
               status: ChannelStatus.ACTIVE,
-              agentId: "proactive",
-              agentType: ChannelAgentType.PERSONAL,
+              senderAgentId: null,
             })
             .returning({ id: channels.id });
           channelId = newChannel.id;

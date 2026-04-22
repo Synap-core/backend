@@ -100,7 +100,7 @@ export function validateProviderConfig(
   if (typeof config !== "object" || config === null) return false;
   const c = config as Record<string, unknown>;
 
-  if (!["direct", "rsshub", "cpproxy", "custom"].includes(c.type as string)) {
+  if (!["custom"].includes(c.type as string)) {
     return false;
   }
 

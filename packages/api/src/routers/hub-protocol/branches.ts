@@ -118,7 +118,6 @@ export const branchesRouter = router({
         parentChannelId: input.parentChannelId,
         branchPurpose: input.branchPurpose,
         agentId: input.agentId,
-        agentType: input.agentType,
         agentConfig: input.agentConfig,
         inheritContext: input.inheritContext,
       });

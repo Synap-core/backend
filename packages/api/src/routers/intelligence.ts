@@ -18,7 +18,6 @@ import {
   entities,
   ChannelType,
   ChannelStatus,
-  ChannelAgentType,
   intelligenceServices,
   users,
   apiKeys,
@@ -413,8 +412,6 @@ export const intelligenceRouter = router({
           workspaceId,
           channelType: ChannelType.THREAD,
           status: ChannelStatus.ACTIVE,
-          agentId: "orchestrator",
-          agentType: ChannelAgentType.META,
         })
         .returning();
       if (!thread) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });

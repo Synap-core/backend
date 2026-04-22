@@ -13,7 +13,7 @@ const FeedSourceSchema = z.object({
   id: z.string(),
   url: z.string(),
   name: z.string(),
-  provider: z.enum(["direct", "rsshub", "cpproxy"]),
+  provider: z.enum(["direct", "custom"]),
   enabled: z.boolean(),
   topics: z.array(z.string()),
   addedAt: z.number(),

@@ -27,7 +27,7 @@ export { createHubProtocolCallerContext } from "./routers/hub-protocol/utils.js"
 export { proposalsRouter } from "./routers/proposals.js";
 export { resolveIntelligenceService } from "./utils/intelligence-routing.js";
 export {
-  ensureDefaultAgentChannel,
+  ensurePersonalChannel as ensureDefaultAgentChannel,
   ensureProactiveFeedChannel,
 } from "./utils/personal-channel.js";
 export { mcpHttpApp } from "./routers/mcp/http-handler.js";
@@ -109,13 +109,6 @@ export {
   invalidateSyncGenerationCache,
 } from "./utils/split-brain-service.js";
 
-// Export Telegram bot token resolver (3-tier: vault → workspace setting → env)
-export {
-  resolveTelegramBotToken,
-  clearTelegramTokenCache,
-  resolveTelegramWebhookSecret,
-  clearTelegramSecretCache,
-} from "./utils/telegram-bot-token.js";
 export {
   createAndVerifyHubInboundKey,
   toRegistrationTrace,
@@ -124,11 +117,6 @@ export {
   type RegistrationTrace,
 } from "./services/external-registration.js";
 
-// Export Telegram bot forwarding and link token utilities
-export {
-  forwardTelegramMessageToAI,
-  findTelegramUser,
-} from "./utils/telegram-bot-forward.js";
 export { consumeLinkToken } from "./utils/consume-link-token.js";
 
 // Export utilities for default whiteboard creation

@@ -1,0 +1,708 @@
+/**
+ * Entity Extract Worker
+ *
+ * Consumes items from FEED_SOURCE_ITEMS_QUEUE (published by feed-source-executor
+ * after fetching via any provider — CPRelay/web-scraper, RSS, etc.).
+ *
+ * Pipeline:
+ *   1. Deduplicate by URL (track seen URLs in subscription.params.seenUrls).
+ *   2. Call IS `/v1/tools/classify_feed_items` for relevance scoring + topic extraction.
+ *   3. Filter items below the relevance threshold from the feed config.
+ *   4. Create first-class Synap entities (bookmark) via EntityRepository.
+ *   5. Post highlights to the user's proactive feed channel.
+ *   6. Emit side-effects and events.
+ *
+ * Queue name: "feed-source-items"
+ * Registered by: feed-source-executor (send, fire-and-forget)
+ */
+
+import { randomUUID, createHash } from "crypto";
+import type PgBoss from "pg-boss";
+import {
+  db,
+  eq,
+  and,
+  getDb,
+  EntityRepository,
+  EventRepository,
+} from "@synap/database";
+import { sql as dbSql } from "@synap/database";
+import {
+  channels,
+  feeds,
+  messages,
+  sourceConfigs,
+  sourceSubscriptions,
+} from "@synap/database/schema";
+import { createLogger, ServiceUnavailableError } from "@synap-core/core";
+import { emitSideEffects } from "@synap/events";
+import { withRetry, FEED_RETRY_OPTIONS } from "@synap/shared-utils";
+import type { SourceItem } from "@synap/feed-service";
+import {
+  MessageRole,
+  MessageAuthorType,
+  type FeedMessageMetadata,
+} from "@synap/database/schema";
+import { FeedMessageMetadataSchema } from "@synap/database/src/types/feed-config";
+
+const logger = createLogger({ module: "entity-extract" });
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
+/** Payload published by feed-source-executor. */
+export interface EntityExtractJobPayload {
+  subscriptionId: string;
+  feedId: string;
+  userId: string;
+  workspaceId?: string;
+  runId?: string;
+  items: SourceItem[];
+}
+
+interface ClassificationResult {
+  id: string;
+  title: string;
+  url: string;
+  source?: string;
+  topics: { name: string; confidence: number; source: string }[];
+  relevanceScore: number;
+  relevanceExplanation?: string;
+  summary?: string;
+}
+
+// ── Deduplication ────────────────────────────────────────────────────────────
+
+/**
+ * Track seen URLs in the subscription's `params.seenUrls` JSONB field.
+ * Returns items that haven't been seen, and stores their URLs.
+ */
+async function deduplicateItems(
+  subscriptionId: string,
+  items: SourceItem[]
+): Promise<SourceItem[]> {
+  const subscription = await db.query.sourceSubscriptions.findFirst({
+    where: eq(sourceSubscriptions.id, subscriptionId),
+  });
+  if (!subscription) return [];
+
+  const seenUrls = new Set<string>(
+    ((subscription.params as Record<string, unknown>)?.seenUrls as string[]) ??
+      []
+  );
+
+  const newItems: SourceItem[] = [];
+  for (const item of items) {
+    const url = item.url.trim().toLowerCase();
+    if (seenUrls.has(url)) {
+      logger.debug({ url: url.slice(0, 80) }, "Skipping duplicate URL");
+      continue;
+    }
+    newItems.push(item);
+    seenUrls.add(url);
+  }
+
+  // Persist seen URLs if we added new ones
+  if (newItems.length > 0) {
+    const capped = Array.from(seenUrls).slice(-5000);
+    try {
+      await db
+        .update(sourceSubscriptions)
+        .set({
+          params: {
+            ...(subscription.params as Record<string, unknown>),
+            seenUrls: capped,
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(sourceSubscriptions.id, subscriptionId));
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : "unknown" },
+        "Failed to persist seen URLs (non-fatal)"
+      );
+    }
+  }
+
+  logger.info(
+    {
+      total: items.length,
+      new: newItems.length,
+      deduped: items.length - newItems.length,
+    },
+    "Deduplication complete"
+  );
+
+  return newItems;
+}
+
+// ── IS Classification ────────────────────────────────────────────────────────
+
+/**
+ * Classify items with the Intelligence Service.
+ * Returns a map from lowercased URL → ClassificationResult.
+ */
+async function classifyWithIS(
+  items: Array<{
+    url: string;
+    title: string;
+    excerpt?: string;
+    bodyText?: string;
+  }>,
+  userId: string,
+  workspaceId: string | undefined,
+  feedType: string
+): Promise<Record<string, ClassificationResult>> {
+  const isUrl = process.env.INTELLIGENCE_HUB_URL;
+  const isApiKey = process.env.INTELLIGENCE_HUB_INTERNAL_KEY;
+
+  if (!isUrl || !isApiKey) {
+    logger.warn("IS not configured, skipping classification");
+    return {};
+  }
+
+  // Batch items in groups of 20 (IS API limit)
+  const batches: (typeof items)[] = [];
+  for (let i = 0; i < items.length; i += 20) {
+    batches.push(items.slice(i, i + 20));
+  }
+
+  const results: Record<string, ClassificationResult> = {};
+
+  const personaMap: Record<string, string> = {
+    "lead-tracking": "sales",
+    "competitor-monitoring": "researcher",
+    ecosystem: "product-manager",
+    "project-mentions": "project-manager",
+    tech: "cto",
+    business: "founder",
+    crypto: "founder",
+    social: "marketing",
+    news: "default",
+  };
+
+  const interestKeywords: Record<string, string[]> = {
+    "lead-tracking": [
+      "startup",
+      "funding",
+      "raise",
+      "series a",
+      "series b",
+      "launch",
+      "hiring",
+      "acq",
+    ],
+    "competitor-monitoring": [
+      "competitor",
+      "alternative",
+      "vs",
+      "comparison",
+      "pricing",
+      "feature",
+    ],
+    ecosystem: [
+      "open source",
+      "api",
+      "sdk",
+      "platform",
+      "infrastructure",
+      "developer",
+    ],
+    "project-mentions": [
+      "project",
+      "repository",
+      "github",
+      "release",
+      "update",
+    ],
+    tech: [
+      "technology",
+      "software",
+      "engineering",
+      "architecture",
+      "devops",
+      "ai",
+      "ml",
+    ],
+    business: [
+      "business",
+      "market",
+      "industry",
+      "economy",
+      "finance",
+      "startup",
+    ],
+    crypto: ["crypto", "blockchain", "web3", "defi", "nft", "token", "chain"],
+    social: ["social", "media", "community", "influencer", "viral"],
+    news: ["news", "world", "current"],
+  };
+
+  for (const batch of batches) {
+    const feedItems = batch.map((item, idx) => ({
+      id: `item-${idx}`,
+      title: item.title,
+      description: item.excerpt,
+      content: item.bodyText ?? item.excerpt ?? "",
+      url: item.url,
+      source: undefined,
+      publishedAt: undefined,
+    }));
+
+    try {
+      const response = await withRetry(
+        async () => {
+          const res = await fetch(
+            `${isUrl.replace(/\/$/, "")}/v1/tools/classify_feed_items`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${isApiKey}`,
+              },
+              body: JSON.stringify({
+                items: feedItems,
+                options: {
+                  mode: "detailed" as const,
+                  extractTopics: true,
+                  computeRelevance: true,
+                  generateSummary: true,
+                  explainRelevance: true,
+                  relevanceThreshold: 0.1,
+                },
+                userContext: {
+                  interests: interestKeywords[feedType] ?? [],
+                  persona: personaMap[feedType] ?? "default",
+                },
+              }),
+              signal: AbortSignal.timeout(30_000),
+            }
+          );
+
+          if (!response.ok) {
+            throw new ServiceUnavailableError(
+              `IS classify returned ${response.status}`
+            );
+          }
+
+          return res;
+        },
+        { ...FEED_RETRY_OPTIONS, maxRetries: 2 }
+      );
+
+      const json = (await response.json()) as { items: ClassificationResult[] };
+      for (const r of json.items ?? []) {
+        results[r.url.trim().toLowerCase()] = r;
+      }
+    } catch (error) {
+      logger.warn(
+        { error: error instanceof Error ? error.message : "unknown" },
+        "IS classify batch failed (items pass through unclassified)"
+      );
+    }
+  }
+
+  return results;
+}
+
+// ── Feed Config Resolution ───────────────────────────────────────────────────
+
+interface FeedConfig {
+  feedType: string;
+  minRelevanceScore: number; // 0-1
+  enrichmentEnabled: boolean;
+}
+
+async function resolveFeedConfig(
+  feedId: string,
+  userId: string
+): Promise<FeedConfig> {
+  try {
+    const feed = await db.query.feeds.findFirst({
+      where: and(eq(feeds.id, feedId), eq(feeds.userId, userId)),
+      columns: { config: true },
+    });
+
+    const config = feed?.config as Record<string, unknown> | undefined;
+    if (config) {
+      return {
+        feedType: (config.feedType as string) ?? "rss",
+        minRelevanceScore: ((config.minRelevanceScore as number) ?? 0) / 100, // stored as 0-100
+        enrichmentEnabled: config.enrichmentEnabled !== false,
+      };
+    }
+  } catch (err) {
+    logger.debug(
+      { err: err instanceof Error ? err.message : "unknown", feedId },
+      "Failed to resolve feed config, using defaults"
+    );
+  }
+
+  return {
+    feedType: "rss",
+    minRelevanceScore: 0,
+    enrichmentEnabled: true,
+  };
+}
+
+// ── Entity Creation ──────────────────────────────────────────────────────────
+
+async function createEntityFromItem(
+  item: SourceItem,
+  feedType: string,
+  userId: string,
+  workspaceId: string | undefined,
+  classification: ClassificationResult | undefined,
+  sourceConfigId: string,
+  entityRepo: EntityRepository
+): Promise<string> {
+  const props: Record<string, unknown> = {
+    url: item.url,
+    source: sourceConfigId,
+    feedType,
+    topics: classification?.topics?.map((t) => t.name) ?? [],
+    relevanceScore: classification?.relevanceScore ?? 1.0,
+  };
+
+  if (item.excerpt) props.excerpt = item.excerpt;
+  if (item.imageUrl) props.imageUrl = item.imageUrl;
+  if (item.author) props.author = item.author;
+  if (item.publishedAt) props.publishedAt = item.publishedAt.toISOString();
+  if (classification?.summary) props.summary = classification.summary;
+
+  // Extra body text from raw (if web-scraper upstream)
+  const rawBody = (item.raw as Record<string, unknown>)?.bodyText;
+  if (typeof rawBody === "string") props.bodyText = rawBody;
+
+  const entity = await entityRepo.create(
+    {
+      profileSlug: "bookmark",
+      title: item.title.slice(0, 500),
+      preview: item.excerpt?.slice(0, 1000),
+      properties: props,
+      userId,
+      workspaceId: workspaceId ?? null,
+    },
+    userId
+  );
+
+  return entity.id;
+}
+
+// ── Proactive Feed Posting ───────────────────────────────────────────────────
+
+async function postToProactiveFeed(
+  userId: string,
+  workspaceId: string | undefined,
+  highlightedItems: Array<{
+    title: string;
+    url: string;
+    summary?: string;
+    topics: string[];
+  }>,
+  runId: string
+): Promise<string | undefined> {
+  if (highlightedItems.length === 0) return undefined;
+
+  // Find user's feed channel
+  const feedChannel = await db.query.channels.findFirst({
+    where: and(eq(channels.userId, userId), eq(channels.type, "feed")),
+  });
+
+  if (!feedChannel) {
+    logger.debug({ userId }, "No feed channel found for proactive posting");
+    return undefined;
+  }
+
+  // Build markdown summary
+  const lines = [`## New Items Discovered (${highlightedItems.length})`];
+  lines.push("");
+  for (const item of highlightedItems.slice(0, 10)) {
+    lines.push(`- **[${item.title}](${item.url})**`);
+    if (item.summary) {
+      lines.push(`  _${item.summary.slice(0, 200)}_`);
+    }
+    if (item.topics.length > 0) {
+      lines.push(`  Tags: ${item.topics.join(", ")}`);
+    }
+    lines.push("");
+  }
+
+  const content = lines.join("\n");
+  const hash = createHash("sha256").update(`${runId}${content}`).digest("hex");
+
+  let metadata: FeedMessageMetadata;
+  try {
+    metadata = FeedMessageMetadataSchema.parse({
+      feedItem: true,
+      feedType: "proactive",
+      source: { platform: "entity-extract", url: "" },
+      topics: highlightedItems.flatMap((i) => i.topics),
+      categories: [],
+      relevanceScore: 0.7,
+      aiClassified: true,
+      crossFeeds: [],
+      batched: highlightedItems.length > 1,
+    });
+  } catch {
+    metadata = {
+      feedItem: true,
+      feedType: "proactive",
+      source: { platform: "entity-extract", url: "" },
+      topics: [],
+      categories: [],
+      relevanceScore: 0.5,
+      aiClassified: true,
+      crossFeeds: [],
+      batched: highlightedItems.length > 1,
+    };
+  }
+
+  await db.insert(messages).values({
+    channelId: feedChannel.id,
+    userId,
+    role: MessageRole.SYSTEM,
+    authorType: MessageAuthorType.BOT,
+    content,
+    hash,
+    previousHash: "",
+    metadata: metadata as unknown as null,
+  });
+
+  logger.info(
+    { channelId: feedChannel.id, itemCount: highlightedItems.length },
+    "Posted proactive feed digest"
+  );
+
+  return feedChannel.id;
+}
+
+// ── Main Handler ─────────────────────────────────────────────────────────────
+
+export async function handleEntityExtract(job: {
+  data: EntityExtractJobPayload;
+}): Promise<{
+  ok: boolean;
+  itemsReceived: number;
+  itemsDeduped: number;
+  itemsClassified: number;
+  itemsCreated: number;
+  itemsFiltered: number;
+  error?: string;
+}> {
+  const { subscriptionId, feedId, userId, workspaceId, runId, items } =
+    job.data;
+
+  const startTime = Date.now();
+  const jobRunId = runId ?? randomUUID();
+  const result = {
+    ok: true,
+    itemsReceived: items.length,
+    itemsDeduped: 0,
+    itemsClassified: 0,
+    itemsCreated: 0,
+    itemsFiltered: 0,
+  };
+
+  try {
+    // 0. Resolve repository
+    const database = await getDb();
+    const eventRepo = new EventRepository(dbSql);
+    const entityRepo = new EntityRepository(database, eventRepo);
+
+    // 1. Resolve feed config
+    const feedConfig = await resolveFeedConfig(feedId, userId);
+
+    // 2. Resolve source config for provenance
+    const subscription = await db.query.sourceSubscriptions.findFirst({
+      where: eq(sourceSubscriptions.id, subscriptionId),
+    });
+    if (!subscription) {
+      return { ...result, ok: false, error: "subscription not found" };
+    }
+    const configId = subscription.sourceConfigId;
+
+    // 3. Deduplicate
+    const deduped = await deduplicateItems(subscriptionId, items);
+    result.itemsDeduped = items.length - deduped.length;
+
+    if (deduped.length === 0) {
+      logger.info(
+        { subscriptionId, runId: jobRunId },
+        "All items deduplicated — nothing to process"
+      );
+      return result;
+    }
+
+    // 4. Classify with IS (if enrichment enabled)
+    let classificationMap: Record<string, ClassificationResult> = {};
+
+    if (feedConfig.enrichmentEnabled) {
+      const classifiedItems = deduped.map((item) => ({
+        url: item.url.trim().toLowerCase(),
+        title: item.title,
+        excerpt: item.excerpt,
+        bodyText: (item.raw as Record<string, unknown>)?.bodyText as
+          | string
+          | undefined,
+      }));
+
+      classificationMap = await classifyWithIS(
+        classifiedItems,
+        userId,
+        workspaceId,
+        feedConfig.feedType
+      );
+      result.itemsClassified = Object.keys(classificationMap).length;
+    }
+
+    // 5. Filter by relevance threshold
+    const threshold = feedConfig.minRelevanceScore;
+    const filteredItems: Array<{
+      item: SourceItem;
+      classification?: ClassificationResult;
+    }> = [];
+
+    for (const item of deduped) {
+      const cls = classificationMap[item.url.trim().toLowerCase()];
+      if (!cls) {
+        if (threshold <= 0) {
+          filteredItems.push({ item });
+        }
+        continue;
+      }
+
+      if (cls.relevanceScore >= threshold) {
+        filteredItems.push({ item, classification: cls });
+      } else {
+        result.itemsFiltered++;
+      }
+    }
+
+    // 6. Create entities
+    const highlighted: Array<{
+      title: string;
+      url: string;
+      summary?: string;
+      topics: string[];
+    }> = [];
+
+    for (const { item, classification } of filteredItems) {
+      try {
+        const entityId = await createEntityFromItem(
+          item,
+          feedConfig.feedType,
+          userId,
+          workspaceId,
+          classification,
+          configId,
+          entityRepo
+        );
+        result.itemsCreated++;
+
+        if (classification) {
+          highlighted.push({
+            title: item.title,
+            url: item.url,
+            summary: classification.summary,
+            topics: classification.topics.map((t) => t.name),
+          });
+        }
+
+        logger.debug(
+          { entityId, title: item.title.slice(0, 60) },
+          "Entity created from feed item"
+        );
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        logger.error(
+          { err: errorMsg, url: item.url.slice(0, 80) },
+          "Failed to create entity from item (non-fatal — continue)"
+        );
+      }
+    }
+
+    // 7. Post to proactive feed (highlights only)
+    try {
+      await postToProactiveFeed(userId, workspaceId, highlighted, jobRunId);
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : "unknown" },
+        "Proactive feed post failed (non-fatal)"
+      );
+    }
+
+    // 8. Emit side effects
+    try {
+      await emitSideEffects({
+        subjectType: "feed",
+        action: "entity_extract",
+        subjectId: jobRunId,
+        userId,
+        workspaceId,
+        data: {
+          subscriptionId,
+          feedId,
+          itemsReceived: items.length,
+          itemsDeduped: result.itemsDeduped,
+          itemsClassified: result.itemsClassified,
+          itemsCreated: result.itemsCreated,
+          itemsFiltered: result.itemsFiltered,
+          durationMs: Date.now() - startTime,
+        },
+      });
+    } catch (err) {
+      logger.debug(
+        { err: err instanceof Error ? err.message : "unknown" },
+        "Side effects emission failed (non-fatal)"
+      );
+    }
+
+    // 9. Emit event
+    try {
+      await eventRepo.append({
+        id: randomUUID(),
+        version: "v1",
+        type: "feed.entity_extract.completed",
+        subjectType: "feed",
+        subjectId: jobRunId,
+        userId,
+        source: "system",
+        timestamp: new Date(),
+        data: {
+          subscriptionId,
+          feedId,
+          itemsReceived: items.length,
+          itemsDeduped: result.itemsDeduped,
+          itemsClassified: result.itemsClassified,
+          itemsCreated: result.itemsCreated,
+          itemsFiltered: result.itemsFiltered,
+          durationMs: Date.now() - startTime,
+        },
+      });
+    } catch (err) {
+      logger.debug(
+        { err: err instanceof Error ? err.message : "unknown" },
+        "Event append failed (non-fatal)"
+      );
+    }
+
+    logger.info(
+      {
+        subscriptionId,
+        runId: jobRunId,
+        ...result,
+        durationMs: Date.now() - startTime,
+      },
+      "Entity extract complete"
+    );
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    logger.error(
+      { err: errorMsg, subscriptionId, feedId },
+      "Entity extract failed catastrophically"
+    );
+    result.ok = false;
+    result.error = errorMsg;
+  }
+
+  return result;
+}

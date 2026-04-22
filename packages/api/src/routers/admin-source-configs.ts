@@ -9,7 +9,7 @@
  * Use case: CP wants to provision a CPRelay source config on a pod it just
  * created, using a fresh relay key. CP calls this endpoint with
  *   { providerType: 'cp-relay', name: 'CP Relay (prod)',
- *     config: { relayUrl: '…', upstreamType: 'rsshub', upstreamConfig: {…} },
+ *     config: { relayUrl: '…', upstreamType: 'rss-direct', upstreamConfig: {…} },
  *     secrets: [{ field: 'relayKey', value: '<generated-key>' }] }
  * and the pod stores the secret + rewrites config.relayKey to a vault://
  * reference.

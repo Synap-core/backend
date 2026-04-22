@@ -6,9 +6,9 @@
  * `source_configs`
  *   Pod-side, admin-managed provider configurations. One row = one
  *   "registered source the Pod knows how to talk to". Examples:
- *     - "RSSHub instance at cp.synap.app" (providerType='rss-direct')
- *     - "SerpAPI via our CP relay"        (providerType='cp-relay')
- *     - "Custom GitHub releases API"      (providerType='http-api')
+ *     - "Direct RSS feed at example.com"  (providerType='rss-direct')
+ *     - "SerpAPI via our CP relay"       (providerType='cp-relay')
+ *     - "Custom GitHub releases API"     (providerType='http-api')
  *
  *   The `config` JSONB stores provider-specific fields. Anything credential-
  *   like is stored as a `vault://<secret-uuid>/<field>` reference — the

@@ -40,7 +40,6 @@ import { handleIntelligenceHealthCheck } from "./intelligence-health-check.js";
 import { handleAutomationTriggerMatch } from "./automation-trigger-matcher.js";
 import { handleAutomationExecute } from "./automation-executor.js";
 import { handleAutomationCronScheduler } from "./automation-cron-scheduler.js";
-import { handleTelegramDigest } from "./telegram-digest.js";
 import { handleRelationBackfill } from "./relation-backfill.js";
 import {
   handleVaultGrantExpiry,
@@ -60,10 +59,6 @@ import {
   FEED_SOURCE_ITEMS_QUEUE,
 } from "./feed-source-executor.js";
 import {
-  handleTelegramBulkImport,
-  TELEGRAM_BULK_IMPORT_QUEUE,
-} from "./telegram-bulk-import.js";
-import {
   handleLinkedInBulkImport,
   LINKEDIN_BULK_IMPORT_QUEUE,
 } from "./linkedin-bulk-import.js";
@@ -78,6 +73,7 @@ import {
   SYNC_PUSH_SUPPLEMENTARY_QUEUE,
 } from "./sync-push-supplementary.js";
 import { handleHydrationSummaryPost } from "./hydration-summary-post.js";
+import { handleEntityExtract } from "./entity-extract-worker.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -109,7 +105,6 @@ const ALL_QUEUES = [
   "automation-trigger-match",
   "automation-execute",
   "automation-cron-scheduler",
-  "telegram-digest",
   "relation-backfill",
   VAULT_GRANT_EXPIRY_QUEUE,
   "automation-pattern-detect",
@@ -119,7 +114,6 @@ const ALL_QUEUES = [
   "feed-proactive-execute",
   FEED_SOURCE_EXECUTE_QUEUE,
   FEED_SOURCE_ITEMS_QUEUE,
-  TELEGRAM_BULK_IMPORT_QUEUE,
   LINKEDIN_BULK_IMPORT_QUEUE,
   SYNC_PUSH_QUEUE,
   SYNC_PULL_QUEUE,
@@ -273,12 +267,6 @@ export async function registerAllWorkers(): Promise<void> {
   );
   logger.info("Registered worker: automation-cron-scheduler");
 
-  // Telegram morning digest (cron: daily at 8:00 AM) — only when Telegram bot is enabled
-  if (process.env.TELEGRAM_BOT_ENABLED === "true") {
-    await boss.work("telegram-digest", async () => handleTelegramDigest());
-    logger.info("Registered worker: telegram-digest");
-  }
-
   // Relation backfill (one-time: creates relation rows for existing entity_id property values)
   await boss.work("relation-backfill", async ([job]: any[]) =>
     handleRelationBackfill(job)
@@ -327,14 +315,17 @@ export async function registerAllWorkers(): Promise<void> {
   );
   logger.info("Registered worker: feed-source-execute");
 
-  // Contacts archive imports (on-demand — heavy batch upserts)
-  await boss.work(TELEGRAM_BULK_IMPORT_QUEUE, async ([job]: any[]) =>
-    handleTelegramBulkImport(job)
+  // Entity extraction (consumes items from FEED_SOURCE_ITEMS_QUEUE — dedup, IS classify, filter, create entities, post to proactive feed)
+  await boss.work("feed-source-items", async ([job]: any[]) =>
+    handleEntityExtract(job)
   );
+  logger.info("Registered worker: feed-source-items (entity-extract)");
+
+  // Contacts archive imports (on-demand — heavy batch upserts)
   await boss.work(LINKEDIN_BULK_IMPORT_QUEUE, async ([job]: any[]) =>
     handleLinkedInBulkImport(job)
   );
-  logger.info("Registered workers: telegram-bulk-import, linkedin-bulk-import");
+  logger.info("Registered worker: linkedin-bulk-import");
 
   // Hydration summary post — Orchestrator's first proactive message after
   // import review (Gap 3 of onboarding). One attempt, swallow-on-fail.

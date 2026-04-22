@@ -3,7 +3,6 @@
  *
  * Public (podProcedure = auth optional):
  *  - agents.list    — list visible agents
- *  - agents.sync    — Hub Protocol authenticated sync (apiKey required)
  *
  * Protected (workspaceProcedure):
  *  - agents.workspaceList — workspace-scoped agent list
@@ -11,14 +10,11 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure, podProcedure } from "./trpc.js";
+import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, desc, or, isNull, isNotNull } from "@synap/database";
-import { agents, type Agent, type NewAgent } from "@synap/database/schema";
+import { db, eq, desc, or, and } from "@synap/database";
+import { agents } from "@synap/database/schema";
 import { randomUUID } from "crypto";
-import { createLogger } from "@synap-core/core";
-
-const logger = createLogger({ module: "agents-router" });
 
 /**
  * List visible agents — public listing (Pod Procedure).
@@ -28,38 +24,27 @@ export const agentsRouter = router({
   list: podProcedure
     .input(
       z.object({
-        intelligenceServiceId: z.string().default(""),
+        intelligenceServiceId: z.string().uuid().optional(),
         ownerType: z.enum(["system", "user", "provider"]).optional(),
         active: z.boolean().optional(),
       })
     )
     .query(async ({ input }) => {
-      let query = db.select().from(agents).orderBy(desc(agents.createdAt));
+      const conditions = [
+        input.intelligenceServiceId
+          ? eq(agents.intelligenceServiceId, input.intelligenceServiceId)
+          : undefined,
+        input.ownerType ? eq(agents.ownerType, input.ownerType) : undefined,
+        input.active !== undefined
+          ? eq(agents.active, input.active)
+          : undefined,
+      ].filter(Boolean) as Parameters<typeof and>;
 
-      const where: ReturnType<typeof eq | typeof isNull | typeof isNotNull>[] =
-        [];
-
-      if (input.intelligenceServiceId === "") {
-        where.push(isNull(agents.intelligenceServiceId));
-      } else if (input.intelligenceServiceId) {
-        where.push(
-          eq(agents.intelligenceServiceId, input.intelligenceServiceId)
-        );
-      }
-
-      if (input.ownerType) {
-        where.push(eq(agents.ownerType, input.ownerType));
-      }
-
-      if (input.active !== undefined) {
-        where.push(eq(agents.active, input.active));
-      }
-
-      if (where.length > 0) {
-        query = query.where(and(...where));
-      }
-
-      return await query;
+      return db
+        .select()
+        .from(agents)
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
+        .orderBy(desc(agents.createdAt));
     }),
 
   /**
@@ -73,17 +58,15 @@ export const agentsRouter = router({
       })
     )
     .query(async ({ input }) => {
-      let query = db.select().from(agents).orderBy(desc(agents.createdAt));
+      const ownerFilter = input.ownerType
+        ? eq(agents.ownerType, input.ownerType)
+        : or(eq(agents.ownerType, "system"), eq(agents.ownerType, "provider"));
 
-      if (input.ownerType) {
-        query = query.where(eq(agents.ownerType, input.ownerType));
-      } else {
-        query = query.where(
-          or(eq(agents.ownerType, "system"), eq(agents.ownerType, "provider"))
-        );
-      }
-
-      return await query;
+      return db
+        .select()
+        .from(agents)
+        .where(ownerFilter)
+        .orderBy(desc(agents.createdAt));
     }),
 
   /**
@@ -107,6 +90,142 @@ export const agentsRouter = router({
 
       return agent;
     }),
-});
 
-export { agentsRouter };
+  /**
+   * Create a user-owned agent (workspace-scoped).
+   */
+  create: workspaceProcedure
+    .input(
+      z.object({
+        name: z.string().min(1).max(200),
+        slug: z
+          .string()
+          .min(1)
+          .max(100)
+          .regex(/^[\w:.-]+$/),
+        description: z.string().max(1000).optional(),
+        capabilities: z.array(z.string()).optional(),
+        intelligenceServiceId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const existing = await db.query.agents.findFirst({
+        where: and(
+          eq(agents.slug, input.slug),
+          eq(agents.ownerType, "user"),
+          eq(agents.active, true)
+        ),
+      });
+
+      if (existing) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Agent slug '${input.slug}' already exists`,
+        });
+      }
+
+      const [agent] = await db
+        .insert(agents)
+        .values({
+          id: randomUUID(),
+          name: input.name,
+          slug: input.slug,
+          description: input.description ?? null,
+          capabilities: input.capabilities ?? [],
+          intelligenceServiceId: input.intelligenceServiceId ?? null,
+          ownerType: "user",
+          active: true,
+        })
+        .returning();
+
+      return agent;
+    }),
+
+  /**
+   * Update an agent (workspace-scoped).
+   */
+  update: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        name: z.string().min(1).max(200).optional(),
+        slug: z
+          .string()
+          .min(1)
+          .max(100)
+          .regex(/^[\w:.-]+$/)
+          .optional(),
+        description: z.string().max(1000).optional(),
+        capabilities: z.array(z.string()).optional(),
+        intelligenceServiceId: z.string().uuid().optional(),
+        active: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const existing = await db.query.agents.findFirst({
+        where: eq(agents.id, input.id),
+      });
+
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Agent ${input.id} not found`,
+        });
+      }
+
+      const updates: Record<string, unknown> = {};
+      if (input.name !== undefined) updates.name = input.name;
+      if (input.slug !== undefined) updates.slug = input.slug;
+      if (input.description !== undefined)
+        updates.description = input.description;
+      if (input.capabilities !== undefined)
+        updates.capabilities = input.capabilities;
+      if (input.intelligenceServiceId !== undefined)
+        updates.intelligenceServiceId = input.intelligenceServiceId;
+      if (input.active !== undefined) updates.active = input.active;
+
+      if (Object.keys(updates).length === 0) {
+        return existing;
+      }
+
+      const [updated] = await db
+        .update(agents)
+        .set(updates)
+        .where(eq(agents.id, input.id))
+        .returning();
+
+      return updated;
+    }),
+
+  /**
+   * Delete (deactivate) an agent (workspace-scoped).
+   */
+  delete: workspaceProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ input }) => {
+      const existing = await db.query.agents.findFirst({
+        where: eq(agents.id, input.id),
+      });
+
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Agent ${input.id} not found`,
+        });
+      }
+
+      if (existing.slug === "orchestrator") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Cannot delete the orchestrator agent",
+        });
+      }
+
+      await db
+        .update(agents)
+        .set({ active: false })
+        .where(eq(agents.id, input.id));
+
+      return { success: true };
+    }),
+});

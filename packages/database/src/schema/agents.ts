@@ -1,76 +1,69 @@
-/**
- * Agents Schema
- *
- * Configuration for AI agents (system and user-created).
- * Defines LLM provider, capabilities, and execution parameters.
- */
-
+import { relations } from "drizzle-orm";
 import {
   pgTable,
+  uuid,
   text,
-  timestamp,
+  varchar,
   jsonb,
-  integer,
-  decimal,
   boolean,
+  timestamp,
+  uniqueIndex,
   index,
+  pgEnum,
 } from "drizzle-orm/pg-core";
+
+import { users } from "./users.js";
+import { intelligenceServices } from "./intelligence-services.js";
+
+export const ownerTypeEnum = pgEnum("agent_owner_type", [
+  "system",
+  "user",
+  "provider",
+]);
 
 export const agents = pgTable(
   "agents",
   {
-    // Identity
-    id: text("id").primaryKey(), // 'orchestrator', 'research-agent', 'user-custom-123'
+    id: uuid("id").primaryKey().defaultRandom(),
     name: text("name").notNull(),
+    slug: varchar("agent_slug", { length: 255 }).notNull(),
     description: text("description"),
-
-    // Ownership
-    createdBy: text("created_by").notNull(), // 'system' | user-id
-    userId: text("user_id"), // NULL for system agents
-
-    // LLM Configuration
-    llmProvider: text("llm_provider", {
-      enum: ["claude", "openai", "ollama", "gemini"],
-    })
+    icon: text("icon"),
+    capabilities: text("capabilities").array().default([]),
+    metadata: jsonb("metadata").default({}),
+    ownerType: ownerTypeEnum("owner_type").notNull().default("system"),
+    userId: uuid("user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    intelligenceServiceId: uuid("intelligence_service_id").references(
+      () => intelligenceServices.id,
+      { onDelete: "set null" }
+    ),
+    active: boolean("active").default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
-      .default("claude"),
-    llmModel: text("llm_model").notNull(), // 'claude-3-7-sonnet-20250219'
-
-    // Agent definition
-    capabilities: text("capabilities").array().notNull(), // ['intent_analysis', 'entity_extraction']
-    systemPrompt: text("system_prompt").notNull(),
-    toolsConfig: jsonb("tools_config"), // Tool definitions
-
-    // Execution
-    executionMode: text("execution_mode", {
-      enum: ["simple", "react", "langgraph"],
-    })
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
-      .default("simple"),
-    maxIterations: integer("max_iterations").default(5),
-    timeoutSeconds: integer("timeout_seconds").default(30),
-
-    // Learning (V2 feature - placeholder for now)
-    weight: decimal("weight", { precision: 5, scale: 2 }).default("1.0"),
-    performanceMetrics: jsonb("performance_metrics"),
-
-    // Status
-    active: boolean("active").notNull().default(true),
-
-    // Timestamps
-    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
-      .defaultNow()
-      .notNull(),
+      .defaultNow(),
   },
-  (table) => ({
-    createdByIdx: index("agents_created_by_idx").on(table.createdBy),
-    userIdIdx: index("agents_user_id_idx").on(table.userId),
-    activeIdx: index("agents_active_idx").on(table.active),
-  })
+  (table) => {
+    return {
+      agentsServiceSlugUnique: uniqueIndex("idx_agents_service_slug").on(
+        table.intelligenceServiceId,
+        table.slug
+      ),
+      agentsActiveIndex: index("idx_agents_active").on(table.active),
+    };
+  }
 );
+
+export const agentRelations = relations(agents, ({ one }) => ({
+  intelligenceService: one(intelligenceServices, {
+    fields: [agents.intelligenceServiceId],
+    references: [intelligenceServices.id],
+  }),
+}));
 
 export type Agent = typeof agents.$inferSelect;
 export type NewAgent = typeof agents.$inferInsert;

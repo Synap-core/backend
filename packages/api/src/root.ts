@@ -49,6 +49,7 @@ import { syncManagementRouter } from "./routers/sync-management.js";
 import { feedsRouter } from "./routers/feeds.js";
 import { trustedIssuersRouter } from "./routers/trusted-issuers.js";
 import { sourceConfigsRouter } from "./routers/source-configs.js";
+import { agentsRouter } from "./routers/agents.js";
 
 /**
  * Core API Router
@@ -95,6 +96,7 @@ export const coreRouter = router({
   agentUsers: agentUsersRouter,
   mcpServers: mcpServersRouter,
   agentConfigs: agentConfigsRouter,
+  agents: agentsRouter,
   widgetDefinitions: widgetDefinitionsRouter,
   channelGateway: channelGatewayRouter,
   import: importRouter,

@@ -19,7 +19,7 @@ export interface FeedMessageMetadata {
     platform: string;
     /** Original source URL */
     url: string;
-    /** RSSHub route: "/hackernews/frontpage" */
+    /** Original feed route or path */
     route?: string;
     /** Original author */
     author?: string;

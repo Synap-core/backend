@@ -45,11 +45,15 @@ import { z } from "zod";
 import { db, eq, and, desc, isNull } from "@synap/database";
 import {
   channels,
+  agents,
   workspaceMembers,
   messages,
   MessageRole,
 } from "@synap/database/schema";
-import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
+import {
+  resolveIntelligenceService,
+  resolveIntelligenceServiceByAgentId,
+} from "../utils/intelligence-routing.js";
 import { ensurePersonalChannel } from "../utils/personal-channel.js";
 import { createLogger } from "@synap-core/core";
 import { authMiddleware } from "@synap/auth";
@@ -173,14 +177,41 @@ chatStreamApp.post("/stream", async (c) => {
     }
   }
 
+  // ── Read channel's assigned agent to drive IS routing and agentType ────────
+  let channelAgentId: string | null = null;
+  let channelAgentSlug: string | null = null;
+  try {
+    const channelRow = await db.query.channels.findFirst({
+      where: eq(channels.id, resolvedChannelId),
+      columns: { assignedAgentId: true },
+    });
+    if (channelRow?.assignedAgentId) {
+      channelAgentId = channelRow.assignedAgentId;
+      const [agentRow] = await db
+        .select({ slug: agents.slug })
+        .from(agents)
+        .where(eq(agents.id, channelAgentId))
+        .limit(1);
+      channelAgentSlug = agentRow?.slug ?? null;
+    }
+  } catch {
+    // non-fatal
+  }
+
   // ── Resolve Intelligence Service endpoint ────────────────────────────────
   let isUrl: string;
   let isApiKey: string;
   try {
-    const resolved = await resolveIntelligenceService({
-      userId,
-      workspaceId: resolvedWorkspaceId,
-    });
+    const resolved = channelAgentId
+      ? await resolveIntelligenceServiceByAgentId(channelAgentId, {
+          userId,
+          workspaceId: resolvedWorkspaceId,
+          capability: "chat",
+        })
+      : await resolveIntelligenceService({
+          userId,
+          workspaceId: resolvedWorkspaceId,
+        });
     isUrl = resolved.endpoint;
     isApiKey = resolved.serviceApiKey;
   } catch (err) {
@@ -200,7 +231,7 @@ chatStreamApp.post("/stream", async (c) => {
     threadId: input.threadId ?? resolvedChannelId,
     userId,
     workspaceId: resolvedWorkspaceId,
-    agentType: input.agentType ?? "meta",
+    agentType: input.agentType ?? channelAgentSlug ?? "meta",
     dataPodUrl: process.env.PUBLIC_URL ?? process.env.BACKEND_URL ?? "",
     stream: true,
   };

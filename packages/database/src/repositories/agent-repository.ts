@@ -1,125 +1,66 @@
 /**
  * Agent Repository
  *
- * Manages AI agent configurations (system and user-created).
- * Standalone implementation for agent CRUD operations.
+ * Manages AI agent identity layer (names, icons, capabilities, routing).
+ * Behavioral internals (systemPrompt, toolsConfig, LLM provider/model) stay on the IS.
  */
 
-import { eq, and, desc, or } from "drizzle-orm";
+import { eq, and, desc, isNull, isNotNull, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import { agents, type Agent } from "../schema/agents.js";
-import { EventRepository } from "./event-repository.js";
-import { sql } from "../client-pg.js";
+import { agents, type Agent, type NewAgent } from "../schema/agents.js";
 
-export interface CreateAgentData {
+export interface UpsertAgentFromSyncData {
   id: string;
   name: string;
+  slug: string;
   description?: string;
-  createdBy: string;
-  userId?: string;
-  llmProvider?: "claude" | "openai" | "ollama" | "gemini";
-  llmModel: string;
-  capabilities: string[];
-  systemPrompt: string;
-  toolsConfig?: Record<string, unknown>;
-  executionMode?: "simple" | "react" | "langgraph";
-  maxIterations?: number;
-  timeoutSeconds?: number;
-  weight?: string;
-  performanceMetrics?: Record<string, unknown>;
-  active?: boolean;
-}
-
-export interface UpdateAgentData {
-  name?: string;
-  description?: string;
-  llmProvider?: "claude" | "openai" | "ollama" | "gemini";
-  llmModel?: string;
+  icon?: string;
   capabilities?: string[];
-  systemPrompt?: string;
-  toolsConfig?: Record<string, unknown>;
-  executionMode?: "simple" | "react" | "langgraph";
-  maxIterations?: number;
-  timeoutSeconds?: number;
-  weight?: string;
-  performanceMetrics?: Record<string, unknown>;
-  active?: boolean;
+  metadata?: Record<string, unknown>;
+  intelligenceServiceId: string;
 }
 
 export class AgentRepository {
-  private eventRepo: EventRepository;
-
   constructor(
     private db: PostgresJsDatabase<typeof import("../schema/index.js")>
-  ) {
-    this.eventRepo = new EventRepository(sql);
-  }
+  ) {}
 
   /**
-   * Create a new agent
+   * Upsert an agent from IS sync payload.
+   * Uses service+slug uniqueness for conflict resolution.
    */
-  async create(data: CreateAgentData, userId: string): Promise<Agent> {
+  async upsertFromSync(data: UpsertAgentFromSyncData): Promise<Agent> {
     const [agent] = await this.db
       .insert(agents)
       .values({
         id: data.id,
         name: data.name,
-        description: data.description,
-        createdBy: data.createdBy,
-        userId: data.userId,
-        llmProvider: data.llmProvider || "claude",
-        llmModel: data.llmModel,
-        capabilities: data.capabilities,
-        systemPrompt: data.systemPrompt,
-        toolsConfig: data.toolsConfig,
-        executionMode: data.executionMode || "simple",
-        maxIterations: data.maxIterations || 5,
-        timeoutSeconds: data.timeoutSeconds || 30,
-        weight: data.weight || "1.0",
-        performanceMetrics: data.performanceMetrics,
-        active: data.active !== undefined ? data.active : true,
-      })
-      .returning();
-
-    await this.emitCompleted("create", agent.id, userId);
-    return agent;
-  }
-
-  /**
-   * Update an agent
-   */
-  async update(
-    id: string,
-    data: UpdateAgentData,
-    userId: string
-  ): Promise<Agent> {
-    const [agent] = await this.db
-      .update(agents)
-      .set({
-        ...data,
+        slug: data.slug,
+        description: data.description ?? null,
+        icon: data.icon ?? null,
+        capabilities: data.capabilities ?? [],
+        metadata: data.metadata ?? {},
+        active: true,
+        ownerType: "provider",
+        intelligenceServiceId: data.intelligenceServiceId,
+        createdAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(eq(agents.id, id))
+      .onConflictDoUpdate({
+        target: [agents.intelligenceServiceId, agents.slug],
+        set: {
+          name: data.name,
+          description: data.description ?? sql`${agents.description}`,
+          icon: data.icon ?? sql`${agents.icon}`,
+          capabilities: data.capabilities ?? agents.capabilities,
+          metadata: data.metadata ?? agents.metadata,
+          active: true,
+          updatedAt: new Date(),
+        },
+      })
       .returning();
 
-    if (!agent) {
-      throw new Error(`Agent ${id} not found`);
-    }
-
-    await this.emitCompleted("update", id, userId);
     return agent;
-  }
-
-  /**
-   * Delete an agent
-   */
-  async delete(id: string, userId: string): Promise<void> {
-    await this.db
-      .update(agents)
-      .set({ active: false, updatedAt: new Date() })
-      .where(eq(agents.id, id));
-
-    await this.emitCompleted("delete", id, userId);
   }
 
   /**
@@ -135,19 +76,50 @@ export class AgentRepository {
   }
 
   /**
-   * List all active agents (system + user's custom agents)
+   * Get active agent by service + slug
    */
-  async listActive(userId?: string): Promise<Agent[]> {
-    const conditions = [eq(agents.active, true)];
+  async getBySlug(serviceId: string, slug: string): Promise<Agent | null> {
+    const [agent] = await this.db
+      .select()
+      .from(agents)
+      .where(
+        and(
+          eq(agents.intelligenceServiceId, serviceId),
+          eq(agents.slug, slug),
+          eq(agents.active, true)
+        )
+      )
+      .limit(1);
+    return agent || null;
+  }
 
-    if (userId) {
-      // Include system agents and user's custom agents
+  /**
+   * List all active agents (optionally filtered by service or owner type)
+   */
+  async list(filters?: {
+    intelligenceServiceId?: string | null;
+    ownerType?: string;
+    active?: boolean;
+  }): Promise<Agent[]> {
+    const conditions: Array<
+      ReturnType<typeof eq | typeof isNull | typeof isNotNull>
+    > = [eq(agents.active, true)];
+
+    if (filters?.intelligenceServiceId === null) {
+      conditions.push(isNull(agents.intelligenceServiceId));
+    } else if (filters?.intelligenceServiceId) {
       conditions.push(
-        or(eq(agents.createdBy, "system"), eq(agents.userId, userId))!
+        eq(agents.intelligenceServiceId, filters.intelligenceServiceId)
       );
-    } else {
-      // Only system agents
-      conditions.push(eq(agents.createdBy, "system"));
+    }
+
+    if (filters?.ownerType) {
+      conditions.push(
+        eq(
+          agents.ownerType,
+          filters.ownerType as "user" | "system" | "provider"
+        )
+      );
     }
 
     return await this.db
@@ -158,35 +130,46 @@ export class AgentRepository {
   }
 
   /**
-   * List user's custom agents
+   * Deactivate an agent
    */
-  async listByUser(userId: string): Promise<Agent[]> {
-    return await this.db
-      .select()
-      .from(agents)
-      .where(eq(agents.userId, userId))
-      .orderBy(desc(agents.createdAt));
+  async deactivate(id: string): Promise<void> {
+    await this.db
+      .update(agents)
+      .set({ active: false, updatedAt: new Date() })
+      .where(eq(agents.id, id));
   }
 
   /**
-   * Emit completed event
+   * Count active agents for a service
    */
-  private async emitCompleted(
-    action: "create" | "update" | "delete",
-    agentId: string,
-    userId: string
-  ): Promise<void> {
-    await this.eventRepo.append({
-      id: crypto.randomUUID(),
-      version: "v1",
-      type: `agents.${action}.completed`,
-      subjectId: agentId,
-      subjectType: "agent",
-      data: { id: agentId },
-      userId,
-      source: "api",
-      timestamp: new Date(),
-      metadata: {},
-    });
+  async countByService(serviceId: string): Promise<number> {
+    const [{ count }] = await this.db
+      .select({ count: agents.id })
+      .from(agents)
+      .where(
+        and(
+          eq(agents.intelligenceServiceId, serviceId),
+          eq(agents.active, true)
+        )
+      );
+    return Number(count) || 0;
+  }
+
+  /**
+   * Get IDs of services that have active agents
+   */
+  async getActiveServiceIds(): Promise<string[]> {
+    const rows = await this.db
+      .select({ id: agents.intelligenceServiceId })
+      .from(agents)
+      .where(
+        and(eq(agents.active, true), isNotNull(agents.intelligenceServiceId))
+      )
+      .groupBy(agents.intelligenceServiceId);
+
+    return rows.map((r) => r.id!).filter(Boolean);
   }
 }
+
+// Re-export types for convenience
+export { type Agent, type NewAgent };

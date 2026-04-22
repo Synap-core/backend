@@ -6,6 +6,7 @@
  */
 export {
   resolveIntelligenceService,
+  resolveIntelligenceServiceByAgentId,
   resolveAgent,
   getDefaultActiveService,
 } from "@synap/intelligence-client";

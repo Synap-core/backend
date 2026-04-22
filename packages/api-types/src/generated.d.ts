@@ -2114,6 +2114,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				parentChannelId?: string | undefined;
 				branchPurpose?: string | undefined;
 				agentId?: string | undefined;
+				agentSlug?: string | undefined;
 				agentType?: string | undefined;
 				agentConfig?: Record<string, any> | undefined;
 				inheritContext?: boolean | undefined;

@@ -1,42 +1,64 @@
-/**
- * Agent handle resolution
- *
- * Maps short @mention handles (e.g. "@cto", "@ai") to intelligence hub
- * agent type strings (e.g. "persona:cto", "meta").
- *
- * Used by sendMessage to resolve @mentions in user messages before forwarding
- * to the intelligence hub — no DB storage, purely for the per-call agentType override.
- */
+import { db, eq } from "@synap/database";
+import { agents } from "@synap/database/schema";
 
+/**
+ * Maps @mention handles to the agent slugs used in the database lookup.
+ * Updated from the previous hardcoded agentType values to agent slugs.
+ * Kept for reference and backward compat with UI / docs.
+ *
+ * Orchestrator is the fallback for legacy "ai" and "synap" mentions.
+ */
 export const AGENT_HANDLE_MAP: Record<string, string> = {
-  // Default / catch-all
-  ai: "meta",
-  synap: "meta",
-  // Personas
+  ai: "orchestrator",
+  synap: "orchestrator",
   cto: "persona:cto",
   sales: "persona:sales",
   marketing: "persona:marketing",
   pm: "persona:project-manager",
-  // Specialists
   research: "knowledge-search",
   code: "code",
   writing: "writing",
 };
 
 /**
- * Resolve a @mention handle to an agentType string.
- * Returns null if the handle is not recognised.
+ * Resolve a @mention handle to the owning agent via the `agents` table.
+ * Strips leading `@`, looks up the slug via `AGENT_HANDLE_MAP`, then
+ * queries `agents` by slug.
+ *
+ * Orchestrator ("ai" / "synap") is a system-level agent with no
+ * intelligenceServiceId — always available.
  */
-export function resolveAgentHandle(handle: string): string | null {
-  return AGENT_HANDLE_MAP[handle.toLowerCase()] ?? null;
+export async function resolveAgentHandle(handle: string): Promise<{
+  agentId: string;
+  agentName: string;
+  agentSlug: string;
+} | null> {
+  const raw = handle.replace(/^@/, "").trim().toLowerCase();
+  const slug = AGENT_HANDLE_MAP[raw];
+  if (!slug) return null;
+
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(eq(agents.slug, slug))
+    .limit(1);
+  if (!agent) return null;
+
+  return {
+    agentId: agent.id,
+    agentName: agent.name,
+    agentSlug: agent.slug,
+  };
 }
 
 /**
- * Parse the first @handle from plain-text message content and resolve it.
- * Returns the agentType string, or null if no recognised @mention found.
+ * Parse the first @handle from plain-text message content.
+ * Returns the raw handle string for backward compat; callers
+ * should pass the result to `resolveAgentHandle()` for the full
+ * agent record.
  */
 export function extractMentionAgentType(content: string): string | null {
   const match = content.match(/@([\w-]+)/);
   if (!match) return null;
-  return resolveAgentHandle(match[1]);
+  return match[1];
 }

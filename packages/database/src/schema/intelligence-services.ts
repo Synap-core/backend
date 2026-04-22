@@ -5,14 +5,7 @@
  * from the Data Pod (e.g., Synap Intelligence Service, third-party AI providers)
  */
 
-import {
-  pgTable,
-  text,
-  timestamp,
-  jsonb,
-  boolean,
-  uuid,
-} from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
 
 export const intelligenceServices = pgTable("intelligence_services", {
   id: text("id").primaryKey(),

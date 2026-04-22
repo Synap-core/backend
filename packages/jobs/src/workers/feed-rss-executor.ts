@@ -23,9 +23,13 @@ import { channels, messages } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
 import {
-  fetchRSSItems,
-  type NormalizedRSSItem,
-} from "../fetchers/rss-fetcher.js";
+  RSSDirectProvider,
+  CPRelayProvider,
+  type SourceItem,
+  type ResolvedConfig,
+  type FetchParams,
+  type FetchResult,
+} from "@synap/feed-service";
 import type {
   FeedExecutionPayload,
   RSSFeedConfig,
@@ -44,6 +48,30 @@ function isRSSFeedConfig(
   config: FeedExecutionPayload["config"]
 ): config is RSSFeedConfig {
   return config.feedType === "rss";
+}
+
+function sourceItemsToNormalized(
+  items: SourceItem[],
+  sourceUrl: string,
+  sourceName?: string
+): NormalizedRSSItem[] {
+  return items.map((item) => ({
+    id: item.externalId,
+    title: item.title,
+    content: item.excerpt ?? "",
+    summary: item.excerpt?.slice(0, 500) ?? "",
+    url: item.url,
+    author: item.author,
+    publishedAt: item.publishedAt,
+    contentText: item.excerpt ?? "",
+    categories: Array.isArray(item.raw)
+      ? (item.raw as string[]).filter(Boolean)
+      : [],
+    source: {
+      name: sourceName || "",
+      url: sourceUrl,
+    },
+  }));
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -585,15 +613,8 @@ export async function handleFeedRSSExecute(job: {
       seenUrls = new Set<string>();
     }
 
-    // 2. Fetch RSS items with retry and comprehensive error handling
-    let fetchResult: {
-      items: NormalizedRSSItem[];
-      errors: Array<{ source: string; error: string }>;
-      sourceCount: number;
-    };
-
+    // 2. Fetch RSS items
     try {
-      // Type guard ensures config.sources exists for RSS feeds
       if (!config.sources?.length) {
         throw new Error("RSS feed config missing sources");
       }
@@ -601,21 +622,38 @@ export async function handleFeedRSSExecute(job: {
       const sources = config.sources;
       const maxItems = config.maxItemsPerRun ?? 10;
 
-      fetchResult = await withRetry(
-        async () => {
-          return await fetchRSSItems(sources, {
-            useCpProxy: config.rsshubConfig?.useCpProxy ?? true,
-            maxItems: maxItems * 2, // Fetch more for filtering
-          });
-        },
-        {
-          ...FEED_RETRY_OPTIONS,
-          maxRetries: 2,
-          onRetry: (error: Error, attempt: number) => {
-            logger.warn({ error: error.message, attempt }, "RSS fetch retry");
-          },
+      const directProvider = new RSSDirectProvider();
+      const allItems: NormalizedRSSItem[] = [];
+      const fetchErrors: Array<{ source: string; error: string }> = [];
+
+      for (const source of sources) {
+        try {
+          const fetchConfig: ResolvedConfig = { feedUrl: source.url };
+          const result = await directProvider.fetch(fetchConfig, {});
+          const items = sourceItemsToNormalized(
+            result.items,
+            source.url,
+            source.name
+          );
+          allItems.push(...items);
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          fetchErrors.push({ source: source.url, error: errorMsg });
         }
-      );
+      }
+
+      // Sort by published date (newest first) and limit
+      allItems.sort((a, b) => {
+        const aDate = a.publishedAt?.getTime() ?? 0;
+        const bDate = b.publishedAt?.getTime() ?? 0;
+        return bDate - aDate;
+      });
+
+      const fetchResult = {
+        items: allItems.slice(0, maxItems * 2),
+        errors: fetchErrors,
+        sourceCount: sources.length,
+      };
 
       fetchedCount = fetchResult.items.length;
 

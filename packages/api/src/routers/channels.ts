@@ -38,7 +38,6 @@ import {
   ThreadKind,
   FeedScope,
   ChannelStatus,
-  ChannelAgentType,
   MessageRole,
   MessageAuthorType,
   type ChannelContextObjectType,
@@ -51,8 +50,12 @@ import {
   mcpServers,
   sessions,
   SessionStatus,
+  agents,
 } from "@synap/database/schema";
-import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
+import {
+  resolveIntelligenceService,
+  resolveIntelligenceServiceByAgentId,
+} from "../utils/intelligence-routing.js";
 import { validateExternalUrl } from "../utils/validate-url.js";
 import { resolveAiChannelByFamily } from "../utils/resolve-ai-channel-family.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
@@ -68,6 +71,7 @@ import type { AIStep, HubResponse } from "@synap-core/types";
 import type { Channel } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects, getBoss } from "@synap/events";
+import { AgentRepository } from "@synap/database";
 
 const logger = createLogger({ module: "channels" });
 
@@ -116,6 +120,54 @@ const POD_WIDE_MCP_CACHE_KEY = "__pod_wide__";
 
 export function invalidateMcpCache(workspaceId?: string | null): void {
   mcpServerCache.delete(workspaceId ?? POD_WIDE_MCP_CACHE_KEY);
+}
+
+/**
+ * Resolve an agentId for message sending.
+ * If a valid UUID is passed, validate it exists + active in the agents table.
+ * Otherwise, query for the system orchestrator agent.
+ */
+async function resolveAgentId(agentId?: string): Promise<string> {
+  if (agentId) {
+    try {
+      crypto.randomUUID(); // validate it's a UUID — throws if malformed
+      const parsed = new RegExp(/^[\d:a-fA-F]+$/).test(agentId);
+      if (!parsed) {
+        logger.warn(
+          { agentId },
+          "Invalid agentId UUID, falling back to orchestrator"
+        );
+        agentId = undefined;
+      }
+    } catch {
+      logger.warn(
+        { agentId },
+        "Invalid agentId UUID, falling back to orchestrator"
+      );
+      agentId = undefined;
+    }
+  }
+
+  const agentRepo = new AgentRepository(db);
+  if (agentId) {
+    const agent = await agentRepo.getById(agentId);
+    if (agent?.active) {
+      return agent.id;
+    }
+    logger.warn(
+      { agentId },
+      "Agent not found or inactive, falling back to orchestrator"
+    );
+  }
+
+  // Fall back to system orchestrator
+  const [orchestrator] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.slug, "orchestrator"), eq(agents.active, true)))
+    .limit(1);
+
+  return orchestrator?.id ?? randomUUID();
 }
 
 async function getMcpServersForWorkspace(
@@ -420,12 +472,8 @@ export const channelsRouter = router({
         contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
         parentChannelId: z.string().uuid().optional(),
         branchPurpose: z.string().max(500).optional(),
-        agentType: z
-          .string()
-          .min(1)
-          .max(100)
-          .regex(/^[\w:.-]+$/)
-          .optional(),
+        /** Agent slug to assign when creating the channel (e.g. "networking"). */
+        agentSlug: z.string().max(100).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -437,7 +485,7 @@ export const channelsRouter = router({
         contextObjectType: input.contextObjectType,
         parentChannelId: input.parentChannelId,
         branchPurpose: input.branchPurpose,
-        agentType: input.agentType,
+        agentSlug: input.agentSlug,
       });
       return { channel };
     }),
@@ -451,15 +499,17 @@ export const channelsRouter = router({
       z.object({
         parentChannelId: z.string().uuid().optional(),
         branchPurpose: z.string().optional(),
-        agentId: z.string().optional(),
-        agentType: z
-          .string()
-          .min(1)
-          .max(100)
-          .regex(/^[\w:.-]+$/)
-          .optional(),
+        /** UUID of the agent to assign to this channel (from agents table). */
+        agentId: z.string().uuid().optional(),
+        /** Slug of the agent to assign (e.g. "orchestrator", "networking"). Resolved to UUID server-side. */
+        agentSlug: z.string().max(100).optional(),
         agentConfig: z.record(z.string(), z.any()).optional(),
         inheritContext: z.boolean().default(true),
+        title: z.string().optional(),
+        externalSource: z.string().optional(),
+        externalChannelId: z.string().optional(),
+        externalParticipants: z.array(z.string()).optional(),
+        metadata: z.record(z.string(), z.any()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -491,8 +541,6 @@ export const channelsRouter = router({
             workspaceId: workspaceId ?? null,
             parentChannelId: input.parentChannelId,
             branchPurpose: input.branchPurpose,
-            agentId: input.agentId || "orchestrator",
-            agentType: input.agentType ?? ChannelAgentType.META,
             agentConfig: input.agentConfig,
             channelType: ChannelType.THREAD,
             threadKind: ThreadKind.BRANCH,
@@ -515,92 +563,64 @@ export const channelsRouter = router({
       }
 
       // Main AI channel
-      const [channel] = await db
+      const channelId = randomUUID();
+
+      // Validate the requested agentId exists and is active.
+      // Leave assignedAgentId null if no agentId provided — IS must sync agents first.
+      let assignedAgentId: string | undefined;
+      if (input.agentId) {
+        const agentRepo = new AgentRepository(db);
+        const agent = await agentRepo.getById(input.agentId);
+        if (agent?.active) {
+          assignedAgentId = agent.id;
+        } else {
+          logger.warn(
+            { agentId: input.agentId },
+            "Requested agentId not found or inactive — channel created without agent"
+          );
+        }
+      }
+
+      // If no agentId but agentSlug provided, resolve slug → UUID
+      if (!assignedAgentId && input.agentSlug) {
+        const [agentBySlug] = await db
+          .select({ id: agents.id })
+          .from(agents)
+          .where(and(eq(agents.slug, input.agentSlug), eq(agents.active, true)))
+          .limit(1);
+        if (agentBySlug) {
+          assignedAgentId = agentBySlug.id;
+        } else {
+          logger.warn(
+            { agentSlug: input.agentSlug },
+            "Agent slug not found — channel created without agent"
+          );
+        }
+      }
+
+      await db
         .insert(channels)
         .values({
+          id: channelId,
           userId: ctx.userId,
           workspaceId: workspaceId ?? null,
           channelType: ChannelType.THREAD,
+          threadKind: ThreadKind.PERSONAL,
           status: ChannelStatus.ACTIVE,
-          agentId: input.agentId || "orchestrator",
-          agentType: input.agentType ?? ChannelAgentType.META,
+          assignedAgentId: assignedAgentId ?? null,
+          title: input.title,
+          externalSource: input.externalSource,
+          externalChannelId: input.externalChannelId,
+          metadata: {
+            externalParticipants: input.externalParticipants ?? [],
+            // External reply routing is capability + toggle based and only runs
+            // when the connector marks the conversation as live.
+            relayEnabled: false,
+            connectorLive: false,
+            ...(input.metadata ?? {}),
+          },
         })
         .returning();
-
-      const channelId = channel.id;
-
-      emitChatEvent({
-        event: "channel:created",
-        data: { channelId, userId: ctx.userId },
-        workspaceId: workspaceId ?? null,
-        userId: ctx.userId,
-      });
-
-      return { channelId, channel };
-    }),
-
-  /**
-   * Create an external-import channel.
-   *
-   * Called either:
-   *   a) directly by the user (manual import from settings)
-   *   b) by proposals.approve when a hub-protocol `createExternalChannel` proposal is approved
-   *
-   * The channel stores the external platform conversation and lets the AI and user
-   * interact with it inside the workspace. No AI auto-response on creation.
-   */
-  createExternalChannel: workspaceProcedure
-    .input(
-      z.object({
-        externalSource: z.string(),
-        externalChannelId: z.string(),
-        title: z.string().min(1).max(255),
-        externalParticipants: z.array(z.string()).optional(),
-        initialMessage: z.string().optional(),
-        metadata: z.record(z.string(), z.unknown()).optional(),
-      })
-    )
-    .mutation(async ({ input, ctx }) => {
-      const workspaceId = ctx.workspaceId;
-      if (!workspaceId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Workspace context required",
-        });
-      }
-
-      // Idempotency: check if a channel for this external source + ID already exists
-      const existing = await db.query.channels.findFirst({
-        where: and(
-          eq(channels.workspaceId, workspaceId),
-          eq(channels.externalSource, input.externalSource),
-          eq(channels.externalChannelId, input.externalChannelId)
-        ),
-      });
-
-      if (existing) {
-        return { channelId: existing.id, status: "exists" as const };
-      }
-
-      const channelId = randomUUID();
-      await db.insert(channels).values({
-        id: channelId,
-        userId: ctx.userId,
-        workspaceId,
-        channelType: ChannelType.EXTERNAL,
-        status: ChannelStatus.ACTIVE,
-        title: input.title,
-        externalSource: input.externalSource,
-        externalChannelId: input.externalChannelId,
-        metadata: {
-          externalParticipants: input.externalParticipants ?? [],
-          // External reply routing is capability + toggle based and only runs
-          // when the connector marks the conversation as live.
-          relayEnabled: false,
-          connectorLive: false,
-          ...(input.metadata ?? {}),
-        },
-      });
 
       emitChatEvent({
         event: "channel:created",
@@ -636,12 +656,6 @@ export const channelsRouter = router({
         visibility: z.enum(["open", "closed"]).default("closed"),
         /** Agent user IDs that can post (required for closed, recommended for open) */
         participants: z.array(z.string().uuid()).optional(),
-        agentType: z
-          .string()
-          .min(1)
-          .max(100)
-          .regex(/^[\w:.-]+$/)
-          .optional(),
         title: z.string().max(255).optional(),
       })
     )
@@ -671,8 +685,6 @@ export const channelsRouter = router({
         channelType: ChannelType.AGENT_COLLAB,
         status: ChannelStatus.ACTIVE,
         title: input.title ?? input.topic.slice(0, 80),
-        agentId: "orchestrator",
-        agentType: input.agentType ?? ChannelAgentType.META,
         metadata: {
           topic: input.topic,
           visibility: input.visibility,
@@ -733,8 +745,6 @@ export const channelsRouter = router({
         contextObjectType: "document",
         contextObjectId: input.documentId,
         status: ChannelStatus.ACTIVE,
-        agentId: "orchestrator",
-        agentType: ChannelAgentType.NONE,
         metadata: { origin: "comment" },
       });
 
@@ -803,8 +813,6 @@ export const channelsRouter = router({
         contextObjectType: "entity",
         contextObjectId: input.entityId,
         status: ChannelStatus.ACTIVE,
-        agentId: "orchestrator",
-        agentType: ChannelAgentType.NONE,
         metadata: { origin: "comment" },
       });
 
@@ -850,13 +858,9 @@ export const channelsRouter = router({
         channelId: z.string().uuid().optional(),
         content: z.string().min(1).max(50_000),
         workspaceId: z.string().uuid().optional(),
-        agentType: z
-          .string()
-          .min(1)
-          .max(100)
-          .regex(/^[\w:.-]+$/)
-          .optional(),
-        /** @mention handle, e.g. "cto" or "ai" — resolved to agentType for this call only */
+        /** UUID of the agent to use — validated against agents table */
+        agentId: z.string().uuid().optional(),
+        /** @mention handle, e.g. "cto" or "ai" — resolved to agent slug for this call only */
         agentHandle: z.string().optional(),
         /** Originating channel ID when spawning a new THREAD from a non-AI channel */
         parentChannelId: z.string().uuid().optional(),
@@ -877,16 +881,41 @@ export const channelsRouter = router({
       let channelId = input.channelId;
       const content = input.content;
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
-      const requestedAgentType = input.agentType;
+      const requestedAgentId: string | undefined = input.agentId;
 
-      // Resolve @mention handle → agentType (for per-call override, not stored on channel)
+      // Resolve @mention handle → agent slug (for per-call override, not stored on channel)
+      const resolvedHandle = input.agentHandle
+        ? await resolveAgentHandle(input.agentHandle)
+        : null;
       const mentionedAgentType =
-        (input.agentHandle ? resolveAgentHandle(input.agentHandle) : null) ??
-        extractMentionAgentType(content);
+        resolvedHandle?.agentSlug ?? extractMentionAgentType(content);
+
+      // Resolve agentId: validate if provided, otherwise query for active orchestrator
+      let resolvedAgentId: string;
+      try {
+        resolvedAgentId = await resolveAgentId(requestedAgentId);
+      } catch (err) {
+        logger.error(
+          { err },
+          "Failed to resolve agentId, falling back to orchestrator"
+        );
+        try {
+          const [orchestrator] = await db
+            .select()
+            .from(agents)
+            .where(
+              and(eq(agents.slug, "orchestrator"), eq(agents.active, true))
+            )
+            .limit(1);
+          resolvedAgentId = orchestrator?.id ?? randomUUID();
+        } catch {
+          resolvedAgentId = randomUUID();
+        }
+      }
 
       // Route to channel when not provided
       if (!channelId) {
-        if (!workspaceId && requestedAgentType !== "onboarding") {
+        if (!workspaceId) {
           throw new TRPCError({
             code: "BAD_REQUEST",
             message:
@@ -894,54 +923,28 @@ export const channelsRouter = router({
           });
         }
 
-        if (requestedAgentType === "onboarding") {
-          // Onboarding flow: no workspace yet — create a dedicated ephemeral channel
-          const [channel] = await db
-            .insert(channels)
-            .values({
-              userId: userId,
-              workspaceId: workspaceId ?? null,
-              channelType: ChannelType.THREAD,
-              status: ChannelStatus.ACTIVE,
-              agentId: "orchestrator",
-              agentType: ChannelAgentType.ONBOARDING,
-              parentChannelId: input.parentChannelId ?? null,
-            })
-            .returning();
-          channelId = channel.id;
-          emitChatEvent({
-            event: "channel:created",
-            data: { channelId, userId: userId },
-            workspaceId: workspaceId ?? null,
-            userId: userId,
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, workspaceId),
+            eq(workspaceMembers.userId, userId)
+          ),
+        });
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "You are not a member of this workspace",
           });
-        } else {
-          if (workspaceId) {
-            const membership = await db.query.workspaceMembers.findFirst({
-              where: and(
-                eq(workspaceMembers.workspaceId, workspaceId),
-                eq(workspaceMembers.userId, userId)
-              ),
-            });
-            if (!membership) {
-              throw new TRPCError({
-                code: "FORBIDDEN",
-                message: "You are not a member of this workspace",
-              });
-            }
-          }
-          const resolvedChannel = await resolveAiChannelByFamily({
-            userId,
-            workspaceId,
-            family: input.aiChannelFamily ?? "personal",
-            contextObjectId: input.contextObjectId,
-            contextObjectType: input.contextObjectType,
-            parentChannelId: input.parentChannelId,
-            branchPurpose: input.branchPurpose,
-            agentType: requestedAgentType,
-          });
-          channelId = resolvedChannel.id;
         }
+        const resolvedChannel = await resolveAiChannelByFamily({
+          userId,
+          workspaceId,
+          family: input.aiChannelFamily ?? "personal",
+          contextObjectId: input.contextObjectId,
+          contextObjectType: input.contextObjectType,
+          parentChannelId: input.parentChannelId,
+          branchPurpose: input.branchPurpose,
+        });
+        channelId = resolvedChannel.id;
       }
 
       // Get channel
@@ -969,6 +972,20 @@ export const channelsRouter = router({
             code: "FORBIDDEN",
             message: "You do not have access to this channel",
           });
+        }
+      }
+
+      // If no explicit agentId in the request and channel has an assigned agent, use it for IS routing
+      if (!requestedAgentId && channel.assignedAgentId) {
+        try {
+          const channelAgent = await new AgentRepository(db).getById(
+            channel.assignedAgentId
+          );
+          if (channelAgent?.active) {
+            resolvedAgentId = channelAgent.id;
+          }
+        } catch {
+          // non-fatal, keep resolvedAgentId from resolveAgentId()
         }
       }
 
@@ -1030,7 +1047,7 @@ export const channelsRouter = router({
         userId: userId,
         previousHash: "",
         hash: userMessageHash,
-        ...(activeSessionId ? { sessionId: activeSessionId } : {}),
+        sessionId: activeSessionId ?? undefined,
       });
 
       // Link attachment entities to channel context
@@ -1095,12 +1112,16 @@ export const channelsRouter = router({
         }
       }
 
-      // Resolve intelligence service dynamically
-      const resolvedService = await resolveIntelligenceService({
-        userId: userId,
-        workspaceId: ctx.workspaceId || undefined,
-        capability: "chat",
-      });
+      // Resolve intelligence service: prefer agentId → intelligenceServiceId lookup,
+      // fall back to workspace/user preference routing.
+      const resolvedService = await resolveIntelligenceServiceByAgentId(
+        resolvedAgentId,
+        {
+          userId: userId,
+          workspaceId: ctx.workspaceId || undefined,
+          capability: "chat",
+        }
+      );
 
       // TODO(hydration-onboarding, Phase 3): route the first N user messages
       // on a brand-new personal channel through OnboardingAgent instead of
@@ -1111,7 +1132,7 @@ export const channelsRouter = router({
       //      `channel.onboardingState` column ({ status, remainingTurns }) —
       //      counting on every send is O(N) today.
       //   2. A per-call agentType override for this path that feeds the IS
-      //      "onboarding" while the channel's stored agentType stays
+      //      "onboarding" while the channel's stored senderAgentId stays
       //      PERSONAL (so history + memory continue to belong to the
       //      Orchestrator once hydration completes).
       //   3. A graceful hand-off: OnboardingAgent writes its distilled
@@ -1125,18 +1146,20 @@ export const channelsRouter = router({
       // follow-up messages continue through the Orchestrator as today.
 
       // AI routing gate:
-      //   thread: AI active when agentType is set and not NONE.
+      //   thread/external: AI active when assignedAgentId (or legacy senderAgentId) is set.
       //   agent_collab: always AI-active.
-      //   external: AI active when agentType is set and not NONE.
       //   feed: never AI-driven from user message.
+      const effectiveAgentRef =
+        channel.assignedAgentId ?? channel.senderAgentId;
+      const channelKind: "pm" | "group" =
+        channel.threadKind === ThreadKind.PERSONAL ||
+        (channel.threadKind === ThreadKind.BRANCH && !channel.workspaceId)
+          ? "pm"
+          : "group";
       const isAiChannel =
         channel.channelType === ChannelType.AGENT_COLLAB ||
-        (channel.channelType === ChannelType.THREAD &&
-          !!channel.agentType &&
-          channel.agentType !== ChannelAgentType.NONE) ||
-        (channel.channelType === ChannelType.EXTERNAL &&
-          !!channel.agentType &&
-          channel.agentType !== ChannelAgentType.NONE);
+        (channel.channelType === ChannelType.THREAD && !!effectiveAgentRef) ||
+        (channel.channelType === ChannelType.EXTERNAL && !!effectiveAgentRef);
 
       // Automation side-effects: channel.message.created.completed for channel_message triggers
       emitSideEffects({
@@ -1166,9 +1189,15 @@ export const channelsRouter = router({
       }> = [];
       let hubResponse: Partial<HubResponse> = { content: "" };
 
-      // Effective agent type: @mention override → channel setting → default
-      const effectiveAgentType =
-        mentionedAgentType ?? channel.agentType ?? "meta";
+      // Effective agent type: @mention override → assignedAgentId (or legacy senderAgentId) → default
+      let effectiveAgentType = "meta";
+      if (mentionedAgentType) {
+        effectiveAgentType = mentionedAgentType;
+      } else if (effectiveAgentRef) {
+        const agentRepo = new AgentRepository(db);
+        const agent = await agentRepo.getById(effectiveAgentRef);
+        effectiveAgentType = agent?.slug ?? "meta";
+      }
 
       // Fetch workspace MCP server configs (cached 30s — avoids a DB hit on every message).
       // Only approved + enabled servers are forwarded to Intelligence Hub.
@@ -1269,7 +1298,7 @@ export const channelsRouter = router({
           query: content,
           threadId: channelId,
           userId: userId,
-          agentId: channel.agentId ?? "orchestrator",
+          agentId: resolvedAgentId,
           agentType: effectiveAgentType,
           // Personality overlay: channel config merged with workspace-level agentPersonality
           agentConfig:
@@ -1294,6 +1323,8 @@ export const channelsRouter = router({
           dataPodUrl: process.env.PUBLIC_URL || `https://${process.env.DOMAIN}`,
           dataPodApiKey: process.env.HUB_PROTOCOL_API_KEY || "",
           // Billing channel: Browser chat is included in subscription
+          // Channel kind: signals to IS whether this is a private or shared channel
+          channelKind,
         });
 
         for await (const chunk of stream) {
@@ -1465,7 +1496,7 @@ export const channelsRouter = router({
             query: content,
             threadId: channelId,
             userId: userId,
-            agentId: channel.agentId ?? "orchestrator",
+            agentId: resolvedAgentId,
             agentType: effectiveAgentType,
             workspaceId,
             sourceMessageId: userMessageId,
@@ -1474,6 +1505,7 @@ export const channelsRouter = router({
             dataPodUrl:
               process.env.PUBLIC_URL || `https://${process.env.DOMAIN}`,
             dataPodApiKey: process.env.HUB_PROTOCOL_API_KEY || "",
+            channelKind,
           });
         } catch (fallbackError) {
           // Both stream and non-streaming fallback failed — Intelligence Hub is down
@@ -1581,89 +1613,7 @@ export const channelsRouter = router({
       const assistantMessageHash = createHash("sha256")
         .update(`${assistantMessageId}${fullContent}${userMessageHash}`)
         .digest("hex");
-
-      // Derive auto-approved actions: tool calls in aiSteps not matched by a created proposal
-      const effectiveAiSteps =
-        aiSteps.length > 0 ? aiSteps : (hubResponse?.aiSteps ?? []);
-      const proposalToolNameSet = new Set(
-        createdProposals.map((cp) => cp.toolName)
-      );
-      // Build enriched auto-approved actions with human-readable labels
-      const autoApprovedActions = effectiveAiSteps
-        .filter(
-          (s) =>
-            s.type === "tool_call" &&
-            s.toolName &&
-            !proposalToolNameSet.has(s.toolName)
-        )
-        .map((s) => {
-          const toolName = s.toolName!;
-          const input = (s.toolInput ?? {}) as Record<string, unknown>;
-
-          // Find corresponding tool_result step to get the created resource ID
-          const resultStep = effectiveAiSteps.find(
-            (r) => r.type === "tool_result" && r.toolName === toolName
-          );
-          const result = (resultStep?.toolOutput ?? {}) as Record<
-            string,
-            unknown
-          >;
-
-          // Build human-readable label from tool args + result
-          let label = toolName.replace(/_/g, " ");
-          const title =
-            (input.title as string) ??
-            (input.name as string) ??
-            (input.displayName as string);
-          const profileSlug =
-            (input.profileSlug as string) ??
-            (input.type as string) ??
-            (input.slug as string);
-
-          if (toolName === "create_entity" && title) {
-            label = `Created ${profileSlug ?? "entity"}: ${title}`;
-          } else if (toolName === "create_profile" && title) {
-            label = `Created type: ${title}`;
-          } else if (toolName === "create_relation") {
-            label = "Linked entities";
-          } else if (toolName === "create_view" && title) {
-            label = `Created view: ${title}`;
-          } else if (toolName === "create_document" && title) {
-            label = `Created doc: ${title}`;
-          } else if (toolName === "update_entity") {
-            label = `Updated entity`;
-          } else if (toolName === "create_property_def") {
-            label = `Added field: ${(input.slug as string) ?? ""}`;
-          } else if (toolName === "remember_fact") {
-            label = "Saved to memory";
-          }
-
-          return {
-            toolName,
-            label,
-            profileSlug: profileSlug ?? undefined,
-            entityId: (result.id as string) ?? undefined,
-          };
-        })
-        // Deduplicate by toolName+label
-        .filter(
-          (a, idx, arr) =>
-            arr.findIndex(
-              (b) => b.toolName === a.toolName && b.label === a.label
-            ) === idx
-        );
-
-      const messageMetadata = {
-        aiSteps: effectiveAiSteps,
-        tokens: hubResponse?.usage?.totalTokens,
-        proposalIds:
-          createdProposals.length > 0
-            ? createdProposals.map((cp) => cp.proposalId)
-            : undefined,
-        autoApprovedActions:
-          autoApprovedActions.length > 0 ? autoApprovedActions : undefined,
-        serviceId: resolvedService.serviceId,
-      };
+      const messageMetadata = { aiSteps };
 
       await db.insert(messages).values({
         id: assistantMessageId,
@@ -1671,11 +1621,11 @@ export const channelsRouter = router({
         role: MessageRole.ASSISTANT,
         authorType: MessageAuthorType.AI_AGENT,
         content: fullContent,
-        userId: userId,
+        userId,
         previousHash: userMessageHash,
         hash: assistantMessageHash,
         metadata: messageMetadata as (typeof messages.$inferInsert)["metadata"],
-        ...(activeSessionId ? { sessionId: activeSessionId } : {}),
+        sessionId: activeSessionId ?? undefined,
       });
 
       // Automation side-effects: channel.message.created.completed for assistant reply
@@ -1807,7 +1757,6 @@ export const channelsRouter = router({
             branchedFromMessageId: assistantMessageId,
             branchPurpose:
               branchDecision.suggestedPurpose || branchDecision.reason,
-            agentId: branchDecision.suggestedAgentType || "research-agent",
             channelType: ChannelType.THREAD,
             threadKind: ThreadKind.BRANCH,
             status: ChannelStatus.ACTIVE,
@@ -2380,13 +2329,7 @@ export const channelsRouter = router({
       z.object({
         channelId: z.string().uuid(),
         title: z.string().optional(),
-        agentId: z.string().optional(),
-        agentType: z
-          .string()
-          .min(1)
-          .max(100)
-          .regex(/^[\w:.-]+$/)
-          .optional(),
+        assignedAgentId: z.string().uuid().nullable().optional(),
         agentConfig: z.record(z.string(), z.unknown()).optional(),
         mcpServerIds: z.array(z.string().uuid()).nullable().optional(),
       })
@@ -2410,8 +2353,7 @@ export const channelsRouter = router({
         .update(channels)
         .set({
           title: input.title,
-          agentId: input.agentId,
-          agentType: input.agentType,
+          assignedAgentId: input.assignedAgentId,
           agentConfig: input.agentConfig,
           ...(input.mcpServerIds !== undefined && {
             mcpServerIds: input.mcpServerIds,
@@ -2841,6 +2783,73 @@ export const channelsRouter = router({
           )
         );
       return { ok: true };
+    }),
+
+  /**
+   * Create (or return existing) external import channel.
+   * Used by the import orchestrator and proposal executor for external source channels.
+   */
+  createExternalChannel: workspaceProcedure
+    .input(
+      z.object({
+        externalSource: z.string().max(100),
+        externalChannelId: z.string().max(500),
+        title: z.string().max(500),
+        externalParticipants: z.array(z.string()).optional(),
+        initialMessage: z.string().optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Return existing channel if already imported
+      const [existing] = await db
+        .select({ id: channels.id })
+        .from(channels)
+        .where(
+          and(
+            eq(channels.workspaceId, ctx.workspaceId),
+            eq(channels.channelType, ChannelType.EXTERNAL),
+            eq(channels.externalChannelId, input.externalChannelId)
+          )
+        )
+        .limit(1);
+
+      if (existing) {
+        return { channelId: existing.id, status: "existing" as const };
+      }
+
+      const [channel] = await db
+        .insert(channels)
+        .values({
+          id: randomUUID(),
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId,
+          channelType: ChannelType.EXTERNAL,
+          threadKind: ThreadKind.WORKSPACE,
+          title: input.title,
+          externalSource: input.externalSource,
+          externalChannelId: input.externalChannelId,
+          metadata: {
+            externalParticipants: input.externalParticipants ?? [],
+            ...(input.metadata ?? {}),
+          },
+          status: ChannelStatus.ACTIVE,
+        })
+        .returning();
+
+      if (input.initialMessage) {
+        await db.insert(messages).values({
+          id: randomUUID(),
+          channelId: channel.id,
+          content: input.initialMessage,
+          role: MessageRole.USER,
+          userId: ctx.userId,
+          previousHash: "",
+          hash: createHash("sha256").update(input.initialMessage).digest("hex"),
+        });
+      }
+
+      return { channelId: channel.id, status: "created" as const };
     }),
 });
 

@@ -2,7 +2,7 @@
  * Signal Feed Database Schema
  *
  * Tables for signal subscriptions, classifications, fetch history, and auto-links.
- * Enables external content (RSSHub, social media) to become first-class entities.
+ * Enables external content (RSS feeds, social media) to become first-class entities.
  */
 
 import {

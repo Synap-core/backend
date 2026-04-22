@@ -21,8 +21,8 @@
  */
 export interface FeedProviderConfig {
   /** Provider type - determines fetching strategy */
-  type: "direct" | "rsshub" | "cpproxy" | "custom";
-  /** Base URL for the provider (required for rsshub, cpproxy) */
+  type: "direct" | "custom";
+  /** Base URL for the provider */
   url?: string;
   /** API key for authenticated providers */
   apiKey?: string;
@@ -80,7 +80,7 @@ export interface FeedSource {
   /** Display name */
   name: string;
   /** Provider type */
-  provider: "direct" | "rsshub" | "cpproxy";
+  provider: "direct" | "custom";
   /** Whether the source is active */
   enabled: boolean;
   /** Associated topics */
@@ -249,16 +249,9 @@ export interface RSSFeedConfig extends BaseFeedConfig {
   sources: Array<{
     url: string;
     name?: string;
-    rsshubRoute?: string;
     headers?: Record<string, string>;
     iconUrl?: string;
   }>;
-  /** RSSHub configuration */
-  rsshubConfig?: {
-    useCpProxy?: boolean;
-    instanceUrl?: string;
-    accessKey?: string;
-  };
   /** Content extraction options */
   extraction?: {
     fetchFullContent?: boolean;

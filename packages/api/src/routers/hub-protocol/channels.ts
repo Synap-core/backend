@@ -104,7 +104,6 @@ export const channelsRouter = router({
         contextObjectType: z.enum(["entity", "document", "view"]).optional(),
         parentChannelId: z.string().uuid().optional(),
         branchPurpose: z.string().max(500).optional(),
-        agentType: z.string().optional(),
       })
     )
     .mutation(async ({ input }) => {
@@ -116,7 +115,6 @@ export const channelsRouter = router({
         contextObjectType: input.contextObjectType,
         parentChannelId: input.parentChannelId,
         branchPurpose: input.branchPurpose,
-        agentType: input.agentType,
       });
       return { channel };
     }),
@@ -500,7 +498,7 @@ export const channelsRouter = router({
             content: input.content,
             userId: channel.userId,
             workspaceId: channel.workspaceId,
-            agentType: (channel.agentType as string) ?? "default",
+            agentType: "meta",
             sourceAgentUserId: input.agentUserId,
             serviceUrl: resolvedService.endpoint,
             serviceApiKey: resolvedService.serviceApiKey,

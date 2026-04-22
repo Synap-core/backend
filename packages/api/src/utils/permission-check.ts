@@ -17,7 +17,6 @@ import { createLogger } from "@synap-core/core";
 import type { RequestShapedProposalData } from "@synap-core/types";
 import { broadcastNotification, emitSideEffects } from "@synap/jobs";
 import type { WorkspaceSettings } from "@synap/database/schema";
-import { notifyProposalViaTelegram } from "./telegram-notify.js";
 import { NotificationService } from "../notifications/NotificationService.js";
 
 const logger = createLogger({ module: "permission-check" });
@@ -615,16 +614,6 @@ async function createProposal(opts: {
     workspaceId,
     data: { proposalStatus: "created" },
   });
-
-  // Telegram push notification (fire-and-forget, non-critical)
-  notifyProposalViaTelegram({
-    userId,
-    proposalId: proposal.id,
-    targetType: singularType,
-    action,
-    reasoning,
-    workspaceId,
-  }).catch(() => {});
 
   // Unified notification system — persist to notifications table + emit notification:new
   NotificationService.fromProposal({

@@ -3,7 +3,7 @@
  *
  * Forwards a fetch request to a remote "relay" (typically the Synap Control
  * Plane) that proxies calls to upstream sources the Pod can't or shouldn't
- * reach directly (RSSHub-at-scale, SerpAPI with a shared key, SEC EDGAR with
+ * reach directly (external RSS feeds, SerpAPI with a shared key, SEC EDGAR with
  * cached rate limits, …).
  *
  * The relay is just ONE of many providers — a Pod that doesn't want to use

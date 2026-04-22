@@ -48,53 +48,6 @@ export const importRouter = router({
       return orchestrator.submitBatch(input.items);
     }),
 
-  // ─── Telegram contacts bulk import ──────────────────────────────────────────
-
-  /**
-   * Queue a batch of Telegram contacts for server-side entity creation.
-   *
-   * The client (relay-app, browser) parses the Telegram Desktop JSON export
-   * and sends the contact list here. Heavy entity creation + dedup runs
-   * asynchronously via pg-boss so the HTTP request returns immediately.
-   *
-   * Returns a job ID — clients can poll background-tasks for progress.
-   */
-  telegramContacts: workspaceProcedure
-    .input(
-      z.object({
-        people: z
-          .array(
-            z.object({
-              externalId: z.string().min(1),
-              name: z.string().min(1).max(500),
-              phone: z.string().nullable().optional(),
-              username: z.string().nullable().optional(),
-              messageCount: z.number().int().nonnegative().optional(),
-            })
-          )
-          .min(1)
-          .max(5000),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const orchestrator = new ImportOrchestrator({
-        workspaceId: ctx.workspaceId!,
-        userId: ctx.userId!,
-        trpcCtx: ctx as unknown as Record<string, unknown>,
-      });
-      const result = await orchestrator.queueTelegramContacts(input.people);
-      logger.info(
-        {
-          workspaceId: ctx.workspaceId,
-          userId: ctx.userId,
-          queuedCount: input.people.length,
-          ...result,
-        },
-        "Telegram bulk import job queued via orchestrator"
-      );
-      return result;
-    }),
-
   // ─── LinkedIn connections bulk import ───────────────────────────────────────
 
   /**

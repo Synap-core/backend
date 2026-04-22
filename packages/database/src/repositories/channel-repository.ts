@@ -15,7 +15,6 @@ import {
   FeedScope,
   ThreadKind,
   ChannelStatus,
-  ChannelAgentType,
 } from "../schema/channels.js";
 import { EventRepository } from "./event-repository.js";
 import { sql } from "../client-pg.js";
@@ -32,8 +31,7 @@ export interface CreateChannelData {
   parentChannelId?: string;
   branchedFromMessageId?: string;
   branchPurpose?: string;
-  agentId?: string;
-  agentType?: ChannelAgentType;
+  senderAgentId?: string;
   agentConfig?: Record<string, unknown>;
   externalSource?: string;
   externalChannelId?: string;
@@ -82,8 +80,7 @@ export class ChannelRepository {
         parentChannelId: data.parentChannelId,
         branchedFromMessageId: data.branchedFromMessageId,
         branchPurpose: data.branchPurpose,
-        agentId: data.agentId || "orchestrator",
-        agentType: data.agentType || ChannelAgentType.NONE,
+        senderAgentId: data.senderAgentId || null,
         agentConfig: data.agentConfig,
         externalSource: data.externalSource,
         externalChannelId: data.externalChannelId,
@@ -246,7 +243,7 @@ export class ChannelRepository {
       channelType: ChannelType.THREAD,
       threadKind: ThreadKind.PERSONAL,
       scope: ChannelScope.POD,
-      agentType: ChannelAgentType.PERSONAL,
+      senderAgentId: undefined,
     });
   }
 
@@ -279,7 +276,7 @@ export class ChannelRepository {
       channelType: ChannelType.FEED,
       scope: ChannelScope.POD,
       feedScope: FeedScope.USER,
-      agentType: ChannelAgentType.PERSONAL,
+      senderAgentId: undefined,
     });
   }
 

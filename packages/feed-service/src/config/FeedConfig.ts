@@ -12,12 +12,7 @@ import { z } from "zod";
 // ============================================================================
 
 /** Valid RSS provider types */
-export const ProviderTypeSchema = z.enum([
-  "direct",
-  "rsshub",
-  "cpproxy",
-  "custom",
-]);
+export const ProviderTypeSchema = z.enum(["custom"]);
 
 /** Valid feed parser types */
 export const ParserTypeSchema = z.enum(["rss", "atom", "json"]);

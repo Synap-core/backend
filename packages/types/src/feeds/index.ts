@@ -43,8 +43,6 @@ export interface BaseFeedConfig {
 export interface RSSFeedSource {
   /** RSS/Atom feed URL */
   url: string;
-  /** Optional RSSHub route for CP proxy */
-  rsshubRoute?: string;
   /** Custom headers for fetch */
   headers?: Record<string, string>;
   /** Source name override */
@@ -57,15 +55,6 @@ export interface RSSFeedConfig extends BaseFeedConfig {
   feedType: "rss";
   /** RSS feed sources (primary + fallbacks) */
   sources: RSSFeedSource[];
-  /** RSSHub configuration for CP proxy */
-  rsshubConfig?: {
-    /** Use CP RSSHub proxy instead of direct fetch */
-    useCpProxy?: boolean;
-    /** RSSHub instance URL (if not using CP) */
-    instanceUrl?: string;
-    /** Access key for RSSHub */
-    accessKey?: string;
-  };
   /** Content extraction options */
   extraction?: {
     /** Extract full article content */

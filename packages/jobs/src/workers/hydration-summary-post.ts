@@ -29,7 +29,6 @@ import {
   ChannelScope,
   ThreadKind,
   ChannelStatus,
-  ChannelAgentType,
   MessageRole,
   MessageAuthorType,
   MessageCategory,
@@ -203,8 +202,7 @@ async function resolvePersonalChannelId(userId: string): Promise<string> {
       threadKind: ThreadKind.PERSONAL,
       scope: ChannelScope.POD,
       status: ChannelStatus.ACTIVE,
-      agentId: "personal",
-      agentType: ChannelAgentType.PERSONAL,
+      senderAgentId: null,
     })
     .returning({ id: channels.id });
   return channel.id;

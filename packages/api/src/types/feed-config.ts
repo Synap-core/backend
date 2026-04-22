@@ -48,7 +48,7 @@ export const FeedMessageMetadataSchema: z.ZodType<FeedMessageMetadata> =
       platform: z.string(),
       /** Original source URL */
       url: z.string(),
-      /** RSSHub route: "/hackernews/frontpage" */
+      /** Original source route or path (e.g. "/hackernews/frontpage") */
       route: z.string().optional(),
       /** Original author */
       author: z.string().optional(),
@@ -125,8 +125,6 @@ export const BaseFeedConfigSchema = z.object({
 export const RSSFeedSourceSchema: z.ZodType<RSSFeedSource> = z.object({
   /** RSS/Atom feed URL */
   url: z.string().url(),
-  /** Optional RSSHub route for CP proxy */
-  rsshubRoute: z.string().optional(),
   /** Custom headers for fetch */
   headers: z.record(z.string(), z.string()).optional(),
   /** Source name override */
@@ -142,17 +140,6 @@ export const RSSFeedConfigSchema: z.ZodType<RSSFeedConfig> =
     sources: z
       .array(RSSFeedSourceSchema)
       .min(1, "At least one RSS source is required"),
-    /** RSSHub configuration for CP proxy */
-    rsshubConfig: z
-      .object({
-        /** Use CP RSSHub proxy instead of direct fetch */
-        useCpProxy: z.boolean().default(true),
-        /** RSSHub instance URL (if not using CP) */
-        instanceUrl: z.string().url().optional(),
-        /** Access key for RSSHub */
-        accessKey: z.string().optional(),
-      })
-      .optional(),
     /** Content extraction options */
     extraction: z
       .object({
