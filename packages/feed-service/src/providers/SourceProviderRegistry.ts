@@ -29,7 +29,6 @@ class SourceProviderRegistryImpl {
       // No logger dep here — providers register at module top-level where
       // pino may not yet be initialised. Use console.warn so any overwrite
       // is still visible.
-      // eslint-disable-next-line no-console
       console.warn(
         `[SourceProviderRegistry] Overwriting provider type "${provider.meta.type}"`
       );

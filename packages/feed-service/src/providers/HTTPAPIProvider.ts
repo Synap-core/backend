@@ -70,7 +70,7 @@ export function readPath(obj: unknown, path: string): unknown {
   const segments = path.split(".").flatMap((part) => {
     const out: string[] = [];
     // pull "name" and "[N]" parts out of "name[1][2]"
-    const match = part.match(/^([^\[]*)(.*)$/);
+    const match = part.match(/^([^[]*)(.*)$/);
     if (!match) return out;
     if (match[1]) out.push(match[1]);
     const bracketRegex = /\[(\d+)\]/g;
