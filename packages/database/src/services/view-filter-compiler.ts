@@ -48,9 +48,8 @@ export interface PropertyFilterMeta {
 
 export class ViewFilterCompiler {
   private propertyMerging: PropertyMergingService;
-  private db: PostgresJsDatabase<schema>;
-
-  constructor(db: PostgresJsDatabase<schema>) {
+  private db: PostgresJsDatabase<typeof schema>;
+  constructor(db: PostgresJsDatabase<typeof schema>) {
     this.db = db;
     this.propertyMerging = new PropertyMergingService(db);
   }
