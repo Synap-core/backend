@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS agents (
     metadata JSONB DEFAULT '{}'::jsonb,
     active BOOLEAN DEFAULT true,
     owner_type TEXT NOT NULL DEFAULT 'system',
-    intelligence_service_id UUID REFERENCES intelligence_services(id),
+    intelligence_service_id TEXT REFERENCES intelligence_services(id),
     user_id UUID REFERENCES users(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

@@ -35,7 +35,7 @@ export const agents = pgTable(
     userId: uuid("user_id").references(() => users.id, {
       onDelete: "set null",
     }),
-    intelligenceServiceId: uuid("intelligence_service_id").references(
+    intelligenceServiceId: text("intelligence_service_id").references(
       () => intelligenceServices.id,
       { onDelete: "set null" }
     ),
