@@ -197,7 +197,10 @@ export const intelligenceRegistryRouter = router({
       }
 
       // Don't expose API key
-      const { _apiKey, ...publicService } = service;
+      const { _apiKey: _, ...publicService } = service as unknown as Record<
+        string,
+        unknown
+      > as typeof service;
       return publicService;
     }),
 

@@ -94,7 +94,13 @@ export const webhooksRouter = router({
       });
 
       // Don't return secrets in list view
-      return subscriptions.map(({ _secret, ...sub }) => sub);
+      return subscriptions.map((s) => {
+        const { _secret: _, ...sub } = s as unknown as Record<
+          string,
+          unknown
+        > as typeof s;
+        return sub;
+      });
     } catch (error) {
       logger.error(
         { err: error, userId },
@@ -140,7 +146,8 @@ export const webhooksRouter = router({
           .where(eq(webhookSubscriptions.id, id))
           .returning();
 
-        const { _secret, ...safeSubscription } = updated;
+        const { _secret: _, ...safeSubscription } =
+          updated as unknown as Record<string, unknown> as typeof updated;
         return safeSubscription;
       } catch (error) {
         if (error instanceof TRPCError) throw error;
