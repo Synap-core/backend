@@ -112,6 +112,9 @@ export * from "./secrets-vault.js";
 export * from "./sessions.js";
 export * from "./compacted-states.js";
 
+// NEW: Knowledge Keys (pod-wide procedural knowledge for agents)
+export * from "./knowledge-keys.js";
+
 // NEW: Dynamic Widget Registry
 export * from "./widget-definitions.js";
 

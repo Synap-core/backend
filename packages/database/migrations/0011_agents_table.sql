@@ -44,6 +44,16 @@ CREATE TABLE IF NOT EXISTS agents (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Add intelligence_service_id column if missing (table may exist from baseline/0009 without it)
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT FROM information_schema.columns
+        WHERE table_name = 'agents' AND column_name = 'intelligence_service_id'
+    ) THEN
+        ALTER TABLE agents ADD COLUMN intelligence_service_id TEXT REFERENCES intelligence_services(id);
+    END IF;
+END $$;
+
 -- Unique idx per service+slug
 CREATE UNIQUE INDEX IF NOT EXISTS agents_intelligence_service_id_agent_slug_unique ON agents(intelligence_service_id, agent_slug);
 
