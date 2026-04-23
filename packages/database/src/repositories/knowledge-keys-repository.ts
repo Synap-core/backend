@@ -342,12 +342,22 @@ export class KnowledgeKeysRepository {
 
     const rows = await this.db
       .select({
-        ...knowledgeKeys,
+        id: knowledgeKeys.id,
+        key: knowledgeKeys.key,
+        namespace: knowledgeKeys.namespace,
+        slug: knowledgeKeys.slug,
+        value: knowledgeKeys.value,
+        workspaceId: knowledgeKeys.workspaceId,
+        version: knowledgeKeys.version,
+        status: knowledgeKeys.status,
+        author: knowledgeKeys.author,
+        createdAt: knowledgeKeys.createdAt,
+        updatedAt: knowledgeKeys.updatedAt,
         rank: sql<number>`ts_rank(to_tsvector('simple', value), ${tsquery})`,
       })
       .from(knowledgeKeys)
       .where(conditions.length ? and(...conditions) : undefined)
-      .orderBy((r: any) => desc(r.rank))
+      .orderBy((r) => desc(r.rank))
       .limit(limit);
 
     return rows.map((r: any) => parseRow(r));
