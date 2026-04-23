@@ -51,7 +51,6 @@ import {
   NOTIFICATION_CLEANUP_QUEUE,
 } from "./notification-cleanup.js";
 import { handleFeedScheduler } from "./feed-scheduler.js";
-import { handleFeedRSSExecute } from "./feed-rss-executor.js";
 import { handleFeedProactiveExecute } from "./feed-proactive-executor.js";
 import {
   handleFeedSourceExecute,
@@ -110,7 +109,6 @@ const ALL_QUEUES = [
   "automation-pattern-detect",
   NOTIFICATION_CLEANUP_QUEUE,
   "feed-scheduler",
-  "feed-rss-execute",
   "feed-proactive-execute",
   FEED_SOURCE_EXECUTE_QUEUE,
   FEED_SOURCE_ITEMS_QUEUE,
@@ -291,23 +289,19 @@ export async function registerAllWorkers(): Promise<void> {
   );
   logger.info("Registered worker: notification-cleanup");
 
-  // Feed scheduler (cron: every minute — schedules due feed executions)
+  // Feed scheduler (cron: every minute — schedules due source subscription fetches)
   await boss.work("feed-scheduler", async () => handleFeedScheduler());
   logger.info("Registered worker: feed-scheduler");
 
-  // Feed RSS executor (on-demand — executes RSS feed fetch and post)
-  await boss.work("feed-rss-execute", async ([job]: any[]) =>
-    handleFeedRSSExecute(job)
-  );
-  logger.info("Registered worker: feed-rss-execute");
-
-  // Feed proactive executor (on-demand — executes proactive digest generation)
+  // Feed proactive executor (on-demand — executes proactive digest generation).
+  // Scheduled by the proactive intelligence cron layer (morning briefing,
+  // weekly digest), not by feed-scheduler.
   await boss.work("feed-proactive-execute", async ([job]: any[]) =>
     handleFeedProactiveExecute(job)
   );
   logger.info("Registered worker: feed-proactive-execute");
 
-  // Pluggable source executor (Phase 1 + 2) — fetches one subscription via
+  // Feed pluggable source executor (Phase 1 + 2) — fetches one subscription via
   // the provider registry. Downstream items land on FEED_SOURCE_ITEMS_QUEUE
   // for Agent 3's classifier/publisher to consume.
   await boss.work(FEED_SOURCE_EXECUTE_QUEUE, async ([job]: any[]) =>

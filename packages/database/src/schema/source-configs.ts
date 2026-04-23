@@ -28,9 +28,9 @@
  *   - `source_subscriptions.source_config_id` uses ON DELETE CASCADE —
  *     deleting a source config removes its subscriptions (and the router
  *     additionally cleans up linked `secrets` rows by `serviceId`).
- *   - `source_subscriptions.feed_id` FKs to `feeds.id` with ON DELETE CASCADE
- *     — deleting a feed removes its subscriptions. (The `feeds` table is
- *     already defined; see schema/feeds.ts.)
+ *   - `source_subscriptions.feed_id` is a plain UUID — an opaque identifier
+ *     that is not a FK to any table. It serves as context (e.g. channel ID
+ *     or entity ID) for downstream workers. No ON DELETE CASCADE.
  */
 
 import {
@@ -42,7 +42,6 @@ import {
   timestamp,
   index,
 } from "drizzle-orm/pg-core";
-import { feeds } from "./feeds.js";
 
 // ────────────────────────────────────────────────────────────────────────────
 // source_configs
@@ -107,10 +106,8 @@ export const sourceSubscriptions = pgTable(
     userId: text("user_id").notNull(),
     workspaceId: uuid("workspace_id"),
 
-    /** FK → feeds.id, ON DELETE CASCADE. */
-    feedId: uuid("feed_id")
-      .notNull()
-      .references(() => feeds.id, { onDelete: "cascade" }),
+    /** Opaque identifier for the feed (e.g. channel ID or entity ID). Not a FK. */
+    feedId: uuid("feed_id").notNull(),
 
     sourceConfigId: uuid("source_config_id")
       .notNull()

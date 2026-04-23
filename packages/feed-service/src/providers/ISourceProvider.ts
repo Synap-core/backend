@@ -16,7 +16,7 @@
  *   - Testable: every provider can be asked to testConnection() without
  *     actually enqueueing an ingest run
  *
- * See packages/feed-service/src/providers/RSSDirectProvider.ts for a full
+ * See packages/feed-service/src/providers/HTTPAPIProvider.ts for a full
  * implementation example.
  */
 

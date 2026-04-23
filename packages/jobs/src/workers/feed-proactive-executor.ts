@@ -25,7 +25,7 @@ import type {
   FeedExecutionPayload,
   ProactiveFeedConfig,
   FeedMessageMetadata,
-} from "@synap/shared-utils";
+} from "@synap-core/types";
 import { MessageRole, MessageAuthorType } from "@synap/database/schema";
 import { calculateNextRun } from "../utils/feed-helpers.js";
 import { withRetry, FEED_RETRY_OPTIONS } from "@synap/shared-utils";

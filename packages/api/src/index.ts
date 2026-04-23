@@ -39,7 +39,6 @@ export { openaiCompatApp } from "./routers/external/openai-compat.js";
 export { apiKeysRouter } from "./routers/api-keys.js";
 export { healthRouter } from "./routers/health.js";
 export { projectsRouter } from "./routers/projects.js";
-export { feedsRouter } from "./routers/feeds.js";
 export { sourceConfigsRouter } from "./routers/source-configs.js";
 export { adminSourceConfigsRouter } from "./routers/admin-source-configs.js";
 export {
@@ -443,13 +442,6 @@ registerRouter("sync", syncManagementRouter, {
   description: "Pod-to-pod sync peer management and status monitoring",
 });
 
-import { feedsRouter } from "./routers/feeds.js";
-registerRouter("feeds", feedsRouter, {
-  version: "1.0.0",
-  source: "core",
-  description: "Unified feed management (RSS and Proactive feeds)",
-});
-
 import { coreRouter } from "./root.js";
 import type { AppRouter } from "./root.js";
 export type { AppRouter };
@@ -494,7 +486,6 @@ export {
   sleep,
   DB_RETRY_OPTIONS,
   API_RETRY_OPTIONS,
-  FEED_RETRY_OPTIONS,
   type RetryOptions,
 } from "@synap/shared-utils";
 
@@ -507,6 +498,3 @@ export {
   type CircuitBreakerOptions,
   type CircuitBreakerStats,
 } from "@synap/shared-utils";
-
-/** @deprecated Import from @synap/shared-utils instead */
-export { calculateNextRun, isFeedDue } from "@synap/shared-utils";

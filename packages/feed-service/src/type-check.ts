@@ -41,13 +41,13 @@ import type {
 } from "./types/index.js";
 
 import type {
-  // Shared utils types
+  // Shared utils types (re-exported from @synap-core/types for convenience)
   FeedConfig,
   RSSFeedConfig,
   ProactiveFeedConfig,
   FeedMessageMetadata,
   FeedExecutionPayload,
-} from "@synap/shared-utils";
+} from "@synap-core/types";
 
 // ============================================================================
 // Type Compatibility Checks

@@ -13,7 +13,7 @@ import {
   profiles,
 } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
-import type { ProactiveFeedConfig } from "@synap/shared-utils";
+import type { ProactiveFeedConfig } from "@synap-core/types";
 
 const logger = createLogger({ module: "proactive-aggregator" });
 

@@ -89,11 +89,6 @@ export type {
 } from "./providers/ISourceProvider.js";
 
 export {
-  RSSDirectProvider,
-  RSSDirectConfigSchema,
-  type RSSDirectConfig,
-} from "./providers/RSSDirectProvider.js";
-export {
   HTTPAPIProvider,
   HTTPAPIConfigSchema,
   type HTTPAPIConfig,
@@ -112,11 +107,9 @@ export type { SourceProviderRegistry } from "./providers/SourceProviderRegistry.
 // `sourceProviderRegistry` sees them populated. This is safe because each
 // provider class has no side effects in its constructor.
 import { sourceProviderRegistry as _registry } from "./providers/SourceProviderRegistry.js";
-import { RSSDirectProvider as _RSSDirectProvider } from "./providers/RSSDirectProvider.js";
 import { HTTPAPIProvider as _HTTPAPIProvider } from "./providers/HTTPAPIProvider.js";
 import { CPRelayProvider as _CPRelayProvider } from "./providers/CPRelayProvider.js";
 
-_registry.register(new _RSSDirectProvider());
 _registry.register(new _HTTPAPIProvider());
 _registry.register(new _CPRelayProvider());
 
