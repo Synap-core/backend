@@ -6,8 +6,8 @@ import {
   timestamp,
   varchar,
   index,
-  sql,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 /**
  * Knowledge Keys Schema
