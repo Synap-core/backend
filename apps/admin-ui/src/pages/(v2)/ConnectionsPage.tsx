@@ -44,11 +44,6 @@ export default function ConnectionsPage() {
     refetchInterval: 60_000,
   });
 
-  const telegramQuery = trpc.channelGateway.telegramStatus.useQuery(undefined, {
-    enabled: !!workspaceId,
-    refetchInterval: 60_000,
-  });
-
   const feedsQuery = trpc.feeds.listFeeds.useQuery(
     { workspaceId: workspaceId ?? undefined, limit: 25, offset: 0 },
     { enabled: !!workspaceId, refetchInterval: 60_000 }

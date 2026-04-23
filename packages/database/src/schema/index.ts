@@ -138,3 +138,9 @@ export * from "./trusted-issuers.js";
 
 // NEW: Source Configs & Subscriptions (pluggable feed source providers)
 export * from "./source-configs.js";
+
+// NEW: Feeds (feed scheduling & status)
+export * from "./feeds.js";
+
+// NEW: Feeds (feed scheduling & status)
+export * from "./feeds.js";
