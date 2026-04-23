@@ -6,7 +6,7 @@ import {
   timestamp,
   varchar,
   index,
-  unique,
+  sql,
 } from "drizzle-orm/pg-core";
 
 /**
@@ -59,7 +59,7 @@ export const knowledgeKeys = pgTable(
     // Full-text search index on value (PostgreSQL GIN)
     valueGin: index("idx_knowledge_value_ft").using(
       "gin",
-      text("to_tsvector('simple', table.value)")
+      sql`to_tsvector('simple', ${table.value})`
     ),
 
     // Browse by namespace
