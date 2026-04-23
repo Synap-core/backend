@@ -2243,7 +2243,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelId: string;
 					parentId: string | null;
 					role: "user" | "system" | "assistant";
-					authorType: "human" | "ai_agent" | "external" | "bot";
+					authorType: "human" | "external" | "ai_agent" | "bot";
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
 					inboxItemId: string | null;
@@ -2471,7 +2471,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "pending" | "none" | "resolved";
+					conflictStatus: "none" | "pending" | "resolved";
 					relevanceScore: number | null;
 				}[] | undefined;
 				branchTree: any;
@@ -2644,7 +2644,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "pending" | "none" | "resolved";
+					conflictStatus: "none" | "pending" | "resolved";
 					relevanceScore: number | null;
 				}[];
 				entities: {
@@ -2657,7 +2657,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "pending" | "none" | "resolved";
+					conflictStatus: "none" | "pending" | "resolved";
 					relevanceScore: number | null;
 				}[];
 				documents: {
@@ -2670,7 +2670,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "pending" | "none" | "resolved";
+					conflictStatus: "none" | "pending" | "resolved";
 					relevanceScore: number | null;
 				}[];
 			};
