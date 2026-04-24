@@ -18,7 +18,7 @@
  *
  */
 
-import { db, eq, and, sql } from "@synap/database";
+import { db, eq, and, drizzleSql } from "@synap/database";
 import { sourceSubscriptions, sourceConfigs } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 const logger = createLogger({ module: "feed-scheduler" });
@@ -54,8 +54,8 @@ export async function handleFeedScheduler(): Promise<void> {
         subscriptionId: sourceSubscriptions.id,
         lastFetchedAt: sourceSubscriptions.lastFetchedAt,
         providerType: sourceConfigs.providerType,
-        subScheduleCron: sql`${sourceSubscriptions.params}->>'scheduleCron'`,
-        cfgScheduleCron: sql`${sourceConfigs.config}->>'scheduleCron'`,
+        subScheduleCron: drizzleSql<string>`${sourceSubscriptions.params}->>'scheduleCron'`,
+        cfgScheduleCron: drizzleSql<string>`${sourceConfigs.config}->>'scheduleCron'`,
       })
       .from(sourceSubscriptions)
       .innerJoin(
