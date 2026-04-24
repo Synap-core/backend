@@ -58,15 +58,8 @@ CREATE INDEX IF NOT EXISTS agents_user_id_idx ON agents(user_id);
 CREATE INDEX IF NOT EXISTS agents_owner_type_idx ON agents(owner_type);
 CREATE INDEX IF NOT EXISTS agents_active_idx ON agents(active);
 
--- Add FK from channels to agents for sender identification
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT FROM information_schema.columns
-        WHERE table_name = 'channels' AND column_name = 'sender_agent_id'
-    ) THEN
-        ALTER TABLE channels ADD COLUMN sender_agent_id UUID REFERENCES agents(id) ON DELETE SET NULL;
-    END IF;
-END $$;
+-- Drop old sender_agent_id (text) and recreate as UUID FK
+ALTER TABLE channels DROP COLUMN IF EXISTS sender_agent_id;
+ALTER TABLE channels ADD COLUMN sender_agent_id UUID REFERENCES agents(id) ON DELETE SET NULL;
 
 COMMIT;

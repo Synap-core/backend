@@ -51,6 +51,8 @@ import {
   sessions,
   SessionStatus,
   agents,
+  sourceConfigs,
+  sourceSubscriptions,
 } from "@synap/database/schema";
 import {
   resolveIntelligenceService,
@@ -2905,6 +2907,169 @@ export const channelsRouter = router({
         .where(eq(messages.id, input.messageId));
 
       return { ok: true };
+    }),
+
+  /**
+   * Upsert a personal feed channel for the caller and attach source
+   * subscriptions to it. Called by Relay onboarding (and feed settings) to
+   * materialise a user's feed preferences into real backend resources.
+   *
+   * Idempotent: returns the existing feed channel if one already exists.
+   * Each source is matched by URL — duplicate URLs are skipped.
+   */
+  setupFeed: protectedProcedure
+    .input(
+      z.object({
+        /** Human-readable name for the feed channel. */
+        name: z.string().min(1).max(255).optional(),
+        /**
+         * Sources to subscribe to. Each entry becomes one source_config +
+         * one source_subscription if not already present.
+         */
+        sources: z
+          .array(
+            z.object({
+              url: z.string().url(),
+              name: z.string().min(1).max(255),
+              /** cpproxy = relayed through CP, rss-direct = raw fetch */
+              provider: z.enum(["cpproxy", "rss-direct"]).default("rss-direct"),
+              topics: z.array(z.string()).optional(),
+            })
+          )
+          .max(50),
+        /** feedType stored as agentConfig on subscriptions for IS classification */
+        feedType: z.string().optional(),
+        /** Relevance threshold 0-100 */
+        relevanceThreshold: z.number().min(0).max(100).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.userId;
+
+      // 1. Upsert the user's personal feed channel
+      let feedChannel = await db.query.channels.findFirst({
+        where: and(
+          eq(channels.userId, userId),
+          eq(channels.channelType, ChannelType.FEED),
+          eq(channels.feedScope, FeedScope.USER)
+        ),
+      });
+
+      if (!feedChannel) {
+        const [created] = await db
+          .insert(channels)
+          .values({
+            id: randomUUID(),
+            userId,
+            workspaceId: null,
+            channelType: ChannelType.FEED,
+            feedScope: FeedScope.USER,
+            title: input.name ?? "My Feed",
+            status: ChannelStatus.ACTIVE,
+          })
+          .returning();
+        feedChannel = created;
+
+        logger.info(
+          { channelId: feedChannel.id, userId },
+          "Feed channel created"
+        );
+      }
+
+      const channelId = feedChannel.id;
+      const createdSourceConfigIds: string[] = [];
+      const createdSubscriptionIds: string[] = [];
+
+      // 2. For each source: upsert source_config, then upsert subscription
+      for (const src of input.sources) {
+        const providerType =
+          src.provider === "cpproxy" ? "cp-relay" : "rss-direct";
+
+        // Find existing config by URL to stay idempotent
+        const existingConfig = await db.query.sourceConfigs.findFirst({
+          where: and(
+            eq(sourceConfigs.userId, userId),
+            drizzleSql`${sourceConfigs.config}->>'url' = ${src.url}`
+          ),
+        });
+
+        let sourceConfigId: string;
+
+        if (existingConfig) {
+          sourceConfigId = existingConfig.id;
+        } else {
+          const [newConfig] = await db
+            .insert(sourceConfigs)
+            .values({
+              id: randomUUID(),
+              userId,
+              workspaceId: null,
+              providerType,
+              name: src.name,
+              config: {
+                url: src.url,
+                topics: src.topics ?? [],
+                feedType: input.feedType ?? "rss",
+                minRelevanceScore: input.relevanceThreshold
+                  ? input.relevanceThreshold / 100
+                  : 0,
+              },
+              enabled: true,
+            })
+            .returning();
+          sourceConfigId = newConfig.id;
+          createdSourceConfigIds.push(sourceConfigId);
+        }
+
+        // Upsert subscription: skip if this channel already has this source
+        const existingSub = await db.query.sourceSubscriptions.findFirst({
+          where: and(
+            eq(sourceSubscriptions.sourceConfigId, sourceConfigId),
+            drizzleSql`${sourceSubscriptions.feedId} = ${channelId}`
+          ),
+        });
+
+        if (!existingSub) {
+          const [newSub] = await db
+            .insert(sourceSubscriptions)
+            .values({
+              id: randomUUID(),
+              userId,
+              workspaceId: null,
+              sourceConfigId,
+              feedId: channelId,
+              status: "active",
+              params: {
+                feedType: input.feedType ?? "rss",
+                agentConfig: {
+                  feedType: input.feedType ?? "rss",
+                  minRelevanceScore: input.relevanceThreshold
+                    ? input.relevanceThreshold / 100
+                    : 0,
+                },
+              },
+            })
+            .returning();
+          createdSubscriptionIds.push(newSub.id);
+        }
+      }
+
+      logger.info(
+        {
+          userId,
+          channelId,
+          sourcesProvided: input.sources.length,
+          configsCreated: createdSourceConfigIds.length,
+          subscriptionsCreated: createdSubscriptionIds.length,
+        },
+        "Feed setup complete"
+      );
+
+      return {
+        channelId,
+        createdSourceConfigIds,
+        createdSubscriptionIds,
+      };
     }),
 });
 
