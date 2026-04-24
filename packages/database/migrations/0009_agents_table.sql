@@ -83,11 +83,45 @@ CREATE INDEX agents_active_idx ON agents(active);
 DROP INDEX IF EXISTS agents_intelligence_service_idx;
 CREATE INDEX agents_intelligence_service_idx ON agents(intelligence_service_id);
 
--- 6. Add sender_agent_id FK on channels
+-- 6. Drop old baseline columns that conflict with new schema
+DO $$ BEGIN
+    IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'agents' AND column_name = 'created_by') THEN
+        ALTER TABLE agents DROP COLUMN created_by;
+    END IF;
+    IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'agents' AND column_name = 'llm_provider') THEN
+        ALTER TABLE agents DROP COLUMN llm_provider;
+    END IF;
+    IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'agents' AND column_name = 'llm_model') THEN
+        ALTER TABLE agents DROP COLUMN llm_model;
+    END IF;
+    IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'agents' AND column_name = 'execution_mode') THEN
+        ALTER TABLE agents DROP COLUMN execution_mode;
+    END IF;
+    IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'agents' AND column_name = 'max_iterations') THEN
+        ALTER TABLE agents DROP COLUMN max_iterations;
+    END IF;
+    IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'agents' AND column_name = 'timeout_seconds') THEN
+        ALTER TABLE agents DROP COLUMN timeout_seconds;
+    END IF;
+    IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'agents' AND column_name = 'weight') THEN
+        ALTER TABLE agents DROP COLUMN weight;
+    END IF;
+    IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'agents' AND column_name = 'performance_metrics') THEN
+        ALTER TABLE agents DROP COLUMN performance_metrics;
+    END IF;
+    IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'agents' AND column_name = 'system_prompt') THEN
+        ALTER TABLE agents DROP COLUMN system_prompt;
+    END IF;
+    IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'agents' AND column_name = 'tools_config') THEN
+        ALTER TABLE agents DROP COLUMN tools_config;
+    END IF;
+END $$;
+
+-- 8. Add sender_agent_id FK on channels
 ALTER TABLE channels DROP COLUMN IF EXISTS sender_agent_id;
 ALTER TABLE channels ADD COLUMN sender_agent_id UUID REFERENCES agents(id) ON DELETE SET NULL;
 
--- 7. Backfill: create synthetic "orchestrator" agent
+-- 9. Backfill: create synthetic "orchestrator" agent
 DO $$
 DECLARE
     orchestrator_agent_id UUID;
