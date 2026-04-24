@@ -24,6 +24,9 @@ BEGIN
     END IF;
 END $$;
 
+-- Drop old agents table (recreated below with proper schema)
+DROP TABLE IF EXISTS agents CASCADE;
+
 -- Create new agents table
 CREATE TABLE IF NOT EXISTS agents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

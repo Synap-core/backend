@@ -2737,6 +2737,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		setupFeed: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sources: {
+					url: string;
+					name: string;
+					provider?: "cpproxy" | "rss-direct" | undefined;
+					topics?: string[] | undefined;
+				}[];
+				name?: string | undefined;
+				feedType?: string | undefined;
+				relevanceThreshold?: number | undefined;
+			};
+			output: {
+				channelId: string;
+				createdSourceConfigIds: string[];
+				createdSubscriptionIds: string[];
+			};
+			meta: object;
+		}>;
 	}>>;
 	proposals: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
