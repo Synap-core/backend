@@ -9,7 +9,6 @@ BEGIN;
 -- These were the old text-based agent fields replaced by the agents table FK
 DO $$
 BEGIN
-    -- Drop agentId column (the text-based FK reference that was not a real FK)
     IF EXISTS (
         SELECT FROM information_schema.columns
         WHERE table_name = 'channels' AND column_name = 'agent_id'
@@ -17,7 +16,6 @@ BEGIN
         ALTER TABLE channels DROP COLUMN agent_id;
     END IF;
 
-    -- Drop agentType column (free-form string, replaced by agents table)
     IF EXISTS (
         SELECT FROM information_schema.columns
         WHERE table_name = 'channels' AND column_name = 'agent_type'
@@ -43,31 +41,18 @@ CREATE TABLE IF NOT EXISTS agents (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Add intelligence_service_id column if missing (table may exist from baseline without it)
-DO $$ BEGIN
-    IF NOT EXISTS (
-        SELECT FROM information_schema.columns
-        WHERE table_name = 'agents' AND column_name = 'intelligence_service_id'
-    ) THEN
-        ALTER TABLE agents ADD COLUMN intelligence_service_id TEXT REFERENCES intelligence_services(id);
-    END IF;
-END $$;
+-- Add missing columns if table existed from older migration without them
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS intelligence_service_id TEXT REFERENCES intelligence_services(id);
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS agent_slug TEXT DEFAULT NULL;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS owner_type TEXT NOT NULL DEFAULT 'system';
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT true;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS capabilities TEXT[] DEFAULT '{}';
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS icon TEXT;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS description TEXT;
 
--- Add agent_slug column if missing (table may exist from older migration without it)
--- Must be nullable to allow multiple existing rows without violating unique constraint
-DO $$ BEGIN
-    IF NOT EXISTS (
-        SELECT FROM information_schema.columns
-        WHERE table_name = 'agents' AND column_name = 'agent_slug'
-    ) THEN
-        ALTER TABLE agents ADD COLUMN agent_slug TEXT DEFAULT NULL;
-    END IF;
-END $$;
-
--- Recreate index (IF NOT EXISTS is idempotent)
-CREATE UNIQUE INDEX IF NOT EXISTS agents_service_slug_unique ON agents(intelligence_service_id, agent_slug);
-
--- Additional indexes for fast lookups
+-- Recreate indexes (IF NOT EXISTS is idempotent)
+CREATE INDEX IF NOT EXISTS agents_service_slug_unique ON agents(intelligence_service_id, agent_slug);
 CREATE INDEX IF NOT EXISTS agents_intelligence_service_idx ON agents(intelligence_service_id);
 CREATE INDEX IF NOT EXISTS agents_user_id_idx ON agents(user_id);
 CREATE INDEX IF NOT EXISTS agents_owner_type_idx ON agents(owner_type);
