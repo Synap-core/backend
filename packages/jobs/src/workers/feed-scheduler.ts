@@ -21,6 +21,7 @@
 import { db, eq, and, sql } from "@synap/database";
 import { sourceSubscriptions, sourceConfigs } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+const logger = createLogger({ module: "feed-scheduler" });
 import { getBoss } from "@synap/events";
 import { randomUUID } from "crypto";
 import { FEED_SOURCE_EXECUTE_QUEUE } from "./feed-source-executor.js";
@@ -53,10 +54,8 @@ export async function handleFeedScheduler(): Promise<void> {
         subscriptionId: sourceSubscriptions.id,
         lastFetchedAt: sourceSubscriptions.lastFetchedAt,
         providerType: sourceConfigs.providerType,
-        subScheduleCron: sourceSubscriptions.params["scheduleCron"],
-        cfgScheduleCron: (sourceConfigs.config as Record<string, unknown>)[
-          "scheduleCron"
-        ],
+        subScheduleCron: sql`${sourceSubscriptions.params}->>'scheduleCron'`,
+        cfgScheduleCron: sql`${sourceConfigs.config}->>'scheduleCron'`,
       })
       .from(sourceSubscriptions)
       .innerJoin(
