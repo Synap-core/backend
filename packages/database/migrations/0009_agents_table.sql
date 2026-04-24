@@ -53,7 +53,18 @@ DO $$ BEGIN
     END IF;
 END $$;
 
--- Unique idx per service
+-- Add agent_slug column if missing (table may exist from older migration without it)
+-- Must be nullable to allow multiple existing rows without violating unique constraint
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT FROM information_schema.columns
+        WHERE table_name = 'agents' AND column_name = 'agent_slug'
+    ) THEN
+        ALTER TABLE agents ADD COLUMN agent_slug TEXT DEFAULT NULL;
+    END IF;
+END $$;
+
+-- Recreate index (IF NOT EXISTS is idempotent)
 CREATE UNIQUE INDEX IF NOT EXISTS agents_service_slug_unique ON agents(intelligence_service_id, agent_slug);
 
 -- Additional indexes for fast lookups
