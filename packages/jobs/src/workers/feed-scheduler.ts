@@ -18,7 +18,7 @@
  *
  */
 
-import { db, eq, and } from "@synap/database";
+import { db, eq, and, sql } from "@synap/database";
 import { sourceSubscriptions, sourceConfigs } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { getBoss } from "@synap/events";
@@ -48,6 +48,14 @@ export async function handleFeedScheduler(): Promise<void> {
   let skippedCount = 0;
 
   try {
+    const cronExpression = sql`
+      coalesce(
+        (source_subscriptions.params->>'scheduleCron')::text,
+        (source_configs.config->>'scheduleCron')::text,
+        null
+      )
+    `;
+
     // Inner join — only subscriptions whose source_config is enabled and
     // whose subscription status is active.
     const rows = await db
@@ -55,6 +63,7 @@ export async function handleFeedScheduler(): Promise<void> {
         subscriptionId: sourceSubscriptions.id,
         lastFetchedAt: sourceSubscriptions.lastFetchedAt,
         providerType: sourceConfigs.providerType,
+        scheduleCron: cronExpression,
       })
       .from(sourceSubscriptions)
       .innerJoin(
@@ -72,6 +81,31 @@ export async function handleFeedScheduler(): Promise<void> {
 
     for (const row of rows) {
       try {
+        const scheduleCron = row.scheduleCron as string | null;
+        if (scheduleCron) {
+          try {
+            await boss.send(
+              FEED_SOURCE_EXECUTE_QUEUE,
+              {
+                subscriptionId: row.subscriptionId,
+                runId: randomUUID(),
+              },
+              { priority: PRIORITY, cadence: scheduleCron }
+            );
+
+            scheduledCount++;
+            continue;
+          } catch (err) {
+            logger.debug(
+              {
+                err: err instanceof Error ? err.message : "unknown",
+                subscriptionId: row.subscriptionId,
+                scheduleCron,
+              },
+              "Failed to schedule with custom cadence, falling back"
+            );
+          }
+        }
         const lastFetchedMs = row.lastFetchedAt
           ? new Date(row.lastFetchedAt).getTime()
           : 0;

@@ -28,9 +28,9 @@ import {
 import { sql as dbSql } from "@synap/database";
 import {
   channels,
-  feeds,
   messages,
   sourceSubscriptions,
+  sourceConfigs,
 } from "@synap/database/schema";
 import { createLogger, ServiceUnavailableError } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
@@ -321,37 +321,82 @@ interface FeedConfig {
 }
 
 async function resolveFeedConfig(
-  feedId: string,
+  subscriptionId: string,
   userId: string
 ): Promise<FeedConfig & { channelId?: string }> {
   try {
-    const [row] = await db
-      .select()
-      .from(feeds)
-      .where(and(eq(feeds.id, feedId), eq(feeds.userId, userId)))
-      .limit(1);
+    const subscription = await db.query.sourceSubscriptions.findFirst({
+      where: and(
+        eq(sourceSubscriptions.id, subscriptionId),
+        eq(sourceSubscriptions.userId, userId)
+      ),
+    });
 
-    if (!row) throw new Error("Feed not found");
+    if (!subscription) throw new Error("Subscription not found");
+
+    const sourceConfig = await db.query.sourceConfigs.findFirst({
+      where: eq(sourceConfigs.id, subscription.sourceConfigId),
+    });
+
+    const config = (sourceConfig?.config as Record<string, unknown>) ?? {};
+    const params = (subscription.params as Record<string, unknown>) ?? {};
+    const providerType = sourceConfig?.providerType as string;
 
     let agentConfig: Record<string, unknown> = {};
-    if (row.channelId) {
-      const channel = await db.query.channels.findFirst({
-        where: eq(channels.id, row.channelId),
-        columns: { agentConfig: true },
-      });
-      agentConfig = (channel?.agentConfig as Record<string, unknown>) ?? {};
+
+    const sourceAgentConfig =
+      (config.agentConfig as Record<string, unknown>) ?? {};
+    const paramAgentConfig =
+      (params.agentConfig as Record<string, unknown>) ?? {};
+    agentConfig = { ...sourceAgentConfig, ...paramAgentConfig };
+
+    const feedTypeFromParams = params.feedType as string | undefined;
+    const feedTypeFromConfig = config.feedType as string | undefined;
+    const providerTypeAsFeed =
+      providerType === "rss-direct" ? "rss" : providerType;
+    const feedType =
+      feedTypeFromParams ??
+      feedTypeFromConfig ??
+      (agentConfig.feedType as string) ??
+      providerTypeAsFeed ??
+      "rss";
+
+    let minRelevanceScore: number;
+    const relevanceFromAgent = agentConfig.minRelevanceScore as
+      | number
+      | undefined;
+    const relevanceFromConfig = config.minRelevanceScore as number | undefined;
+
+    if (typeof relevanceFromAgent === "number") {
+      minRelevanceScore =
+        relevanceFromAgent > 1 ? relevanceFromAgent / 100 : relevanceFromAgent;
+    } else if (typeof relevanceFromConfig === "number") {
+      minRelevanceScore =
+        relevanceFromConfig > 1
+          ? relevanceFromConfig / 100
+          : relevanceFromConfig;
+    } else {
+      minRelevanceScore = 0;
+    }
+
+    const enrichmentFromAgent = agentConfig.enrichmentEnabled;
+    if (typeof enrichmentFromAgent === "boolean") {
+      // keep as-is
+    } else if (typeof (config.enrichmentEnabled as boolean) === "boolean") {
+      agentConfig.enrichmentEnabled = config.enrichmentEnabled as boolean;
     }
 
     return {
-      feedType:
-        (row.feedType as string) ?? (agentConfig.feedType as string) ?? "rss",
-      minRelevanceScore: ((agentConfig.minRelevanceScore as number) ?? 0) / 100, // stored as 0-100
-      enrichmentEnabled: agentConfig.enrichmentEnabled !== false,
+      feedType,
+      minRelevanceScore,
+      enrichmentEnabled:
+        (agentConfig.enrichmentEnabled ?? config.enrichmentEnabled ?? true) ===
+        true,
       agentConfig,
     };
   } catch (err) {
     logger.debug(
-      { err: err instanceof Error ? err.message : "unknown", feedId },
+      { err: err instanceof Error ? err.message : "unknown", subscriptionId },
       "Failed to resolve feed config, using defaults"
     );
   }
@@ -531,16 +576,17 @@ export async function handleEntityExtract(job: {
     const eventRepo = new EventRepository(dbSql);
     const entityRepo = new EntityRepository(database, eventRepo);
 
-    // 1. Resolve feed config
-    const feedConfig = await resolveFeedConfig(feedId, userId);
-
-    // 2. Resolve source config for provenance
+    // 1. Resolve subscription and feed config
     const subscription = await db.query.sourceSubscriptions.findFirst({
       where: eq(sourceSubscriptions.id, subscriptionId),
     });
     if (!subscription) {
       return { ...result, ok: false, error: "subscription not found" };
     }
+
+    const feedConfig = await resolveFeedConfig(subscriptionId, userId);
+
+    // 2. Resolve source config for provenance
     const configId = subscription.sourceConfigId;
 
     // 3. Deduplicate

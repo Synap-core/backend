@@ -2851,6 +2851,61 @@ export const channelsRouter = router({
 
       return { channelId: channel.id, status: "created" as const };
     }),
+
+  /**
+   * Patch message metadata — used for feed actions like dismiss/capture.
+   */
+  patchMessageMetadata: protectedProcedure
+    .input(
+      z.object({
+        messageId: z.string().uuid(),
+        channelId: z.string().uuid(),
+        metadata: z.record(z.unknown()),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const channel = await db.query.channels.findFirst({
+        where: eq(channels.id, input.channelId),
+      });
+      if (!channel) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Channel not found",
+        });
+      }
+      if (channel.userId !== ctx.userId) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
+      }
+
+      const msg = await db.query.messages.findFirst({
+        where: and(
+          eq(messages.id, input.messageId),
+          eq(messages.channelId, input.channelId)
+        ),
+      });
+      if (!msg) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Message not found",
+        });
+      }
+
+      const existing = (msg.metadata ?? {}) as Record<string, unknown>;
+      const merged: Record<string, unknown> = {};
+      for (const k of Object.keys(existing)) {
+        merged[k] = existing[k];
+      }
+      for (const [k, v] of Object.entries(input.metadata)) {
+        merged[k] = v;
+      }
+
+      await db
+        .update(messages)
+        .set({ metadata: merged as any })
+        .where(eq(messages.id, input.messageId));
+
+      return { ok: true };
+    }),
 });
 
 /** Recursive node returned by getBranchTree — mirrors the frontend BranchNode shape */

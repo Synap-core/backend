@@ -8,6 +8,7 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 /**
  * Knowledge Keys Schema
@@ -73,5 +74,14 @@ export const knowledgeKeys = pgTable(
   })
 );
 
-export type KnowledgeKeyRow = typeof knowledgeKeys.$inferSelect;
-export type NewKnowledgeKeyRow = typeof knowledgeKeys.$inferInsert;
+export type KnowledgeKey = typeof knowledgeKeys.$inferSelect;
+export type NewKnowledgeKey = typeof knowledgeKeys.$inferInsert;
+
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const insertKnowledgeKeySchema = createInsertSchema(knowledgeKeys);
+/**
+ * @internal For monorepo usage - enables schema composition in API layer
+ */
+export const selectKnowledgeKeySchema = createSelectSchema(knowledgeKeys);

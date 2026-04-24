@@ -15,6 +15,7 @@ export * from "./profile-property-repository.js";
 export * from "./entity-property-index-repository.js";
 export * from "./conversation-repository.js";
 export * from "./knowledge-repository.js";
+export * from "./knowledge-keys-repository.js";
 export * from "./suggestion-repository.js";
 export * from "./vector-repository.js";
 export * from "./entity-repository.js";

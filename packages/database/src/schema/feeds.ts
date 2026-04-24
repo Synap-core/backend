@@ -2,9 +2,14 @@
  * Feeds table — long-running AI researcher rows bound 1:1 to FEED-type channels.
  *
  * Migration: 0007_feeds.sql
- * This table is still actively used by entity-extract-worker.ts for feed config
- * resolution. Do NOT remove without updating the worker to use an alternative
- * storage (e.g., entity properties or a channel extension).
+ *
+ * DEPRECATED — entity-extract-worker.ts has been migrated to resolve feed config
+ * from source_subscriptions + source_configs. This table is retained for backward
+ * compatibility: if a subscription's feedId maps to a legacy feeds.id, the scheduler
+ * will degrade gracefully. Full removal will happen in Phase 3 after migration is
+ * verified across all pods.
+ *
+ * Do NOT remove without confirming all subscriptions use the new path.
  */
 
 import {

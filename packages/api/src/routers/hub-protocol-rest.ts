@@ -57,6 +57,8 @@ import {
   intelligenceServices,
   agents,
   createWorkspaceFromDefinition,
+  knowledgeKeysRepository,
+  insertKnowledgeKeySchema,
 } from "@synap/database";
 import { z } from "zod";
 import {
@@ -2271,6 +2273,266 @@ app.delete("/memory/:id", async (c) => {
     return c.json({ success: true });
   } catch (err) {
     logger.error({ err, id }, "deleteFact failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/*
+ * Knowledge Keys — pod-wide procedural knowledge for agents and humans
+ * These are separate from knowledge_facts (user-scoped episodic memory).
+ * Knowledge keys are pod-wide procedural documentation addressed by key
+ * string like "deploy:backend" or "ui:tokens".
+ */
+
+/**
+ * GET /knowledge?namespace=&status=&limit=&offset=
+ * List knowledge keys with optional filtering.
+ */
+app.get("/knowledge", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.read required" },
+      403
+    );
+  }
+
+  const authUserId = c.get("userId") as string;
+  const namespace = c.req.query("namespace");
+  const status = c.req.query("status");
+  const limit = parseInt(c.req.query("limit") ?? "50", 10);
+  const offset = parseInt(c.req.query("offset") ?? "0", 10);
+
+  let workspaceId: string | undefined;
+
+  const wsParam = c.req.query("workspaceId");
+  if (wsParam) {
+    workspaceId = wsParam;
+  } else {
+    workspaceId = authUserId;
+  }
+
+  try {
+    const items = await knowledgeKeysRepository.list({
+      namespace,
+      status,
+      workspaceId,
+      limit,
+      offset,
+    });
+    return c.json(items);
+  } catch (err) {
+    logger.error({ err }, "list knowledge keys failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /knowledge/search?q=&limit=
+ * Full-text search on knowledge key values.
+ */
+app.get("/knowledge/search", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.read required" },
+      403
+    );
+  }
+
+  const authUserId = c.get("userId") as string;
+  const query = c.req.query("q") ?? c.req.query("query") ?? "";
+  const limit = parseInt(c.req.query("limit") ?? "10", 10);
+
+  let workspaceId: string | undefined;
+
+  const wsParam = c.req.query("workspaceId");
+  if (wsParam) {
+    workspaceId = wsParam;
+  } else {
+    workspaceId = authUserId;
+  }
+
+  if (!query) {
+    return c.json({ error: "query parameter 'q' is required" }, 400);
+  }
+
+  try {
+    const results = await knowledgeKeysRepository.searchFullText(
+      query,
+      workspaceId,
+      limit
+    );
+    return c.json(results);
+  } catch (err) {
+    logger.error({ err }, "search knowledge keys failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * GET /knowledge/:key
+ * Get a single knowledge entry by its key string.
+ */
+app.get("/knowledge/:key", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.read required" },
+      403
+    );
+  }
+
+  const authUserId = c.get("userId") as string;
+  const key = c.req.param("key");
+  const decodedKey = decodeURIComponent(key);
+
+  let workspaceId: string | undefined;
+
+  const wsParam = c.req.query("workspaceId");
+  if (wsParam) {
+    workspaceId = wsParam;
+  } else {
+    workspaceId = authUserId;
+  }
+
+  try {
+    const record = await knowledgeKeysRepository.getByKey(
+      decodedKey,
+      workspaceId
+    );
+    if (!record) {
+      return c.json({ error: `Knowledge key not found: ${decodedKey}` }, 404);
+    }
+    return c.json(record);
+  } catch (err) {
+    logger.error({ err }, "get knowledge key failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * POST /knowledge — create a new knowledge entry
+ */
+app.post("/knowledge", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.write required" },
+      403
+    );
+  }
+
+  const authUserId = c.get("userId") as string;
+
+  try {
+    const raw = await c.req.json();
+    const parsed = insertKnowledgeKeySchema.parse({
+      key: raw.key,
+      value: raw.value,
+      namespace: raw.namespace,
+      slug: raw.slug,
+      status: raw.status ?? "active",
+      author: raw.author ?? authUserId,
+    });
+
+    const record = await knowledgeKeysRepository.create({
+      key: parsed.key,
+      value: parsed.value,
+      status: parsed.status,
+      workspaceId: parsed.workspaceId || undefined,
+      author: parsed.author || undefined,
+    });
+    return c.json(record);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return c.json(
+        { error: err.errors.map((e) => e.message).join(", ") },
+        400
+      );
+    }
+    logger.error({ err }, "create knowledge key failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * PUT /knowledge/:key — upsert a knowledge entry
+ */
+app.put("/knowledge/:key", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.write required" },
+      403
+    );
+  }
+
+  const authUserId = c.get("userId") as string;
+  const key = c.req.param("key");
+  const decodedKey = decodeURIComponent(key);
+
+  try {
+    const raw = await c.req.json();
+    const parsed = insertKnowledgeKeySchema.parse({
+      key: decodedKey,
+      value: raw.value,
+      status: raw.status ?? "active",
+      author: raw.author ?? authUserId,
+    });
+
+    const record = await knowledgeKeysRepository.upsert(decodedKey, {
+      key: decodedKey,
+      value: parsed.value,
+      status: parsed.status,
+      workspaceId: parsed.workspaceId || undefined,
+      author: parsed.author || undefined,
+    });
+    return c.json(record);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return c.json(
+        { error: err.errors.map((e) => e.message).join(", ") },
+        400
+      );
+    }
+    logger.error({ err }, "upsert knowledge key failed");
+    return c.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      500
+    );
+  }
+});
+
+/**
+ * DELETE /knowledge/:key — archive (soft delete) a knowledge key
+ */
+app.delete("/knowledge/:key", async (c) => {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return c.json(
+      { error: "Insufficient scope: hub-protocol.write required" },
+      403
+    );
+  }
+
+  const key = c.req.param("key");
+  const decodedKey = decodeURIComponent(key);
+
+  try {
+    const result = await knowledgeKeysRepository.archive(decodedKey);
+    return c.json({ success: result });
+  } catch (err) {
+    logger.error({ err }, "archive knowledge key failed");
     return c.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       500
