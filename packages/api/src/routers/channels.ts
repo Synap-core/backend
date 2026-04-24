@@ -2860,7 +2860,7 @@ export const channelsRouter = router({
       z.object({
         messageId: z.string().uuid(),
         channelId: z.string().uuid(),
-        metadata: z.record(z.unknown()),
+        metadata: z.record(z.string(), z.unknown()),
       })
     )
     .mutation(async ({ ctx, input }) => {

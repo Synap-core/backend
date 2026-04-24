@@ -2726,6 +2726,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		patchMessageMetadata: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				messageId: string;
+				channelId: string;
+				metadata: Record<string, unknown>;
+			};
+			output: {
+				ok: boolean;
+			};
+			meta: object;
+		}>;
 	}>>;
 	proposals: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
