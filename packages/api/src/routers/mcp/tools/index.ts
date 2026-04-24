@@ -213,6 +213,54 @@ export const tools = {
           required: ["entityId", "workspaceId"],
         },
       },
+      {
+        name: "synap_get_knowledge",
+        description:
+          "Get a single knowledge key by its namespace:slug identifier (e.g. 'deploy:backend'). Knowledge keys are pod-wide procedural docs — deploy guides, build instructions, operational runbooks, architecture decisions. Use when the user asks 'how do we deploy', 'how does auth work', 'what's our backup strategy', 'how to fix X'. Always search first with synap_list_knowledge to discover available keys.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            key: {
+              type: "string",
+              description:
+                "Knowledge key in namespace:slug format (e.g., 'deploy:backend')",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Workspace ID (optional, defaults to auth user's workspace)",
+            },
+          },
+          required: ["key"],
+        },
+      },
+      {
+        name: "synap_list_knowledge",
+        description:
+          "List all available knowledge keys, optionally filtered by namespace. Returns namespace, slug, key, title, and last updated date. Use before synap_get_knowledge to discover what procedural docs are available. Example namespaces: deploy, build, ops, architecture, security, runbooks.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            namespace: {
+              type: "string",
+              description:
+                "Filter by namespace (e.g., 'deploy', 'build', 'ops')",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Workspace ID (optional, defaults to auth user's workspace)",
+            },
+            status: {
+              type: "string",
+              description: "Filter by status: 'active' (default) or all",
+              enum: ["active", "all"],
+              default: "active",
+            },
+          },
+          required: [],
+        },
+      },
 
       // ── Writes (governed — may create proposals) ───────────────────────────
       {

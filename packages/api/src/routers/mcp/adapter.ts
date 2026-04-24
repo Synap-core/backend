@@ -11,7 +11,12 @@ import { hubProtocolRouter } from "../hub-protocol/index.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "../hub-protocol/utils.js";
 import { getDb } from "@synap/database";
-import { db, knowledgeRepository, messages } from "@synap/database";
+import {
+  db,
+  knowledgeKeys,
+  knowledgeRepository,
+  messages,
+} from "@synap/database";
 import {
   proposals,
   ProposalStatus,
@@ -19,6 +24,7 @@ import {
   eq,
   and,
   desc,
+  asc,
 } from "@synap/database";
 import { randomUUID, createHash } from "crypto";
 import type { Context } from "../../types/context.js";
@@ -278,6 +284,31 @@ export async function executeMCPToolViaHubProtocol(
         sourceEntityId: args.sourceEntityId as string,
         targetEntityId: args.targetEntityId as string,
         type: (args.type as string) || "related",
+      });
+      return ok(result);
+    }
+
+    case "synap_get_knowledge": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      const wsId = args.workspaceId as string | undefined;
+      const result = await caller.knowledge.getKnowledge({
+        userId,
+        key: args.key as string,
+        workspaceId: wsId,
+      });
+      return ok(result);
+    }
+
+    case "synap_list_knowledge": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      const wsId = args.workspaceId as string | undefined;
+      const statusFilter =
+        (args.status as string | undefined) === "active" ? "active" : undefined;
+      const result = await caller.knowledge.listKnowledge({
+        userId,
+        namespace: args.namespace as string | undefined,
+        workspaceId: wsId,
+        status: statusFilter,
       });
       return ok(result);
     }

@@ -25,8 +25,6 @@ import { getBoss } from "@synap/events";
 import { randomUUID } from "crypto";
 import { FEED_SOURCE_EXECUTE_QUEUE } from "./feed-source-executor.js";
 
-const logger = createLogger({ module: "feed-scheduler" });
-
 // ── Constants ────────────────────────────────────────────────────────────────
 
 /** Cron schedule for this worker (every minute) */
@@ -48,14 +46,6 @@ export async function handleFeedScheduler(): Promise<void> {
   let skippedCount = 0;
 
   try {
-    const cronExpression = sql`
-      coalesce(
-        (source_subscriptions.params->>'scheduleCron')::text,
-        (source_configs.config->>'scheduleCron')::text,
-        null
-      )
-    `;
-
     // Inner join — only subscriptions whose source_config is enabled and
     // whose subscription status is active.
     const rows = await db
@@ -63,7 +53,10 @@ export async function handleFeedScheduler(): Promise<void> {
         subscriptionId: sourceSubscriptions.id,
         lastFetchedAt: sourceSubscriptions.lastFetchedAt,
         providerType: sourceConfigs.providerType,
-        scheduleCron: cronExpression,
+        subScheduleCron: sourceSubscriptions.params["scheduleCron"],
+        cfgScheduleCron: (sourceConfigs.config as Record<string, unknown>)[
+          "scheduleCron"
+        ],
       })
       .from(sourceSubscriptions)
       .innerJoin(
@@ -81,16 +74,21 @@ export async function handleFeedScheduler(): Promise<void> {
 
     for (const row of rows) {
       try {
-        const scheduleCron = row.scheduleCron as string | null;
+        const scheduleCron =
+          (row.subScheduleCron as string) ||
+          (row.cfgScheduleCron as string) ||
+          null;
         if (scheduleCron) {
           try {
+            const sendOptions: { priority: number } & Record<string, unknown> =
+              { priority: PRIORITY, schedule: scheduleCron };
             await boss.send(
               FEED_SOURCE_EXECUTE_QUEUE,
               {
                 subscriptionId: row.subscriptionId,
                 runId: randomUUID(),
               },
-              { priority: PRIORITY, cadence: scheduleCron }
+              sendOptions
             );
 
             scheduledCount++;
@@ -107,7 +105,7 @@ export async function handleFeedScheduler(): Promise<void> {
           }
         }
         const lastFetchedMs = row.lastFetchedAt
-          ? new Date(row.lastFetchedAt).getTime()
+          ? new Date(row.lastFetchedAt as number | string | Date).getTime()
           : 0;
         if (now - lastFetchedMs < DEFAULT_POLL_INTERVAL_MS) {
           skippedCount++;
