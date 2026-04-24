@@ -32,7 +32,7 @@ export const agents = pgTable(
     capabilities: text("capabilities").array().default([]),
     metadata: jsonb("metadata").default({}),
     ownerType: ownerTypeEnum("owner_type").notNull().default("system"),
-    userId: uuid("user_id").references(() => users.id, {
+    userId: text("user_id").references(() => users.id, {
       onDelete: "set null",
     }),
     intelligenceServiceId: text("intelligence_service_id").references(
