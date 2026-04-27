@@ -2243,7 +2243,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelId: string;
 					parentId: string | null;
 					role: "user" | "system" | "assistant";
-					authorType: "human" | "external" | "ai_agent" | "bot";
+					authorType: "human" | "ai_agent" | "external" | "bot";
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
 					inboxItemId: string | null;
@@ -9914,6 +9914,309 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				error?: string;
 				sampleCount?: number;
 			};
+			meta: object;
+		}>;
+	}>>;
+	sourceSubscriptions: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+				status?: "error" | "active" | "paused" | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+			};
+			output: {
+				id: string;
+				userId: string;
+				workspaceId: string | null;
+				feedId: string;
+				sourceConfigId: string;
+				params: Record<string, unknown>;
+				cursor: string | null;
+				lastFetchedAt: Date | null;
+				lastItemAt: Date | null;
+				status: string;
+				errorMessage: string | null;
+				createdAt: Date;
+				updatedAt: Date;
+			}[];
+			meta: object;
+		}>;
+		listBySourceConfig: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				sourceConfigId: string;
+			};
+			output: {
+				id: string;
+				userId: string;
+				workspaceId: string | null;
+				feedId: string;
+				sourceConfigId: string;
+				params: Record<string, unknown>;
+				cursor: string | null;
+				lastFetchedAt: Date | null;
+				lastItemAt: Date | null;
+				status: string;
+				errorMessage: string | null;
+				createdAt: Date;
+				updatedAt: Date;
+			}[];
+			meta: object;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				id: string;
+				feedId: string;
+				params: Record<string, unknown>;
+				cursor: string | null;
+				lastFetchedAt: Date | null;
+				status: string;
+				errorMessage: string | null;
+				sourceConfig: {
+					id: string;
+					providerType: string;
+					name: string;
+					enabled: boolean;
+				};
+			};
+			meta: object;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				feedId: string;
+				sourceConfigId: string;
+				params?: Record<string, unknown> | undefined;
+				workspaceId?: string | null | undefined;
+			};
+			output: {
+				userId: string;
+				workspaceId: string | null;
+				id: string;
+				errorMessage: string | null;
+				updatedAt: Date;
+				createdAt: Date;
+				status: string;
+				lastFetchedAt: Date | null;
+				feedId: string;
+				sourceConfigId: string;
+				params: Record<string, unknown>;
+				cursor: string | null;
+				lastItemAt: Date | null;
+			};
+			meta: object;
+		}>;
+		update: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				patch: {
+					params?: Record<string, unknown> | undefined;
+					status?: "error" | "active" | "paused" | undefined;
+					cursor?: string | undefined;
+				};
+			};
+			output: {
+				id: string;
+				userId: string;
+				workspaceId: string | null;
+				feedId: string;
+				sourceConfigId: string;
+				params: Record<string, unknown>;
+				cursor: string | null;
+				lastFetchedAt: Date | null;
+				lastItemAt: Date | null;
+				status: string;
+				errorMessage: string | null;
+				createdAt: Date;
+				updatedAt: Date;
+			};
+			meta: object;
+		}>;
+		delete: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				ok: boolean;
+			};
+			meta: object;
+		}>;
+		pause: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				id: string;
+				userId: string;
+				workspaceId: string | null;
+				feedId: string;
+				sourceConfigId: string;
+				params: Record<string, unknown>;
+				cursor: string | null;
+				lastFetchedAt: Date | null;
+				lastItemAt: Date | null;
+				status: string;
+				errorMessage: string | null;
+				createdAt: Date;
+				updatedAt: Date;
+			};
+			meta: object;
+		}>;
+		resume: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				id: string;
+				userId: string;
+				workspaceId: string | null;
+				feedId: string;
+				sourceConfigId: string;
+				params: Record<string, unknown>;
+				cursor: string | null;
+				lastFetchedAt: Date | null;
+				lastItemAt: Date | null;
+				status: string;
+				errorMessage: string | null;
+				createdAt: Date;
+				updatedAt: Date;
+			};
+			meta: object;
+		}>;
+		updateCursor: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				cursor: string;
+				lastFetchedAt?: unknown;
+				lastItemAt?: unknown;
+			};
+			output: {
+				id: string;
+				userId: string;
+				workspaceId: string | null;
+				feedId: string;
+				sourceConfigId: string;
+				params: Record<string, unknown>;
+				cursor: string | null;
+				lastFetchedAt: Date | null;
+				lastItemAt: Date | null;
+				status: string;
+				errorMessage: string | null;
+				createdAt: Date;
+				updatedAt: Date;
+			};
+			meta: object;
+		}>;
+	}>>;
+	feeds: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+				sourceConfigId?: string | undefined;
+				status?: "error" | "active" | "paused" | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+			};
+			output: {
+				id: string;
+				feedId: string;
+				params: Record<string, unknown>;
+				cursor: string | null;
+				lastFetchedAt: Date | null;
+				lastItemAt: Date | null;
+				status: string;
+				errorMessage: string | null;
+				sourceConfig: {
+					id: string;
+					name: string;
+					providerType: string;
+					enabled: boolean;
+				};
+			}[];
+			meta: object;
+		}>;
+		recentItems: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				subscriptionId: string;
+				limit?: number | undefined;
+			};
+			output: {
+				subscription: {
+					id: string;
+					feedId: string;
+					status: string;
+					lastFetchedAt: Date | null;
+					lastItemAt: Date | null;
+					errorMessage: string | null;
+				};
+				messageLimit: number;
+				note: string;
+			};
+			meta: object;
+		}>;
+		updateLastFetched: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				cursor?: string | undefined;
+				lastItemAt?: unknown;
+			};
+			output: {
+				id: string;
+				userId: string;
+				workspaceId: string | null;
+				feedId: string;
+				sourceConfigId: string;
+				params: Record<string, unknown>;
+				cursor: string | null;
+				lastFetchedAt: Date | null;
+				lastItemAt: Date | null;
+				status: string;
+				errorMessage: string | null;
+				createdAt: Date;
+				updatedAt: Date;
+			};
+			meta: object;
+		}>;
+		healthSummary: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				total: number;
+				active: number;
+				paused: number;
+				error: number;
+				recentlyFetched: number;
+				lastRefreshed: Date;
+			};
+			meta: object;
+		}>;
+		countBySourceConfig: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				sourceConfigId: string;
+				sourceConfigName: string | null;
+				providerType: string | null;
+				count: number;
+			}[];
 			meta: object;
 		}>;
 	}>>;

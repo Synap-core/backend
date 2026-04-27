@@ -48,6 +48,8 @@ import { proactiveRouter } from "./routers/proactive.js";
 import { syncManagementRouter } from "./routers/sync-management.js";
 import { trustedIssuersRouter } from "./routers/trusted-issuers.js";
 import { sourceConfigsRouter } from "./routers/source-configs.js";
+import { sourceSubscriptionsRouter } from "./routers/source-subscriptions.js";
+import { feedsRouter } from "./routers/feeds.js";
 import { agentsRouter } from "./routers/agents.js";
 
 /**
@@ -105,6 +107,8 @@ export const coreRouter = router({
   sync: syncManagementRouter,
   trustedIssuers: trustedIssuersRouter,
   sourceConfigs: sourceConfigsRouter,
+  sourceSubscriptions: sourceSubscriptionsRouter,
+  feeds: feedsRouter,
 });
 
 export type AppRouter = typeof coreRouter;
