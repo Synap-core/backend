@@ -397,8 +397,10 @@ app.post("/api/handshake", async (c) => {
       );
     }
 
-    const issuerUrl =
-      clientIssuerUrl ?? legacyCpUrl ?? config.server.controlPlaneUrl;
+    // issuerUrl resolution: client always passes issuerUrl; legacyCpUrl is for old clients.
+    // No env-var fallback — if neither is provided, verifyCpJwt reads the token's own `iss`
+    // claim and the trusted_issuers registry gates acceptance.
+    const issuerUrl = clientIssuerUrl ?? legacyCpUrl;
 
     const payload = await verifyCpJwtWithTrust<{
       sub: string;

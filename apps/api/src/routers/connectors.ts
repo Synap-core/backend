@@ -188,7 +188,19 @@ connectorsRouter.post("/pull-sync", async (c) => {
     return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
   }
 
-  const cpUrl = config.server.controlPlaneUrl;
+  let cpUrl: string | undefined;
+  try {
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cp = (ws?.settings as Record<string, unknown> | null)
+      ?.controlPlane as { url?: string } | undefined;
+    cpUrl = cp?.url;
+  } catch {
+    /* fall through */
+  }
+
   const payload = await verifyCpJwtWithTrust<{
     type: string;
     podId: string;
@@ -429,7 +441,19 @@ connectorsRouter.post("/disconnect", async (c) => {
     return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
   }
 
-  const cpUrl = config.server.controlPlaneUrl;
+  let cpUrl: string | undefined;
+  try {
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cp = (ws?.settings as Record<string, unknown> | null)
+      ?.controlPlane as { url?: string } | undefined;
+    cpUrl = cp?.url;
+  } catch {
+    /* fall through */
+  }
+
   const payload = await verifyCpJwtWithTrust<{
     type: string;
     podId: string;

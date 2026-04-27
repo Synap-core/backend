@@ -5,6 +5,7 @@
  * Used for the Control Plane push flow where CP calls the pod to register itself.
  *
  * Routes:
+ *   POST /api/provision/seed-trust            — Bootstrap: CP registers itself as trusted issuer (PROVISIONING_TOKEN auth)
  *   POST /api/provision/connect               — CP pushes credentials via signed JWT
  *   POST /api/provision/register-intelligence — IS self-registers its API key via CP-signed JWT
  *   POST /api/provision/reset-intelligence    — Clear stale IS registration (CP-JWT auth)
@@ -13,8 +14,10 @@
  *   POST /api/provision/disconnect            — Remove CP connection (admin only, uses CP JWT)
  *
  * Auth model:
- *   All mutating calls use a short-lived ES256 JWT signed by the Control Plane.
+ *   seed-trust uses PROVISIONING_TOKEN (bootstrap shared secret set by install.sh).
+ *   All other mutating calls use a short-lived ES256 JWT signed by the Control Plane.
  *   Pods verify via /.well-known/jwks.json — no shared secret required.
+ *   The pod has zero hardcoded knowledge of the CP URL; trust is established at provisioning time.
  */
 
 import { Hono } from "hono";
@@ -36,6 +39,7 @@ import {
   ApiKeyRepository,
   sql,
   seedAdminUser,
+  TrustedIssuerService,
 } from "@synap/database";
 import {
   workspaces,
@@ -51,6 +55,108 @@ const logger = createLogger({ module: "provision" });
 const OPENCLAW_HUB_SCOPES = ["hub-protocol.read", "hub-protocol.write"];
 
 export const provisionRouter = new Hono();
+
+// ─── POST /api/provision/seed-trust ─────────────────────────────────────────
+//
+// Bootstrap endpoint: the Control Plane introduces itself to the pod as a
+// trusted issuer. Called ONCE during provisioning, before /connect.
+//
+// Auth: Bearer <PROVISIONING_TOKEN> (shared secret set by install.sh — used
+//   only for this bootstrap call; all subsequent calls use ES256 JWTs).
+//
+// Body: { issuerUrl: string }  — the CP's public base URL (e.g. "https://api.synap.live")
+//
+// On success:
+//   1. Inserts/updates trusted_issuers with status="approved", isBuiltIn=true
+//   2. Seeds workspace.settings.controlPlane.url so all subsequent provision
+//      routes can read cpUrl from the DB instead of an env var.
+//
+// Idempotent — safe to call multiple times.
+
+provisionRouter.post("/seed-trust", async (c) => {
+  const provisioningToken = process.env.PROVISIONING_TOKEN;
+  if (!provisioningToken) {
+    logger.error("seed-trust refused: PROVISIONING_TOKEN not set on this pod");
+    return c.json({ error: "PROVISIONING_TOKEN not configured" }, 500);
+  }
+
+  const authHeader = c.req.header("Authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  }
+  const token = authHeader.slice(7);
+  if (token !== provisioningToken) {
+    logger.warn("seed-trust rejected: invalid PROVISIONING_TOKEN");
+    return c.json({ error: "Invalid provisioning token" }, 401);
+  }
+
+  const body = await c.req.json().catch(() => null);
+  const parsed = z.object({ issuerUrl: z.string().url() }).safeParse(body);
+  if (!parsed.success) {
+    return c.json(
+      { error: "issuerUrl is required and must be a valid URL" },
+      400
+    );
+  }
+  const { issuerUrl } = parsed.data;
+
+  try {
+    // 1. Seed the CP into trusted_issuers
+    const svc = new TrustedIssuerService();
+    await svc.seedBuiltIn([
+      {
+        issuerUrl,
+        displayName: "Synap Cloud",
+        description:
+          "Synap managed control plane — approved at provisioning time",
+        allowedScopes: [
+          "setup.agent",
+          "provision",
+          "tier_update",
+          "sync",
+          "hub-protocol.read",
+          "hub-protocol.write",
+        ],
+      },
+    ]);
+
+    // 2. Seed workspace.settings.controlPlane.url so /connect and all other
+    //    provision routes can resolve cpUrl from the DB without needing the env var.
+    try {
+      const db = await getDb();
+      const ws = await db.query.workspaces.findFirst();
+      if (ws) {
+        const existing = (ws.settings as Record<string, unknown>) ?? {};
+        const existingCp =
+          (existing.controlPlane as Record<string, unknown>) ?? {};
+        await db
+          .update(workspaces)
+          .set({
+            settings: {
+              ...existing,
+              controlPlane: { ...existingCp, url: issuerUrl },
+            },
+          })
+          .where(eq(workspaces.id, ws.id));
+      }
+    } catch (dbErr) {
+      // Non-fatal — /connect will set this properly when called next
+      logger.warn(
+        { err: dbErr },
+        "seed-trust: could not pre-seed workspace.settings.controlPlane.url (non-fatal)"
+      );
+    }
+
+    logger.info(
+      { issuerUrl },
+      "Trust established: CP registered as trusted issuer"
+    );
+    return c.json({ success: true, issuerUrl });
+  } catch (err) {
+    logger.error({ err }, "seed-trust: failed to seed trusted issuer");
+    return c.json({ error: "Failed to register trusted issuer" }, 500);
+  }
+});
 
 // ─── POST /api/provision/connect ────────────────────────────────────────────
 //
@@ -107,7 +213,8 @@ provisionRouter.post("/connect", async (c) => {
     nangoHost?: string;
     nangoRecordsApiKey?: string;
   }>(token, {
-    pinnedIssuer: config.server.controlPlaneUrl,
+    // No pinnedIssuer — trust is gated by trusted_issuers registry (seeded by /seed-trust).
+    // The JWT's own `iss` claim is matched against the registry by verifyCpJwtWithTrust.
     audience: podPublicUrl,
   });
 
@@ -214,20 +321,18 @@ provisionRouter.post("/register-intelligence", async (c) => {
   }
   const token = authHeader.slice(7);
 
-  // Resolve cpUrl from workspace settings (set by /connect) or env
-  let cpUrl: string | undefined = config.server.controlPlaneUrl;
-  if (!cpUrl) {
-    try {
-      const db = await getDb();
-      const ws = await db.query.workspaces.findFirst({
-        columns: { settings: true },
-      });
-      const cp = (ws?.settings as Record<string, unknown> | null)
-        ?.controlPlane as { url?: string } | undefined;
-      cpUrl = cp?.url;
-    } catch {
-      // fall through to undefined — verifyCpJwt will attempt JWKS from token claim
-    }
+  // Resolve cpUrl from workspace.settings (set by /seed-trust + /connect)
+  let cpUrl: string | undefined;
+  try {
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cp = (ws?.settings as Record<string, unknown> | null)
+      ?.controlPlane as { url?: string } | undefined;
+    cpUrl = cp?.url;
+  } catch {
+    // fall through to undefined — verifyCpJwtWithTrust reads iss from token, trust registry gates it
   }
 
   const podPublicUrl = process.env.PUBLIC_URL;
@@ -452,8 +557,8 @@ provisionRouter.post("/reset-intelligence", async (c) => {
   }
   const token = authHeader.slice(7);
 
-  // Resolve cpUrl from workspace settings or env
-  let cpUrl: string | undefined = config.server.controlPlaneUrl;
+  // Resolve cpUrl and registeredPodId from workspace.settings (set by /seed-trust + /connect)
+  let cpUrl: string | undefined;
   let registeredPodId: string | undefined;
   try {
     const db = await getDb();
@@ -462,7 +567,7 @@ provisionRouter.post("/reset-intelligence", async (c) => {
     });
     const cp = (ws?.settings as Record<string, unknown> | null)
       ?.controlPlane as { url?: string; podId?: string } | undefined;
-    if (!cpUrl) cpUrl = cp?.url;
+    cpUrl = cp?.url;
     registeredPodId = cp?.podId;
   } catch {
     /* fall through */
@@ -644,7 +749,7 @@ provisionRouter.post("/seed-admin", async (c) => {
     name?: string;
     aud: string;
   }>(token, {
-    pinnedIssuer: config.server.controlPlaneUrl,
+    // No pinnedIssuer — trust is gated by trusted_issuers registry (seeded by /seed-trust).
     audience: podPublicUrl,
   });
 
@@ -797,7 +902,7 @@ provisionRouter.post("/validate-credentials", async (c) => {
   }
   const token = authHeader.slice(7);
 
-  let cpUrl: string | undefined = config.server.controlPlaneUrl;
+  let cpUrl: string | undefined;
   let registeredPodId: string | undefined;
   try {
     const db = await getDb();
@@ -806,7 +911,7 @@ provisionRouter.post("/validate-credentials", async (c) => {
     });
     const cp = (ws?.settings as Record<string, unknown> | null)
       ?.controlPlane as { url?: string; podId?: string } | undefined;
-    if (!cpUrl) cpUrl = cp?.url;
+    cpUrl = cp?.url;
     registeredPodId = cp?.podId;
   } catch {
     /* fall through */
@@ -1313,7 +1418,7 @@ provisionRouter.get("/addon-status", async (c) => {
   }
   const token = authHeader.slice(7);
 
-  let cpUrl: string | undefined = config.server.controlPlaneUrl;
+  let cpUrl: string | undefined;
   let registeredPodId: string | undefined;
   try {
     const db = await getDb();
@@ -1323,7 +1428,7 @@ provisionRouter.get("/addon-status", async (c) => {
     const cp = (ws?.settings as Record<string, unknown>)?.controlPlane as
       | { url?: string; podId?: string }
       | undefined;
-    if (!cpUrl) cpUrl = cp?.url;
+    cpUrl = cp?.url;
     registeredPodId = cp?.podId;
   } catch {
     /* fall through */
@@ -1432,8 +1537,8 @@ provisionRouter.post("/activate-addon", async (c) => {
   }
   const token = authHeader.slice(7);
 
-  // Resolve cpUrl and registered podId from workspace settings or env
-  let cpUrl: string | undefined = config.server.controlPlaneUrl;
+  // Resolve cpUrl and registeredPodId from workspace.settings (set by /seed-trust + /connect)
+  let cpUrl: string | undefined;
   let registeredPodId: string | undefined;
   try {
     const db = await getDb();
@@ -1443,7 +1548,7 @@ provisionRouter.post("/activate-addon", async (c) => {
     const cp = (ws?.settings as Record<string, unknown>)?.controlPlane as
       | { url?: string; podId?: string }
       | undefined;
-    if (!cpUrl) cpUrl = cp?.url;
+    cpUrl = cp?.url;
     registeredPodId = cp?.podId;
   } catch {
     /* fall through */
@@ -1691,7 +1796,7 @@ provisionRouter.post("/deactivate-addon", async (c) => {
   }
   const token = authHeader.slice(7);
 
-  let cpUrl: string | undefined = config.server.controlPlaneUrl;
+  let cpUrl: string | undefined;
   let registeredPodId: string | undefined;
   try {
     const db = await getDb();
@@ -1701,7 +1806,7 @@ provisionRouter.post("/deactivate-addon", async (c) => {
     const cp = (ws?.settings as Record<string, unknown>)?.controlPlane as
       | { url?: string; podId?: string }
       | undefined;
-    if (!cpUrl) cpUrl = cp?.url;
+    cpUrl = cp?.url;
     registeredPodId = cp?.podId;
   } catch {
     /* fall through */
@@ -1818,7 +1923,19 @@ provisionRouter.post("/disconnect", async (c) => {
     return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
   }
 
-  const cpUrl = config.server.controlPlaneUrl;
+  let cpUrl: string | undefined;
+  try {
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cp = (ws?.settings as Record<string, unknown> | null)
+      ?.controlPlane as { url?: string } | undefined;
+    cpUrl = cp?.url;
+  } catch {
+    /* fall through */
+  }
+
   const payload = await verifyCpJwtWithTrust<{ type?: string }>(token, {
     pinnedIssuer: cpUrl,
     audience: podPublicUrl,
@@ -1893,8 +2010,7 @@ provisionRouter.post("/trigger-update", async (c) => {
   }
   const token = authHeader.slice(7);
 
-  // Read CP URL from workspace settings for JWT verification
-  let cpUrl: string | undefined = config.server.controlPlaneUrl;
+  let cpUrl: string | undefined;
   try {
     const db = await getDb();
     const ws = await db.query.workspaces.findFirst({
@@ -1902,14 +2018,14 @@ provisionRouter.post("/trigger-update", async (c) => {
     });
     const cp = (ws?.settings as Record<string, unknown> | null)
       ?.controlPlane as { url?: string } | undefined;
-    if (!cpUrl) cpUrl = cp?.url;
+    cpUrl = cp?.url;
   } catch {
-    /* use env fallback */
+    /* fall through */
   }
 
   if (!cpUrl) {
     return c.json(
-      { error: "No Control Plane connection — cannot verify JWT" },
+      { error: "No Control Plane connection — run /seed-trust first" },
       403
     );
   }

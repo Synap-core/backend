@@ -413,10 +413,11 @@ http
         return respond(res, 202, { accepted: true, type: "exec" });
       }
 
-      execFile("/bin/sh", [`${DEPLOY_DIR}/${cmd.script}`, ...cmd.args(payload)], { cwd: DEPLOY_DIR, timeout: 600_000 }, (err) => {
+      execFile("/bin/sh", [`${DEPLOY_DIR}/${cmd.script}`, ...cmd.args(payload)], { cwd: DEPLOY_DIR, timeout: 600_000 }, (err, stdout, stderr) => {
         activeOps.delete(payload.type);
         const status = err ? "failed" : "completed";
-        if (err) log(`${payload.type} failed: ${err.message}`);
+        const output = (stdout || "") + (stderr ? `\n[stderr] ${stderr}` : "");
+        if (err) log(`${payload.type} failed: ${err.message}\n${output.slice(0, 2000)}`);
         else log(`${payload.type} done`);
 
         // Callback to CP with result (Node.js https, not shell wget)
@@ -427,12 +428,13 @@ http
             status,
             version: payload.targetVersion || payload.type,
             error: err ? err.message : null,
+            output: output.slice(0, 50_000),
             correlationId: packet.correlationId,
             step: packet.step,
             commandType: packet.commandType,
             errorSummary: packet.errorSummary,
-            logsSnippet: packet.logsSnippet,
-            packet,
+            logsSnippet: output.slice(0, 2000),
+            packet: { ...packet, logsSnippet: output.slice(0, 2000) },
           });
           const cbUrl = new URL(payload.callbackUrl);
           const cbReq = https.request(cbUrl, {
