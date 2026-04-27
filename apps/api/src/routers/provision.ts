@@ -24,7 +24,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { randomUUID, randomBytes } from "crypto";
 import bcrypt from "bcrypt";
-import { createLogger, config } from "@synap-core/core";
+import { createLogger } from "@synap-core/core";
 import {
   createAndVerifyHubInboundKey,
   toRegistrationTrace,
@@ -129,14 +129,13 @@ provisionRouter.post("/seed-trust", async (c) => {
         const existing = (ws.settings as Record<string, unknown>) ?? {};
         const existingCp =
           (existing.controlPlane as Record<string, unknown>) ?? {};
+        const merged = {
+          ...existing,
+          controlPlane: { ...existingCp, url: issuerUrl },
+        } as typeof ws.settings;
         await db
           .update(workspaces)
-          .set({
-            settings: {
-              ...existing,
-              controlPlane: { ...existingCp, url: issuerUrl },
-            },
-          })
+          .set({ settings: merged })
           .where(eq(workspaces.id, ws.id));
       }
     } catch (dbErr) {

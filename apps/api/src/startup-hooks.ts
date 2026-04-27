@@ -7,7 +7,7 @@
  * - Default integrations
  */
 
-import { createLogger, config } from "@synap-core/core";
+import { createLogger } from "@synap-core/core";
 import {
   db,
   webhookSubscriptions,

@@ -22,7 +22,7 @@ import {
 import { entityExternalLinks } from "@synap/database/schema";
 import { verifyCpJwtWithTrust } from "@synap/api";
 import { emitSideEffects } from "@synap/jobs";
-import { config, createLogger } from "@synap-core/core";
+import { createLogger } from "@synap-core/core";
 import crypto from "crypto";
 
 const logger = createLogger({ module: "connectors-router" });
