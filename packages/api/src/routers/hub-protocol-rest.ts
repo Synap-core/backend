@@ -4494,10 +4494,20 @@ app.get("/channels/personal", async (c) => {
   }
   try {
     const caller = await getCaller(c, { workspaceId, userId });
+    // Resolve orchestrator agent ID for backward compat (personal = orchestrator thread)
+    const [agent] = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.slug, "orchestrator"), eq(agents.active, true)))
+      .limit(1);
+    if (!agent) {
+      return c.json({ error: "Orchestrator agent not found" }, 404);
+    }
     const result = await caller.channels.resolveAiChannel({
       userId,
       workspaceId,
-      family: "personal",
+      family: "agent",
+      agentId: agent.id,
     });
     return c.json(result?.channel);
   } catch (err) {

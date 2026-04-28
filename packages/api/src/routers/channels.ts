@@ -383,6 +383,7 @@ async function listChannelsWithFlags(params: {
   feedScope?: FeedScope;
   contextObjectId?: string;
   contextObjectType?: (typeof CONTEXT_OBJECT_TYPE_VALUES)[number];
+  assignedAgentId?: string;
   limit: number;
   offset?: number;
 }): Promise<
@@ -429,6 +430,10 @@ async function listChannelsWithFlags(params: {
     conditions.push(eq(channels.contextObjectType, params.contextObjectType));
   }
 
+  if (params.assignedAgentId) {
+    conditions.push(eq(channels.assignedAgentId, params.assignedAgentId));
+  }
+
   const rows = await db.query.channels.findMany({
     where: and(...conditions),
     orderBy: [desc(channels.updatedAt)],
@@ -469,7 +474,7 @@ export const channelsRouter = router({
     .input(
       z.object({
         workspaceId: z.string().uuid().optional(),
-        family: z.enum(AI_CHANNEL_FAMILY_VALUES).default("personal"),
+        family: z.enum(AI_CHANNEL_FAMILY_VALUES).default("agent"),
         contextObjectId: z.string().uuid().optional(),
         contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
         parentChannelId: z.string().uuid().optional(),
@@ -940,7 +945,7 @@ export const channelsRouter = router({
         const resolvedChannel = await resolveAiChannelByFamily({
           userId,
           workspaceId,
-          family: input.aiChannelFamily ?? "personal",
+          family: input.aiChannelFamily ?? "agent",
           contextObjectId: input.contextObjectId,
           contextObjectType: input.contextObjectType,
           parentChannelId: input.parentChannelId,
@@ -1903,6 +1908,7 @@ export const channelsRouter = router({
         limit: z.number().min(1).max(100).default(20),
         contextObjectId: z.string().uuid().optional(),
         contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
+        assignedAgentId: z.string().uuid().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -1913,6 +1919,7 @@ export const channelsRouter = router({
         threadKind: input.threadKind,
         contextObjectId: input.contextObjectId,
         contextObjectType: input.contextObjectType,
+        assignedAgentId: input.assignedAgentId,
         limit: input.limit,
       });
 
@@ -2060,15 +2067,32 @@ export const channelsRouter = router({
     }),
 
   /**
-   * Get or create the user's personal AI thread.
+   * Get or create a private thread between the current user and a specific agent.
+   * Pod-scoped: one per (userId, agentId). Returns channel immediately (fast, no IS call).
    */
-  getPersonalThread: protectedProcedure
-    .input(z.object({ workspaceId: z.string().uuid() }))
-    .query(async ({ input, ctx }) => {
+  getOrCreateAgentThread: workspaceProcedure
+    .input(z.object({ agentId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
       const channel = await resolveAiChannelByFamily({
         userId: ctx.userId,
-        workspaceId: input.workspaceId,
-        family: "personal",
+        workspaceId: ctx.workspaceId,
+        family: "agent",
+        agentId: input.agentId,
+      });
+      return { channel };
+    }),
+
+  /**
+   * Get or create the workspace-wide group thread.
+   * One per (userId, workspaceId). Agents can be @mentioned; no assigned agent by default.
+   */
+  getOrCreateWorkspaceGroup: workspaceProcedure
+    .input(z.object({}))
+    .query(async ({ ctx }) => {
+      const channel = await resolveAiChannelByFamily({
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        family: "workspace_group",
       });
       return { channel };
     }),

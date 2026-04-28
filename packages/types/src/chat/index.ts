@@ -121,7 +121,8 @@ export interface SendMessageRequest {
  * - branch: branch channel with a parent channel
  */
 export const AI_CHANNEL_FAMILY_VALUES = [
-  "personal",
+  "agent",
+  "workspace_group",
   "context",
   "branch",
 ] as const;

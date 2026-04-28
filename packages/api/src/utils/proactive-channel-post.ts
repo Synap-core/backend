@@ -9,6 +9,8 @@
  * - PostProactiveMessageResult → Use DeliveryResult from DeliveryService
  */
 
+import type { ProactiveMessageType } from "../services/DeliveryService.js";
+
 // Re-export all public types and the service from DeliveryService
 export { DeliveryService } from "../services/DeliveryService.js";
 export type {

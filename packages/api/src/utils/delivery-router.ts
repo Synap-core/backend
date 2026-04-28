@@ -50,7 +50,7 @@ import {
   type ProactiveMessageType,
 } from "../services/DeliveryService.js";
 import { NotificationService } from "../notifications/NotificationService.js";
-import { ensurePersonalChannel } from "./personal-channel.js";
+import { ensureAgentThread, getAgentIdBySlug } from "./personal-channel.js";
 import { emitChatEvent } from "./chat-realtime-broadcast.js";
 
 const logger = createLogger({ module: "delivery-router" });
@@ -166,8 +166,10 @@ async function deliverToChat(
   input: RouteSignalInput & { proactiveType: ProactiveMessageType }
 ): Promise<SurfaceResult> {
   try {
-    const { userId, workspaceId, content, proactiveType, metadata } = input;
-    const channel = await ensurePersonalChannel(userId, workspaceId);
+    const { userId, content, proactiveType, metadata } = input;
+    const orchestratorId = await getAgentIdBySlug("orchestrator");
+    if (!orchestratorId) throw new Error("Orchestrator agent not found");
+    const channel = await ensureAgentThread(userId, orchestratorId);
     const messageId = randomUUID();
     const hash = createHash("sha256")
       .update(`${messageId}${content}`)

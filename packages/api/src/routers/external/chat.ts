@@ -19,7 +19,10 @@ import { db, eq, and, inArray, or } from "@synap/database";
 import { channels, workspaceMembers } from "@synap/database/schema";
 import { ChannelType, ThreadKind, ChannelStatus } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
-import { ensurePersonalChannel } from "../../utils/personal-channel.js";
+import {
+  ensureAgentThread,
+  getAgentIdBySlug,
+} from "../../utils/personal-channel.js";
 import { createLogger } from "@synap-core/core";
 import { externalApiKeyAuth, type ExternalApiVariables } from "./middleware.js";
 
@@ -188,10 +191,9 @@ externalChatApp.post(
     } else {
       // Auto-create or retrieve the user's personal thread
       try {
-        const personalChannel = await ensurePersonalChannel(
-          userId,
-          resolvedWorkspaceId
-        );
+        const orchestratorId = await getAgentIdBySlug("orchestrator");
+        if (!orchestratorId) throw new Error("Default agent not found");
+        const personalChannel = await ensureAgentThread(userId, orchestratorId);
         resolvedChannelId = personalChannel.id;
       } catch (err) {
         logger.error(

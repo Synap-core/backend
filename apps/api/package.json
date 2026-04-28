@@ -25,12 +25,16 @@
     "hono": "^4.12.10",
     "hono-rate-limiter": "^0.4.2",
     "jsonwebtoken": "^9.0.2",
+    "ssh2": "^1.16.0",
+    "ws": "^8.18.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
     "@types/jsonwebtoken": "^9.0.0",
     "@types/pg": "^8.15.6",
+    "@types/ssh2": "^1.11.19",
+    "@types/ws": "^8.5.0",
     "pg": "^8.16.3",
     "tsx": "^4.7.0",
     "typescript": "^5.9.3"

@@ -62,6 +62,7 @@ export {
 // Export ensureSystemProfiles utility
 export {
   ensureSystemProfiles,
+  ensureDevplaneProfiles,
   type EnsureSystemProfilesResult,
 } from "./utils/ensure-system-profiles.js";
 

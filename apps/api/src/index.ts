@@ -1026,9 +1026,12 @@ await (async () => {
   }
 })();
 
+// WebSocket upgrade router — handles SSH proxy and recipe runner endpoints
+import { handleWebSocketUpgrade } from "./ws-router.js";
+
 // Start server
 try {
-  serve(
+  const httpServer = serve(
     {
       fetch: app.fetch,
       port: config.server.port,
@@ -1057,6 +1060,15 @@ try {
         );
       }
     }
+  );
+
+  // Register WebSocket upgrade router.
+  // Routes /api/devplane/ssh to the SSH proxy and /api/devplane/recipe-run to
+  // the recipe runner. All other upgrade paths are destroyed to avoid conflicts
+  // with Hono SSE or other upgrade handlers.
+  httpServer.on("upgrade", handleWebSocketUpgrade);
+  apiLogger.info(
+    "WebSocket endpoints registered: /api/devplane/ssh, /api/devplane/recipe-run"
   );
 } catch (err) {
   apiLogger.error({ err }, "CRITICAL: Failed to start server");

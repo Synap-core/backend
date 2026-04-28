@@ -70,7 +70,8 @@ vi.mock("@synap/events", () => ({
 }));
 
 vi.mock("../utils/personal-channel.js", () => ({
-  ensurePersonalChannel: vi.fn(),
+  ensureAgentThread: vi.fn(),
+  getAgentIdBySlug: vi.fn().mockResolvedValue("agent-orchestrator-id"),
 }));
 
 // ─── Import after mocks ─────────────────────────────────────────────────────
@@ -78,7 +79,7 @@ vi.mock("../utils/personal-channel.js", () => ({
 import { db } from "@synap/database";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { emitSideEffects } from "@synap/events";
-import { ensurePersonalChannel } from "../utils/personal-channel.js";
+import { ensureAgentThread } from "../utils/personal-channel.js";
 import {
   DeliveryService,
   type DeliveryRequest,
@@ -127,7 +128,7 @@ describe("DeliveryService", () => {
   const mockDbQuery = db.query as any;
   const mockNotificationCreate = NotificationService.create as any;
   const mockEmitSideEffectsFn = emitSideEffects as any;
-  const mockEnsurePersonalChannelFn = ensurePersonalChannel as any;
+  const mockEnsureAgentThreadFn = ensureAgentThread as any;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -149,8 +150,8 @@ describe("DeliveryService", () => {
 
     mockNotificationCreate.mockResolvedValue("notification-123");
     mockEmitSideEffectsFn.mockResolvedValue(undefined);
-    mockEnsurePersonalChannelFn.mockResolvedValue({
-      id: "personal-channel-456",
+    mockEnsureAgentThreadFn.mockResolvedValue({
+      id: "agent-thread-456",
       userId: "user-123",
       channelType: "thread",
       status: "active",
@@ -259,9 +260,9 @@ describe("DeliveryService", () => {
 
       await DeliveryService.deliver(request);
 
-      expect(mockEnsurePersonalChannelFn).toHaveBeenCalledWith(
+      expect(mockEnsureAgentThreadFn).toHaveBeenCalledWith(
         "user-123",
-        "workspace-456"
+        "agent-orchestrator-id"
       );
       expect(mockDbInsert).toHaveBeenCalled();
     });
@@ -278,7 +279,7 @@ describe("DeliveryService", () => {
     });
 
     it("should emit side effects for chat delivery", async () => {
-      mockEnsurePersonalChannelFn.mockResolvedValue({
+      mockEnsureAgentThreadFn.mockResolvedValue({
         id: "personal-123",
         userId: "user-123",
         channelType: "thread",
@@ -373,7 +374,7 @@ describe("DeliveryService", () => {
 
   describe("multiple surfaces", () => {
     it("should deliver to all specified surfaces", async () => {
-      mockEnsurePersonalChannelFn.mockResolvedValue({
+      mockEnsureAgentThreadFn.mockResolvedValue({
         id: "personal-123",
         userId: "user-123",
         channelType: "thread",
@@ -484,7 +485,7 @@ describe("DeliveryService", () => {
           }),
         });
 
-      mockEnsurePersonalChannelFn.mockResolvedValue({
+      mockEnsureAgentThreadFn.mockResolvedValue({
         id: "personal-123",
         userId: "user-123",
         channelType: "thread",
@@ -506,8 +507,8 @@ describe("DeliveryService", () => {
       expect(result.deliveries[1].success).toBe(false);
     });
 
-    it("should handle ensurePersonalChannel failure", async () => {
-      mockEnsurePersonalChannelFn.mockRejectedValue(
+    it("should handle ensureAgentThread failure", async () => {
+      mockEnsureAgentThreadFn.mockRejectedValue(
         new Error("Channel creation failed")
       );
 
@@ -758,7 +759,7 @@ describe("DeliveryService", () => {
         surfaces: [{ type: "chat" }],
       });
 
-      mockEnsurePersonalChannelFn.mockResolvedValue({
+      mockEnsureAgentThreadFn.mockResolvedValue({
         id: "personal-123",
         userId: "user-123",
         channelType: "thread",
@@ -768,9 +769,9 @@ describe("DeliveryService", () => {
       const result = await DeliveryService.deliver(request);
 
       expect(result.success).toBe(true);
-      expect(mockEnsurePersonalChannelFn).toHaveBeenCalledWith(
+      expect(mockEnsureAgentThreadFn).toHaveBeenCalledWith(
         "user-123",
-        undefined
+        "agent-orchestrator-id"
       );
       expect(mockEmitSideEffectsFn).toHaveBeenCalledWith(
         expect.objectContaining({

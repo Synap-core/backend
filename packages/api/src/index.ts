@@ -27,8 +27,10 @@ export { createHubProtocolCallerContext } from "./routers/hub-protocol/utils.js"
 export { proposalsRouter } from "./routers/proposals.js";
 export { resolveIntelligenceService } from "./utils/intelligence-routing.js";
 export {
-  ensurePersonalChannel as ensureDefaultAgentChannel,
+  ensureAgentThread,
+  ensureWorkspaceGroupChannel,
   ensureProactiveFeedChannel,
+  getAgentIdBySlug,
 } from "./utils/personal-channel.js";
 export { mcpHttpApp } from "./routers/mcp/http-handler.js";
 export { fileUploadApp } from "./routers/file-upload.js";
@@ -85,6 +87,14 @@ export {
 
 // Export utilities for webhook handling
 export { syncUserFromKratos } from "./utils/kratos-sync.js";
+
+// Export vault resolver utilities (used by ssh-proxy and other server-side consumers)
+export {
+  isVaultReference,
+  parseVaultReference,
+  resolveVaultSecret,
+  resolveVaultReferences,
+} from "./utils/vault-resolver.js";
 
 // Export JWKS client for CP JWT verification
 export {

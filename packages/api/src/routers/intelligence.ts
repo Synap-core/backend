@@ -37,7 +37,10 @@ import {
 } from "../utils/command-template.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { ensurePersonalChannel } from "../utils/personal-channel.js";
+import {
+  ensureAgentThread,
+  getAgentIdBySlug,
+} from "../utils/personal-channel.js";
 import { channelsRouter, invalidateMcpCache } from "./channels.js";
 
 // ── Shared proxy response types ───────────────────────────────────────────
@@ -1289,9 +1292,10 @@ export const intelligenceRouter = router({
    */
   getLatestMemoryState: workspaceProcedure.query(async ({ ctx }) => {
     const userId = requireUserId(ctx.userId);
-    const workspaceId = ctx.workspaceId!;
 
-    const personalChannel = await ensurePersonalChannel(userId, workspaceId);
+    const orchestratorId = await getAgentIdBySlug("orchestrator");
+    if (!orchestratorId) return null;
+    const personalChannel = await ensureAgentThread(userId, orchestratorId);
 
     const [state] = await db
       .select()

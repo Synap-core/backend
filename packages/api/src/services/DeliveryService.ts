@@ -34,8 +34,9 @@ import { eventRepository } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { NotificationService } from "../notifications/NotificationService.js";
 import {
-  ensurePersonalChannel,
+  ensureAgentThread,
   ensureProactiveFeedChannel,
+  getAgentIdBySlug,
 } from "../utils/personal-channel.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import {
@@ -769,10 +770,9 @@ async function deliverToChatInternal(
   let channelId = surface.channelId;
 
   if (!channelId) {
-    const channel = await ensurePersonalChannel(
-      request.userId,
-      request.workspaceId
-    );
+    const orchestratorId = await getAgentIdBySlug("orchestrator");
+    if (!orchestratorId) throw new Error("Orchestrator agent not found");
+    const channel = await ensureAgentThread(request.userId, orchestratorId);
     channelId = channel.id;
   }
 

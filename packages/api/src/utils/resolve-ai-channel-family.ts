@@ -8,8 +8,10 @@ import {
   agents,
   type Channel,
 } from "@synap/database/schema";
-import type { AIChannelFamily } from "@synap-core/types";
-import { ensurePersonalChannel } from "./personal-channel.js";
+import {
+  ensureAgentThread,
+  ensureWorkspaceGroupChannel,
+} from "./personal-channel.js";
 import { randomUUID } from "crypto";
 
 /**
@@ -27,15 +29,23 @@ async function resolveSlugToAgentId(slug: string): Promise<string | null> {
 
 export type ContextObjectType = "entity" | "document" | "view";
 
+export type AIChannelFamily =
+  | "agent"
+  | "workspace_group"
+  | "branch"
+  | "context";
+
 interface ResolveAiChannelByFamilyParams {
   userId: string;
   workspaceId?: string;
   family: AIChannelFamily;
+  /** Agent UUID — required for family="agent" */
+  agentId?: string;
   contextObjectId?: string;
   contextObjectType?: ContextObjectType;
   parentChannelId?: string;
   branchPurpose?: string;
-  /** Agent slug to assign when creating the channel (e.g. "networking"). Falls back to orchestrator. */
+  /** Agent slug — used for branch/context families as fallback. */
   agentSlug?: string;
 }
 
@@ -46,6 +56,7 @@ export async function resolveAiChannelByFamily(
     userId,
     workspaceId,
     family,
+    agentId,
     contextObjectId,
     contextObjectType,
     parentChannelId,
@@ -53,18 +64,29 @@ export async function resolveAiChannelByFamily(
     agentSlug,
   } = params;
 
-  // Resolve the agent ID: prefer explicit agentSlug, fall back to orchestrator
-  const resolvedAgentId = agentSlug
-    ? ((await resolveSlugToAgentId(agentSlug)) ??
-      (await resolveSlugToAgentId("orchestrator")))
-    : await resolveSlugToAgentId("orchestrator");
-  // Kept for backward compat — orchestratorAgentId is used in non-personal channel inserts
-  const orchestratorAgentId = resolvedAgentId;
-
-  if (family === "personal") {
-    return ensurePersonalChannel(userId, workspaceId);
+  // ── Per-agent personal thread ──────────────────────────────────────────────
+  if (family === "agent") {
+    if (!agentId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: 'agentId is required for family="agent"',
+      });
+    }
+    return ensureAgentThread(userId, agentId);
   }
 
+  // ── Workspace group thread ─────────────────────────────────────────────────
+  if (family === "workspace_group") {
+    if (!workspaceId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: 'workspaceId is required for family="workspace_group"',
+      });
+    }
+    return ensureWorkspaceGroupChannel(userId, workspaceId);
+  }
+
+  // ── All remaining families require workspaceId ────────────────────────────
   if (!workspaceId) {
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -72,6 +94,13 @@ export async function resolveAiChannelByFamily(
     });
   }
 
+  // Resolve agent for branch/context families
+  const orchestratorAgentId = agentSlug
+    ? ((await resolveSlugToAgentId(agentSlug)) ??
+      (await resolveSlugToAgentId("orchestrator")))
+    : await resolveSlugToAgentId("orchestrator");
+
+  // ── Branch thread ──────────────────────────────────────────────────────────
   if (family === "branch") {
     if (!parentChannelId) {
       throw new TRPCError({
@@ -102,7 +131,7 @@ export async function resolveAiChannelByFamily(
         userId,
         workspaceId,
         parentChannelId,
-        branchPurpose: branchPurpose ?? "Branch from personal AI",
+        branchPurpose: branchPurpose ?? "Branch",
         assignedAgentId: orchestratorAgentId,
         channelType: ChannelType.THREAD,
         threadKind: ThreadKind.BRANCH,
@@ -114,10 +143,11 @@ export async function resolveAiChannelByFamily(
     return branch;
   }
 
+  // ── Context thread ─────────────────────────────────────────────────────────
   if (family !== "context") {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "Unsupported channel family for resolver",
+      message: "Unsupported channel family",
     });
   }
 
@@ -149,9 +179,7 @@ export async function resolveAiChannelByFamily(
     orderBy: [desc(channels.updatedAt)],
   });
 
-  if (existing) {
-    return existing;
-  }
+  if (existing) return existing;
 
   const [created] = await db
     .insert(channels)

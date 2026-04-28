@@ -26,6 +26,7 @@ import { randomUUID } from "crypto";
 import { createHash } from "crypto";
 import { db, eq, and, gt } from "@synap/database";
 import {
+  agents,
   channels,
   messages,
   workspaceMembers,
@@ -99,7 +100,8 @@ export const channelsRouter = router({
       z.object({
         userId: z.string(),
         workspaceId: z.string().uuid().optional(),
-        family: z.enum(AI_CHANNEL_FAMILY_VALUES).default("personal"),
+        family: z.enum(AI_CHANNEL_FAMILY_VALUES),
+        agentId: z.string().uuid().optional(),
         contextObjectId: z.string().uuid().optional(),
         contextObjectType: z.enum(["entity", "document", "view"]).optional(),
         parentChannelId: z.string().uuid().optional(),
@@ -111,6 +113,7 @@ export const channelsRouter = router({
         userId: input.userId,
         workspaceId: input.workspaceId,
         family: input.family,
+        agentId: input.agentId,
         contextObjectId: input.contextObjectId,
         contextObjectType: input.contextObjectType,
         parentChannelId: input.parentChannelId,
@@ -635,13 +638,31 @@ export const channelsRouter = router({
       z.object({
         userId: z.string(),
         workspaceId: z.string().uuid(),
+        /** Agent ID to create/retrieve the thread for. Defaults to orchestrator if omitted. */
+        agentId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input }) => {
+      let resolvedAgentId = input.agentId;
+      if (!resolvedAgentId) {
+        const [agent] = await db
+          .select({ id: agents.id })
+          .from(agents)
+          .where(and(eq(agents.slug, "orchestrator"), eq(agents.active, true)))
+          .limit(1);
+        resolvedAgentId = agent?.id;
+      }
+      if (!resolvedAgentId) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Orchestrator agent not found",
+        });
+      }
       const channel = await resolveAiChannelByFamily({
         userId: input.userId,
         workspaceId: input.workspaceId,
-        family: "personal",
+        family: "agent",
+        agentId: resolvedAgentId,
       });
       return { channel };
     }),

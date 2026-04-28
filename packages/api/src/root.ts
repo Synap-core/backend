@@ -51,6 +51,7 @@ import { sourceConfigsRouter } from "./routers/source-configs.js";
 import { sourceSubscriptionsRouter } from "./routers/source-subscriptions.js";
 import { feedsRouter } from "./routers/feeds.js";
 import { agentsRouter } from "./routers/agents.js";
+import { devplaneRouter } from "./routers/devplane.js";
 
 /**
  * Core API Router
@@ -109,6 +110,7 @@ export const coreRouter = router({
   sourceConfigs: sourceConfigsRouter,
   sourceSubscriptions: sourceSubscriptionsRouter,
   feeds: feedsRouter,
+  devplane: devplaneRouter,
 });
 
 export type AppRouter = typeof coreRouter;

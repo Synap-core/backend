@@ -1286,3 +1286,613 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
     };
   }
 }
+
+/**
+ * Ensure DevPlane profiles and property definitions exist
+ *
+ * Idempotent — safe to call multiple times. Creates 6 DevPlane profiles
+ * (devplane_app, devplane_feature, devplane_service, devplane_package,
+ * devplane_environment, devplane_deployment) plus their property defs.
+ * All profiles are workspace-scoped.
+ */
+export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResult> {
+  const db = await getDb();
+  const propertyDefRepo = new PropertyDefRepository(db);
+  const profileRepo = new ProfileRepository(db);
+  const profilePropertyRepo = new ProfilePropertyRepository(db);
+
+  let profilesCreated = 0;
+  let propertiesCreated = 0;
+  let linksCreated = 0;
+
+  try {
+    // 1. Property definitions for all DevPlane profiles
+    const devplanePropertyDefs = [
+      // devplane_app
+      {
+        slug: "appName",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 200 },
+        uiHints: { label: "App Name", inputType: "text" },
+      },
+      {
+        slug: "repoUrl",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Repository URL", inputType: "url" },
+      },
+      {
+        slug: "techStack",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Tech Stack", inputType: "text" },
+      },
+      {
+        slug: "port",
+        valueType: PropertyValueType.NUMBER,
+        constraints: { min: 1, max: 65535 },
+        uiHints: { label: "Port", inputType: "number" },
+      },
+      {
+        slug: "deployUrl",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Deploy URL", inputType: "url" },
+      },
+      {
+        slug: "appDescription",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 5000 },
+        uiHints: { label: "Description", inputType: "textarea" },
+      },
+      // devplane_feature
+      {
+        slug: "featureStatus",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["planned", "in-progress", "done", "error"] },
+        uiHints: { label: "Status", inputType: "select", displayAs: "status" },
+      },
+      {
+        slug: "featureDescription",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 5000 },
+        uiHints: { label: "Description", inputType: "textarea" },
+      },
+      {
+        slug: "linkedAppSlugs",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Linked Apps", inputType: "text" },
+      },
+      {
+        slug: "linkedPackageSlugs",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Linked Packages", inputType: "text" },
+      },
+      // devplane_service
+      {
+        slug: "serviceType",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Service Type", inputType: "text" },
+      },
+      {
+        slug: "host",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Host", inputType: "text" },
+      },
+      {
+        slug: "servicePort",
+        valueType: PropertyValueType.NUMBER,
+        constraints: { min: 1, max: 65535 },
+        uiHints: { label: "Port", inputType: "number" },
+      },
+      {
+        slug: "healthUrl",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Health URL", inputType: "url" },
+      },
+      // devplane_package
+      {
+        slug: "npmName",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "NPM Name", inputType: "text" },
+      },
+      {
+        slug: "packageVersion",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Version", inputType: "text" },
+      },
+      {
+        slug: "packageDescription",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 5000 },
+        uiHints: { label: "Description", inputType: "textarea" },
+      },
+      {
+        slug: "usedByApps",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Used By Apps", inputType: "text" },
+      },
+      // devplane_environment
+      {
+        slug: "envName",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["dev", "staging", "prod"] },
+        uiHints: { label: "Environment", inputType: "select" },
+      },
+      {
+        slug: "envHost",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Host", inputType: "text" },
+      },
+      {
+        slug: "sshUser",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "SSH User", inputType: "text" },
+      },
+      {
+        slug: "sshKeyVaultRef",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "SSH Key (Vault Ref)", inputType: "text" },
+      },
+      {
+        slug: "linkedAppSlug",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Linked App", inputType: "text" },
+      },
+      // devplane_deployment
+      {
+        slug: "deployStatus",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: ["pending", "running", "success", "failed"],
+        },
+        uiHints: { label: "Status", inputType: "select", displayAs: "status" },
+      },
+      {
+        slug: "commitSha",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Commit SHA", inputType: "text" },
+      },
+      {
+        slug: "deployedAppSlug",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Deployed App", inputType: "text" },
+      },
+      {
+        slug: "deployedEnv",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Environment", inputType: "text" },
+      },
+      {
+        slug: "logsUrl",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Logs URL", inputType: "url" },
+      },
+      {
+        slug: "webhookUrl",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Webhook URL", inputType: "url" },
+      },
+      // devplane_recipe
+      {
+        slug: "recipeSteps",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: {
+          label: "Recipe Steps",
+          inputType: "textarea",
+          description:
+            "JSON array of steps: [{name, command, continueOnError}]",
+        },
+      },
+      {
+        slug: "recipeName",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 200 },
+        uiHints: { label: "Recipe Name", inputType: "text" },
+      },
+      {
+        slug: "recipeDescription",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 5000 },
+        uiHints: { label: "Description", inputType: "textarea" },
+      },
+      {
+        slug: "linkedEnvironmentId",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Linked Environment", inputType: "text" },
+      },
+      {
+        slug: "onFailure",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["stop", "continue", "rollback"] },
+        uiHints: { label: "On Failure", inputType: "select" },
+      },
+      {
+        slug: "rollbackRecipeId",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Rollback Recipe", inputType: "text" },
+      },
+      {
+        slug: "recipeTemplate",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: ["kamal", "docker-compose", "git-pull", "custom"],
+        },
+        uiHints: { label: "Template", inputType: "select" },
+      },
+      // devplane_recipe_run
+      {
+        slug: "recipeId",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Recipe", inputType: "text" },
+      },
+      {
+        slug: "runStatus",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: ["running", "success", "failed", "cancelled"],
+        },
+        uiHints: { label: "Status", inputType: "select", displayAs: "status" },
+      },
+      {
+        slug: "runSteps",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: {
+          label: "Run Steps",
+          inputType: "textarea",
+          description:
+            "JSON array: [{name, command, status, exitCode, output, startedAt, finishedAt}]",
+        },
+      },
+      {
+        slug: "runStartedAt",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Started At", inputType: "text" },
+      },
+      {
+        slug: "runFinishedAt",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Finished At", inputType: "text" },
+      },
+      {
+        slug: "runDuration",
+        valueType: PropertyValueType.NUMBER,
+        constraints: { min: 0 },
+        uiHints: { label: "Duration (ms)", inputType: "number" },
+      },
+      {
+        slug: "triggeredBy",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["manual", "automation"] },
+        uiHints: { label: "Triggered By", inputType: "select" },
+      },
+    ];
+
+    const createdPropertyDefs = new Map<string, string>();
+
+    for (const propDef of devplanePropertyDefs) {
+      // Match only base rows (workspace_id IS NULL) — same convention as seed
+      const existing = await propertyDefRepo.getBySlug(
+        propDef.slug,
+        undefined,
+        null
+      );
+      if (existing) {
+        createdPropertyDefs.set(propDef.slug, existing.id);
+      } else {
+        const created = await propertyDefRepo.create(propDef);
+        createdPropertyDefs.set(propDef.slug, created.id);
+        propertiesCreated++;
+      }
+    }
+
+    // 2. DevPlane profiles — all workspace-scoped
+    const devplaneProfiles = [
+      {
+        slug: "devplane_app",
+        displayName: "App",
+        uiHints: {
+          icon: "layout-dashboard",
+          color: "#6366F1",
+          description: "A software application in DevPlane",
+        },
+      },
+      {
+        slug: "devplane_feature",
+        displayName: "Feature",
+        uiHints: {
+          icon: "git-branch",
+          color: "#0EA5E9",
+          description: "A feature or work item tracked in DevPlane",
+        },
+      },
+      {
+        slug: "devplane_service",
+        displayName: "Service",
+        uiHints: {
+          icon: "server",
+          color: "#10B981",
+          description: "A backing service (database, queue, cache, etc.)",
+        },
+      },
+      {
+        slug: "devplane_package",
+        displayName: "Package",
+        uiHints: {
+          icon: "package",
+          color: "#F59E0B",
+          description: "An npm / library package",
+        },
+      },
+      {
+        slug: "devplane_environment",
+        displayName: "Environment",
+        uiHints: {
+          icon: "cloud",
+          color: "#8B5CF6",
+          description: "A deployment environment (dev / staging / prod)",
+        },
+      },
+      {
+        slug: "devplane_deployment",
+        displayName: "Deployment",
+        uiHints: {
+          icon: "rocket",
+          color: "#EC4899",
+          description: "A deployment event for an app to an environment",
+        },
+      },
+      {
+        slug: "devplane_recipe",
+        displayName: "Recipe",
+        uiHints: {
+          icon: "play-circle",
+          color: "#8B5CF6",
+          description:
+            "An ordered list of shell commands to run on a remote server",
+        },
+      },
+      {
+        slug: "devplane_recipe_run",
+        displayName: "Recipe Run",
+        uiHints: {
+          icon: "activity",
+          color: "#0EA5E9",
+          description:
+            "A single execution of a recipe with per-step status tracking",
+        },
+      },
+    ];
+
+    const createdProfiles = new Map<string, string>();
+
+    for (const profile of devplaneProfiles) {
+      const existing = await profileRepo.getBySlug(profile.slug);
+      if (existing) {
+        createdProfiles.set(profile.slug, existing.id);
+      } else {
+        const created = await profileRepo.create({
+          slug: profile.slug,
+          displayName: profile.displayName,
+          uiHints: profile.uiHints,
+          scope: ProfileScope.SYSTEM,
+          entityScope: "workspace",
+        });
+        createdProfiles.set(profile.slug, created.id);
+        profilesCreated++;
+      }
+    }
+
+    // 3. Link properties to profiles
+    const profilePropertyLinks: Array<{
+      profileSlug: string;
+      propertySlugs: Array<{
+        slug: string;
+        required?: boolean;
+        defaultValue?: unknown;
+        displayOrder: number;
+      }>;
+    }> = [
+      {
+        profileSlug: "devplane_app",
+        propertySlugs: [
+          { slug: "title", required: true, displayOrder: 0 },
+          { slug: "appName", required: false, displayOrder: 1 },
+          { slug: "repoUrl", required: false, displayOrder: 2 },
+          { slug: "techStack", required: false, displayOrder: 3 },
+          { slug: "port", required: false, displayOrder: 4 },
+          { slug: "deployUrl", required: false, displayOrder: 5 },
+          { slug: "appDescription", required: false, displayOrder: 6 },
+        ],
+      },
+      {
+        profileSlug: "devplane_feature",
+        propertySlugs: [
+          { slug: "title", required: true, displayOrder: 0 },
+          {
+            slug: "featureStatus",
+            required: false,
+            defaultValue: "planned",
+            displayOrder: 1,
+          },
+          { slug: "priority", required: false, displayOrder: 2 },
+          { slug: "featureDescription", required: false, displayOrder: 3 },
+          { slug: "linkedAppSlugs", required: false, displayOrder: 4 },
+          { slug: "linkedPackageSlugs", required: false, displayOrder: 5 },
+        ],
+      },
+      {
+        profileSlug: "devplane_service",
+        propertySlugs: [
+          { slug: "title", required: true, displayOrder: 0 },
+          { slug: "serviceType", required: false, displayOrder: 1 },
+          { slug: "host", required: false, displayOrder: 2 },
+          { slug: "servicePort", required: false, displayOrder: 3 },
+          { slug: "healthUrl", required: false, displayOrder: 4 },
+        ],
+      },
+      {
+        profileSlug: "devplane_package",
+        propertySlugs: [
+          { slug: "title", required: true, displayOrder: 0 },
+          { slug: "npmName", required: false, displayOrder: 1 },
+          { slug: "packageVersion", required: false, displayOrder: 2 },
+          { slug: "packageDescription", required: false, displayOrder: 3 },
+          { slug: "usedByApps", required: false, displayOrder: 4 },
+        ],
+      },
+      {
+        profileSlug: "devplane_environment",
+        propertySlugs: [
+          { slug: "title", required: true, displayOrder: 0 },
+          {
+            slug: "envName",
+            required: false,
+            defaultValue: "dev",
+            displayOrder: 1,
+          },
+          { slug: "envHost", required: false, displayOrder: 2 },
+          { slug: "sshUser", required: false, displayOrder: 3 },
+          { slug: "sshKeyVaultRef", required: false, displayOrder: 4 },
+          { slug: "linkedAppSlug", required: false, displayOrder: 5 },
+        ],
+      },
+      {
+        profileSlug: "devplane_deployment",
+        propertySlugs: [
+          { slug: "title", required: true, displayOrder: 0 },
+          {
+            slug: "deployStatus",
+            required: false,
+            defaultValue: "pending",
+            displayOrder: 1,
+          },
+          { slug: "commitSha", required: false, displayOrder: 2 },
+          { slug: "deployedAppSlug", required: false, displayOrder: 3 },
+          { slug: "deployedEnv", required: false, displayOrder: 4 },
+          { slug: "logsUrl", required: false, displayOrder: 5 },
+          { slug: "webhookUrl", required: false, displayOrder: 6 },
+        ],
+      },
+      {
+        profileSlug: "devplane_recipe",
+        propertySlugs: [
+          { slug: "title", required: true, displayOrder: 0 },
+          { slug: "recipeName", required: false, displayOrder: 1 },
+          { slug: "recipeDescription", required: false, displayOrder: 2 },
+          { slug: "recipeSteps", required: false, displayOrder: 3 },
+          { slug: "linkedEnvironmentId", required: false, displayOrder: 4 },
+          { slug: "linkedAppSlug", required: false, displayOrder: 5 },
+          {
+            slug: "onFailure",
+            required: false,
+            defaultValue: "stop",
+            displayOrder: 6,
+          },
+          { slug: "rollbackRecipeId", required: false, displayOrder: 7 },
+          { slug: "recipeTemplate", required: false, displayOrder: 8 },
+        ],
+      },
+      {
+        profileSlug: "devplane_recipe_run",
+        propertySlugs: [
+          { slug: "title", required: true, displayOrder: 0 },
+          { slug: "recipeId", required: false, displayOrder: 1 },
+          {
+            slug: "runStatus",
+            required: false,
+            defaultValue: "running",
+            displayOrder: 2,
+          },
+          { slug: "runSteps", required: false, displayOrder: 3 },
+          { slug: "runStartedAt", required: false, displayOrder: 4 },
+          { slug: "runFinishedAt", required: false, displayOrder: 5 },
+          { slug: "runDuration", required: false, displayOrder: 6 },
+          { slug: "triggeredBy", required: false, displayOrder: 7 },
+        ],
+      },
+    ];
+
+    // Resolve the shared "title" and "priority" property def IDs from the seed
+    const sharedSlugs = ["title", "priority"];
+    for (const slug of sharedSlugs) {
+      const existing = await propertyDefRepo.getBySlug(slug, undefined, null);
+      if (existing) {
+        createdPropertyDefs.set(slug, existing.id);
+      }
+    }
+
+    for (const link of profilePropertyLinks) {
+      const profileId = createdProfiles.get(link.profileSlug);
+      if (!profileId) continue;
+
+      for (const prop of link.propertySlugs) {
+        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        if (!propertyDefId) continue;
+
+        const existingLinks = await profilePropertyRepo.getByProfile(profileId);
+        const linkExists = existingLinks.some(
+          (l) => l.propertyDefId === propertyDefId
+        );
+
+        await profilePropertyRepo.link({
+          profileId,
+          propertyDefId,
+          required: prop.required ?? false,
+          defaultValue: prop.defaultValue,
+          displayOrder: prop.displayOrder,
+        });
+
+        if (!linkExists) {
+          linksCreated++;
+        }
+      }
+    }
+
+    const totalCreated = profilesCreated + propertiesCreated + linksCreated;
+
+    return {
+      status: totalCreated > 0 ? "created" : "exists",
+      message:
+        totalCreated > 0
+          ? `DevPlane: created ${profilesCreated} profiles, ${propertiesCreated} properties, ${linksCreated} links`
+          : "All DevPlane profiles already exist",
+      profilesCreated,
+      propertiesCreated,
+      linksCreated,
+    };
+  } catch (error: any) {
+    return {
+      status: "error",
+      message: "Failed to ensure DevPlane profiles",
+      profilesCreated,
+      propertiesCreated,
+      linksCreated,
+      error: error.message,
+    };
+  }
+}

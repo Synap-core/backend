@@ -44,8 +44,10 @@ import { assertPackageTierAccess } from "../utils/tier-check.js";
 import { emitSideEffects, getBoss } from "@synap/events";
 import { config, createLogger } from "@synap-core/core";
 import {
-  ensurePersonalChannel,
+  ensureAgentThread,
+  ensureWorkspaceGroupChannel,
   ensureProactiveFeedChannel,
+  getAgentIdBySlug,
 } from "../utils/personal-channel.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 
@@ -722,13 +724,27 @@ export const workspacesRouter = router({
         },
       });
 
-      // 4. Auto-provision personal chat + proactive feed channels for the new member (idempotent)
-      ensurePersonalChannel(input.userId, input.workspaceId).catch((err) => {
-        logger.warn(
-          { err },
-          "Failed to provision personal channel on workspace join"
-        );
-      });
+      // 4. Auto-provision per-agent thread + workspace group + proactive feed for new member (idempotent)
+      getAgentIdBySlug("orchestrator")
+        .then(async (orchestratorId) => {
+          if (orchestratorId) {
+            await ensureAgentThread(input.userId, orchestratorId);
+          }
+        })
+        .catch((err) => {
+          logger.warn(
+            { err },
+            "Failed to provision orchestrator thread on workspace join"
+          );
+        });
+      ensureWorkspaceGroupChannel(input.userId, input.workspaceId).catch(
+        (err) => {
+          logger.warn(
+            { err },
+            "Failed to provision workspace group channel on workspace join"
+          );
+        }
+      );
       ensureProactiveFeedChannel(input.userId, input.workspaceId).catch(
         (err) => {
           logger.warn(

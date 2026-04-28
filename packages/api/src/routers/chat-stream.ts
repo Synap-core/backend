@@ -54,7 +54,10 @@ import {
   resolveIntelligenceService,
   resolveIntelligenceServiceByAgentId,
 } from "../utils/intelligence-routing.js";
-import { ensurePersonalChannel } from "../utils/personal-channel.js";
+import {
+  ensureAgentThread,
+  getAgentIdBySlug,
+} from "../utils/personal-channel.js";
 import { createLogger } from "@synap-core/core";
 import { authMiddleware } from "@synap/auth";
 
@@ -163,15 +166,15 @@ chatStreamApp.post("/stream", async (c) => {
     resolvedChannelId = input.channelId;
   } else {
     try {
-      const personalChannel = await ensurePersonalChannel(
-        userId,
-        resolvedWorkspaceId
-      );
+      const orchestratorId = await getAgentIdBySlug("orchestrator");
+      if (!orchestratorId)
+        return c.json({ error: "Default agent not found" }, 500);
+      const personalChannel = await ensureAgentThread(userId, orchestratorId);
       resolvedChannelId = personalChannel.id;
     } catch (err) {
       logger.error(
         { err: err instanceof Error ? err.message : String(err) },
-        "Failed to ensure personal channel"
+        "Failed to resolve default agent thread"
       );
       return c.json({ error: "Failed to resolve chat channel" }, 500);
     }
@@ -312,8 +315,6 @@ chatStreamApp.get("/history", async (c) => {
   // ── Resolve workspaceId ────────────────────────────────────────────────────
   const rawWorkspaceId = c.req.query("workspaceId");
   const rawChannelId = c.req.query("channelId");
-  let resolvedWorkspaceId: string;
-
   if (rawWorkspaceId) {
     const membership = await db.query.workspaceMembers.findFirst({
       where: and(
@@ -325,7 +326,6 @@ chatStreamApp.get("/history", async (c) => {
     if (!membership) {
       return c.json({ error: "Workspace not found or access denied" }, 404);
     }
-    resolvedWorkspaceId = rawWorkspaceId;
   } else {
     const membership = await db.query.workspaceMembers.findFirst({
       where: eq(workspaceMembers.userId, userId),
@@ -334,7 +334,6 @@ chatStreamApp.get("/history", async (c) => {
     if (!membership) {
       return c.json({ error: "No workspace found for this user" }, 404);
     }
-    resolvedWorkspaceId = membership.workspaceId;
   }
 
   // ── Parse limit ────────────────────────────────────────────────────────────
@@ -369,15 +368,15 @@ chatStreamApp.get("/history", async (c) => {
     channelId = channel.id;
   } else {
     try {
-      const personalChannel = await ensurePersonalChannel(
-        userId,
-        resolvedWorkspaceId
-      );
+      const orchestratorId = await getAgentIdBySlug("orchestrator");
+      if (!orchestratorId)
+        return c.json({ error: "Default agent not found" }, 500);
+      const personalChannel = await ensureAgentThread(userId, orchestratorId);
       channelId = personalChannel.id;
     } catch (err) {
       logger.error(
         { err: err instanceof Error ? err.message : String(err) },
-        "Failed to ensure personal channel for history fetch"
+        "Failed to resolve default agent thread for history fetch"
       );
       return c.json({ error: "Failed to resolve chat channel" }, 500);
     }

@@ -33,6 +33,7 @@ export interface CreateChannelData {
   branchedFromMessageId?: string;
   branchPurpose?: string;
   senderAgentId?: string;
+  assignedAgentId?: string;
   agentConfig?: Record<string, unknown>;
   externalSource?: string;
   externalChannelId?: string;
@@ -80,6 +81,7 @@ export class ChannelRepository {
         branchedFromMessageId: data.branchedFromMessageId,
         branchPurpose: data.branchPurpose,
         senderAgentId: data.senderAgentId || null,
+        assignedAgentId: data.assignedAgentId || null,
         agentConfig: data.agentConfig,
         externalSource: data.externalSource,
         externalChannelId: data.externalChannelId,
@@ -219,6 +221,7 @@ export class ChannelRepository {
    */
   async ensurePersonalChannel(
     userId: string,
+    agentId: string,
     _workspaceId?: string
   ): Promise<Channel> {
     const [existing] = await this.db
@@ -227,7 +230,7 @@ export class ChannelRepository {
       .where(
         and(
           eq(channels.userId, userId),
-          eq(channels.channelType, ChannelType.THREAD),
+          eq(channels.assignedAgentId, agentId),
           eq(channels.threadKind, ThreadKind.PERSONAL),
           eq(channels.status, ChannelStatus.ACTIVE)
         )
@@ -242,7 +245,7 @@ export class ChannelRepository {
       channelType: ChannelType.THREAD,
       threadKind: ThreadKind.PERSONAL,
       scope: ChannelScope.POD,
-      senderAgentId: undefined,
+      assignedAgentId: agentId,
     });
   }
 

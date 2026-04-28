@@ -21,7 +21,10 @@ import { z } from "zod";
 import { db, eq, and } from "@synap/database";
 import { workspaceMembers } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
-import { ensurePersonalChannel } from "../../utils/personal-channel.js";
+import {
+  ensureAgentThread,
+  getAgentIdBySlug,
+} from "../../utils/personal-channel.js";
 import { createLogger } from "@synap-core/core";
 import { externalApiKeyAuth, type ExternalApiVariables } from "./middleware.js";
 
@@ -191,10 +194,9 @@ openaiCompatApp.post(
     // ── Resolve channel (auto-create personal channel) ───────────────────────
     let resolvedChannelId: string;
     try {
-      const personalChannel = await ensurePersonalChannel(
-        userId,
-        resolvedWorkspaceId
-      );
+      const orchestratorId = await getAgentIdBySlug("orchestrator");
+      if (!orchestratorId) throw new Error("Default agent not found");
+      const personalChannel = await ensureAgentThread(userId, orchestratorId);
       resolvedChannelId = personalChannel.id;
     } catch (err) {
       logger.error(
