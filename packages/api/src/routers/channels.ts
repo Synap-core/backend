@@ -74,8 +74,85 @@ import type { Channel } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects, getBoss } from "@synap/events";
 import { AgentRepository } from "@synap/database";
+import { resolveVaultReferences } from "../utils/vault-resolver.js";
 
 const logger = createLogger({ module: "channels" });
+
+/** A concrete fetch target produced by the CP query planner. */
+export interface DerivedQuery {
+  upstreamType: string;
+  config: Record<string, unknown>;
+  label: string;
+  rationale?: string;
+}
+
+/**
+ * Ask the CP relay to expand archetype + criteria into concrete DerivedQuery[].
+ * Best-effort: returns [] on any error so setupFeed can proceed unblocked.
+ */
+async function deriveFeedQueries(
+  archetypeConfig: { config: unknown; userId: string },
+  archetype: string,
+  criteria: string | undefined
+): Promise<DerivedQuery[]> {
+  try {
+    const raw = (archetypeConfig.config ?? {}) as Record<string, unknown>;
+    // Fall back to env vars — source_config rows don't always bake in the CP URL.
+    const relayUrl =
+      (raw.relayUrl as string | undefined) ??
+      process.env.CP_URL ??
+      process.env.CONTROL_PLANE_URL;
+    const relayKeyRef =
+      (raw.relayKey as string | undefined) ??
+      process.env.CP_RELAY_KEY ??
+      process.env.SOURCE_RELAY_KEY;
+    if (!relayUrl || !relayKeyRef) return [];
+
+    const resolved = await resolveVaultReferences(
+      { relayKey: relayKeyRef },
+      archetypeConfig.userId
+    );
+    const relayKey = resolved.relayKey;
+    if (!relayKey) return [];
+
+    const res = await fetch(
+      `${relayUrl.replace(/\/$/, "")}/api/sources/plan-queries`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${relayKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ archetype, criteria }),
+        signal: AbortSignal.timeout(10_000),
+      }
+    );
+
+    if (!res.ok) {
+      logger.warn(
+        { archetype, status: res.status },
+        "plan-queries returned non-OK — skipping derived queries"
+      );
+      return [];
+    }
+
+    const json = (await res.json()) as unknown;
+    if (
+      !json ||
+      typeof json !== "object" ||
+      !Array.isArray((json as { queries?: unknown }).queries)
+    ) {
+      return [];
+    }
+    return (json as { queries: DerivedQuery[] }).queries;
+  } catch (err) {
+    logger.warn(
+      { err, archetype },
+      "Failed to derive feed queries (non-fatal)"
+    );
+    return [];
+  }
+}
 
 const CHANNEL_TYPE_VALUES = [
   ChannelType.THREAD,
@@ -3024,7 +3101,15 @@ export const channelsRouter = router({
 
       const channelId = feedChannel.id;
 
-      // 3. Upsert subscription — idempotent by (sourceConfigId, feedId)
+      // 3. Expand archetype + criteria into concrete fetch targets via the CP query planner.
+      //    Best-effort: derivedQueries is [] if the CP isn't configured or plan-queries fails.
+      const derivedQueries = await deriveFeedQueries(
+        archetypeConfig,
+        input.archetype,
+        input.criteria
+      );
+
+      // 4. Upsert subscription — idempotent by (sourceConfigId, feedId)
       const existingSub = await db.query.sourceSubscriptions.findFirst({
         where: and(
           eq(sourceSubscriptions.sourceConfigId, archetypeConfig.id),
@@ -3054,6 +3139,7 @@ export const channelsRouter = router({
                   ? input.relevanceThreshold / 100
                   : 0,
               },
+              ...(derivedQueries.length > 0 && { derivedQueries }),
             },
           })
           .returning();
@@ -3063,7 +3149,7 @@ export const channelsRouter = router({
         input.scheduleCron ||
         input.relevanceThreshold !== undefined
       ) {
-        // Update criteria/schedule on existing subscription
+        // Update criteria/schedule and refresh derived queries on existing subscription
         await db
           .update(sourceSubscriptions)
           .set({
@@ -3077,6 +3163,7 @@ export const channelsRouter = router({
                   ? input.relevanceThreshold / 100
                   : 0,
               },
+              ...(derivedQueries.length > 0 && { derivedQueries }),
             },
             updatedAt: new Date(),
           })

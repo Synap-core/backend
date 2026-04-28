@@ -189,23 +189,100 @@ export async function handleFeedSourceExecute(job: {
     return { ok: false, itemCount: 0, error: msg };
   }
 
+  // ── Fan-out over derivedQueries if available ─────────────────────────────
+  // When the query planner has expanded the archetype into concrete targets,
+  // run one fetch per derived query and merge results. Falls back to single
+  // provider.fetch() when no derivedQueries are stored.
+
+  interface DerivedQuery {
+    upstreamType: string;
+    config: Record<string, unknown>;
+    label: string;
+  }
+
+  const derivedQueries = (
+    (subscription.params as Record<string, unknown>)?.derivedQueries as
+      | DerivedQuery[]
+      | undefined
+  )?.filter((q) => q && q.upstreamType && q.config);
+
   let items: SourceItem[] = [];
   let nextToken: string | undefined;
-  try {
-    const result = await provider.fetch(resolved, {
-      sinceToken: subscription.cursor ?? undefined,
-      limit: 50,
-    });
-    items = result.items;
-    nextToken = result.nextToken;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error(
-      { err, subscriptionId, providerType: sourceConfig.providerType },
-      "Provider fetch failed"
+
+  if (derivedQueries && derivedQueries.length > 0) {
+    // Fan-out: use the resolved relayUrl + relayKey but override upstreamType/config per query.
+    const relayUrl = resolved.relayUrl as string | undefined;
+    const relayKey = resolved.relayKey as string | undefined;
+
+    if (!relayUrl || !relayKey) {
+      await markSubscriptionError(
+        subscriptionId,
+        "derivedQueries present but relayUrl/relayKey could not be resolved"
+      );
+      return {
+        ok: false,
+        itemCount: 0,
+        error: "missing relay credentials for derived query fan-out",
+      };
+    }
+
+    logger.debug(
+      { subscriptionId, queryCount: derivedQueries.length },
+      "Fan-out fetch over derivedQueries"
     );
-    await markSubscriptionError(subscriptionId, `Fetch: ${msg}`);
-    return { ok: false, itemCount: 0, error: msg };
+
+    const seenIds = new Set<string>();
+    for (const dq of derivedQueries) {
+      const queryConfig: Record<string, unknown> = {
+        relayUrl,
+        relayKey,
+        upstreamType: dq.upstreamType,
+        upstreamConfig: dq.config,
+      };
+
+      try {
+        const result = await provider.fetch(queryConfig, {
+          sinceToken: subscription.cursor ?? undefined,
+          limit: Math.ceil(50 / derivedQueries.length),
+        });
+        // Deduplicate across queries by externalId
+        for (const item of result.items) {
+          if (!seenIds.has(item.externalId)) {
+            seenIds.add(item.externalId);
+            items.push(item);
+          }
+        }
+        if (result.nextToken) nextToken = result.nextToken;
+      } catch (err) {
+        logger.warn(
+          {
+            err,
+            subscriptionId,
+            upstreamType: dq.upstreamType,
+            label: dq.label,
+          },
+          "Derived query fetch failed — continuing with remaining queries"
+        );
+      }
+    }
+  } else {
+    // Default single-fetch path
+    try {
+      const result = await provider.fetch(resolved, {
+        sinceToken: subscription.cursor ?? undefined,
+        limit: 50,
+      });
+      items = result.items;
+      nextToken = result.nextToken;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error(
+        { err, subscriptionId, providerType: sourceConfig.providerType },
+        "Provider fetch failed"
+      );
+      await markSubscriptionError(subscriptionId, `Fetch: ${msg}`);
+      return { ok: false, itemCount: 0, error: msg };
+    }
   }
 
   const latestItemAt = items.reduce<Date | null>((acc, it) => {
@@ -252,6 +329,7 @@ export async function handleFeedSourceExecute(job: {
       subscriptionId,
       providerType: sourceConfig.providerType,
       itemCount: items.length,
+      derivedQueryCount: derivedQueries?.length ?? 0,
       cursorChanged: nextToken !== subscription.cursor,
     },
     "Source fetch complete"

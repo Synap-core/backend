@@ -1621,6 +1621,102 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
         constraints: { maxLength: 500 },
         uiHints: { label: "Description", inputType: "text" },
       },
+      // devplane_incident
+      {
+        slug: "severity",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["critical", "high", "medium", "low"] },
+        uiHints: {
+          label: "Severity",
+          inputType: "select",
+          displayAs: "status",
+        },
+      },
+      {
+        slug: "incidentStatus",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["open", "investigating", "resolved"] },
+        uiHints: { label: "Status", inputType: "select", displayAs: "status" },
+      },
+      {
+        slug: "affectedApps",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 1000 },
+        uiHints: {
+          label: "Affected Apps",
+          inputType: "text",
+          description: "Comma-separated list of app slugs",
+        },
+      },
+      {
+        slug: "rootCause",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 2000 },
+        uiHints: { label: "Root Cause", inputType: "textarea" },
+      },
+      {
+        slug: "resolvedAt",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Resolved At", inputType: "text" },
+      },
+      {
+        slug: "incidentDescription",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 5000 },
+        uiHints: { label: "Description", inputType: "textarea" },
+      },
+      // devplane_cron
+      {
+        slug: "cronExpression",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 100 },
+        uiHints: {
+          label: "Cron Expression",
+          inputType: "text",
+          description: "e.g. 0 9 * * 1-5",
+        },
+      },
+      {
+        slug: "linkedAppSlug",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 200 },
+        uiHints: { label: "Linked App", inputType: "text" },
+      },
+      {
+        slug: "cronStatus",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["active", "paused", "error"] },
+        uiHints: { label: "Status", inputType: "select", displayAs: "status" },
+      },
+      {
+        slug: "lastRunAt",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Last Run At", inputType: "text" },
+      },
+      {
+        slug: "lastRunStatus",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["success", "failed"] },
+        uiHints: {
+          label: "Last Run Status",
+          inputType: "select",
+          displayAs: "status",
+        },
+      },
+      {
+        slug: "nextRunAt",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Next Run At", inputType: "text" },
+      },
+      {
+        slug: "cronDescription",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 1000 },
+        uiHints: { label: "Description", inputType: "text" },
+      },
     ];
 
     const createdPropertyDefs = new Map<string, string>();
@@ -1724,6 +1820,25 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
           icon: "sparkles",
           color: "#F59E0B",
           description: "A reusable AI prompt template with dynamic variables",
+        },
+      },
+      {
+        slug: "devplane_incident",
+        displayName: "Incident",
+        uiHints: {
+          icon: "alert-triangle",
+          color: "#EF4444",
+          description:
+            "A production incident with severity, status, and root cause tracking",
+        },
+      },
+      {
+        slug: "devplane_cron",
+        displayName: "Cron Job",
+        uiHints: {
+          icon: "timer",
+          color: "#06B6D4",
+          description: "A scheduled task with cron expression and run history",
         },
       },
     ];
@@ -1888,6 +2003,41 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
           },
           { slug: "snippetDescription", required: false, displayOrder: 3 },
           { slug: "snippetBody", required: true, displayOrder: 4 },
+        ],
+      },
+      {
+        profileSlug: "devplane_incident",
+        propertySlugs: [
+          { slug: "title", required: true, displayOrder: 0 },
+          { slug: "severity", required: false, displayOrder: 1 },
+          {
+            slug: "incidentStatus",
+            required: false,
+            defaultValue: "open",
+            displayOrder: 2,
+          },
+          { slug: "affectedApps", required: false, displayOrder: 3 },
+          { slug: "rootCause", required: false, displayOrder: 4 },
+          { slug: "resolvedAt", required: false, displayOrder: 5 },
+          { slug: "incidentDescription", required: false, displayOrder: 6 },
+        ],
+      },
+      {
+        profileSlug: "devplane_cron",
+        propertySlugs: [
+          { slug: "title", required: true, displayOrder: 0 },
+          { slug: "cronExpression", required: false, displayOrder: 1 },
+          { slug: "linkedAppSlug", required: false, displayOrder: 2 },
+          {
+            slug: "cronStatus",
+            required: false,
+            defaultValue: "active",
+            displayOrder: 3,
+          },
+          { slug: "lastRunAt", required: false, displayOrder: 4 },
+          { slug: "lastRunStatus", required: false, displayOrder: 5 },
+          { slug: "nextRunAt", required: false, displayOrder: 6 },
+          { slug: "cronDescription", required: false, displayOrder: 7 },
         ],
       },
     ];

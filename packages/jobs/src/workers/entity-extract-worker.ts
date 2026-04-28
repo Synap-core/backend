@@ -26,6 +26,7 @@ import {
   EventRepository,
 } from "@synap/database";
 import { OperationalEventTypes } from "@synap/events";
+import { sql as drizzleSql } from "drizzle-orm";
 import { sql as dbSql } from "@synap/database";
 import {
   channels,
@@ -110,17 +111,16 @@ async function deduplicateItems(
     seenUrls.add(url);
   }
 
-  // Persist seen URLs if we added new ones
+  // Persist seen URLs if we added new ones.
+  // Use jsonb_set to update only the seenUrls key — avoids racing with
+  // setupFeed's concurrent update to derivedQueries.
   if (newItems.length > 0) {
     const capped = Array.from(seenUrls).slice(-5000);
     try {
       await db
         .update(sourceSubscriptions)
         .set({
-          params: {
-            ...(subscription.params as Record<string, unknown>),
-            seenUrls: capped,
-          },
+          params: drizzleSql`jsonb_set(COALESCE(params, '{}'), '{seenUrls}', ${JSON.stringify(capped)}::jsonb, true)`,
           updatedAt: new Date(),
         })
         .where(eq(sourceSubscriptions.id, subscriptionId));
@@ -265,7 +265,7 @@ async function classifyWithIS(
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                Authorization: `Bearer ${isApiKey}`,
+                "X-Internal-Key": isApiKey,
               },
               body: JSON.stringify({
                 items: feedItems,
