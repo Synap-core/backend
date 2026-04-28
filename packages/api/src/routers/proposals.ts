@@ -511,9 +511,16 @@ export const proposalsRouter = router({
         proposal.proposalType === "create_branch"
       ) {
         const data = (proposal.data ?? {}) as Record<string, unknown>;
+        const branchWorkspaceId = proposal.workspaceId || null;
+        if (!branchWorkspaceId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Proposal is missing a valid workspaceId",
+          });
+        }
         const membership = await getWorkspaceMembership(
           db,
-          proposal.workspaceId!,
+          branchWorkspaceId,
           userId
         );
         if (!membership) {
@@ -526,7 +533,7 @@ export const proposalsRouter = router({
           db,
           authenticated: true as const,
           userId,
-          workspaceId: proposal.workspaceId!,
+          workspaceId: branchWorkspaceId,
           workspaceRole: membership.role,
         };
         const caller = channelsRouter.createCaller(branchCallerCtx);
@@ -564,9 +571,16 @@ export const proposalsRouter = router({
         proposal.proposalType === "merge_branch"
       ) {
         const data = (proposal.data ?? {}) as Record<string, unknown>;
+        const mergeWorkspaceId = proposal.workspaceId || null;
+        if (!mergeWorkspaceId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Proposal is missing a valid workspaceId",
+          });
+        }
         const membership = await getWorkspaceMembership(
           db,
-          proposal.workspaceId!,
+          mergeWorkspaceId,
           userId
         );
         if (!membership) {
@@ -579,7 +593,7 @@ export const proposalsRouter = router({
           db,
           authenticated: true as const,
           userId,
-          workspaceId: proposal.workspaceId!,
+          workspaceId: mergeWorkspaceId,
           workspaceRole: membership.role,
         };
         const caller = channelsRouter.createCaller(mergeCallerCtx);
@@ -615,9 +629,16 @@ export const proposalsRouter = router({
         proposal.proposalType === "create_external"
       ) {
         const data = (proposal.data ?? {}) as Record<string, unknown>;
+        const extWorkspaceId = proposal.workspaceId || null;
+        if (!extWorkspaceId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Proposal is missing a valid workspaceId",
+          });
+        }
         const membership = await getWorkspaceMembership(
           db,
-          proposal.workspaceId!,
+          extWorkspaceId,
           userId
         );
         if (!membership) {
@@ -630,7 +651,7 @@ export const proposalsRouter = router({
           db,
           authenticated: true as const,
           userId,
-          workspaceId: proposal.workspaceId!,
+          workspaceId: extWorkspaceId,
           workspaceRole: membership.role,
         };
         const caller = channelsRouter.createCaller(extCallerCtx);
@@ -672,9 +693,16 @@ export const proposalsRouter = router({
       ) {
         const innerData = ((proposal.data as Record<string, unknown>)?.data ??
           {}) as Record<string, unknown>;
+        const proposalWorkspaceId = proposal.workspaceId || null;
+        if (!proposalWorkspaceId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Entity creation proposal is missing a valid workspaceId",
+          });
+        }
         const membership = await getWorkspaceMembership(
           db,
-          proposal.workspaceId!,
+          proposalWorkspaceId,
           userId
         );
         if (!membership) {
@@ -687,7 +715,7 @@ export const proposalsRouter = router({
           db,
           authenticated: true as const,
           userId,
-          workspaceId: proposal.workspaceId!,
+          workspaceId: proposalWorkspaceId,
           workspaceRole: membership.role,
         };
         const entityCaller = regularEntitiesRouter.createCaller(

@@ -3313,7 +3313,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			output: {
 				env: {
-					key: "NODE_ENV" | "PUBLIC_URL" | "DOMAIN" | "OPENCLAW_DOMAIN" | "INTELLIGENCE_HUB_URL" | "CONTROL_PLANE_URL" | "ALLOWED_ORIGINS" | "EMBEDDING_PROVIDER";
+					key: "NODE_ENV" | "CONTROL_PLANE_URL" | "PUBLIC_URL" | "DOMAIN" | "OPENCLAW_DOMAIN" | "INTELLIGENCE_HUB_URL" | "ALLOWED_ORIGINS" | "EMBEDDING_PROVIDER";
 					value: string | null;
 				}[];
 				files: {
@@ -10245,6 +10245,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				offset?: number | undefined;
 			};
 			output: {
+				derivedQueryCount: number;
+				derivedQueries: {
+					upstreamType: string;
+					label: string;
+				}[] | undefined;
 				id: string;
 				feedId: string;
 				params: Record<string, unknown>;

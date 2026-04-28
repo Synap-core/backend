@@ -50,10 +50,9 @@ export class ProfileResolutionService {
     const cached = ProfileResolutionService.entityScopeCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.scope;
 
-    const profile = await this.profileRepo.getBySlugForWorkspace(
-      profileSlug,
-      workspaceId ?? ""
-    );
+    const profile = workspaceId
+      ? await this.profileRepo.getBySlugForWorkspace(profileSlug, workspaceId)
+      : await this.profileRepo.getBySlug(profileSlug);
     const scope = profile?.entityScope === "pod" ? "pod" : "workspace";
 
     ProfileResolutionService.entityScopeCache.set(cacheKey, {

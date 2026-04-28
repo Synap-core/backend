@@ -7,6 +7,9 @@ WORKDIR /app
 # ============================================================================
 FROM base AS builder
 
+# Install build tools required for native modules (e.g. node-pty via node-gyp)
+RUN apk add --no-cache python3 make g++
+
 # Copy all files for build
 COPY . .
 
