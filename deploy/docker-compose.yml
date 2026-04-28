@@ -206,6 +206,7 @@ services:
       - sh
       - -c
       - |
+        set -e
         DB_SCRIPTS=''
         for p in \
           /app/node_modules/@synap/database/dist/scripts \

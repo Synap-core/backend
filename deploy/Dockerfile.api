@@ -7,6 +7,9 @@ WORKDIR /app
 # ============================================================================
 FROM base AS builder
 
+# Build tools for native addons (e.g. node-pty via node-gyp)
+RUN apk add --no-cache python3 make g++
+
 # ── Layer 1: dependency manifests (cached unless lockfile or package.json changes) ──
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
 COPY apps/admin-ui/package.json ./apps/admin-ui/
@@ -38,9 +41,14 @@ RUN --mount=type=cache,id=pnpm-backend,target=/root/.local/share/pnpm/store \
 # ── Layer 2: source + build (re-runs on every source change) ──
 COPY . .
 
-# Build the API package (sequential to avoid worker OOM on constrained hosts)
+# Build the API package and its workspace deps (sequential to avoid worker OOM)
+# @synap/database is listed explicitly so its dist/scripts/ (migrate.js, init-hub-keys.js)
+# are always compiled fresh and included by pnpm deploy.
 RUN --mount=type=cache,id=turbo-backend,target=/app/.turbo \
-    NODE_OPTIONS=--max-old-space-size=4096 pnpm turbo build --filter=api --concurrency=1
+    NODE_OPTIONS=--max-old-space-size=4096 pnpm turbo build \
+      --filter=api \
+      --filter=@synap/database \
+      --concurrency=1
 
 # Build provision-agent script separately (standalone bundle, not affected by turbo cache)
 RUN cd /app/packages/api && npx tsup --config tsup.provision.config.ts

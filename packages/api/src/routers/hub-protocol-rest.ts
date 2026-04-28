@@ -3546,7 +3546,7 @@ app.post("/proposals", async (c) => {
     );
   }
   const body = (await c.req.json()) as {
-    workspaceId: string;
+    workspaceId?: string | null;
     agentUserId?: string;
     channelId?: string;
     targetType: string;
@@ -3556,17 +3556,10 @@ app.post("/proposals", async (c) => {
     summary?: string;
     sourceMessageId?: string;
   };
-  if (
-    !body.workspaceId ||
-    !body.targetType ||
-    !body.targetId ||
-    !body.proposalType ||
-    !body.data
-  ) {
+  if (!body.targetType || !body.targetId || !body.proposalType || !body.data) {
     return c.json(
       {
-        error:
-          "workspaceId, targetType, targetId, proposalType, and data are required",
+        error: "targetType, targetId, proposalType, and data are required",
       },
       400
     );
@@ -3583,7 +3576,7 @@ app.post("/proposals", async (c) => {
       .insert(proposals)
       .values({
         id,
-        workspaceId: body.workspaceId,
+        workspaceId: body.workspaceId ?? null,
         targetType: body.targetType,
         targetId: body.targetId,
         proposalType: body.proposalType,

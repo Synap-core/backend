@@ -21,6 +21,7 @@ import {
   gt,
   getWorkspaceMembership,
   normalizeDocumentType,
+  ProfileResolutionService,
 } from "@synap/database";
 import { ProposalStatus, workspaces } from "@synap/database/schema";
 import type { WorkspaceSettings } from "@synap/database/schema";
@@ -693,34 +694,6 @@ export const proposalsRouter = router({
       ) {
         const innerData = ((proposal.data as Record<string, unknown>)?.data ??
           {}) as Record<string, unknown>;
-        const proposalWorkspaceId = proposal.workspaceId || null;
-        if (!proposalWorkspaceId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Entity creation proposal is missing a valid workspaceId",
-          });
-        }
-        const membership = await getWorkspaceMembership(
-          db,
-          proposalWorkspaceId,
-          userId
-        );
-        if (!membership) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "No workspace access",
-          });
-        }
-        const entityCallerCtx = {
-          db,
-          authenticated: true as const,
-          userId,
-          workspaceId: proposalWorkspaceId,
-          workspaceRole: membership.role,
-        };
-        const entityCaller = regularEntitiesRouter.createCaller(
-          entityCallerCtx as unknown as Context
-        );
         const profileSlug = innerData.profileSlug as string | undefined;
         if (!profileSlug) {
           throw new TRPCError({
@@ -728,6 +701,67 @@ export const proposalsRouter = router({
             message: "Entity proposal is missing profileSlug",
           });
         }
+
+        const proposalWorkspaceId = proposal.workspaceId || null;
+
+        // Check whether this profile is pod-wide or workspace-scoped.
+        // Pod-wide entities (task, event, note, project, …) can be created without
+        // a workspace context — the membership check is skipped and the entity is
+        // stored with workspaceId = null.
+        const profileService = new ProfileResolutionService(db);
+        const entityScope = await profileService.getEntityScope(
+          profileSlug,
+          proposalWorkspaceId
+        );
+        const isPodWide = entityScope === "pod";
+
+        let entityCallerCtx: {
+          db: typeof db;
+          authenticated: true;
+          userId: string;
+          workspaceId: string | null;
+          workspaceRole: string;
+        };
+
+        if (isPodWide) {
+          entityCallerCtx = {
+            db,
+            authenticated: true as const,
+            userId,
+            workspaceId: null,
+            workspaceRole: "owner",
+          };
+        } else {
+          if (!proposalWorkspaceId) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "Entity creation proposal for a workspace-scoped profile is missing a valid workspaceId",
+            });
+          }
+          const membership = await getWorkspaceMembership(
+            db,
+            proposalWorkspaceId,
+            userId
+          );
+          if (!membership) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "No workspace access",
+            });
+          }
+          entityCallerCtx = {
+            db,
+            authenticated: true as const,
+            userId,
+            workspaceId: proposalWorkspaceId,
+            workspaceRole: membership.role,
+          };
+        }
+
+        const entityCaller = regularEntitiesRouter.createCaller(
+          entityCallerCtx as unknown as Context
+        );
         await entityCaller.create({
           profileSlug,
           title: (innerData.title as string) || "Untitled",
