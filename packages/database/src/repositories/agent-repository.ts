@@ -40,7 +40,7 @@ export class AgentRepository {
         capabilities: data.capabilities ?? [],
         metadata: data.metadata ?? {},
         active: true,
-        ownerType: "provider",
+        ownerType: "synap",
         intelligenceServiceId: data.intelligenceServiceId,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -113,12 +113,7 @@ export class AgentRepository {
     }
 
     if (filters?.ownerType) {
-      conditions.push(
-        eq(
-          agents.ownerType,
-          filters.ownerType as "user" | "system" | "provider"
-        )
-      );
+      conditions.push(eq(agents.ownerType, filters.ownerType));
     }
 
     return await this.db
