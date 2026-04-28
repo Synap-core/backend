@@ -25,6 +25,7 @@ import {
   EntityRepository,
   EventRepository,
 } from "@synap/database";
+import { OperationalEventTypes } from "@synap/events";
 import { sql as dbSql } from "@synap/database";
 import {
   channels,
@@ -318,6 +319,7 @@ interface FeedConfig {
   minRelevanceScore: number; // 0-1
   enrichmentEnabled: boolean;
   agentConfig: Record<string, unknown>;
+  feedArchetype?: string; // archetype slug from source_config.metadata (e.g. "leads")
 }
 
 async function resolveFeedConfig(
@@ -386,6 +388,11 @@ async function resolveFeedConfig(
       agentConfig.enrichmentEnabled = config.enrichmentEnabled as boolean;
     }
 
+    const feedArchetype =
+      ((sourceConfig?.metadata as Record<string, unknown>)?.archetype as
+        | string
+        | undefined) ?? undefined;
+
     return {
       feedType,
       minRelevanceScore,
@@ -393,6 +400,7 @@ async function resolveFeedConfig(
         (agentConfig.enrichmentEnabled ?? config.enrichmentEnabled ?? true) ===
         true,
       agentConfig,
+      feedArchetype,
     };
   } catch (err) {
     logger.debug(
@@ -674,6 +682,36 @@ export async function handleEntityExtract(job: {
             summary: classification.summary,
             topics: classification.topics.map((t) => t.name),
           });
+        }
+
+        // Emit per-entity automation trigger event (non-fatal)
+        try {
+          await eventRepo.append({
+            id: randomUUID(),
+            version: "v1",
+            type: OperationalEventTypes.FEED_NEW_ITEM,
+            subjectType: "feed",
+            subjectId: entityId,
+            userId,
+            source: "system",
+            timestamp: new Date(),
+            data: {
+              entityId,
+              feedId,
+              subscriptionId,
+              feedArchetype: feedConfig.feedArchetype,
+              feedType: feedConfig.feedType,
+              relevanceScore: classification?.relevanceScore ?? 1.0,
+              title: item.title.slice(0, 500),
+              url: item.url,
+              topics: classification?.topics?.map((t) => t.name) ?? [],
+            },
+          });
+        } catch (evtErr) {
+          logger.debug(
+            { err: evtErr instanceof Error ? evtErr.message : "unknown" },
+            "feed.new_item event append failed (non-fatal)"
+          );
         }
 
         logger.debug(

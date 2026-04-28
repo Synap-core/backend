@@ -72,6 +72,12 @@ export const sourceConfigs = pgTable(
 
     enabled: boolean("enabled").notNull().default(true),
 
+    /**
+     * Arbitrary metadata JSONB. Used to tag archetype seeds:
+     *   { archetype: "leads", isArchetypeSeed: true }
+     */
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+
     // Last-known test probe state — populated by `testConnection` tRPC call.
     lastTestedAt: timestamp("last_tested_at", { withTimezone: true }),
     lastTestStatus: text("last_test_status"), // 'ok' | 'error'

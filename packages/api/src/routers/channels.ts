@@ -2936,36 +2936,56 @@ export const channelsRouter = router({
    * Idempotent: returns the existing feed channel if one already exists.
    * Each source is matched by URL — duplicate URLs are skipped.
    */
+  /**
+   * Set up (or update) the user's personal feed channel for a given archetype.
+   * Resolves the pre-provisioned source_config for the archetype (seeded by CP
+   * at pod provisioning time) and creates a subscription linking it to the
+   * user's feed channel.
+   *
+   * Idempotent: calling again for the same archetype returns the existing
+   * channelId without creating duplicates.
+   */
   setupFeed: protectedProcedure
     .input(
       z.object({
-        /** Human-readable name for the feed channel. */
-        name: z.string().min(1).max(255).optional(),
-        /**
-         * Sources to subscribe to. Each entry becomes one source_config +
-         * one source_subscription if not already present.
-         */
-        sources: z
-          .array(
-            z.object({
-              url: z.string().url(),
-              name: z.string().min(1).max(255),
-              /** cpproxy = relayed through CP, rss-direct = raw fetch */
-              provider: z.enum(["cpproxy", "rss-direct"]).default("rss-direct"),
-              topics: z.array(z.string()).optional(),
-            })
-          )
-          .max(50),
-        /** feedType stored as agentConfig on subscriptions for IS classification */
-        feedType: z.string().optional(),
+        archetype: z.enum([
+          "leads",
+          "hiring",
+          "investors",
+          "trends",
+          "competitors",
+          "press",
+        ]),
+        /** NL context forwarded to IS for relevance scoring */
+        criteria: z.string().max(1000).optional(),
+        /** Cron schedule — defaults to every 15 minutes */
+        scheduleCron: z.string().optional(),
         /** Relevance threshold 0-100 */
         relevanceThreshold: z.number().min(0).max(100).optional(),
+        /** Channel display name — defaults to archetype label */
+        name: z.string().min(1).max(255).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.userId;
 
-      // 1. Upsert the user's personal feed channel
+      // 1. Resolve the archetype source_config seeded by CP provisioning
+      const archetypeConfig = await db.query.sourceConfigs.findFirst({
+        where: and(
+          eq(sourceConfigs.userId, userId),
+          drizzleSql`metadata->>'archetype' = ${input.archetype}`,
+          drizzleSql`metadata->>'isArchetypeSeed' = 'true'`
+        ),
+      });
+
+      if (!archetypeConfig) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `Feed sources for archetype "${input.archetype}" are not provisioned on this pod yet. Re-provision or contact support.`,
+        });
+      }
+
+      // 2. Upsert the user's personal feed channel
       let feedChannel = await db.query.channels.findFirst({
         where: and(
           eq(channels.userId, userId),
@@ -2975,6 +2995,14 @@ export const channelsRouter = router({
       });
 
       if (!feedChannel) {
+        const archetypeLabels: Record<string, string> = {
+          leads: "Leads",
+          hiring: "Hiring",
+          investors: "Investors",
+          trends: "Trends",
+          competitors: "Competitors",
+          press: "Press",
+        };
         const [created] = await db
           .insert(channels)
           .values({
@@ -2983,12 +3011,11 @@ export const channelsRouter = router({
             workspaceId: null,
             channelType: ChannelType.FEED,
             feedScope: FeedScope.USER,
-            title: input.name ?? "My Feed",
+            title: input.name ?? archetypeLabels[input.archetype] ?? "My Feed",
             status: ChannelStatus.ACTIVE,
           })
           .returning();
         feedChannel = created;
-
         logger.info(
           { channelId: feedChannel.id, userId },
           "Feed channel created"
@@ -2996,99 +3023,122 @@ export const channelsRouter = router({
       }
 
       const channelId = feedChannel.id;
-      const createdSourceConfigIds: string[] = [];
-      const createdSubscriptionIds: string[] = [];
 
-      // 2. For each source: upsert source_config, then upsert subscription
-      for (const src of input.sources) {
-        const providerType =
-          src.provider === "cpproxy" ? "cp-relay" : "rss-direct";
+      // 3. Upsert subscription — idempotent by (sourceConfigId, feedId)
+      const existingSub = await db.query.sourceSubscriptions.findFirst({
+        where: and(
+          eq(sourceSubscriptions.sourceConfigId, archetypeConfig.id),
+          drizzleSql`${sourceSubscriptions.feedId} = ${channelId}`
+        ),
+      });
 
-        // Find existing config by URL to stay idempotent
-        const existingConfig = await db.query.sourceConfigs.findFirst({
-          where: and(
-            eq(sourceConfigs.userId, userId),
-            drizzleSql`${sourceConfigs.config}->>'url' = ${src.url}`
-          ),
-        });
+      let subscriptionId: string | null = existingSub?.id ?? null;
 
-        let sourceConfigId: string;
-
-        if (existingConfig) {
-          sourceConfigId = existingConfig.id;
-        } else {
-          const [newConfig] = await db
-            .insert(sourceConfigs)
-            .values({
-              id: randomUUID(),
-              userId,
-              workspaceId: null,
-              providerType,
-              name: src.name,
-              config: {
-                url: src.url,
-                topics: src.topics ?? [],
-                feedType: input.feedType ?? "rss",
+      if (!existingSub) {
+        const [newSub] = await db
+          .insert(sourceSubscriptions)
+          .values({
+            id: randomUUID(),
+            userId,
+            workspaceId: null,
+            sourceConfigId: archetypeConfig.id,
+            feedId: channelId,
+            status: "active",
+            params: {
+              feedType: input.archetype,
+              scheduleCron: input.scheduleCron ?? "*/15 * * * *",
+              agentConfig: {
+                feedType: input.archetype,
+                criteria: input.criteria ?? "",
                 minRelevanceScore: input.relevanceThreshold
                   ? input.relevanceThreshold / 100
                   : 0,
               },
-              enabled: true,
-            })
-            .returning();
-          sourceConfigId = newConfig.id;
-          createdSourceConfigIds.push(sourceConfigId);
-        }
-
-        // Upsert subscription: skip if this channel already has this source
-        const existingSub = await db.query.sourceSubscriptions.findFirst({
-          where: and(
-            eq(sourceSubscriptions.sourceConfigId, sourceConfigId),
-            drizzleSql`${sourceSubscriptions.feedId} = ${channelId}`
-          ),
-        });
-
-        if (!existingSub) {
-          const [newSub] = await db
-            .insert(sourceSubscriptions)
-            .values({
-              id: randomUUID(),
-              userId,
-              workspaceId: null,
-              sourceConfigId,
-              feedId: channelId,
-              status: "active",
-              params: {
-                feedType: input.feedType ?? "rss",
-                agentConfig: {
-                  feedType: input.feedType ?? "rss",
-                  minRelevanceScore: input.relevanceThreshold
-                    ? input.relevanceThreshold / 100
-                    : 0,
-                },
+            },
+          })
+          .returning();
+        subscriptionId = newSub.id;
+      } else if (
+        input.criteria ||
+        input.scheduleCron ||
+        input.relevanceThreshold !== undefined
+      ) {
+        // Update criteria/schedule on existing subscription
+        await db
+          .update(sourceSubscriptions)
+          .set({
+            params: {
+              feedType: input.archetype,
+              scheduleCron: input.scheduleCron ?? "*/15 * * * *",
+              agentConfig: {
+                feedType: input.archetype,
+                criteria: input.criteria ?? "",
+                minRelevanceScore: input.relevanceThreshold
+                  ? input.relevanceThreshold / 100
+                  : 0,
               },
-            })
-            .returning();
-          createdSubscriptionIds.push(newSub.id);
-        }
+            },
+            updatedAt: new Date(),
+          })
+          .where(eq(sourceSubscriptions.id, existingSub.id));
       }
 
       logger.info(
-        {
-          userId,
-          channelId,
-          sourcesProvided: input.sources.length,
-          configsCreated: createdSourceConfigIds.length,
-          subscriptionsCreated: createdSubscriptionIds.length,
-        },
+        { userId, channelId, archetype: input.archetype, subscriptionId },
         "Feed setup complete"
       );
 
-      return {
-        channelId,
-        createdSourceConfigIds,
-        createdSubscriptionIds,
-      };
+      return { channelId, subscriptionId };
+    }),
+
+  /**
+   * Return the user's personal feed channel and its active subscriptions.
+   * Optionally filter subscriptions by archetype.
+   */
+  getFeedChannel: protectedProcedure
+    .input(
+      z.object({
+        archetype: z
+          .enum([
+            "leads",
+            "hiring",
+            "investors",
+            "trends",
+            "competitors",
+            "press",
+          ])
+          .optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = ctx.userId;
+
+      const channel = await db.query.channels.findFirst({
+        where: and(
+          eq(channels.userId, userId),
+          eq(channels.channelType, ChannelType.FEED),
+          eq(channels.feedScope, FeedScope.USER)
+        ),
+      });
+
+      if (!channel) return { channel: null, subscriptions: [] };
+
+      const subs = await db.query.sourceSubscriptions.findMany({
+        where: and(
+          drizzleSql`${sourceSubscriptions.feedId} = ${channel.id}`,
+          eq(sourceSubscriptions.status, "active")
+        ),
+      });
+
+      const filtered = input.archetype
+        ? subs.filter(
+            (s) =>
+              (s.params as Record<string, unknown>)?.feedType ===
+              input.archetype
+          )
+        : subs;
+
+      return { channel, subscriptions: filtered };
     }),
 });
 

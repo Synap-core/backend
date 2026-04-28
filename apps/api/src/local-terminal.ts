@@ -29,6 +29,7 @@ import { db, eq, and } from "@synap/database";
 import { workspaces } from "@synap/database/schema";
 import { getKratosSession, getKratosSessionByToken } from "@synap/auth";
 import { createLogger } from "@synap-core/core";
+import { resolveVaultSecret } from "@synap/api";
 
 const logger = createLogger({ module: "local-terminal" });
 
@@ -72,6 +73,54 @@ async function isLocalTerminalEnabled(
   return (workspace?.settings as any)?.devplane?.localTerminalEnabled === true;
 }
 
+const PROVIDER_ENV_VARS: Record<string, string> = {
+  anthropic: "ANTHROPIC_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+  openai: "OPENAI_API_KEY",
+};
+
+async function resolveProviderEnv(
+  workspaceId: string,
+  userId: string
+): Promise<Record<string, string>> {
+  try {
+    const workspace = await db.query.workspaces.findFirst({
+      where: eq(workspaces.id, workspaceId),
+      columns: { settings: true },
+    });
+
+    const settings = (workspace?.settings ?? {}) as Record<string, unknown>;
+    const devplane = (settings["devplane"] ?? {}) as Record<string, unknown>;
+    // Per-user providers — each workspace member has independent API keys
+    const userProviders = (devplane["userProviders"] ?? {}) as Record<
+      string,
+      Record<string, { apiKeyVaultRef?: string }>
+    >;
+    const myProviders = (userProviders[userId] ?? {}) as Record<
+      string,
+      { apiKeyVaultRef?: string }
+    >;
+
+    const env: Record<string, string> = {};
+
+    for (const [providerType, envVar] of Object.entries(PROVIDER_ENV_VARS)) {
+      const vaultRef = myProviders[providerType]?.apiKeyVaultRef;
+      if (vaultRef && /^vault:\/\//.test(vaultRef)) {
+        const secretId = vaultRef.replace("vault://", "");
+        const apiKey = await resolveVaultSecret(secretId, userId);
+        if (apiKey) {
+          env[envVar] = apiKey;
+        }
+      }
+    }
+
+    return env;
+  } catch (err) {
+    logger.warn({ err, workspaceId }, "Failed to resolve provider env vars");
+    return {};
+  }
+}
+
 export function handleLocalTerminalUpgrade(
   req: IncomingMessage,
   socket: Duplex,
@@ -107,6 +156,9 @@ export function handleLocalTerminalUpgrade(
       return;
     }
 
+    // Resolve AI provider env vars from workspace settings (vault-backed API keys)
+    const providerEnv = await resolveProviderEnv(workspaceId, userId);
+
     // Lazy-import node-pty so the module only loads when needed
     let ptyModule: typeof import("node-pty");
     try {
@@ -130,7 +182,7 @@ export function handleLocalTerminalUpgrade(
         cols: 220,
         rows: 50,
         cwd: process.env["HOME"] ?? "/",
-        env: process.env as Record<string, string>,
+        env: { ...process.env, ...providerEnv } as Record<string, string>,
       });
     } catch (err: any) {
       logger.error({ err }, "Failed to spawn PTY");

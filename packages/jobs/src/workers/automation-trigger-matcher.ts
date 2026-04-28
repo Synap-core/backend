@@ -184,6 +184,23 @@ function matchTriggerSpecificFilters(
     }
   }
 
+  // ── feed trigger ─────────────────────────────────────────────────────────
+  if (eventType.startsWith("feed.")) {
+    // Filter by archetype (e.g. "leads", "trends") — "any" or absent = all archetypes
+    if (config.feedArchetype && config.feedArchetype !== "any") {
+      if (eventData?.feedArchetype !== config.feedArchetype) {
+        return false;
+      }
+    }
+    // Filter by minimum relevance score (0-1)
+    if (typeof config.feedMinRelevanceScore === "number") {
+      const score = eventData?.relevanceScore as number | undefined;
+      if (score === undefined || score < config.feedMinRelevanceScore) {
+        return false;
+      }
+    }
+  }
+
   return true;
 }
 

@@ -14,11 +14,14 @@ import {
   and,
   desc,
   count,
+  drizzleSql,
+  workspaces,
 } from "@synap/database";
-import { entities } from "@synap/database/schema";
+import { entities, secrets } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { isVaultReference } from "../utils/vault-resolver.js";
+import { encryptServerSide } from "../utils/server-vault.js";
 
 // ─── Shared types ─────────────────────────────────────────────────────────────
 
@@ -279,6 +282,688 @@ export const devplaneRouter = router({
     }),
 
   /**
+   * Seed Synap project data into DevPlane.
+   *
+   * Creates apps, services, packages, features, environments, and recipes
+   * that represent the real Synap infrastructure. Idempotent — skips if
+   * devplane_app entities already exist.
+   */
+  seedSynapProjectData: workspaceProcedure
+    .input(z.object({}).optional())
+    .mutation(async ({ ctx }) => {
+      const existing = await db
+        .select({ n: count() })
+        .from(entities)
+        .where(
+          and(
+            eq(entities.type, "devplane_app"),
+            eq(entities.userId, ctx.userId)
+          )
+        );
+
+      if ((existing[0]?.n ?? 0) > 0) {
+        return { seeded: false, message: "Synap project data already exists" };
+      }
+
+      const now = new Date();
+      const ws = ctx.workspaceId;
+      const uid = ctx.userId;
+
+      const ins = (
+        type: string,
+        title: string,
+        props: Record<string, unknown>
+      ) =>
+        db.insert(entities).values({
+          id: crypto.randomUUID(),
+          userId: uid,
+          workspaceId: ws,
+          profileId: null,
+          type,
+          title,
+          properties: props,
+          createdAt: now,
+          updatedAt: now,
+        });
+
+      // ── Apps ──────────────────────────────────────────────────────────────
+      await ins("devplane_app", "synap-backend", {
+        appName: "synap-backend",
+        repoUrl: "https://github.com/synap-core/synap-backend",
+        techStack: "Node.js, Hono, tRPC, Drizzle ORM, PostgreSQL, pg-boss",
+        port: 4000,
+        deployUrl: "https://api.synap.live",
+        appDescription:
+          "Data Pod API — tRPC routers, Hub Protocol REST, Drizzle schema, pg-boss workers, Socket.IO realtime",
+      });
+      await ins("devplane_app", "synap-app", {
+        appName: "synap-app",
+        repoUrl: "https://github.com/synap-core/synap-app",
+        techStack:
+          "React 19, Tamagui, TanStack Query, Zustand, tRPC 11, pnpm monorepo, Turbo",
+        port: 3000,
+        appDescription:
+          "Frontend monorepo — Hub OS, Studio, Base template, CRM, DevPlane, and all core/feature/view packages",
+      });
+      await ins("devplane_app", "synap-intelligence-service", {
+        appName: "synap-intelligence-service",
+        repoUrl: "https://github.com/synap-core/synap-intelligence-service",
+        techStack:
+          "Node.js, OrchestratorAgent, PersonaAgent, OpenRouter, Langfuse",
+        port: 3001,
+        deployUrl: "https://ai.synap.live",
+        appDescription:
+          "AI Agent Hub — OrchestratorAgent + PersonaAgents, Hub Protocol client, session-scoped memory, 21 sub-routers",
+      });
+      await ins("devplane_app", "browser", {
+        appName: "browser",
+        repoUrl: "https://github.com/synap-core/browser",
+        techStack: "Electron, React 19, Tamagui, Vite, electron-builder",
+        appDescription:
+          "Primary desktop app — 18 apps, bento dashboard, sidebar, entity panel, AI chat, command palette",
+      });
+      await ins("devplane_app", "relay-app", {
+        appName: "relay-app",
+        repoUrl: "https://github.com/synap-core/relay-app",
+        techStack: "Expo, React Native, Tamagui, TanStack Query",
+        appDescription:
+          "Consumer mobile app — capture, proactive feed, personal AI, 5 automation templates, native OS integrations",
+      });
+      await ins("devplane_app", "synap-control-plane-api", {
+        appName: "synap-control-plane-api",
+        repoUrl: "https://github.com/synap-core/synap-control-plane-api",
+        techStack: "Node.js, Hono REST, PostgreSQL, Trigger.dev, Better Auth",
+        port: 3000,
+        deployUrl: "https://api.synap.live",
+        appDescription:
+          "SaaS control plane — pod provisioning, billing, tenant management, CP↔Pod ES256 JWT auth",
+      });
+      await ins("devplane_app", "synap-control-plane-dashboard", {
+        appName: "synap-control-plane-dashboard",
+        repoUrl: "https://github.com/synap-core/synap-control-plane-dashboard",
+        techStack: "React, Vite, TypeScript",
+        port: 5173,
+        deployUrl: "https://dashboard.synap.live",
+        appDescription:
+          "Admin dashboard — pod lifecycle, tenant management, shared pod monitoring, marketplace packs",
+      });
+      await ins("devplane_app", "synap-cli", {
+        appName: "synap-cli",
+        repoUrl: "https://github.com/synap-core/synap-cli",
+        techStack: "Node.js, Commander.js",
+        appDescription:
+          "npx @synap/cli init — three-path flow: connect existing OpenClaw, fresh server, or laptop. Provisions agent + API key via Hub Protocol.",
+      });
+
+      // ── Services ──────────────────────────────────────────────────────────
+      await ins("devplane_service", "PostgreSQL (TimescaleDB 15)", {
+        serviceType: "database",
+        servicePort: 5432,
+        healthUrl: "postgresql://synap:***@localhost:5432/synap",
+      });
+      await ins("devplane_service", "Redis", {
+        serviceType: "cache",
+        servicePort: 6379,
+      });
+      await ins("devplane_service", "MinIO", {
+        serviceType: "storage",
+        servicePort: 9000,
+        healthUrl: "http://localhost:9000/minio/health/live",
+      });
+      await ins("devplane_service", "Typesense", {
+        serviceType: "search",
+        servicePort: 8108,
+        healthUrl: "http://localhost:8108/health",
+      });
+      await ins("devplane_service", "Kratos", {
+        serviceType: "auth",
+        servicePort: 4433,
+        healthUrl: "http://localhost:4433/health/alive",
+      });
+      await ins("devplane_service", "Hydra", {
+        serviceType: "oauth2",
+        servicePort: 4444,
+        healthUrl: "http://localhost:4444/health/alive",
+      });
+      await ins("devplane_service", "Caddy", {
+        serviceType: "reverse-proxy",
+        servicePort: 443,
+      });
+      await ins("devplane_service", "RSSHub", {
+        serviceType: "rss",
+        servicePort: 1200,
+        healthUrl: "http://localhost:1200/healthz",
+      });
+      await ins("devplane_service", "Dozzle", {
+        serviceType: "logs",
+        servicePort: 8080,
+      });
+      await ins("devplane_service", "Prometheus + Grafana", {
+        serviceType: "monitoring",
+        servicePort: 9090,
+        healthUrl: "http://localhost:9090/-/healthy",
+      });
+
+      // ── Packages ──────────────────────────────────────────────────────────
+      const pkgs: Array<[string, string, string]> = [
+        // Backend
+        [
+          "@synap/api",
+          "1.0.0",
+          "tRPC routers, Hub Protocol REST handlers, vault resolver, SSH proxy, recipe runner",
+        ],
+        [
+          "@synap/database",
+          "0.1.1",
+          "Drizzle schema + migrations, repositories, ProfileResolutionService, pg client",
+        ],
+        [
+          "@synap/auth",
+          "1.0.0",
+          "Kratos session client — getKratosSession, getKratosSessionByToken, identity management",
+        ],
+        [
+          "@synap/jobs",
+          "1.0.0",
+          "pg-boss workers — 27 workers + 3 proactive cron jobs (morning briefing, weekly digest, health check)",
+        ],
+        [
+          "@synap/events",
+          "1.0.0",
+          "Typed event chain — 13 event types, delivery router, AutomationTriggerConfig",
+        ],
+        [
+          "@synap/realtime",
+          "1.0.0",
+          "Socket.IO server + Yjs CRDT document sync, presence, collaborative editing",
+        ],
+        [
+          "@synap/search",
+          "1.0.0",
+          "Typesense client — full-text search, entity indexing, collection management",
+        ],
+        [
+          "@synap/storage",
+          "1.0.0",
+          "MinIO client — file upload/download, presigned URLs, bucket management",
+        ],
+        [
+          "@synap/ai",
+          "1.0.0",
+          "AI pipeline — embedding generation, pgvector semantic search, classification",
+        ],
+        [
+          "@synap/feed-service",
+          "1.0.0",
+          "RSS feed aggregation, content parsing, feed worker",
+        ],
+        [
+          "@synap-core/hub-protocol",
+          "1.0.0",
+          "Hub Protocol types — 21 sub-router contracts between IS and backend",
+        ],
+        [
+          "@synap/agent-sdk",
+          "1.0.0",
+          "Agent SDK — PodClient, IS HTTP contract, tool execution helpers",
+        ],
+        // App core
+        [
+          "@synap-core/ui-system",
+          "1.0.0",
+          "Tamagui design system — tokens, primitives (Button, Input, Card), dark/light themes, Fraunces + DM Sans",
+        ],
+        [
+          "@synap-core/cell-runtime",
+          "1.0.0",
+          "Cell registry singleton + CellRenderer dispatcher — BentoCellHost, PanelCellHost, PageCellHost",
+        ],
+        [
+          "@synap-core/capabilities",
+          "1.0.0",
+          "Widget types manifest — 60+ built-in cells, view type definitions, contracts",
+        ],
+        [
+          "@synap-core/channels",
+          "1.0.0",
+          "Channel system — 6 types (ai_thread, branch, entity_comments, document_review, view_discussion, direct)",
+        ],
+        [
+          "@synap-core/document",
+          "1.0.0",
+          "Document editor — Tiptap 3 / ProseMirror, collaborative editing, slash commands",
+        ],
+        [
+          "@synap-core/notifications",
+          "1.0.0",
+          "Notification system — 27 types, NotificationBell, toast provider, lifecycle management",
+        ],
+        [
+          "@synap-core/template-engine",
+          "1.0.0",
+          "Workspace templates — 6 presets (second-brain, agent-fleet, startup-os…), mergePresetAndAddons",
+        ],
+        [
+          "@synap-core/connectors",
+          "1.0.0",
+          "Nango OAuth connectors — 39 integrations, CP→Pod pull-sync",
+        ],
+        [
+          "@synap-core/marketplace",
+          "1.0.0",
+          "CP marketplace browser — search, category tabs, install pipeline, 13 pack types",
+        ],
+        [
+          "@synap-core/native-os",
+          "1.0.0",
+          "Native OS umbrella — 7 sub-packages: shared-storage, share, spotlight, intents, widgets, live-updates, vision",
+        ],
+        // App features
+        [
+          "@synap-core/ai-chat",
+          "1.0.0",
+          "AI chat UI — SSE streaming, branch management, context items, history compaction",
+        ],
+        [
+          "@synap-core/capture-pipeline",
+          "1.0.0",
+          "Shared capture types, CaptureClient adapter, AI enrichment, 7 capture surfaces",
+        ],
+        [
+          "@synap-core/onboarding",
+          "1.0.0",
+          "Story-based onboarding — StoryOnboardingFlow, 6 presets, 10 feature addons, BrowserNewSpaceDialog",
+        ],
+        [
+          "@synap-core/proposals",
+          "1.0.0",
+          "Governance proposals UI — ProposalsList, ProposalDetail, timeline, inbox integration",
+        ],
+        [
+          "@synap-core/workflows",
+          "1.0.0",
+          "Automations + commands — flow editor, trigger→step chain, sandbox execution",
+        ],
+        [
+          "@synap-core/whiteboard",
+          "1.0.0",
+          "Entity-aware spatial canvas — tldraw 2.0, entity pins, collaborative cursors",
+        ],
+        [
+          "@synap-core/intelligence",
+          "1.0.0",
+          "Intelligence app — agent detail, usage stats, skills list, proposals badge, recent chats",
+        ],
+        [
+          "@synap/extension",
+          "1.0.0",
+          "Chrome MV3 browser extension — Side Panel API, tab import, quick capture, Hub Protocol client",
+        ],
+        // Views
+        [
+          "@synap/view-bento",
+          "1.0.0",
+          "Bento dashboard — 12-col react-grid-layout, 22 widget types, edit mode, widget error boundaries",
+        ],
+        [
+          "@synap/view-kanban",
+          "1.0.0",
+          "Kanban view — drag-drop, swimlanes, groupBy field, FieldRenderer",
+        ],
+        [
+          "@synap/view-calendar",
+          "1.0.0",
+          "Calendar view — month/week/day modes, event drag-drop, recurring events",
+        ],
+        [
+          "@synap/view-table",
+          "1.0.0",
+          "Table view — sortable columns, inline editing, filter bar, bulk actions",
+        ],
+        [
+          "@synap/view-timeline",
+          "1.0.0",
+          "Timeline view — Gantt-like, date ranges, dependency lines (planned)",
+        ],
+        [
+          "@synap/view-graph",
+          "1.0.0",
+          "Graph view — force/tree/radial layouts, entity relationships, D3",
+        ],
+      ];
+
+      for (const [name, version, description] of pkgs) {
+        await ins("devplane_package", name, {
+          npmName: name,
+          packageVersion: version,
+          packageDescription: description,
+        });
+      }
+
+      // ── Features ──────────────────────────────────────────────────────────
+      const features: Array<[string, string, string, string]> = [
+        // [title, status, linkedAppSlugs, description]
+        [
+          "AI Chat",
+          "done",
+          "synap-app,browser,relay-app",
+          "SSE streaming chat with OrchestratorAgent + PersonaAgents, branch management, context items, history compaction at 12k tokens",
+        ],
+        [
+          "Whiteboard",
+          "done",
+          "browser",
+          "Entity-aware spatial canvas using tldraw 2.0 — pin entities, draw freely, collaborative cursors via Yjs",
+        ],
+        [
+          "Kanban View",
+          "done",
+          "synap-app,browser",
+          "Grouped entity list with drag-drop, swimlanes, groupBy any property, FieldRenderer cards",
+        ],
+        [
+          "Calendar View",
+          "done",
+          "synap-app,browser",
+          "Month/week/day calendar for event entities — drag-drop, recurring events, dateRange properties",
+        ],
+        [
+          "Bento Dashboard",
+          "done",
+          "synap-app,browser",
+          "12-col react-grid-layout dashboard — 22 widget types, edit mode, per-entity dashboards, AI-composable",
+        ],
+        [
+          "Table View",
+          "done",
+          "synap-app,browser",
+          "Sortable/filterable table — inline editing, bulk actions, column resize, FieldRenderer cells",
+        ],
+        [
+          "Graph View",
+          "done",
+          "synap-app,browser",
+          "Knowledge graph visualization — force/tree/radial layouts, typed relationships, D3",
+        ],
+        [
+          "Document Editor",
+          "done",
+          "synap-app,browser",
+          "Tiptap 3 / ProseMirror editor — slash commands, collaborative editing via Yjs, entity embeds",
+        ],
+        [
+          "Capture Pipeline",
+          "done",
+          "browser,relay-app,synap-app",
+          "7-surface unified capture — AI classifies + enriches entities, streaming, HTML parsing, refine flow",
+        ],
+        [
+          "Story Onboarding",
+          "done",
+          "browser,relay-app",
+          "StoryOnboardingFlow — 6 presets + 10 feature addons → workspace proposal creation",
+        ],
+        [
+          "Proposals & Governance",
+          "done",
+          "synap-app,browser",
+          "AI writes → checkPermissionOrPropose → user approves. Event chain, audit log, auto-approve whitelist",
+        ],
+        [
+          "Workflows & Automations",
+          "done",
+          "synap-app,browser",
+          "Trigger→step chain with 5 node types — entity triggers, skill steps, condition branches, vault resolution",
+        ],
+        [
+          "Notifications",
+          "done",
+          "synap-app,browser,relay-app",
+          "27 registry types — NotificationBell, toast, banner, lifecycle (actioned on approve/reject), proactive integration",
+        ],
+        [
+          "Connectors (Nango)",
+          "in-progress",
+          "synap-app",
+          "39 OAuth integrations via Nango self-hosted — CP→Pod pull-sync, source tracking on entities",
+        ],
+        [
+          "Marketplace",
+          "done",
+          "browser",
+          "CP marketplace — 13 pack types (10 profile + 3 view), composesFrom resolution, install pipeline",
+        ],
+        [
+          "Browser Extension",
+          "done",
+          "synap-app",
+          "Chrome MV3 Side Panel — tab import onboarding, quick capture, Hub Protocol REST client, service worker auth",
+        ],
+        [
+          "Relay Mobile App",
+          "done",
+          "relay-app",
+          "Expo RN — 3-surface feed model (personal chat/proactive feed/notifications), 5 automation templates",
+        ],
+        [
+          "DevPlane",
+          "in-progress",
+          "devplane",
+          "Infra management app — apps, services, packages, environments, SSH terminal, recipe runner, prompt snippets",
+        ],
+        [
+          "MCP Integration",
+          "in-progress",
+          "synap-intelligence-service,browser",
+          "MCP server support — hidden from default UX, adminOnly gate in settings, tool discovery",
+        ],
+        [
+          "Background Agents",
+          "in-progress",
+          "synap-intelligence-service",
+          "Long-running autonomous agents — heartbeat, pg-boss orchestration, proactive intelligence layer",
+        ],
+        [
+          "Native OS Integrations",
+          "in-progress",
+          "relay-app",
+          "7 sub-packages — share sheet, Spotlight search, home screen widgets, Live Activities, vision capture",
+        ],
+        [
+          "Timeline View",
+          "planned",
+          "synap-app,browser",
+          "Gantt-like timeline — date ranges, dependency lines, groupBy, milestone markers",
+        ],
+      ];
+
+      for (const [title, status, linkedAppSlugs, desc] of features) {
+        await ins("devplane_feature", title, {
+          featureStatus: status,
+          featureDescription: desc,
+          linkedAppSlugs,
+        });
+      }
+
+      // ── Environments (envHost intentionally blank — fill in via UI) ────────
+      await ins("devplane_environment", "Production Pod", {
+        envName: "prod",
+        linkedAppSlug: "synap-backend",
+      });
+      await ins("devplane_environment", "Intelligence Service", {
+        envName: "prod",
+        linkedAppSlug: "synap-intelligence-service",
+      });
+      await ins("devplane_environment", "Control Plane", {
+        envName: "prod",
+        linkedAppSlug: "synap-control-plane-api",
+      });
+      await ins("devplane_environment", "Local Dev", {
+        envName: "dev",
+      });
+
+      // ── Recipes ───────────────────────────────────────────────────────────
+      await ins("devplane_recipe", "Deploy Data Pod", {
+        recipeName: "Deploy Data Pod",
+        recipeDescription:
+          "Pull new backend image, run DB migrations, canary-validate, then swap production. Uses update-pod.sh canary-first strategy.",
+        recipeTemplate: "docker-compose",
+        onFailure: "stop",
+        recipeSteps: JSON.stringify([
+          {
+            name: "Pull images",
+            command:
+              "docker compose -p synap-backend -f deploy/docker-compose.yml pull backend realtime backend-migrate",
+          },
+          {
+            name: "Run migrations",
+            command:
+              "docker compose -p synap-backend -f deploy/docker-compose.yml run --rm backend-migrate",
+          },
+          {
+            name: "Full canary update",
+            command: "./deploy/update-pod.sh latest",
+          },
+          {
+            name: "Health check",
+            command:
+              "wget -q -O /dev/null --timeout=10 http://localhost:4000/health && echo 'OK'",
+          },
+        ]),
+      });
+      await ins("devplane_recipe", "Deploy Intelligence Service", {
+        recipeName: "Deploy Intelligence Service",
+        recipeDescription:
+          "Pull IS Docker image, run migrations, restart service, verify health endpoint.",
+        recipeTemplate: "docker-compose",
+        onFailure: "stop",
+        recipeSteps: JSON.stringify([
+          {
+            name: "Pull image",
+            command: "docker compose pull --ignore-pull-failures",
+          },
+          {
+            name: "Run migrations",
+            command: "docker compose run --rm --no-deps intelligence-migrate",
+          },
+          {
+            name: "Restart service",
+            command:
+              "docker compose --profile standalone up -d --force-recreate --no-deps intelligence-service",
+          },
+          {
+            name: "Health check",
+            command:
+              "docker compose exec -T intelligence-service wget -qO- http://127.0.0.1:3001/health",
+          },
+        ]),
+      });
+      await ins("devplane_recipe", "Deploy Control Plane", {
+        recipeName: "Deploy Control Plane",
+        recipeDescription:
+          "Build CP Docker image from latest git, run migrations, redeploy API container.",
+        recipeTemplate: "docker-compose",
+        onFailure: "stop",
+        recipeSteps: JSON.stringify([
+          { name: "Pull latest code", command: "git pull" },
+          {
+            name: "Build Docker image",
+            command: "docker build -t synap-control-plane:latest .",
+          },
+          { name: "Run migrations", command: "./synap-cp migrate" },
+          {
+            name: "Redeploy API",
+            command:
+              "docker compose -f docker-compose.prod.yml up -d --force-recreate api",
+          },
+          { name: "Health check", command: "./synap-cp health" },
+        ]),
+      });
+      await ins("devplane_recipe", "Run DB Migrations", {
+        recipeName: "Run DB Migrations",
+        recipeDescription:
+          "Pull migrate image and run pending Drizzle migrations on the pod database.",
+        recipeTemplate: "docker-compose",
+        onFailure: "stop",
+        recipeSteps: JSON.stringify([
+          {
+            name: "Pull migrate image",
+            command: "docker compose pull backend-migrate",
+          },
+          {
+            name: "Run migrations",
+            command: "docker compose run --rm backend-migrate",
+          },
+        ]),
+      });
+      await ins("devplane_recipe", "Build Browser App", {
+        recipeName: "Build Browser App",
+        recipeDescription:
+          "Build Electron desktop app distributables for all platforms.",
+        recipeTemplate: "custom",
+        onFailure: "continue",
+        recipeSteps: JSON.stringify([
+          {
+            name: "Install dependencies",
+            command: "pnpm install --frozen-lockfile",
+          },
+          { name: "Build Mac", command: "pnpm dist:mac" },
+          {
+            name: "Build Windows",
+            command: "pnpm dist:win",
+            continueOnError: true,
+          },
+        ]),
+      });
+      await ins("devplane_recipe", "Health Check All Services", {
+        recipeName: "Health Check All Services",
+        recipeDescription:
+          "Verify all production services are responding. Runs checks in sequence — stops on first failure.",
+        recipeTemplate: "custom",
+        onFailure: "continue",
+        recipeSteps: JSON.stringify([
+          {
+            name: "Pod API",
+            command:
+              "wget -q -O /dev/null --timeout=5 http://localhost:4000/health && echo 'Pod: OK'",
+          },
+          {
+            name: "Intelligence Service",
+            command:
+              "wget -qO- --timeout=5 http://localhost:3001/health && echo 'IS: OK'",
+          },
+          { name: "Control Plane", command: "./synap-cp health" },
+          {
+            name: "Typesense",
+            command: "wget -qO- --timeout=5 http://localhost:8108/health",
+          },
+          {
+            name: "MinIO",
+            command:
+              "wget -qO- --timeout=5 http://localhost:9000/minio/health/live && echo 'MinIO: OK'",
+          },
+        ]),
+      });
+
+      logger.info(
+        { workspaceId: ctx.workspaceId },
+        "Seeded Synap project data into DevPlane"
+      );
+
+      return {
+        seeded: true,
+        counts: {
+          apps: 8,
+          services: 10,
+          packages: pkgs.length,
+          features: features.length,
+          environments: 4,
+          recipes: 6,
+        },
+      };
+    }),
+
+  /**
    * Seed default prompt snippets for the current workspace.
    *
    * Idempotent — checks if any snippets already exist before creating.
@@ -413,5 +1098,141 @@ export const devplaneRouter = router({
       );
 
       return { seeded: true, count: defaults.length };
+    }),
+
+  /**
+   * Save an AI provider API key for terminal env injection.
+   *
+   * Stores the key in a server-side vault secret and saves the vault reference
+   * (never the plaintext key) in workspace settings under:
+   *   settings.devplane.providers.{providerType}.apiKeyVaultRef
+   *
+   * Provider types and their PTY env vars:
+   *   anthropic   → ANTHROPIC_API_KEY
+   *   openrouter  → OPENROUTER_API_KEY
+   *   openai      → OPENAI_API_KEY
+   */
+  saveProviderApiKey: workspaceProcedure
+    .input(
+      z.object({
+        providerType: z.enum(["anthropic", "openrouter", "openai"]),
+        apiKey: z.string().min(1),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const blob = encryptServerSide(input.apiKey);
+      const secretName = `devplane_provider_${input.providerType}_${ctx.workspaceId}`;
+
+      const existing = await db.query.secrets.findFirst({
+        where: and(
+          eq(secrets.userId, ctx.userId),
+          eq(secrets.name, secretName)
+        ),
+        columns: { id: true },
+      });
+
+      let secretId: string;
+      if (existing) {
+        await db
+          .update(secrets)
+          .set({
+            encryptedData: blob.encryptedData,
+            iv: blob.iv,
+            authTag: blob.authTag,
+            updatedAt: new Date(),
+          })
+          .where(eq(secrets.id, existing.id));
+        secretId = existing.id;
+      } else {
+        secretId = crypto.randomUUID();
+        await db.insert(secrets).values({
+          id: secretId,
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId,
+          name: secretName,
+          type: "api_key",
+          encryptedData: blob.encryptedData,
+          iv: blob.iv,
+          authTag: blob.authTag,
+          encryptionMode: "server",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }
+
+      // Store vault ref namespaced by userId so each workspace member has independent keys
+      const vaultRef = `vault://${secretId}`;
+      await db
+        .update(workspaces)
+        .set({
+          settings: drizzleSql`settings || jsonb_build_object(
+            'devplane', COALESCE(settings->'devplane', '{}'::jsonb) || jsonb_build_object(
+              'userProviders', COALESCE(settings->'devplane'->'userProviders', '{}'::jsonb) || jsonb_build_object(
+                ${ctx.userId}, COALESCE(settings->'devplane'->'userProviders'->${ctx.userId}, '{}'::jsonb) || jsonb_build_object(
+                  ${input.providerType}, jsonb_build_object('apiKeyVaultRef', ${vaultRef}::text)
+                )
+              )
+            )
+          )`,
+        })
+        .where(eq(workspaces.id, ctx.workspaceId));
+
+      logger.info(
+        {
+          workspaceId: ctx.workspaceId,
+          userId: ctx.userId,
+          providerType: input.providerType,
+        },
+        "Provider API key saved"
+      );
+
+      return { ok: true };
+    }),
+
+  /**
+   * Get which AI providers have API keys configured for the current user (without exposing keys).
+   */
+  getProviderConfigs: workspaceProcedure
+    .input(z.object({}).optional())
+    .query(async ({ ctx }) => {
+      const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, ctx.workspaceId),
+        columns: { settings: true },
+      });
+
+      const settings = (workspace?.settings ?? {}) as Record<string, unknown>;
+      const devplane = (settings["devplane"] ?? {}) as Record<string, unknown>;
+      // Per-user providers (each workspace member has independent keys)
+      const userProviders = (devplane["userProviders"] ?? {}) as Record<
+        string,
+        Record<string, { apiKeyVaultRef?: string }>
+      >;
+      const myProviders = (userProviders[ctx.userId] ?? {}) as Record<
+        string,
+        { apiKeyVaultRef?: string }
+      >;
+
+      return {
+        anthropic: {
+          configured: isVaultReference(
+            myProviders["anthropic"]?.apiKeyVaultRef ?? ""
+          ),
+        },
+        openrouter: {
+          configured: isVaultReference(
+            myProviders["openrouter"]?.apiKeyVaultRef ?? ""
+          ),
+        },
+        openai: {
+          configured: isVaultReference(
+            myProviders["openai"]?.apiKeyVaultRef ?? ""
+          ),
+        },
+        aiTerminal: (devplane["aiTerminal"] ?? null) as {
+          tool?: string;
+          linkedProvider?: string;
+          customCommand?: string;
+        } | null,
+      };
     }),
 });

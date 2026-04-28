@@ -74,6 +74,10 @@ export const OperationalEventTypes = {
 
   // ── Channel messages ─────────────────────────────────────────────────────
   CHANNEL_MESSAGE_CREATED: "channel_message.created.completed",
+
+  // ── Feed items ───────────────────────────────────────────────────────────
+  /** Fires once per entity created from the feed pipeline (post-classification, post-threshold). */
+  FEED_NEW_ITEM: "feed.new_item.completed",
 } as const;
 
 export type OperationalEventType =

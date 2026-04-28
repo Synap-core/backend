@@ -81,6 +81,12 @@ export interface AutomationTriggerConfig {
   // ── proactive domain filters ───────────────────────────────────────────
   /** Filter by proactive message type ("morning_briefing" | "weekly_digest" | "insight" | "any") */
   proactiveType?: string;
+
+  // ── feed domain filters ────────────────────────────────────────────────
+  /** Only fire for items from this archetype ("leads" | "hiring" | "investors" | "trends" | "competitors" | "press") */
+  feedArchetype?: string;
+  /** Minimum relevance score (0-1) — items below this score are skipped */
+  feedMinRelevanceScore?: number;
 }
 
 export interface AutomationNodeBase {

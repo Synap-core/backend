@@ -1313,6 +1313,8 @@ declare const OperationalEventTypes: {
 	readonly PROACTIVE_POST: "proactive.post.completed";
 	readonly NOTIFICATION_CREATED: "notification.created";
 	readonly CHANNEL_MESSAGE_CREATED: "channel_message.created.completed";
+	/** Fires once per entity created from the feed pipeline (post-classification, post-threshold). */
+	readonly FEED_NEW_ITEM: "feed.new_item.completed";
 };
 export type OperationalEventType = (typeof OperationalEventTypes)[keyof typeof OperationalEventTypes];
 /**
@@ -2776,20 +2778,70 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		setupFeed: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				sources: {
-					url: string;
-					name: string;
-					provider?: "cpproxy" | "rss-direct" | undefined;
-					topics?: string[] | undefined;
-				}[];
-				name?: string | undefined;
-				feedType?: string | undefined;
+				archetype: "leads" | "hiring" | "investors" | "trends" | "competitors" | "press";
+				criteria?: string | undefined;
+				scheduleCron?: string | undefined;
 				relevanceThreshold?: number | undefined;
+				name?: string | undefined;
 			};
 			output: {
 				channelId: string;
-				createdSourceConfigIds: string[];
-				createdSubscriptionIds: string[];
+				subscriptionId: string | null;
+			};
+			meta: object;
+		}>;
+		getFeedChannel: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				archetype?: "leads" | "hiring" | "investors" | "trends" | "competitors" | "press" | undefined;
+			};
+			output: {
+				channel: null;
+				subscriptions: never[];
+			} | {
+				channel: {
+					userId: string;
+					workspaceId: string | null;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					metadata: unknown;
+					title: string | null;
+					externalSource: string | null;
+					status: "active" | "merged" | "archived";
+					scope: "user" | "workspace" | "pod";
+					channelType: "external" | "thread" | "feed" | "agent_collab";
+					feedScope: "user" | "workspace" | null;
+					contextObjectType: string | null;
+					contextObjectId: string | null;
+					threadKind: "workspace" | "personal" | "entity" | "document" | "view" | "project" | "task" | "branch" | null;
+					parentChannelId: string | null;
+					branchedFromMessageId: string | null;
+					branchPurpose: string | null;
+					agentConfig: unknown;
+					mcpServerIds: string[] | null;
+					assignedAgentId: string | null;
+					senderAgentId: string | null;
+					contextSummary: string | null;
+					resultSummary: string | null;
+					mergedIntoStateId: string | null;
+					externalChannelId: string | null;
+					mergedAt: Date | null;
+				};
+				subscriptions: {
+					userId: string;
+					workspaceId: string | null;
+					id: string;
+					errorMessage: string | null;
+					updatedAt: Date;
+					createdAt: Date;
+					status: string;
+					lastFetchedAt: Date | null;
+					feedId: string;
+					sourceConfigId: string;
+					params: Record<string, unknown>;
+					cursor: string | null;
+					lastItemAt: Date | null;
+				}[];
 			};
 			meta: object;
 		}>;
@@ -9877,6 +9929,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description: string | null;
 				config: Record<string, unknown>;
 				enabled: boolean;
+				metadata: Record<string, unknown> | null;
 				lastTestedAt: Date | null;
 				lastTestStatus: string | null;
 				lastTestError: string | null;
@@ -9911,6 +9964,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				updatedAt: Date;
 				createdAt: Date;
+				metadata: Record<string, unknown> | null;
 				description: string | null;
 				enabled: boolean;
 				providerType: string;
@@ -9940,6 +9994,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description: string | null;
 				config: Record<string, unknown>;
 				enabled: boolean;
+				metadata: Record<string, unknown> | null;
 				lastTestedAt: Date | null;
 				lastTestStatus: string | null;
 				lastTestError: string | null;
@@ -10343,6 +10398,26 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 			meta: object;
 		}>;
+		seedSynapProjectData: import("@trpc/server").TRPCMutationProcedure<{
+			input: Record<string, never> | undefined;
+			output: {
+				seeded: boolean;
+				message: string;
+				counts?: undefined;
+			} | {
+				seeded: boolean;
+				counts: {
+					apps: number;
+					services: number;
+					packages: number;
+					features: number;
+					environments: number;
+					recipes: number;
+				};
+				message?: undefined;
+			};
+			meta: object;
+		}>;
 		seedDefaultSnippets: import("@trpc/server").TRPCMutationProcedure<{
 			input: Record<string, never> | undefined;
 			output: {
@@ -10353,6 +10428,36 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				seeded: boolean;
 				count: number;
 				message?: undefined;
+			};
+			meta: object;
+		}>;
+		saveProviderApiKey: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				providerType: "anthropic" | "openrouter" | "openai";
+				apiKey: string;
+			};
+			output: {
+				ok: boolean;
+			};
+			meta: object;
+		}>;
+		getProviderConfigs: import("@trpc/server").TRPCQueryProcedure<{
+			input: Record<string, never> | undefined;
+			output: {
+				anthropic: {
+					configured: boolean;
+				};
+				openrouter: {
+					configured: boolean;
+				};
+				openai: {
+					configured: boolean;
+				};
+				aiTerminal: {
+					tool?: string;
+					linkedProvider?: string;
+					customCommand?: string;
+				} | null;
 			};
 			meta: object;
 		}>;
