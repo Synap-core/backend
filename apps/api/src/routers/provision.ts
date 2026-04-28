@@ -29,7 +29,6 @@ import {
   createAndVerifyHubInboundKey,
   toRegistrationTrace,
   verifyCpJwtWithTrust,
-  verifyCpJwt,
 } from "@synap/api";
 import {
   getDb,
@@ -86,13 +85,11 @@ provisionRouter.post("/seed-trust", async (c) => {
     return c.json({ error: "Missing or invalid Authorization header" }, 401);
   }
   const token = authHeader.slice(7);
+  if (token !== provisioningToken) {
+    logger.warn("seed-trust rejected: invalid PROVISIONING_TOKEN");
+    return c.json({ error: "Invalid provisioning token" }, 401);
+  }
 
-  // Primary auth: provisioning token (shared secret set by install.sh).
-  // Fallback auth: CP-signed JWT with type="provision" — allows the admin
-  // dashboard to re-establish trust on pods provisioned before the token
-  // flow was fixed, without needing to know the pod's PROVISIONING_TOKEN.
-  // We verify the JWT signature via JWKS but do NOT require the issuer to
-  // be in trusted_issuers (that's what we're about to establish).
   const body = await c.req.json().catch(() => null);
   const parsed = z.object({ issuerUrl: z.string().url() }).safeParse(body);
   if (!parsed.success) {
@@ -102,24 +99,6 @@ provisionRouter.post("/seed-trust", async (c) => {
     );
   }
   const { issuerUrl } = parsed.data;
-
-  if (token !== provisioningToken) {
-    // Try JWT fallback: verify signature against the candidate issuerUrl's JWKS.
-    const jwtPayload = await verifyCpJwt<{ type?: string }>(
-      token,
-      issuerUrl
-    ).catch(() => null);
-    if (!jwtPayload || jwtPayload.type !== "provision") {
-      logger.warn(
-        "seed-trust rejected: token is neither a valid PROVISIONING_TOKEN nor a valid CP provision JWT"
-      );
-      return c.json({ error: "Invalid provisioning token" }, 401);
-    }
-    logger.info(
-      { issuerUrl },
-      "seed-trust: authenticated via CP provision JWT (fallback path)"
-    );
-  }
 
   try {
     // 1. Seed the CP into trusted_issuers
