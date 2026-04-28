@@ -4982,6 +4982,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		listRegisteredAgents: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				agents: {
+					name: string;
+					id: string;
+					description: string | null;
+					slug: string;
+					icon: string | null;
+					capabilities: string[] | null;
+					ownerType: "user" | "system" | "provider";
+				}[];
+			};
+			meta: object;
+		}>;
 		memoryFacts: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				limit?: number | undefined;

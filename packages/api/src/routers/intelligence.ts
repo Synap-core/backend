@@ -23,6 +23,7 @@ import {
   apiKeys,
   mcpServers,
   compactedStates,
+  agents,
   type NewIntelligenceCommand,
   type AgentMetadata,
 } from "@synap/database/schema";
@@ -617,6 +618,31 @@ export const intelligenceRouter = router({
       // Hub unreachable or no service configured — show empty state
       return { agents: [] };
     }
+  }),
+
+  /**
+   * List all active agents registered in this pod.
+   * Returns system agents + user-owned agents visible to the current user.
+   * Used by the frontend to show the agent launcher in the channels sidebar.
+   */
+  listRegisteredAgents: workspaceProcedure.query(async ({ ctx }) => {
+    const rows = await db.query.agents.findMany({
+      where: and(
+        eq(agents.active, true),
+        or(eq(agents.ownerType, "system"), eq(agents.userId, ctx.userId ?? ""))
+      ),
+      columns: {
+        id: true,
+        slug: true,
+        name: true,
+        description: true,
+        icon: true,
+        capabilities: true,
+        ownerType: true,
+      },
+      orderBy: [agents.slug],
+    });
+    return { agents: rows };
   }),
 
   // ── Memory Proxy ─────────────────────────────────────────────────────────

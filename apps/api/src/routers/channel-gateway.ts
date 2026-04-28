@@ -27,7 +27,8 @@ import {
 } from "@synap/database/schema";
 import {
   resolveIntelligenceService,
-  ensureDefaultAgentChannel,
+  ensureAgentThread,
+  getAgentIdBySlug,
 } from "@synap/api";
 
 const logger = createLogger({ module: "channel-gateway-rest" });
@@ -227,10 +228,9 @@ channelGatewayApp.post("/inbound", async (c) => {
   let threadId: string = defaultChannelId ?? "";
 
   if (!threadId) {
-    const defaultAgentChannel = await ensureDefaultAgentChannel(
-      userId,
-      workspaceId ?? undefined
-    );
+    const orchestratorId = await getAgentIdBySlug("orchestrator");
+    if (!orchestratorId) throw new Error("Orchestrator agent not found");
+    const defaultAgentChannel = await ensureAgentThread(userId, orchestratorId);
     threadId = defaultAgentChannel.id;
   }
 
