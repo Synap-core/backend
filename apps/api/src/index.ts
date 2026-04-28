@@ -918,6 +918,10 @@ import fs from "fs";
 // Redirect /admin to /admin/
 app.get("/admin", (c) => c.redirect("/admin/"));
 
+// Redirect /openclaw to /admin/openclaw
+app.get("/openclaw", (c) => c.redirect("/admin/openclaw"));
+app.get("/openclaw/", (c) => c.redirect("/admin/openclaw"));
+
 // Serve static files from the admin-ui build
 app.use(
   "/admin/*",
