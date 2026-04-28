@@ -93,7 +93,13 @@ export class ProfileResolutionService {
     );
     if (profile) return profile;
 
-    // Try by ID
+    // Try by ID — only if the identifier looks like a UUID to avoid a
+    // guaranteed-failing query (and confusing postgres errors) when a slug
+    // is passed that simply doesn't exist in the DB yet.
+    const UUID_RE =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!UUID_RE.test(identifier)) return null;
+
     profile = await this.profileRepo.getById(identifier);
     if (profile && (await this.isAccessible(profile, userId, workspaceId))) {
       return profile;
