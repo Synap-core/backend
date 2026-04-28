@@ -22,7 +22,7 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { randomUUID, randomBytes } from "crypto";
+import { randomUUID, randomBytes, timingSafeEqual } from "crypto";
 import bcrypt from "bcrypt";
 import { createLogger } from "@synap-core/core";
 import {
@@ -85,7 +85,13 @@ provisionRouter.post("/seed-trust", async (c) => {
     return c.json({ error: "Missing or invalid Authorization header" }, 401);
   }
   const token = authHeader.slice(7);
-  if (token !== provisioningToken) {
+  // Timing-safe comparison prevents token oracle attacks via response latency
+  const tokenBuf = Buffer.from(token);
+  const expectedBuf = Buffer.from(provisioningToken);
+  const tokenValid =
+    tokenBuf.length === expectedBuf.length &&
+    timingSafeEqual(tokenBuf, expectedBuf);
+  if (!tokenValid) {
     logger.warn("seed-trust rejected: invalid PROVISIONING_TOKEN");
     return c.json({ error: "Invalid provisioning token" }, 401);
   }
@@ -1269,6 +1275,117 @@ provisionRouter.get("/status", async (c) => {
     logger.error({ err }, "Provision status error");
     return c.json({ error: "Internal server error" }, 500);
   }
+});
+
+// ─── GET /api/provision/debug ────────────────────────────────────────────────
+//
+// Operator debug endpoint: returns pod trust state, Kratos health, and token
+// configuration without exposing secrets. Requires a valid CP-signed JWT —
+// only the Control Plane admin dashboard should call this.
+
+provisionRouter.get("/debug", async (c) => {
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    return c.json({ error: "PUBLIC_URL not configured" }, 500);
+  }
+
+  const authHeader = c.req.header("Authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return c.json({ error: "Missing Authorization header" }, 401);
+  }
+  const token = authHeader.slice(7);
+  const payload = await verifyCpJwtWithTrust(token, { audience: podPublicUrl });
+  if (!payload) {
+    return c.json(
+      { error: "CP not trusted — call /api/provision/seed-trust first" },
+      401
+    );
+  }
+
+  const kratosAdminUrl =
+    process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
+
+  // Probe Kratos admin health
+  let kratosHealthy = false;
+  let kratosVersion: string | null = null;
+  let kratosError: string | null = null;
+  try {
+    const healthRes = await fetch(`${kratosAdminUrl}/admin/version`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (healthRes.ok) {
+      const data = (await healthRes.json()) as { version?: string };
+      kratosHealthy = true;
+      kratosVersion = data.version ?? null;
+    } else {
+      kratosError = `HTTP ${healthRes.status}`;
+    }
+  } catch (err) {
+    kratosError = err instanceof Error ? err.message : String(err);
+  }
+
+  // Read trusted issuers
+  let trustedIssuers: Array<{
+    issuerUrl: string;
+    status: string;
+    isBuiltIn: boolean;
+    createdAt: string;
+  }> = [];
+  let workspaceControlPlane: Record<string, unknown> | null = null;
+  try {
+    const svc = new TrustedIssuerService();
+    const issuers = await svc.list();
+    trustedIssuers = issuers.map((i) => ({
+      issuerUrl: i.issuerUrl,
+      status: i.status,
+      isBuiltIn: i.isBuiltIn ?? false,
+      createdAt: i.createdAt?.toISOString() ?? "",
+    }));
+
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cp = (ws?.settings as Record<string, unknown> | null)
+      ?.controlPlane as Record<string, unknown> | undefined;
+    if (cp) {
+      workspaceControlPlane = {
+        url: cp.url,
+        podId: cp.podId,
+        connectedAt: cp.connectedAt,
+        lastPingAt: cp.lastPingAt,
+      };
+    }
+  } catch (err) {
+    logger.warn({ err }, "debug: could not read trusted issuers or workspace");
+  }
+
+  const provToken = process.env.PROVISIONING_TOKEN;
+
+  return c.json({
+    pod: {
+      publicUrl: podPublicUrl,
+      sharedPodMode: process.env.SHARED_POD_MODE === "true",
+      kratosAdminUrl,
+    },
+    trust: {
+      cpTrusted: trustedIssuers.some(
+        (i) => i.status === "approved" && i.isBuiltIn
+      ),
+      issuers: trustedIssuers,
+      workspaceControlPlane,
+    },
+    kratos: {
+      healthy: kratosHealthy,
+      version: kratosVersion,
+      error: kratosError,
+    },
+    provisioningToken: {
+      configured: !!provToken,
+      // First 8 chars so operator can verify it matches the CP without exposing the full secret
+      prefix: provToken ? provToken.slice(0, 8) + "..." : null,
+    },
+  });
 });
 
 // ─── GET /api/provision/diagnose-intelligence ────────────────────────────────

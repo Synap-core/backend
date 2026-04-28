@@ -55,6 +55,7 @@ import {
   rateLimitMiddleware,
   aiRateLimitMiddleware,
   requestSizeLimit,
+  handshakeRateLimitMiddleware,
 } from "./middleware/security.js";
 import { eventStreamManager, setupEventBroadcasting } from "@synap/api";
 import { authMiddleware } from "@synap/auth";
@@ -364,6 +365,7 @@ app.post("/api/auth/token-exchange", async (c) => {
 // Flow:
 //   Browser → POST /pods/handshake (control plane) → ES256 JWT
 //   Browser → POST ${podUrl}/api/handshake { token } (this endpoint) → Kratos session cookie
+app.use("/api/handshake", handshakeRateLimitMiddleware);
 app.post("/api/handshake", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
@@ -468,6 +470,16 @@ app.post("/api/handshake", async (c) => {
           "Handshake: found existing Kratos identity"
         );
       }
+    } else {
+      const errBody = await listResp.text().catch(() => "");
+      apiLogger.error(
+        {
+          status: listResp.status,
+          body: errBody.slice(0, 500),
+          kratosAdminUrl,
+        },
+        "Handshake: Kratos identity lookup failed — Kratos may be unreachable or misconfigured"
+      );
     }
 
     // ──────────────────────────────────────────────────────────────────

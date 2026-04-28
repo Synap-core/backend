@@ -119,6 +119,36 @@ export const aiRateLimitMiddleware = rateLimiter({
 });
 
 /**
+ * Handshake Rate Limiting Middleware
+ *
+ * /api/handshake creates Kratos sessions — stricter than the global limit.
+ * 20 attempts per 15 minutes per IP prevents brute-force session minting.
+ */
+export const handshakeRateLimitMiddleware = rateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-7",
+  keyGenerator: (c) => {
+    const ip =
+      c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
+      c.req.header("x-real-ip") ||
+      "unknown";
+    if (process.env.NODE_ENV === "development") return "handshake-dev-bypass";
+    return `handshake:${ip}`;
+  },
+  handler: (c) => {
+    return c.json(
+      {
+        error: "Too many authentication attempts",
+        message: "Rate limit exceeded. Please try again in 15 minutes.",
+        retryAfter: "15 minutes",
+      },
+      429
+    );
+  },
+});
+
+/**
  * Request Size Limit Middleware
  *
  * Limit: 10MB max request body
