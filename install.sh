@@ -38,20 +38,25 @@ ADMIN_EMAIL="${SYNAP_ADMIN_EMAIL:-}"
 BACKEND_VERSION_FLAG="${SYNAP_BACKEND_VERSION:-}"
 POD_AGENT_VERSION_FLAG="${SYNAP_POD_AGENT_VERSION:-}"
 CONTROL_PLANE_URL_FLAG="${SYNAP_CONTROL_PLANE_URL:-}"
+# When the Control Plane provisions a managed pod it passes a pre-generated
+# token so CP and pod share the same secret for the seed-trust bootstrap call.
+# Self-hosted installs leave this blank and install.sh generates a random one.
+PROVISIONING_TOKEN_FLAG="${SYNAP_PROVISIONING_TOKEN:-}"
 
 # ─── CLI flags ─────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --domain)             DOMAIN="$2";                 shift 2 ;;
-    --dir)                INSTALL_DIR="$2";             shift 2 ;;
-    --email)              LETSENCRYPT_EMAIL="$2";       shift 2 ;;
-    --intelligence-url)   INTELLIGENCE_URL="$2";        shift 2 ;;
-    --intelligence-key)   INTELLIGENCE_API_KEY="$2";    shift 2 ;;
-    --admin-email)        ADMIN_EMAIL="$2";             shift 2 ;;
-    --deploy-version)     DEPLOY_VERSION="$2";          shift 2 ;;
-    --backend-version)    BACKEND_VERSION_FLAG="$2";    shift 2 ;;
-    --pod-agent-version)  POD_AGENT_VERSION_FLAG="$2";  shift 2 ;;
-    --control-plane-url)  CONTROL_PLANE_URL_FLAG="$2";  shift 2 ;;
+    --domain)              DOMAIN="$2";                  shift 2 ;;
+    --dir)                 INSTALL_DIR="$2";              shift 2 ;;
+    --email)               LETSENCRYPT_EMAIL="$2";        shift 2 ;;
+    --intelligence-url)    INTELLIGENCE_URL="$2";         shift 2 ;;
+    --intelligence-key)    INTELLIGENCE_API_KEY="$2";     shift 2 ;;
+    --admin-email)         ADMIN_EMAIL="$2";              shift 2 ;;
+    --deploy-version)      DEPLOY_VERSION="$2";           shift 2 ;;
+    --backend-version)     BACKEND_VERSION_FLAG="$2";     shift 2 ;;
+    --pod-agent-version)   POD_AGENT_VERSION_FLAG="$2";   shift 2 ;;
+    --control-plane-url)   CONTROL_PLANE_URL_FLAG="$2";   shift 2 ;;
+    --provisioning-token)  PROVISIONING_TOKEN_FLAG="$2";  shift 2 ;;
     *) echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
 done
@@ -322,7 +327,8 @@ else
   HUB_JWT_SECRET=$(_gen)
   SYNAP_SERVICE_ENCRYPTION_KEY=$(_gen)
   VAULT_SERVER_KEY=$(_gen)
-  PROVISIONING_TOKEN=$(_gen)
+  # Use the CP-supplied token when available (managed pods); otherwise generate.
+  PROVISIONING_TOKEN="${PROVISIONING_TOKEN_FLAG:-$(_gen)}"
 
   success "Secrets generated"
 
