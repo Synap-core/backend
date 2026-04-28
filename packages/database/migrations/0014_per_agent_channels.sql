@@ -1,6 +1,10 @@
 -- Migration: 0014_per_agent_channels
--- Replace single personal-channel-per-user with one-per-(user × agent) model.
--- Adds two partial unique indexes — no column changes needed.
+-- Re-introduce thread_kind (dropped by 0010) for the V2 channel model,
+-- add assigned_agent_id FK, and create per-agent uniqueness indexes.
+
+-- Re-add thread_kind (was dropped in 0010; V2 model requires it again).
+ALTER TABLE channels
+  ADD COLUMN IF NOT EXISTS thread_kind text;
 
 -- One active personal thread per (user, agent).
 -- Enforces the new per-agent DM model: each user gets exactly one
