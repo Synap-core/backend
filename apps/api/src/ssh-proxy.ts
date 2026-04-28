@@ -23,7 +23,7 @@
  *   - Text JSON `{ type: "closed" }` → remote side closed the shell
  */
 
-import { Client as SshClient } from "ssh2";
+import { Client as SshClient, type ClientChannel } from "ssh2";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
@@ -180,7 +180,7 @@ async function handleSshSession(
 
       sshClient!.shell(
         { term: "xterm-256color", cols: 80, rows: 24 },
-        (err, stream) => {
+        (err: Error | undefined, stream: ClientChannel) => {
           if (err) {
             logger.error({ err }, "SSH shell open failed");
             sendJson(ws, { type: "error", message: err.message });
@@ -238,7 +238,7 @@ async function handleSshSession(
       );
     });
 
-    sshClient.on("error", (err) => {
+    sshClient.on("error", (err: Error) => {
       logger.error({ err: err.message, host: creds.host }, "SSH client error");
       sendJson(ws, { type: "error", message: err.message });
       ws.close(1011, err.message);
@@ -305,7 +305,7 @@ export function handleSshUpgrade(
         return;
       }
 
-      getWss().handleUpgrade(req, socket, head, (ws) => {
+      getWss().handleUpgrade(req, socket, head, (ws: WebSocket) => {
         logger.info({ envId, userId }, "SSH WebSocket upgrade accepted");
         handleSshSession(ws, envId, userId);
       });

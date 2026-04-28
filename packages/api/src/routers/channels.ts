@@ -127,49 +127,44 @@ export function invalidateMcpCache(workspaceId?: string | null): void {
 /**
  * Resolve an agentId for message sending.
  * If a valid UUID is passed, validate it exists + active in the agents table.
- * Otherwise, query for the system orchestrator agent.
+ * Otherwise falls back to the orchestrator agent.
+ * Throws if neither is found — a missing orchestrator means agent sync hasn't run.
  */
 async function resolveAgentId(agentId?: string): Promise<string> {
-  if (agentId) {
-    try {
-      crypto.randomUUID(); // validate it's a UUID — throws if malformed
-      const parsed = new RegExp(/^[\d:a-fA-F]+$/).test(agentId);
-      if (!parsed) {
-        logger.warn(
-          { agentId },
-          "Invalid agentId UUID, falling back to orchestrator"
-        );
-        agentId = undefined;
-      }
-    } catch {
-      logger.warn(
-        { agentId },
-        "Invalid agentId UUID, falling back to orchestrator"
-      );
-      agentId = undefined;
-    }
+  // Validate the provided UUID format
+  const UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (agentId && !UUID_RE.test(agentId)) {
+    logger.warn(
+      { agentId },
+      "Invalid agentId UUID format, falling back to orchestrator"
+    );
+    agentId = undefined;
   }
 
-  const agentRepo = new AgentRepository(db);
   if (agentId) {
+    const agentRepo = new AgentRepository(db);
     const agent = await agentRepo.getById(agentId);
-    if (agent?.active) {
-      return agent.id;
-    }
+    if (agent?.active) return agent.id;
     logger.warn(
       { agentId },
       "Agent not found or inactive, falling back to orchestrator"
     );
   }
 
-  // Fall back to system orchestrator
+  // Fall back to the orchestrator agent
   const [orchestrator] = await db
-    .select()
+    .select({ id: agents.id })
     .from(agents)
     .where(and(eq(agents.slug, "orchestrator"), eq(agents.active, true)))
     .limit(1);
 
-  return orchestrator?.id ?? randomUUID();
+  if (!orchestrator) {
+    throw new Error(
+      "Orchestrator agent not found in agents table. Run agent sync (POST /api/hub/agents/sync) to populate."
+    );
+  }
+  return orchestrator.id;
 }
 
 async function getMcpServersForWorkspace(

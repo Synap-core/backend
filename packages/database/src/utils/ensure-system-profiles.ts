@@ -1590,6 +1590,37 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
         constraints: { enum: ["manual", "automation"] },
         uiHints: { label: "Triggered By", inputType: "select" },
       },
+      // devplane_prompt_snippet
+      {
+        slug: "snippetTitle",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 200 },
+        uiHints: { label: "Snippet Title", inputType: "text" },
+      },
+      {
+        slug: "snippetBody",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 10000 },
+        uiHints: {
+          label: "Prompt Template",
+          inputType: "textarea",
+          description: "Use @{arg:NAME} for dynamic variables",
+        },
+      },
+      {
+        slug: "snippetCategory",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: ["deploy", "debug", "test", "audit", "review", "custom"],
+        },
+        uiHints: { label: "Category", inputType: "select" },
+      },
+      {
+        slug: "snippetDescription",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 500 },
+        uiHints: { label: "Description", inputType: "text" },
+      },
     ];
 
     const createdPropertyDefs = new Map<string, string>();
@@ -1684,6 +1715,15 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
           color: "#0EA5E9",
           description:
             "A single execution of a recipe with per-step status tracking",
+        },
+      },
+      {
+        slug: "devplane_prompt_snippet",
+        displayName: "Prompt Snippet",
+        uiHints: {
+          icon: "sparkles",
+          color: "#F59E0B",
+          description: "A reusable AI prompt template with dynamic variables",
         },
       },
     ];
@@ -1833,6 +1873,21 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
           { slug: "runFinishedAt", required: false, displayOrder: 5 },
           { slug: "runDuration", required: false, displayOrder: 6 },
           { slug: "triggeredBy", required: false, displayOrder: 7 },
+        ],
+      },
+      {
+        profileSlug: "devplane_prompt_snippet",
+        propertySlugs: [
+          { slug: "title", required: true, displayOrder: 0 },
+          { slug: "snippetTitle", required: false, displayOrder: 1 },
+          {
+            slug: "snippetCategory",
+            required: false,
+            defaultValue: "custom",
+            displayOrder: 2,
+          },
+          { slug: "snippetDescription", required: false, displayOrder: 3 },
+          { slug: "snippetBody", required: true, displayOrder: 4 },
         ],
       },
     ];

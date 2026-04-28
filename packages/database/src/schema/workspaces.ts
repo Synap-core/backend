@@ -454,6 +454,17 @@ export interface WorkspaceSettings {
     /** Who can approve AI proposals. Default: "owner_and_admins" */
     proposalApprovalPolicy?: "owner_and_admins" | "any_editor" | "admins_only";
   };
+
+  // ─── DevPlane settings ───────────────────────────────────────────────────────
+  /** Settings for the DevPlane app embedded in this workspace */
+  devplane?: {
+    /**
+     * Allow DevPlane to open a local PTY terminal in the browser.
+     * Only safe when the pod is running on a trusted local machine.
+     * Disabled by default.
+     */
+    localTerminalEnabled?: boolean;
+  };
 }
 
 export const workspaces = pgTable("workspaces", {

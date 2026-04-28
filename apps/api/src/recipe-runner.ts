@@ -19,7 +19,7 @@
  *   { type: "cancel" }   — abort after the current step finishes
  */
 
-import { Client as SshClient } from "ssh2";
+import { Client as SshClient, type ClientChannel } from "ssh2";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
@@ -169,7 +169,7 @@ async function runStep(
       command: step.command,
     });
 
-    ssh.exec(step.command, (err, stream) => {
+    ssh.exec(step.command, (err: Error | undefined, stream: ClientChannel) => {
       if (err) {
         sendJson(ws, { type: "step_done", index, exitCode: 1, success: false });
         resolve({ exitCode: 1, success: false, output: err.message });
@@ -302,7 +302,7 @@ async function runRecipe(
 
     await new Promise<void>((resolve, reject) => {
       sshClient!.on("ready", () => resolve());
-      sshClient!.on("error", (err) => reject(err));
+      sshClient!.on("error", (err: Error) => reject(err));
       sshClient!.connect({
         host: creds.host,
         port: creds.port,
@@ -465,7 +465,7 @@ export function handleRecipeRunUpgrade(
         return;
       }
 
-      getWss().handleUpgrade(req, socket, head, (ws) => {
+      getWss().handleUpgrade(req, socket, head, (ws: WebSocket) => {
         logger.info(
           { recipeId, envId, userId },
           "Recipe run WebSocket upgrade accepted"

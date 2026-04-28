@@ -18,7 +18,8 @@ import { intelligenceServices } from "./intelligence-services.js";
 export const ownerTypeEnum = pgEnum("agent_owner_type", [
   "system",
   "user",
-  "provider",
+  /** Registered by the Synap Intelligence Service via /api/hub/agents/sync. */
+  "synap",
 ]);
 
 export const agents = pgTable(

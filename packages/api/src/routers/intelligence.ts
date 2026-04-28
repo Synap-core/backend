@@ -629,7 +629,11 @@ export const intelligenceRouter = router({
     const rows = await db.query.agents.findMany({
       where: and(
         eq(agents.active, true),
-        or(eq(agents.ownerType, "system"), eq(agents.userId, ctx.userId ?? ""))
+        or(
+          eq(agents.ownerType, "system"),
+          eq(agents.ownerType, "synap"),
+          eq(agents.userId, ctx.userId ?? "")
+        )
       ),
       columns: {
         id: true,

@@ -10,6 +10,7 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { handleSshUpgrade } from "./ssh-proxy.js";
 import { handleRecipeRunUpgrade } from "./recipe-runner.js";
+import { handleLocalTerminalUpgrade } from "./local-terminal.js";
 
 export function handleWebSocketUpgrade(
   req: IncomingMessage,
@@ -22,6 +23,8 @@ export function handleWebSocketUpgrade(
     handleSshUpgrade(req, socket, head);
   } else if (url.pathname === "/api/devplane/recipe-run") {
     handleRecipeRunUpgrade(req, socket, head);
+  } else if (url.pathname === "/api/devplane/local-terminal") {
+    handleLocalTerminalUpgrade(req, socket, head);
   } else {
     // Unknown upgrade target — destroy so it doesn't hang
     socket.destroy();

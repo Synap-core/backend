@@ -7,7 +7,14 @@
 
 import { z } from "zod";
 import { router, workspaceProcedure } from "../trpc.js";
-import { ensureDevplaneProfiles, db, eq, and, desc } from "@synap/database";
+import {
+  ensureDevplaneProfiles,
+  db,
+  eq,
+  and,
+  desc,
+  count,
+} from "@synap/database";
 import { entities } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
@@ -269,5 +276,142 @@ export const devplaneRouter = router({
         });
 
       return runs;
+    }),
+
+  /**
+   * Seed default prompt snippets for the current workspace.
+   *
+   * Idempotent — checks if any snippets already exist before creating.
+   * Called once on first login from the DevPlane frontend.
+   */
+  seedDefaultSnippets: workspaceProcedure
+    .input(z.object({}).optional())
+    .mutation(async ({ ctx }) => {
+      // Check if snippets already exist for this workspace
+      const existing = await db
+        .select({ n: count() })
+        .from(entities)
+        .where(
+          and(
+            eq(entities.type, "devplane_prompt_snippet"),
+            eq(entities.userId, ctx.userId)
+          )
+        );
+
+      if ((existing[0]?.n ?? 0) > 0) {
+        return { seeded: false, message: "Snippets already exist" };
+      }
+
+      const defaults: Array<{
+        title: string;
+        category: string;
+        description: string;
+        body: string;
+      }> = [
+        // Deploy
+        {
+          title: "Deploy app to environment",
+          category: "deploy",
+          description: "General app deployment with health check",
+          body: "Deploy @{arg:app} to @{arg:environment}. Check health endpoints after deploy and report status.",
+        },
+        {
+          title: "Kamal deploy with rollback",
+          category: "deploy",
+          description: "Zero-downtime deploy via Kamal",
+          body: "Run Kamal deploy for @{arg:app} on @{arg:environment}. If health check fails, trigger rollback and report what went wrong.",
+        },
+        {
+          title: "Check deployment status",
+          category: "deploy",
+          description: "Inspect deployment health and recent logs",
+          body: "Check the latest deployment of @{arg:app} on @{arg:environment}. Report any failures, restarts, or warnings in the logs.",
+        },
+        // Debug
+        {
+          title: "Debug production error",
+          category: "debug",
+          description: "Root cause analysis for production errors",
+          body: "I'm seeing this error in production on @{arg:service}:\n\n@{arg:error}\n\nWhat are the most likely root causes and debugging steps?",
+        },
+        {
+          title: "Analyze logs",
+          category: "debug",
+          description: "Parse and interpret service logs",
+          body: "Analyze these logs from @{arg:service}:\n\n@{arg:logs}\n\nIdentify errors, warnings, and anomalies. Suggest fixes for each issue.",
+        },
+        // Test
+        {
+          title: "Write test cases",
+          category: "test",
+          description: "Generate test suite for a feature",
+          body: "Write comprehensive test cases for @{arg:feature} in @{arg:app}. Include unit tests, edge cases, and failure scenarios.",
+        },
+        {
+          title: "Review test coverage",
+          category: "test",
+          description: "Identify coverage gaps and untested paths",
+          body: "Review test coverage for @{arg:component}. Identify gaps, suggest additional tests, and flag any untested critical paths.",
+        },
+        // Audit
+        {
+          title: "Security audit",
+          category: "audit",
+          description: "Security vulnerability check (OWASP top 10)",
+          body: "Perform a security audit of @{arg:component} in @{arg:app}. Check for common vulnerabilities (OWASP top 10), secrets exposure, and injection risks.",
+        },
+        {
+          title: "Performance audit",
+          category: "audit",
+          description: "Performance bottleneck and N+1 analysis",
+          body: "Audit the performance of @{arg:feature} in @{arg:app}. Identify bottlenecks, N+1 queries, and memory leaks. Suggest optimizations.",
+        },
+        {
+          title: "Dependency audit",
+          category: "audit",
+          description: "Check for CVEs and outdated packages",
+          body: "Audit dependencies of @{arg:package}. Identify outdated packages, known CVEs, and unused dependencies. Suggest updates or replacements.",
+        },
+        // Review
+        {
+          title: "Code review",
+          category: "review",
+          description: "Thorough code review with actionable feedback",
+          body: "Review the implementation of @{arg:feature} in @{arg:app}. Check for bugs, code quality issues, and adherence to best practices. Be specific.",
+        },
+        {
+          title: "Architecture review",
+          category: "review",
+          description: "Architecture and design quality review",
+          body: "Review the architecture of @{arg:service}. Evaluate scalability, separation of concerns, failure modes, and suggest improvements.",
+        },
+      ];
+
+      const now = new Date();
+      for (const s of defaults) {
+        await db.insert(entities).values({
+          id: crypto.randomUUID(),
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId,
+          profileId: null,
+          type: "devplane_prompt_snippet",
+          title: s.title,
+          properties: {
+            snippetTitle: s.title,
+            snippetCategory: s.category,
+            snippetDescription: s.description,
+            snippetBody: s.body,
+          },
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+
+      logger.info(
+        { workspaceId: ctx.workspaceId, count: defaults.length },
+        "Seeded default DevPlane snippets"
+      );
+
+      return { seeded: true, count: defaults.length };
     }),
 });
