@@ -221,7 +221,11 @@ services:
         fi
         echo "Using database scripts: $$DB_SCRIPTS"
         node "$$DB_SCRIPTS/migrate.js"
-        node "$$DB_SCRIPTS/init-hub-keys.js"
+        if [ -f "$$DB_SCRIPTS/init-hub-keys.js" ]; then
+          node "$$DB_SCRIPTS/init-hub-keys.js"
+        else
+          echo "⚠ init-hub-keys.js not found in $$DB_SCRIPTS — skipping hub key seeding (image may be outdated, pull latest to fix)"
+        fi
     # One-shot service — runs once and exits. 'no' is correct for standalone Compose
     # (deploy.restart_policy is Docker Swarm only and is ignored here)
     restart: "no"
