@@ -1084,6 +1084,29 @@ provisionRouter.get("/status", async (c) => {
       columns: { settings: true },
     });
 
+    // Optional CP JWT auth: if Authorization header is present, verify it via the
+    // trusted_issuers registry. Returns 401 when CP is not yet trusted (seed-trust
+    // not called). Public callers without Authorization always get the response.
+    const authHeader = c.req.header("Authorization");
+    if (authHeader?.startsWith("Bearer ")) {
+      const token = authHeader.slice(7);
+      const cpUrl = (ws?.settings as Record<string, unknown> | null)
+        ?.controlPlane as { url?: string } | undefined;
+      const podPublicUrl = process.env.PUBLIC_URL;
+      if (podPublicUrl) {
+        const payload = await verifyCpJwtWithTrust(token, {
+          pinnedIssuer: cpUrl?.url,
+          audience: podPublicUrl,
+        });
+        if (!payload) {
+          return c.json(
+            { error: "CP not trusted — call /api/provision/seed-trust first" },
+            401
+          );
+        }
+      }
+    }
+
     const settings = (ws?.settings as Record<string, unknown>) ?? {};
     const cp = settings.controlPlane as
       | {
