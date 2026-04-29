@@ -54,6 +54,10 @@ if ! $COMPOSE pull backend realtime backend-migrate 2>&1; then
   exit 1
 fi
 
+# Pull Kratos image (non-fatal — old Kratos keeps running if pull fails)
+log "Pulling Kratos image (non-fatal)..."
+$COMPOSE pull kratos kratos-migrate 2>/dev/null || log "WARN: Kratos image pull failed — skipping Kratos update"
+
 # ─── Step 1b: Ensure Kratos/Hydra databases exist ─────────────────────────────
 log "Ensuring kratos and hydra databases exist..."
 $COMPOSE exec -T postgres psql -U synap -c "SELECT 'CREATE DATABASE kratos' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'kratos')\gexec" 2>/dev/null || true
@@ -62,6 +66,14 @@ $COMPOSE exec -T postgres psql -U synap -c "SELECT 'CREATE DATABASE hydra' WHERE
 # ─── Step 2: Run migrations (old backend still serving) ───────────────────────
 log "Running migrations (old backend still serving)..."
 $COMPOSE run --rm backend-migrate 2>&1 || log "WARN: migration exited non-zero"
+
+# Run Kratos migrations and update Kratos container (non-fatal).
+# Kratos data lives in Postgres, so upgrading the image is safe.
+# This ensures pods provisioned with older Kratos get POST /admin/identities/:id/sessions.
+log "Running Kratos migrations (non-fatal)..."
+$COMPOSE run --rm kratos-migrate 2>/dev/null || log "WARN: kratos-migrate exited non-zero"
+log "Updating Kratos container (non-fatal)..."
+$COMPOSE up -d --force-recreate kratos 2>/dev/null || log "WARN: Kratos container update failed"
 
 # ─── Step 3: Start canary with new image (old backend still serving) ──────────
 # Clean up any canary left over from a previous failed run

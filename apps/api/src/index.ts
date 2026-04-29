@@ -453,32 +453,63 @@ app.post("/api/handshake", async (c) => {
       process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
 
     // ──────────────────────────────────────────────────────────────────
-    // 1. Find existing Kratos identity by email
+    // 1. Find existing Kratos identity by email.
+    //
+    // Kratos is the source of truth for auth identities. The CP seeds
+    // the identity via /api/provision/seed-admin during provisioning
+    // (dedicated pods) or we auto-create it here (shared pods).
+    //
+    // NOTE: user changing their Kratos password never breaks handshake —
+    // step 3 uses the admin API which bypasses password entirely.
     // ──────────────────────────────────────────────────────────────────
     let identityId: string | null = null;
+    let kratosUnreachable = false;
 
-    const listResp = await fetch(
-      `${kratosAdminUrl}/admin/identities?credentials_identifier=${encodeURIComponent(email)}`
-    );
+    try {
+      const listResp = await fetch(
+        `${kratosAdminUrl}/admin/identities?credentials_identifier=${encodeURIComponent(email)}`,
+        { signal: AbortSignal.timeout(8_000) }
+      );
 
-    if (listResp.ok) {
-      const identities = (await listResp.json()) as Array<{ id: string }>;
-      if (Array.isArray(identities) && identities.length > 0) {
-        identityId = identities[0].id;
-        apiLogger.info(
-          { email, identityId },
-          "Handshake: found existing Kratos identity"
+      if (listResp.ok) {
+        const identities = (await listResp.json()) as Array<{ id: string }>;
+        if (Array.isArray(identities) && identities.length > 0) {
+          identityId = identities[0].id;
+          apiLogger.info(
+            { email, identityId },
+            "Handshake: found Kratos identity"
+          );
+        }
+      } else {
+        const errBody = await listResp.text().catch(() => "");
+        apiLogger.error(
+          {
+            status: listResp.status,
+            body: errBody.slice(0, 500),
+            kratosAdminUrl,
+          },
+          "Handshake: Kratos identity lookup returned non-OK"
         );
+        // Non-OK from Kratos admin API = Kratos is up but broken.
+        // Fall through — identityId stays null → handled below.
       }
-    } else {
-      const errBody = await listResp.text().catch(() => "");
+    } catch (err) {
+      kratosUnreachable = true;
       apiLogger.error(
+        { err, kratosAdminUrl },
+        "Handshake: Kratos admin API unreachable"
+      );
+    }
+
+    if (kratosUnreachable) {
+      return c.json(
         {
-          status: listResp.status,
-          body: errBody.slice(0, 500),
-          kratosAdminUrl,
+          error: "auth_service_unavailable",
+          code: "KRATOS_UNREACHABLE",
+          message:
+            "The pod's auth service is not reachable. The pod may still be starting up.",
         },
-        "Handshake: Kratos identity lookup failed — Kratos may be unreachable or misconfigured"
+        503
       );
     }
 
@@ -486,80 +517,88 @@ app.post("/api/handshake", async (c) => {
     // 2. No identity → behavior depends on pod mode.
     //
     // Dedicated pods:
-    //   The admin identity is seeded during provisioning via the pod's
-    //   /api/provision/seed-admin endpoint (called by the CP). Handshake
-    //   is SSO convenience over an account that MUST already exist.
-    //   Returning 403 here indicates the pod wasn't seeded correctly —
-    //   the operator needs to re-run seed-admin or the user needs to
-    //   recover their password via Kratos self-service.
+    //   Identity MUST already exist — seeded by /api/provision/seed-admin
+    //   during provisioning. Missing identity = provisioning incomplete.
+    //   Return 403 so the client shows "reseed required" rather than 500.
     //
     // Shared pods:
-    //   Users never went through a dedicated provisioning flow — they
-    //   interact with the pod exclusively through Relay / landing /
-    //   other Synap apps that authenticate via handshake. There's no
-    //   user-facing password (they don't need one; recovery via Kratos
-    //   self-service still works if they ever want one). So on shared
-    //   pods we auto-create the identity with a random password they'll
-    //   never know.
-    //
-    // This split is the minimal path to unblock shared pods without a
-    // full setup-flow rework for them. Full design: per-user setup
-    // tracking + proper shared-pod onboarding flow. Punted until the
-    // shared pod has real traffic.
+    //   No provisioning flow. Auto-create on first handshake.
     // ──────────────────────────────────────────────────────────────────
     if (!identityId) {
       if (!config.server.sharedPodMode) {
-        apiLogger.info(
+        apiLogger.warn(
           { email },
-          "Handshake rejected: no Kratos identity yet for this email — pod admin must be seeded via /api/provision/seed-admin"
+          "Handshake: no Kratos identity for email on dedicated pod — provisioning incomplete (seed-admin must be re-run)"
         );
         return c.json(
           {
             error: "account_not_set_up",
+            code: "IDENTITY_NOT_FOUND",
             message:
-              "This pod has no account for this email yet. Ask your admin to reseed the pod, or use Kratos self-service recovery to set a password.",
+              "No account exists for this email on this pod. The pod may need to be re-provisioned (reseed-admin from the control plane dashboard).",
             setupRequired: true,
           },
           403
         );
       }
 
-      // Shared pod path — auto-create the identity with a random
-      // password. The user doesn't need to know it; handshake will
-      // issue sessions via Kratos admin API every time they visit.
+      // Shared pod path — auto-create identity. Handshake always uses the
+      // admin API to create sessions, so the password is never needed.
       apiLogger.info(
         { email },
-        "Handshake (shared pod): auto-creating Kratos identity for new user"
+        "Handshake (shared pod): auto-creating Kratos identity"
       );
       const placeholderPassword = crypto.randomBytes(32).toString("base64url");
-      const createResp = await fetch(`${kratosAdminUrl}/admin/identities`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          schema_id: "default",
-          traits: { email },
-          credentials: {
-            password: { config: { password: placeholderPassword } },
-          },
-          metadata_public: {
-            createdVia: "handshake-shared",
-            createdAt: new Date().toISOString(),
-            // No setupRequired flag — shared-pod users aren't expected
-            // to ever set a password. If they want one they can go
-            // through Kratos self-service recovery.
-          },
-          verifiable_addresses: [
-            { value: email, verified: true, via: "email", status: "completed" },
-          ],
-        }),
-      });
+      let createResp: Response;
+      try {
+        createResp = await fetch(`${kratosAdminUrl}/admin/identities`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            schema_id: "default",
+            traits: { email },
+            credentials: {
+              password: { config: { password: placeholderPassword } },
+            },
+            metadata_public: {
+              createdVia: "handshake-shared",
+              createdAt: new Date().toISOString(),
+            },
+            verifiable_addresses: [
+              {
+                value: email,
+                verified: true,
+                via: "email",
+                status: "completed",
+              },
+            ],
+          }),
+          signal: AbortSignal.timeout(8_000),
+        });
+      } catch (err) {
+        apiLogger.error(
+          { err },
+          "Handshake: Kratos identity create threw (network)"
+        );
+        return c.json(
+          { error: "auth_service_unavailable", code: "KRATOS_UNREACHABLE" },
+          503
+        );
+      }
       if (!createResp.ok) {
         const errBody = await createResp.text();
         apiLogger.error(
           { status: createResp.status, body: errBody.slice(0, 500) },
-          "Failed to create Kratos identity on shared pod"
+          "Handshake: failed to create Kratos identity on shared pod"
         );
-        return c.json({ error: "Failed to provision user account" }, 500);
+        return c.json(
+          {
+            error: "Failed to provision user account",
+            code: "KRATOS_CREATE_FAILED",
+            detail: errBody.slice(0, 200),
+          },
+          500
+        );
       }
       const newIdentity = (await createResp.json()) as { id: string };
       identityId = newIdentity.id;
@@ -568,31 +607,55 @@ app.post("/api/handshake", async (c) => {
     // ──────────────────────────────────────────────────────────────────
     // 3. Create a Kratos session via ADMIN API — no password needed.
     //
-    // Kratos v1.3+ exposes POST /admin/identities/:id/sessions which
-    // returns a session_token we can set as the browser cookie. This
-    // replaces the earlier "admin PUT password + self-service login"
-    // dance that forced us to know a password.
+    // POST /admin/identities/:id/sessions (Kratos v1.3+) creates a
+    // privileged session and returns session_token. This token is
+    // what the browser sends as the ory_kratos_session cookie.
+    //
+    // Note: password changes on the pod never break this — the admin
+    // API bypasses the credential check entirely.
     // ──────────────────────────────────────────────────────────────────
-    const adminSessionResp = await fetch(
-      `${kratosAdminUrl}/admin/identities/${identityId}/sessions`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      }
-    );
+    let adminSessionResp: Response;
+    try {
+      adminSessionResp = await fetch(
+        `${kratosAdminUrl}/admin/identities/${identityId}/sessions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+          signal: AbortSignal.timeout(8_000),
+        }
+      );
+    } catch (err) {
+      apiLogger.error(
+        { err, identityId },
+        "Handshake: Kratos session create threw (network)"
+      );
+      return c.json(
+        { error: "auth_service_unavailable", code: "KRATOS_UNREACHABLE" },
+        503
+      );
+    }
 
     if (!adminSessionResp.ok) {
-      const errBody = await adminSessionResp.text();
+      const errBody = await adminSessionResp.text().catch(() => "");
       apiLogger.error(
         {
           status: adminSessionResp.status,
           body: errBody.slice(0, 500),
           identityId,
         },
-        "Failed to create Kratos session via admin API"
+        "Handshake: Kratos session creation failed"
       );
-      return c.json({ error: "Failed to create session" }, 500);
+      return c.json(
+        {
+          error: "Failed to create session",
+          code: "KRATOS_SESSION_FAILED",
+          kratosStatus: adminSessionResp.status,
+          // Include Kratos error detail so the dashboard/client can diagnose without SSH.
+          detail: errBody.slice(0, 300),
+        },
+        500
+      );
     }
 
     const adminSessionData = (await adminSessionResp.json()) as {
@@ -604,10 +667,14 @@ app.post("/api/handshake", async (c) => {
     if (!sessionToken) {
       apiLogger.error(
         { identityId },
-        "Kratos admin session endpoint returned no session_token"
+        "Handshake: Kratos returned 200 but no session_token — check Kratos tokenizer config"
       );
       return c.json(
-        { error: "Session token not returned by auth server" },
+        {
+          error: "Session token not returned by auth server",
+          code: "KRATOS_NO_SESSION_TOKEN",
+          hint: "Kratos may be running a version < 1.0 or session tokenizer is not configured",
+        },
         500
       );
     }
