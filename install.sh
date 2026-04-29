@@ -38,9 +38,9 @@ ADMIN_EMAIL="${SYNAP_ADMIN_EMAIL:-}"
 BACKEND_VERSION_FLAG="${SYNAP_BACKEND_VERSION:-}"
 POD_AGENT_VERSION_FLAG="${SYNAP_POD_AGENT_VERSION:-}"
 CONTROL_PLANE_URL_FLAG="${SYNAP_CONTROL_PLANE_URL:-}"
-# When the Control Plane provisions a managed pod it passes a pre-generated
-# token so CP and pod share the same secret for the seed-trust bootstrap call.
-# Self-hosted installs leave this blank and install.sh generates a random one.
+# PROVISIONING_TOKEN is used by setup-openclaw.sh to create agent users and
+# API keys. It is NOT used for CP trust (seed-trust uses ES256 JWTs instead).
+# Managed pods can inject a pre-generated token; self-hosted installs generate one.
 PROVISIONING_TOKEN_FLAG="${SYNAP_PROVISIONING_TOKEN:-}"
 
 # ─── CLI flags ─────────────────────────────────────────────────────────────────
@@ -412,8 +412,10 @@ SYNAP_SERVICE_ENCRYPTION_KEY=$SYNAP_SERVICE_ENCRYPTION_KEY
 # Used for add-on provisioning (OpenClaw, ZeroClaw bootstrap credentials).
 VAULT_SERVER_KEY=$VAULT_SERVER_KEY
 
-# ── Self-Hosted Agent Setup ──────────────────────────────────────────────
-# Required by setup-openclaw.sh to create agent users and API keys.
+# ── OpenClaw / Agent Setup ────────────────────────────────────────────────────
+# Used by setup-openclaw.sh to create agent users and API keys on this pod.
+# NOT used for CP trust — seed-trust authenticates via ES256 JWT against
+# CONTROL_PLANE_URL, no shared secret required.
 PROVISIONING_TOKEN=$PROVISIONING_TOKEN
 
 # ── Pod Public URL ────────────────────────────────────────────────────────────

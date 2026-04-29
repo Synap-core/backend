@@ -5,7 +5,7 @@
  * Used for the Control Plane push flow where CP calls the pod to register itself.
  *
  * Routes:
- *   POST /api/provision/seed-trust            — Bootstrap: CP registers itself as trusted issuer (PROVISIONING_TOKEN auth)
+ *   POST /api/provision/seed-trust            — Bootstrap: CP registers itself as trusted issuer (CP-signed ES256 JWT auth)
  *   POST /api/provision/connect               — CP pushes credentials via signed JWT
  *   POST /api/provision/register-intelligence — IS self-registers its API key via CP-signed JWT
  *   POST /api/provision/reset-intelligence    — Clear stale IS registration (CP-JWT auth)
@@ -15,10 +15,11 @@
  *   POST /api/provision/disconnect            — Remove CP connection (admin only, uses CP JWT)
  *
  * Auth model:
- *   seed-trust uses PROVISIONING_TOKEN (bootstrap shared secret set by install.sh).
- *   All other mutating calls use a short-lived ES256 JWT signed by the Control Plane.
- *   Pods verify via /.well-known/jwks.json — no shared secret required.
- *   The pod has zero hardcoded knowledge of the CP URL; trust is established at provisioning time.
+ *   All mutating calls use a short-lived ES256 JWT signed by the Control Plane.
+ *   Pods verify via CONTROL_PLANE_URL/.well-known/jwks.json (pinned at install time).
+ *   seed-trust uses a "seed-trust"-typed JWT (trust registry empty on first call, so
+ *   verification uses the pinned JWKS directly rather than the registry).
+ *   No shared secret is required anywhere in the CP→Pod trust chain.
  */
 
 import { Hono } from "hono";
