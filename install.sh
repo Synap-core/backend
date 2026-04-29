@@ -429,11 +429,10 @@ PUBLIC_URL=https://$DOMAIN
 
 # ── Control Plane Integration ─────────────────────────────────────────────────
 # For Synap-managed deployments only. Leave blank for fully self-hosted setups.
-# The pod verifies CP JWTs by fetching /.well-known/jwks.json from CONTROL_PLANE_URL.
-# No shared secret required — only the public URL is needed here.
-# When blank, the pod falls back to reading the \`iss\` claim from each JWT
-# (standard OIDC discovery). Setting it explicitly is safer: it pins which
-# Control Plane is trusted to sign tokens for this pod.
+# The pod verifies ALL CP JWTs by fetching /.well-known/jwks.json from this URL.
+# This includes the seed-trust bootstrap JWT — no shared secret is required.
+# Setting this explicitly pins which Control Plane is trusted to act on this pod.
+# When blank the pod cannot accept CP provisioning calls (seed-trust returns 500).
 CONTROL_PLANE_URL=${CONTROL_PLANE_URL_FLAG}
 
 # ── Intelligence Service (Synap Agent Hub) ────────────────────────────────────

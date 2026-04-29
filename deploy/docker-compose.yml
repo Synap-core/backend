@@ -54,9 +54,6 @@ x-backend-env: &backend-env
   CP_RSSHUB_PROXY_URL: ${CP_RSSHUB_PROXY_URL:-}
   RSS_FETCH_TIMEOUT_MS: ${RSS_FETCH_TIMEOUT_MS:-30000}
   RSS_FETCH_RETRIES: ${RSS_FETCH_RETRIES:-3}
-  # Path to .env file for runtime reads (e.g. reseed-trust PROVISIONING_TOKEN fallback).
-  # The deploy dir is mounted at /opt/synap/deploy/ in the backend container.
-  ENV_FILE_PATH: /opt/synap/deploy/.env
 
 services:
   # ============================================================================
@@ -707,6 +704,9 @@ services:
       POD_AGENT_PORT: 4002
       DEPLOY_DIR: /deploy
       HOST_LOG_DIR: /host-log
+      # Pinned CP trust anchor — pod-agent verifies all JWTs against this JWKS.
+      # Set by install.sh; must never be accepted from the request header.
+      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/deploy:rw
@@ -715,8 +715,9 @@ services:
       # only — see server.js HOST_LOG_ALLOWLIST). Read-only is critical:
       # a compromised CP JWT should never be able to tamper with host logs.
       - /var/log:/host-log:ro
-    ports:
-      - "4002:4002"
+    # No host port binding — Caddy proxies /api/pod-agent/* to pod-agent:4002
+    # on the same Docker network. Binding 4002 to the host would expose an
+    # unauthenticated (at network level) command endpoint to the public internet.
     networks:
       - synap-net
     healthcheck:

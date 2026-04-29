@@ -278,11 +278,15 @@ export async function verifyCpJwt<T extends object>(
  *
  * Returns null on any rejection (verify failure, unknown issuer, non-approved status).
  *
+ * Issuer pinning: if `opts.pinnedIssuer` is not provided, this function
+ * automatically falls back to `process.env.CONTROL_PLANE_URL` (set at install
+ * time by install.sh). On managed pods this prevents OIDC-style discovery from
+ * an unverified `iss` claim — only the pre-configured CP JWKS is used for
+ * signature verification.
+ *
  * @param token - The JWT to verify.
- * @param opts.pinnedIssuer - Optional allowlist: if set, `verifyCpJwt` enforces
- *   that the token's `iss` matches this URL exactly. If omitted, the issuer is
- *   read from the token's `iss` claim (OIDC-style) — but trust registry lookup
- *   still applies, so only approved issuers pass.
+ * @param opts.pinnedIssuer - Optional explicit override. If omitted, falls back
+ *   to `CONTROL_PLANE_URL` env var, then to OIDC-style iss discovery.
  * @param opts.audience - Required non-empty audience string (typically the pod's
  *   PUBLIC_URL). Callers MUST refuse the request before calling this function if
  *   they cannot supply an audience — there is no way to skip the check here.
@@ -294,7 +298,13 @@ export async function verifyCpJwtWithTrust<T extends object>(
     audience: string;
   }
 ): Promise<T | null> {
-  const payload = await verifyCpJwt<T>(token, opts.pinnedIssuer, opts.audience);
+  // Pin to the configured CP URL (set at install time) when not explicitly
+  // overridden. This prevents OIDC-style discovery from the unverified iss
+  // claim on managed pods — the signature is always verified against the
+  // known-good JWKS endpoint, not one the token claims.
+  const pinnedIssuer =
+    opts.pinnedIssuer ?? process.env.CONTROL_PLANE_URL ?? undefined;
+  const payload = await verifyCpJwt<T>(token, pinnedIssuer, opts.audience);
   if (!payload) {
     return null;
   }

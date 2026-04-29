@@ -23,12 +23,13 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { randomUUID, randomBytes, timingSafeEqual } from "crypto";
+import { randomUUID, randomBytes } from "crypto";
 import bcrypt from "bcrypt";
 import { createLogger } from "@synap-core/core";
 import {
   createAndVerifyHubInboundKey,
   toRegistrationTrace,
+  verifyCpJwt,
   verifyCpJwtWithTrust,
 } from "@synap/api";
 import {
@@ -60,41 +61,52 @@ export const provisionRouter = new Hono();
 // ─── POST /api/provision/seed-trust ─────────────────────────────────────────
 //
 // Bootstrap endpoint: the Control Plane introduces itself to the pod as a
-// trusted issuer. Called ONCE during provisioning, before /connect.
+// trusted issuer. Called during provisioning and again any time trust needs
+// to be re-established (e.g. after pod migration or trust corruption).
 //
-// Auth: Bearer <PROVISIONING_TOKEN> (shared secret set by install.sh — used
-//   only for this bootstrap call; all subsequent calls use ES256 JWTs).
+// Auth: Bearer <CP-signed ES256 JWT>
+//   Claims: { type: "seed-trust", aud: <pod PUBLIC_URL>, iss: <CONTROL_PLANE_URL>, jti }
+//
+// Bootstrap verification — the trusted_issuers registry is empty on first
+// call so we CANNOT use verifyCpJwtWithTrust here. Instead we verify the JWT
+// directly against CONTROL_PLANE_URL, which is pinned at install time by
+// install.sh. This is safe: the CP URL is injected by a trusted channel
+// (cloud-init / VPS user-data). No shared secret is required.
 //
 // Body: { issuerUrl: string }  — the CP's public base URL (e.g. "https://api.synap.live")
+//   Must match the CONTROL_PLANE_URL env var — prevents registering a rogue issuer.
 //
 // On success:
 //   1. Inserts/updates trusted_issuers with status="approved", isBuiltIn=true
 //   2. Seeds workspace.settings.controlPlane.url so all subsequent provision
 //      routes can read cpUrl from the DB instead of an env var.
 //
-// Idempotent — safe to call multiple times.
+// Idempotent — safe to call multiple times (seedBuiltIn is a no-op if already present).
 
 provisionRouter.post("/seed-trust", async (c) => {
-  // Primary: read from process env (set at startup).
-  // Fallback: read directly from .env file — handles the reseed-trust flow where
-  // pod-agent writes a fresh PROVISIONING_TOKEN to disk without restarting the backend.
-  let provisioningToken = process.env.PROVISIONING_TOKEN;
-  if (!provisioningToken) {
-    try {
-      const { readFileSync } = await import("fs");
-      // Deploy dir is mounted at /opt/synap/deploy/ inside the backend container
-      // (configured in docker-compose.yml: - .:/opt/synap/deploy:ro)
-      const envPath = process.env.ENV_FILE_PATH || "/opt/synap/deploy/.env";
-      const envContent = readFileSync(envPath, "utf8");
-      const match = envContent.match(/^PROVISIONING_TOKEN=(.+)$/m);
-      if (match) provisioningToken = match[1].trim();
-    } catch {
-      // .env not readable — continue; will return 500 below if still unset
-    }
+  const cpUrl = process.env.CONTROL_PLANE_URL;
+  const podPublicUrl = process.env.PUBLIC_URL;
+
+  if (!cpUrl) {
+    logger.error(
+      "seed-trust refused: CONTROL_PLANE_URL not configured on this pod"
+    );
+    return c.json(
+      {
+        error:
+          "CONTROL_PLANE_URL not configured — pod cannot verify CP identity",
+      },
+      500
+    );
   }
-  if (!provisioningToken) {
-    logger.error("seed-trust refused: PROVISIONING_TOKEN not set on this pod");
-    return c.json({ error: "PROVISIONING_TOKEN not configured" }, 500);
+  if (!podPublicUrl) {
+    logger.error(
+      "seed-trust refused: PUBLIC_URL not configured — audience check is mandatory"
+    );
+    return c.json(
+      { error: "PUBLIC_URL not configured; seed-trust refused" },
+      500
+    );
   }
 
   const authHeader = c.req.header("Authorization") ?? "";
@@ -102,15 +114,19 @@ provisionRouter.post("/seed-trust", async (c) => {
     return c.json({ error: "Missing or invalid Authorization header" }, 401);
   }
   const token = authHeader.slice(7);
-  // Timing-safe comparison prevents token oracle attacks via response latency
-  const tokenBuf = Buffer.from(token);
-  const expectedBuf = Buffer.from(provisioningToken);
-  const tokenValid =
-    tokenBuf.length === expectedBuf.length &&
-    timingSafeEqual(tokenBuf, expectedBuf);
-  if (!tokenValid) {
-    logger.warn("seed-trust rejected: invalid PROVISIONING_TOKEN");
-    return c.json({ error: "Invalid provisioning token" }, 401);
+
+  // Verify against pinned JWKS — bypasses trust registry (which is empty at bootstrap).
+  const payload = await verifyCpJwt<{ type: string }>(
+    token,
+    cpUrl,
+    podPublicUrl
+  );
+  if (!payload || payload.type !== "seed-trust") {
+    logger.warn(
+      { cpUrl, podPublicUrl },
+      "seed-trust rejected: invalid or wrong-type CP JWT"
+    );
+    return c.json({ error: "Invalid or untrusted seed-trust token" }, 401);
   }
 
   const body = await c.req.json().catch(() => null);
@@ -122,6 +138,19 @@ provisionRouter.post("/seed-trust", async (c) => {
     );
   }
   const { issuerUrl } = parsed.data;
+
+  // Validate issuerUrl matches our pinned CP URL — prevents a valid CP JWT from
+  // being used to register a different (attacker-controlled) issuer URL.
+  if (issuerUrl !== cpUrl) {
+    logger.warn(
+      { issuerUrl, cpUrl },
+      "seed-trust rejected: issuerUrl does not match CONTROL_PLANE_URL"
+    );
+    return c.json(
+      { error: "issuerUrl must match the configured CONTROL_PLANE_URL" },
+      400
+    );
+  }
 
   try {
     // 1. Seed the CP into trusted_issuers
@@ -142,6 +171,11 @@ provisionRouter.post("/seed-trust", async (c) => {
         ],
       },
     ]);
+
+    logger.info(
+      { issuerUrl, podPublicUrl },
+      "Trust established via CP JWT — trusted_issuers seeded"
+    );
 
     // 2. Seed workspace.settings.controlPlane.url so /connect and all other
     //    provision routes can resolve cpUrl from the DB without needing the env var.
@@ -169,10 +203,6 @@ provisionRouter.post("/seed-trust", async (c) => {
       );
     }
 
-    logger.info(
-      { issuerUrl },
-      "Trust established: CP registered as trusted issuer"
-    );
     return c.json({ success: true, issuerUrl });
   } catch (err) {
     logger.error({ err }, "seed-trust: failed to seed trusted issuer");

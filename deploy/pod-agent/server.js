@@ -5,7 +5,8 @@
  * Stateless HTTP server that accepts CP-signed JWT commands and dispatches
  * shell scripts via Docker socket. No config, no database, zero npm deps.
  *
- * JWKS URL discovered from request header — pod needs no CP configuration.
+ * JWKS URL is pinned to CONTROL_PLANE_URL env var (set by install.sh).
+ * The X-JWKS-URL request header is ignored — callers cannot substitute keys.
  */
 
 const http = require("http");
@@ -41,6 +42,14 @@ const HOST_LOG_ALLOWLIST = new Set([
 ]);
 
 const HOST_LOG_MAX_BYTES = 256 * 1024; // 256 KB — tail from end if larger
+
+// ── CP trust anchor ──
+// CONTROL_PLANE_URL is set by install.sh and injected into this container
+// via docker-compose. Pod-agent pins its JWKS endpoint to this URL and will
+// NOT accept a JWKS URL from the request header — eliminating the ability for
+// any caller to substitute their own signing key.
+const CONTROL_PLANE_URL = process.env.CONTROL_PLANE_URL || "";
+const CP_JWKS_URL = CONTROL_PLANE_URL ? `${CONTROL_PLANE_URL}/.well-known/jwks.json` : "";
 
 // ── JWKS Cache ──
 
@@ -283,9 +292,8 @@ http
       try {
         const auth = req.headers["authorization"] || "";
         if (!auth.startsWith("Bearer ")) return respond(res, 401, { error: "no auth" });
-        const jwksUrl = req.headers["x-jwks-url"];
-        if (!jwksUrl || !jwksUrl.startsWith("https://")) return respond(res, 400, { error: "bad jwks url" });
-        const publicKey = await getPublicKey(jwksUrl);
+        if (!CP_JWKS_URL) return respond(res, 503, { error: "CONTROL_PLANE_URL not configured on this pod" });
+        const publicKey = await getPublicKey(CP_JWKS_URL);
         const payload = verifyJWT(auth.slice(7), publicKey);
         if (payload.type !== "read-host-log") {
           return respond(res, 403, { error: "wrong jwt type" });
@@ -347,10 +355,9 @@ http
     try {
       const auth = req.headers["authorization"] || "";
       if (!auth.startsWith("Bearer ")) return respond(res, 401, { error: "no auth" });
-      const jwksUrl = req.headers["x-jwks-url"];
-      if (!jwksUrl || !jwksUrl.startsWith("https://")) return respond(res, 400, { error: "bad jwks url" });
+      if (!CP_JWKS_URL) return respond(res, 503, { error: "CONTROL_PLANE_URL not configured on this pod" });
 
-      const publicKey = await getPublicKey(jwksUrl);
+      const publicKey = await getPublicKey(CP_JWKS_URL);
       const payload = verifyJWT(auth.slice(7), publicKey);
 
       if (payload.nonce) {
