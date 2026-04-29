@@ -75,7 +75,21 @@ export const provisionRouter = new Hono();
 // Idempotent — safe to call multiple times.
 
 provisionRouter.post("/seed-trust", async (c) => {
-  const provisioningToken = process.env.PROVISIONING_TOKEN;
+  // Primary: read from process env (set at startup).
+  // Fallback: read directly from .env file — handles the reseed-trust flow where
+  // pod-agent writes a fresh PROVISIONING_TOKEN to disk without restarting the backend.
+  let provisioningToken = process.env.PROVISIONING_TOKEN;
+  if (!provisioningToken) {
+    try {
+      const { readFileSync } = await import("fs");
+      const envPath = process.env.ENV_FILE_PATH || "/opt/synap/.env";
+      const envContent = readFileSync(envPath, "utf8");
+      const match = envContent.match(/^PROVISIONING_TOKEN=(.+)$/m);
+      if (match) provisioningToken = match[1].trim();
+    } catch {
+      // .env not readable — continue; will return 500 below if still unset
+    }
+  }
   if (!provisioningToken) {
     logger.error("seed-trust refused: PROVISIONING_TOKEN not set on this pod");
     return c.json({ error: "PROVISIONING_TOKEN not configured" }, 500);
