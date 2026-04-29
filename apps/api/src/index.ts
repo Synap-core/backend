@@ -293,8 +293,8 @@ const proxyKratosRequest = async (c: HonoContext, kratosPath: string) => {
         : [];
     for (const cookie of setCookies) outHeaders.append("set-cookie", cookie);
 
-    return new Response(response.body, {
-      status: response.status,
+    return c.newResponse(response.body, {
+      status: response.status as 200,
       headers: outHeaders,
     });
   } catch (error) {
