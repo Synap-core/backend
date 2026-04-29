@@ -10,6 +10,7 @@
  *   POST /api/provision/register-intelligence — IS self-registers its API key via CP-signed JWT
  *   POST /api/provision/reset-intelligence    — Clear stale IS registration (CP-JWT auth)
  *   POST /api/provision/seed-admin            — Atomic admin seeding (Kratos + users + workspace)
+ *   POST /api/provision/admin-recovery-link   — Generate Kratos password-recovery link for admin (CP-JWT auth)
  *   GET  /api/provision/status                — Public status check (includes IS credential probe)
  *   POST /api/provision/disconnect            — Remove CP connection (admin only, uses CP JWT)
  *
@@ -897,6 +898,116 @@ provisionRouter.post("/seed-admin", async (c) => {
       },
       500
     );
+  }
+});
+
+// ─── POST /api/provision/admin-recovery-link ────────────────────────────────
+//
+// Generates a Kratos password-recovery link for the pod's admin account.
+// Intended to be called by the CP dashboard when a user needs to set or reset
+// their admin password after automated provisioning (seed-admin uses a random
+// placeholder password the admin never sees).
+//
+// Auth: Bearer <CP JWT, type "admin-recovery">
+// Claims: { email } — the admin email to generate a recovery link for.
+// Returns: { recoveryLink, expiresAt }
+provisionRouter.post("/admin-recovery-link", async (c) => {
+  const authHeader = c.req.header("Authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  }
+  const token = authHeader.slice(7);
+
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) return c.json({ error: "PUBLIC_URL not configured" }, 500);
+
+  const payload = await verifyCpJwtWithTrust<{ type: string; email?: string }>(
+    token,
+    {
+      audience: podPublicUrl,
+    }
+  );
+  if (!payload) return c.json({ error: "Invalid or expired token" }, 401);
+  if (payload.type !== "admin-recovery") {
+    return c.json(
+      {
+        error: `Invalid token type — expected 'admin-recovery', got '${payload.type}'`,
+      },
+      403
+    );
+  }
+
+  const email = payload.email;
+  if (!email || typeof email !== "string") {
+    return c.json({ error: "Token must include 'email' claim" }, 400);
+  }
+
+  const kratosAdminUrl =
+    process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
+
+  // Look up the Kratos identity for this email
+  let identityId: string | null = null;
+  try {
+    const listRes = await fetch(
+      `${kratosAdminUrl}/admin/identities?credentials_identifier=${encodeURIComponent(email)}`
+    );
+    if (listRes.ok) {
+      const identities = (await listRes.json()) as Array<{ id: string }>;
+      if (Array.isArray(identities) && identities.length > 0) {
+        identityId = identities[0].id;
+      }
+    }
+  } catch (err) {
+    logger.error(
+      { err, email },
+      "admin-recovery-link: Kratos identity lookup failed"
+    );
+    return c.json({ error: "Failed to contact authentication server" }, 502);
+  }
+
+  if (!identityId) {
+    return c.json(
+      { error: `No Kratos identity found for email: ${email}` },
+      404
+    );
+  }
+
+  // Create a recovery link (valid for 4 hours)
+  try {
+    const recoveryRes = await fetch(`${kratosAdminUrl}/admin/recovery/link`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expires_in: "4h", identity_id: identityId }),
+    });
+    if (!recoveryRes.ok) {
+      const body = await recoveryRes.text().catch(() => "");
+      logger.error(
+        { status: recoveryRes.status, body, email },
+        "admin-recovery-link: Kratos recovery link creation failed"
+      );
+      return c.json(
+        { error: `Recovery link generation failed (${recoveryRes.status})` },
+        502
+      );
+    }
+    const data = (await recoveryRes.json()) as {
+      recovery_link?: string;
+      expires_at?: string;
+    };
+    if (!data.recovery_link) {
+      return c.json({ error: "Kratos returned no recovery link" }, 502);
+    }
+    logger.info(
+      { email, identityId },
+      "admin-recovery-link: recovery link generated"
+    );
+    return c.json({
+      recoveryLink: data.recovery_link,
+      expiresAt: data.expires_at ?? null,
+    });
+  } catch (err) {
+    logger.error({ err, email }, "admin-recovery-link: unexpected error");
+    return c.json({ error: "Failed to generate recovery link" }, 500);
   }
 });
 
