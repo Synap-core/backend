@@ -85,21 +85,13 @@ export const provisionRouter = new Hono();
 // Idempotent — safe to call multiple times (seedBuiltIn is a no-op if already present).
 
 provisionRouter.post("/seed-trust", async (c) => {
-  const cpUrl = process.env.CONTROL_PLANE_URL;
+  // CONTROL_PLANE_URL is set at install time by install.sh on managed pods.
+  // On self-hosted pods (no CP), it may be empty — in that case we fall back to
+  // OIDC-style discovery: the JWT's own `iss` claim determines the JWKS URL.
+  // This lets any self-hosted CP connect as long as it signs a valid ES256 JWT.
+  const cpUrl = process.env.CONTROL_PLANE_URL || undefined;
   const podPublicUrl = process.env.PUBLIC_URL;
 
-  if (!cpUrl) {
-    logger.error(
-      "seed-trust refused: CONTROL_PLANE_URL not configured on this pod"
-    );
-    return c.json(
-      {
-        error:
-          "CONTROL_PLANE_URL not configured — pod cannot verify CP identity",
-      },
-      500
-    );
-  }
   if (!podPublicUrl) {
     logger.error(
       "seed-trust refused: PUBLIC_URL not configured — audience check is mandatory"
@@ -110,13 +102,23 @@ provisionRouter.post("/seed-trust", async (c) => {
     );
   }
 
+  if (!cpUrl) {
+    logger.warn(
+      "seed-trust: CONTROL_PLANE_URL not set — using OIDC-style issuer discovery (self-hosted mode). " +
+        "Set CONTROL_PLANE_URL in .env to restrict to a single trusted CP."
+    );
+  }
+
   const authHeader = c.req.header("Authorization") ?? "";
   if (!authHeader.startsWith("Bearer ")) {
     return c.json({ error: "Missing or invalid Authorization header" }, 401);
   }
   const token = authHeader.slice(7);
 
-  // Verify against pinned JWKS — bypasses trust registry (which is empty at bootstrap).
+  // Verify against JWKS — bypasses trust registry (which is empty at bootstrap).
+  // When cpUrl is set (managed pods): pins to the pre-configured CP URL.
+  // When cpUrl is undefined (self-hosted): reads `iss` from the unverified JWT
+  // header and fetches JWKS from {iss}/.well-known/jwks.json (OIDC discovery).
   const payload = await verifyCpJwt<{ type: string }>(
     token,
     cpUrl,
@@ -140,9 +142,10 @@ provisionRouter.post("/seed-trust", async (c) => {
   }
   const { issuerUrl } = parsed.data;
 
-  // Validate issuerUrl matches our pinned CP URL — prevents a valid CP JWT from
-  // being used to register a different (attacker-controlled) issuer URL.
-  if (issuerUrl !== cpUrl) {
+  // When CONTROL_PLANE_URL is pinned: enforce that the issuerUrl in the body
+  // matches it — prevents a valid CP JWT from registering a different issuer URL.
+  // When not pinned (self-hosted): accept what the token's iss claim asserts.
+  if (cpUrl && issuerUrl !== cpUrl) {
     logger.warn(
       { issuerUrl, cpUrl },
       "seed-trust rejected: issuerUrl does not match CONTROL_PLANE_URL"
