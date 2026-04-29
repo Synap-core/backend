@@ -133,6 +133,10 @@ const COMMANDS = {
   update: {
     script: "update-pod.sh",
     args: (p) => [p.targetVersion || "latest"],
+    // Canary (3 min) + production health (2 min) + image pull (variable).
+    // On first pull of a multi-hundred-MB image this can exceed 10 min, causing
+    // a false-failed callback even though the containers kept running. 25 min.
+    timeout: 25 * 60 * 1000,
   },
   suspend: {
     script: "suspend-pod.sh",
@@ -420,7 +424,7 @@ http
         return respond(res, 202, { accepted: true, type: "exec" });
       }
 
-      execFile("/bin/sh", [`${DEPLOY_DIR}/${cmd.script}`, ...cmd.args(payload)], { cwd: DEPLOY_DIR, timeout: 600_000 }, (err, stdout, stderr) => {
+      execFile("/bin/sh", [`${DEPLOY_DIR}/${cmd.script}`, ...cmd.args(payload)], { cwd: DEPLOY_DIR, timeout: cmd.timeout ?? 600_000 }, (err, stdout, stderr) => {
         activeOps.delete(payload.type);
         const status = err ? "failed" : "completed";
         const output = (stdout || "") + (stderr ? `\n[stderr] ${stderr}` : "");

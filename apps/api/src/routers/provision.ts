@@ -2392,10 +2392,11 @@ provisionRouter.post("/trigger-update", async (c) => {
   const callbackJwt = payload.callbackJwt || "";
   const updateId = payload.updateId || "";
 
-  // Use docker compose with the updater profile to spawn a detached one-shot container
+  // install.sh places docker-compose.yml directly at $INSTALL_DIR (e.g. /opt/synap/docker-compose.yml)
+  // without a deploy/ subdir. Use the systemd WorkingDirectory (/opt/synap) as the implicit dir.
   const cmd = [
     "docker compose",
-    "-f /opt/synap/deploy/docker-compose.yml",
+    "-f /opt/synap/docker-compose.yml",
     "--profile updater",
     "run -d --rm updater",
     sanitizedVersion,
