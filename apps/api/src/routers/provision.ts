@@ -82,7 +82,9 @@ provisionRouter.post("/seed-trust", async (c) => {
   if (!provisioningToken) {
     try {
       const { readFileSync } = await import("fs");
-      const envPath = process.env.ENV_FILE_PATH || "/opt/synap/.env";
+      // Deploy dir is mounted at /opt/synap/deploy/ inside the backend container
+      // (configured in docker-compose.yml: - .:/opt/synap/deploy:ro)
+      const envPath = process.env.ENV_FILE_PATH || "/opt/synap/deploy/.env";
       const envContent = readFileSync(envPath, "utf8");
       const match = envContent.match(/^PROVISIONING_TOKEN=(.+)$/m);
       if (match) provisioningToken = match[1].trim();

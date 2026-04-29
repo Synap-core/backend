@@ -54,6 +54,9 @@ x-backend-env: &backend-env
   CP_RSSHUB_PROXY_URL: ${CP_RSSHUB_PROXY_URL:-}
   RSS_FETCH_TIMEOUT_MS: ${RSS_FETCH_TIMEOUT_MS:-30000}
   RSS_FETCH_RETRIES: ${RSS_FETCH_RETRIES:-3}
+  # Path to .env file for runtime reads (e.g. reseed-trust PROVISIONING_TOKEN fallback).
+  # The deploy dir is mounted at /opt/synap/deploy/ in the backend container.
+  ENV_FILE_PATH: /opt/synap/deploy/.env
 
 services:
   # ============================================================================
