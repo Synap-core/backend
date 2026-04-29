@@ -38,9 +38,8 @@ PREV_VERSION=$(grep "^BACKEND_VERSION=" "$CD/.env" 2>/dev/null | cut -d= -f2 || 
 
 # ─── Step 1: Set version and pull (old backend still serving) ─────────────────
 case "$VERSION" in
-  main-*|main) DOCKER_TAG="main" ;;
-  v*)          DOCKER_TAG="$VERSION" ;;
-  *)           DOCKER_TAG="main" ;;
+  v*)   DOCKER_TAG="$VERSION" ;;
+  *)    DOCKER_TAG="$VERSION" ;;
 esac
 
 log "Setting BACKEND_VERSION=${DOCKER_TAG} (from version=${VERSION})"
