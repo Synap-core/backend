@@ -14,7 +14,7 @@ const https = require("https");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { execFile } = require("child_process");
+const { execFile, spawn } = require("child_process");
 
 const PORT = parseInt(process.env.POD_AGENT_PORT || "4002", 10);
 const DEPLOY_DIR = process.env.DEPLOY_DIR || "/deploy";
@@ -350,6 +350,106 @@ http
         log(`host-log rejected: ${e.message}`);
         return respond(res, 403, { error: e.message });
       }
+    }
+
+    // Docker log streaming — SSE. GET /api/pod-agent/docker-logs?service=NAME
+    // Streams `docker logs --follow --tail=200 synap-{service}` as Server-Sent Events.
+    // JWT type must be "read-docker-logs". Service name is validated against an allowlist.
+    const DOCKER_LOG_SERVICES = {
+      api: "synap-backend",
+      realtime: "synap-realtime",
+      kratos: "synap-kratos",
+      caddy: "synap-caddy",
+      "pod-agent": "synap-pod-agent",
+      typesense: "synap-typesense",
+      postgres: "synap-postgres",
+      redis: "synap-redis",
+    };
+    const dockerLogsMatch =
+      req.method === "GET" &&
+      (req.url || "").match(/^(?:\/api\/pod-agent)?\/docker-logs(?:\?(.*))?$/);
+    if (dockerLogsMatch) {
+      try {
+        const auth = req.headers["authorization"] || "";
+        if (!auth.startsWith("Bearer ")) return respond(res, 401, { error: "no auth" });
+        if (!CP_JWKS_URL) return respond(res, 503, { error: "CONTROL_PLANE_URL not configured" });
+        const publicKey = await getPublicKey(CP_JWKS_URL);
+        const payload = verifyJWT(auth.slice(7), publicKey);
+        if (payload.type !== "read-docker-logs") return respond(res, 403, { error: "wrong jwt type" });
+
+        const params = new URLSearchParams(dockerLogsMatch[1] || "");
+        const service = params.get("service") || "api";
+        const tail = Math.min(parseInt(params.get("tail") || "200", 10) || 200, 1000);
+        const containerName = DOCKER_LOG_SERVICES[service];
+        if (!containerName) {
+          return respond(res, 400, { error: `unknown service: ${service}`, allowed: Object.keys(DOCKER_LOG_SERVICES) });
+        }
+
+        log(`docker-logs stream: ${service} (${containerName})`);
+
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "Connection": "keep-alive",
+          "X-Accel-Buffering": "no",
+        });
+
+        // Send a ready event so the client knows the stream opened
+        res.write(`event: ready\ndata: ${JSON.stringify({ service, container: containerName })}\n\n`);
+
+        const proc = spawn("docker", ["logs", "--follow", `--tail=${tail}`, containerName], {
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+
+        function sendLine(line) {
+          if (!line) return;
+          res.write(`event: log\ndata: ${JSON.stringify({ line, t: Date.now() })}\n\n`);
+        }
+
+        let stdoutBuf = "";
+        proc.stdout.on("data", (chunk) => {
+          stdoutBuf += chunk.toString();
+          const lines = stdoutBuf.split("\n");
+          stdoutBuf = lines.pop(); // keep partial line
+          lines.forEach(sendLine);
+        });
+
+        let stderrBuf = "";
+        proc.stderr.on("data", (chunk) => {
+          stderrBuf += chunk.toString();
+          const lines = stderrBuf.split("\n");
+          stderrBuf = lines.pop();
+          lines.forEach(sendLine);
+        });
+
+        proc.on("error", (err) => {
+          log(`docker-logs proc error for ${containerName}: ${err.message}`);
+          res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
+          res.end();
+        });
+
+        proc.on("close", (code) => {
+          log(`docker-logs proc closed for ${containerName}: code=${code}`);
+          res.write(`event: closed\ndata: ${JSON.stringify({ code })}\n\n`);
+          res.end();
+        });
+
+        // Keepalive comment every 20s so proxies (Caddy, Cloudflare) don't close the stream
+        const keepalive = setInterval(() => {
+          try { res.write(": keepalive\n\n"); } catch { clearInterval(keepalive); }
+        }, 20_000);
+
+        req.on("close", () => {
+          clearInterval(keepalive);
+          proc.kill("SIGTERM");
+          log(`docker-logs client disconnected: ${service}`);
+        });
+      } catch (e) {
+        log(`docker-logs rejected: ${e.message}`);
+        if (!res.headersSent) return respond(res, 403, { error: e.message });
+        res.end();
+      }
+      return;
     }
 
     if (req.method !== "POST" || (req.url !== "/command" && req.url !== "/api/pod-agent/command")) {
