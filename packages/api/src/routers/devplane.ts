@@ -20,7 +20,11 @@ import {
 import { entities, secrets } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
-import { isVaultReference } from "../utils/vault-resolver.js";
+import {
+  isVaultReference,
+  parseVaultReference,
+  resolveVaultSecret,
+} from "../utils/vault-resolver.js";
 import { encryptServerSide } from "../utils/server-vault.js";
 
 // ─── Shared types ─────────────────────────────────────────────────────────────
@@ -123,11 +127,8 @@ export const devplaneRouter = router({
       return {
         id: entity.id,
         name: entity.title ?? "Unnamed environment",
-        host: (props["envHost"] as string | undefined) ?? null,
-        port:
-          typeof props["envPort"] === "number"
-            ? (props["envPort"] as number)
-            : 22,
+        host: (props["host"] as string | undefined) ?? null,
+        port: 22,
         sshUser: (props["sshUser"] as string | undefined) ?? null,
         hasKey:
           typeof props["sshKeyVaultRef"] === "string" &&
@@ -634,9 +635,9 @@ export const devplaneRouter = router({
 
       for (const [name, version, description] of pkgs) {
         await ins("devplane_package", name, {
-          npmName: name,
+          packageName: name,
           packageVersion: version,
-          packageDescription: description,
+          description,
         });
       }
 
@@ -777,29 +778,37 @@ export const devplaneRouter = router({
         ],
       ];
 
-      for (const [title, status, linkedAppSlugs, desc] of features) {
+      for (const [title, status, linkedApps, desc] of features) {
+        // linkedApps is comma-separated; store the first as linkedApp (primary)
+        const linkedApp = linkedApps.split(",")[0]?.trim() ?? "";
+        const linkedPackages = "";
         await ins("devplane_feature", title, {
           featureStatus: status,
-          featureDescription: desc,
-          linkedAppSlugs,
+          linkedApp,
+          linkedPackages,
+          description: desc,
         });
       }
 
-      // ── Environments (envHost intentionally blank — fill in via UI) ────────
+      // ── Environments (host intentionally blank — fill in via UI) ────────
       await ins("devplane_environment", "Production Pod", {
-        envName: "prod",
+        envType: "production",
         linkedAppSlug: "synap-backend",
+        isActive: true,
       });
       await ins("devplane_environment", "Intelligence Service", {
-        envName: "prod",
+        envType: "production",
         linkedAppSlug: "synap-intelligence-service",
+        isActive: true,
       });
       await ins("devplane_environment", "Control Plane", {
-        envName: "prod",
+        envType: "production",
         linkedAppSlug: "synap-control-plane-api",
+        isActive: true,
       });
       await ins("devplane_environment", "Local Dev", {
-        envName: "dev",
+        envType: "development",
+        isActive: false,
       });
 
       // ── Recipes ───────────────────────────────────────────────────────────
@@ -1187,6 +1196,130 @@ export const devplaneRouter = router({
       );
 
       return { ok: true };
+    }),
+
+  /**
+   * Save a vault-backed secret for a DevPlane entity property.
+   *
+   * Encrypts server-side, upserts into the secrets table, and writes the
+   * `vault://uuid` reference back into the entity's JSONB properties.
+   * Returns the vault ref so the frontend can confirm the value was stored.
+   *
+   * Supported property slugs:
+   *   sshKeyVaultRef       — devplane_environment SSH private key
+   *   npmTokenVaultRef     — devplane_app NPM publish token
+   *   githubTokenVaultRef  — devplane_app GitHub personal access token
+   */
+  saveEntitySecret: workspaceProcedure
+    .input(
+      z.object({
+        entityId: z.string().uuid(),
+        propertySlug: z.enum([
+          "sshKeyVaultRef",
+          "npmTokenVaultRef",
+          "githubTokenVaultRef",
+        ]),
+        secretValue: z.string().min(1),
+        secretName: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const blob = encryptServerSide(input.secretValue);
+      const name =
+        input.secretName ?? `devplane_${input.propertySlug}_${input.entityId}`;
+
+      const existing = await db.query.secrets.findFirst({
+        where: and(eq(secrets.userId, ctx.userId), eq(secrets.name, name)),
+        columns: { id: true },
+      });
+
+      let secretId: string;
+      if (existing) {
+        await db
+          .update(secrets)
+          .set({
+            encryptedData: blob.encryptedData,
+            iv: blob.iv,
+            authTag: blob.authTag,
+            updatedAt: new Date(),
+          })
+          .where(eq(secrets.id, existing.id));
+        secretId = existing.id;
+      } else {
+        secretId = crypto.randomUUID();
+        await db.insert(secrets).values({
+          id: secretId,
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId,
+          name,
+          type: "api_key",
+          encryptedData: blob.encryptedData,
+          iv: blob.iv,
+          authTag: blob.authTag,
+          encryptionMode: "server",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }
+
+      const vaultRef = `vault://${secretId}`;
+
+      // Merge vault ref into entity properties JSONB
+      await db
+        .update(entities)
+        .set({
+          properties: drizzleSql`COALESCE(properties, '{}'::jsonb) || jsonb_build_object(${input.propertySlug}::text, ${vaultRef}::text)`,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(eq(entities.id, input.entityId), eq(entities.userId, ctx.userId))
+        );
+
+      logger.info(
+        {
+          workspaceId: ctx.workspaceId,
+          userId: ctx.userId,
+          entityId: input.entityId,
+          propertySlug: input.propertySlug,
+        },
+        "Entity secret saved"
+      );
+
+      return { vaultRef };
+    }),
+
+  /**
+   * Resolve a vault:// reference to its plaintext value (server-side only).
+   *
+   * Only resolves server-side encrypted secrets (`encryptionMode = "server"`).
+   * Client-encrypted secrets are never returned — callers should not
+   * assume a value is always available.
+   */
+  resolveEntitySecret: workspaceProcedure
+    .input(z.object({ vaultRef: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const parsed = parseVaultReference(input.vaultRef);
+      if (!parsed) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Invalid vault reference: ${input.vaultRef}`,
+        });
+      }
+
+      const value = await resolveVaultSecret(
+        parsed.secretId,
+        ctx.userId,
+        parsed.fieldName
+      );
+
+      if (value === null) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Secret not found or not accessible",
+        });
+      }
+
+      return { value };
     }),
 
   /**

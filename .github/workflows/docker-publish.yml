@@ -15,7 +15,7 @@ on:
 
 # Branch → image tag mapping:
 #   develop  → :dev  (staging ring — no CP notification)
-#   main     → :main + :sha-* (production ring — notifies CP)
+#   main     → :main + :latest + :sha-* (production ring — notifies CP)
 #   v*       → :vX.Y.Z + :latest (release — notifies CP)
 
 env:
@@ -96,7 +96,7 @@ jobs:
             type=sha,prefix={{branch}}-
             type=raw,value=dev,enable=${{ steps.resolve.outputs.ref == 'refs/heads/develop' }}
             type=raw,value=main,enable=${{ steps.resolve.outputs.ref == 'refs/heads/main' }}
-            type=raw,value=latest,enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/tags/v') || steps.resolve.outputs.ref == 'refs/heads/main' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
@@ -220,7 +220,7 @@ jobs:
             type=sha,prefix={{branch}}-
             type=raw,value=dev,enable=${{ steps.resolve.outputs.ref == 'refs/heads/develop' }}
             type=raw,value=main,enable=${{ steps.resolve.outputs.ref == 'refs/heads/main' }}
-            type=raw,value=latest,enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/tags/v') || steps.resolve.outputs.ref == 'refs/heads/main' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
@@ -290,7 +290,7 @@ jobs:
             type=sha,prefix={{branch}}-
             type=raw,value=dev,enable=${{ steps.resolve.outputs.ref == 'refs/heads/develop' }}
             type=raw,value=main,enable=${{ steps.resolve.outputs.ref == 'refs/heads/main' }}
-            type=raw,value=latest,enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ startsWith(steps.resolve.outputs.ref, 'refs/tags/v') || steps.resolve.outputs.ref == 'refs/heads/main' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 

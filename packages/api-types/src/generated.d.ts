@@ -10446,6 +10446,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		saveEntitySecret: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				entityId: string;
+				propertySlug: "sshKeyVaultRef" | "npmTokenVaultRef" | "githubTokenVaultRef";
+				secretValue: string;
+				secretName?: string | undefined;
+			};
+			output: {
+				vaultRef: string;
+			};
+			meta: object;
+		}>;
+		resolveEntitySecret: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				vaultRef: string;
+			};
+			output: {
+				value: string;
+			};
+			meta: object;
+		}>;
 		getProviderConfigs: import("@trpc/server").TRPCQueryProcedure<{
 			input: Record<string, never> | undefined;
 			output: {

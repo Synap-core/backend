@@ -42,6 +42,10 @@ CONTROL_PLANE_URL_FLAG="${SYNAP_CONTROL_PLANE_URL:-}"
 # API keys. It is NOT used for CP trust (seed-trust uses ES256 JWTs instead).
 # Managed pods can inject a pre-generated token; self-hosted installs generate one.
 PROVISIONING_TOKEN_FLAG="${SYNAP_PROVISIONING_TOKEN:-}"
+# SMTP connection URI for Kratos courier. Defaults to local catch-all (no real
+# delivery). Managed pods get a real relay URI injected by the Control Plane;
+# self-hosted installs can set SYNAP_SMTP_URI or pass --smtp-uri.
+SMTP_URI="${SYNAP_SMTP_URI:-}"
 
 # ─── CLI flags ─────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -57,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     --pod-agent-version)   POD_AGENT_VERSION_FLAG="$2";   shift 2 ;;
     --control-plane-url)   CONTROL_PLANE_URL_FLAG="$2";   shift 2 ;;
     --provisioning-token)  PROVISIONING_TOKEN_FLAG="$2";  shift 2 ;;
+    --smtp-uri)            SMTP_URI="$2";                  shift 2 ;;
     *) echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
 done
@@ -446,10 +451,12 @@ INTELLIGENCE_HUB_API_KEY=${INTELLIGENCE_API_KEY:-}
 # ANTHROPIC_API_KEY=
 # GOOGLE_AI_API_KEY=
 
-# ── Email (optional — configure SMTP for user notifications) ──────────────────
-# Default: local mailpit/catchall (no real email sent). Override to enable real email.
-SMTP_CONNECTION_URI=smtp://localhost:1025/
-# SMTP_CONNECTION_URI=smtps://user:pass@smtp.example.com:465
+# ── Email — SMTP for Kratos courier (password reset, recovery codes) ──────────
+# When --smtp-uri is passed (e.g. by the Synap Control Plane), real email is
+# delivered. Self-hosted installs can set SYNAP_SMTP_URI or edit this directly.
+# Without a real URI Kratos queues messages locally (never delivered).
+SMTP_CONNECTION_URI=${SMTP_URI:-smtp://localhost:1025/}
+# Example real relay: SMTP_CONNECTION_URI=smtps://resend:RESEND_API_KEY@smtp.resend.com:465
 
 # ── Frontend / CORS ───────────────────────────────────────────────────────────
 FRONTEND_URL=https://$DOMAIN

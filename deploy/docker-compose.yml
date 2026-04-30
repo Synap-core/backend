@@ -371,6 +371,12 @@ services:
       IDENTITY_SCHEMAS_0_URL: file:///etc/config/kratos/identity.schema.json
       DOMAIN: ${DOMAIN}
       KRATOS_WEBHOOK_SECRET: ${KRATOS_WEBHOOK_SECRET}
+      # SMTP relay for Kratos courier (password recovery, verification codes).
+      # Defaults to local catch-all (no real delivery) when SMTP_CONNECTION_URI
+      # is not set. Managed pods have this injected by the Control Plane at
+      # provision time via install.sh --smtp-uri. Self-hosted installs set it
+      # in .env. Kratos reads COURIER_SMTP_CONNECTION_URI natively.
+      COURIER_SMTP_CONNECTION_URI: ${SMTP_CONNECTION_URI:-smtp://localhost:1025/}
       # Kratos itself sees only backend-originated traffic (Caddy routes
       # /.ory/kratos/public/* through backend:4000). No external CORS gate
       # needed here — ALLOWED_ORIGINS on the backend is the single source.

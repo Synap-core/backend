@@ -113,11 +113,9 @@
         reverse_proxy realtime:4001
     }
 
-    # Ory Kratos (Authentication) — routed THROUGH the backend, not direct.
-    # Synap surface (studio, app, landing) to be re-listed inside kratos.yml,
-    # which drifts out of sync quickly. Keep one CORS source of truth.
-    #
-    # Route Kratos directly for auth flows - this was the original working config
+    # Ory Kratos (Authentication)
+    # SERVE_PUBLIC_BASE_URL = https://${DOMAIN}/.ory/kratos/public/
+    # handle_path strips the prefix → Kratos receives bare /self-service/... paths.
     handle_path /.ory/kratos/public/* {
         reverse_proxy kratos:4433
     }
