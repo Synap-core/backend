@@ -55,7 +55,7 @@ export default function WorkspacesPage() {
     data: workspaces,
     isLoading,
     refetch,
-  } = trpc.workspaces.list.useQuery();
+  } = trpc.workspaces.adminListAll.useQuery();
 
   const createMutation = trpc.workspaces.create.useMutation({
     onSuccess: () => {
@@ -124,15 +124,6 @@ export default function WorkspacesPage() {
                   </Chip>
                 </div>
 
-                <Chip
-                  size="sm"
-                  variant="soft"
-                  color={ROLE_COLORS[ws.role] ?? "default"}
-                  className="self-start ring-1 ring-divider"
-                >
-                  {ws.role}
-                </Chip>
-
                 {ws.description && (
                   <Text className="line-clamp-2 text-sm text-default-500">
                     {ws.description}
@@ -143,9 +134,7 @@ export default function WorkspacesPage() {
                   <div className="flex items-center gap-1">
                     <IconUsers size={14} color={colors.text.tertiary} />
                     <span>
-                      {ws.settings?.intelligenceServiceId
-                        ? "AI connected"
-                        : "No AI service"}
+                      {ws.memberCount} member{ws.memberCount !== 1 ? "s" : ""}
                     </span>
                   </div>
                   <span>{new Date(ws.createdAt).toLocaleDateString()}</span>

@@ -246,7 +246,7 @@ export default function ConnectPage() {
                   : "display it here for you to copy."}
               </p>
               {existingActiveIntegrationKeys.length > 0 && (
-                <div className="rounded-medium border border-warning-200 bg-warning-50 px-3 py-2 text-xs text-warning-800">
+                <div className="rounded-medium border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
                   Found {existingActiveIntegrationKeys.length} active{" "}
                   {integrationInfo.label} key
                   {existingActiveIntegrationKeys.length > 1 ? "s" : ""} for your
@@ -270,7 +270,7 @@ export default function ConnectPage() {
                 </Button>
               </div>
               {redirectUri && (
-                <div className="rounded-medium border border-warning-200 bg-warning-50 px-3 py-2 text-xs text-warning-800">
+                <div className="rounded-medium border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
                   You must explicitly approve key creation below before any
                   credentials are issued.
                 </div>
@@ -306,7 +306,7 @@ export default function ConnectPage() {
               we authenticate the user manually then resume /connect. */}
           {step === "handshake-fallback" && (
             <div className="flex flex-col gap-4">
-              <div className="flex items-start gap-2 rounded-medium border border-warning-200 bg-warning-50 p-3 text-warning-800">
+              <div className="flex items-start gap-2 rounded-medium border border-warning/30 bg-warning/10 p-3 text-warning">
                 <IconLock size={18} className="mt-0.5 shrink-0" />
                 <div>
                   <p className="text-small font-semibold">
@@ -347,7 +347,7 @@ export default function ConnectPage() {
           {/* Redirecting to deeplink app */}
           {step === "redirecting" && (
             <div className="flex flex-col items-center gap-4 py-6 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-success-100 text-success-600">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-success/15 text-success">
                 <IconCheck size={24} />
               </div>
               <div>
@@ -362,7 +362,7 @@ export default function ConnectPage() {
           {/* Done — show key for copy */}
           {step === "done" && apiKey && (
             <div className="flex flex-col gap-4">
-              <div className="flex items-start gap-2 rounded-medium border border-warning-200 bg-warning-50 p-3 text-warning-800">
+              <div className="flex items-start gap-2 rounded-medium border border-warning/30 bg-warning/10 p-3 text-warning">
                 <IconAlertCircle size={18} className="mt-0.5 shrink-0" />
                 <div>
                   <p className="text-small font-semibold">Save this key</p>
@@ -371,7 +371,7 @@ export default function ConnectPage() {
                   </p>
                 </div>
               </div>
-              <pre className="overflow-x-auto rounded-medium border border-warning-200 bg-warning-50 p-3 font-mono text-xs text-warning-700 break-all whitespace-pre-wrap">
+              <pre className="overflow-x-auto rounded-medium border border-warning/30 bg-warning/10 p-3 font-mono text-xs text-warning break-all whitespace-pre-wrap">
                 {apiKey}
               </pre>
               <Button variant="outline" className="w-full" onPress={handleCopy}>
@@ -397,7 +397,7 @@ export default function ConnectPage() {
           {/* Error */}
           {step === "error" && (
             <div className="flex flex-col gap-4">
-              <div className="flex items-start gap-2 rounded-medium border border-danger-200 bg-danger-50 p-3 text-danger-800">
+              <div className="flex items-start gap-2 rounded-medium border border-danger/30 bg-danger/10 p-3 text-danger">
                 <IconX size={18} className="mt-0.5 shrink-0" />
                 <div>
                   <p className="text-small font-semibold">Connection failed</p>

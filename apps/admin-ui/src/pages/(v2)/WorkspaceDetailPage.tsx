@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import {
   Button,
   Card,
@@ -21,6 +21,7 @@ import {
   IconBuildingCommunity,
   IconRobot,
   IconPlug,
+  IconAlertTriangle,
 } from "@tabler/icons-react";
 import { trpc } from "../../lib/trpc";
 import { useWorkspace } from "../../lib/workspace";
@@ -58,6 +59,10 @@ export default function WorkspaceDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { workspaceId: contextWorkspaceId } = useWorkspace();
   const workspaceId = id ?? contextWorkspaceId!;
+  const navigate = useNavigate();
+
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirmName, setDeleteConfirmName] = useState("");
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -83,6 +88,14 @@ export default function WorkspaceDetailPage() {
     onOpenChange: (open) => {
       setAgentModalOpen(open);
       if (!open) resetAgentForm();
+    },
+  });
+
+  const deleteModal = useOverlayState({
+    isOpen: deleteOpen,
+    onOpenChange: (open) => {
+      setDeleteOpen(open);
+      if (!open) setDeleteConfirmName("");
     },
   });
 
@@ -112,6 +125,14 @@ export default function WorkspaceDetailPage() {
     isLoading: agentsLoading,
     refetch: refetchAgents,
   } = trpc.agentUsers.list.useQuery({ workspaceId });
+
+  const adminDeleteMutation = trpc.workspaces.adminDelete.useMutation({
+    onSuccess: () => {
+      showSuccessNotification({ message: "Workspace deleted" });
+      navigate("/workspaces");
+    },
+    onError: (err) => showErrorNotification({ message: err.message }),
+  });
 
   const removeMemberMutation = trpc.workspaces.removeMember.useMutation({
     onSuccess: () => {
@@ -628,6 +649,37 @@ export default function WorkspaceDetailPage() {
               </Switch>
             </div>
           </div>
+
+          {/* Danger Zone */}
+          {!(workspace.settings as Record<string, unknown>)?.systemSlug && (
+            <div className="mt-8 max-w-md rounded-xl border border-danger/30 p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <IconAlertTriangle size={16} className="text-danger" />
+                <Text className="text-sm font-semibold text-danger">
+                  Danger Zone
+                </Text>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <Text className="text-sm font-medium">Delete workspace</Text>
+                  <Text className="text-xs text-default-500">
+                    Permanently removes all data. This cannot be undone.
+                  </Text>
+                </div>
+                <Button
+                  variant="outline"
+                  color="danger"
+                  size="sm"
+                  onPress={() => deleteModal.open()}
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <IconTrash size={14} />
+                    Delete
+                  </span>
+                </Button>
+              </div>
+            </div>
+          )}
         </Tabs.Panel>
 
         <Tabs.Panel id="services" className="pt-1">
@@ -858,6 +910,87 @@ export default function WorkspaceDetailPage() {
                   )}
                 </Button>
               </Modal.Body>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
+
+      {/* Delete workspace confirmation modal */}
+      <Modal state={deleteModal}>
+        <Modal.Backdrop isDismissable>
+          <Modal.Container size="sm" placement="center">
+            <Modal.Dialog>
+              <Modal.Header className="border-b border-divider px-5 py-4">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-danger/15 text-danger">
+                    <IconTrash size={16} />
+                  </span>
+                  <Modal.Heading className="text-base font-semibold">
+                    Delete workspace
+                  </Modal.Heading>
+                </div>
+                <Modal.CloseTrigger className="absolute right-3 top-3" />
+              </Modal.Header>
+              <Modal.Body className="flex flex-col gap-4 px-5 py-4">
+                <div className="rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
+                  <p className="font-semibold">This action is irreversible.</p>
+                  <p className="mt-1 text-xs opacity-90">
+                    All entities, views, members, documents, and channels in{" "}
+                    <strong>{workspace?.name}</strong> will be permanently
+                    deleted.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label className="text-xs text-default-500">
+                    Type{" "}
+                    <code className="rounded bg-default-100 px-1 py-0.5 font-mono text-foreground">
+                      {workspace?.name}
+                    </code>{" "}
+                    to confirm
+                  </Label>
+                  <Input
+                    value={deleteConfirmName}
+                    onChange={(e) => setDeleteConfirmName(e.target.value)}
+                    placeholder={workspace?.name ?? ""}
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="border-default-200 bg-background text-foreground"
+                  />
+                </div>
+              </Modal.Body>
+              <Modal.Footer className="border-t border-divider px-5 py-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onPress={() => deleteModal.close()}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  color="danger"
+                  size="sm"
+                  isDisabled={
+                    deleteConfirmName !== workspace?.name ||
+                    adminDeleteMutation.isPending
+                  }
+                  onPress={() =>
+                    adminDeleteMutation.mutate({
+                      workspaceId,
+                      confirmName: deleteConfirmName,
+                    })
+                  }
+                >
+                  {adminDeleteMutation.isPending ? (
+                    <Spinner size="sm" color="current" />
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5">
+                      <IconTrash size={14} />
+                      Delete workspace
+                    </span>
+                  )}
+                </Button>
+              </Modal.Footer>
             </Modal.Dialog>
           </Modal.Container>
         </Modal.Backdrop>

@@ -147,12 +147,12 @@ export default function PodServicesPage() {
       </div>
 
       {isDomainCollision ? (
-        <Card.Root className="border border-danger-300 bg-danger-50/60">
+        <Card.Root className="border border-danger/30 bg-danger/10">
           <Card.Content className="p-4">
-            <Text className="text-sm font-semibold text-danger-700">
+            <Text className="text-sm font-semibold text-danger">
               OpenClaw domain collision detected
             </Text>
-            <Text className="mt-1 text-xs text-danger-700">
+            <Text className="mt-1 text-xs text-danger">
               `OPENCLAW_DOMAIN` matches `DOMAIN`, which can cause redirect
               loops. Use a dedicated subdomain (for example
               `openclaw.your-domain`).

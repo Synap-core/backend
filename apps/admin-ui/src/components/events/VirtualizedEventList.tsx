@@ -58,7 +58,7 @@ export default function VirtualizedEventList({
               }}
               className={`absolute left-0 top-0 flex w-full items-center gap-3 border transition-colors ${
                 event.isError
-                  ? "border-danger-200 bg-danger-50 hover:bg-danger-100/80"
+                  ? "border-danger/30 bg-danger/10 hover:bg-danger/15"
                   : "border-divider bg-default-100 hover:bg-default-200/80"
               } ${onEventClick ? "cursor-pointer" : ""} `}
               style={{

@@ -221,7 +221,7 @@ export default function KratosSelfServicePage({
   if (error && !flow) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background p-6">
-        <div className="max-w-md rounded-2xl border border-danger-200 bg-danger-50 p-6 text-danger-900">
+        <div className="max-w-md rounded-2xl border border-danger/30 bg-danger/10 p-6 text-danger">
           <div className="mb-2 flex items-center gap-2 font-semibold">
             <IconAlertCircle size={20} />
             Sign-in unavailable
@@ -249,7 +249,7 @@ export default function KratosSelfServicePage({
         </p>
 
         {error ? (
-          <div className="mt-4 rounded-medium border border-danger-200 bg-danger-50 p-3 text-sm text-danger-800">
+          <div className="mt-4 rounded-medium border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
             {error}
           </div>
         ) : null}

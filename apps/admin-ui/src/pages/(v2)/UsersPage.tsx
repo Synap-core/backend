@@ -329,12 +329,12 @@ export default function UsersPage() {
                           {passwordResetResult.failures.map((failure) => (
                             <div
                               key={`fail-${failure.userId}`}
-                              className="rounded-md border border-danger-200 bg-danger-50 px-3 py-2"
+                              className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2"
                             >
-                              <Text className="text-xs font-medium text-danger-700">
+                              <Text className="text-xs font-medium text-danger">
                                 {failure.email}
                               </Text>
-                              <Text className="text-xs text-danger-600">
+                              <Text className="text-xs text-danger/80">
                                 {failure.error}
                               </Text>
                             </div>

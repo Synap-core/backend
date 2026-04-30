@@ -65,6 +65,15 @@ body {
     sans-serif;
 }
 
+/* Input autofill dark mode — prevents browser yellow autofill flash */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 30px var(--color-content1, #18181b) inset !important;
+  -webkit-text-fill-color: var(--color-foreground, #fafafa) !important;
+  caret-color: var(--color-foreground, #fafafa);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

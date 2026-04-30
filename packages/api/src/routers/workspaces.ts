@@ -8,7 +8,12 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, publicProcedure } from "../trpc.js";
+import {
+  router,
+  protectedProcedure,
+  publicProcedure,
+  podAdminProcedure,
+} from "../trpc.js";
 import {
   db,
   eq,
@@ -656,6 +661,100 @@ export const workspacesRouter = router({
         status: "deleted" as const,
         message: "Workspace deleted successfully.",
       };
+    }),
+
+  /**
+   * Admin: list ALL workspaces on the pod (pod-admin only)
+   */
+  adminListAll: podAdminProcedure.query(async () => {
+    const allWorkspaces = await db.query.workspaces.findMany({
+      orderBy: [desc(workspaces.createdAt)],
+    });
+
+    const counts = await db
+      .select({
+        workspaceId: workspaceMembers.workspaceId,
+        count: drizzleSql<number>`count(*)::int`,
+      })
+      .from(workspaceMembers)
+      .groupBy(workspaceMembers.workspaceId);
+
+    const countMap = new Map(counts.map((c) => [c.workspaceId, c.count]));
+
+    return allWorkspaces.map((ws) => ({
+      ...ws,
+      memberCount: countMap.get(ws.id) ?? 0,
+    }));
+  }),
+
+  /**
+   * Admin: force-delete any workspace (pod-admin only)
+   *
+   * Blocked for system workspaces (systemSlug set in settings).
+   * Requires the caller to pass the workspace name for confirmation
+   * (verified server-side to prevent accidental bulk deletions).
+   */
+  adminDelete: podAdminProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid(),
+        confirmName: z.string(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, input.workspaceId),
+        columns: { id: true, name: true, settings: true },
+      });
+
+      if (!workspace) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Workspace not found",
+        });
+      }
+
+      const settings = (workspace.settings ?? {}) as Record<string, unknown>;
+      if (settings.systemSlug) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "System workspaces cannot be deleted from the admin panel.",
+        });
+      }
+
+      if (workspace.name !== input.confirmName) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Workspace name does not match. Deletion cancelled.",
+        });
+      }
+
+      const dbConn = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
+
+      await workspaceRepo.delete(input.workspaceId, ctx.userId);
+
+      auditLog({
+        subjectType: "workspaces",
+        action: "admin_delete",
+        phase: "completed",
+        subjectId: input.workspaceId,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        data: {
+          id: input.workspaceId,
+          name: workspace.name,
+          adminForced: true,
+        },
+      });
+
+      logger.warn(
+        { workspaceId: input.workspaceId, deletedBy: ctx.userId },
+        "Admin force-deleted workspace"
+      );
+
+      return { status: "deleted" as const, message: "Workspace deleted." };
     }),
 
   /**

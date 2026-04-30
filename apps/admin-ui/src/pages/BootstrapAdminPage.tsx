@@ -73,7 +73,7 @@ export default function BootstrapAdminPage() {
         </p>
 
         {error ? (
-          <div className="mt-4 rounded-medium border border-danger-200 bg-danger-50 p-3 text-sm text-danger-800">
+          <div className="mt-4 rounded-medium border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
             {error}
           </div>
         ) : null}

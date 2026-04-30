@@ -467,7 +467,7 @@ export default function ApiKeysPage() {
               <Modal.Body className="px-5 py-4">
                 {newKey ? (
                   <div className="flex flex-col gap-4">
-                    <div className="flex gap-2 rounded-medium border border-warning-200 bg-warning-50 p-3 text-warning-800">
+                    <div className="flex gap-2 rounded-medium border border-warning/30 bg-warning/10 p-3 text-warning">
                       <IconAlertCircle size={18} className="shrink-0" />
                       <div>
                         <p className="font-semibold">Save this key now</p>
@@ -477,7 +477,7 @@ export default function ApiKeysPage() {
                       </div>
                     </div>
                     <pre
-                      className="overflow-x-auto rounded-medium border border-warning-200 bg-warning-50 p-4 font-mono text-sm text-warning-700"
+                      className="overflow-x-auto rounded-medium border border-warning/30 bg-warning/10 p-4 font-mono text-sm text-warning"
                       style={{ fontFamily: typography.fontFamily.mono }}
                     >
                       {newKey}
