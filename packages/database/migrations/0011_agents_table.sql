@@ -28,6 +28,7 @@ BEGIN
 END $$;
 
 -- Create the new agents table
+-- intelligence_service_id has no inline FK — added conditionally below (see 0009 for rationale).
 CREATE TABLE IF NOT EXISTS agents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
@@ -38,7 +39,7 @@ CREATE TABLE IF NOT EXISTS agents (
     metadata JSONB DEFAULT '{}'::jsonb,
     active BOOLEAN DEFAULT true,
     owner_type TEXT NOT NULL DEFAULT 'system',
-    intelligence_service_id TEXT REFERENCES intelligence_services(id),
+    intelligence_service_id TEXT,
     user_id UUID REFERENCES users(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -50,7 +51,26 @@ DO $$ BEGIN
         SELECT FROM information_schema.columns
         WHERE table_name = 'agents' AND column_name = 'intelligence_service_id'
     ) THEN
-        ALTER TABLE agents ADD COLUMN intelligence_service_id TEXT REFERENCES intelligence_services(id);
+        ALTER TABLE agents ADD COLUMN intelligence_service_id TEXT;
+    END IF;
+END $$;
+
+-- Add FK only when intelligence_services.id is TEXT — skip for pods where it is UUID
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT FROM information_schema.table_constraints
+        WHERE constraint_name = 'agents_intelligence_service_id_fkey'
+          AND table_name = 'agents'
+    ) THEN
+        IF EXISTS (
+            SELECT FROM information_schema.columns
+            WHERE table_name = 'intelligence_services' AND column_name = 'id'
+              AND data_type = 'text'
+        ) THEN
+            ALTER TABLE agents ADD CONSTRAINT agents_intelligence_service_id_fkey
+                FOREIGN KEY (intelligence_service_id)
+                REFERENCES intelligence_services(id) ON DELETE SET NULL;
+        END IF;
     END IF;
 END $$;
 

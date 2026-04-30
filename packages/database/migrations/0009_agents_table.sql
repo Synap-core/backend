@@ -25,6 +25,9 @@ BEGIN
 END $$;
 
 -- 2. Create agents table
+-- intelligence_service_id is TEXT without an inline FK constraint here — the FK is added
+-- conditionally below because some pods have intelligence_services.id as UUID (from older
+-- migrations) and PostgreSQL rejects a TEXT→UUID foreign key (PG code 42804).
 CREATE TABLE IF NOT EXISTS agents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
@@ -35,7 +38,7 @@ CREATE TABLE IF NOT EXISTS agents (
     metadata JSONB DEFAULT '{}'::jsonb,
     owner_type TEXT NOT NULL DEFAULT 'system',
     user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
-    intelligence_service_id TEXT REFERENCES intelligence_services(id) ON DELETE SET NULL,
+    intelligence_service_id TEXT,
     active BOOLEAN DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -49,10 +52,31 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS capabilities TEXT[] DEFAULT '{}';
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS owner_type TEXT NOT NULL DEFAULT 'system';
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE SET NULL;
-ALTER TABLE agents ADD COLUMN IF NOT EXISTS intelligence_service_id TEXT REFERENCES intelligence_services(id) ON DELETE SET NULL;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS intelligence_service_id TEXT;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT true;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+-- Add FK from intelligence_service_id → intelligence_services(id) only when the target
+-- column is also TEXT. Pods where intelligence_services.id was already converted to UUID
+-- (PG code 42804) skip this — 0011_agents_table.sql handles those via a DO block as well.
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT FROM information_schema.table_constraints
+        WHERE constraint_name = 'agents_intelligence_service_id_fkey'
+          AND table_name = 'agents'
+    ) THEN
+        IF EXISTS (
+            SELECT FROM information_schema.columns
+            WHERE table_name = 'intelligence_services' AND column_name = 'id'
+              AND data_type = 'text'
+        ) THEN
+            ALTER TABLE agents ADD CONSTRAINT agents_intelligence_service_id_fkey
+                FOREIGN KEY (intelligence_service_id)
+                REFERENCES intelligence_services(id) ON DELETE SET NULL;
+        END IF;
+    END IF;
+END $$;
 
 -- 4. If table existed from 0000 baseline with TEXT id, convert to UUID
 DO $$ BEGIN
