@@ -25,6 +25,9 @@ const POD_PATHS: readonly string[] = [
   "/intelligence",
 ];
 
+// /audit is workspace-aware (filters governance events by workspace),
+// so it lives in the Lens section.
+
 const LENS_PATHS: readonly string[] = [
   "/workspace",
   "/events",
@@ -33,6 +36,7 @@ const LENS_PATHS: readonly string[] = [
   "/proposals",
   "/connections",
   "/api-keys",
+  "/audit",
 ];
 
 /**
