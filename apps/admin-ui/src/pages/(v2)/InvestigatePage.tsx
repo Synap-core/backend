@@ -42,6 +42,7 @@ import {
 } from "@tabler/icons-react";
 import { SearchResultsSkeleton } from "../../components/loading/LoadingSkeletons";
 import { trpc } from "../../lib/trpc";
+import { useWorkspace } from "../../lib/workspace";
 import EventTypeExplorer from "../../components/events/EventTypeExplorer";
 import SchemaFormGenerator from "../../components/forms/SchemaFormGenerator";
 
@@ -73,6 +74,7 @@ type EventTypeEntry = {
 };
 
 export default function InvestigatePage() {
+  const { workspaceId } = useWorkspace();
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState("search");
 
@@ -128,6 +130,7 @@ export default function InvestigatePage() {
       userId: deferredSearch && !isUuid ? deferredSearch : undefined,
       correlationId: deferredSearch && isUuid ? deferredSearch : undefined,
       eventType: deferredEventType || undefined,
+      workspaceId: workspaceId ?? undefined,
       fromDate: toIso(fromDate),
       toDate: toIso(toDate),
       limit: 100,

@@ -2024,6 +2024,64 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		adminList: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | null | undefined;
+				profileSlug?: string | undefined;
+				search?: string | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+			};
+			output: {
+				items: {
+					id: string;
+					title: string | null;
+					preview: string | null;
+					profileSlug: string;
+					workspaceId: string | null;
+					workspaceName: string | null;
+					userId: string;
+					createdAt: Date;
+					updatedAt: Date;
+					propertiesPreview: string;
+				}[];
+				total: number;
+			};
+			meta: object;
+		}>;
+		adminGet: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				properties: {};
+				systemData: {};
+				workspaceName: string | null;
+				userId: string;
+				workspaceId: string | null;
+				id: string;
+				type: string;
+				updatedAt: Date;
+				createdAt: Date;
+				profileId: string | null;
+				title: string | null;
+				preview: string | null;
+				documentId: string | null;
+				version: number;
+				deletedAt: Date | null;
+			};
+			meta: object;
+		}>;
+		adminListProfiles: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | null | undefined;
+			};
+			output: {
+				profileSlug: string;
+				count: number;
+			}[];
+			meta: object;
+		}>;
 	}>>;
 	chat: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -3191,6 +3249,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				subjectType?: string | undefined;
 				subjectId?: string | undefined;
 				correlationId?: string | undefined;
+				workspaceId?: string | undefined;
 				fromDate?: string | undefined;
 				toDate?: string | undefined;
 				limit?: number | undefined;
@@ -3441,6 +3500,103 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		getQueueStats: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				totals: Record<string, number>;
+				queues: {
+					queue: string;
+					counts: Record<string, number>;
+					total: number;
+				}[];
+			};
+			meta: object;
+		}>;
+		listJobs: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				state?: "active" | "created" | "completed" | "failed" | "cancelled" | "retry" | undefined;
+				queueName?: string | undefined;
+				limit?: number | undefined;
+			};
+			output: {
+				id: string;
+				queue: string;
+				state: string;
+				retryCount: number;
+				retryLimit: number;
+				createdOn: Date;
+				startedOn: Date | null;
+				completedOn: Date | null;
+				dataPreview: string | null;
+				outputPreview: string | null;
+			}[];
+			meta: object;
+		}>;
+		getJobDetails: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: Record<string, unknown>;
+			meta: object;
+		}>;
+		retryJob: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				ok: boolean;
+			};
+			meta: object;
+		}>;
+		cancelJob: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				ok: boolean;
+			};
+			meta: object;
+		}>;
+		listAuditLogs: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+				userId?: string | undefined;
+				subjectType?: string | undefined;
+				action?: string | undefined;
+				fromDate?: string | undefined;
+				toDate?: string | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+			};
+			output: {
+				events: {
+					id: string;
+					timestamp: Date;
+					eventType: string;
+					action: string;
+					phase: string;
+					subjectType: string;
+					subjectId: string;
+					userId: string;
+					workspaceId: string | null;
+					source: string;
+					correlationId: string | null;
+					data: Record<string, unknown>;
+					metadata: Record<string, unknown> | undefined;
+				}[];
+				actors: Record<string, {
+					id: string;
+					email: string | null;
+					name: string | null;
+				}>;
+				workspaces: Record<string, {
+					id: string;
+					name: string;
+				}>;
+				availableSubjectTypes: string[];
+			};
+			meta: object;
+		}>;
 	}>>;
 	hub: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -3534,6 +3690,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				lastUsedAt: Date | null;
 				usageCount: number;
 				createdAt: Date;
+				revokedAt: Date | null;
+				revokedReason: string | null;
+			}[];
+			meta: object;
+		}>;
+		adminListAll: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+			} | undefined;
+			output: {
+				id: string;
+				userId: string;
+				keyName: string;
+				keyPrefix: string;
+				keyType: "system" | "hub_inbound" | "user_pat";
+				hubId: string | null;
+				scope: string[];
+				isActive: boolean;
+				expiresAt: Date | null;
+				lastUsedAt: Date | null;
+				usageCount: number;
+				createdAt: Date;
+				createdBy: string | null;
 				revokedAt: Date | null;
 				revokedReason: string | null;
 			}[];
@@ -5975,6 +6154,56 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "deleted";
 				message: string;
 				proposalId?: undefined;
+			};
+			meta: object;
+		}>;
+		adminGet: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				memberCount: number;
+				role: "admin";
+				name: string;
+				id: string;
+				type: string;
+				updatedAt: Date;
+				createdAt: Date;
+				description: string | null;
+				settings: WorkspaceSettings;
+				ownerId: string;
+				subscriptionTier: string | null;
+				subscriptionStatus: string | null;
+				stripeCustomerId: string | null;
+			};
+			meta: object;
+		}>;
+		adminListAll: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				memberCount: number;
+				name: string;
+				id: string;
+				type: string;
+				updatedAt: Date;
+				createdAt: Date;
+				description: string | null;
+				settings: WorkspaceSettings;
+				ownerId: string;
+				subscriptionTier: string | null;
+				subscriptionStatus: string | null;
+				stripeCustomerId: string | null;
+			}[];
+			meta: object;
+		}>;
+		adminDelete: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				workspaceId: string;
+				confirmName: string;
+			};
+			output: {
+				status: "deleted";
+				message: string;
 			};
 			meta: object;
 		}>;

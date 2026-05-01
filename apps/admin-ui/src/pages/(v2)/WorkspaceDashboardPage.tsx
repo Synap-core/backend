@@ -46,7 +46,8 @@ const PROPOSAL_STATUS_COLORS: Record<string, "warning" | "success" | "danger"> =
 
 export default function WorkspaceDashboardPage() {
   const navigate = useNavigate();
-  const { workspaceId, workspaceName } = useWorkspace();
+  const { workspaceId, workspaceName, workspaces, isAllWorkspaces } =
+    useWorkspace();
 
   const { data: workspace, isLoading: wsLoading } =
     trpc.workspaces.get.useQuery(
@@ -77,10 +78,51 @@ export default function WorkspaceDashboardPage() {
   const pendingProposals = proposalsData?.proposals ?? [];
   const isLoading = wsLoading || membersLoading || agentsLoading;
 
-  if (!workspaceId) {
+  if (isAllWorkspaces) {
     return (
-      <div style={{ padding: spacing[8] }}>
-        <Text className="text-sm text-default-500">No workspace selected.</Text>
+      <div className="w-full" style={{ padding: spacing[8] }}>
+        <div className="flex flex-col gap-6">
+          <div>
+            <h1 className="m-0 text-2xl font-bold text-foreground">
+              All workspaces
+            </h1>
+            <Text className="mt-1 text-sm text-default-500">
+              Pod-wide view — select a workspace in the sidebar to inspect it.
+            </Text>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {workspaces.map((ws) => (
+              <Link
+                key={ws.id}
+                to={`/workspaces/${ws.id}`}
+                className="no-underline"
+              >
+                <Card className="cursor-pointer border border-divider transition-colors hover:bg-default-100">
+                  <div className="flex flex-col gap-2 p-4">
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-secondary/10 text-sm font-bold uppercase text-secondary">
+                        {ws.name.charAt(0)}
+                      </span>
+                      <span className="flex-1 truncate font-semibold text-foreground">
+                        {ws.name}
+                      </span>
+                      <IconArrowRight
+                        size={14}
+                        className="shrink-0 text-default-400"
+                      />
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-default-500">
+                      <span className="flex items-center gap-1">
+                        <IconUsers size={12} />
+                        {ws.memberCount} member{ws.memberCount !== 1 ? "s" : ""}
+                      </span>
+                    </div>
+                  </div>
+                </Card>
+              </Link>
+            ))}
+          </div>
+        </div>
       </div>
     );
   }

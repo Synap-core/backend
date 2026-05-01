@@ -664,6 +664,36 @@ export const workspacesRouter = router({
     }),
 
   /**
+   * Admin: get any workspace by ID (pod-admin only, no membership required)
+   */
+  adminGet: podAdminProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ input }) => {
+      const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, input.id),
+      });
+
+      if (!workspace) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Workspace not found",
+        });
+      }
+
+      const memberCount = await db
+        .select({ count: drizzleSql<number>`count(*)::int` })
+        .from(workspaceMembers)
+        .where(eq(workspaceMembers.workspaceId, input.id));
+
+      return {
+        ...workspace,
+        memberCount: memberCount[0]?.count ?? 0,
+        // Admins have no role in the workspace (they're managing it externally)
+        role: "admin" as const,
+      };
+    }),
+
+  /**
    * Admin: list ALL workspaces on the pod (pod-admin only)
    */
   adminListAll: podAdminProcedure.query(async () => {

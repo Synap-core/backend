@@ -13,7 +13,10 @@ import ProposalsPage from "./pages/(v2)/ProposalsPage";
 import IntelligencePage from "./pages/(v2)/IntelligencePage";
 import SecretsPage from "./pages/(v2)/SecretsPage";
 import DocumentsPage from "./pages/(v2)/DocumentsPage";
+import EntitiesPage from "./pages/(v2)/EntitiesPage";
 import PodServicesPage from "./pages/(v2)/PodServicesPage";
+import JobsPage from "./pages/(v2)/JobsPage";
+import AuditLogPage from "./pages/(v2)/AuditLogPage";
 import ConnectionsPage from "./pages/(v2)/ConnectionsPage";
 import ConnectionDetailPage from "./pages/(v2)/ConnectionDetailPage";
 import OpenClawControlCenterPage from "./pages/(v2)/OpenClawControlCenterPage";
@@ -41,6 +44,7 @@ function App() {
 
         {/* Data & Search */}
         <Route path="documents/:documentId?" element={<DocumentsPage />} />
+        <Route path="entities" element={<EntitiesPage />} />
         <Route path="events" element={<InvestigatePage />} />
         <Route path="workspaces/:id" element={<WorkspaceDetailPage />} />
         <Route path="workspaces" element={<WorkspacesPage />} />
@@ -48,6 +52,8 @@ function App() {
 
         {/* Monitoring */}
         <Route path="pod-services" element={<PodServicesPage />} />
+        <Route path="jobs" element={<JobsPage />} />
+        <Route path="audit" element={<AuditLogPage />} />
         <Route path="connections" element={<ConnectionsPage />} />
         <Route
           path="connections/:integrationId"

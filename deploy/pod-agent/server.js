@@ -19,6 +19,14 @@ const { execFile, spawn } = require("child_process");
 const PORT = parseInt(process.env.POD_AGENT_PORT || "4002", 10);
 const DEPLOY_DIR = process.env.DEPLOY_DIR || "/deploy";
 
+// How much of a command's stdout/stderr we forward to CP in the result packet.
+// `logsSnippet` is what CP's failure-packets formatter compacts and displays;
+// CP's compact() limit is ~8k, so anything north of that gets clipped on the
+// receiving side. We send a bit more (16k) so docker compose canary stack
+// traces aren't truncated mid-error before CP ever sees them.
+const LOGS_SNIPPET_MAX = 16_000;
+const FULL_OUTPUT_MAX = 50_000;
+
 /**
  * Host log directory bind-mounted from /var/log on the host at /host-log:ro
  * inside this container. Used by the read-host-log endpoint to return the
@@ -498,14 +506,14 @@ http
             const body = JSON.stringify({
               type: "exec",
               success: !err,
-              output: output.slice(0, 50_000),
+              output: output.slice(0, FULL_OUTPUT_MAX),
               error: err ? err.message : null,
               correlationId: packet.correlationId,
               step: packet.step,
               commandType: packet.commandType,
               errorSummary: packet.errorSummary,
-              logsSnippet: output.slice(0, 2000),
-              packet: { ...packet, logsSnippet: output.slice(0, 2000) },
+              logsSnippet: output.slice(0, LOGS_SNIPPET_MAX),
+              packet: { ...packet, logsSnippet: output.slice(0, LOGS_SNIPPET_MAX) },
             });
             const cbReq = https.request(payload.callbackUrl, {
               method: "POST",
@@ -539,13 +547,13 @@ http
             status,
             version: payload.targetVersion || payload.type,
             error: err ? err.message : null,
-            output: output.slice(0, 50_000),
+            output: output.slice(0, FULL_OUTPUT_MAX),
             correlationId: packet.correlationId,
             step: packet.step,
             commandType: packet.commandType,
             errorSummary: packet.errorSummary,
-            logsSnippet: output.slice(0, 2000),
-            packet: { ...packet, logsSnippet: output.slice(0, 2000) },
+            logsSnippet: output.slice(0, LOGS_SNIPPET_MAX),
+            packet: { ...packet, logsSnippet: output.slice(0, LOGS_SNIPPET_MAX) },
           });
           const cbUrl = new URL(payload.callbackUrl);
           const cbReq = https.request(cbUrl, {

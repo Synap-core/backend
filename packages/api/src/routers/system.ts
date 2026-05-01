@@ -18,7 +18,7 @@ import {
   router,
 } from "../trpc.js";
 import { EventTypeSchemas } from "@synap-core/core";
-import { getAllEventTypes } from "@synap/events";
+import { getAllEventTypes, getBoss } from "@synap/events";
 import { getAllGeneratedEventTypes, parseEventType } from "@synap/events";
 import { testConnection } from "@synap/search";
 import { dynamicToolRegistry } from "@synap/ai";
@@ -416,6 +416,7 @@ export const systemRouter = router({
         subjectType: z.string().optional(),
         subjectId: z.string().optional(),
         correlationId: z.string().optional(),
+        workspaceId: z.string().optional(),
         fromDate: z.string().datetime().optional(),
         toDate: z.string().datetime().optional(),
         limit: z.number().min(1).max(1000).default(100),
@@ -429,6 +430,7 @@ export const systemRouter = router({
         subjectType: input.subjectType,
         subjectId: input.subjectId,
         correlationId: input.correlationId,
+        workspaceId: input.workspaceId,
         fromDate: input.fromDate ? new Date(input.fromDate) : undefined,
         toDate: input.toDate ? new Date(input.toDate) : undefined,
         limit: input.limit,
@@ -440,6 +442,7 @@ export const systemRouter = router({
         userId: input.userId,
         eventType: input.eventType,
         subjectType: input.subjectType,
+        workspaceId: input.workspaceId,
         fromDate: filters.fromDate,
         toDate: filters.toDate,
       });
@@ -1182,6 +1185,337 @@ export const systemRouter = router({
       setDynamicCorsOrigins([...new Set([...envOrigins, ...input.origins])]);
 
       return { origins: input.origins, merged: getDynamicCorsOrigins() };
+    }),
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Job queue (pg-boss) — operational visibility for pod admins.
+  //
+  // pg-boss exposes JS APIs for retry/cancel/getJobById, but no list-all.
+  // We read pgboss.job directly for listing and aggregate stats. State
+  // changes still go through the JS API so pg-boss invariants hold.
+  // ─────────────────────────────────────────────────────────────────────
+
+  /** Aggregate counts per state and per queue. */
+  getQueueStats: podAdminProcedure.query(async () => {
+    const totals = (await db.execute(sqlDrizzle`
+      SELECT state, count(*)::int AS count
+      FROM pgboss.job
+      GROUP BY state
+    `)) as unknown as Array<{ state: string; count: number }>;
+
+    const perQueue = (await db.execute(sqlDrizzle`
+      SELECT name AS queue, state, count(*)::int AS count
+      FROM pgboss.job
+      GROUP BY name, state
+      ORDER BY name
+    `)) as unknown as Array<{ queue: string; state: string; count: number }>;
+
+    const states = [
+      "created",
+      "retry",
+      "active",
+      "completed",
+      "cancelled",
+      "failed",
+    ] as const;
+
+    const totalsByState: Record<string, number> = Object.fromEntries(
+      states.map((s) => [s, 0])
+    );
+    for (const row of totals) {
+      totalsByState[row.state] = row.count;
+    }
+
+    const queueMap = new Map<string, Record<string, number>>();
+    for (const row of perQueue) {
+      const existing =
+        queueMap.get(row.queue) ??
+        Object.fromEntries(states.map((s) => [s, 0]));
+      existing[row.state] = row.count;
+      queueMap.set(row.queue, existing);
+    }
+
+    return {
+      totals: totalsByState,
+      queues: Array.from(queueMap.entries()).map(([queue, counts]) => ({
+        queue,
+        counts,
+        total: Object.values(counts).reduce((a, b) => a + b, 0),
+      })),
+    };
+  }),
+
+  /** Recent jobs, optionally filtered by state and/or queue name. */
+  listJobs: podAdminProcedure
+    .input(
+      z.object({
+        state: z
+          .enum([
+            "created",
+            "retry",
+            "active",
+            "completed",
+            "cancelled",
+            "failed",
+          ])
+          .optional(),
+        queueName: z.string().optional(),
+        limit: z.number().min(1).max(200).default(50),
+      })
+    )
+    .query(async ({ input }) => {
+      // Build a parameterized WHERE clause via drizzle's sql composition.
+      const conditions: ReturnType<typeof sqlDrizzle>[] = [];
+      if (input.state) {
+        conditions.push(sqlDrizzle`state = ${input.state}`);
+      }
+      if (input.queueName) {
+        conditions.push(sqlDrizzle`name = ${input.queueName}`);
+      }
+
+      const whereClause =
+        conditions.length === 0
+          ? sqlDrizzle.empty()
+          : sqlDrizzle`WHERE ${sqlDrizzle.join(conditions, sqlDrizzle` AND `)}`;
+
+      const rows = (await db.execute(sqlDrizzle`
+        SELECT
+          id::text AS id,
+          name AS queue,
+          state,
+          retry_count AS "retryCount",
+          retry_limit AS "retryLimit",
+          created_on AS "createdOn",
+          started_on AS "startedOn",
+          completed_on AS "completedOn",
+          (CASE
+            WHEN length(data::text) > 500
+              THEN left(data::text, 500) || '…'
+            ELSE data::text
+           END) AS "dataPreview",
+          (CASE
+            WHEN output IS NULL THEN NULL
+            WHEN length(output::text) > 500
+              THEN left(output::text, 500) || '…'
+            ELSE output::text
+           END) AS "outputPreview"
+        FROM pgboss.job
+        ${whereClause}
+        ORDER BY created_on DESC
+        LIMIT ${input.limit}
+      `)) as unknown as Array<{
+        id: string;
+        queue: string;
+        state: string;
+        retryCount: number;
+        retryLimit: number;
+        createdOn: Date;
+        startedOn: Date | null;
+        completedOn: Date | null;
+        dataPreview: string | null;
+        outputPreview: string | null;
+      }>;
+
+      return rows;
+    }),
+
+  /** Full job row including untruncated data + output. */
+  getJobDetails: podAdminProcedure
+    .input(z.object({ id: z.string() }))
+    .query(async ({ input }) => {
+      const rows = (await db.execute(sqlDrizzle`
+        SELECT
+          id::text AS id,
+          name AS queue,
+          state,
+          priority,
+          retry_count AS "retryCount",
+          retry_limit AS "retryLimit",
+          retry_delay AS "retryDelay",
+          retry_backoff AS "retryBackoff",
+          created_on AS "createdOn",
+          start_after AS "startAfter",
+          started_on AS "startedOn",
+          completed_on AS "completedOn",
+          keep_until AS "keepUntil",
+          singleton_key AS "singletonKey",
+          dead_letter AS "deadLetter",
+          policy,
+          data,
+          output
+        FROM pgboss.job
+        WHERE id = ${input.id}::uuid
+        LIMIT 1
+      `)) as unknown as Array<Record<string, unknown>>;
+
+      if (rows.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Job not found" });
+      }
+      return rows[0];
+    }),
+
+  /** Re-enqueue a failed/cancelled job via pg-boss API. */
+  retryJob: podAdminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ input }) => {
+      const rows = (await db.execute(sqlDrizzle`
+        SELECT name FROM pgboss.job WHERE id = ${input.id}::uuid LIMIT 1
+      `)) as unknown as Array<{ name: string }>;
+      if (rows.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Job not found" });
+      }
+      try {
+        await getBoss().retry(rows[0].name, input.id);
+      } catch (err) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Retry failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+      return { ok: true };
+    }),
+
+  /** Cancel an active/queued job via pg-boss API. */
+  cancelJob: podAdminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ input }) => {
+      const rows = (await db.execute(sqlDrizzle`
+        SELECT name FROM pgboss.job WHERE id = ${input.id}::uuid LIMIT 1
+      `)) as unknown as Array<{ name: string }>;
+      if (rows.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Job not found" });
+      }
+      try {
+        await getBoss().cancel(rows[0].name, input.id);
+      } catch (err) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Cancel failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+      return { ok: true };
+    }),
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Audit log — curated lens on the events table for governance/security.
+  //
+  // Distinct from searchEvents (raw debugging tool). This endpoint filters
+  // to a fixed set of audit-relevant subject types and resolves user names
+  // in a single batch so the UI can render readable rows.
+  // ─────────────────────────────────────────────────────────────────────
+  listAuditLogs: podAdminProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().optional(),
+        userId: z.string().optional(),
+        subjectType: z.string().optional(),
+        action: z.string().optional(),
+        fromDate: z.string().datetime().optional(),
+        toDate: z.string().datetime().optional(),
+        limit: z.number().min(1).max(200).default(50),
+        offset: z.number().min(0).default(0),
+      })
+    )
+    .query(async ({ input }) => {
+      const AUDIT_SUBJECT_TYPES = [
+        "workspaces",
+        "workspace_members",
+        "api_keys",
+        "proposals",
+        "agents",
+        "users",
+        "secrets",
+        "intelligence_services",
+        "trusted_issuers",
+      ];
+
+      const events = await eventRepository.searchEvents({
+        userId: input.userId,
+        subjectType: input.subjectType as unknown as undefined,
+        subjectTypes: input.subjectType ? undefined : AUDIT_SUBJECT_TYPES,
+        workspaceId: input.workspaceId,
+        fromDate: input.fromDate ? new Date(input.fromDate) : undefined,
+        toDate: input.toDate ? new Date(input.toDate) : undefined,
+        limit: input.limit,
+        offset: input.offset,
+      });
+
+      // Filter by action client-side (event type format: "table.action.phase").
+      // Also restrict to phase=completed so we surface successful audit events.
+      const filtered = events.filter((ev) => {
+        const parts = ev.eventType.split(".");
+        const phase = parts[parts.length - 1];
+        if (phase !== "completed") return false;
+        if (input.action) {
+          const verb = parts[1];
+          if (verb !== input.action) return false;
+        }
+        return true;
+      });
+
+      // Batch-resolve actor user info so the UI can show readable names.
+      const uniqueUserIds = Array.from(new Set(filtered.map((e) => e.userId)));
+      const actorMap: Record<
+        string,
+        { id: string; email: string | null; name: string | null }
+      > = {};
+      if (uniqueUserIds.length > 0) {
+        const rows = await db.query.users.findMany({
+          where: (u, { inArray }) => inArray(u.id, uniqueUserIds),
+          columns: { id: true, email: true, name: true },
+        });
+        for (const u of rows) {
+          actorMap[u.id] = {
+            id: u.id,
+            email: u.email ?? null,
+            name: u.name ?? null,
+          };
+        }
+      }
+
+      // Resolve workspace names for the optional "workspace" column.
+      const uniqueWorkspaceIds = Array.from(
+        new Set(
+          filtered
+            .map((e) => (e.data as Record<string, unknown>)?.workspaceId)
+            .filter((v): v is string => typeof v === "string" && v.length > 0)
+        )
+      );
+      const workspaceMap: Record<string, { id: string; name: string }> = {};
+      if (uniqueWorkspaceIds.length > 0) {
+        const rows = await db.query.workspaces.findMany({
+          where: (w, { inArray }) => inArray(w.id, uniqueWorkspaceIds),
+          columns: { id: true, name: true },
+        });
+        for (const w of rows) {
+          workspaceMap[w.id] = { id: w.id, name: w.name };
+        }
+      }
+
+      return {
+        events: filtered.map((ev) => {
+          const parts = ev.eventType.split(".");
+          const wsId = (ev.data as Record<string, unknown>)?.workspaceId;
+          return {
+            id: ev.id,
+            timestamp: ev.timestamp,
+            eventType: ev.eventType,
+            action: parts[1] ?? "",
+            phase: parts[parts.length - 1] ?? "",
+            subjectType: ev.subjectType,
+            subjectId: ev.subjectId,
+            userId: ev.userId,
+            workspaceId: typeof wsId === "string" ? wsId : null,
+            source: ev.source,
+            correlationId: ev.correlationId ?? null,
+            data: ev.data,
+            metadata: ev.metadata,
+          };
+        }),
+        actors: actorMap,
+        workspaces: workspaceMap,
+        availableSubjectTypes: AUDIT_SUBJECT_TYPES,
+      };
     }),
 });
 

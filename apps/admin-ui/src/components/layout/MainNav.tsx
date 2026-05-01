@@ -15,12 +15,14 @@ import {
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
   IconFileText,
+  IconDatabase,
+  IconListDetails,
   IconMoon,
   IconSun,
 } from "@tabler/icons-react";
-import { useWorkspace } from "../../lib/workspace";
 import { useThemeContext } from "../../main";
 import SearchCommandButton from "./SearchCommandButton";
+import WorkspaceSwitcher from "./WorkspaceSwitcher";
 import { NavListSectionBlock, type NavListSection } from "./NavList";
 
 interface MainNavProps {
@@ -31,60 +33,47 @@ interface MainNavProps {
   onToggleCollapsed?: () => void;
 }
 
-const podSections: NavListSection[] = [
-  {
-    label: "Overview",
-    items: [{ path: "/", label: "Pod overview", icon: IconHome }],
-  },
-  {
-    label: "Data & search",
-    items: [
-      { path: "/documents", label: "Documents", icon: IconFileText },
-      { path: "/events", label: "Events", icon: IconSearch },
-      {
-        path: "/workspaces",
-        label: "Workspaces",
-        icon: IconBuildingCommunity,
-      },
-      { path: "/users", label: "Users", icon: IconUsers },
-    ],
-  },
-  {
-    label: "Monitoring",
-    items: [
-      {
-        path: "/pod-services",
-        label: "Pod services",
-        icon: IconPlugConnected,
-      },
-      {
-        path: "/connections",
-        label: "Integrations",
-        icon: IconPlug,
-      },
-      { path: "/openclaw", label: "Add-ons (OpenClaw)", icon: IconRobot },
-    ],
-  },
-  {
-    label: "Governance",
-    items: [
-      { path: "/secrets", label: "Secrets & keys", icon: IconShieldLock },
-      { path: "/api-keys", label: "API keys", icon: IconShieldLock },
-      {
-        path: "/trusted-issuers",
-        label: "Trusted issuers",
-        icon: IconShieldCheck,
-      },
-    ],
-  },
-];
+/**
+ * Two top-level sections, mirroring the conceptual split:
+ *  - Pod  → infra, sovereignty, inventory. Workspace selector doesn't apply.
+ *  - Lens → workspace-aware data. Selector filters; "All" shows aggregate.
+ *
+ * If you add a new route, also register it in `nav-scope.ts` so the
+ * WorkspaceSwitcher knows whether to mute itself on that page.
+ */
+const podSection: NavListSection = {
+  label: "Pod",
+  items: [
+    { path: "/", label: "Pod overview", icon: IconHome },
+    { path: "/pod-services", label: "Pod services", icon: IconPlugConnected },
+    { path: "/jobs", label: "Jobs", icon: IconListDetails },
+    { path: "/workspaces", label: "Workspaces", icon: IconBuildingCommunity },
+    { path: "/users", label: "Users", icon: IconUsers },
+    {
+      path: "/trusted-issuers",
+      label: "Trusted issuers",
+      icon: IconShieldCheck,
+    },
+    { path: "/secrets", label: "Secrets", icon: IconShieldLock },
+    { path: "/openclaw", label: "Add-ons", icon: IconRobot },
+    {
+      path: "/intelligence",
+      label: "Intelligence services",
+      icon: IconTerminal2,
+    },
+  ],
+};
 
-const workspaceSection: NavListSection = {
-  label: "Workspace",
+const lensSection: NavListSection = {
+  label: "Lens",
   items: [
     { path: "/workspace", label: "Workspace home", icon: IconHome },
+    { path: "/events", label: "Events", icon: IconSearch },
+    { path: "/entities", label: "Entities", icon: IconDatabase },
+    { path: "/documents", label: "Documents", icon: IconFileText },
     { path: "/proposals", label: "Proposals", icon: IconCheckbox },
-    { path: "/intelligence", label: "Intelligence", icon: IconTerminal2 },
+    { path: "/connections", label: "Connections", icon: IconPlug },
+    { path: "/api-keys", label: "API keys", icon: IconShieldLock },
   ],
 };
 
@@ -95,17 +84,7 @@ export default function MainNav({
   onToggleCollapsed,
 }: MainNavProps) {
   const location = useLocation();
-  const { workspaceId, workspaceRole, workspaces, setWorkspace } =
-    useWorkspace();
   const { theme, toggleTheme } = useThemeContext();
-
-  const isAdmin = workspaceRole === "owner" || workspaceRole === "admin";
-  const podNav = isAdmin
-    ? podSections
-    : podSections.map((s) => ({
-        ...s,
-        items: s.items.filter((i) => i.path !== "/users"),
-      }));
 
   const isActive = (path: string) => {
     if (path === "/") {
@@ -132,17 +111,18 @@ export default function MainNav({
     >
       <div
         className={cn(
-          "mb-4 flex shrink-0 flex-col gap-2",
+          "mb-3 flex shrink-0 flex-col gap-2",
           collapsed ? "items-center px-0" : "px-1"
         )}
       >
+        <WorkspaceSwitcher collapsed={collapsed} />
         <SearchCommandButton
           onPress={onCommandPaletteOpen}
           railOnly={collapsed}
         />
       </div>
 
-      <Separator className="mb-4 shrink-0 opacity-60" />
+      <Separator className="mb-3 shrink-0 opacity-60" />
 
       <div
         className={cn(
@@ -152,56 +132,19 @@ export default function MainNav({
             : "space-y-3 rounded-2xl border border-divider/70 bg-content1 p-2 shadow-sm"
         )}
       >
-        {podNav.map((section) => (
-          <div key={section.label}>
-            <NavListSectionBlock
-              section={section}
-              collapsed={collapsed}
-              isActive={isActive}
-              onNavigate={onNavigate}
-            />
-          </div>
-        ))}
-
-        {isAdmin ? (
-          <>
-            <Separator className="my-2 opacity-60" />
-            <div>
-              {!collapsed && workspaces.length > 0 ? (
-                <div className="mb-3 px-1">
-                  <label
-                    className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-default-400"
-                    htmlFor="admin-workspace-select"
-                  >
-                    Active workspace
-                  </label>
-                  <select
-                    id="admin-workspace-select"
-                    className="w-full rounded-lg border border-divider bg-default-50 px-2 py-1.5 text-xs text-foreground outline-none transition-colors hover:border-default-300 focus:border-primary focus:ring-2 focus:ring-primary/20"
-                    value={workspaceId ?? ""}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (v) setWorkspace(v);
-                    }}
-                  >
-                    {workspaces.map((w) => (
-                      <option key={w.id} value={w.id}>
-                        {w.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ) : null}
-
-              <NavListSectionBlock
-                section={workspaceSection}
-                collapsed={collapsed}
-                isActive={isActive}
-                onNavigate={onNavigate}
-              />
-            </div>
-          </>
-        ) : null}
+        <NavListSectionBlock
+          section={podSection}
+          collapsed={collapsed}
+          isActive={isActive}
+          onNavigate={onNavigate}
+        />
+        <Separator className="my-2 opacity-60" />
+        <NavListSectionBlock
+          section={lensSection}
+          collapsed={collapsed}
+          isActive={isActive}
+          onNavigate={onNavigate}
+        />
       </div>
 
       <div className="mt-auto shrink-0 space-y-2 border-t border-divider pt-3">

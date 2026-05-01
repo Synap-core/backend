@@ -10,29 +10,31 @@ import {
 import { trpc } from "./trpc";
 
 const STORAGE_KEY = "synap_workspace_id";
+const ALL_VALUE = "__all__";
 
 interface Workspace {
   id: string;
   name: string;
   type: string;
-  role: string;
+  memberCount: number;
 }
 
 interface WorkspaceState {
+  /** null = "All workspaces" (pod-wide view) */
   workspaceId: string | null;
   workspaceName: string | null;
-  workspaceRole: string | null;
   workspaces: Workspace[];
   isLoading: boolean;
-  setWorkspace: (id: string) => void;
+  isAllWorkspaces: boolean;
+  setWorkspace: (id: string | null) => void;
 }
 
 const WorkspaceContext = createContext<WorkspaceState>({
   workspaceId: null,
   workspaceName: null,
-  workspaceRole: null,
   workspaces: [],
   isLoading: true,
+  isAllWorkspaces: true,
   setWorkspace: () => {},
 });
 
@@ -41,12 +43,18 @@ export function useWorkspace(): WorkspaceState {
 }
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(
-    () => localStorage.getItem(STORAGE_KEY)
-  );
+  const [rawStored, setRawStored] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(STORAGE_KEY);
+    } catch {
+      return null;
+    }
+  });
 
-  // Auth is guaranteed by AuthProvider gating children — always enabled here
-  const { data: workspacesRaw, isLoading } = trpc.workspaces.list.useQuery();
+  // Use adminListAll so the selector shows every workspace on the pod,
+  // not only ones the admin user is a direct member of.
+  const { data: workspacesRaw, isLoading } =
+    trpc.workspaces.adminListAll.useQuery();
 
   const workspaces: Workspace[] = useMemo(
     () =>
@@ -54,30 +62,29 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         id: w.id,
         name: w.name,
         type: w.type,
-        role: w.role,
+        memberCount: w.memberCount,
       })),
     [workspacesRaw]
   );
 
-  // Derive effective workspace ID — auto-select first if selection is invalid
+  // null   → "All workspaces" (default)
+  // string → specific workspace ID
   const workspaceId = useMemo(() => {
-    if (isLoading || workspaces.length === 0) return selectedWorkspaceId;
-    const valid =
-      selectedWorkspaceId &&
-      workspaces.some((w) => w.id === selectedWorkspaceId);
-    return valid ? selectedWorkspaceId : workspaces[0].id;
-  }, [isLoading, workspaces, selectedWorkspaceId]);
+    if (!rawStored || rawStored === ALL_VALUE) return null;
+    // Validate the stored ID is still a real workspace
+    if (isLoading) return null;
+    const valid = workspaces.some((w) => w.id === rawStored);
+    return valid ? rawStored : null;
+  }, [rawStored, workspaces, isLoading]);
 
-  // Sync auto-selection to localStorage (external system side effect only)
-  useEffect(() => {
-    if (workspaceId && workspaceId !== selectedWorkspaceId) {
-      localStorage.setItem(STORAGE_KEY, workspaceId);
+  const setWorkspace = useCallback((id: string | null) => {
+    const val = id ?? ALL_VALUE;
+    try {
+      localStorage.setItem(STORAGE_KEY, val);
+    } catch {
+      /* ignore */
     }
-  }, [workspaceId, selectedWorkspaceId]);
-
-  const setWorkspace = useCallback((id: string) => {
-    localStorage.setItem(STORAGE_KEY, id);
-    setSelectedWorkspaceId(id);
+    setRawStored(val);
   }, []);
 
   const currentWorkspace = workspaces.find((w) => w.id === workspaceId);
@@ -86,20 +93,23 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     () => ({
       workspaceId,
       workspaceName: currentWorkspace?.name ?? null,
-      workspaceRole: currentWorkspace?.role ?? null,
       workspaces,
       isLoading,
+      isAllWorkspaces: workspaceId === null,
       setWorkspace,
     }),
-    [
-      workspaceId,
-      currentWorkspace?.name,
-      currentWorkspace?.role,
-      workspaces,
-      isLoading,
-      setWorkspace,
-    ]
+    [workspaceId, currentWorkspace?.name, workspaces, isLoading, setWorkspace]
   );
+
+  // Keep the X-Workspace-Id header in sync (used by tRPC client).
+  // When null, remove it so workspace-scoped endpoints see no workspace.
+  useEffect(() => {
+    if (workspaceId) {
+      localStorage.setItem("synap_workspace_id", workspaceId);
+    } else {
+      localStorage.removeItem("synap_workspace_id");
+    }
+  }, [workspaceId]);
 
   return (
     <WorkspaceContext.Provider value={value}>

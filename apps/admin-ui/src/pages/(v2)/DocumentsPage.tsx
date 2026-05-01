@@ -31,43 +31,38 @@ const trpcX = trpc as any;
 export default function DocumentsPage() {
   const { documentId } = useParams<{ documentId?: string }>();
   const navigate = useNavigate();
-  const { workspaceName, workspaceId } = useWorkspace();
+  const { workspaceName, workspaceId, isAllWorkspaces } = useWorkspace();
   const [markdownOnly, setMarkdownOnly] = useState(true);
   const [query, setQuery] = useState("");
 
+  // When "All workspaces" is selected, list globally (pod-wide).
+  // When a specific workspace is selected, use the workspace-scoped list
+  // (which respects the X-Workspace-Id header set by the tRPC client).
   const listGlobalQuery = trpcX.documents.listGlobal.useQuery(
     { markdownOnly, limit: 150 },
-    { retry: false }
+    { retry: false, enabled: isAllWorkspaces }
   );
-
-  const isMissingPodAdminWorkspace =
-    listGlobalQuery.isError &&
-    /pod administration workspace not found/i.test(
-      listGlobalQuery.error.message ?? ""
-    );
 
   const listWorkspaceQuery = trpc.documents.listInWorkspace.useQuery(
     { markdownOnly, limit: 150 },
-    { retry: false, enabled: isMissingPodAdminWorkspace && !!workspaceId }
+    { retry: false, enabled: !isAllWorkspaces && !!workspaceId }
   );
 
-  const listQuery = isMissingPodAdminWorkspace
-    ? listWorkspaceQuery
-    : listGlobalQuery;
+  const listQuery = isAllWorkspaces ? listGlobalQuery : listWorkspaceQuery;
 
   const detailGlobalQuery = trpcX.documents.getGlobal.useQuery(
     { documentId: documentId! },
-    { enabled: !!documentId && !isMissingPodAdminWorkspace, retry: false }
+    { enabled: !!documentId && isAllWorkspaces, retry: false }
   );
 
   const detailWorkspaceQuery = trpc.documents.getInWorkspace.useQuery(
     { documentId: documentId! },
-    { enabled: !!documentId && isMissingPodAdminWorkspace, retry: false }
+    { enabled: !!documentId && !isAllWorkspaces, retry: false }
   );
 
-  const detailQuery = isMissingPodAdminWorkspace
-    ? detailWorkspaceQuery
-    : detailGlobalQuery;
+  const detailQuery = isAllWorkspaces
+    ? detailGlobalQuery
+    : detailWorkspaceQuery;
 
   const filtered = useMemo(() => {
     const rows = listQuery.data?.documents ?? [];
@@ -114,17 +109,19 @@ export default function DocumentsPage() {
         <Text className="max-w-3xl text-small text-default-500">
           Browse file-backed notes across this pod. Markdown and plain text open
           in the viewer; PDFs and other binaries stay in Synap Browser.
-          {isMissingPodAdminWorkspace ? (
+          {isAllWorkspaces ? (
             <>
               {" "}
-              Pod-admin workspace was not found, so documents are shown from the
-              active workspace scope.
+              Showing documents from{" "}
+              <span className="font-medium text-default-700">
+                all workspaces
+              </span>
+              .
             </>
-          ) : null}
-          {workspaceName ? (
+          ) : workspaceName ? (
             <>
               {" "}
-              Current workspace context:{" "}
+              Scoped to{" "}
               <span className="font-medium text-default-700">
                 {workspaceName}
               </span>

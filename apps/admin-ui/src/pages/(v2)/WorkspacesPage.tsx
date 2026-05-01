@@ -32,14 +32,6 @@ const WORKSPACE_TYPE_COLORS: Record<string, "accent" | "success" | "warning"> =
     enterprise: "warning",
   };
 
-const ROLE_COLORS: Record<string, "accent" | "warning" | "accent" | "default"> =
-  {
-    owner: "accent",
-    admin: "warning",
-    editor: "accent",
-    viewer: "default",
-  };
-
 export default function WorkspacesPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");

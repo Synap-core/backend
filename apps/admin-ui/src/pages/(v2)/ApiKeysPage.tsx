@@ -18,6 +18,7 @@ import {
   IconAlertCircle,
 } from "@tabler/icons-react";
 import { trpc } from "../../lib/trpc";
+import { useWorkspace } from "../../lib/workspace";
 import {
   showSuccessNotification,
   showErrorNotification,
@@ -127,6 +128,7 @@ function SectionHeader({
 }
 
 export default function ApiKeysPage() {
+  const { workspaceId, workspaceName, isAllWorkspaces } = useWorkspace();
   const [createOpen, setCreateOpen] = useState(false);
   const [newKey, setNewKey] = useState<string | null>(null);
   const [keyName, setKeyName] = useState("");
@@ -137,11 +139,15 @@ export default function ApiKeysPage() {
     onOpenChange: setCreateOpen,
   });
 
+  // Admin view: list ALL pod keys, optionally narrowed to a specific workspace
+  // (filtered server-side via workspace membership of each key's owner).
   const {
     data: myKeys,
     isLoading: myKeysLoading,
     refetch: refetchMy,
-  } = trpc.apiKeys.list.useQuery();
+  } = trpc.apiKeys.adminListAll.useQuery({
+    workspaceId: workspaceId ?? undefined,
+  });
 
   const {
     data: systemKeys,
@@ -229,7 +235,24 @@ export default function ApiKeysPage() {
           <p className="max-w-xl text-small text-default-500">
             Create keys while signed in to this pod (Kratos session). They are
             user-scoped — use presets for common integrations, then refine
-            scopes as needed.
+            scopes as needed.{" "}
+            {isAllWorkspaces ? (
+              <>
+                Showing keys from{" "}
+                <span className="font-medium text-default-700">
+                  all workspaces
+                </span>
+                .
+              </>
+            ) : workspaceName ? (
+              <>
+                Showing keys whose owner has access to{" "}
+                <span className="font-medium text-default-700">
+                  {workspaceName}
+                </span>
+                .
+              </>
+            ) : null}
           </p>
         </div>
         <Button

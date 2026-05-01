@@ -14,6 +14,7 @@ import {
   workspaceProcedure,
   protectedProcedure,
   podProcedure,
+  podAdminProcedure,
 } from "../trpc.js";
 import {
   db,
@@ -1301,5 +1302,172 @@ export const entitiesRouter = router({
         viewMode: input.mode,
         bentoViewId: bentoViewId ?? null,
       };
+    }),
+
+  /**
+   * Admin: list entities pod-wide or scoped to a workspace.
+   *
+   * - workspaceId === undefined → all entities pod-wide
+   * - workspaceId === null      → only pod-wide entities (workspace_id IS NULL)
+   * - workspaceId === string    → that workspace's entities
+   */
+  adminList: podAdminProcedure
+    .input(
+      z.object({
+        workspaceId: z.union([z.string().uuid(), z.null()]).optional(),
+        profileSlug: z.string().optional(),
+        search: z.string().optional(),
+        limit: z.number().int().min(1).max(200).default(50),
+        offset: z.number().int().min(0).default(0),
+      })
+    )
+    .query(async ({ input }) => {
+      const conditions: any[] = [isNull(entities.deletedAt)];
+
+      if (input.workspaceId === null) {
+        conditions.push(isNull(entities.workspaceId));
+      } else if (typeof input.workspaceId === "string") {
+        conditions.push(eq(entities.workspaceId, input.workspaceId));
+      }
+
+      if (input.profileSlug) {
+        conditions.push(eq(entities.type, input.profileSlug));
+      }
+
+      if (input.search && input.search.trim().length > 0) {
+        const term = `%${input.search.trim()}%`;
+        conditions.push(
+          or(
+            drizzleSql`${entities.title} ILIKE ${term}`,
+            drizzleSql`${entities.preview} ILIKE ${term}`,
+            drizzleSql`${entities.properties}::text ILIKE ${term}`
+          )
+        );
+      }
+
+      const totalRow = await db
+        .select({ count: drizzleSql<number>`count(*)::int` })
+        .from(entities)
+        .where(and(...conditions));
+      const total = totalRow[0]?.count ?? 0;
+
+      const rows = await db.query.entities.findMany({
+        where: and(...conditions),
+        orderBy: [desc(entities.updatedAt)],
+        limit: input.limit,
+        offset: input.offset,
+        columns: {
+          id: true,
+          title: true,
+          preview: true,
+          type: true,
+          workspaceId: true,
+          userId: true,
+          createdAt: true,
+          updatedAt: true,
+          properties: true,
+        },
+      });
+
+      // Resolve workspace names for the rows
+      const wsIds = Array.from(
+        new Set(
+          rows.map((r) => r.workspaceId).filter((id): id is string => !!id)
+        )
+      );
+      const wsRows =
+        wsIds.length > 0
+          ? await db.query.workspaces.findMany({
+              where: inArray(workspaces.id, wsIds),
+              columns: { id: true, name: true },
+            })
+          : [];
+      const wsNameById = new Map(wsRows.map((w) => [w.id, w.name]));
+
+      // Truncate properties to keep payload small
+      const items = rows.map((r) => {
+        const propsString = JSON.stringify(r.properties ?? {});
+        const truncated =
+          propsString.length > 240
+            ? propsString.slice(0, 240) + "…"
+            : propsString;
+        return {
+          id: r.id,
+          title: r.title,
+          preview: r.preview,
+          profileSlug: r.type,
+          workspaceId: r.workspaceId,
+          workspaceName: r.workspaceId
+            ? (wsNameById.get(r.workspaceId) ?? null)
+            : null,
+          userId: r.userId,
+          createdAt: r.createdAt,
+          updatedAt: r.updatedAt,
+          propertiesPreview: truncated,
+        };
+      });
+
+      return { items, total };
+    }),
+
+  /**
+   * Admin: get full entity detail by id (pod-admin only).
+   */
+  adminGet: podAdminProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ input }) => {
+      const row = await db.query.entities.findFirst({
+        where: eq(entities.id, input.id),
+      });
+      if (!row) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
+      }
+
+      const ws = row.workspaceId
+        ? await db.query.workspaces.findFirst({
+            where: eq(workspaces.id, row.workspaceId),
+            columns: { id: true, name: true },
+          })
+        : null;
+
+      return {
+        ...row,
+        properties: row.properties ?? {},
+        systemData: row.systemData ?? {},
+        workspaceName: ws?.name ?? null,
+      };
+    }),
+
+  /**
+   * Admin: list profile slugs with entity counts (for the profile filter).
+   */
+  adminListProfiles: podAdminProcedure
+    .input(
+      z.object({
+        workspaceId: z.union([z.string().uuid(), z.null()]).optional(),
+      })
+    )
+    .query(async ({ input }) => {
+      const conditions: any[] = [isNull(entities.deletedAt)];
+      if (input.workspaceId === null) {
+        conditions.push(isNull(entities.workspaceId));
+      } else if (typeof input.workspaceId === "string") {
+        conditions.push(eq(entities.workspaceId, input.workspaceId));
+      }
+
+      const rows = await db
+        .select({
+          profileSlug: entities.type,
+          count: drizzleSql<number>`count(*)::int`,
+        })
+        .from(entities)
+        .where(and(...conditions))
+        .groupBy(entities.type)
+        .orderBy(desc(drizzleSql`count(*)`));
+
+      return rows.map((r) => ({
+        profileSlug: r.profileSlug,
+        count: r.count,
+      }));
     }),
 });

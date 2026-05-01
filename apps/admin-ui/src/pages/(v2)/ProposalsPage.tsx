@@ -8,6 +8,7 @@ import {
   IconChevronRight,
 } from "@tabler/icons-react";
 import { trpc } from "../../lib/trpc";
+import { useWorkspace } from "../../lib/workspace";
 import {
   showSuccessNotification,
   showErrorNotification,
@@ -36,6 +37,7 @@ function timeSince(date: Date | string) {
 }
 
 export default function ProposalsPage() {
+  const { workspaceId } = useWorkspace();
   const [status, setStatus] = useState<ProposalStatus>("pending");
   const [targetType, setTargetType] = useState<TargetType | "">("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -44,6 +46,7 @@ export default function ProposalsPage() {
   const { data, isLoading, refetch } = trpc.proposals.list.useQuery({
     status: status === "all" ? "all" : status,
     targetType: targetType || undefined,
+    workspaceId: workspaceId ?? undefined,
     limit: 100,
   });
 

@@ -496,8 +496,10 @@ export class EventRepository {
       userId?: string;
       eventType?: string;
       subjectType?: subjectType;
+      subjectTypes?: string[];
       subjectId?: string;
       correlationId?: string;
+      workspaceId?: string;
       fromDate?: Date;
       toDate?: Date;
       limit?: number;
@@ -514,6 +516,13 @@ export class EventRepository {
       paramIndex++;
     }
 
+    if (filters.workspaceId) {
+      // Workspace context is stored inside the event's `data` JSONB.
+      query += ` AND data->>'workspaceId' = $${paramIndex}`;
+      params.push(filters.workspaceId);
+      paramIndex++;
+    }
+
     if (filters.eventType) {
       query += ` AND type = $${paramIndex}`;
       params.push(filters.eventType);
@@ -524,6 +533,14 @@ export class EventRepository {
       query += ` AND subject_type = $${paramIndex}`;
       params.push(filters.subjectType);
       paramIndex++;
+    }
+
+    if (filters.subjectTypes && filters.subjectTypes.length > 0) {
+      const placeholders = filters.subjectTypes
+        .map(() => `$${paramIndex++}`)
+        .join(", ");
+      query += ` AND subject_type IN (${placeholders})`;
+      params.push(...filters.subjectTypes);
     }
 
     if (filters.subjectId) {
@@ -576,6 +593,7 @@ export class EventRepository {
       userId?: string;
       eventType?: string;
       subjectType?: subjectType;
+      workspaceId?: string;
       fromDate?: Date;
       toDate?: Date;
     } = {}
@@ -587,6 +605,12 @@ export class EventRepository {
     if (filters.userId) {
       query += ` AND user_id = $${paramIndex}`;
       params.push(filters.userId);
+      paramIndex++;
+    }
+
+    if (filters.workspaceId) {
+      query += ` AND data->>'workspaceId' = $${paramIndex}`;
+      params.push(filters.workspaceId);
       paramIndex++;
     }
 

@@ -46,7 +46,7 @@ export default function ConnectionsPage() {
 
   const feedsQuery = trpc.feeds.listFeeds.useQuery(
     { workspaceId: workspaceId ?? undefined, limit: 25, offset: 0 },
-    { enabled: !!workspaceId, refetchInterval: 60_000 }
+    { refetchInterval: 60_000 }
   );
 
   const checkHealthMutation = trpc.capabilities.checkHealth.useMutation({

@@ -14,6 +14,7 @@ import {
   and,
   eq,
   asc,
+  inArray,
   getDb,
   EventRepository,
   ApiKeyRepository,
@@ -65,6 +66,52 @@ export const apiKeysRouter = router({
       revokedReason: key.revokedReason,
     }));
   }),
+
+  /**
+   * Admin: list all API keys on the pod (pod-admin only).
+   * When `workspaceId` is set, filters to keys whose owner is a member of that workspace.
+   * Note: API keys don't have a direct workspace_id column — workspace association is
+   * inferred via the owner's workspace memberships.
+   */
+  adminListAll: podAdminProcedure
+    .input(z.object({ workspaceId: z.string().uuid().optional() }).optional())
+    .query(async ({ input }) => {
+      const workspaceId = input?.workspaceId;
+
+      let userIdFilter: string[] | undefined;
+      if (workspaceId) {
+        const members = await db.query.workspaceMembers.findMany({
+          where: eq(workspaceMembers.workspaceId, workspaceId),
+          columns: { userId: true },
+        });
+        userIdFilter = members.map((m) => m.userId);
+        // No members → no keys to return.
+        if (userIdFilter.length === 0) return [];
+      }
+
+      const keys = await db.query.apiKeys.findMany({
+        where: userIdFilter ? inArray(apiKeys.userId, userIdFilter) : undefined,
+        orderBy: (apiKeys, { desc }) => [desc(apiKeys.createdAt)],
+      });
+
+      return keys.map((key) => ({
+        id: key.id,
+        userId: key.userId,
+        keyName: key.keyName,
+        keyPrefix: key.keyPrefix,
+        keyType: key.keyType,
+        hubId: key.hubId,
+        scope: key.scope,
+        isActive: key.isActive,
+        expiresAt: key.expiresAt,
+        lastUsedAt: key.lastUsedAt,
+        usageCount: key.usageCount,
+        createdAt: key.createdAt,
+        createdBy: key.createdBy,
+        revokedAt: key.revokedAt,
+        revokedReason: key.revokedReason,
+      }));
+    }),
 
   /**
    * Create a new API key

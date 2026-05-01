@@ -103,7 +103,7 @@ export default function WorkspaceDetailPage() {
     data: workspace,
     isLoading: wsLoading,
     refetch: refetchWs,
-  } = trpc.workspaces.get.useQuery({ id: workspaceId });
+  } = trpc.workspaces.adminGet.useQuery({ id: workspaceId });
 
   const {
     data: members,
@@ -667,8 +667,7 @@ export default function WorkspaceDetailPage() {
                   </Text>
                 </div>
                 <Button
-                  variant="outline"
-                  color="danger"
+                  variant="danger"
                   size="sm"
                   onPress={() => deleteModal.open()}
                 >
@@ -967,8 +966,7 @@ export default function WorkspaceDetailPage() {
                   Cancel
                 </Button>
                 <Button
-                  variant="primary"
-                  color="danger"
+                  variant="danger"
                   size="sm"
                   isDisabled={
                     deleteConfirmName !== workspace?.name ||
