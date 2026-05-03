@@ -35,6 +35,14 @@ export const logger: any = createLogger({ module: "hub-protocol-rest" });
 export type HubVariables = {
   userId: string;
   scopes: string[];
+  /**
+   * The api_keys.id of the bearer that authenticated this request. Set ONLY
+   * when the auth middleware accepted an `Authorization: Bearer` credential —
+   * NOT set for `X-Session-Token` callers (Kratos sessions don't have an
+   * api_keys row). Routes that need to introspect the bearer (e.g. the
+   * `/auth/status` endpoint) must check for `undefined`.
+   */
+  apiKeyId?: string;
   parentKeyId?: string;
   externalUserId?: string;
 };

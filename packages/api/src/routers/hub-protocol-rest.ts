@@ -20,12 +20,15 @@ import {
   isSubTokenFeatureEnabled,
   resolveExternalUserMapping,
 } from "../services/external-user-mapping.js";
+import { authErrorResponse, shortenKeyId } from "../utils/auth-error.js";
 import { idempotencyMiddleware } from "./hub-protocol/_middleware/idempotency.js";
+import { AuthErrorEnvelopeSchema } from "./hub-protocol/rest/_codecs/auth.js";
 import { registerOpenApiStubs } from "./hub-protocol/rest/_openapi-stubs.js";
 import {
   type HubHono,
   registerAgentUsersRoutes,
   registerAgentsRoutes,
+  registerAuthRoutes,
   registerAutomationsRoutes,
   registerCaptureRoutes,
   registerChannelsRoutes,
@@ -100,7 +103,27 @@ app.openAPIRegistry.registerComponent("securitySchemes", "bearerAuth", {
   bearerFormat: "API key",
   description:
     "Pod API key (Bearer) issued via /api/hub/setup/agent or pod admin tooling. " +
-    "Browser/web clients may use the X-Session-Token header instead.",
+    "Browser/web clients may use the X-Session-Token header instead. " +
+    "See GET /api/hub/auth/status to introspect the calling key.",
+});
+
+// ── Standardized 401 envelope (AuthErrorEnvelope) ──────────────────────────
+//
+// Every gated route inherits the 401 contract from the auth middleware (see
+// `utils/auth-error.ts`). Registering the schema + a reusable response means
+// per-route configs can `$ref: "#/components/responses/Unauthorized"` instead
+// of repeating the shape. The envelope replaces the legacy `{ error: string }`
+// response on auth failures while keeping the 401 status and the `error` key
+// for backwards compatibility — see `utils/auth-error.ts` for the migration
+// notes.
+app.openAPIRegistry.register("AuthErrorEnvelope", AuthErrorEnvelopeSchema);
+app.openAPIRegistry.registerComponent("responses", "Unauthorized", {
+  description: "Auth failed. See `reason` field for the specific cause.",
+  content: {
+    "application/json": {
+      schema: { $ref: "#/components/schemas/AuthErrorEnvelope" },
+    },
+  },
 });
 
 // ── Health (no auth, must register before middleware) ──────────────────────
@@ -118,7 +141,24 @@ registerHealthRoutes(app);
  */
 app.use("/*", async (c, next) => {
   const reqPath = c.req.path;
-  const skipAuthPaths = ["/health", "/entity-share/deliver", "/setup/agent"];
+  // Public-by-design paths. `/openapi.json` and `/docs` are discovery
+  // surfaces — gating them behind auth defeats their purpose (Eve CLI
+  // and similar operators need to read the spec BEFORE they have a
+  // valid bearer to know what endpoints exist). `/health` is the
+  // standard liveness probe. `/entity-share/deliver` and `/setup/agent`
+  // use specialized auth (CP JWT and PROVISIONING_TOKEN respectively)
+  // and run their own checks downstream.
+  //
+  // Match logic: exact match OR suffix match (the path comes in mounted
+  // under `/api/hub/...`, so suffix-match is what catches it). Ordering
+  // is irrelevant since `.some()` is logical-OR.
+  const skipAuthPaths = [
+    "/health",
+    "/openapi.json",
+    "/docs",
+    "/entity-share/deliver",
+    "/setup/agent",
+  ];
   if (skipAuthPaths.some((p) => reqPath === p || reqPath.endsWith(p))) {
     return next();
   }
@@ -128,10 +168,33 @@ app.use("/*", async (c, next) => {
   const token = extractBearerToken(authHeader);
 
   if (token) {
-    const keyRecord = await apiKeyService.validateApiKey(token);
-    if (!keyRecord) {
-      return c.json({ error: "Invalid or expired API key" }, 401);
+    // Use getApiKeyStatus (introspecting variant) so we can return a
+    // structured failure reason — distinguishing revoked from expired
+    // from unknown matters to operators trying to debug Eve CLI auth.
+    const status = await apiKeyService.getApiKeyStatus(token);
+    if (status.status === "invalid_format") {
+      return authErrorResponse(c, "invalid_format");
     }
+    if (status.status === "not_found") {
+      // Either the key was never minted on this pod, or it was hard-revoked.
+      // From the caller's perspective both look identical — collapse to
+      // `key_revoked` with a hint that re-minting fixes it.
+      return authErrorResponse(c, "key_revoked");
+    }
+    if (status.status === "revoked") {
+      return authErrorResponse(c, "key_revoked", {
+        keyIdPrefix: shortenKeyId(status.record.id),
+      });
+    }
+    if (status.status === "expired") {
+      return authErrorResponse(c, "expired", {
+        keyIdPrefix: shortenKeyId(status.record.id),
+      });
+    }
+    const keyRecord = status.record;
+    // Match the legacy validateApiKey side effect: bump last_used_at /
+    // usage_count (debounced internally to once per minute per key id).
+    apiKeyService.recordKeyUse(keyRecord.id);
     const allowed = apiKeyService.checkRateLimit(keyRecord.id, "request");
     if (!allowed) {
       return c.json({ error: "Rate limit exceeded" }, 429);
@@ -197,6 +260,10 @@ app.use("/*", async (c, next) => {
 
     c.set("userId", resolvedUserId);
     c.set("scopes", resolvedScopes);
+    // Expose the api_keys.id of the bearer that authenticated the request,
+    // so /auth/status (and any future introspection routes) can look up
+    // metadata about the calling key without re-running bcrypt.
+    c.set("apiKeyId", keyRecord.id);
     return next();
   }
 
@@ -216,16 +283,17 @@ app.use("/*", async (c, next) => {
     } catch (err) {
       logger.warn({ err }, "Session token validation failed");
     }
-    return c.json({ error: "Invalid or expired session token" }, 401);
+    // Session token was provided but rejected — surface as `key_revoked`
+    // so the envelope reason set stays closed. (Session tokens are not
+    // api_keys rows, but from the operator's perspective the failure mode
+    // is the same: "your credential is no longer accepted".)
+    return authErrorResponse(c, "key_revoked", {
+      message:
+        "Session token is invalid or expired. Re-authenticate via Better Auth.",
+    });
   }
 
-  return c.json(
-    {
-      error:
-        "Authentication required. Use Authorization: Bearer <key> or X-Session-Token: <token>",
-    },
-    401
-  );
+  return authErrorResponse(c, "no_auth");
 });
 
 // ── Idempotency middleware ─────────────────────────────────────────────────
@@ -267,6 +335,7 @@ app.use(
 // /entities/:id, /sessions/active must come before /sessions/:sessionId, etc.).
 // The route-file boundaries below are aligned with the original line order in
 // the previous monolithic file so behavior is preserved character-for-character.
+registerAuthRoutes(app); // /auth/status — bearer introspection
 registerUsersRoutes(app); // /users/me
 registerWorkspacesRoutes(app); // /workspaces, /workspaces/:id/*, /users/:id/context
 registerThreadsRoutes(app); // /threads* — combines GET-list, context, link, branches, messages, etc.
@@ -323,6 +392,11 @@ app.doc31("/openapi.json", {
       "Idempotency-Key is supported on all writes.",
   },
   servers: [{ url: "/api/hub", description: "Pod-relative base URL" }],
+  // Global security requirement — every operation inherits `bearerAuth`
+  // unless it explicitly sets `security: []` (currently: /health, /openapi.json,
+  // /docs, /entity-share/deliver, /setup/agent — all listed in `skipAuthPaths`
+  // above and registered with `security: []` in their stubs/route defs).
+  security: [{ bearerAuth: [] }],
 });
 
 // ── Swagger UI (DEV ONLY) ──────────────────────────────────────────────────

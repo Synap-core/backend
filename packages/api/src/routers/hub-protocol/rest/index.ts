@@ -6,6 +6,7 @@
  * mount order, then calls these registers in the right order.
  */
 
+export { registerAuthRoutes } from "./auth.js";
 export { registerHealthRoutes } from "./health.js";
 export { registerUsersRoutes } from "./users.js";
 export { registerWorkspacesRoutes } from "./workspaces.js";

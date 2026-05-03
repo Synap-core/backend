@@ -217,6 +217,87 @@ export class ApiKeyService {
   }
 
   /**
+   * Bump last_used_at + usage_count for a key, debounced to once per minute.
+   * Fire-and-forget — never throws, never blocks the caller.
+   *
+   * Extracted so both `validateApiKey` and the new `/api/hub/*` auth path
+   * (which uses `getApiKeyStatus` for structured errors) can share the same
+   * usage-tracking side effect without re-doing bcrypt twice.
+   */
+  recordKeyUse(keyId: string): void {
+    const now = Date.now();
+    const lastWrite = lastUsedAtWriteCache.get(keyId) ?? 0;
+    if (now - lastWrite < LAST_USED_AT_DEBOUNCE_MS) return;
+
+    lastUsedAtWriteCache.set(keyId, now);
+    db.update(apiKeys)
+      .set({
+        lastUsedAt: new Date(),
+        usageCount: sql`${apiKeys.usageCount} + 1`,
+      })
+      .where(eq(apiKeys.id, keyId))
+      .catch(() => {
+        // Non-fatal — usage tracking is best-effort
+      });
+  }
+
+  /**
+   * Inspect an API key's status WITHOUT enforcing it.
+   *
+   * Unlike `validateApiKey`, this method distinguishes between the various
+   * failure modes (revoked / expired / unknown / wrong-format) so callers
+   * can return structured error envelopes instead of an opaque 401.
+   *
+   * Used by the standardized auth-error envelope on `/api/hub/*` and by the
+   * future Eve CLI doctor command.
+   *
+   * NOTE: This method does NOT update lastUsedAt / usageCount, and does NOT
+   * apply rate limiting — it is a pure introspection helper. Callers that
+   * accept the key (i.e. status === "valid") MUST call `recordKeyUse(id)`
+   * to keep the usage counter accurate.
+   *
+   * @param apiKey - The full API key to inspect.
+   * @returns Discriminated union describing the key's exact state.
+   */
+  async getApiKeyStatus(
+    apiKey: string
+  ): Promise<
+    | { status: "invalid_format" }
+    | { status: "not_found" }
+    | { status: "revoked"; record: ApiKeyRecord }
+    | { status: "expired"; record: ApiKeyRecord }
+    | { status: "valid"; record: ApiKeyRecord }
+  > {
+    const prefix = this.extractPrefix(apiKey);
+    if (!prefix) return { status: "invalid_format" };
+
+    // Look up ALL keys with the matching prefix (no active/expiry filter).
+    // We need the row to disambiguate revoked vs expired vs unknown.
+    const candidates = await db
+      .select()
+      .from(apiKeys)
+      .where(eq(apiKeys.keyPrefix, prefix));
+
+    for (const candidate of candidates) {
+      // Use bcrypt.compare only on the rows whose prefix matches — bcrypt is
+      // expensive (~200ms each), but the prefix narrows the search space
+      // significantly in practice (one prefix per key class).
+      const isMatch = await bcrypt.compare(apiKey, candidate.keyHash);
+      if (!isMatch) continue;
+
+      if (!candidate.isActive) {
+        return { status: "revoked", record: candidate };
+      }
+      if (candidate.expiresAt && candidate.expiresAt <= new Date()) {
+        return { status: "expired", record: candidate };
+      }
+      return { status: "valid", record: candidate };
+    }
+
+    return { status: "not_found" };
+  }
+
+  /**
    * Validate an API key
    *
    * Checks if the key is valid, active, and not expired.
@@ -248,24 +329,7 @@ export class ApiKeyService {
     for (const candidate of candidates) {
       const isValid = await bcrypt.compare(apiKey, candidate.keyHash);
       if (isValid) {
-        // 4. Update last_used_at and usage_count (debounced — at most once per minute)
-        const now = Date.now();
-        const lastWrite = lastUsedAtWriteCache.get(candidate.id) ?? 0;
-
-        if (now - lastWrite >= LAST_USED_AT_DEBOUNCE_MS) {
-          lastUsedAtWriteCache.set(candidate.id, now);
-          // Fire-and-forget — don't block the request on a usage counter update
-          db.update(apiKeys)
-            .set({
-              lastUsedAt: new Date(),
-              usageCount: sql`${apiKeys.usageCount} + 1`,
-            })
-            .where(eq(apiKeys.id, candidate.id))
-            .catch(() => {
-              // Non-fatal — usage tracking is best-effort
-            });
-        }
-
+        this.recordKeyUse(candidate.id);
         return candidate;
       }
     }
