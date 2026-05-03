@@ -139,6 +139,11 @@ DO $$ BEGIN
     IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'agents' AND column_name = 'tools_config') THEN
         ALTER TABLE agents DROP COLUMN tools_config;
     END IF;
+    -- workspace_id was added by an old migration that was later removed from the codebase.
+    -- The current schema (agents.ts) has no workspace_id; drop it so the backfill INSERT works.
+    IF EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'agents' AND column_name = 'workspace_id') THEN
+        ALTER TABLE agents DROP COLUMN workspace_id;
+    END IF;
 END $$;
 
 -- 8. Add sender_agent_id FK on channels

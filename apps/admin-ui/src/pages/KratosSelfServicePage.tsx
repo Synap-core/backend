@@ -13,9 +13,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Input } from "@heroui/react";
-import { IconAlertCircle } from "@tabler/icons-react";
+import { IconAlertCircle, IconInfoCircle } from "@tabler/icons-react";
 import {
   collectErrorMessages,
+  collectInfoMessages,
   createFlow,
   extractInitialValues,
   fetchFlowById,
@@ -55,6 +56,10 @@ export default function KratosSelfServicePage({
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Positive feedback from Kratos for state transitions (e.g. recovery code
+  // emailed, verification sent). Distinct from `error` so we render it as
+  // info instead of as a red banner the user reads as failure.
+  const [info, setInfo] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
 
   // Load (or create) the flow on mount.
@@ -63,6 +68,7 @@ export default function KratosSelfServicePage({
     void (async () => {
       setLoading(true);
       setError(null);
+      setInfo(null);
       try {
         let loaded: KratosFlow;
         if (flowId) {
@@ -126,6 +132,7 @@ export default function KratosSelfServicePage({
       if (!flow) return;
       setSubmitting(true);
       setError(null);
+      setInfo(null);
       try {
         const {
           flow: nextFlow,
@@ -139,10 +146,19 @@ export default function KratosSelfServicePage({
         if (nextFlow) {
           setFlow(nextFlow);
           setValues((prev) => mergeHiddenValues(prev, nextFlow));
-          const msgs = collectErrorMessages(nextFlow);
-          setError(
-            msgs.length ? msgs.join(" ") : "Check the form and try again."
-          );
+          const errors = collectErrorMessages(nextFlow);
+          const infos = collectInfoMessages(nextFlow);
+          // Errors take precedence — they mean validation failed.
+          // Info-only flows mean Kratos advanced to the next step (e.g. the
+          // recovery flow transitioning email-entry → code-entry with an
+          // "email sent" notice). Showing it as info keeps the user moving.
+          // If neither is present we say nothing rather than the misleading
+          // generic "Check the form" fallback we used to default to.
+          if (errors.length) {
+            setError(errors.join(" "));
+          } else if (infos.length) {
+            setInfo(infos.join(" "));
+          }
           return;
         }
         if (structuralError) {
@@ -251,6 +267,13 @@ export default function KratosSelfServicePage({
         {error ? (
           <div className="mt-4 rounded-medium border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
             {error}
+          </div>
+        ) : null}
+
+        {info ? (
+          <div className="mt-4 flex items-start gap-2 rounded-medium border border-primary/30 bg-primary/10 p-3 text-sm text-primary">
+            <IconInfoCircle size={16} className="mt-0.5 flex-shrink-0" />
+            <span>{info}</span>
           </div>
         ) : null}
 

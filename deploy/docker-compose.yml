@@ -54,6 +54,10 @@ x-backend-env: &backend-env
   CP_RSSHUB_PROXY_URL: ${CP_RSSHUB_PROXY_URL:-}
   RSS_FETCH_TIMEOUT_MS: ${RSS_FETCH_TIMEOUT_MS:-30000}
   RSS_FETCH_RETRIES: ${RSS_FETCH_RETRIES:-3}
+  # Mirrored only so the backend can introspect its own courier (SMTP) config
+  # in /api/provision/status. Kratos reads this directly via its own service env
+  # block below — the backend never sends mail itself; it just reports status.
+  SMTP_CONNECTION_URI: ${SMTP_CONNECTION_URI:-}
 
 services:
   # ============================================================================

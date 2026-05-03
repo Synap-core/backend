@@ -502,6 +502,25 @@ export function collectErrorMessages(flow: KratosFlow): string[] {
   return [...uiMsgs, ...nodeMsgs];
 }
 
+/**
+ * Collect non-error messages from a flow (info / success). Kratos uses info
+ * messages for state transitions like "An email containing a recovery code
+ * has been sent" — these are user-facing positive feedback, not validation
+ * failures. Without surfacing them, the UI falls back to a misleading generic
+ * error and the user thinks the form is broken when it actually advanced.
+ */
+export function collectInfoMessages(flow: KratosFlow): string[] {
+  const isInfoLike = (t: string): boolean => t === "info" || t === "success";
+  const uiMsgs = (flow.ui.messages ?? [])
+    .filter((m) => isInfoLike(m.type))
+    .map((m) => m.text);
+  const nodeMsgs = flow.ui.nodes
+    .flatMap((n) => n.messages ?? [])
+    .filter((m) => isInfoLike(m.type))
+    .map((m) => m.text);
+  return [...uiMsgs, ...nodeMsgs];
+}
+
 /** Pull initial form values (hidden defaults, CSRF token) from a flow's nodes. */
 export function extractInitialValues(flow: KratosFlow): Record<string, string> {
   const out: Record<string, string> = {};

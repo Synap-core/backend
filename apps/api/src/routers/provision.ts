@@ -57,6 +57,48 @@ import { getSyncGenerationState } from "@synap/api";
 const logger = createLogger({ module: "provision" });
 const OPENCLAW_HUB_SCOPES = ["hub-protocol.read", "hub-protocol.write"];
 
+/**
+ * Reports whether the pod's SMTP courier is wired to a real relay.
+ *
+ * Reads `SMTP_CONNECTION_URI` (mirrored from .env into the backend container
+ * by docker-compose so we can self-introspect — Kratos itself reads
+ * COURIER_SMTP_CONNECTION_URI directly, which is the same value).
+ *
+ * The localhost:1025 default is a catch-all that swallows mail without
+ * delivering it. Users hit this when CP didn't pass --smtp-uri at provision
+ * time, which makes password reset and Kratos recovery emails silently fail.
+ */
+function courierStatus(): {
+  status: "configured" | "catchall" | "unknown";
+  host: string | null;
+  // Only populated when status==="configured". Helps users sanity-check that
+  // they actually configured the relay they think they did (e.g. resend.com).
+  scheme: string | null;
+} {
+  const uri = process.env.SMTP_CONNECTION_URI;
+  if (!uri) {
+    return { status: "unknown", host: null, scheme: null };
+  }
+  let host: string | null = null;
+  let scheme: string | null = null;
+  try {
+    const u = new URL(uri);
+    host = u.hostname || null;
+    scheme = u.protocol.replace(/:$/, "") || null;
+  } catch {
+    // malformed URI — treat as unknown rather than catchall, since we can't
+    // tell what the operator intended.
+    return { status: "unknown", host: null, scheme: null };
+  }
+  const isCatchAll =
+    host === "localhost" || host === "127.0.0.1" || host === "::1";
+  return {
+    status: isCatchAll ? "catchall" : "configured",
+    host,
+    scheme,
+  };
+}
+
 export const provisionRouter = new Hono();
 
 // ─── POST /api/provision/seed-trust ─────────────────────────────────────────
@@ -1418,6 +1460,16 @@ provisionRouter.get("/status", async (c) => {
       },
       // Pod version info — read from env (set by install.sh / synap update)
       podVersion: process.env.BACKEND_VERSION || null,
+      // Courier (SMTP) status — drives the "no recovery email arriving" warning
+      // on the dashboard. We don't actually send mail from the backend; Kratos
+      // does. We only mirror SMTP_CONNECTION_URI here so the backend can report
+      // whether the courier is wired to a real relay or the localhost catch-all.
+      // - status="configured" → real SMTP host, mail should deliver
+      // - status="catchall"   → smtp://localhost:1025 default, mail goes nowhere
+      // - status="unknown"    → env var missing (older pod, env wasn't mirrored
+      //                          to the backend container — pod may still send
+      //                          mail correctly via Kratos, just can't self-report)
+      courier: courierStatus(),
       // Split-brain status (for frontend banner + CP dashboard)
       ...(await (async () => {
         try {
