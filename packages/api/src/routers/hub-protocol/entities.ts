@@ -76,6 +76,24 @@ export const entitiesRouter = router({
         description: z.string().optional(),
         properties: z.record(z.string(), z.unknown()).optional(),
         agentUserId: z.string().uuid().optional(),
+        /**
+         * Provenance tag for AI-governance/auto-approve gating + downstream
+         * audit trail. Defaults to `"agent"` when `agentUserId` is set,
+         * otherwise `"intelligence"`. Connectors and integrations should
+         * pass their own source so events carry the correct origin.
+         */
+        source: z
+          .enum([
+            "intelligence",
+            "agent",
+            "openwebui-pipeline",
+            "openclaw",
+            "extension",
+            "cli",
+            "n8n",
+            "raycast",
+          ])
+          .optional(),
         aiMetadata: z
           .object({
             messageId: z.string().optional(),
@@ -117,8 +135,9 @@ export const entitiesRouter = router({
         title: input.title,
         description: input.description,
         properties: input.properties,
-        // Use "agent" source when agentUserId is present — enables proper attribution in events
-        source: input.agentUserId ? "agent" : "intelligence",
+        // Provenance: explicit `source` from caller wins; otherwise infer
+        // "agent" when an agentUserId is present, else "intelligence".
+        source: input.source ?? (input.agentUserId ? "agent" : "intelligence"),
         // Only pass agentUserId when explicitly provided — ctx.userId is the API key
         // owner ("system") which is not a valid UUID and would fail Zod validation.
         agentUserId: input.agentUserId,
@@ -128,6 +147,10 @@ export const entitiesRouter = router({
         message: result.message,
         id: result.id,
         proposalId: result.proposalId,
+        // Echo the workspace lens we resolved for the caller — useful when
+        // the request omitted workspaceId and we picked the user's first
+        // accessible workspace, or when entityScope='pod' (workspaceId=null).
+        workspaceId: authWorkspaceId ?? null,
       };
     }),
 

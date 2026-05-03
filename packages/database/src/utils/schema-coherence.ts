@@ -93,6 +93,16 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "merged_at",
     addedBy: "0099_schema_reconciliation.sql (custom)",
   },
+  {
+    table: "channels",
+    column: "external_source",
+    addedBy: "0017_channels_external_id.sql",
+  },
+  {
+    table: "channels",
+    column: "external_id",
+    addedBy: "0017_channels_external_id.sql",
+  },
 
   // inbox_items — 0003 created an early shape; the current Drizzle schema
   // grew to carry a full Life Feed payload but no numbered migration ever
@@ -190,6 +200,28 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "api_keys",
     column: "description",
     addedBy: "0044_api_keys_type_description.sql (custom)",
+  },
+  {
+    table: "api_keys",
+    column: "parent_key_id",
+    addedBy: "0018_per_user_sub_tokens.sql",
+  },
+
+  // api_key_external_users — sub-token mappings (0018)
+  {
+    table: "api_key_external_users",
+    column: "parent_api_key_id",
+    addedBy: "0018_per_user_sub_tokens.sql",
+  },
+  {
+    table: "api_key_external_users",
+    column: "external_user_id",
+    addedBy: "0018_per_user_sub_tokens.sql",
+  },
+  {
+    table: "api_key_external_users",
+    column: "synap_user_id",
+    addedBy: "0018_per_user_sub_tokens.sql",
   },
 
   // proposals

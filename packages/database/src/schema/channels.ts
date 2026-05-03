@@ -16,7 +16,9 @@ import {
   timestamp,
   jsonb,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { isNotNull } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { agents } from "./agents.js";
 
@@ -222,8 +224,17 @@ export const channels = pgTable(
     mergedIntoStateId: uuid("merged_into_state_id"), // FK to compacted_states (circular dep — set in migration)
 
     // External source (for EXTERNAL channels; reply routing enabled only with live connector capability)
-    externalSource: text("external_source"), // 'whatsapp' | 'slack' | 'gmail' | 'telegram' | 'sms'
+    externalSource: text("external_source"), // 'whatsapp' | 'slack' | 'gmail' | 'telegram' | 'sms' | 'openwebui' | ...
     externalChannelId: text("external_channel_id"), // ID of conversation in external system
+
+    /**
+     * External dedup key — used together with `externalSource` to upsert
+     * channels created by sidecar pipelines (e.g. OWUI channel-sync). The
+     * `(externalSource, externalId)` pair is uniquely indexed when
+     * `externalId` is non-null, so concurrent inserts hit a deterministic
+     * conflict and the caller can SELECT-then-return the surviving row.
+     */
+    externalId: text("external_id"),
 
     // Metadata
     // FEED channels: items may include per-item action metadata (primaryAction, secondaryActions).
@@ -252,6 +263,15 @@ export const channels = pgTable(
     ),
     scopeIdx: index("channels_scope_idx").on(table.scope),
     typeIdx: index("channels_type_idx").on(table.channelType),
+    /**
+     * Partial unique index over (externalSource, externalId), enforced only
+     * when `externalId` is non-null — most channels have no external identity
+     * and stay unconstrained. Pairs with the matching SQL in
+     * 0017_channels_external_id.sql.
+     */
+    externalSourceIdUnique: uniqueIndex("channels_external_source_id_unique")
+      .on(table.externalSource, table.externalId)
+      .where(isNotNull(table.externalId)),
   })
 );
 
@@ -278,6 +298,7 @@ export interface Channel {
   mergedIntoStateId: string | null;
   externalSource: string | null;
   externalChannelId: string | null;
+  externalId: string | null;
   metadata: unknown;
   createdAt: Date;
   updatedAt: Date;

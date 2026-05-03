@@ -40,6 +40,7 @@ import {
   entityExternalLinks,
 } from "@synap/database/schema";
 import { type Entity, EntitySchema } from "@synap-core/types";
+import { entityToWire } from "./hub-protocol/rest/_codecs/entity.js";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
@@ -48,12 +49,27 @@ import { randomUUID } from "crypto";
 import { syncPropertyToRelations } from "../utils/property-relation-sync.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
-/** Standard entity shape for API responses */
+/**
+ * Standard entity shape for API responses.
+ *
+ * Uses `entityToWire` (the single canonical entity codec used by Hub Protocol REST)
+ * to normalize properties / systemData / profileSlug, then layers on the file fields
+ * the existing tRPC consumers expect. Keeping the wrapper preserves the long-standing
+ * `Entity` shape (`type` field instead of `profileSlug`) plus the explicit null
+ * file fields, while routing the source-of-truth normalization through the codec.
+ */
 function toApiEntity(entity: any): Entity {
+  // Defer to the canonical codec for shape normalization. We then spread the
+  // original DB row over the result so any tRPC-only fields (profileId, version,
+  // deletedAt, etc.) that don't exist on the wire shape are preserved verbatim
+  // for the Entity Zod schema.
+  const wire = entityToWire(entity);
   return {
     ...entity,
-    properties: entity.properties || {},
-    systemData: entity.systemData || {},
+    profileSlug: wire.profileSlug,
+    type: wire.type,
+    properties: wire.properties,
+    systemData: wire.systemData ?? {},
     fileUrl: null,
     filePath: null,
     fileSize: null,
@@ -208,9 +224,28 @@ export const entitiesRouter = router({
         global: z.boolean().optional().default(false),
         /** Override the target workspace for this entity (defaults to current workspace). */
         targetWorkspaceId: z.string().uuid().optional(),
-        /** Source of action for AI governance (e.g. "ai", "intelligence") */
+        /**
+         * Source of action for AI governance + downstream audit/event tagging.
+         * Hub Protocol callers may pass connector-specific values (e.g.
+         * "openwebui-pipeline", "openclaw", "extension") so the proposal layer
+         * carries accurate provenance. Permission gating is unchanged: the
+         * legacy AI gate only branches on "ai"/"intelligence"; everything else
+         * falls through to the agentUserId / role-based path.
+         */
         source: z
-          .enum(["user", "ai", "intelligence", "system", "agent"])
+          .enum([
+            "user",
+            "ai",
+            "intelligence",
+            "system",
+            "agent",
+            "openwebui-pipeline",
+            "openclaw",
+            "extension",
+            "cli",
+            "n8n",
+            "raycast",
+          ])
           .optional(),
         /** AI reasoning for proposals */
         reasoning: z.string().optional(),

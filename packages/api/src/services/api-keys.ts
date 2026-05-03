@@ -61,9 +61,21 @@ export class ApiKeyService {
    *
    * @param userId - User ID who owns the key
    * @param keyName - User-friendly name for the key
-   * @param scope - Array of permissions
+   * @param scope - Array of permissions (must be a subset of parent's scopes when parentKeyId is set)
    * @param hubId - Optional Hub ID (for Hub keys)
    * @param expiresInDays - Optional expiration in days
+   * @param parentKeyId - Optional parent key ID — when provided, this key
+   *   becomes a sub-token (Mode 2). The parent's `id` is stored in
+   *   `parent_key_id`; revoking the parent cascades via FK ON DELETE CASCADE.
+   *   Behavior when set:
+   *     • Parent must exist and be active — otherwise an error is thrown.
+   *     • If `scope` is omitted (empty array), the child inherits the
+   *       parent's scopes. If `scope` is provided, it must be a subset of
+   *       the parent's scopes (least-privilege guarantee — never wider).
+   *     • Rate limit bucket is shared with the parent (the auth middleware
+   *       keys rate-limit on the validated key id, so children get their
+   *       own bucket; revoke-cascade ties them together at the trust level).
+   *
    * @returns The generated key and key ID
    *
    * @example
@@ -77,22 +89,88 @@ export class ApiKeyService {
    *
    * // ⚠️ Display the key to the user ONCE
    * console.log('Your API key:', key);
+   *
+   * @example
+   * // Mint a sub-token narrowed to a single scope:
+   * const child = await apiKeyService.generateApiKey(
+   *   externalSynapUserId,
+   *   'external:owui-user-42',
+   *   ['hub-protocol.write'],   // narrower than parent
+   *   undefined,
+   *   undefined,
+   *   parentKey.id,
+   * );
    */
   async generateApiKey(
     userId: string,
     keyName: string,
     scope: ApiKeyScope[],
     hubId?: string,
-    expiresInDays?: number
+    expiresInDays?: number,
+    parentKeyId?: string
   ): Promise<{ key: string; keyId: string }> {
+    // 0. Sub-token validation — verify parent + enforce scope subset.
+    let effectiveScope: ApiKeyScope[] = scope;
+    let effectiveHubId: string | undefined = hubId;
+    if (parentKeyId) {
+      const [parent] = await db
+        .select()
+        .from(apiKeys)
+        .where(eq(apiKeys.id, parentKeyId));
+
+      if (!parent) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Parent API key ${parentKeyId} not found`,
+        });
+      }
+      if (!parent.isActive) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Parent API key is not active",
+        });
+      }
+      if (parent.expiresAt && parent.expiresAt <= new Date()) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Parent API key has expired",
+        });
+      }
+
+      const parentScopes = (parent.scope ?? []) as ApiKeyScope[];
+
+      // Inheritance: empty scope array means "inherit parent's scopes
+      // verbatim". Anything explicit must be a subset (never wider).
+      if (!scope || scope.length === 0) {
+        effectiveScope = parentScopes;
+      } else {
+        const parentScopeSet = new Set<string>(parentScopes);
+        const widening = scope.filter((s) => !parentScopeSet.has(s));
+        if (widening.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Child key scopes must be a subset of parent scopes. Disallowed: ${widening.join(", ")}`,
+          });
+        }
+        effectiveScope = scope;
+      }
+
+      // Inherit hubId from parent when caller didn't explicitly pick one.
+      // This keeps the child's prefix bucketed alongside the parent.
+      if (!effectiveHubId && parent.hubId) {
+        effectiveHubId = parent.hubId;
+      }
+    }
+
     // 1. Generate random key
     const randomPart = randomBytes(32).toString("base64url");
 
     // 2. Determine prefix based on hubId
     let prefix: string;
-    if (hubId) {
+    if (effectiveHubId) {
       // Hub key (use live by default, test if hubId contains 'test' or 'dev')
-      const isTest = hubId.includes("test") || hubId.includes("dev");
+      const isTest =
+        effectiveHubId.includes("test") || effectiveHubId.includes("dev");
       prefix = isTest ? KEY_PREFIXES.HUB_TEST : KEY_PREFIXES.HUB_LIVE;
     } else {
       // User key
@@ -121,12 +199,13 @@ export class ApiKeyService {
         keyName,
         keyPrefix: prefix,
         keyHash,
-        hubId: hubId || null,
-        scope,
+        hubId: effectiveHubId || null,
+        scope: effectiveScope,
         expiresAt,
         rotationScheduledAt,
         isActive: true,
         createdBy: userId,
+        parentKeyId: parentKeyId ?? null,
       })
       .returning({ id: apiKeys.id });
 

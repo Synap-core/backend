@@ -855,6 +855,7 @@ ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "result_summary" text;
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "merged_into_state_id" uuid;
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "external_source" text;
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "external_channel_id" text;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "external_id" text;
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "metadata" jsonb;
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
@@ -881,6 +882,12 @@ CREATE INDEX IF NOT EXISTS "channels_scope_idx"
 
 CREATE INDEX IF NOT EXISTS "channels_type_idx"
   ON "channels" ("channel_type");
+
+-- Partial unique dedup key for channels created from external sidecars
+-- (e.g. Open WebUI channel-sync). Mirrors 0017_channels_external_id.sql.
+CREATE UNIQUE INDEX IF NOT EXISTS "channels_external_source_id_unique"
+  ON "channels" ("external_source", "external_id")
+  WHERE "external_id" IS NOT NULL;
 
 -- ─── 19. channel_connections + channel_link_tokens ───────────────────────────
 
@@ -2810,6 +2817,55 @@ CREATE INDEX IF NOT EXISTS "relations_workspace_type_idx"
 CREATE INDEX IF NOT EXISTS "channels_feed_scope_user_idx"
   ON "channels" ("user_id", "channel_type", "feed_scope")
   WHERE "channel_type" = 'feed';
+
+-- ─── Per-external-user sub-token mappings (migration 0018) ──────────────────
+--
+-- Mirrors 0018_per_user_sub_tokens.sql so a fresh pod created from this
+-- baseline carries the new table even before the dated migration runs.
+-- See that file for the full contract.
+
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "parent_key_id" uuid;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'api_keys_parent_key_id_fkey'
+  ) THEN
+    ALTER TABLE "api_keys"
+      ADD CONSTRAINT "api_keys_parent_key_id_fkey"
+      FOREIGN KEY ("parent_key_id") REFERENCES "api_keys"("id") ON DELETE CASCADE;
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS "api_keys_parent_key_id_idx"
+  ON "api_keys" ("parent_key_id")
+  WHERE "parent_key_id" IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS "api_key_external_users" (
+  "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "parent_api_key_id"   uuid NOT NULL REFERENCES "api_keys"("id") ON DELETE CASCADE,
+  "external_user_id"    text NOT NULL,
+  "synap_user_id"       text NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+  "child_api_key_id"    uuid REFERENCES "api_keys"("id") ON DELETE SET NULL,
+  "metadata"            jsonb NOT NULL DEFAULT '{}'::jsonb,
+  "created_at"          timestamp with time zone NOT NULL DEFAULT now(),
+  "last_used_at"        timestamp with time zone,
+  CONSTRAINT "api_key_external_users_unique" UNIQUE ("parent_api_key_id", "external_user_id")
+);
+ALTER TABLE "api_key_external_users" ADD COLUMN IF NOT EXISTS "parent_api_key_id" uuid;
+ALTER TABLE "api_key_external_users" ADD COLUMN IF NOT EXISTS "external_user_id" text;
+ALTER TABLE "api_key_external_users" ADD COLUMN IF NOT EXISTS "synap_user_id" text;
+ALTER TABLE "api_key_external_users" ADD COLUMN IF NOT EXISTS "child_api_key_id" uuid;
+ALTER TABLE "api_key_external_users" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}'::jsonb;
+ALTER TABLE "api_key_external_users" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "api_key_external_users" ADD COLUMN IF NOT EXISTS "last_used_at" timestamp with time zone;
+
+CREATE INDEX IF NOT EXISTS "api_key_external_users_parent_idx"
+  ON "api_key_external_users" ("parent_api_key_id");
+
+CREATE INDEX IF NOT EXISTS "api_key_external_users_synap_user_idx"
+  ON "api_key_external_users" ("synap_user_id");
 
 -- ─── _migrations tracking table ──────────────────────────────────────────────
 

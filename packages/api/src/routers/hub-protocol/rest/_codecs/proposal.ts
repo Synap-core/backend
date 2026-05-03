@@ -1,0 +1,98 @@
+/**
+ * Proposal Wire Codec — Hub Protocol REST schemas for proposals.
+ *
+ * Proposals are the core governance primitive: AI/connector mutations create
+ * a pending proposal that humans review. Approval emits the underlying side
+ * effect via the event chain.
+ */
+
+import { z } from "@hono/zod-openapi";
+
+/** Canonical proposal status values. */
+export const ProposalStatusSchema = z
+  .enum(["pending", "approved", "rejected", "all"])
+  .openapi("ProposalStatus");
+
+/** Wire shape of a proposal row. */
+export const WireProposalSchema = z
+  .object({
+    id: z.string(),
+    workspaceId: z.string().nullable(),
+    targetType: z.string(),
+    targetId: z.string(),
+    proposalType: z.string(),
+    data: z.record(z.string(), z.unknown()),
+    status: z.enum(["pending", "approved", "rejected"]),
+    agentUserId: z.string().nullable().optional(),
+    threadId: z.string().nullable().optional(),
+    sourceMessageId: z.string().nullable().optional(),
+    createdBy: z.string().nullable().optional(),
+    createdAt: z.union([z.string(), z.date()]).optional(),
+    updatedAt: z.union([z.string(), z.date()]).optional(),
+  })
+  .openapi("Proposal");
+
+/** GET /proposals query. */
+export const ListProposalsQuerySchema = z
+  .object({
+    userId: z.string().optional(),
+    workspaceId: z.string().optional(),
+    status: ProposalStatusSchema.optional().describe(
+      "Defaults to `pending`. Use `all` to return every status."
+    ),
+  })
+  .openapi("ListProposalsQuery");
+
+/** PATCH /proposals/{id} request body. */
+export const UpdateProposalRequestSchema = z
+  .object({
+    data: z
+      .record(z.string(), z.unknown())
+      .describe("Updated proposal payload (replaces existing data)."),
+    summary: z
+      .string()
+      .optional()
+      .describe("Human-readable summary of the revision."),
+  })
+  .openapi("UpdateProposalRequest");
+
+/** POST /proposals request body. */
+export const CreateProposalRequestSchema = z
+  .object({
+    workspaceId: z.string().nullable().optional(),
+    agentUserId: z.string().optional(),
+    channelId: z
+      .string()
+      .optional()
+      .describe("Channel/thread originating the proposal."),
+    targetType: z
+      .string()
+      .describe("Subject type the proposal mutates (e.g. entity, view)."),
+    targetId: z
+      .string()
+      .describe(
+        "ID of the target subject (existing record or stable temp id)."
+      ),
+    proposalType: z
+      .string()
+      .describe("Sub-action, e.g. entity.create, view.update, vault.request."),
+    data: z
+      .record(z.string(), z.unknown())
+      .describe("Free-form proposal payload — shape is targetType-specific."),
+    summary: z.string().optional(),
+    sourceMessageId: z
+      .string()
+      .optional()
+      .describe(
+        "Message that originated the proposal — for event chain causality."
+      ),
+  })
+  .openapi("CreateProposalRequest");
+
+/** POST /proposals minimal response. */
+export const CreateProposalResponseSchema = z
+  .object({
+    id: z.string(),
+    status: z.literal("pending"),
+  })
+  .openapi("CreateProposalResponse");

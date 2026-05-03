@@ -65,6 +65,11 @@ export const apiKeys = pgTable(
       withTimezone: true,
     }),
 
+    // Sub-token (per-external-user) — when set, this key is a child of
+    // `parent_key_id`. Revoking the parent cascades. NULL for parent keys
+    // and stand-alone keys. See migration 0018_per_user_sub_tokens.sql.
+    parentKeyId: uuid("parent_key_id"),
+
     // Audit Trail
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

@@ -1,0 +1,597 @@
+/**
+ * Hub Protocol REST — entities
+ *
+ * Mount order matters here: GET /entities must come before GET /entities/:id,
+ * and GET /entities/:id/connections must come before GET /entities/:id, so the
+ * Hono first-match router resolves correctly. The original file's order is
+ * preserved exactly.
+ *
+ * Routes are wired via `app.openapi(routeDef, handler)` so request bodies /
+ * params / query strings are validated against the per-route Zod schema BEFORE
+ * the handler runs. Validation failures bubble up through the `defaultHook` set
+ * on the parent `OpenAPIHono` (see hub-protocol-rest.ts).
+ */
+
+import { createRoute, z } from "@hono/zod-openapi";
+import { db, entities, profiles, eq, and, isNull } from "@synap/database";
+
+import { relationsRouter } from "../../relations.js";
+import { createHubProtocolCallerContext } from "../utils.js";
+import {
+  CreateEntityRequestSchema,
+  CreateEntityResponseSchema,
+  RawEntityRecordSchema,
+  UpdateEntityRequestSchema,
+  UpdateEntityResponseSchema,
+  WireEntitySchema,
+  entityToWire,
+} from "./_codecs/entity.js";
+import { ErrorSchema } from "./_codecs/_openapi.js";
+import {
+  getCaller,
+  getUserAccessibleWorkspaceIds,
+  hasScope,
+  logger,
+  resolveActorId,
+  verifyWorkspaceAccess,
+  type HubHono,
+} from "./_shared.js";
+
+export function registerEntitiesRoutes(app: HubHono): void {
+  // ── GET /users/:userId/entities ─────────────────────────────────────────
+  const listUserEntitiesRoute = createRoute({
+    method: "get",
+    path: "/users/{userId}/entities",
+    tags: ["Entities"],
+    summary: "List entities for a user",
+    description:
+      "Returns entities owned by the given user, optionally filtered by " +
+      "profileSlug and workspaceId. Pod-wide profiles are returned regardless " +
+      "of workspaceId.",
+    request: {
+      params: z.object({ userId: z.string() }),
+      query: z.object({
+        profileSlug: z.string().optional(),
+        type: z
+          .string()
+          .optional()
+          .describe("Deprecated alias for profileSlug."),
+        workspaceId: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Array of entities",
+        content: {
+          "application/json": { schema: z.array(RawEntityRecordSchema) },
+        },
+      },
+      403: {
+        description: "Missing scope",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(listUserEntitiesRoute, async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const { userId } = c.req.valid("param");
+    const query = c.req.valid("query");
+    const profileSlug = query.profileSlug || query.type || undefined;
+    const limit = query.limit;
+    const workspaceId = query.workspaceId || null;
+    try {
+      const effectiveWsIds = workspaceId
+        ? [workspaceId]
+        : await getUserAccessibleWorkspaceIds(userId);
+      if (effectiveWsIds.length === 0) return c.json([], 200);
+
+      const caller = await getCaller(c, {
+        workspaceId: effectiveWsIds[0],
+        userId,
+      });
+      const result = await caller.entities.getEntities({
+        userId,
+        workspaceId: workspaceId || undefined,
+        profileSlug: profileSlug || undefined,
+        limit: limit ? parseInt(limit, 10) : undefined,
+      });
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err, userId }, "getEntities failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── GET /entities ───────────────────────────────────────────────────────
+  // Canonical list/search endpoint. Must be registered before GET /entities/:id
+  // so Hono's first-match router does not capture `/entities` as an id.
+  const listEntitiesRoute = createRoute({
+    method: "get",
+    path: "/entities",
+    tags: ["Entities"],
+    summary: "Search/list entities",
+    description:
+      "Canonical list/search endpoint. When `q` is set, performs a Typesense " +
+      "search; otherwise lists entities with normal scoping.",
+    request: {
+      query: z.object({
+        q: z.string().optional().describe("Free-text search query."),
+        profileSlug: z.string().optional(),
+        workspaceId: z.string().optional(),
+        limit: z.string().optional(),
+        sort: z.string().optional().describe("e.g. `updatedAt:desc`."),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Array of entities",
+        content: { "application/json": { schema: z.array(WireEntitySchema) } },
+      },
+      401: {
+        description: "Unauthorized",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(listEntitiesRoute, async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+
+    const userId = c.get("userId") as string;
+    if (!userId) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    const query = c.req.valid("query");
+    const q = (query.q ?? "").trim();
+    const profileSlug = query.profileSlug || undefined;
+    const workspaceIdParam = query.workspaceId || null;
+    const limitRaw = query.limit;
+    const limit = Math.min(
+      Math.max(parseInt(limitRaw ?? "20", 10) || 20, 1),
+      100
+    );
+    const sortParam = (query.sort ?? "").trim();
+
+    try {
+      const effectiveWsIds = workspaceIdParam
+        ? [workspaceIdParam]
+        : await getUserAccessibleWorkspaceIds(userId);
+      if (effectiveWsIds.length === 0) {
+        return c.json([], 200);
+      }
+
+      if (workspaceIdParam) {
+        const ok = await verifyWorkspaceAccess(userId, workspaceIdParam);
+        if (!ok) {
+          return c.json({ error: "Access denied to workspace" }, 403);
+        }
+      }
+
+      const workspaceId = workspaceIdParam ?? effectiveWsIds[0];
+
+      const caller = await getCaller(c, {
+        workspaceId,
+        userId,
+      });
+
+      if (q.length > 0) {
+        const searchResp = await caller.search.search({
+          userId,
+          query: q,
+          workspaceId,
+          collections: ["entities"],
+          limit,
+          page: 1,
+        });
+
+        let docs = searchResp.results
+          .filter((r) => r.collection === "entities")
+          .map((r) => r.document as Record<string, unknown>);
+
+        if (profileSlug) {
+          docs = docs.filter(
+            (d) =>
+              (d.entityType as string | undefined) === profileSlug ||
+              (d.type as string | undefined) === profileSlug
+          );
+        }
+
+        return c.json(
+          docs.map((d) => entityToWire(d)),
+          200
+        );
+      }
+
+      const listed = await caller.entities.getEntities({
+        userId,
+        workspaceId: workspaceIdParam || undefined,
+        profileSlug: profileSlug || undefined,
+        limit,
+      });
+
+      let rows = (listed as unknown[]).map((e) => entityToWire(e));
+
+      if (
+        sortParam.includes("updatedAt") &&
+        sortParam.toLowerCase().includes("desc")
+      ) {
+        rows = [...rows].sort((a, b) => {
+          const tb = new Date(String(b.updatedAt ?? 0)).getTime();
+          const ta = new Date(String(a.updatedAt ?? 0)).getTime();
+          return tb - ta;
+        });
+      }
+
+      return c.json(rows, 200);
+    } catch (err) {
+      logger.error({ err, userId }, "GET /entities failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── GET /entities/:id/connections ───────────────────────────────────────
+  // Declared BEFORE /entities/:id so Hono routes this static-prefix segment
+  // first.
+  const getConnectionsRoute = createRoute({
+    method: "get",
+    path: "/entities/{id}/connections",
+    tags: ["Entities"],
+    summary: "Get a single entity's relations",
+    description:
+      "Returns up to `limit` relations (default 50, max 200) connected to " +
+      "the entity. Workspace-scoped on shared pods.",
+    request: {
+      params: z.object({ id: z.string() }),
+      query: z.object({
+        userId: z.string().optional(),
+        workspaceId: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Relations list with summary counts",
+        content: {
+          "application/json": {
+            // Loose record — `getConnections` returns
+            // `{ connections: [...], counts: { ... } }` plus extra fields.
+            // Sidecars / clients normalize on their end.
+            schema: z.record(z.string(), z.unknown()),
+          },
+        },
+      },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(getConnectionsRoute, async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const { id: entityId } = c.req.valid("param");
+    const query = c.req.valid("query");
+    const userId = query.userId || (c.get("userId") as string);
+    const workspaceId = query.workspaceId;
+    const limitParam = query.limit;
+    const limit = limitParam
+      ? Math.min(200, Math.max(1, Number(limitParam)))
+      : 50;
+
+    if (!userId) {
+      return c.json({ error: "userId is required" }, 400);
+    }
+
+    try {
+      const scopes = c.get("scopes") as string[];
+      const ctx = await createHubProtocolCallerContext(
+        userId,
+        scopes,
+        workspaceId ?? undefined
+      );
+      const caller = relationsRouter.createCaller(
+        ctx as Parameters<typeof relationsRouter.createCaller>[0]
+      );
+      const result = await caller.getConnections({ entityId, limit });
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err, entityId }, "getConnections failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── GET /entities/:id ───────────────────────────────────────────────────
+  // Fetch a single entity by ID. Used by skill trigger executor to get entity
+  // context. On shared pods, verifies the entity belongs to a workspace the
+  // user can access.
+  const getEntityRoute = createRoute({
+    method: "get",
+    path: "/entities/{id}",
+    tags: ["Entities"],
+    summary: "Fetch a single entity",
+    description:
+      "Returns the entity row by ID. Verifies workspace access on shared pods.",
+    request: {
+      params: z.object({ id: z.string() }),
+      query: z.object({
+        workspaceId: z.string().optional(),
+        userId: z.string().optional(),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Entity row",
+        content: { "application/json": { schema: RawEntityRecordSchema } },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      404: { description: "Not found" },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(getEntityRoute, async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const { id: entityId } = c.req.valid("param");
+    const query = c.req.valid("query");
+    const userId = query.userId || (c.get("userId") as string);
+    try {
+      const result = await db.query.entities.findFirst({
+        where: and(eq(entities.id, entityId), isNull(entities.deletedAt)),
+      });
+      if (!result) return c.body(null, 404);
+      if (result.workspaceId) {
+        const hasAccess = await verifyWorkspaceAccess(
+          userId,
+          result.workspaceId
+        );
+        if (!hasAccess) {
+          return c.json({ error: "Access denied to entity's workspace" }, 403);
+        }
+      }
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err, entityId }, "entities.get failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Internal error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /entities ──────────────────────────────────────────────────────
+  // Creates an entity on behalf of a user. Auth via API key or session token.
+  //
+  // Returns the underlying tRPC result plus the resolved `effectiveWorkspaceId`
+  // so callers can echo back the workspace the entity actually landed in
+  // (useful for pod-wide profiles where workspaceId is null).
+  const createEntityRoute = createRoute({
+    method: "post",
+    path: "/entities",
+    tags: ["Entities"],
+    summary: "Create an entity",
+    description:
+      "Creates an entity on behalf of a user. Honors profile.entityScope: " +
+      "pod-wide profiles ignore workspaceId. Supports `Idempotency-Key`.",
+    request: {
+      body: {
+        content: {
+          "application/json": { schema: CreateEntityRequestSchema },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Created entity (with effectiveWorkspaceId echo)",
+        content: {
+          "application/json": { schema: CreateEntityResponseSchema },
+        },
+      },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      403: {
+        description: "Missing scope",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(createEntityRoute, async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+
+    const body = c.req.valid("json");
+
+    const authUserId = c.get("userId") as string;
+    const userId = body.userId ?? authUserId;
+    if (!userId) {
+      return c.json({ error: "userId required" }, 400);
+    }
+
+    const profileSlug = body.profileSlug ?? body.type ?? "bookmark";
+
+    let effectiveWorkspaceId: string | null;
+
+    if (body.workspaceId) {
+      effectiveWorkspaceId = body.workspaceId;
+    } else {
+      const profile = await db.query.profiles.findFirst({
+        where: eq(profiles.slug, profileSlug),
+        columns: { entityScope: true },
+      });
+
+      if (!profile || profile.entityScope === "pod") {
+        effectiveWorkspaceId = null;
+      } else {
+        const wsIds = await getUserAccessibleWorkspaceIds(userId);
+        effectiveWorkspaceId = wsIds[0] ?? null;
+        if (!effectiveWorkspaceId) {
+          return c.json(
+            { error: "No accessible workspace found for this user" },
+            400
+          );
+        }
+      }
+    }
+
+    try {
+      const actorResolution = await resolveActorId(body.agentUserId, userId);
+      if ("error" in actorResolution)
+        return c.json({ error: actorResolution.error }, 400);
+      const actorId = actorResolution.actorId;
+
+      const caller = await getCaller(c, {
+        workspaceId: effectiveWorkspaceId,
+        userId: actorId,
+        sourceMessageId: body.sourceMessageId,
+      });
+      const result = await caller.entities.createEntity({
+        userId,
+        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        profileSlug,
+        title: body.title,
+        description: body.description,
+        properties: body.properties,
+        ...(body.source ? { source: body.source } : {}),
+      });
+      // Echo back the resolved workspace context so external callers can
+      // confirm where the entity landed (especially useful when the body
+      // omitted workspaceId and we resolved it from the profile's entityScope).
+      return c.json({ ...result, effectiveWorkspaceId }, 200);
+    } catch (err) {
+      logger.error({ err }, "createEntity failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── PATCH /entities/:entityId ───────────────────────────────────────────
+  // Requires workspaceId in body for workspace-scoped update (same event chain).
+  const updateEntityRoute = createRoute({
+    method: "patch",
+    path: "/entities/{entityId}",
+    tags: ["Entities"],
+    summary: "Update an entity",
+    description:
+      "Patch entity title / preview / metadata. Supports `Idempotency-Key`.",
+    request: {
+      params: z.object({ entityId: z.string() }),
+      body: {
+        content: {
+          "application/json": { schema: UpdateEntityRequestSchema },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Updated entity",
+        content: {
+          "application/json": { schema: UpdateEntityResponseSchema },
+        },
+      },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(updateEntityRoute, async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const { entityId } = c.req.valid("param");
+    const body = c.req.valid("json");
+    try {
+      const actorResolution = await resolveActorId(
+        body.agentUserId,
+        body.userId
+      );
+      if ("error" in actorResolution)
+        return c.json({ error: actorResolution.error }, 400);
+      const actorId = actorResolution.actorId;
+      const caller = await getCaller(c, {
+        workspaceId: body.workspaceId ?? null,
+        userId: actorId,
+        sourceMessageId: body.sourceMessageId,
+      });
+      const result = await caller.entities.updateEntity({
+        entityId,
+        userId: body.userId,
+        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        title: body.title,
+        preview: body.preview,
+        metadata: body.metadata,
+      });
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err, entityId }, "updateEntity failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+}
