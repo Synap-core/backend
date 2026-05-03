@@ -103,7 +103,7 @@ export const backgroundTasksRouter = router({
       // Note: This is a direct update (not via events) for execution tracking
       // The task definition itself is updated via events, but execution tracking
       // can be updated directly for performance
-      const { taskId, _userId, ...updateData } = input;
+      const { taskId, userId: _userId, ...updateData } = input;
 
       // For now, we'll use the update endpoint which goes through events
       // In the future, we might want a direct update endpoint for execution tracking

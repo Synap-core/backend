@@ -13,7 +13,7 @@ import { createHubProtocolCallerContext } from "../hub-protocol/utils.js";
 import { getDb } from "@synap/database";
 import {
   db,
-  knowledgeKeys,
+  knowledgeKeysRepository,
   knowledgeRepository,
   messages,
 } from "@synap/database";
@@ -24,7 +24,6 @@ import {
   eq,
   and,
   desc,
-  asc,
 } from "@synap/database";
 import { randomUUID, createHash } from "crypto";
 import type { Context } from "../../types/context.js";
@@ -291,11 +290,12 @@ export async function executeMCPToolViaHubProtocol(
     case "synap_get_knowledge": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
       const wsId = args.workspaceId as string | undefined;
-      const result = await caller.knowledge.getKnowledge({
-        userId,
-        key: args.key as string,
-        workspaceId: wsId,
-      });
+      // Knowledge keys live in Hub Protocol REST (not tRPC). Call the
+      // repository directly — same data path as POST/GET /api/hub/knowledge.
+      const result = await knowledgeKeysRepository.getByKey(
+        args.key as string,
+        wsId
+      );
       return ok(result);
     }
 
@@ -304,8 +304,9 @@ export async function executeMCPToolViaHubProtocol(
       const wsId = args.workspaceId as string | undefined;
       const statusFilter =
         (args.status as string | undefined) === "active" ? "active" : undefined;
-      const result = await caller.knowledge.listKnowledge({
-        userId,
+      // Knowledge keys live in Hub Protocol REST (not tRPC). Call the
+      // repository directly — same data path as GET /api/hub/knowledge.
+      const result = await knowledgeKeysRepository.list({
         namespace: args.namespace as string | undefined,
         workspaceId: wsId,
         status: statusFilter,
