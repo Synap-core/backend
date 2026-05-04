@@ -8,6 +8,7 @@ import {
   db,
   sql,
   getDb,
+  users,
   workspaces,
   workspaceMembers,
   eq,
@@ -15,6 +16,7 @@ import {
   inArray,
   EventRepository,
   WorkspaceRepository,
+  type AgentMetadata,
 } from "@synap/database";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -24,6 +26,11 @@ import {
   ListWorkspacesResponseSchema,
 } from "./_codecs/misc.js";
 import { registerOpenApi } from "./_codecs/_register.js";
+import {
+  createWorkspaceFromDefinitionIdempotent,
+  isAgentTypeAllowedToCreateWorkspaces,
+  WORKSPACE_CREATE_AGENT_TYPE_ALLOWLIST,
+} from "../../../services/workspace-creation-service.js";
 import {
   getCaller,
   getUserAccessibleWorkspaceIds,
@@ -38,6 +45,56 @@ const eveProviderIdSchema = z.enum([
   "anthropic",
   "openai",
 ]);
+
+/**
+ * Resolve the calling user's agentType (if any).
+ *
+ * The auth middleware sets `userId` on the Hono context but does NOT load
+ * the user row — looking it up here is cheap (single PK fetch) and avoids
+ * widening the middleware contract for a single endpoint.
+ *
+ * Returns:
+ *   - the agentType string when the user is `userType="agent"` and has an
+ *     `agentType` field in their metadata
+ *   - null otherwise (human user, missing metadata, etc.)
+ */
+async function resolveCallerAgentType(userId: string): Promise<string | null> {
+  const row = await db.query.users.findFirst({
+    where: eq(users.id, userId),
+    columns: { userType: true, agentMetadata: true },
+  });
+  if (!row || row.userType !== "agent") return null;
+  const metadata = row.agentMetadata as AgentMetadata | null;
+  return metadata?.agentType ?? null;
+}
+
+/**
+ * Body schema for `POST /workspaces/from-definition`.
+ *
+ * Mirrors the `WorkspaceProposal` shape used by the frontend
+ * (`apps/devplane/lib/devplaneWorkspaceDefinition.ts`) plus the registry
+ * format consumed by `createWorkspaceFromDefinition`. Both formats are
+ * normalized server-side. We use `passthrough()` so unknown fields propagate
+ * — definition shapes evolve faster than this schema.
+ */
+const WorkspaceFromDefinitionBodySchema = z
+  .object({
+    /**
+     * Stable caller-supplied idempotency key. Same key + same user → same
+     * workspace. Eve / Coder generate this from a template id.
+     */
+    proposalId: z.string().min(1).optional(),
+    /** Optional override for the workspace's display name. */
+    workspaceName: z.string().optional(),
+    /** Optional template provenance (audited, not used for idempotency). */
+    templateId: z.string().optional(),
+    templateName: z.string().optional(),
+    workspaceType: z
+      .enum(["personal", "agent", "project", "operational"])
+      .optional(),
+    /** WorkspaceProposal fields — accepted with `passthrough()` for forward-compat. */
+  })
+  .passthrough();
 
 const eveProviderRoutingPolicySchema = z.object({
   mode: z.enum(["local", "provider", "hybrid"]).optional(),
@@ -158,6 +215,38 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     },
   });
 
+  registerOpenApi(app, {
+    method: "post",
+    path: "/workspaces/from-definition",
+    tags: ["Workspaces"],
+    summary: "Create a workspace from a WorkspaceProposal definition",
+    description:
+      "Idempotently provisions a workspace from a WorkspaceProposal-shaped " +
+      "definition. Restricted to agent users whose agentType is in the " +
+      "allowlist (currently `eve`, `coder`). Pass a stable `proposalId` " +
+      "to make retries idempotent — the same id for the same user returns " +
+      "the existing workspace with `created: false`.",
+    request: {
+      body: WorkspaceFromDefinitionBodySchema,
+    },
+    responses: {
+      200: {
+        description: "Workspace id and creation outcome",
+        schema: zOpenapi.object({
+          workspaceId: zOpenapi.string(),
+          created: zOpenapi.boolean(),
+        }),
+      },
+      400: { description: "Invalid definition", schema: ErrorSchema },
+      403: {
+        description:
+          "Forbidden — agentType not in allowlist or insufficient scope",
+        schema: ErrorSchema,
+      },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
   /**
    * GET /workspaces — list workspaces accessible to the authenticated user.
    */
@@ -182,6 +271,118 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     } catch (err) {
       logger.error({ err }, "GET /workspaces failed");
       return c.json({ error: "Failed to list workspaces" }, 500);
+    }
+  });
+
+  /**
+   * POST /workspaces/from-definition
+   *
+   * Restricted to allowlisted agentTypes (Eve, Coder). Idempotent on
+   * caller-supplied `proposalId`.
+   *
+   * Registered BEFORE the `:workspaceId` dynamic routes below to ensure
+   * Hono's first-match dispatcher does not interpret "from-definition" as a
+   * workspace id.
+   */
+  app.post("/workspaces/from-definition", async (c) => {
+    const scopes = c.get("scopes") as string[];
+    if (!hasScope(scopes, "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const userId = c.get("userId") as string;
+
+    // ── agentType allowlist gate ───────────────────────────────────────────
+    // Look up the calling user's agentType from `users.agentMetadata`. Only
+    // agent users with an allowlisted agentType (e.g. `eve`, `coder`) may
+    // call this endpoint. Human users and other agentTypes get 403.
+    const agentType = await resolveCallerAgentType(userId);
+    if (!isAgentTypeAllowedToCreateWorkspaces(agentType)) {
+      return c.json(
+        {
+          error:
+            "Forbidden — workspace creation via Hub Protocol is restricted to allowlisted agentTypes.",
+          allowedAgentTypes: WORKSPACE_CREATE_AGENT_TYPE_ALLOWLIST,
+          callerAgentType: agentType,
+        },
+        403
+      );
+    }
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const parsed = WorkspaceFromDefinitionBodySchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        {
+          error: "Invalid workspace definition body",
+          details: parsed.error.issues,
+        },
+        400
+      );
+    }
+
+    const {
+      proposalId,
+      workspaceName,
+      templateId,
+      templateName,
+      workspaceType,
+      // The remaining fields are the WorkspaceProposal definition itself —
+      // strip the wrapper meta fields above and pass the rest through.
+      ...definition
+    } = parsed.data;
+
+    try {
+      const result = await createWorkspaceFromDefinitionIdempotent({
+        // The definition object accepts `passthrough()` fields — cast to the
+        // shape the database util expects. Validation happens inside
+        // createWorkspaceFromDefinition (validateDefinition).
+        definition: definition as Parameters<
+          typeof createWorkspaceFromDefinitionIdempotent
+        >[0]["definition"],
+        userId,
+        proposalId,
+        workspaceName,
+        templateId,
+        templateName,
+        workspaceType,
+        // Always "provisioning" — this endpoint is gated to agent users only,
+        // never humans. Audit trail must distinguish machine-provisioned rows.
+        createdBy: "provisioning",
+      });
+      return c.json(
+        {
+          workspaceId: result.workspaceId,
+          created: result.created,
+        },
+        200
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(
+        { err, userId, agentType, proposalId },
+        "POST /workspaces/from-definition failed"
+      );
+      // Definition-validation errors are 400; everything else is 500.
+      const isValidationError = message.startsWith(
+        "Definition validation failed"
+      );
+      return c.json(
+        {
+          error: isValidationError ? message : "Failed to create workspace",
+          ...(isValidationError ? {} : { reason: message }),
+        },
+        isValidationError ? 400 : 500
+      );
     }
   });
 

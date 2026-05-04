@@ -26,10 +26,12 @@ import { AuthErrorEnvelopeSchema } from "./hub-protocol/rest/_codecs/auth.js";
 import { registerOpenApiStubs } from "./hub-protocol/rest/_openapi-stubs.js";
 import {
   type HubHono,
+  registerAgentConfigsRoutes,
   registerAgentUsersRoutes,
   registerAgentsRoutes,
   registerAuthRoutes,
   registerAutomationsRoutes,
+  registerBackgroundTasksRoutes,
   registerCaptureRoutes,
   registerChannelsRoutes,
   registerCommandsRoutes,
@@ -350,6 +352,7 @@ registerMemoryRoutes(app); // /memory*
 registerKnowledgeRoutes(app); // /knowledge*, /graph/traverse
 registerCommandsRoutes(app); // /commands*, /commands/execute
 registerAgentUsersRoutes(app); // /agent-users
+registerAgentConfigsRoutes(app); // /agent-configs
 registerViewsRoutes(app); // /views*
 registerProfilesRoutes(app); // /profiles*, /property-defs*
 registerRelationsRoutes(app); // /relations*
@@ -357,6 +360,7 @@ registerSessionsRoutes(app); // /sessions*, /compacted-states*
 registerWidgetDefinitionsRoutes(app); // /widget-definitions
 registerMcpServersRoutes(app); // /mcp-servers
 registerAutomationsRoutes(app); // /automations*
+registerBackgroundTasksRoutes(app); // /background-tasks*
 registerVaultRoutes(app); // /vault/request
 registerChannelsRoutes(app); // /channels/*
 registerTerminalRoutes(app); // /terminal/logs

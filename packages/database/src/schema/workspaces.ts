@@ -330,6 +330,18 @@ export interface WorkspaceSettings {
   systemSlug?: string;
   /** Version of the package at time of creation. */
   packageVersion?: string;
+  /**
+   * Caller-supplied proposal id used for idempotency on workspace-from-definition
+   * creation paths (Hub Protocol REST `/workspaces/from-definition`). When set,
+   * subsequent calls with the same `proposalId` for the same user return the
+   * existing workspace instead of creating a new one.
+   *
+   * Distinct from `packageSlug` (which keys idempotency in the tRPC path) —
+   * external callers (Eve, Coder) generate `proposalId` themselves from a
+   * stable template id (e.g. "builder-workspace-v1") so retries are safe even
+   * when no CP package is involved.
+   */
+  proposalId?: string;
 
   // ─── Installed Packs ─────────────────────────────────────────────────────────
   /**

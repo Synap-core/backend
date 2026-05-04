@@ -3,7 +3,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { db, eq, and, inArray } from "@synap/database";
+import { db, eq, and, inArray, drizzleSql } from "@synap/database";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -52,10 +52,59 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       );
     }
     const workspaceId = c.req.query("workspaceId");
+    const parentUserId = c.req.query("parentUserId");
     const userId = c.get("userId") as string;
+
+    // Security gate: a caller can only filter by parentUserId === self.
+    // This lets an orchestrator (e.g. Hermes) discover its own personalities
+    // without exposing other agents' parent-child relationships.
+    if (parentUserId && parentUserId !== userId) {
+      return c.json(
+        { error: "parentUserId must match the authenticated user" },
+        403
+      );
+    }
+
     try {
       const { users, workspaceMembers } =
         await import("@synap/database/schema");
+
+      // Parent-filter mode: skip the workspace-membership join (an orchestrator
+      // and its personalities don't necessarily share workspace membership).
+      // Authorization is enforced earlier (parentUserId === callerId), so
+      // only the caller's own personalities are ever visible — the bypass is
+      // intentional, not a footgun.
+      //
+      // Response shape is reduced to id/name/agentType only — we deliberately
+      // do NOT return the full agentMetadata blob (it can carry sensitive
+      // fields like `parentAgentId`, `capabilities`, audit hints). The
+      // agentType is the only identity slug callers actually need.
+      if (parentUserId) {
+        const childAgents = await db
+          .select({
+            id: users.id,
+            name: users.name,
+            agentMetadata: users.agentMetadata,
+          })
+          .from(users)
+          .where(
+            and(
+              eq(users.userType, "agent"),
+              drizzleSql`${users.agentMetadata}->>'parentAgentId' = ${parentUserId}`
+            )
+          );
+        return c.json(
+          childAgents.map((row) => {
+            const meta = (row.agentMetadata ?? {}) as { agentType?: string };
+            return {
+              id: row.id,
+              name: row.name,
+              agentType: meta.agentType ?? null,
+            };
+          })
+        );
+      }
+
       const accessibleWsIds = workspaceId
         ? [workspaceId]
         : await getUserAccessibleWorkspaceIds(userId);

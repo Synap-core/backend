@@ -1,0 +1,1252 @@
+{
+  "_meta": {
+    "slug": "builder-workspace",
+    "icon": "wrench",
+    "color": "#7C3AED",
+    "tags": ["builder", "developer", "agents", "tasks"],
+    "description": "Builder workspace — apps, features, services, packages, environments, deployments, recipes, decisions, incidents, plus delegated agent tasks/projects/skills/providers.",
+    "isPublic": true
+  },
+  "workspaceName": "Builder",
+  "description": "Developer + agent intelligence layer. Combines the DevPlane developer schema (apps, packages, services, environments, deployments, recipes, decisions, incidents) with the OpenClaw delegation primitives (project, task, skill, provider). Agents are pod-level identities — not tracked as workspace entities.",
+  "proposalId": "builder-workspace-v1",
+  "icon": "wrench",
+  "color": "#7C3AED",
+  "profiles": [
+    {
+      "slug": "devplane_app",
+      "displayName": "App",
+      "icon": "layout-dashboard",
+      "color": "violet",
+      "description": "A software application in your development stack",
+      "properties": [
+        {
+          "slug": "appName",
+          "label": "App Name",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "description",
+          "label": "Description",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "appStatus",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["planning", "active", "deprecated", "archived"]
+        },
+        {
+          "slug": "repoUrl",
+          "label": "Repository URL",
+          "valueType": "string",
+          "inputType": "url"
+        },
+        {
+          "slug": "deployUrl",
+          "label": "Deploy URL",
+          "valueType": "string",
+          "inputType": "url"
+        },
+        {
+          "slug": "techStack",
+          "label": "Tech Stack",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "port",
+          "label": "Dev Port",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "entityChannelId",
+          "label": "AI Channel ID",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    },
+    {
+      "slug": "devplane_feature",
+      "displayName": "Feature",
+      "icon": "git-branch",
+      "color": "blue",
+      "description": "A feature or work item with a persistent AI session",
+      "properties": [
+        {
+          "slug": "featureStatus",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "backlog",
+            "in_progress",
+            "in_review",
+            "done",
+            "cancelled"
+          ]
+        },
+        {
+          "slug": "priority",
+          "label": "Priority",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["low", "medium", "high", "critical"]
+        },
+        {
+          "slug": "linkedApp",
+          "label": "Linked App",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "linkedPackages",
+          "label": "Linked Packages",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "linkedEnvironment",
+          "label": "Linked Environment",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "estimatedDays",
+          "label": "Estimated Days",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "entityChannelId",
+          "label": "AI Channel ID",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    },
+    {
+      "slug": "devplane_service",
+      "displayName": "Service",
+      "icon": "server",
+      "color": "cyan",
+      "description": "A backend service or microservice",
+      "properties": [
+        {
+          "slug": "serviceStatus",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["healthy", "degraded", "down", "maintenance"]
+        },
+        {
+          "slug": "serviceType",
+          "label": "Type",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "api",
+            "worker",
+            "cron",
+            "database",
+            "cache",
+            "queue",
+            "other"
+          ]
+        },
+        {
+          "slug": "host",
+          "label": "Host",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "servicePort",
+          "label": "Port",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "healthUrl",
+          "label": "Health Check URL",
+          "valueType": "string",
+          "inputType": "url"
+        },
+        {
+          "slug": "linkedApp",
+          "label": "Linked App",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "linkedEnvironmentId",
+          "label": "Linked Server",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    },
+    {
+      "slug": "devplane_package",
+      "displayName": "Package",
+      "icon": "package",
+      "color": "amber",
+      "description": "An npm/pnpm package — tracked with health, graph edges, and publish history",
+      "properties": [
+        {
+          "slug": "packageName",
+          "label": "Package Name",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "packageVersion",
+          "label": "Version",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "isPublished",
+          "label": "Published",
+          "valueType": "boolean",
+          "inputType": "checkbox"
+        },
+        {
+          "slug": "packageRegistry",
+          "label": "Registry",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["npm", "github", "private", "local"]
+        },
+        {
+          "slug": "dependsOn",
+          "label": "Depends On",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "consumedByApps",
+          "label": "Consumed By Apps",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "healthScore",
+          "label": "Health Score",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "healthGrade",
+          "label": "Health Grade",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["A", "B", "C", "D", "F"]
+        },
+        {
+          "slug": "lastHealthCheck",
+          "label": "Last Health Check",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "staleStatus",
+          "label": "NPM Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["up-to-date", "stale", "local", "unknown"]
+        },
+        {
+          "slug": "uncommittedCount",
+          "label": "Uncommitted Files",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "entityChannelId",
+          "label": "AI Channel ID",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "packagePath",
+          "label": "Local Path",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    },
+    {
+      "slug": "devplane_environment",
+      "displayName": "Server",
+      "icon": "server",
+      "color": "teal",
+      "description": "A server or deployment target — SSH-accessible, provider-agnostic",
+      "properties": [
+        {
+          "slug": "envType",
+          "label": "Environment",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["local", "development", "staging", "production"]
+        },
+        {
+          "slug": "host",
+          "label": "Host / IP",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "envUrl",
+          "label": "App URL",
+          "valueType": "string",
+          "inputType": "url"
+        },
+        {
+          "slug": "isActive",
+          "label": "Active",
+          "valueType": "boolean",
+          "inputType": "checkbox"
+        },
+        {
+          "slug": "sshUser",
+          "label": "SSH User",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "linkedAppSlug",
+          "label": "Linked App",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "kamalRole",
+          "label": "Role",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["web", "worker", "db", "cache", "all"]
+        },
+        {
+          "slug": "serverProvider",
+          "label": "Provider",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "hetzner",
+            "digitalocean",
+            "aws",
+            "gcp",
+            "local",
+            "other"
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "devplane_deployment",
+      "displayName": "Deployment",
+      "icon": "rocket",
+      "color": "rose",
+      "description": "A deployment event or release",
+      "properties": [
+        {
+          "slug": "deployStatus",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "pending",
+            "running",
+            "succeeded",
+            "failed",
+            "rolled_back"
+          ]
+        },
+        {
+          "slug": "version",
+          "label": "Version",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "commitSha",
+          "label": "Commit SHA",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "linkedApp",
+          "label": "Linked App",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "linkedEnvironment",
+          "label": "Environment",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "deployedBy",
+          "label": "Deployed By",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "deployedAt",
+          "label": "Deployed At",
+          "valueType": "date",
+          "inputType": "date"
+        },
+        {
+          "slug": "logsUrl",
+          "label": "Logs URL",
+          "valueType": "string",
+          "inputType": "url"
+        },
+        {
+          "slug": "recipeRunId",
+          "label": "Recipe Run",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    },
+    {
+      "slug": "devplane_recipe",
+      "displayName": "Recipe",
+      "icon": "play-circle",
+      "color": "orange",
+      "description": "An ordered list of shell commands to run on a remote server",
+      "properties": [
+        {
+          "slug": "recipeName",
+          "label": "Recipe Name",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "recipeDescription",
+          "label": "Description",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "recipeTemplate",
+          "label": "Template",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["kamal", "shell", "custom"]
+        },
+        {
+          "slug": "onFailure",
+          "label": "On Failure",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["stop", "continue", "rollback"]
+        },
+        {
+          "slug": "recipeSteps",
+          "label": "Recipe Steps",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "linkedEnvironmentId",
+          "label": "Linked Environment",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "linkedAppSlug",
+          "label": "Linked App",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "rollbackRecipeId",
+          "label": "Rollback Recipe",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    },
+    {
+      "slug": "devplane_recipe_run",
+      "displayName": "Recipe Run",
+      "icon": "activity",
+      "color": "blue",
+      "description": "A single execution of a recipe with per-step status tracking",
+      "properties": [
+        {
+          "slug": "recipeId",
+          "label": "Recipe",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "runStatus",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["running", "success", "failed", "cancelled"]
+        },
+        {
+          "slug": "runSteps",
+          "label": "Run Steps",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "runStartedAt",
+          "label": "Started At",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "runFinishedAt",
+          "label": "Finished At",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "runDuration",
+          "label": "Duration (ms)",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "triggeredBy",
+          "label": "Triggered By",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["manual", "automation"]
+        },
+        {
+          "slug": "linkedApp",
+          "label": "Linked App",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    },
+    {
+      "slug": "devplane_prompt_snippet",
+      "displayName": "Prompt Snippet",
+      "icon": "sparkles",
+      "color": "amber",
+      "description": "A reusable AI prompt template",
+      "properties": [
+        {
+          "slug": "snippetTitle",
+          "label": "Title",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "snippetCategory",
+          "label": "Category",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "deploy",
+            "debug",
+            "test",
+            "audit",
+            "review",
+            "workflow",
+            "custom"
+          ]
+        },
+        {
+          "slug": "snippetDescription",
+          "label": "Description",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "snippetBody",
+          "label": "Prompt Template",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "isExecutable",
+          "label": "Executable",
+          "valueType": "boolean",
+          "inputType": "checkbox"
+        },
+        {
+          "slug": "linkedApp",
+          "label": "Linked App",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    },
+    {
+      "slug": "devplane_decision_record",
+      "displayName": "Decision Record",
+      "icon": "book-open",
+      "color": "indigo",
+      "description": "A technical decision with context, rationale, and alternatives",
+      "properties": [
+        {
+          "slug": "decisionContext",
+          "label": "Context",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "decisionChoice",
+          "label": "Decision",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "alternatives",
+          "label": "Alternatives Considered",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "linkedApp",
+          "label": "Linked App",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "linkedPackages",
+          "label": "Linked Packages",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "madeBy",
+          "label": "Made By",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "madeAt",
+          "label": "Made At",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    },
+    {
+      "slug": "devplane_incident",
+      "displayName": "Incident",
+      "icon": "alert-triangle",
+      "color": "red",
+      "description": "A production incident with severity, status, and root cause tracking",
+      "properties": [
+        {
+          "slug": "severity",
+          "label": "Severity",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["critical", "high", "medium", "low"]
+        },
+        {
+          "slug": "incidentStatus",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["open", "investigating", "resolved"]
+        },
+        {
+          "slug": "affectedApps",
+          "label": "Affected Apps",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "rootCause",
+          "label": "Root Cause",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "resolvedAt",
+          "label": "Resolved At",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "incidentDescription",
+          "label": "Description",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "linkedEnvironment",
+          "label": "Linked Environment",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "recipeRunId",
+          "label": "Recipe Run",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    },
+    {
+      "slug": "devplane_cron",
+      "displayName": "Cron Job",
+      "icon": "timer",
+      "color": "cyan",
+      "description": "A scheduled task with cron expression and run history",
+      "properties": [
+        {
+          "slug": "cronExpression",
+          "label": "Cron Expression",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "cronStatus",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["active", "paused", "error"]
+        },
+        {
+          "slug": "cronDescription",
+          "label": "Description",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "linkedAppSlug",
+          "label": "Linked App",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "lastRunAt",
+          "label": "Last Run At",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "lastRunStatus",
+          "label": "Last Run Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["success", "failed"]
+        },
+        {
+          "slug": "nextRunAt",
+          "label": "Next Run At",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    },
+    {
+      "slug": "devplane_package_publish",
+      "displayName": "Package Publish",
+      "icon": "upload-cloud",
+      "color": "emerald",
+      "description": "A recorded npm publish event with version, changelog, and consumer impact",
+      "properties": [
+        {
+          "slug": "publishedPackage",
+          "label": "Package",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "fromVersion",
+          "label": "From Version",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "toVersion",
+          "label": "To Version",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "bumpType",
+          "label": "Bump Type",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["patch", "minor", "major"]
+        },
+        {
+          "slug": "changelogEntry",
+          "label": "Changelog",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "publishStatus",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["success", "failed", "dry-run"]
+        },
+        {
+          "slug": "consumersNotified",
+          "label": "Consumers Notified",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "triggeredBy",
+          "label": "Triggered By",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["manual", "automation"]
+        },
+        {
+          "slug": "publishedAt",
+          "label": "Published At",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    },
+    {
+      "slug": "project",
+      "displayName": "Project",
+      "icon": "folder",
+      "color": "#2E6DA4",
+      "description": "A bounded body of work delegated to one or more agents",
+      "properties": [
+        {
+          "slug": "project-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Backlog",
+            "Queued",
+            "In Progress",
+            "Blocked",
+            "Completed",
+            "Cancelled"
+          ]
+        },
+        {
+          "slug": "project-priority",
+          "label": "Priority",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["Critical", "High", "Medium", "Low"]
+        },
+        {
+          "slug": "project-owner",
+          "label": "Human Owner",
+          "valueType": "entity_id",
+          "targetProfileSlug": "person"
+        },
+        { "slug": "project-start", "label": "Start Date", "valueType": "date" },
+        {
+          "slug": "project-deadline",
+          "label": "Deadline",
+          "valueType": "date"
+        },
+        {
+          "slug": "project-health",
+          "label": "Health",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["Green", "Yellow", "Red"]
+        },
+        {
+          "slug": "project-type",
+          "label": "Type",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Development",
+            "Research",
+            "Content",
+            "Automation",
+            "DevOps",
+            "Data",
+            "Outreach",
+            "Monitoring"
+          ]
+        },
+        { "slug": "project-goal", "label": "Goal", "valueType": "string" },
+        {
+          "slug": "project-outcome",
+          "label": "Expected Outcome",
+          "valueType": "string"
+        }
+      ]
+    },
+    {
+      "slug": "task",
+      "displayName": "Task",
+      "icon": "check-square",
+      "color": "#1B6E45",
+      "description": "An atomic work item assigned to a coder agent or background runner",
+      "properties": [
+        {
+          "slug": "task-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Backlog",
+            "Queued",
+            "Running",
+            "Review",
+            "Done",
+            "Failed",
+            "Cancelled"
+          ],
+          "constraints": { "defaultValue": "Queued" }
+        },
+        {
+          "slug": "task-priority",
+          "label": "Priority",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["Critical", "High", "Medium", "Low"],
+          "constraints": { "defaultValue": "Medium" }
+        },
+        {
+          "slug": "task-project",
+          "label": "Project",
+          "valueType": "entity_id",
+          "targetProfileSlug": "project"
+        },
+        {
+          "slug": "task-type",
+          "label": "Type",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Code",
+            "Research",
+            "Content",
+            "Ops",
+            "Data",
+            "Outreach",
+            "Review",
+            "Monitor",
+            "Custom"
+          ]
+        },
+        { "slug": "task-due-date", "label": "Due Date", "valueType": "date" },
+        {
+          "slug": "task-effort-hours",
+          "label": "Effort Estimate (hrs)",
+          "valueType": "number"
+        },
+        {
+          "slug": "task-token-estimate",
+          "label": "Token Estimate (K)",
+          "valueType": "number"
+        },
+        {
+          "slug": "task-actual-tokens",
+          "label": "Actual Tokens Used (K)",
+          "valueType": "number"
+        },
+        {
+          "slug": "task-blocked-by",
+          "label": "Blocked By",
+          "valueType": "string"
+        },
+        {
+          "slug": "task-session-key",
+          "label": "Session Key",
+          "valueType": "string"
+        }
+      ]
+    },
+    {
+      "slug": "skill",
+      "displayName": "Skill",
+      "icon": "zap",
+      "color": "#7C3AED",
+      "description": "An installed agent capability — a ClawHub skill, custom script, or API integration",
+      "properties": [
+        {
+          "slug": "skill-trust",
+          "label": "Trust Level",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["Trusted", "Review", "Untrusted", "Blocked"],
+          "constraints": { "defaultValue": "Review" }
+        },
+        {
+          "slug": "skill-category",
+          "label": "Category",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Productivity",
+            "Development",
+            "Communication",
+            "Data",
+            "Security",
+            "Storage",
+            "Browser",
+            "Voice",
+            "IoT",
+            "Custom"
+          ]
+        },
+        {
+          "slug": "skill-source-url",
+          "label": "Source URL",
+          "valueType": "string"
+        },
+        { "slug": "skill-version", "label": "Version", "valueType": "string" },
+        {
+          "slug": "skill-install-date",
+          "label": "Install Date",
+          "valueType": "date"
+        },
+        {
+          "slug": "skill-last-audit",
+          "label": "Last Audit Date",
+          "valueType": "date"
+        },
+        {
+          "slug": "skill-virustotal",
+          "label": "VirusTotal Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["Clean", "Flagged", "Not Scanned", "Pending"]
+        },
+        {
+          "slug": "skill-maintainer",
+          "label": "Maintainer",
+          "valueType": "string"
+        },
+        {
+          "slug": "skill-requires-api",
+          "label": "Requires API Key",
+          "valueType": "boolean"
+        },
+        {
+          "slug": "skill-notes",
+          "label": "Security Notes",
+          "valueType": "string"
+        }
+      ]
+    },
+    {
+      "slug": "provider",
+      "displayName": "Provider",
+      "icon": "database",
+      "color": "#B5451B",
+      "description": "An LLM or API provider — tracks cost, key health, and agent usage",
+      "properties": [
+        {
+          "slug": "provider-type",
+          "label": "Type",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "LLM Cloud",
+            "LLM Local",
+            "API Gateway",
+            "Vector DB",
+            "Storage",
+            "Custom"
+          ]
+        },
+        {
+          "slug": "provider-key-health",
+          "label": "Key Health",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["Valid", "Expiring", "Expired", "No Key (Local)"],
+          "constraints": { "defaultValue": "Valid" }
+        },
+        {
+          "slug": "provider-model",
+          "label": "Model / Endpoint",
+          "valueType": "string"
+        },
+        {
+          "slug": "provider-cost-input",
+          "label": "Cost per 1K Input Tokens ($)",
+          "valueType": "number"
+        },
+        {
+          "slug": "provider-cost-output",
+          "label": "Cost per 1K Output Tokens ($)",
+          "valueType": "number"
+        },
+        {
+          "slug": "provider-budget-day",
+          "label": "Daily Budget Ceiling ($)",
+          "valueType": "number"
+        },
+        {
+          "slug": "provider-spend-week",
+          "label": "Actual Spend This Week ($)",
+          "valueType": "number"
+        },
+        {
+          "slug": "provider-base-url",
+          "label": "Base URL / Endpoint",
+          "valueType": "string"
+        },
+        { "slug": "provider-notes", "label": "Notes", "valueType": "string" }
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "Apps",
+      "type": "table",
+      "scopeProfileSlug": "devplane_app",
+      "config": {
+        "columns": ["title", "appStatus", "techStack", "port", "deployUrl"]
+      }
+    },
+    {
+      "name": "Task Board",
+      "type": "kanban",
+      "scopeProfileSlug": "task",
+      "groupBy": "task-status",
+      "defaultView": true,
+      "description": "All delegated tasks by status: Backlog → Queued → Running → Review → Done."
+    },
+    {
+      "name": "Deployments",
+      "type": "calendar",
+      "scopeProfileSlug": "devplane_deployment",
+      "startField": "deployedAt",
+      "config": { "dateField": "deployedAt", "colorBy": "deployStatus" },
+      "description": "Deployment events on a calendar so release cadence is visible at a glance."
+    },
+    {
+      "name": "Packages",
+      "type": "table",
+      "scopeProfileSlug": "devplane_package",
+      "config": {
+        "columns": [
+          "packageName",
+          "packageVersion",
+          "healthGrade",
+          "staleStatus"
+        ]
+      }
+    },
+    {
+      "name": "Incidents",
+      "type": "table",
+      "scopeProfileSlug": "devplane_incident",
+      "config": {
+        "columns": [
+          "title",
+          "severity",
+          "incidentStatus",
+          "affectedApps",
+          "resolvedAt"
+        ]
+      }
+    },
+    {
+      "name": "Projects",
+      "type": "kanban",
+      "scopeProfileSlug": "project",
+      "groupBy": "project-status",
+      "description": "Delegated projects by status."
+    }
+  ],
+  "layoutConfig": {
+    "defaultView": "Task Board",
+    "sidebarItems": [
+      {
+        "kind": "view",
+        "viewName": "Apps",
+        "label": "Apps",
+        "icon": "layout-dashboard"
+      },
+      {
+        "kind": "view",
+        "viewName": "Task Board",
+        "label": "Tasks",
+        "icon": "check-square"
+      },
+      {
+        "kind": "view",
+        "viewName": "Deployments",
+        "label": "Deployments",
+        "icon": "rocket"
+      },
+      {
+        "kind": "view",
+        "viewName": "Packages",
+        "label": "Packages",
+        "icon": "package"
+      },
+      {
+        "kind": "view",
+        "viewName": "Incidents",
+        "label": "Incidents",
+        "icon": "alert-triangle"
+      }
+    ]
+  },
+  "bentoViewName": "Builder Home",
+  "bentoLayout": [
+    {
+      "widgetType": "section-header",
+      "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+      "config": {
+        "title": "Builder",
+        "subtitle": "Apps, packages, deployments, and delegated tasks in one lens.",
+        "color": "#7C3AED"
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 0, "y": 2, "w": 3, "h": 2 },
+      "config": {
+        "profileSlug": "devplane_app",
+        "label": "Apps",
+        "icon": "layout-dashboard"
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 3, "y": 2, "w": 3, "h": 2 },
+      "config": {
+        "profileSlug": "task",
+        "label": "Tasks",
+        "icon": "check-square"
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 6, "y": 2, "w": 3, "h": 2 },
+      "config": {
+        "profileSlug": "devplane_deployment",
+        "label": "Deployments",
+        "icon": "rocket"
+      }
+    }
+  ],
+  "bentoViewBlocks": [
+    {
+      "kind": "view",
+      "viewName": "Task Board",
+      "pos": { "x": 0, "y": 4, "w": 12, "h": 6 }
+    }
+  ]
+}

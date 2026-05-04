@@ -50,6 +50,12 @@ export const WireAgentUserSchema = z
 export const ListAgentUsersQuerySchema = z
   .object({
     workspaceId: z.string().optional(),
+    parentUserId: z
+      .string()
+      .optional()
+      .describe(
+        "Filter agents by agentMetadata.parentAgentId — used by orchestrators (e.g. Hermes) to discover their personalities."
+      ),
   })
   .openapi("ListAgentUsersQuery");
 

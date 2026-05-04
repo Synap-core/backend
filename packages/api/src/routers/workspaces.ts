@@ -55,6 +55,7 @@ import {
   getAgentIdBySlug,
 } from "../utils/personal-channel.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
+import { withWorkspaceProposalIdLock } from "../services/workspace-creation-service.js";
 
 const logger = createLogger({ module: "workspaces" });
 
@@ -1647,6 +1648,13 @@ export const workspacesRouter = router({
          * created first, then the AI proposes a definition to populate it.
          */
         workspaceId: z.string().uuid().optional(),
+        /**
+         * Optional: caller-supplied stable identifier for idempotent re-creates.
+         * If a workspace with this proposalId already exists for the user, it
+         * is returned untouched. Stamped into `settings.proposalId`.
+         * Used by Eve (Builder Workspace = "builder-workspace-v1") and DevPlane.
+         */
+        proposalId: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1656,52 +1664,144 @@ export const workspacesRouter = router({
         await assertPackageTierAccess(ctx.userId, input.packageSlug);
       }
 
-      // Idempotency: if the user already has a workspace with this packageSlug, return it.
-      // "pending" workspaces (creation in progress) are returned as-is so the client can
-      // subscribe to progress events. "failed" workspaces are returned with status "failed"
-      // so the client can offer a retry button.
-      // Prevents duplicate workspaces when the browser re-triggers onboarding on reconnect.
-      if (input.packageSlug) {
-        const existingMembership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.userId, ctx.userId),
-            drizzleSql`EXISTS (
+      // Serialise concurrent calls with the same (userId, proposalId) so a
+      // hung retry can't race the original. No-op when proposalId is missing.
+      return withWorkspaceProposalIdLock(
+        ctx.userId,
+        input.proposalId,
+        async () => {
+          // Idempotency by proposalId — caller-supplied stable key. If a workspace
+          // with this proposalId already exists for the user → return it. Mirrors
+          // the Hub REST path so DevPlane and Eve see the same row when they ask
+          // for "builder-workspace-v1".
+          if (input.proposalId) {
+            const existingByProposal =
+              await db.query.workspaceMembers.findFirst({
+                where: and(
+                  eq(workspaceMembers.userId, ctx.userId),
+                  drizzleSql`EXISTS (
+              SELECT 1 FROM workspaces w
+              WHERE w.id = ${workspaceMembers.workspaceId}
+                AND w.settings->>'proposalId' = ${input.proposalId}
+            )`
+                ),
+                with: { workspace: true },
+              });
+            if (existingByProposal?.workspace) {
+              logger.info(
+                {
+                  userId: ctx.userId,
+                  proposalId: input.proposalId,
+                  workspaceId: existingByProposal.workspace.id,
+                },
+                "createFromDefinition: returning existing workspace by proposalId"
+              );
+              return {
+                workspaceId: existingByProposal.workspace.id,
+                entityIds: [],
+              };
+            }
+          }
+
+          // Idempotency: if the user already has a workspace with this packageSlug, return it.
+          // "pending" workspaces (creation in progress) are returned as-is so the client can
+          // subscribe to progress events. "failed" workspaces are returned with status "failed"
+          // so the client can offer a retry button.
+          // Prevents duplicate workspaces when the browser re-triggers onboarding on reconnect.
+          if (input.packageSlug) {
+            const existingMembership =
+              await db.query.workspaceMembers.findFirst({
+                where: and(
+                  eq(workspaceMembers.userId, ctx.userId),
+                  drizzleSql`EXISTS (
               SELECT 1 FROM workspaces w
               WHERE w.id = ${workspaceMembers.workspaceId}
                 AND w.settings->>'packageSlug' = ${input.packageSlug}
             )`
-          ),
-          with: { workspace: true },
-        });
-        if (existingMembership?.workspace) {
-          const ws = existingMembership.workspace;
-          const wsSettings = ws.settings as WorkspaceSettings | null;
-          const provStatus = wsSettings?.provisioningStatus;
+                ),
+                with: { workspace: true },
+              });
+            if (existingMembership?.workspace) {
+              const ws = existingMembership.workspace;
+              const wsSettings = ws.settings as WorkspaceSettings | null;
+              const provStatus = wsSettings?.provisioningStatus;
 
-          if (provStatus === "failed") {
-            // Automatically resume from where the previous attempt failed.
-            logger.warn(
-              {
-                userId: ctx.userId,
-                packageSlug: input.packageSlug,
+              if (provStatus === "failed") {
+                // Automatically resume from where the previous attempt failed.
+                logger.warn(
+                  {
+                    userId: ctx.userId,
+                    packageSlug: input.packageSlug,
+                    workspaceId: ws.id,
+                    failedStep: wsSettings?.failedStep,
+                    completedSteps: wsSettings?.completedSteps,
+                  },
+                  "createFromDefinition: resuming failed workspace"
+                );
+                emitChatEvent({
+                  event: "workspace:creation_progress",
+                  data: {
+                    step: "resume",
+                    pct: 5,
+                    label: `Resuming from step '${wsSettings?.failedStep ?? "unknown"}'`,
+                    status: "progress",
+                  },
+                  userId: ctx.userId,
+                });
+                // Fall through to createWorkspaceFromDefinition with resumeFrom set
+                const resumeResult = await createWorkspaceFromDefinition({
+                  definition: input.definition,
+                  userId: ctx.userId,
+                  packageSlug: input.packageSlug,
+                  packageVersion: input.packageVersion,
+                  templateId: input.templateId,
+                  templateName: input.templateName,
+                  workspaceName: input.workspaceName,
+                  createdBy: "user",
+                  workspaceType: input.workspaceType,
+                  linkedAgentId: input.linkedAgentId,
+                  resumeFrom: {
+                    workspaceId: ws.id,
+                    completedSteps: wsSettings?.completedSteps ?? [],
+                  },
+                  onProgress: (step, pct, label) => {
+                    emitChatEvent({
+                      event: "workspace:creation_progress",
+                      data: { step, pct, label, status: "progress" },
+                      userId: ctx.userId,
+                    });
+                  },
+                });
+                return {
+                  status: "created" as const,
+                  workspaceId: resumeResult.workspaceId,
+                  profileIds: resumeResult.profileIds,
+                  viewIds: resumeResult.viewIds,
+                };
+              }
+
+              logger.info(
+                {
+                  userId: ctx.userId,
+                  packageSlug: input.packageSlug,
+                  workspaceId: ws.id,
+                  provisioningStatus: provStatus,
+                },
+                "createFromDefinition: returning existing workspace (idempotent)"
+              );
+              return {
+                status:
+                  provStatus === "active"
+                    ? ("created" as const)
+                    : ("pending" as const),
                 workspaceId: ws.id,
-                failedStep: wsSettings?.failedStep,
-                completedSteps: wsSettings?.completedSteps,
-              },
-              "createFromDefinition: resuming failed workspace"
-            );
-            emitChatEvent({
-              event: "workspace:creation_progress",
-              data: {
-                step: "resume",
-                pct: 5,
-                label: `Resuming from step '${wsSettings?.failedStep ?? "unknown"}'`,
-                status: "progress",
-              },
-              userId: ctx.userId,
-            });
-            // Fall through to createWorkspaceFromDefinition with resumeFrom set
-            const resumeResult = await createWorkspaceFromDefinition({
+              };
+            }
+          }
+
+          let result: Awaited<ReturnType<typeof createWorkspaceFromDefinition>>;
+          try {
+            result = await createWorkspaceFromDefinition({
               definition: input.definition,
               userId: ctx.userId,
               packageSlug: input.packageSlug,
@@ -1712,10 +1812,17 @@ export const workspacesRouter = router({
               createdBy: "user",
               workspaceType: input.workspaceType,
               linkedAgentId: input.linkedAgentId,
-              resumeFrom: {
-                workspaceId: ws.id,
-                completedSteps: wsSettings?.completedSteps ?? [],
-              },
+              // When workspaceId is provided, populate the existing workspace
+              // instead of creating a new one (chat-first onboarding flow).
+              // "workspace" is in completedSteps to skip the CREATE step.
+              ...(input.workspaceId
+                ? {
+                    resumeFrom: {
+                      workspaceId: input.workspaceId,
+                      completedSteps: ["workspace"],
+                    },
+                  }
+                : {}),
               onProgress: (step, pct, label) => {
                 emitChatEvent({
                   event: "workspace:creation_progress",
@@ -1724,193 +1831,177 @@ export const workspacesRouter = router({
                 });
               },
             });
-            return {
-              status: "created" as const,
-              workspaceId: resumeResult.workspaceId,
-              profileIds: resumeResult.profileIds,
-              viewIds: resumeResult.viewIds,
-            };
-          }
-
-          logger.info(
-            {
-              userId: ctx.userId,
-              packageSlug: input.packageSlug,
-              workspaceId: ws.id,
-              provisioningStatus: provStatus,
-            },
-            "createFromDefinition: returning existing workspace (idempotent)"
-          );
-          return {
-            status:
-              provStatus === "active"
-                ? ("created" as const)
-                : ("pending" as const),
-            workspaceId: ws.id,
-          };
-        }
-      }
-
-      let result: Awaited<ReturnType<typeof createWorkspaceFromDefinition>>;
-      try {
-        result = await createWorkspaceFromDefinition({
-          definition: input.definition,
-          userId: ctx.userId,
-          packageSlug: input.packageSlug,
-          packageVersion: input.packageVersion,
-          templateId: input.templateId,
-          templateName: input.templateName,
-          workspaceName: input.workspaceName,
-          createdBy: "user",
-          workspaceType: input.workspaceType,
-          linkedAgentId: input.linkedAgentId,
-          // When workspaceId is provided, populate the existing workspace
-          // instead of creating a new one (chat-first onboarding flow).
-          // "workspace" is in completedSteps to skip the CREATE step.
-          ...(input.workspaceId
-            ? {
-                resumeFrom: {
-                  workspaceId: input.workspaceId,
-                  completedSteps: ["workspace"],
-                },
-              }
-            : {}),
-          onProgress: (step, pct, label) => {
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            // Extract step name from structured error message ("...at step 'X': ...")
+            const stepMatch = message.match(/at step '([^']+)'/);
+            const failedStep = stepMatch?.[1];
+            logger.error(
+              {
+                err,
+                userId: ctx.userId,
+                packageSlug: input.packageSlug,
+                failedStep,
+              },
+              "createFromDefinition failed"
+            );
+            // Emit error progress event so the frontend loading state can show
+            // what went wrong instead of spinning indefinitely.
             emitChatEvent({
               event: "workspace:creation_progress",
-              data: { step, pct, label, status: "progress" },
+              data: {
+                step: failedStep ?? "error",
+                pct: 0,
+                label: failedStep
+                  ? `Failed at step '${failedStep}': ${message}`
+                  : `Creation failed: ${message}`,
+                status: "error",
+              },
               userId: ctx.userId,
             });
-          },
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        // Extract step name from structured error message ("...at step 'X': ...")
-        const stepMatch = message.match(/at step '([^']+)'/);
-        const failedStep = stepMatch?.[1];
-        logger.error(
-          {
-            err,
-            userId: ctx.userId,
-            packageSlug: input.packageSlug,
-            failedStep,
-          },
-          "createFromDefinition failed"
-        );
-        // Emit error progress event so the frontend loading state can show
-        // what went wrong instead of spinning indefinitely.
-        emitChatEvent({
-          event: "workspace:creation_progress",
-          data: {
-            step: failedStep ?? "error",
-            pct: 0,
-            label: failedStep
-              ? `Failed at step '${failedStep}': ${message}`
-              : `Creation failed: ${message}`,
-            status: "error",
-          },
-          userId: ctx.userId,
-        });
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: failedStep
-            ? `Workspace creation failed at step '${failedStep}': ${message}`
-            : `Workspace creation failed: ${message}`,
-        });
-      }
-
-      // Create documents for entities with content
-      // (storage lives in the API layer, not the database package)
-      const entitiesWithContent = (input.definition.suggestedEntities ?? [])
-        .map((entity, idx) => ({ entity, entityId: result.entityIds[idx] }))
-        .filter(
-          (e): e is typeof e & { entity: { content: string } } =>
-            !!e.entity.content && !!e.entityId
-        );
-
-      if (entitiesWithContent.length > 0) {
-        const { storage } = await import("@synap/storage");
-
-        const database = await getDb();
-        const evRepo = new EventRepository(sql);
-        const docRepo = new DocumentRepository(database, evRepo);
-        const entRepo = new EntityRepository(database, evRepo);
-
-        for (const { entity, entityId } of entitiesWithContent) {
-          try {
-            const key = storage.buildPath(ctx.userId, "entity", entityId, "md");
-            const metadata = await storage.upload(key, entity.content, {
-              contentType: "text/markdown",
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: failedStep
+                ? `Workspace creation failed at step '${failedStep}': ${message}`
+                : `Workspace creation failed: ${message}`,
             });
+          }
 
-            const doc = await docRepo.create(
-              {
-                title: entity.title,
-                type: "markdown",
-                storageUrl: metadata.url,
-                storageKey: metadata.path,
-                size: metadata.size,
-                mimeType: "text/markdown",
-                userId: ctx.userId,
-                workspaceId: result.workspaceId,
-              },
-              ctx.userId
+          // Stamp caller-supplied proposalId into settings so future calls with
+          // the same proposalId hit the idempotency check above. Best-effort: a
+          // failure here just means the next call may create a duplicate.
+          if (input.proposalId) {
+            try {
+              const ws = await db.query.workspaces.findFirst({
+                where: eq(workspaces.id, result.workspaceId),
+                columns: { settings: true },
+              });
+              const existingSettings = (ws?.settings ??
+                {}) as WorkspaceSettings;
+              await db
+                .update(workspaces)
+                .set({
+                  settings: {
+                    ...existingSettings,
+                    proposalId: input.proposalId,
+                  } satisfies WorkspaceSettings,
+                })
+                .where(eq(workspaces.id, result.workspaceId));
+            } catch (err) {
+              logger.warn(
+                {
+                  err,
+                  workspaceId: result.workspaceId,
+                  proposalId: input.proposalId,
+                },
+                "Failed to stamp proposalId into workspace settings (non-fatal)"
+              );
+            }
+          }
+
+          // Create documents for entities with content
+          // (storage lives in the API layer, not the database package)
+          const entitiesWithContent = (input.definition.suggestedEntities ?? [])
+            .map((entity, idx) => ({ entity, entityId: result.entityIds[idx] }))
+            .filter(
+              (e): e is typeof e & { entity: { content: string } } =>
+                !!e.entity.content && !!e.entityId
             );
 
-            // Link entity → document (single direction — no backlink needed)
-            await entRepo.update(entityId, { documentId: doc.id }, ctx.userId);
+          if (entitiesWithContent.length > 0) {
+            const { storage } = await import("@synap/storage");
+
+            const database = await getDb();
+            const evRepo = new EventRepository(sql);
+            const docRepo = new DocumentRepository(database, evRepo);
+            const entRepo = new EntityRepository(database, evRepo);
+
+            for (const { entity, entityId } of entitiesWithContent) {
+              try {
+                const key = storage.buildPath(
+                  ctx.userId,
+                  "entity",
+                  entityId,
+                  "md"
+                );
+                const metadata = await storage.upload(key, entity.content, {
+                  contentType: "text/markdown",
+                });
+
+                const doc = await docRepo.create(
+                  {
+                    title: entity.title,
+                    type: "markdown",
+                    storageUrl: metadata.url,
+                    storageKey: metadata.path,
+                    size: metadata.size,
+                    mimeType: "text/markdown",
+                    userId: ctx.userId,
+                    workspaceId: result.workspaceId,
+                  },
+                  ctx.userId
+                );
+
+                // Link entity → document (single direction — no backlink needed)
+                await entRepo.update(
+                  entityId,
+                  { documentId: doc.id },
+                  ctx.userId
+                );
+              } catch (err) {
+                logger.warn(
+                  { err, entityId, title: entity.title },
+                  "Failed to create document for seed entity (non-fatal)"
+                );
+              }
+            }
+          }
+
+          // Enqueue workspace-init for default whiteboard/commands
+          // (skips default views when packageSlug is set)
+          try {
+            const boss = getBoss();
+            await boss.send("workspace-init", {
+              workspaceId: result.workspaceId,
+              userId: ctx.userId,
+              packageSlug: input.packageSlug,
+            });
           } catch (err) {
             logger.warn(
-              { err, entityId, title: entity.title },
-              "Failed to create document for seed entity (non-fatal)"
+              { err, workspaceId: result.workspaceId },
+              "Failed to enqueue workspace-init (non-fatal)"
             );
           }
+
+          auditLog({
+            subjectType: "workspaces",
+            action: "create",
+            phase: "completed",
+            subjectId: result.workspaceId,
+            userId: ctx.userId,
+            data: {
+              id: result.workspaceId,
+              packageSlug: input.packageSlug,
+              createdBy: "user",
+            },
+          });
+
+          emitSideEffects({
+            subjectType: "workspace",
+            action: "create",
+            subjectId: result.workspaceId,
+            userId: ctx.userId,
+          });
+
+          return {
+            status: "created" as const,
+            workspaceId: result.workspaceId,
+            profileIds: result.profileIds,
+            viewIds: result.viewIds,
+            entityIds: result.entityIds,
+          };
         }
-      }
-
-      // Enqueue workspace-init for default whiteboard/commands
-      // (skips default views when packageSlug is set)
-      try {
-        const boss = getBoss();
-        await boss.send("workspace-init", {
-          workspaceId: result.workspaceId,
-          userId: ctx.userId,
-          packageSlug: input.packageSlug,
-        });
-      } catch (err) {
-        logger.warn(
-          { err, workspaceId: result.workspaceId },
-          "Failed to enqueue workspace-init (non-fatal)"
-        );
-      }
-
-      auditLog({
-        subjectType: "workspaces",
-        action: "create",
-        phase: "completed",
-        subjectId: result.workspaceId,
-        userId: ctx.userId,
-        data: {
-          id: result.workspaceId,
-          packageSlug: input.packageSlug,
-          createdBy: "user",
-        },
-      });
-
-      emitSideEffects({
-        subjectType: "workspace",
-        action: "create",
-        subjectId: result.workspaceId,
-        userId: ctx.userId,
-      });
-
-      return {
-        status: "created" as const,
-        workspaceId: result.workspaceId,
-        profileIds: result.profileIds,
-        viewIds: result.viewIds,
-        entityIds: result.entityIds,
-      };
+      ); // close withWorkspaceProposalIdLock
     }),
 
   /**
