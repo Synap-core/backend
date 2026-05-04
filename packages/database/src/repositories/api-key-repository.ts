@@ -19,7 +19,7 @@ export interface CreateApiKeyInput {
   expiresAt?: Date;
   userId: string;
   /** Categorical label for what this key is used for */
-  keyType?: "hub_inbound" | "user_pat" | "system";
+  keyType?: "hub_inbound" | "user_pat" | "system" | "service";
   /** Human-readable explanation of this key's purpose */
   description?: string;
 }

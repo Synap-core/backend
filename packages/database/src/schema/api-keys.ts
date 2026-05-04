@@ -43,7 +43,11 @@ export const apiKeys = pgTable(
     keyType: text("key_type")
       .notNull()
       .default("hub_inbound")
-      .$type<"hub_inbound" | "user_pat" | "system">(), // Categorical purpose label
+      .$type<"hub_inbound" | "user_pat" | "system" | "service">(), // Categorical purpose label
+    // 'service' is for service-account keys (e.g. the Eve dashboard's
+    // realtime-observer key). Service keys are owned by an agent-typed user
+    // (agentMetadata.agentType=eve) and carry the `realtime:observe` scope.
+    // Mint path is the same as other agents — POST /api/hub/setup/agent.
     description: text("description"), // Human-readable explanation of what this key does
 
     // Metadata
@@ -153,6 +157,14 @@ export const API_KEY_SCOPES = [
   // External API scopes (for external callers: Claude Code, custom agents, scripts)
   "skills.invoke", // List and invoke skills via /api/external/skills
   "chat.stream", // Stream AI chat completions via /api/external/chat (Option D)
+  // Realtime observer scope (Phase 3A — Eve OS channels viz)
+  // Read-only Socket.IO subscription scope. A key with this scope can connect
+  // to /presence with `apiKey` instead of `userId` and join workspace:${id}
+  // rooms to receive event broadcasts (chat:stream, openclaw:message:received,
+  // hermes:task:status, etc). Does NOT grant the right to emit events back —
+  // the bridge HTTP endpoint stays guarded by BRIDGE_SECRET as before. See
+  // synap-team-docs/content/team/platform/eve-os-vision.mdx §9 Phase 3A.
+  "realtime:observe",
 ] as const;
 
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];

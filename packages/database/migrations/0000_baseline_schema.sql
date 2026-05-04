@@ -2867,6 +2867,22 @@ CREATE INDEX IF NOT EXISTS "api_key_external_users_parent_idx"
 CREATE INDEX IF NOT EXISTS "api_key_external_users_synap_user_idx"
   ON "api_key_external_users" ("synap_user_id");
 
+-- ─── Realtime observer scope (migration 0019) ───────────────────────────────
+--
+-- Mirrors 0019_realtime_observe_scope.sql. The Eve dashboard's Socket.IO
+-- handshake authenticates with an API key carrying the `realtime:observe`
+-- scope. No DDL is strictly required (key_type and scope are unconstrained
+-- text) — the comment + partial index live here for a fresh-pod boot.
+
+COMMENT ON COLUMN "api_keys"."key_type" IS
+  'Categorical purpose label: hub_inbound | user_pat | system | service. '
+  '''service'' is for service-account keys (e.g. the Eve realtime observer).';
+
+CREATE INDEX IF NOT EXISTS "api_keys_realtime_observe_idx"
+  ON "api_keys" ("key_prefix")
+  WHERE "is_active" = true
+    AND 'realtime:observe' = ANY("scope");
+
 -- ─── _migrations tracking table ──────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS "_migrations" (

@@ -13,6 +13,8 @@
     "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/server.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "cf:dev": "wrangler dev",
     "cf:deploy": "wrangler deploy"
   },
@@ -20,6 +22,7 @@
     "@cloudflare/workers-types": "^4.20240117.0",
     "@synap/database": "workspace:*",
     "@synap/storage": "workspace:*",
+    "bcrypt": "^6.0.0",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "0.8.3",
     "socket.io": "^4.8.3",
@@ -27,9 +30,11 @@
     "yjs": "^13.6.11"
   },
   "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
     "@types/node": "^20.11.0",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3",
+    "vitest": "^4.0.7",
     "wrangler": "^3.28.0"
   }
 }
