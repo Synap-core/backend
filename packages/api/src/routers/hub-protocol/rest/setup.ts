@@ -240,16 +240,24 @@ export function registerSetupRoutes(app: HubHono): void {
 
     try {
       // ── Find target workspace ───────────────────────────────────────────────
+      // Priority: explicit id > agent-os package > any workspace on the pod.
+      // The agent-os lookup is kept for backward-compat with OpenClaw installs
+      // that seeded that workspace. Falling back to any workspace means Eve
+      // and other self-hosted provisioners don't need a specific workspace
+      // pre-created before provisioning can succeed.
       let ws = requestedWorkspaceId
         ? await db.query.workspaces.findFirst({
             where: (w, { eq }) => eq(w.id, requestedWorkspaceId),
           })
-        : await db.query.workspaces.findFirst({
+        : ((await db.query.workspaces.findFirst({
             where: drizzleSql`${workspaces.settings}->>'packageSlug' = 'agent-os'`,
             orderBy: (w) => asc(w.createdAt),
-          });
+          })) ??
+          (await db.query.workspaces.findFirst({
+            orderBy: (w) => asc(w.createdAt),
+          })));
 
-      // If no Agent OS workspace exists, auto-seed one from the bundled template.
+      // If still no workspace exists, auto-seed one from the bundled template.
       if (!ws && !requestedWorkspaceId) {
         let ownerCandidate = await db.query.users.findFirst({
           where: (u, { eq }) => eq(u.userType, "human"),
@@ -386,7 +394,7 @@ export function registerSetupRoutes(app: HubHono): void {
           {
             error: requestedWorkspaceId
               ? `Workspace ${requestedWorkspaceId} not found`
-              : "No workspace found and could not auto-create one. Set ADMIN_EMAIL in your pod .env and retry.",
+              : "No workspace exists on this pod and auto-creation failed. Set ADMIN_EMAIL in your pod .env and retry.",
           },
           404
         );
