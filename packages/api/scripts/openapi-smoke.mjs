@@ -14,21 +14,16 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 
 // Source-import the stubs and full schemas (no DB deps for these files).
-const { registerOpenApiStubs } = await import(
-  "../src/routers/hub-protocol/rest/_openapi-stubs.ts"
-);
-const entityCodec = await import(
-  "../src/routers/hub-protocol/rest/_codecs/entity.ts"
-);
-const threadCodec = await import(
-  "../src/routers/hub-protocol/rest/_codecs/thread.ts"
-);
-const memoryCodec = await import(
-  "../src/routers/hub-protocol/rest/_codecs/memory.ts"
-);
-const knowledgeCodec = await import(
-  "../src/routers/hub-protocol/rest/_codecs/knowledge.ts"
-);
+const { registerOpenApiStubs } =
+  await import("../src/routers/hub-protocol/rest/_openapi-stubs.ts");
+const entityCodec =
+  await import("../src/routers/hub-protocol/rest/_codecs/entity.ts");
+const threadCodec =
+  await import("../src/routers/hub-protocol/rest/_codecs/thread.ts");
+const memoryCodec =
+  await import("../src/routers/hub-protocol/rest/_codecs/memory.ts");
+const knowledgeCodec =
+  await import("../src/routers/hub-protocol/rest/_codecs/knowledge.ts");
 
 const app = new OpenAPIHono();
 app.openAPIRegistry.registerComponent("securitySchemes", "bearerAuth", {
@@ -68,13 +63,16 @@ console.log(
     0
   )
 );
-console.log("Tags:", [
-  ...new Set(
-    Object.values(doc.paths ?? {}).flatMap((p) =>
-      Object.values(p ?? {}).flatMap((op) => op?.tags ?? [])
-    )
-  ),
-].sort());
+console.log(
+  "Tags:",
+  [
+    ...new Set(
+      Object.values(doc.paths ?? {}).flatMap((p) =>
+        Object.values(p ?? {}).flatMap((op) => op?.tags ?? [])
+      )
+    ),
+  ].sort()
+);
 
 console.log("\n--- HEAD (first 50 lines) ---");
 const out = JSON.stringify(doc, null, 2);
