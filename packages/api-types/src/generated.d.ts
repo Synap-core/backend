@@ -436,6 +436,18 @@ export interface WorkspaceSettings {
 	/** Version of the package at time of creation. */
 	packageVersion?: string;
 	/**
+	 * Caller-supplied proposal id used for idempotency on workspace-from-definition
+	 * creation paths (Hub Protocol REST `/workspaces/from-definition`). When set,
+	 * subsequent calls with the same `proposalId` for the same user return the
+	 * existing workspace instead of creating a new one.
+	 *
+	 * Distinct from `packageSlug` (which keys idempotency in the tRPC path) —
+	 * external callers (Eve, Coder) generate `proposalId` themselves from a
+	 * stable template id (e.g. "builder-workspace-v1") so retries are safe even
+	 * when no CP package is involved.
+	 */
+	proposalId?: string;
+	/**
 	 * Profile packs, view packs, and bento templates installed into this workspace.
 	 * Populated by the browser when installing from the CP package registry.
 	 * Used to show "Installed" badges and prevent re-installation.
@@ -6525,8 +6537,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceType?: "personal" | "project" | "agent" | "operational" | undefined;
 				linkedAgentId?: string | undefined;
 				workspaceId?: string | undefined;
+				proposalId?: string | undefined;
 			};
 			output: {
+				workspaceId: string;
+				entityIds: never[];
+				status?: undefined;
+				profileIds?: undefined;
+				viewIds?: undefined;
+			} | {
 				status: "created";
 				workspaceId: string;
 				profileIds: string[];
@@ -6535,9 +6554,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				status: "created" | "pending";
 				workspaceId: string;
+				entityIds?: undefined;
 				profileIds?: undefined;
 				viewIds?: undefined;
-				entityIds?: undefined;
 			} | {
 				status: "created";
 				workspaceId: string;
@@ -8116,7 +8135,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				offset?: number | undefined;
 			} | undefined;
 			output: {
-				tasks: any;
+				tasks: ({
+					name: string;
+					userId: string;
+					workspaceId: string | null;
+					id: string;
+					errorMessage: string | null;
+					type: "cron" | "event" | "interval";
+					action: string;
+					updatedAt: Date;
+					createdAt: Date;
+					metadata: unknown;
+					status: "error" | "active" | "paused";
+					description: string | null;
+					context: unknown;
+					schedule: string | null;
+					lastRunAt: Date | null;
+					nextRunAt: Date | null;
+					executionCount: number;
+					successCount: number;
+					failureCount: number;
+				})[];
 			};
 			meta: object;
 		}>;
@@ -8125,7 +8164,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: {
-				task: any;
+				task: {
+					name: string;
+					userId: string;
+					workspaceId: string | null;
+					id: string;
+					errorMessage: string | null;
+					type: "cron" | "event" | "interval";
+					action: string;
+					updatedAt: Date;
+					createdAt: Date;
+					metadata: unknown;
+					status: "error" | "active" | "paused";
+					description: string | null;
+					context: unknown;
+					schedule: string | null;
+					lastRunAt: Date | null;
+					nextRunAt: Date | null;
+					executionCount: number;
+					successCount: number;
+					failureCount: number;
+				};
 			};
 			meta: object;
 		}>;
@@ -8140,13 +8199,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				context?: Record<string, unknown> | undefined;
 			};
 			output: {
-				id: `${string}-${string}-${string}-${string}-${string}`;
-				status: "proposed";
-				proposalId: string;
-			} | {
 				id: string;
 				status: "created";
 				proposalId?: undefined;
+			} | {
+				id: string;
+				status: "proposed";
+				proposalId: string | undefined;
 			};
 			meta: object;
 		}>;
@@ -8159,13 +8218,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				action?: string | undefined;
 				context?: Record<string, unknown> | undefined;
 				status?: "error" | "active" | "paused" | undefined;
+				nextRunAt?: string | Date | undefined;
 			};
 			output: {
-				status: "proposed";
-				proposalId: string;
-			} | {
 				status: "updated";
 				proposalId?: undefined;
+			} | {
+				status: "proposed";
+				proposalId: string | undefined;
 			};
 			meta: object;
 		}>;
@@ -8174,11 +8234,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: {
-				status: "proposed";
-				proposalId: string;
-			} | {
 				status: "deleted";
 				proposalId?: undefined;
+			} | {
+				status: "proposed";
+				proposalId: string | undefined;
 			};
 			meta: object;
 		}>;
