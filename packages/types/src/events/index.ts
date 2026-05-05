@@ -73,6 +73,71 @@ export interface DocumentVersionCreatedEvent {
 }
 
 // =============================================================================
+// Actor-prefixed events ({actor}:{entity}:{action}) — see docstring on EventNames
+// =============================================================================
+
+/** Platforms that OpenClaw bridges into Synap channels. */
+export type OpenClawPlatform =
+  | "telegram"
+  | "whatsapp"
+  | "signal"
+  | "matrix"
+  | "discord"
+  | "voice";
+
+/** External chat platform message ingested via OpenClaw → routed into a Synap channel. */
+export interface OpenClawMessageReceivedEvent {
+  channelId: string;
+  messageId: string;
+  platform: OpenClawPlatform;
+  /** Short preview of the message body. Truncated upstream — no PII normalization here. */
+  excerpt: string;
+  /** ISO-8601 timestamp from when the bridge accepted the inbound message. */
+  receivedAt: string;
+}
+
+/** Synap (the brain) routed an outbound assistant reply back to an external platform. */
+export interface SynapReplyRoutedEvent {
+  channelId: string;
+  messageId: string;
+  /** External platform identifier (e.g. "telegram", "voice", "email"). */
+  targetPlatform: string;
+  excerpt: string;
+  /** ISO-8601 timestamp at which the reply was handed to the egress connector. */
+  routedAt: string;
+}
+
+/** Hermes background-task lifecycle. `taskId` matches the background_tasks row id. */
+export interface HermesTaskQueuedEvent {
+  taskId: string;
+  /** Task kind (job-queue name / task-template id). */
+  kind: string;
+  /** What initiated the task — "user", "agent:<type>", "automation", "cron", etc. */
+  source: string;
+  queuedAt: string;
+}
+
+export interface HermesTaskStartedEvent {
+  taskId: string;
+  kind: string;
+  startedAt: string;
+}
+
+export interface HermesTaskCompletedEvent {
+  taskId: string;
+  /** Wall-clock duration in milliseconds (queued → completed). */
+  durationMs: number;
+  completedAt: string;
+}
+
+export interface HermesTaskFailedEvent {
+  taskId: string;
+  /** Human-readable error summary. Stack traces stay in logs. */
+  error: string;
+  failedAt: string;
+}
+
+// =============================================================================
 // AI Events
 // =============================================================================
 
@@ -146,6 +211,14 @@ export interface DomainServerToClientEvents {
   "chat:message": (data: ChatMessageEvent) => void;
   "chat:stream": (data: ChatStreamEvent) => void;
 
+  // {actor}:{entity}:{action} — new convention. New events MUST land here, not above.
+  "openclaw:message:received": (data: OpenClawMessageReceivedEvent) => void;
+  "synap:reply:routed": (data: SynapReplyRoutedEvent) => void;
+  "hermes:task:queued": (data: HermesTaskQueuedEvent) => void;
+  "hermes:task:started": (data: HermesTaskStartedEvent) => void;
+  "hermes:task:completed": (data: HermesTaskCompletedEvent) => void;
+  "hermes:task:failed": (data: HermesTaskFailedEvent) => void;
+
   // System
   error: (data: { code: string; message: string }) => void;
 }
@@ -174,9 +247,55 @@ export interface DomainClientToServerEvents {
 // =============================================================================
 
 /**
- * All domain event names for type checking
+ * Legacy 2-segment event-name registry. Kept exported because external
+ * consumers (browser hooks, SDK clients) still depend on it.
+ *
+ * @deprecated since 2026-05-05 — use {@link EventNames} for new code. The new
+ * convention is `{actor}:{entity}:{action}` (three segments, lowercase). Do
+ * not add entries here.
  */
 export const DomainEventNames = {
+  /** @deprecated since 2026-05-05 — legacy 2-segment naming. New events use `{actor}:{entity}:{action}`. Do not remove; existing consumers still depend on these. */
+  ENTITY_CREATED: "entity:created",
+  /** @deprecated since 2026-05-05 — legacy 2-segment naming. New events use `{actor}:{entity}:{action}`. Do not remove; existing consumers still depend on these. */
+  ENTITY_UPDATED: "entity:updated",
+  /** @deprecated since 2026-05-05 — legacy 2-segment naming. New events use `{actor}:{entity}:{action}`. Do not remove; existing consumers still depend on these. */
+  ENTITY_DELETED: "entity:deleted",
+  /** @deprecated since 2026-05-05 — legacy 2-segment naming. New events use `{actor}:{entity}:{action}`. Do not remove; existing consumers still depend on these. */
+  DOCUMENT_UPDATED: "document:updated",
+  /** @deprecated since 2026-05-05 — legacy 2-segment naming. New events use `{actor}:{entity}:{action}`. Do not remove; existing consumers still depend on these. */
+  DOCUMENT_VERSION: "document:version",
+  /** @deprecated since 2026-05-05 — legacy 2-segment naming. New events use `{actor}:{entity}:{action}`. Do not remove; existing consumers still depend on these. */
+  AI_PROPOSAL: "ai:proposal",
+  /** @deprecated since 2026-05-05 — legacy 2-segment naming. New events use `{actor}:{entity}:{action}`. Do not remove; existing consumers still depend on these. */
+  AI_PROPOSAL_STATUS: "ai:proposal:status",
+  /** @deprecated since 2026-05-05 — legacy 2-segment naming. New events use `{actor}:{entity}:{action}`. Do not remove; existing consumers still depend on these. */
+  CHAT_MESSAGE: "chat:message",
+  /** @deprecated since 2026-05-05 — legacy 2-segment naming. New events use `{actor}:{entity}:{action}`. Do not remove; existing consumers still depend on these. */
+  CHAT_STREAM: "chat:stream",
+} as const;
+
+export type DomainEventName =
+  (typeof DomainEventNames)[keyof typeof DomainEventNames];
+
+/**
+ * Canonical event-name registry. Pattern: `{actor}:{entity}:{action}` —
+ * three segments, lowercase, colon-delimited.
+ *
+ * Actor vocabulary:
+ * - `user` — direct human action
+ * - `agent` — Synap agent (orchestrator, persona)
+ * - `openclaw` — messaging ingress (external chat → Synap)
+ * - `hermes` — execution daemon
+ * - `synap` — the brain (notifications, channel routing, AI streaming)
+ * - `system` — infra / cron / lifecycle
+ *
+ * Add new events at the bottom under the `{actor}:{entity}:{action}` block.
+ * Never add new 2-segment entries — those are kept for backwards compatibility
+ * only.
+ */
+export const EventNames = {
+  // Legacy (2-segment, backwards-compat) — DO NOT add more like these.
   ENTITY_CREATED: "entity:created",
   ENTITY_UPDATED: "entity:updated",
   ENTITY_DELETED: "entity:deleted",
@@ -186,12 +305,33 @@ export const DomainEventNames = {
   AI_PROPOSAL_STATUS: "ai:proposal:status",
   CHAT_MESSAGE: "chat:message",
   CHAT_STREAM: "chat:stream",
+
+  // {actor}:{entity}:{action} — NEW convention. Add new events here.
+  OPENCLAW_MESSAGE_RECEIVED: "openclaw:message:received",
+  SYNAP_REPLY_ROUTED: "synap:reply:routed",
+  HERMES_TASK_QUEUED: "hermes:task:queued",
+  HERMES_TASK_STARTED: "hermes:task:started",
+  HERMES_TASK_COMPLETED: "hermes:task:completed",
+  HERMES_TASK_FAILED: "hermes:task:failed",
 } as const;
 
-export type DomainEventName =
-  (typeof DomainEventNames)[keyof typeof DomainEventNames];
+export type EventName = (typeof EventNames)[keyof typeof EventNames];
 
-// Unified backend event system (SubjectType, EventAction, EventPhase, EventName)
+/**
+ * Maps an event name to its payload shape via {@link DomainServerToClientEvents}.
+ * Lets `emitTyped<E>` infer the right payload from the event name alone, so
+ * `emitTyped("hermes:task:queued", { ... })` is type-checked at the call site.
+ */
+export type EventPayloadFor<E extends EventName> =
+  E extends keyof DomainServerToClientEvents
+    ? Parameters<DomainServerToClientEvents[E]>[0]
+    : never;
+
+// Unified backend event system (SubjectType, EventAction, EventPhase, EventName).
+// `EventName` from unified.js is the dotted automation-pattern type
+// (`{subject}.{action}.{phase}`) — orthogonal to the colon-delimited realtime
+// {@link EventName} declared above. Consumers needing the unified one should
+// import it directly from `@synap-core/types/events/unified`.
 export {
   SUBJECT_TYPES,
   EVENT_ACTIONS,
@@ -205,6 +345,7 @@ export type {
   SubjectType,
   EventAction,
   EventPhase,
-  EventName,
   EventPattern,
 } from "./unified.js";
+// Re-exported under an alias to avoid clashing with the realtime EventName.
+export type { EventName as UnifiedEventName } from "./unified.js";

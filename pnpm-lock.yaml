@@ -9,7 +9,7 @@ overrides:
   drizzle-zod: 0.8.3
   zod: 4.3.6
   zod-to-json-schema: 3.23.2
-  axios: '>=1.15.0'
+  axios: '>=1.15.2'
   fast-xml-parser: '>=5.5.6'
   socket.io-parser: '>=4.2.6'
   path-to-regexp: '>=8.4.0'
@@ -641,6 +641,9 @@ importers:
       '@synap-core/core':
         specifier: workspace:*
         version: link:../core
+      '@synap-core/types':
+        specifier: workspace:*
+        version: link:../types
       '@synap/database':
         specifier: workspace:*
         version: link:../database
@@ -666,6 +669,9 @@ importers:
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
+      vitest:
+        specifier: ^4.0.7
+        version: 4.0.17(@opentelemetry/api@1.9.0)(@types/node@25.0.7)(@vitest/ui@4.0.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.2)
 
   packages/external-connect-client: {}
 
@@ -818,7 +824,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^1.6.1
-        version: 1.6.1(@types/node@25.0.7)(@vitest/ui@4.0.17(vitest@4.0.17))(lightningcss@1.32.0)
+        version: 1.6.1(@types/node@25.0.7)(@vitest/ui@4.0.17)(lightningcss@1.32.0)
 
   packages/realtime:
     dependencies:
@@ -828,6 +834,9 @@ importers:
       '@synap/database':
         specifier: workspace:*
         version: link:../database
+      '@synap/events':
+        specifier: workspace:*
+        version: link:../events
       '@synap/storage':
         specifier: workspace:*
         version: link:../storage
@@ -958,7 +967,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^1.0.4
-        version: 1.6.1(@types/node@22.19.5)(@vitest/ui@4.0.17(vitest@4.0.17))(lightningcss@1.32.0)
+        version: 1.6.1(@types/node@22.19.5)(@vitest/ui@4.0.17)(lightningcss@1.32.0)
 
   packages/test-e2e:
     dependencies:
@@ -983,9 +992,6 @@ importers:
       '@trpc/server':
         specifier: ^11.8.1
         version: 11.8.1(typescript@5.9.3)
-      axios:
-        specifier: '>=1.15.0'
-        version: 1.15.0
       bcrypt:
         specifier: ^6.0.0
         version: 6.0.0
@@ -1002,12 +1008,15 @@ importers:
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.28
+      axios:
+        specifier: '>=1.15.2'
+        version: 1.16.0
       typescript:
         specifier: ^5.3.3
         version: 5.9.3
       vitest:
         specifier: ^1.3.1
-        version: 1.6.1(@types/node@20.19.28)(@vitest/ui@4.0.17(vitest@4.0.17))(lightningcss@1.32.0)
+        version: 1.6.1(@types/node@20.19.28)(@vitest/ui@4.0.17)(lightningcss@1.32.0)
 
   packages/types:
     dependencies:
@@ -4568,8 +4577,8 @@ packages:
     resolution: {integrity: sha512-wvUjBtSGN7+7SjNpq/9M2Tg350UZD3q62IFZLbRAR1bSMlCo1ZaeW+BJ+D090e4hIIZLBcTDWe4Mh4jvUDajzQ==}
     engines: {node: '>= 0.4'}
 
-  axios@1.15.0:
-    resolution: {integrity: sha512-wWyJDlAatxk30ZJer+GeCWS209sA42X+N5jU2jy6oHTp7ufw8uzUTVFBX9+wTfAlhiJXGS0Bq7X6efruWjuK9Q==}
+  axios@1.16.0:
+    resolution: {integrity: sha512-6hp5CwvTPlN2A31g5dxnwAX0orzM7pmCRDLnZSX772mv8WDqICwFjowHuPs04Mc8deIld1+ejhtaMn5vp6b+1w==}
 
   bail@2.0.2:
     resolution: {integrity: sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw==}
@@ -5457,8 +5466,8 @@ packages:
   flatted@3.3.3:
     resolution: {integrity: sha512-GX+ysw4PBCz0PzosHDepZGANEuFCMLrnRTiEy9McGjmkCQYwRq4A/X786G/fjM/+OjsWSU1ZrY5qyARZmO/uwg==}
 
-  follow-redirects@1.15.11:
-    resolution: {integrity: sha512-deG2P0JfjrTxl50XGCDyfI97ZGVCxIpfKYmfyrQ54n5FO/0gfIES8C/Psl6kWVDolizcaaxZJnTS0QSMxvnsBQ==}
+  follow-redirects@1.16.0:
+    resolution: {integrity: sha512-y5rN/uOsadFT/JfYwhxRS5R7Qce+g3zG97+JrtFZlC9klX/W5hD7iiLzScI4nZqUS7DNUdhPgw4xI8W2LuXlUw==}
     engines: {node: '>=4.0'}
     peerDependencies:
       debug: '*'
@@ -10520,13 +10529,13 @@ snapshots:
 
   '@ory/hydra-client@2.2.1':
     dependencies:
-      axios: 1.15.0
+      axios: 1.16.0
     transitivePeerDependencies:
       - debug
 
   '@ory/kratos-client@1.3.8':
     dependencies:
-      axios: 1.15.0
+      axios: 1.16.0
     transitivePeerDependencies:
       - debug
 
@@ -12056,7 +12065,7 @@ snapshots:
       obug: 2.1.1
       std-env: 3.10.0
       tinyrainbow: 3.0.3
-      vitest: 4.0.17(@opentelemetry/api@1.9.0)(@types/node@24.10.7)(@vitest/ui@4.0.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.2)
+      vitest: 4.0.17(@opentelemetry/api@1.9.0)(@types/node@20.19.28)(@vitest/ui@4.0.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.2)
 
   '@vitest/expect@1.6.1':
     dependencies:
@@ -12072,6 +12081,14 @@ snapshots:
       '@vitest/utils': 4.0.17
       chai: 6.2.2
       tinyrainbow: 3.0.3
+
+  '@vitest/mocker@4.0.17(vite@7.3.1(@types/node@20.19.28)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.2))':
+    dependencies:
+      '@vitest/spy': 4.0.17
+      estree-walker: 3.0.3
+      magic-string: 0.30.21
+    optionalDependencies:
+      vite: 7.3.1(@types/node@20.19.28)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.2)
 
   '@vitest/mocker@4.0.17(vite@7.3.1(@types/node@24.10.7)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.2))':
     dependencies:
@@ -12325,9 +12342,9 @@ snapshots:
     dependencies:
       possible-typed-array-names: 1.1.0
 
-  axios@1.15.0:
+  axios@1.16.0:
     dependencies:
-      follow-redirects: 1.15.11
+      follow-redirects: 1.16.0
       form-data: 4.0.5
       proxy-from-env: 2.1.0
     transitivePeerDependencies:
@@ -13340,7 +13357,7 @@ snapshots:
 
   flatted@3.3.3: {}
 
-  follow-redirects@1.15.11: {}
+  follow-redirects@1.16.0: {}
 
   for-each@0.3.5:
     dependencies:
@@ -15873,7 +15890,7 @@ snapshots:
   typesense@1.8.2(@babel/runtime@7.29.2):
     dependencies:
       '@babel/runtime': 7.29.2
-      axios: 1.15.0
+      axios: 1.16.0
       loglevel: 1.9.2
     transitivePeerDependencies:
       - debug
@@ -16128,7 +16145,7 @@ snapshots:
       tsx: 4.21.0
       yaml: 2.8.2
 
-  vitest@1.6.1(@types/node@20.19.28)(@vitest/ui@4.0.17(vitest@4.0.17))(lightningcss@1.32.0):
+  vitest@1.6.1(@types/node@20.19.28)(@vitest/ui@4.0.17)(lightningcss@1.32.0):
     dependencies:
       '@vitest/expect': 1.6.1
       '@vitest/runner': 1.6.1
@@ -16163,7 +16180,7 @@ snapshots:
       - supports-color
       - terser
 
-  vitest@1.6.1(@types/node@22.19.5)(@vitest/ui@4.0.17(vitest@4.0.17))(lightningcss@1.32.0):
+  vitest@1.6.1(@types/node@22.19.5)(@vitest/ui@4.0.17)(lightningcss@1.32.0):
     dependencies:
       '@vitest/expect': 1.6.1
       '@vitest/runner': 1.6.1
@@ -16198,7 +16215,7 @@ snapshots:
       - supports-color
       - terser
 
-  vitest@1.6.1(@types/node@25.0.7)(@vitest/ui@4.0.17(vitest@4.0.17))(lightningcss@1.32.0):
+  vitest@1.6.1(@types/node@25.0.7)(@vitest/ui@4.0.17)(lightningcss@1.32.0):
     dependencies:
       '@vitest/expect': 1.6.1
       '@vitest/runner': 1.6.1
@@ -16236,7 +16253,7 @@ snapshots:
   vitest@4.0.17(@opentelemetry/api@1.9.0)(@types/node@20.19.28)(@vitest/ui@4.0.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.2):
     dependencies:
       '@vitest/expect': 4.0.17
-      '@vitest/mocker': 4.0.17(vite@7.3.1(@types/node@25.0.7)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.2))
+      '@vitest/mocker': 4.0.17(vite@7.3.1(@types/node@20.19.28)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.2))
       '@vitest/pretty-format': 4.0.17
       '@vitest/runner': 4.0.17
       '@vitest/snapshot': 4.0.17

@@ -18,6 +18,7 @@
 
 import type { EventRecord } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { EventNames } from "@synap-core/types/events";
 
 const logger = createLogger({ module: "domain-event-bridge" });
 
@@ -31,15 +32,15 @@ function mapToSocketEvent(
 ): { event: string; workspaceIdRequired: boolean } | null {
   const m: Record<string, { event: string; workspaceIdRequired: boolean }> = {
     "entity.create.completed": {
-      event: "entity:created",
+      event: EventNames.ENTITY_CREATED,
       workspaceIdRequired: true,
     },
     "entity.update.completed": {
-      event: "entity:updated",
+      event: EventNames.ENTITY_UPDATED,
       workspaceIdRequired: true,
     },
     "entity.delete.completed": {
-      event: "entity:deleted",
+      event: EventNames.ENTITY_DELETED,
       workspaceIdRequired: true,
     },
     "view.create.completed": {
@@ -75,7 +76,7 @@ function mapToSocketEvent(
       workspaceIdRequired: true,
     },
     "document.update.completed": {
-      event: "document:updated",
+      event: EventNames.DOCUMENT_UPDATED,
       workspaceIdRequired: true,
     },
     "document.delete.completed": {

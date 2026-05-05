@@ -61,6 +61,9 @@ import {
 import { validateExternalUrl } from "../utils/validate-url.js";
 import { resolveAiChannelByFamily } from "../utils/resolve-ai-channel-family.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
+import { emitTyped } from "../utils/event-emit.js";
+import { makeExcerpt } from "../utils/excerpt.js";
+import { EventNames } from "@synap-core/types/events";
 import { MessageLinksRepository } from "@synap/database";
 import {
   MessageLinkTargetType,
@@ -1412,7 +1415,7 @@ export const channelsRouter = router({
             fullContent += chunk.content;
 
             emitChatEvent({
-              event: "chat:stream",
+              event: EventNames.CHAT_STREAM,
               data: {
                 threadId: channelId,
                 type: "chunk",
@@ -1468,6 +1471,34 @@ export const channelsRouter = router({
               userId: userId,
               channelId,
             });
+
+            // Phase 3B: parallel typed emit for the eve-dashboard channels viz.
+            // The legacy `route_to_channel` event above stays for backwards-compat.
+            // Internal Synap-to-Synap routing → targetPlatform="synap"; the
+            // viz layer can distinguish that from external relay routes when
+            // OpenClaw-side outbound emit lands.
+            const routingPayload = (chunk as { routing?: { reason?: string } })
+              .routing;
+            void emitTyped(
+              "synap:reply:routed",
+              {
+                channelId,
+                messageId: userMessageId,
+                targetPlatform: "synap",
+                excerpt: makeExcerpt(routingPayload?.reason ?? content),
+                routedAt: new Date().toISOString(),
+              },
+              {
+                workspaceId: workspaceId ?? undefined,
+                userId,
+                channelId,
+              }
+            ).catch((err) => {
+              logger.warn(
+                { err, event: "synap:reply:routed", channelId },
+                "emitTyped failed"
+              );
+            });
           } else if (chunk.type === "complete") {
             if (chunk.data) {
               const data = chunk.data as Partial<HubResponse>;
@@ -1489,7 +1520,7 @@ export const channelsRouter = router({
             // Notify client of each proposal created during this AI response
             for (const cp of createdProposals) {
               emitChatEvent({
-                event: "ai:proposal",
+                event: EventNames.AI_PROPOSAL,
                 data: {
                   threadId: channelId,
                   messageId: userMessageId,
@@ -1511,7 +1542,7 @@ export const channelsRouter = router({
               (chunk.data as { agentType?: string } | undefined)?.agentType ??
               effectiveAgentType;
             emitChatEvent({
-              event: "chat:stream",
+              event: EventNames.CHAT_STREAM,
               data: {
                 threadId: channelId,
                 type: "complete",
@@ -1650,7 +1681,7 @@ export const channelsRouter = router({
           createdProposals.push(...fallbackProposals);
           for (const cp of fallbackProposals) {
             emitChatEvent({
-              event: "ai:proposal",
+              event: EventNames.AI_PROPOSAL,
               data: {
                 threadId: channelId,
                 messageId: userMessageId,
@@ -1671,7 +1702,7 @@ export const channelsRouter = router({
         // emit a completion event so the frontend is never left waiting forever.
         if (streamDeadline.signal.aborted && !fullContent) {
           emitChatEvent({
-            event: "chat:stream",
+            event: EventNames.CHAT_STREAM,
             data: {
               threadId: channelId,
               type: "complete",
@@ -1773,7 +1804,7 @@ export const channelsRouter = router({
       }
 
       emitChatEvent({
-        event: "chat:message",
+        event: EventNames.CHAT_MESSAGE,
         data: {
           threadId: channelId,
           message: {

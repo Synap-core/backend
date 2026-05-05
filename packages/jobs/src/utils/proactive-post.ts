@@ -41,6 +41,7 @@ import type {
 } from "@synap/database/schema";
 import { getDefaultProactiveAiPreferences } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+import { EventNames } from "@synap-core/types/events";
 import { emitSideEffects } from "@synap/events";
 
 const logger = createLogger({ module: "proactive-post" });
@@ -247,7 +248,7 @@ async function postToProactiveFeed(
   });
 
   emitRealtimeEvent({
-    event: "chat:message",
+    event: EventNames.CHAT_MESSAGE,
     data: {
       threadId: channel.id,
       message: {
@@ -302,7 +303,7 @@ async function postToPersonalChat(
   });
 
   emitRealtimeEvent({
-    event: "chat:message",
+    event: EventNames.CHAT_MESSAGE,
     data: {
       threadId: channel.id,
       message: {

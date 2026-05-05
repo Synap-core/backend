@@ -39,6 +39,7 @@ import {
   getAgentIdBySlug,
 } from "../utils/personal-channel.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
+import { EventNames } from "@synap-core/types/events";
 import {
   withRetryResult,
   API_RETRY_OPTIONS,
@@ -485,7 +486,7 @@ async function deliverToProactiveFeed(
 
     // ── 6. Emit real-time event ────────────────────────────────────────────
     emitChatEvent({
-      event: "chat:message",
+      event: EventNames.CHAT_MESSAGE,
       data: {
         threadId: channel.id,
         message: {

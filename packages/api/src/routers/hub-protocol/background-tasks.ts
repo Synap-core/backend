@@ -10,6 +10,12 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { backgroundTasksRouter as regularBackgroundTasksRouter } from "../background-tasks.js";
 import { createHubProtocolCallerContext } from "./utils.js";
+import { emitTyped } from "../../utils/event-emit.js";
+import { db, eq, backgroundTasks } from "@synap/database";
+import {
+  diffHermesLifecycle,
+  type HermesLifecycleEmit,
+} from "../../utils/hermes-lifecycle.js";
 
 export const backgroundTasksRouter = router({
   /**
@@ -99,6 +105,17 @@ export const backgroundTasksRouter = router({
       );
       const caller = regularBackgroundTasksRouter.createCaller(callerContext);
 
+      // Snapshot the previous task row so we can detect transitions for the
+      // Phase 3B Hermes lifecycle emits (started / completed / failed). The
+      // tRPC `update` only accepts a subset of these fields, so the
+      // execution-tracking deltas (lastRunAt / successCount / failureCount /
+      // errorMessage) currently never reach DB via this path — see report.
+      // We still emit on the *intent* signaled by the input, since IS is the
+      // source of truth for run lifecycle.
+      const prev = await db.query.backgroundTasks.findFirst({
+        where: eq(backgroundTasks.id, input.taskId),
+      });
+
       // Update task with execution results
       // Note: This is a direct update (not via events) for execution tracking
       // The task definition itself is updated via events, but execution tracking
@@ -111,6 +128,46 @@ export const backgroundTasksRouter = router({
         id: taskId,
         ...updateData,
       });
+
+      // ── Phase 3B: hermes:task:* lifecycle emits ─────────────────────────
+      // Detected from IS-reported deltas in `input`. Granularity rule:
+      // emit only on macro transitions, not internal sub-agent steps.
+      // Decision logic lives in `utils/hermes-lifecycle.ts` so it can be
+      // unit-tested without DB / bridge wiring.
+      const target = {
+        userId: input.userId,
+        workspaceId: prev?.workspaceId ?? undefined,
+      } as const;
+      const emits: HermesLifecycleEmit[] = diffHermesLifecycle(
+        prev
+          ? {
+              action: prev.action,
+              workspaceId: prev.workspaceId,
+              lastRunAt: prev.lastRunAt,
+              successCount: prev.successCount,
+              failureCount: prev.failureCount,
+              errorMessage: prev.errorMessage,
+            }
+          : null,
+        input
+      );
+
+      for (const emit of emits) {
+        // Discriminated union: each branch narrows event+payload to a
+        // matching pair so emitTyped's generic infers correctly.
+        const dispatch = (() => {
+          if (emit.event === "hermes:task:started") {
+            return emitTyped(emit.event, emit.payload, target);
+          }
+          if (emit.event === "hermes:task:completed") {
+            return emitTyped(emit.event, emit.payload, target);
+          }
+          return emitTyped(emit.event, emit.payload, target);
+        })();
+        void dispatch.catch((err) => {
+          console.warn(`[hub-protocol] ${emit.event} emit failed`, err);
+        });
+      }
 
       return { success: true };
     }),

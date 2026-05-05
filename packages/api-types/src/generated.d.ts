@@ -3725,7 +3725,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				userId: string;
 				keyName: string;
 				keyPrefix: string;
-				keyType: "system" | "hub_inbound" | "user_pat";
+				keyType: "system" | "hub_inbound" | "user_pat" | "service";
 				hubId: string | null;
 				scope: string[];
 				isActive: boolean;

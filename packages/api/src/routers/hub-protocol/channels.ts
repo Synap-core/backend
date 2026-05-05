@@ -37,6 +37,10 @@ import {
 import { AI_CHANNEL_FAMILY_VALUES } from "@synap-core/types";
 import { resolveAiChannelByFamily } from "../../utils/resolve-ai-channel-family.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
+import { emitTyped } from "../../utils/event-emit.js";
+import { makeExcerpt } from "../../utils/excerpt.js";
+import { EventNames } from "@synap-core/types/events";
+import type { OpenClawPlatform } from "@synap-core/types/events";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import {
@@ -46,6 +50,21 @@ import {
 } from "@synap/jobs";
 import type { A2AIResponseTriggerData } from "@synap/jobs";
 import { TRPCError } from "@trpc/server";
+
+/**
+ * Sources we can map straight to {@link OpenClawPlatform} for the
+ * `openclaw:message:received` realtime event. Sources outside this set still
+ * land in DB normally; the viz emit is silently skipped (the event payload's
+ * `platform` enum is closed and we'd rather drop than misrepresent).
+ *
+ * TODO(eve-channels): extend the registry's OpenClawPlatform union if/when
+ * slack/email/sms become first-class bridge platforms.
+ */
+const OPENCLAW_PLATFORM_MAP: Record<string, OpenClawPlatform> = {
+  telegram: "telegram",
+  whatsapp: "whatsapp",
+  discord: "discord",
+};
 
 const EXTERNAL_SOURCES = [
   "whatsapp",
@@ -294,7 +313,7 @@ export const channelsRouter = router({
         .where(eq(channels.id, channel.id));
 
       emitChatEvent({
-        event: "chat:message",
+        event: EventNames.CHAT_MESSAGE,
         data: {
           threadId: channel.id,
           message: {
@@ -316,6 +335,34 @@ export const channelsRouter = router({
         workspaceId: channel.workspaceId ?? null,
         userId: channel.userId,
       });
+
+      // Phase 3B: feed the eve-dashboard channels viz. We only emit when the
+      // external source maps to a known OpenClawPlatform — see
+      // {@link OPENCLAW_PLATFORM_MAP}. Privacy gating is enforced at the
+      // consumer; the excerpt is truncated here purely to bound payload size.
+      const openclawPlatform = OPENCLAW_PLATFORM_MAP[input.externalSource];
+      if (openclawPlatform) {
+        void emitTyped(
+          "openclaw:message:received",
+          {
+            channelId: channel.id,
+            messageId,
+            platform: openclawPlatform,
+            excerpt: makeExcerpt(input.content),
+            receivedAt: new Date().toISOString(),
+          },
+          {
+            workspaceId: channel.workspaceId ?? undefined,
+            channelId: channel.id,
+            userId: channel.userId,
+          }
+        ).catch((err) => {
+          console.warn(
+            "[hub-protocol] openclaw:message:received emit failed",
+            err
+          );
+        });
+      }
 
       return {
         status: "received" as const,
@@ -465,7 +512,7 @@ export const channelsRouter = router({
 
       // Emit — triggers Synap IS to respond
       emitChatEvent({
-        event: "chat:message",
+        event: EventNames.CHAT_MESSAGE,
         data: {
           threadId: input.channelId,
           message: {
@@ -738,7 +785,7 @@ export const channelsRouter = router({
 
       // Emit chat event — causes IS to generate an AI response in this channel
       emitChatEvent({
-        event: "chat:message",
+        event: EventNames.CHAT_MESSAGE,
         data: {
           threadId: input.channelId,
           message: {

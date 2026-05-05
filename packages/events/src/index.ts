@@ -62,5 +62,19 @@ export { getBoss, startBoss, stopBoss, boss } from "./boss.js";
 
 export { emitSideEffects, type SideEffectPayload } from "./side-effects.js";
 
+// ============================================================================
+// REALTIME EVENT SCHEMAS (Socket.IO bridge payload validation)
+// ============================================================================
+//
+// Schemas keyed by realtime event name, used by `emitTyped` and the bridge
+// to validate payloads against the {@link DomainServerToClientEvents} contract.
+// See `@synap-core/types/events` for the event-name registry.
+
+export {
+  EventSchemas,
+  getSchemaForEvent,
+  passthroughSchema,
+} from "./realtime-schemas.js";
+
 // Note: SynapEvent schema and event metadata types are in @synap-core/core
 // to break the circular dependency between the database and events packages.

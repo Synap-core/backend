@@ -19,6 +19,7 @@ import { emitSideEffects } from "@synap/jobs";
 import { createLogger } from "@synap-core/core";
 
 import { auditLog } from "../utils/audit-log.js";
+import { emitTyped } from "../utils/event-emit.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { isValidAction, listActions } from "./background-task-actions.js";
 
@@ -207,6 +208,30 @@ export async function createBackgroundTask(
     subjectId: task.id,
     userId: input.userId,
     workspaceId: input.workspaceId,
+  });
+
+  // Phase 3B: signal the eve-dashboard that a new Hermes task has entered
+  // the queue. `kind` carries the action id (the registry-validated string
+  // above), `source` is "user:<userId>" — Hermes runs are spawned by the
+  // calling user from this surface; agent-spawned tasks would route via
+  // their own emit site if they bypass this service.
+  void emitTyped(
+    "hermes:task:queued",
+    {
+      taskId: task.id,
+      kind: input.action,
+      source: `user:${input.userId}`,
+      queuedAt: new Date().toISOString(),
+    },
+    {
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+    }
+  ).catch((err) => {
+    logger.warn(
+      { err, taskId: task.id, event: "hermes:task:queued" },
+      "emitTyped failed"
+    );
   });
 
   return { id: task.id };

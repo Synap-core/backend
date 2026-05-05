@@ -26,6 +26,8 @@ export interface ChatBroadcastOptions {
   userId?: string | null;
   /** Target a specific channel room (e.g. for stream events). Reduces noise for other clients. */
   channelId?: string | null;
+  /** Target a view room (e.g. for view-scoped realtime updates). */
+  viewId?: string | null;
 }
 
 async function attemptEmit(
@@ -58,8 +60,8 @@ async function attemptEmit(
  * At least one of workspaceId, userId, or channelId must be set.
  */
 export function emitChatEvent(options: ChatBroadcastOptions): void {
-  const { event, data, workspaceId, userId, channelId } = options;
-  if (!workspaceId && !userId && !channelId) return;
+  const { event, data, workspaceId, userId, channelId, viewId } = options;
+  if (!workspaceId && !userId && !channelId && !viewId) return;
 
   const url = `${getRealtimeUrl()}/bridge/emit`;
   const body = JSON.stringify({
@@ -68,6 +70,7 @@ export function emitChatEvent(options: ChatBroadcastOptions): void {
     ...(workspaceId && { workspaceId }),
     ...(userId && { userId }),
     ...(channelId && { channelId }),
+    ...(viewId && { viewId }),
   });
 
   // Run retries in background — never blocks caller

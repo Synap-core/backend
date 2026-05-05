@@ -10,6 +10,9 @@
 import type { Server as SocketIOServer } from "socket.io";
 import type { IncomingMessage, ServerResponse } from "http";
 import * as Y from "yjs";
+// Import the schema lookup via the dedicated subpath so the bridge doesn't
+// pull in `@synap/events`' boss/db side-effects (which require DATABASE_URL).
+import { getSchemaForEvent } from "@synap/events/realtime-schemas";
 
 interface BridgeEmitRequest {
   event: string;
@@ -19,6 +22,31 @@ interface BridgeEmitRequest {
   /** Channel-scoped room — reduces noise by targeting only clients in that channel */
   channelId?: string;
   data: any;
+}
+
+/**
+ * Result of validating an inbound bridge emit payload against the schema
+ * registry. Pulled out of `handleEmit` so it can be unit-tested without
+ * spinning up a real HTTP server / Socket.IO.
+ *
+ * Contract: legacy events without a schema fall through with `ok: true`.
+ * The bridge MUST stay backwards-compatible with old emitters.
+ */
+export type ValidateEmitResult = { ok: true } | { ok: false; issues: unknown };
+
+/**
+ * Apply the realtime schema (if any) to a payload. Returns `{ ok: true }`
+ * when no schema is registered for `event` — that's the legacy pass-through.
+ */
+export function validateEmitPayload(
+  event: string,
+  data: unknown
+): ValidateEmitResult {
+  const schema = getSchemaForEvent(event);
+  if (!schema) return { ok: true };
+  const result = schema.safeParse(data);
+  if (result.success) return { ok: true };
+  return { ok: false, issues: result.error.issues };
 }
 
 /** Lazy getter for the Yjs server — set after yjsServer is initialized in server.ts */
@@ -189,6 +217,21 @@ async function handleEmit(
         JSON.stringify({
           error:
             "Must provide at least one of: workspaceId, viewId, userId, channelId",
+        })
+      );
+      return;
+    }
+
+    // Validate payload against the registered schema (if any). Legacy events
+    // without a schema fall through unchanged — backwards-compat is mandatory.
+    const validation = validateEmitPayload(event, data);
+    if (!validation.ok) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: "Invalid event payload",
+          event,
+          issues: validation.issues,
         })
       );
       return;

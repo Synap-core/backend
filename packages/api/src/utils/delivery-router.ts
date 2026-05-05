@@ -33,6 +33,7 @@
 
 import { randomUUID, createHash } from "crypto";
 import { createLogger } from "@synap-core/core";
+import { EventNames } from "@synap-core/types/events";
 import { db, eq, workspaces, messages } from "@synap/database";
 import {
   MessageRole,
@@ -196,7 +197,7 @@ async function deliverToChat(
     });
 
     emitChatEvent({
-      event: "chat:message",
+      event: EventNames.CHAT_MESSAGE,
       data: {
         threadId: channel.id,
         message: {
