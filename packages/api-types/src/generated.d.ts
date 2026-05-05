@@ -6389,6 +6389,55 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		listPodMembers: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				id: string;
+				email: string;
+				name: string | null;
+				avatarUrl: string | null;
+				primaryRole: "owner" | "admin" | "editor" | "viewer";
+				workspaceCount: number;
+				workspaces: {
+					id: string;
+					name: string;
+					role: string;
+					joinedAt: Date;
+				}[];
+			}[];
+			meta: object;
+		}>;
+		listAllInvites: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				id: string;
+				type: "pod" | "workspace";
+				email: string;
+				role: string;
+				token: string;
+				workspaceId: string | null;
+				workspaceName: string | null;
+				invitedBy: string;
+				expiresAt: Date;
+				createdAt: Date;
+			}[];
+			meta: object;
+		}>;
+		removeFromPod: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				userId: string;
+			};
+			output: {
+				status: "removed";
+				removedFromWorkspaces: number;
+				totalWorkspaces: number;
+				errors: {
+					workspaceId: string;
+					error: string;
+				}[];
+			};
+			meta: object;
+		}>;
 		createFromDefinition: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				definition: {
@@ -6590,6 +6639,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceName?: undefined;
 				inviterName?: undefined;
 				role?: undefined;
+				email?: undefined;
 				expiresAt?: undefined;
 			} | {
 				expired: false;
@@ -6597,12 +6647,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceName: string;
 				inviterName: string;
 				role: string;
+				email: string;
 				expiresAt: Date;
 			} | {
 				expired: false;
 				type: "pod";
 				inviterName: string;
 				role: string;
+				email: string;
 				expiresAt: Date;
 				workspaceName?: undefined;
 			} | null;

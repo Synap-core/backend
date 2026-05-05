@@ -1,0 +1,36 @@
+{
+  "name": "pod-admin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Operator-facing pod administration surface. Replaces apps/admin-ui.",
+  "scripts": {
+    "dev": "next dev --webpack --port 4040",
+    "build": "next build --webpack",
+    "start": "next start --port 4040",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@heroui/react": "^2.4.0",
+    "@heroui/theme": "^2.4.0",
+    "@synap-core/api-types": "workspace:*",
+    "@tanstack/react-query": "^5.62.13",
+    "@trpc/client": "^11.0.0",
+    "@trpc/react-query": "^11.0.0",
+    "framer-motion": "^11.0.0",
+    "lucide-react": "^0.441.0",
+    "next": "16.1.1",
+    "next-themes": "^0.4.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "superjson": "^2.2.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.4.0",
+    "postcss": "^8.4.0",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.5.0"
+  }
+}

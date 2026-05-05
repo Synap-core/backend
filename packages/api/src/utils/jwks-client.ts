@@ -230,21 +230,23 @@ export async function verifyCpJwt<T extends object>(
     }) as T & { jti?: string };
 
     // JTI replay check — reject tokens whose ID has been seen before.
-    // If jti is absent (older CP versions), log a warning but allow through
-    // for backward compatibility. CP should always include jti.
-    if (payload.jti) {
-      if (checkAndConsumeJti(payload.jti)) {
-        logger.warn(
-          { jti: payload.jti },
-          "verifyCpJwt: JTI replay detected — token rejected"
-        );
-        return null;
-      }
-    } else {
-      logger.warn(
-        "verifyCpJwt: token has no jti claim — replay protection unavailable. " +
-          "Ensure the Control Plane includes jti in all provisioning JWTs."
+    // jti is MANDATORY: a token without one cannot be tracked for replay,
+    // so we refuse it outright. The canonical CP mint (`signCpJwt` in
+    // synap-control-plane-api) always emits `jti: crypto.randomUUID()`,
+    // so any assertion missing the claim is malformed or hand-crafted.
+    if (typeof payload.jti !== "string" || payload.jti.length === 0) {
+      logger.error(
+        { issuerUrl },
+        "verifyCpJwt: missing jti — token rejected (replay protection requires jti)"
       );
+      return null;
+    }
+    if (checkAndConsumeJti(payload.jti)) {
+      logger.warn(
+        { jti: payload.jti },
+        "verifyCpJwt: JTI replay detected — token rejected"
+      );
+      return null;
     }
 
     return payload as T;

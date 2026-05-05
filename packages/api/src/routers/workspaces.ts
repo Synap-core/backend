@@ -19,6 +19,8 @@ import {
   eq,
   and,
   desc,
+  inArray,
+  or,
   workspaces,
   workspaceMembers,
   invites,
@@ -1403,6 +1405,334 @@ export const workspacesRouter = router({
         actorUserId: ctx.userId,
       });
       return { success: true };
+    }),
+
+  /**
+   * List ALL members across every workspace the caller has access to,
+   * deduplicated by user. The operator's "pod-wide roster" view in
+   * settings/members reads this — see Eve dashboard
+   * `app/(os)/settings/members/page.tsx`.
+   *
+   * Permission model (intentionally permissive read):
+   *   • Caller must be a member of at least one workspace.
+   *   • Returned membership rows are restricted to workspaces the caller
+   *     is also a member of — we never expose memberships from
+   *     workspaces the caller can't see. (Conservative: this is the
+   *     same surface listMembers already exposes per-workspace.)
+   *
+   * Shape:
+   *   {
+   *     id, email, name, avatarUrl,
+   *     primaryRole: "owner" | "admin" | "editor" | "viewer",
+   *     workspaceCount: number,
+   *     workspaces: Array<{ id, name, role, joinedAt }>
+   *   }
+   *
+   * `primaryRole` is the highest-precedence role across the user's
+   * memberships in workspaces the caller can see. Order:
+   *   owner > admin > editor > viewer
+   */
+  listPodMembers: protectedProcedure.query(async ({ ctx }) => {
+    // 1. Find every workspace the caller belongs to.
+    const myMemberships = await db.query.workspaceMembers.findMany({
+      where: eq(workspaceMembers.userId, ctx.userId),
+      columns: { workspaceId: true },
+    });
+    const accessibleWorkspaceIds = myMemberships.map((m) => m.workspaceId);
+    if (accessibleWorkspaceIds.length === 0) return [];
+
+    // 2. Pull every membership row for those workspaces, joined with
+    //    user + workspace metadata for display.
+    const rows = await db.query.workspaceMembers.findMany({
+      where: inArray(workspaceMembers.workspaceId, accessibleWorkspaceIds),
+      with: {
+        user: {
+          columns: {
+            id: true,
+            email: true,
+            name: true,
+            avatarUrl: true,
+            userType: true,
+          },
+        },
+        workspace: { columns: { id: true, name: true } },
+      },
+    });
+
+    // 3. Deduplicate by userId. Compute the highest role across the
+    //    user's memberships (operator's lens).
+    const roleRank: Record<string, number> = {
+      owner: 4,
+      admin: 3,
+      editor: 2,
+      viewer: 1,
+    };
+    type WorkspaceRef = {
+      id: string;
+      name: string;
+      role: string;
+      joinedAt: Date;
+    };
+    const byUser = new Map<
+      string,
+      {
+        id: string;
+        email: string;
+        name: string | null;
+        avatarUrl: string | null;
+        userType: string;
+        primaryRole: string;
+        workspaces: WorkspaceRef[];
+      }
+    >();
+    for (const r of rows) {
+      // Skip rows whose user row is missing (orphaned membership) and
+      // skip non-human users (agents) — they show up in
+      // workspace_members for governance reasons but the operator
+      // roster is for human teammates.
+      if (!r.user) continue;
+      if (r.user.userType !== "human") continue;
+      const existing = byUser.get(r.user.id);
+      const wsRef: WorkspaceRef = {
+        id: r.workspace?.id ?? r.workspaceId,
+        name: r.workspace?.name ?? "",
+        role: r.role,
+        joinedAt: r.joinedAt,
+      };
+      if (!existing) {
+        byUser.set(r.user.id, {
+          id: r.user.id,
+          email: r.user.email,
+          name: r.user.name,
+          avatarUrl: r.user.avatarUrl,
+          userType: r.user.userType,
+          primaryRole: r.role,
+          workspaces: [wsRef],
+        });
+      } else {
+        existing.workspaces.push(wsRef);
+        if ((roleRank[r.role] ?? 0) > (roleRank[existing.primaryRole] ?? 0)) {
+          existing.primaryRole = r.role;
+        }
+      }
+    }
+
+    // 4. Stable sort: operator first, then by primaryRole desc, then
+    //    by name/email asc.
+    const list = [...byUser.values()].map((u) => ({
+      id: u.id,
+      email: u.email,
+      name: u.name,
+      avatarUrl: u.avatarUrl,
+      primaryRole: u.primaryRole as "owner" | "admin" | "editor" | "viewer",
+      workspaceCount: u.workspaces.length,
+      workspaces: u.workspaces,
+    }));
+    list.sort((a, b) => {
+      if (a.id === ctx.userId) return -1;
+      if (b.id === ctx.userId) return 1;
+      const dr =
+        (roleRank[b.primaryRole] ?? 0) - (roleRank[a.primaryRole] ?? 0);
+      if (dr !== 0) return dr;
+      const an = (a.name ?? a.email).toLowerCase();
+      const bn = (b.name ?? b.email).toLowerCase();
+      return an.localeCompare(bn);
+    });
+    return list;
+  }),
+
+  /**
+   * List ALL pending invites across every workspace the caller can
+   * manage, plus pod-level invites if the caller is a pod owner.
+   *
+   * Used by the Eve members page to show a single "Pending invites"
+   * table. Returns invites with workspace name (when applicable) so
+   * the UI doesn't need a second round-trip per row.
+   *
+   * Permission model:
+   *   • Workspace invites: returned only for workspaces where caller
+   *     is owner or admin (matches createInvite/revokeInvite gates).
+   *   • Pod invites: returned only when the caller owns at least one
+   *     workspace (matches the pod-invite gate elsewhere).
+   */
+  listAllInvites: protectedProcedure.query(async ({ ctx }) => {
+    const myMemberships = await db.query.workspaceMembers.findMany({
+      where: eq(workspaceMembers.userId, ctx.userId),
+      columns: { workspaceId: true, role: true },
+    });
+    const manageableWorkspaceIds = myMemberships
+      .filter((m) => m.role === "owner" || m.role === "admin")
+      .map((m) => m.workspaceId);
+    const isPodOwner = myMemberships.some((m) => m.role === "owner");
+
+    // Query workspace invites for manageable workspaces + pod invites
+    // for pod owners. Empty arrays bail early so we don't issue empty
+    // IN-clause queries.
+    const conditions = [];
+    if (manageableWorkspaceIds.length > 0) {
+      conditions.push(
+        and(
+          eq(invites.type, "workspace"),
+          inArray(invites.workspaceId, manageableWorkspaceIds)
+        )
+      );
+    }
+    if (isPodOwner) {
+      conditions.push(eq(invites.type, "pod"));
+    }
+    if (conditions.length === 0) return [];
+
+    const rows = await db.query.invites.findMany({
+      where: conditions.length === 1 ? conditions[0] : or(...conditions),
+      with: { workspace: { columns: { id: true, name: true } } },
+      orderBy: [desc(invites.createdAt)],
+    });
+
+    return rows.map((r) => ({
+      id: r.id,
+      type: r.type,
+      email: r.email,
+      role: r.role,
+      token: r.token,
+      workspaceId: r.workspaceId,
+      workspaceName: r.workspace?.name ?? null,
+      invitedBy: r.invitedBy,
+      expiresAt: r.expiresAt,
+      createdAt: r.createdAt,
+    }));
+  }),
+
+  /**
+   * Remove a user from EVERY workspace the caller can manage.
+   * Pod-wide eviction in a single call.
+   *
+   * Why this exists (vs. iterating removeMember from the UI):
+   *   • One permission check vs. N round-trips.
+   *   • One audit-log row summarising the eviction.
+   *   • Atomic "no-op when not allowed" semantics — if the caller
+   *     can't manage ANY of the target's workspaces we throw
+   *     FORBIDDEN, instead of partial removal.
+   *
+   * Permission model:
+   *   • Caller must be owner or admin of at least one workspace
+   *     containing the target user.
+   *   • Removal happens for every workspace where:
+   *       (a) caller is owner|admin, AND
+   *       (b) target is currently a member.
+   *   • Caller cannot remove themselves (use a per-workspace
+   *     leaveWorkspace procedure for that — out of scope here).
+   *   • Removal is blocked when it would leave a workspace with zero
+   *     owners (last-owner guard).
+   */
+  removeFromPod: protectedProcedure
+    .input(z.object({ userId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      if (input.userId === ctx.userId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "You can't remove yourself from the pod.",
+        });
+      }
+
+      // Fetch the caller's manageable workspaces and the target's
+      // workspaces in parallel.
+      const [myMemberships, targetMemberships] = await Promise.all([
+        db.query.workspaceMembers.findMany({
+          where: eq(workspaceMembers.userId, ctx.userId),
+          columns: { workspaceId: true, role: true },
+        }),
+        db.query.workspaceMembers.findMany({
+          where: eq(workspaceMembers.userId, input.userId),
+          columns: { workspaceId: true, role: true },
+        }),
+      ]);
+
+      const manageableWs = new Set(
+        myMemberships
+          .filter((m) => m.role === "owner" || m.role === "admin")
+          .map((m) => m.workspaceId)
+      );
+      const targetWs = new Map(
+        targetMemberships.map((m) => [m.workspaceId, m.role])
+      );
+
+      // Intersection: workspaces where caller can act AND target is
+      // currently a member.
+      const toRemove = [...targetWs.keys()].filter((wid) =>
+        manageableWs.has(wid)
+      );
+      if (toRemove.length === 0) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "You don't have permission to remove this member from any workspace.",
+        });
+      }
+
+      // Last-owner guard: if removing the target would leave any
+      // workspace with zero owners, refuse the whole operation.
+      // Cheaper to do it once with a single GROUP BY than one query
+      // per workspace.
+      for (const wid of toRemove) {
+        if (targetWs.get(wid) !== "owner") continue;
+        const owners = await db.query.workspaceMembers.findMany({
+          where: and(
+            eq(workspaceMembers.workspaceId, wid),
+            eq(workspaceMembers.role, "owner")
+          ),
+          columns: { userId: true },
+        });
+        if (owners.length <= 1) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Cannot remove the last owner of a workspace. Promote another member first.",
+          });
+        }
+      }
+
+      // Execute removals — best-effort serial; we collect failures so
+      // a single broken workspace doesn't abort the rest. Audit-log
+      // covers each removal for forensics.
+      const dbConn = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const memberRepo = new WorkspaceMemberRepository(dbConn, eventRepo);
+      const removed: string[] = [];
+      const errors: Array<{ workspaceId: string; error: string }> = [];
+      for (const wid of toRemove) {
+        try {
+          await memberRepo.remove(
+            { workspaceId: wid, userId: input.userId },
+            ctx.userId
+          );
+          removed.push(wid);
+        } catch (err) {
+          errors.push({
+            workspaceId: wid,
+            error: err instanceof Error ? err.message : "Unknown error",
+          });
+        }
+      }
+
+      auditLog({
+        subjectType: "workspaceMember",
+        action: "removeFromPod",
+        phase: "completed",
+        subjectId: input.userId,
+        userId: ctx.userId,
+        data: {
+          targetUserId: input.userId,
+          removedFromWorkspaces: removed,
+          errors,
+        },
+      });
+
+      return {
+        status: "removed" as const,
+        removedFromWorkspaces: removed.length,
+        totalWorkspaces: toRemove.length,
+        errors,
+      };
     }),
 
   /**
