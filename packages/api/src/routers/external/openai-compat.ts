@@ -40,6 +40,14 @@ const MODEL_TIER_MAP: Record<string, string> = {
   "synap/complex": "complex",
 };
 
+// ── Model alias → agentType override ─────────────────────────────────────────
+// Tier-based aliases always use agentType "meta". Agent-specific aliases route
+// to a named agent persona. IS falls back to OrchestratorAgent for unknown types.
+const MODEL_AGENT_MAP: Record<string, string> = {
+  "synap/hermes": "hermes", // Builder agent (code, deployment, scaffolding)
+  "synap/openclaw": "openclaw", // OpenClaw agent (shell, tools, automation)
+};
+
 // ── Zod schemas ──────────────────────────────────────────────────────────────
 
 const messageSchema = z.object({
@@ -260,12 +268,14 @@ openaiCompatApp.post(
       agentConfig.systemPromptOverride = systemPrompt;
     }
 
+    const resolvedAgentType = MODEL_AGENT_MAP[requestedModel] ?? "meta";
+
     const isBody: Record<string, unknown> = {
       query,
       threadId: resolvedChannelId,
       userId,
       workspaceId: resolvedWorkspaceId,
-      agentType: "meta",
+      agentType: resolvedAgentType,
       dataPodUrl: process.env.PUBLIC_URL ?? process.env.BACKEND_URL ?? "",
       stream: input.stream,
     };
@@ -571,6 +581,18 @@ openaiCompatApp.get("/models", externalApiKeyAuth("chat.stream"), (c) => {
     },
     {
       id: "synap/complex",
+      object: "model" as const,
+      created: 1700000000,
+      owned_by: "synap",
+    },
+    {
+      id: "synap/hermes",
+      object: "model" as const,
+      created: 1700000000,
+      owned_by: "synap",
+    },
+    {
+      id: "synap/openclaw",
       object: "model" as const,
       created: 1700000000,
       owned_by: "synap",
