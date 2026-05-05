@@ -6,8 +6,6 @@
  * the regular API-key auth middleware (it does its own auth here).
  */
 
-import { readFileSync } from "fs";
-import { resolve as resolvePath } from "path";
 import { randomUUID } from "crypto";
 import jwt from "jsonwebtoken";
 
@@ -27,10 +25,8 @@ import {
   EventRepository,
   ApiKeyRepository,
   TrustedIssuerService,
-  createWorkspaceFromDefinition,
   type ApiKeyScope,
 } from "@synap/database";
-import { getBoss } from "@synap/jobs";
 
 import { apiKeyService } from "../../../services/api-keys.js";
 import { createAdminUser } from "../../../scripts/create-admin-user.js";
@@ -69,8 +65,6 @@ export function registerSetupRoutes(app: HubHono): void {
     let authenticated = false;
     let authMethod: "jwt" | "provisioning_token" | "api_key" =
       "provisioning_token";
-    let jwtEmail: string | null = null;
-    let jwtName: string | null = null;
     let jwtIssuerUrl: string | null = null;
 
     // Try 1: CP-signed JWT verified against Trusted Issuers registry
@@ -170,10 +164,6 @@ export function registerSetupRoutes(app: HubHono): void {
                 authenticated = true;
                 authMethod = "jwt";
                 jwtIssuerUrl = iss;
-                jwtEmail =
-                  typeof payload.email === "string" ? payload.email : null;
-                jwtName =
-                  typeof payload.name === "string" ? payload.name : null;
               }
             } catch {
               // JWT verification failed — fall through to other auth methods
@@ -200,12 +190,6 @@ export function registerSetupRoutes(app: HubHono): void {
       if (keyRecord?.isActive && keyRecord.scope.includes("setup.agent")) {
         authenticated = true;
         authMethod = "api_key";
-        const keyOwner = await db.query.users.findFirst({
-          where: (u, { eq }) => eq(u.id, keyRecord.userId),
-          columns: { email: true, name: true },
-        });
-        jwtEmail = keyOwner?.email ?? null;
-        jwtName = keyOwner?.name ?? null;
       }
     }
 
@@ -231,22 +215,16 @@ export function registerSetupRoutes(app: HubHono): void {
       typeof body.agentType === "string" ? body.agentType : "openclaw";
     const requestedWorkspaceId: string | undefined =
       typeof body.workspaceId === "string" ? body.workspaceId : undefined;
-    const bodyDefinition: Record<string, unknown> | null =
-      body.definition &&
-      typeof body.definition === "object" &&
-      !Array.isArray(body.definition)
-        ? (body.definition as Record<string, unknown>)
-        : null;
 
     const agentLabel = agentType.charAt(0).toUpperCase() + agentType.slice(1);
 
     try {
-      // ── Find target workspace ───────────────────────────────────────────────
+      // ── Find target workspace (optional — agent exists at pod level) ─────────
+      // Workspace is NOT required for provisioning. The agent user and API key
+      // are pod-wide resources. Workspace membership is granted opportunistically
+      // when a workspace already exists; if none does, provisioning still succeeds.
+      //
       // Priority: explicit id > agent-os package > any workspace on the pod.
-      // The agent-os lookup is kept for backward-compat with OpenClaw installs
-      // that seeded that workspace. Falling back to any workspace means Eve
-      // and other self-hosted provisioners don't need a specific workspace
-      // pre-created before provisioning can succeed.
       let ws = requestedWorkspaceId
         ? await db.query.workspaces.findFirst({
             where: (w, { eq }) => eq(w.id, requestedWorkspaceId),
@@ -259,159 +237,28 @@ export function registerSetupRoutes(app: HubHono): void {
             orderBy: (w) => asc(w.createdAt),
           })));
 
-      // If still no workspace exists, auto-seed one from the bundled template.
-      if (!ws && !requestedWorkspaceId) {
-        let ownerCandidate = await db.query.users.findFirst({
-          where: (u, { eq }) => eq(u.userType, "human"),
-          columns: { id: true, name: true },
-        });
-
-        // No human user on pod yet — create one so we can seed the workspace.
-        if (!ownerCandidate) {
-          const ownerEmail = jwtEmail ?? process.env.ADMIN_EMAIL ?? null;
-          const ownerName =
-            jwtName ?? (ownerEmail ? ownerEmail.split("@")[0] : null);
-
-          if (ownerEmail) {
-            const existingByEmail = await db.query.users.findFirst({
-              where: (u, { eq }) => eq(u.email, ownerEmail),
-              columns: { id: true, name: true },
-            });
-
-            if (existingByEmail) {
-              ownerCandidate = existingByEmail;
-              logger.info(
-                { userId: existingByEmail.id, email: ownerEmail },
-                "setup/agent: found existing user by email"
-              );
-            } else {
-              const newUserId = randomUUID();
-              await db.insert(users).values({
-                id: newUserId,
-                email: ownerEmail,
-                name: ownerName,
-                userType: "human",
-                emailVerified: true,
-                kratosIdentityId: null,
-                timezone: "UTC",
-                locale: "en",
-              });
-              ownerCandidate = { id: newUserId, name: ownerName };
-              logger.info(
-                {
-                  userId: newUserId,
-                  email: ownerEmail,
-                  source: jwtEmail ? "cp-jwt" : "admin-email-env",
-                },
-                "setup/agent: created human user (Kratos webhook not yet fired)"
-              );
-            }
-          }
-        }
-
-        if (ownerCandidate) {
-          // 1) definition from CLI body  2) bundled file fallback (dist/ → ../../../ = repo root)
-          let agentOsDefinition: Record<string, unknown> | null =
-            bodyDefinition;
-          if (!agentOsDefinition) {
-            try {
-              const templatePath = resolvePath(
-                new URL(".", import.meta.url).pathname,
-                "../../../templates/agent-os.json"
-              );
-              agentOsDefinition = JSON.parse(
-                readFileSync(templatePath, "utf-8")
-              );
-            } catch {
-              // Template not available — fall back to blank workspace below
-            }
-          }
-
-          let newWsId: string;
-          if (agentOsDefinition) {
-            const result = await createWorkspaceFromDefinition({
-              definition: agentOsDefinition as Parameters<
-                typeof createWorkspaceFromDefinition
-              >[0]["definition"],
-              userId: ownerCandidate.id,
-              packageSlug: "agent-os",
-              workspaceName: "OpenClaw Agent OS",
-              workspaceType: "personal",
-              createdBy: "provisioning",
-            });
-            newWsId = result.workspaceId;
-            logger.info(
-              { workspaceId: newWsId, ownerId: ownerCandidate.id },
-              "setup/agent: auto-seeded Agent OS workspace from template"
-            );
-          } else {
-            // Fallback: plain blank workspace
-            const [newWs] = await db
-              .insert(workspaces)
-              .values({
-                name: ownerCandidate.name
-                  ? `${ownerCandidate.name}'s Space`
-                  : "My Space",
-                type: "personal",
-                ownerId: ownerCandidate.id,
-                settings: {},
-              })
-              .returning();
-            await db.insert(workspaceMembers).values({
-              id: randomUUID(),
-              workspaceId: newWs.id,
-              userId: ownerCandidate.id,
-              role: "owner",
-            });
-            newWsId = newWs.id;
-            logger.info(
-              { workspaceId: newWsId, ownerId: ownerCandidate.id },
-              "setup/agent: auto-created blank workspace (template unavailable)"
-            );
-          }
-
-          // Enqueue workspace-init to seed whiteboard, commands, relation defs, etc.
-          try {
-            const boss = getBoss();
-            await boss.send("workspace-init", {
-              workspaceId: newWsId,
-              userId: ownerCandidate.id,
-              packageSlug: "agent-os",
-            });
-          } catch (err) {
-            logger.warn(
-              { err, workspaceId: newWsId },
-              "setup/agent: could not enqueue workspace-init (non-fatal)"
-            );
-          }
-
-          ws = await db.query.workspaces.findFirst({
-            where: (w, { eq }) => eq(w.id, newWsId),
-          });
-        }
-      }
-
-      if (!ws) {
+      if (requestedWorkspaceId && !ws) {
         return c.json(
-          {
-            error: requestedWorkspaceId
-              ? `Workspace ${requestedWorkspaceId} not found`
-              : "No workspace exists on this pod and auto-creation failed. Set ADMIN_EMAIL in your pod .env and retry.",
-          },
+          { error: `Workspace ${requestedWorkspaceId} not found` },
           404
         );
       }
 
-      // ── Find workspace owner, repair if missing ─────────────────────────────
-      const ownerMember = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, ws.id),
-          eq(workspaceMembers.role, "owner")
-        ),
-        columns: { userId: true },
-      });
+      // ── Find pod owner (any human user) ────────────────────────────────────
+      // Used to attribute the agent user and, when a workspace exists, to repair
+      // missing workspace membership.
+      let ownerUserId: string | null = null;
 
-      let ownerUserId = ownerMember?.userId ?? null;
+      if (ws) {
+        const ownerMember = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, ws.id),
+            eq(workspaceMembers.role, "owner")
+          ),
+          columns: { userId: true },
+        });
+        ownerUserId = ownerMember?.userId ?? null;
+      }
 
       if (!ownerUserId) {
         const humanUser = await db.query.users.findFirst({
@@ -419,26 +266,30 @@ export function registerSetupRoutes(app: HubHono): void {
           columns: { id: true },
         });
         if (humanUser) {
-          const existingMembership = await db.query.workspaceMembers.findFirst({
-            where: and(
-              eq(workspaceMembers.userId, humanUser.id),
-              eq(workspaceMembers.workspaceId, ws.id)
-            ),
-            columns: { id: true, role: true },
-          });
-          if (!existingMembership) {
-            await db.insert(workspaceMembers).values({
-              id: randomUUID(),
-              workspaceId: ws.id,
-              userId: humanUser.id,
-              role: "owner",
-            });
-            logger.info(
-              { workspaceId: ws.id, userId: humanUser.id },
-              "setup/agent: assigned human user as workspace owner (self-repair)"
-            );
-          }
           ownerUserId = humanUser.id;
+          // Self-repair: ensure the human user is a member of the workspace.
+          if (ws) {
+            const existingMembership =
+              await db.query.workspaceMembers.findFirst({
+                where: and(
+                  eq(workspaceMembers.userId, humanUser.id),
+                  eq(workspaceMembers.workspaceId, ws.id)
+                ),
+                columns: { id: true },
+              });
+            if (!existingMembership) {
+              await db.insert(workspaceMembers).values({
+                id: randomUUID(),
+                workspaceId: ws.id,
+                userId: humanUser.id,
+                role: "owner",
+              });
+              logger.info(
+                { workspaceId: ws.id, userId: humanUser.id },
+                "setup/agent: assigned human user as workspace owner (self-repair)"
+              );
+            }
+          }
         }
       }
 
@@ -486,27 +337,29 @@ export function registerSetupRoutes(app: HubHono): void {
         );
       }
 
-      // ── 2. Grant workspace membership (idempotent) ──────────────────────────
-      const existingMembership = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.userId, agentUserId),
-          eq(workspaceMembers.workspaceId, ws.id)
-        ),
-        columns: { id: true },
-      });
-
-      if (!existingMembership) {
-        await db.insert(workspaceMembers).values({
-          id: randomUUID(),
-          workspaceId: ws.id,
-          userId: agentUserId,
-          role: "editor",
-          invitedBy: ownerUserId ?? undefined,
+      // ── 2. Grant workspace membership (opportunistic — skipped if no workspace) ─
+      if (ws) {
+        const existingMembership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.userId, agentUserId),
+            eq(workspaceMembers.workspaceId, ws.id)
+          ),
+          columns: { id: true },
         });
-        logger.info(
-          { agentUserId, workspaceId: ws.id },
-          "setup/agent: workspace membership granted"
-        );
+
+        if (!existingMembership) {
+          await db.insert(workspaceMembers).values({
+            id: randomUUID(),
+            workspaceId: ws.id,
+            userId: agentUserId,
+            role: "editor",
+            invitedBy: ownerUserId ?? undefined,
+          });
+          logger.info(
+            { agentUserId, workspaceId: ws.id },
+            "setup/agent: workspace membership granted"
+          );
+        }
       }
 
       // ── 3. Create Hub Protocol API key ──────────────────────────────────────
@@ -560,7 +413,7 @@ export function registerSetupRoutes(app: HubHono): void {
         {
           agentUserId,
           keyId: apiKey.id,
-          workspaceId: ws.id,
+          workspaceId: ws?.id ?? null,
           agentType,
           authMethod,
           registration: registrationTrace,
@@ -570,7 +423,7 @@ export function registerSetupRoutes(app: HubHono): void {
 
       return c.json({
         agentUserId,
-        workspaceId: ws.id,
+        workspaceId: ws?.id ?? null,
         hubApiKey: plainKey,
         keyId: apiKey.id,
         registration: registrationTrace,

@@ -160,6 +160,9 @@ app.use("/*", async (c, next) => {
     "/docs",
     "/entity-share/deliver",
     "/setup/agent",
+    "/setup/status",
+    "/setup/magic-link",
+    "/setup/first-admin",
   ];
   if (skipAuthPaths.some((p) => reqPath === p || reqPath.endsWith(p))) {
     return next();
