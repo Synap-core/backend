@@ -18,6 +18,7 @@ import {
   eq,
   and,
   inArray,
+  count,
   drizzleSql,
   apiKeyExternalUsers,
   workspaces,
@@ -266,51 +267,44 @@ export function registerSetupRoutes(app: HubHono): void {
 
         // No human user on pod yet — create one so we can seed the workspace.
         if (!ownerCandidate) {
-          // Use email from: CP JWT > ADMIN_EMAIL env > generated placeholder.
-          // The placeholder lets a completely fresh pod bootstrap without any
-          // env vars — the real user can be created later via normal sign-up,
-          // and the workspace ownership transferred.
-          const ownerEmail =
-            jwtEmail ?? process.env.ADMIN_EMAIL ?? `admin@pod.local`;
+          const ownerEmail = jwtEmail ?? process.env.ADMIN_EMAIL ?? null;
           const ownerName =
-            jwtName ?? (ownerEmail ? ownerEmail.split("@")[0] : "Pod Admin");
+            jwtName ?? (ownerEmail ? ownerEmail.split("@")[0] : null);
 
-          const existingByEmail = await db.query.users.findFirst({
-            where: (u, { eq }) => eq(u.email, ownerEmail),
-            columns: { id: true, name: true },
-          });
-
-          if (existingByEmail) {
-            ownerCandidate = existingByEmail;
-            logger.info(
-              { userId: existingByEmail.id, email: ownerEmail },
-              "setup/agent: found existing user by email"
-            );
-          } else {
-            const newUserId = randomUUID();
-            await db.insert(users).values({
-              id: newUserId,
-              email: ownerEmail,
-              name: ownerName,
-              userType: "human",
-              emailVerified: true,
-              kratosIdentityId: null,
-              timezone: "UTC",
-              locale: "en",
+          if (ownerEmail) {
+            const existingByEmail = await db.query.users.findFirst({
+              where: (u, { eq }) => eq(u.email, ownerEmail),
+              columns: { id: true, name: true },
             });
-            ownerCandidate = { id: newUserId, name: ownerName };
-            logger.info(
-              {
-                userId: newUserId,
+
+            if (existingByEmail) {
+              ownerCandidate = existingByEmail;
+              logger.info(
+                { userId: existingByEmail.id, email: ownerEmail },
+                "setup/agent: found existing user by email"
+              );
+            } else {
+              const newUserId = randomUUID();
+              await db.insert(users).values({
+                id: newUserId,
                 email: ownerEmail,
-                source: jwtEmail
-                  ? "cp-jwt"
-                  : process.env.ADMIN_EMAIL
-                    ? "admin-email-env"
-                    : "placeholder",
-              },
-              "setup/agent: created human user"
-            );
+                name: ownerName,
+                userType: "human",
+                emailVerified: true,
+                kratosIdentityId: null,
+                timezone: "UTC",
+                locale: "en",
+              });
+              ownerCandidate = { id: newUserId, name: ownerName };
+              logger.info(
+                {
+                  userId: newUserId,
+                  email: ownerEmail,
+                  source: jwtEmail ? "cp-jwt" : "admin-email-env",
+                },
+                "setup/agent: created human user (Kratos webhook not yet fired)"
+              );
+            }
           }
         }
 
@@ -812,5 +806,238 @@ export function registerSetupRoutes(app: HubHono): void {
         childApiKeyId: null,
       },
     });
+  });
+
+  // ── GET /setup/status ──────────────────────────────────────────────────────
+  //
+  // No auth required — safe to expose so the CLI and setup page can detect
+  // whether the pod has been bootstrapped yet.
+  app.get("/setup/status", async (c) => {
+    try {
+      const [humanResult] = await db
+        .select({ count: count() })
+        .from(users)
+        .where(eq(users.userType, "human"));
+      const [wsResult] = await db.select({ count: count() }).from(workspaces);
+
+      const humanCount = Number(humanResult?.count ?? 0);
+      const workspaceCount = Number(wsResult?.count ?? 0);
+
+      return c.json({
+        hasAdmin: humanCount > 0,
+        workspaceCount,
+        needsSetup: humanCount === 0,
+      });
+    } catch (err) {
+      logger.error({ err }, "setup/status: failed");
+      return c.json({ error: "Internal server error" }, 500);
+    }
+  });
+
+  // ── POST /setup/magic-link ─────────────────────────────────────────────────
+  //
+  // Auth: PROVISIONING_TOKEN only.
+  // Generates a short-lived JWT the operator pastes into their browser.
+  // Guard: if a human user already exists → 409.
+  app.post("/setup/magic-link", async (c) => {
+    // Auth
+    const provisioningToken = process.env.PROVISIONING_TOKEN;
+    const authHeader = c.req.header("authorization") ?? "";
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7).trim()
+      : null;
+    if (!token || !provisioningToken || token !== provisioningToken) {
+      return c.json(
+        { error: "Unauthorized — PROVISIONING_TOKEN required" },
+        401
+      );
+    }
+
+    // Guard: already has admin?
+    const [humanResult] = await db
+      .select({ count: count() })
+      .from(users)
+      .where(eq(users.userType, "human"));
+    if (Number(humanResult?.count ?? 0) > 0) {
+      return c.json({ error: "Admin already exists" }, 409);
+    }
+
+    const magicToken = jwt.sign(
+      { purpose: "first_admin_setup" },
+      provisioningToken,
+      { expiresIn: "1h" }
+    );
+
+    const publicUrl = process.env.PUBLIC_URL ?? "";
+    const url = `${publicUrl}/setup?token=${magicToken}`;
+    return c.json({ token: magicToken, url });
+  });
+
+  // ── POST /setup/first-admin ────────────────────────────────────────────────
+  //
+  // Auth: PROVISIONING_TOKEN in header OR magicToken in body.
+  // Body: { email, password, name?, magicToken? }
+  // Guard: if human users already exist → 409.
+  app.post("/setup/first-admin", async (c) => {
+    const provisioningToken = process.env.PROVISIONING_TOKEN;
+
+    // Parse body first
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Invalid request body" }, 400);
+    }
+
+    const email = typeof body.email === "string" ? body.email.trim() : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    const name =
+      typeof body.name === "string" && body.name.trim()
+        ? body.name.trim()
+        : email.split("@")[0];
+    const magicToken =
+      typeof body.magicToken === "string" ? body.magicToken : null;
+
+    if (!email || !password) {
+      return c.json({ error: "email and password are required" }, 400);
+    }
+
+    // Auth: magic token OR PROVISIONING_TOKEN header
+    let authenticated = false;
+
+    if (magicToken) {
+      if (!provisioningToken) {
+        return c.json(
+          { error: "PROVISIONING_TOKEN not configured on pod" },
+          500
+        );
+      }
+      try {
+        const decoded = jwt.verify(magicToken, provisioningToken) as Record<
+          string,
+          unknown
+        >;
+        if (decoded.purpose === "first_admin_setup") {
+          authenticated = true;
+        }
+      } catch {
+        return c.json({ error: "Invalid or expired magic token" }, 401);
+      }
+    } else {
+      const authHeader = c.req.header("authorization") ?? "";
+      const token = authHeader.startsWith("Bearer ")
+        ? authHeader.slice(7).trim()
+        : null;
+      if (token && provisioningToken && token === provisioningToken) {
+        authenticated = true;
+      }
+    }
+
+    if (!authenticated) {
+      return c.json(
+        {
+          error:
+            "Unauthorized — PROVISIONING_TOKEN or valid magic token required",
+        },
+        401
+      );
+    }
+
+    // Guard: admin already exists?
+    const [humanResult] = await db
+      .select({ count: count() })
+      .from(users)
+      .where(eq(users.userType, "human"));
+    if (Number(humanResult?.count ?? 0) > 0) {
+      return c.json({ error: "Admin already exists" }, 409);
+    }
+
+    // Create Kratos identity
+    const kratosAdminUrl =
+      process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
+    let kratosIdentityId: string;
+    try {
+      const createResp = await fetch(`${kratosAdminUrl}/admin/identities`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          schema_id: "default",
+          traits: { email },
+          credentials: {
+            password: { config: { password } },
+          },
+          metadata_public: {
+            createdVia: "first-admin-setup",
+            createdAt: new Date().toISOString(),
+          },
+          verifiable_addresses: [
+            {
+              value: email,
+              verified: true,
+              via: "email",
+              status: "completed",
+            },
+          ],
+        }),
+        signal: AbortSignal.timeout(8_000),
+      });
+
+      if (!createResp.ok) {
+        const errBody = await createResp.text();
+        logger.error(
+          { status: createResp.status, body: errBody.slice(0, 500) },
+          "setup/first-admin: Kratos identity creation failed"
+        );
+        return c.json(
+          {
+            error: "Failed to create Kratos identity",
+            detail: errBody.slice(0, 200),
+          },
+          500
+        );
+      }
+
+      const newIdentity = (await createResp.json()) as { id: string };
+      kratosIdentityId = newIdentity.id;
+    } catch (err) {
+      logger.error({ err }, "setup/first-admin: Kratos request threw");
+      return c.json({ error: "Auth service unavailable" }, 503);
+    }
+
+    // Insert user into Synap DB
+    const userId = randomUUID();
+    await db.insert(users).values({
+      id: userId,
+      email,
+      name,
+      userType: "human",
+      emailVerified: true,
+      kratosIdentityId,
+      timezone: "UTC",
+      locale: "en",
+    });
+
+    // Create a personal workspace
+    const [newWs] = await db
+      .insert(workspaces)
+      .values({
+        name: `${name}'s Space`,
+        type: "personal",
+        ownerId: userId,
+        settings: {},
+      })
+      .returning();
+
+    await db.insert(workspaceMembers).values({
+      id: randomUUID(),
+      workspaceId: newWs.id,
+      userId,
+      role: "owner",
+    });
+
+    logger.info(
+      { userId, workspaceId: newWs.id, email },
+      "setup/first-admin: first human admin created"
+    );
+
+    return c.json({ userId, workspaceId: newWs.id, email });
   });
 }
