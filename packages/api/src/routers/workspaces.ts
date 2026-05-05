@@ -2156,6 +2156,10 @@ export const workspacesRouter = router({
       });
       const inviterName = inviter?.name ?? inviter?.email ?? "A Synap user";
 
+      // The token already grants the holder permission to consume this
+      // invite, so echoing the canonical email back is not a leak — the
+      // invitee needs it to lock the signup form to the right address.
+      // Anyone with the token can already see workspace name + role.
       if (invite.type === "workspace") {
         return {
           expired: false as const,
@@ -2163,6 +2167,7 @@ export const workspacesRouter = router({
           workspaceName: invite.workspace?.name ?? "Unknown Workspace",
           inviterName,
           role: invite.role,
+          email: invite.email,
           expiresAt: invite.expiresAt,
         };
       } else {
@@ -2171,6 +2176,7 @@ export const workspacesRouter = router({
           type: "pod" as const,
           inviterName,
           role: invite.role,
+          email: invite.email,
           expiresAt: invite.expiresAt,
         };
       }

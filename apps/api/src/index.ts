@@ -1128,7 +1128,7 @@ ${
       btn.disabled = true;
       btn.textContent = 'Creating…';
       try {
-        const res = await fetch('${publicUrl}/api/hub/setup/first-admin', {
+        const res = await fetch('/api/hub/setup/first-admin', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
