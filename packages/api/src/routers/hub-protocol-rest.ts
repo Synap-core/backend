@@ -30,6 +30,7 @@ import {
   registerAgentUsersRoutes,
   registerAgentsRoutes,
   registerAuthRoutes,
+  registerExchangeRoutes,
   registerAutomationsRoutes,
   registerBackgroundTasksRoutes,
   registerCaptureRoutes,
@@ -163,6 +164,12 @@ app.use("/*", async (c, next) => {
     "/setup/status",
     "/setup/magic-link",
     "/setup/first-admin",
+    // /auth/exchange is the JWT-Bearer Grant primitive — auth happens via
+    // the assertion JWT signature + the trusted_issuers allowlist, not via
+    // an API key. Gating it behind the API-key middleware would break the
+    // entire flow (callers don't have a key yet — that's why they're
+    // exchanging).
+    "/auth/exchange",
   ];
   if (skipAuthPaths.some((p) => reqPath === p || reqPath.endsWith(p))) {
     return next();
@@ -328,7 +335,14 @@ app.use("/*", async (c, next) => {
 app.use(
   "/*",
   idempotencyMiddleware({
-    skipPaths: ["/setup/agent", "/entity-share/deliver"],
+    skipPaths: [
+      "/setup/agent",
+      "/entity-share/deliver",
+      // /auth/exchange returns a Kratos session_token — same one-shot-secret
+      // hazard as /setup/agent. Two replays of the same Idempotency-Key would
+      // otherwise be served the same access_token from cache.
+      "/auth/exchange",
+    ],
     // secretBodyPattern uses the default — see middleware source.
   })
 );
@@ -341,6 +355,7 @@ app.use(
 // The route-file boundaries below are aligned with the original line order in
 // the previous monolithic file so behavior is preserved character-for-character.
 registerAuthRoutes(app); // /auth/status — bearer introspection
+registerExchangeRoutes(app); // /auth/exchange — RFC 7523 JWT-Bearer Grant (no API-key auth)
 registerUsersRoutes(app); // /users/me
 registerWorkspacesRoutes(app); // /workspaces, /workspaces/:id/*, /users/:id/context
 registerThreadsRoutes(app); // /threads* — combines GET-list, context, link, branches, messages, etc.

@@ -225,7 +225,7 @@ export function registerSetupRoutes(app: HubHono): void {
       // when a workspace already exists; if none does, provisioning still succeeds.
       //
       // Priority: explicit id > agent-os package > any workspace on the pod.
-      let ws = requestedWorkspaceId
+      const ws = requestedWorkspaceId
         ? await db.query.workspaces.findFirst({
             where: (w, { eq }) => eq(w.id, requestedWorkspaceId),
           })
