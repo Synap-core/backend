@@ -266,44 +266,51 @@ export function registerSetupRoutes(app: HubHono): void {
 
         // No human user on pod yet — create one so we can seed the workspace.
         if (!ownerCandidate) {
-          const ownerEmail = jwtEmail ?? process.env.ADMIN_EMAIL ?? null;
+          // Use email from: CP JWT > ADMIN_EMAIL env > generated placeholder.
+          // The placeholder lets a completely fresh pod bootstrap without any
+          // env vars — the real user can be created later via normal sign-up,
+          // and the workspace ownership transferred.
+          const ownerEmail =
+            jwtEmail ?? process.env.ADMIN_EMAIL ?? `admin@pod.local`;
           const ownerName =
-            jwtName ?? (ownerEmail ? ownerEmail.split("@")[0] : null);
+            jwtName ?? (ownerEmail ? ownerEmail.split("@")[0] : "Pod Admin");
 
-          if (ownerEmail) {
-            const existingByEmail = await db.query.users.findFirst({
-              where: (u, { eq }) => eq(u.email, ownerEmail),
-              columns: { id: true, name: true },
+          const existingByEmail = await db.query.users.findFirst({
+            where: (u, { eq }) => eq(u.email, ownerEmail),
+            columns: { id: true, name: true },
+          });
+
+          if (existingByEmail) {
+            ownerCandidate = existingByEmail;
+            logger.info(
+              { userId: existingByEmail.id, email: ownerEmail },
+              "setup/agent: found existing user by email"
+            );
+          } else {
+            const newUserId = randomUUID();
+            await db.insert(users).values({
+              id: newUserId,
+              email: ownerEmail,
+              name: ownerName,
+              userType: "human",
+              emailVerified: true,
+              kratosIdentityId: null,
+              timezone: "UTC",
+              locale: "en",
             });
-
-            if (existingByEmail) {
-              ownerCandidate = existingByEmail;
-              logger.info(
-                { userId: existingByEmail.id, email: ownerEmail },
-                "setup/agent: found existing user by email"
-              );
-            } else {
-              const newUserId = randomUUID();
-              await db.insert(users).values({
-                id: newUserId,
+            ownerCandidate = { id: newUserId, name: ownerName };
+            logger.info(
+              {
+                userId: newUserId,
                 email: ownerEmail,
-                name: ownerName,
-                userType: "human",
-                emailVerified: true,
-                kratosIdentityId: null,
-                timezone: "UTC",
-                locale: "en",
-              });
-              ownerCandidate = { id: newUserId, name: ownerName };
-              logger.info(
-                {
-                  userId: newUserId,
-                  email: ownerEmail,
-                  source: jwtEmail ? "cp-jwt" : "admin-email-env",
-                },
-                "setup/agent: created human user (Kratos webhook not yet fired)"
-              );
-            }
+                source: jwtEmail
+                  ? "cp-jwt"
+                  : process.env.ADMIN_EMAIL
+                    ? "admin-email-env"
+                    : "placeholder",
+              },
+              "setup/agent: created human user"
+            );
           }
         }
 
