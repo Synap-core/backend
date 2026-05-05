@@ -19,6 +19,7 @@ import "dotenv/config";
 // initializeTracing();
 
 import { Hono, type Context as HonoContext } from "hono";
+import { HTTPException } from "hono/http-exception";
 
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
@@ -1226,6 +1227,12 @@ app.notFound((c) => {
 app.onError((err, c) => {
   const errorId = crypto.randomUUID();
   // Use existing apiLogger (created at line 50) instead of creating new one
+
+  // HTTPException carries its own status code — let it flow through directly
+  // instead of converting it to InternalServerError(500) via toSynapError.
+  if (err instanceof HTTPException) {
+    return err.getResponse();
+  }
 
   // Convert to SynapError if needed (standardized error handling)
   const synapError = isSynapError(err)

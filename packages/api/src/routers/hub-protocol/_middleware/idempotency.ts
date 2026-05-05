@@ -140,33 +140,21 @@ export function __resetIdempotencyStoreForTests(): void {
  * Re-attach a consumed body to the Hono request so downstream handlers can
  * still call `c.req.text()` / `c.req.json()` / etc.
  *
- * `c.req.text()` consumes the underlying ReadableStream — the standard fix is
- * to swap `c.req.raw` for a fresh Request built from the buffered text AND
- * pre-populate `c.req.bodyCache.text` so Hono's HonoRequest helpers serve
- * the cached value instead of trying to re-read the stream.
+ * In Hono 4.x, `bodyCache` stores Promises, not plain strings. The internal
+ * `#cachedBody(key)` method checks `bodyCache[key]` and calls `.then()` on
+ * whatever it finds. Setting `bodyCache.text = string` (not a Promise) causes
+ * `c.req.json()` → `#cachedBody("text").then(JSON.parse)` to throw
+ * "TypeError: .then is not a function", which Hono's validator catches and
+ * re-throws as HTTPException(400, "Malformed JSON in request body").
+ *
+ * Fix: store `Promise.resolve(bodyText)` — a real thenable — so the cache hit
+ * path works correctly across all body accessors (text, json, arrayBuffer).
  */
 function reattachBody(
-  c: { req: { raw: Request; bodyCache: { text?: string; json?: unknown } } },
+  c: { req: { raw: Request; bodyCache: Record<string, unknown> } },
   bodyText: string
 ): void {
-  const original = c.req.raw;
-  const reconstructed = new Request(original.url, {
-    method: original.method,
-    headers: original.headers,
-    body: bodyText.length > 0 ? bodyText : undefined,
-    // Required when the body is non-null on POST/PUT/etc. in undici.
-    duplex: bodyText.length > 0 ? "half" : undefined,
-    // Preserve other knobs callers may rely on.
-    redirect: original.redirect,
-    referrer: original.referrer,
-    referrerPolicy: original.referrerPolicy,
-    integrity: original.integrity,
-    signal: original.signal,
-  } as RequestInit & { duplex?: "half" });
-  c.req.raw = reconstructed;
-  // Prime Hono's body cache so .text() / .json() don't re-read the stream.
-  c.req.bodyCache.text = bodyText;
-  // .json() reads from bodyCache.text if present, so no need to set .json.
+  (c.req.bodyCache as Record<string, unknown>).text = Promise.resolve(bodyText);
 }
 
 /**
