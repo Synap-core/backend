@@ -33,6 +33,7 @@ import {
 import { getBoss } from "@synap/jobs";
 
 import { apiKeyService } from "../../../services/api-keys.js";
+import { createAdminUser } from "../../../scripts/create-admin-user.js";
 import {
   isSubTokenFeatureEnabled,
   lookupExternalUserMapping,
@@ -950,94 +951,31 @@ export function registerSetupRoutes(app: HubHono): void {
       return c.json({ error: "Admin already exists" }, 409);
     }
 
-    // Create Kratos identity
-    const kratosAdminUrl =
-      process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
-    let kratosIdentityId: string;
     try {
-      const createResp = await fetch(`${kratosAdminUrl}/admin/identities`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          schema_id: "default",
-          traits: { email },
-          credentials: {
-            password: { config: { password } },
-          },
-          metadata_public: {
-            createdVia: "first-admin-setup",
-            createdAt: new Date().toISOString(),
-          },
-          verifiable_addresses: [
-            {
-              value: email,
-              verified: true,
-              via: "email",
-              status: "completed",
-            },
-          ],
-        }),
-        signal: AbortSignal.timeout(8_000),
+      const result = await createAdminUser(email, password, name, {
+        createWorkspace: true,
       });
 
-      if (!createResp.ok) {
-        const errBody = await createResp.text();
-        logger.error(
-          { status: createResp.status, body: errBody.slice(0, 500) },
-          "setup/first-admin: Kratos identity creation failed"
-        );
-        return c.json(
-          {
-            error: "Failed to create Kratos identity",
-            detail: errBody.slice(0, 200),
-          },
-          500
-        );
-      }
+      logger.info(
+        { userId: result.userId, workspaceId: result.workspaceId, email },
+        "setup/first-admin: first human admin created"
+      );
 
-      const newIdentity = (await createResp.json()) as { id: string };
-      kratosIdentityId = newIdentity.id;
+      return c.json({
+        userId: result.userId,
+        workspaceId: result.workspaceId,
+        email,
+      });
     } catch (err) {
-      logger.error({ err }, "setup/first-admin: Kratos request threw");
-      return c.json({ error: "Auth service unavailable" }, 503);
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error({ err, email }, "setup/first-admin: createAdminUser failed");
+      if (msg.includes("already exists") || msg.includes("duplicate")) {
+        return c.json({ error: "Admin user already exists" }, 409);
+      }
+      return c.json(
+        { error: "Failed to create admin user", detail: msg.slice(0, 200) },
+        500
+      );
     }
-
-    // Insert user into Synap DB
-    const userId = randomUUID();
-    await db.insert(users).values({
-      id: userId,
-      email,
-      name,
-      userType: "human",
-      emailVerified: true,
-      kratosIdentityId,
-      timezone: "UTC",
-      locale: "en",
-    });
-
-    // Create a personal workspace
-    const [newWs] = await db
-      .insert(workspaces)
-      .values({
-        name: `${name}'s Space`,
-        type: "personal",
-        ownerId: userId,
-        settings: {},
-      })
-      .returning();
-
-    await db.insert(workspaceMembers).values({
-      id: randomUUID(),
-      workspaceId: newWs.id,
-      userId,
-      role: "owner",
-    });
-
-    logger.info(
-      { userId, workspaceId: newWs.id, email },
-      "setup/first-admin: first human admin created"
-    );
-
-    return c.json({ userId, workspaceId: newWs.id, email });
   });
 }
