@@ -997,7 +997,6 @@ app.use(
 // The form POSTs to /api/hub/setup/first-admin via fetch (no full-page reload).
 app.get("/setup", (c) => {
   const token = c.req.query("token") ?? "";
-  const publicUrl = process.env.PUBLIC_URL ?? "";
 
   const html = `<!DOCTYPE html>
 <html lang="en">

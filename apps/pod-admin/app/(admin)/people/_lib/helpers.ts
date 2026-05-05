@@ -5,11 +5,19 @@
  * doesn't depend on Overview internals; both are tiny enough that
  * duplicating beats coupling.
  *
- * `studioDeepLinkForWorkspace` returns the URL Studio uses to swap into
- * a specific workspace. The shape `studio.synap.live/?ws=<id>` was
- * specified in the Phase C brief; Studio implements the `?ws=` switch
- * server-side. In dev (`NEXT_PUBLIC_STUDIO_URL`) operators can point
- * this elsewhere.
+ * `studioDeepLinkForWorkspace` returns the URL Studio uses to land on a
+ * specific workspace. Studio currently reads the active workspace from
+ * the auth context (see `synap-app/apps/studio/components/providers/
+ * SynapProvider.tsx`) — there is no `?ws=` query-param switch wired yet,
+ * so we still encode the workspace id as a hint (so Studio can pick it
+ * up later without the link breaking) and the operator may need to
+ * switch workspaces manually inside Studio for now.
+ *
+ * TODO(phase-e): teach Studio to honour `?ws=<id>` by reading the param
+ * in its auth provider and calling `updateWorkspaceId`. Until then, this
+ * helper is best-effort: the URL opens Studio on its default workspace.
+ *
+ * In dev, `NEXT_PUBLIC_STUDIO_URL` points to the local Studio dev server.
  */
 
 export function formatRelative(date: Date): string {

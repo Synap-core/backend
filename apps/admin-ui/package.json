@@ -1,5 +1,6 @@
 {
   "name": "admin-ui",
+  "description": "DEPRECATED — see synap-backend/apps/pod-admin. This Vite SPA is kept alive for one release as a redirect shell, plus the preserved /kratos, /bootstrap, /connect routes.",
   "private": true,
   "version": "1.0.0",
   "type": "module",

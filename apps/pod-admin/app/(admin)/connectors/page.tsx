@@ -19,13 +19,7 @@
  * work because we derive aggregates from any connectors list query.
  */
 
-import {
-  Button,
-  Drawer,
-  DrawerBody,
-  DrawerContent,
-  DrawerHeader,
-} from "@heroui/react";
+import { Button } from "@heroui/react";
 import {
   AlertTriangle,
   Building2,
@@ -38,11 +32,11 @@ import {
   Rss,
   Server,
   Trash2,
-  X,
 } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { trpc } from "../../../lib/trpc";
+import { DetailDrawer } from "../components/detail-drawer";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -51,10 +45,34 @@ import {
 import { SectionCard } from "../components/section-card";
 import type { StatusKind } from "../components/status-pill";
 import { StatusPill } from "../components/status-pill";
+import { useFocusRow } from "../components/use-focus-row";
 
 // ─── Page ─────────────────────────────────────────────────────────────
 
 export default function ConnectorsPage() {
+  // Connectors uses `useSearchParams` indirectly via `useFocusRow` — wrap
+  // in Suspense per Next 16's App Router contract.
+  return (
+    <Suspense fallback={<ConnectorsFallback />}>
+      <ConnectorsInner />
+    </Suspense>
+  );
+}
+
+function ConnectorsFallback() {
+  return (
+    <div className="px-6 py-6 max-w-[1400px]">
+      <header className="mb-6 flex flex-col gap-1">
+        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
+          Connectors
+        </h1>
+      </header>
+      <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
+    </div>
+  );
+}
+
+function ConnectorsInner() {
   return (
     <div className="px-6 py-6 max-w-[1400px]">
       <header className="mb-6 flex flex-col gap-1">
@@ -411,6 +429,16 @@ function PerWorkspaceGridSection() {
 
   const rows = (query.data ?? []) as unknown as FeedRow[];
 
+  // ?focus=<feedId> from ⌘K or Overview alerts (sync errors). Open the
+  // drawer once the matching row is rendered.
+  const focusId = useFocusRow({ ready: !query.isLoading });
+  useEffect(() => {
+    if (!focusId || selected) return;
+    const found = rows.find((r) => r.id === focusId);
+    if (found) setSelected(found);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId, rows]);
+
   return (
     <>
       <SectionCard
@@ -459,6 +487,7 @@ function PerWorkspaceGridSection() {
                 {rows.map((row) => (
                   <tr
                     key={row.id}
+                    data-row-id={row.id}
                     onClick={() => setSelected(row)}
                     className={[
                       "cursor-pointer border-b border-foreground/[0.05]",
@@ -529,115 +558,94 @@ function ConnectorDetailDrawer({
     : "/studio/settings/integrations";
 
   return (
-    <Drawer
+    <DetailDrawer
       isOpen={!!row}
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-      placement="right"
-      backdrop="opaque"
-      size="md"
-    >
-      <DrawerContent className="bg-background">
-        {row ? (
+      onClose={onClose}
+      title={
+        row?.sourceConfig?.name ??
+        row?.sourceConfig?.providerType ??
+        "Connector"
+      }
+      subtitle={
+        row
+          ? row.workspaceId
+            ? `workspace ${row.workspaceId.slice(0, 8)}`
+            : "Pod-wide"
+          : undefined
+      }
+      footer={
+        row ? (
           <>
-            <DrawerHeader className="flex items-center justify-between gap-3 border-b border-foreground/[0.05] px-5 py-4">
-              <div className="flex flex-col gap-0.5">
-                <span className="text-[14px] font-medium text-foreground">
-                  {row.sourceConfig?.name ??
-                    row.sourceConfig?.providerType ??
-                    "Connector"}
-                </span>
-                <span className="text-[11.5px] text-foreground/55">
-                  {row.workspaceId
-                    ? `workspace ${row.workspaceId.slice(0, 8)}`
-                    : "Pod-wide"}
-                </span>
-              </div>
-              <Button
-                isIconOnly
-                size="sm"
-                variant="light"
-                radius="full"
-                onPress={onClose}
-                aria-label="Close"
-              >
-                <X className="h-3.5 w-3.5" />
-              </Button>
-            </DrawerHeader>
-            <DrawerBody className="flex flex-col gap-4 px-5 py-4">
-              <DrawerField label="Status">
-                <StatusPill
-                  kind={feedStatusKind(row.status)}
-                  label={row.status}
-                />
-              </DrawerField>
-              <DrawerField label="Provider">
-                <span className="text-[12.5px] text-foreground/85">
-                  {row.sourceConfig?.providerType ?? "—"}
-                </span>
-              </DrawerField>
-              <DrawerField label="Last fetched">
-                <span className="text-[12.5px] text-foreground/85 tabular">
-                  {row.lastFetchedAt
-                    ? new Date(row.lastFetchedAt).toLocaleString()
-                    : "Never"}
-                </span>
-              </DrawerField>
-              {row.errorMessage && (
-                <DrawerField label="Last error">
-                  <p className="text-[11.5px] text-status-down break-words">
-                    {row.errorMessage}
-                  </p>
-                </DrawerField>
-              )}
-              <DrawerField label="Recent events">
-                {/* TODO(phase-C): wire `trpc.feeds.recentItems` (or an
-                    equivalent connector-event log) and render the last 5
-                    events with timestamps. */}
-                <p className="text-[11px] text-foreground/45">
-                  Recent event timeline requires a connector-event log endpoint
-                  (TODO).
-                </p>
-              </DrawerField>
-
-              <div className="mt-4 flex items-center gap-2">
-                <Button
-                  as={Link}
-                  href={studioHref}
-                  size="sm"
-                  variant="solid"
-                  color="primary"
-                  radius="md"
-                  endContent={<ExternalLink className="h-3 w-3" />}
-                >
-                  Open in Studio
-                </Button>
-                <Button
-                  size="sm"
-                  variant="flat"
-                  radius="md"
-                  startContent={<RefreshCw className="h-3 w-3" />}
-                  isDisabled
-                >
-                  Re-authenticate
-                </Button>
-                <Button
-                  size="sm"
-                  variant="light"
-                  radius="md"
-                  startContent={<Trash2 className="h-3 w-3" />}
-                  isDisabled
-                  className="ml-auto text-status-down"
-                >
-                  Remove
-                </Button>
-              </div>
-            </DrawerBody>
+            <Button
+              as={Link}
+              href={studioHref}
+              size="sm"
+              variant="solid"
+              color="primary"
+              radius="md"
+              endContent={<ExternalLink className="h-3 w-3" />}
+            >
+              Open in Studio
+            </Button>
+            <Button
+              size="sm"
+              variant="flat"
+              radius="md"
+              startContent={<RefreshCw className="h-3 w-3" />}
+              isDisabled
+            >
+              Re-authenticate
+            </Button>
+            <Button
+              size="sm"
+              variant="light"
+              radius="md"
+              startContent={<Trash2 className="h-3 w-3" />}
+              isDisabled
+              className="ml-auto text-status-down"
+            >
+              Remove
+            </Button>
           </>
-        ) : null}
-      </DrawerContent>
-    </Drawer>
+        ) : null
+      }
+    >
+      {row ? (
+        <div className="flex flex-col gap-4">
+          <DrawerField label="Status">
+            <StatusPill kind={feedStatusKind(row.status)} label={row.status} />
+          </DrawerField>
+          <DrawerField label="Provider">
+            <span className="text-[12.5px] text-foreground/85">
+              {row.sourceConfig?.providerType ?? "—"}
+            </span>
+          </DrawerField>
+          <DrawerField label="Last fetched">
+            <span className="text-[12.5px] text-foreground/85 tabular">
+              {row.lastFetchedAt
+                ? new Date(row.lastFetchedAt).toLocaleString()
+                : "Never"}
+            </span>
+          </DrawerField>
+          {row.errorMessage && (
+            <DrawerField label="Last error">
+              <p className="text-[11.5px] text-status-down break-words">
+                {row.errorMessage}
+              </p>
+            </DrawerField>
+          )}
+          <DrawerField label="Recent events">
+            {/* TODO(phase-C): wire `trpc.feeds.recentItems` (or an
+                equivalent connector-event log) and render the last 5
+                events with timestamps. */}
+            <p className="text-[11px] text-foreground/45">
+              Recent event timeline requires a connector-event log endpoint
+              (TODO).
+            </p>
+          </DrawerField>
+        </div>
+      ) : null}
+    </DetailDrawer>
   );
 }
 

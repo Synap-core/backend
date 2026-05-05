@@ -57,6 +57,7 @@ import {
 } from "../../components/resource-row";
 import { SectionCard } from "../../components/section-card";
 import type { StatusKind } from "../../components/status-pill";
+import { useFocusRow } from "../../components/use-focus-row";
 import { formatRelative, shortId } from "./format";
 
 interface AdminKey {
@@ -106,6 +107,11 @@ export function ApiKeysSection() {
   });
   const systemKeys = trpc.apiKeys.listSystemKeys.useQuery(undefined, {
     staleTime: 60_000,
+  });
+
+  // ?focus=<keyId> from ⌘K — receiver wraps each KeyRow with data-row-id.
+  useFocusRow({
+    ready: !operatorKeys.isLoading && !systemKeys.isLoading,
   });
 
   const utils = trpc.useUtils();
@@ -223,7 +229,13 @@ export function ApiKeysSection() {
         ) : (
           <div className="-mx-2">
             {system.map((k) => (
-              <KeyRow key={k.id} apiKey={toAdminLike(k)} readOnly />
+              <div
+                key={k.id}
+                data-row-id={k.id}
+                className="rounded-md transition-shadow"
+              >
+                <KeyRow apiKey={toAdminLike(k)} readOnly />
+              </div>
             ))}
           </div>
         )}
@@ -258,12 +270,17 @@ export function ApiKeysSection() {
         ) : (
           <div className="-mx-2">
             {operator.map((k) => (
-              <KeyRow
+              <div
                 key={k.id}
-                apiKey={k}
-                onRevoke={() => setRevokeTarget(k)}
-                onRotate={() => rotate.mutate({ keyId: k.id })}
-              />
+                data-row-id={k.id}
+                className="rounded-md transition-shadow"
+              >
+                <KeyRow
+                  apiKey={k}
+                  onRevoke={() => setRevokeTarget(k)}
+                  onRotate={() => rotate.mutate({ keyId: k.id })}
+                />
+              </div>
             ))}
           </div>
         )}

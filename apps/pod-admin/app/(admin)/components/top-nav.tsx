@@ -4,7 +4,7 @@
  * `TopNav` — 44px pod-admin header. Three slots:
  *
  *   • Left   — Synap mark · "Pod Admin" · pod hostname
- *   • Center — ⌘K Search input (kbd hint, no actual command palette yet)
+ *   • Center — ⌘K Search trigger — opens the global SearchModal palette
  *   • Right  — refresh-timestamp chip · user avatar with sign-out popover
  *
  * The whole bar is non-sticky on purpose: in a dashboard the operator
@@ -17,7 +17,6 @@ import {
   Avatar,
   Button,
   Chip,
-  Input,
   Kbd,
   Popover,
   PopoverContent,
@@ -37,6 +36,8 @@ interface TopNavProps {
   lastRefreshed?: Date | null;
   /** Manual refresh — invalidates the page's queries. */
   onRefresh?: () => void;
+  /** Open the global ⌘K search palette. */
+  onOpenSearch?: () => void;
 }
 
 export function TopNav({
@@ -44,6 +45,7 @@ export function TopNav({
   podHost,
   lastRefreshed,
   onRefresh,
+  onOpenSearch,
 }: TopNavProps) {
   const initials = (operatorEmail ?? "?").charAt(0).toUpperCase();
   const refreshedLabel = useRelativeTime(lastRefreshed ?? null);
@@ -99,20 +101,29 @@ export function TopNav({
         )}
       </div>
 
-      {/* Center — search (placeholder; ⌘K palette is Phase C) */}
+      {/* Center — search trigger.  Reads as a disabled-looking input but
+          is actually a button: clicking opens the ⌘K palette mounted by
+          AdminShell, which is also bound to the meta-K shortcut. */}
       <div className="mx-auto hidden w-full max-w-md items-center md:flex">
-        <Input
-          size="sm"
-          radius="md"
-          variant="flat"
-          placeholder="Search this pod…"
-          startContent={<Search className="h-3.5 w-3.5 text-foreground/45" />}
-          endContent={<Kbd keys={["command"]}>K</Kbd>}
-          isDisabled
-          spellCheck="false"
-          aria-label="Search"
-          className="text-[12.5px]"
-        />
+        <button
+          type="button"
+          onClick={onOpenSearch}
+          aria-label="Open search (⌘K)"
+          className="
+            group flex h-8 w-full items-center gap-2 rounded-md
+            bg-content2/40 px-3
+            ring-1 ring-inset ring-foreground/[0.06]
+            text-[12.5px] text-foreground/55
+            transition-colors hover:bg-content2/60 hover:text-foreground/85
+            focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40
+          "
+        >
+          <Search className="h-3.5 w-3.5 shrink-0 text-foreground/45" />
+          <span className="flex-1 text-left">Search this pod…</span>
+          <Kbd keys={["command"]} className="shrink-0">
+            K
+          </Kbd>
+        </button>
       </div>
 
       {/* Right — refresh + user avatar */}

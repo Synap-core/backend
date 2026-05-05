@@ -116,12 +116,21 @@ const rootEl = document.getElementById("root");
 if (!rootEl) {
   renderFatal("Missing #root element.");
 } else {
+  // The admin-ui is deprecated (see App.tsx). Three routes are preserved
+  // and need their normal provider stack: /admin/kratos, /admin/bootstrap,
+  // /admin/connect. Everything else renders <DeprecationRedirect />, which
+  // does a window.location.replace to Pod Admin and needs zero providers
+  // — skipping AuthProvider/WorkspaceProvider here matters because those
+  // talk to tRPC and would otherwise log noise + fight a session that the
+  // operator no longer has.
   const pathname = window.location.pathname;
   const isPublicAdminPath =
     pathname.endsWith("/admin/kratos") ||
     pathname.endsWith("/admin/bootstrap") ||
+    pathname.endsWith("/admin/connect") ||
     pathname === "/admin/kratos" ||
-    pathname === "/admin/bootstrap";
+    pathname === "/admin/bootstrap" ||
+    pathname === "/admin/connect";
 
   // Apply theme immediately to avoid flash
   const initialTheme = getSavedTheme() ?? getSystemTheme();

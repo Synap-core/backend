@@ -253,7 +253,9 @@ function AlertsCard() {
           primary: "Trusted issuer awaiting approval",
           secondary: i.issuerUrl ?? i.id,
           status: { kind: "stale", label: "Pending" },
-          href: `/trust-keys?focus=${encodeURIComponent(i.id)}`,
+          // Land on the Trusted Issuers sub-tab + scroll/highlight the
+          // pending issuer row.
+          href: `/trust-keys?section=issuers&focus=${encodeURIComponent(i.id)}`,
         });
       }
     }

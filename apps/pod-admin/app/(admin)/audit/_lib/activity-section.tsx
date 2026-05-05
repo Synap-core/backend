@@ -12,16 +12,7 @@
  * the cap, then add an offset.
  */
 
-import {
-  Avatar,
-  Button,
-  Chip,
-  Drawer,
-  DrawerBody,
-  DrawerContent,
-  DrawerHeader,
-  useDisclosure,
-} from "@heroui/react";
+import { Avatar, Button, Chip, useDisclosure } from "@heroui/react";
 import {
   Activity,
   Check,
@@ -33,11 +24,13 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
+import { DetailDrawer } from "../../components/detail-drawer";
 import {
   ResourceRowEmpty,
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../../components/resource-row";
+import { useFocusRow } from "../../components/use-focus-row";
 import {
   type ActorSummary,
   type AuditFilters,
@@ -182,6 +175,17 @@ export function ActivitySection({
     onClose: () => setSelected(null),
   });
 
+  // ?focus=<eventId> from ⌘K or Overview alerts. Open the drawer for the
+  // matching event once data has landed; the row will scroll-and-highlight
+  // as long as the event is on the current page.
+  const focusId = useFocusRow({ ready: !auditQuery.isLoading });
+  useEffect(() => {
+    if (!focusId || selected) return;
+    const found = filtered.find((e) => e.id === focusId);
+    if (found) setSelected(found);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId, filtered]);
+
   return (
     <>
       <div className="rounded-lg ring-1 ring-inset ring-foreground/10 bg-foreground/[0.02]">
@@ -257,7 +261,10 @@ function ActivityRow({
   const { Icon, tone } = actionPresentation(event.action);
 
   return (
-    <li className="border-b border-foreground/[0.05] last:border-b-0">
+    <li
+      data-row-id={event.id}
+      className="rounded-md border-b border-foreground/[0.05] last:border-b-0 transition-shadow"
+    >
       <button
         type="button"
         onClick={onSelect}
@@ -385,92 +392,69 @@ function EventDrawer({
   onOpenChange: (open: boolean) => void;
 }) {
   return (
-    <Drawer
+    <DetailDrawer
       isOpen={isOpen}
-      onOpenChange={onOpenChange}
-      placement="right"
-      size="md"
-      classNames={{
-        base: "bg-content1",
-      }}
+      onClose={() => onOpenChange(false)}
+      title="Event detail"
+      subtitle={
+        event ? <code className="font-mono">{event.eventType}</code> : undefined
+      }
+      headerAccessory={
+        <span
+          className="glass-icon flex h-7 w-7 items-center justify-center"
+          style={{ background: "rgba(52, 211, 153, 0.15)" }}
+        >
+          <Activity className="h-3.5 w-3.5 text-foreground/85" />
+        </span>
+      }
     >
-      <DrawerContent>
-        {() =>
-          event && (
-            <>
-              <DrawerHeader className="flex flex-col gap-1.5 border-b border-foreground/[0.05]">
-                <div className="flex items-center gap-2">
-                  <span
-                    className="glass-icon flex h-7 w-7 items-center justify-center"
-                    style={{ background: "rgba(52, 211, 153, 0.15)" }}
-                  >
-                    <Activity className="h-3.5 w-3.5 text-foreground/85" />
-                  </span>
-                  <div className="flex flex-col">
-                    <span className="text-[14px] font-medium text-foreground">
-                      Event detail
-                    </span>
-                    <code className="text-[11px] text-foreground/55">
-                      {event.eventType}
-                    </code>
-                  </div>
-                </div>
-              </DrawerHeader>
-              <DrawerBody className="px-5 py-4">
-                <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-[11.5px]">
-                  <Field
-                    k="When"
-                    v={new Date(event.timestamp).toLocaleString()}
-                  />
-                  <Field k="Action" v={event.action || "—"} />
-                  <Field k="Phase" v={event.phase || "—"} />
-                  <Field
-                    k="Subject"
-                    v={`${SUBJECT_TYPE_LABELS[event.subjectType] ?? event.subjectType}`}
-                  />
-                  <Field k="Subject ID" v={event.subjectId} mono />
-                  <Field
-                    k="Actor"
-                    v={actor?.email ?? actor?.name ?? event.userId}
-                  />
-                  <Field k="Actor ID" v={event.userId} mono />
-                  <Field
-                    k="Workspace"
-                    v={
-                      workspace
-                        ? `${workspace.name}`
-                        : (event.workspaceId ?? "pod-level")
-                    }
-                  />
-                  <Field k="Source" v={event.source} />
-                  <Field k="Correlation" v={event.correlationId ?? "—"} mono />
-                </dl>
+      {event ? (
+        <>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-[11.5px]">
+            <Field k="When" v={new Date(event.timestamp).toLocaleString()} />
+            <Field k="Action" v={event.action || "—"} />
+            <Field k="Phase" v={event.phase || "—"} />
+            <Field
+              k="Subject"
+              v={`${SUBJECT_TYPE_LABELS[event.subjectType] ?? event.subjectType}`}
+            />
+            <Field k="Subject ID" v={event.subjectId} mono />
+            <Field k="Actor" v={actor?.email ?? actor?.name ?? event.userId} />
+            <Field k="Actor ID" v={event.userId} mono />
+            <Field
+              k="Workspace"
+              v={
+                workspace
+                  ? `${workspace.name}`
+                  : (event.workspaceId ?? "pod-level")
+              }
+            />
+            <Field k="Source" v={event.source} />
+            <Field k="Correlation" v={event.correlationId ?? "—"} mono />
+          </dl>
 
-                <div className="mt-4">
-                  <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-foreground/45">
-                    Data
-                  </p>
-                  <pre className="overflow-auto rounded-md bg-foreground/[0.04] p-3 font-mono text-[11px] text-foreground/85 ring-1 ring-inset ring-foreground/10">
-                    {JSON.stringify(event.data, null, 2)}
-                  </pre>
-                </div>
+          <div className="mt-4">
+            <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-foreground/45">
+              Data
+            </p>
+            <pre className="overflow-auto rounded-md bg-foreground/[0.04] p-3 font-mono text-[11px] text-foreground/85 ring-1 ring-inset ring-foreground/10">
+              {JSON.stringify(event.data, null, 2)}
+            </pre>
+          </div>
 
-                {event.metadata && (
-                  <div className="mt-4">
-                    <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-foreground/45">
-                      Metadata
-                    </p>
-                    <pre className="overflow-auto rounded-md bg-foreground/[0.04] p-3 font-mono text-[11px] text-foreground/85 ring-1 ring-inset ring-foreground/10">
-                      {JSON.stringify(event.metadata, null, 2)}
-                    </pre>
-                  </div>
-                )}
-              </DrawerBody>
-            </>
-          )
-        }
-      </DrawerContent>
-    </Drawer>
+          {event.metadata && (
+            <div className="mt-4">
+              <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-foreground/45">
+                Metadata
+              </p>
+              <pre className="overflow-auto rounded-md bg-foreground/[0.04] p-3 font-mono text-[11px] text-foreground/85 ring-1 ring-inset ring-foreground/10">
+                {JSON.stringify(event.metadata, null, 2)}
+              </pre>
+            </div>
+          )}
+        </>
+      ) : null}
+    </DetailDrawer>
   );
 }
 

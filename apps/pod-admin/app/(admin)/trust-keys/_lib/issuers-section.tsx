@@ -44,6 +44,7 @@ import {
   ResourceRowSkeleton,
 } from "../../components/resource-row";
 import type { StatusKind } from "../../components/status-pill";
+import { useFocusRow } from "../../components/use-focus-row";
 import { formatRelative } from "./format";
 
 type IssuerStatus = "pending" | "approved" | "rejected" | "revoked";
@@ -142,6 +143,10 @@ export function IssuersSection() {
   const list = trpc.trustedIssuers.list.useQuery(undefined, {
     staleTime: 60_000,
   });
+
+  // ?focus=<issuerId> from ⌘K or Overview's pending-issuer alert. Receiver
+  // is `data-row-id` on the wrapping div around each IssuerRow.
+  useFocusRow({ ready: !list.isLoading });
 
   const utils = trpc.useUtils();
 
@@ -280,13 +285,18 @@ export function IssuersSection() {
           <ResourceRowEmpty message="No trusted issuers match this filter." />
         ) : (
           filtered.map((issuer) => (
-            <IssuerRow
+            <div
               key={issuer.id}
-              issuer={issuer}
-              onApprove={() => setApproveTarget(issuer)}
-              onReject={() => setRejectTarget(issuer)}
-              onRevoke={() => setRevokeTarget(issuer)}
-            />
+              data-row-id={issuer.id}
+              className="rounded-md transition-shadow"
+            >
+              <IssuerRow
+                issuer={issuer}
+                onApprove={() => setApproveTarget(issuer)}
+                onReject={() => setRejectTarget(issuer)}
+                onRevoke={() => setRevokeTarget(issuer)}
+              />
+            </div>
           ))
         )}
       </div>

@@ -20,11 +20,6 @@
 
 import {
   Button,
-  Drawer,
-  DrawerBody,
-  DrawerContent,
-  DrawerFooter,
-  DrawerHeader,
   Input,
   Modal,
   ModalBody,
@@ -46,8 +41,9 @@ import {
   Plus,
   Settings2,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../lib/trpc";
+import { DetailDrawer } from "../components/detail-drawer";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -56,6 +52,7 @@ import {
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
 import { StatusPill, type StatusKind } from "../components/status-pill";
+import { useFocusRow } from "../components/use-focus-row";
 import {
   formatRelative,
   studioDeepLinkForWorkspace,
@@ -125,6 +122,29 @@ function colorForWorkspace(ws: Workspace): string {
 // ─── Page ───────────────────────────────────────────────────────────
 
 export default function WorkspacesPage() {
+  // useSearchParams in `useFocusRow` requires a Suspense boundary in the
+  // App Router; we wrap the heavy lifting in `WorkspacesInner`.
+  return (
+    <Suspense fallback={<WorkspacesFallback />}>
+      <WorkspacesInner />
+    </Suspense>
+  );
+}
+
+function WorkspacesFallback() {
+  return (
+    <div className="px-6 py-6 max-w-[1400px]">
+      <header className="mb-6 flex flex-col gap-1">
+        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
+          Workspaces
+        </h1>
+      </header>
+      <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
+    </div>
+  );
+}
+
+function WorkspacesInner() {
   const createDisclosure = useDisclosure();
   const drawerDisclosure = useDisclosure();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -132,6 +152,18 @@ export default function WorkspacesPage() {
   const query = trpc.workspaces.adminListAll.useQuery(undefined, {
     staleTime: 30_000,
   });
+
+  // ?focus=<workspaceId> from ⌘K: open the drawer for that workspace and
+  // (when the row is rendered) scroll-and-highlight it.
+  const focusId = useFocusRow({ ready: !query.isLoading });
+  useEffect(() => {
+    if (focusId && !drawerDisclosure.isOpen) {
+      setSelectedId(focusId);
+      drawerDisclosure.onOpen();
+    }
+    // We intentionally only react when the focus param itself changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId]);
 
   // The api-types snapshot types `settings` as the structured
   // WorkspaceSettings interface; we treat it as a loose record here so
@@ -200,14 +232,19 @@ export default function WorkspacesPage() {
         ) : (
           <div className="-mx-2">
             {workspaces.map((ws) => (
-              <WorkspaceRow
+              <div
                 key={ws.id}
-                ws={ws}
-                onSelect={() => {
-                  setSelectedId(ws.id);
-                  drawerDisclosure.onOpen();
-                }}
-              />
+                data-row-id={ws.id}
+                className="rounded-md transition-shadow"
+              >
+                <WorkspaceRow
+                  ws={ws}
+                  onSelect={() => {
+                    setSelectedId(ws.id);
+                    drawerDisclosure.onOpen();
+                  }}
+                />
+              </div>
             ))}
           </div>
         )}
@@ -375,183 +412,148 @@ function WorkspaceDrawer({
   const settingsPretty = ws ? JSON.stringify(ws.settings ?? {}, null, 2) : "{}";
 
   return (
-    <Drawer
+    <DetailDrawer
       isOpen={isOpen}
       onClose={onClose}
-      placement="right"
-      size="md"
-      backdrop="blur"
+      title={ws?.name ?? "—"}
+      subtitle={ws ? <span className="font-mono">{ws.id}</span> : undefined}
+      headerAccessory={
+        <span
+          aria-hidden
+          className="glass-icon flex h-9 w-9 shrink-0 items-center justify-center text-[14px] font-semibold text-white"
+          style={{ background: ws ? colorForWorkspace(ws) : undefined }}
+        >
+          {ws ? workspaceInitial(ws) : "?"}
+        </span>
+      }
+      headerRight={
+        status ? <StatusPill kind={status.kind} label={status.label} /> : null
+      }
+      footer={
+        <>
+          <Button variant="flat" radius="md" size="sm" onPress={onClose}>
+            Close
+          </Button>
+          {ws ? (
+            <Button
+              as="a"
+              href={studioDeepLinkForWorkspace(ws.id)}
+              target="_blank"
+              rel="noopener noreferrer"
+              color="primary"
+              variant="solid"
+              radius="md"
+              size="sm"
+              endContent={<ExternalLink className="h-3.5 w-3.5" />}
+            >
+              Open in Studio
+            </Button>
+          ) : null}
+        </>
+      }
     >
-      <DrawerContent>
-        {(close) => (
-          <>
-            <DrawerHeader className="flex flex-col gap-2 border-b border-foreground/[0.06] px-6 py-4">
-              <div className="flex items-center gap-3">
-                <span
-                  aria-hidden
-                  className="glass-icon flex h-9 w-9 shrink-0 items-center justify-center text-[14px] font-semibold text-white"
-                  style={{ background: ws ? colorForWorkspace(ws) : undefined }}
-                >
-                  {ws ? workspaceInitial(ws) : "?"}
-                </span>
+      {ws ? (
+        <div className="flex flex-col gap-4">
+          {ws.description ? (
+            <p className="text-[12.5px] text-foreground/55">{ws.description}</p>
+          ) : null}
+          <DetailRow label="Type" value={ws.type} />
+          <DetailRow
+            label="Members"
+            value={`${ws.memberCount} ${
+              ws.memberCount === 1 ? "member" : "members"
+            }`}
+          />
+          <DetailRow
+            label="Created"
+            value={ws.createdAt ? new Date(ws.createdAt).toLocaleString() : "—"}
+          />
+          <DetailRow
+            label="Last update"
+            value={ws.updatedAt ? formatRelative(new Date(ws.updatedAt)) : "—"}
+          />
+          <DetailRow
+            label="Subscription"
+            value={
+              ws.subscriptionTier
+                ? `${ws.subscriptionTier}${
+                    ws.subscriptionStatus ? ` · ${ws.subscriptionStatus}` : ""
+                  }`
+                : "—"
+            }
+          />
+
+          <div>
+            <h4 className="mb-2 text-[11px] uppercase tracking-wider text-foreground/45">
+              Owner
+            </h4>
+            {membersQuery.isLoading ? (
+              <p className="text-[12px] text-foreground/55">Loading…</p>
+            ) : owner ? (
+              <div className="flex items-center justify-between gap-3 rounded-md border border-foreground/[0.06] bg-foreground/[0.02] px-3 py-2">
                 <div className="flex min-w-0 flex-col">
-                  <span className="truncate text-[15px] font-medium text-foreground">
-                    {ws?.name ?? "—"}
+                  <span className="truncate text-[12.5px] font-medium text-foreground">
+                    {owner.user.name ?? owner.user.email}
                   </span>
                   <span className="truncate font-mono text-[10.5px] text-foreground/40">
-                    {ws?.id ?? ""}
+                    {owner.user.email}
                   </span>
                 </div>
-                {status ? (
-                  <div className="ml-auto shrink-0">
-                    <StatusPill kind={status.kind} label={status.label} />
+                <span className="shrink-0 text-[11px] text-foreground/55">
+                  owner
+                </span>
+              </div>
+            ) : (
+              <p className="text-[12px] text-foreground/55">
+                No human owner found.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <h4 className="mb-2 text-[11px] uppercase tracking-wider text-foreground/45">
+              Members ({membersQuery.data?.length ?? 0})
+            </h4>
+            {membersQuery.isLoading ? (
+              <p className="text-[12px] text-foreground/55">Loading…</p>
+            ) : membersQuery.data && membersQuery.data.length > 0 ? (
+              <div className="flex flex-col gap-1">
+                {membersQuery.data.slice(0, 8).map((m) => (
+                  <div
+                    key={m.id}
+                    className="flex items-center justify-between gap-3 rounded-md px-3 py-1.5 hover:bg-content2/40"
+                  >
+                    <span className="truncate text-[12px] text-foreground">
+                      {m.user?.name ?? m.user?.email ?? m.userId}
+                    </span>
+                    <span className="shrink-0 text-[11px] text-foreground/55">
+                      {m.role}
+                    </span>
                   </div>
+                ))}
+                {membersQuery.data.length > 8 ? (
+                  <p className="px-3 pt-1 text-[11px] text-foreground/45">
+                    +{membersQuery.data.length - 8} more — open in Studio to see
+                    all
+                  </p>
                 ) : null}
               </div>
-              {ws?.description ? (
-                <p className="text-[12.5px] text-foreground/55">
-                  {ws.description}
-                </p>
-              ) : null}
-            </DrawerHeader>
+            ) : (
+              <p className="text-[12px] text-foreground/55">No members.</p>
+            )}
+          </div>
 
-            <DrawerBody className="px-6 py-4">
-              {ws ? (
-                <div className="flex flex-col gap-4">
-                  <DetailRow label="Type" value={ws.type} />
-                  <DetailRow
-                    label="Members"
-                    value={`${ws.memberCount} ${
-                      ws.memberCount === 1 ? "member" : "members"
-                    }`}
-                  />
-                  <DetailRow
-                    label="Created"
-                    value={
-                      ws.createdAt
-                        ? new Date(ws.createdAt).toLocaleString()
-                        : "—"
-                    }
-                  />
-                  <DetailRow
-                    label="Last update"
-                    value={
-                      ws.updatedAt
-                        ? formatRelative(new Date(ws.updatedAt))
-                        : "—"
-                    }
-                  />
-                  <DetailRow
-                    label="Subscription"
-                    value={
-                      ws.subscriptionTier
-                        ? `${ws.subscriptionTier}${
-                            ws.subscriptionStatus
-                              ? ` · ${ws.subscriptionStatus}`
-                              : ""
-                          }`
-                        : "—"
-                    }
-                  />
-
-                  <div>
-                    <h4 className="mb-2 text-[11px] uppercase tracking-wider text-foreground/45">
-                      Owner
-                    </h4>
-                    {membersQuery.isLoading ? (
-                      <p className="text-[12px] text-foreground/55">Loading…</p>
-                    ) : owner ? (
-                      <div className="flex items-center justify-between gap-3 rounded-md border border-foreground/[0.06] bg-foreground/[0.02] px-3 py-2">
-                        <div className="flex min-w-0 flex-col">
-                          <span className="truncate text-[12.5px] font-medium text-foreground">
-                            {owner.user.name ?? owner.user.email}
-                          </span>
-                          <span className="truncate font-mono text-[10.5px] text-foreground/40">
-                            {owner.user.email}
-                          </span>
-                        </div>
-                        <span className="shrink-0 text-[11px] text-foreground/55">
-                          owner
-                        </span>
-                      </div>
-                    ) : (
-                      <p className="text-[12px] text-foreground/55">
-                        No human owner found.
-                      </p>
-                    )}
-                  </div>
-
-                  <div>
-                    <h4 className="mb-2 text-[11px] uppercase tracking-wider text-foreground/45">
-                      Members ({membersQuery.data?.length ?? 0})
-                    </h4>
-                    {membersQuery.isLoading ? (
-                      <p className="text-[12px] text-foreground/55">Loading…</p>
-                    ) : membersQuery.data && membersQuery.data.length > 0 ? (
-                      <div className="flex flex-col gap-1">
-                        {membersQuery.data.slice(0, 8).map((m) => (
-                          <div
-                            key={m.id}
-                            className="flex items-center justify-between gap-3 rounded-md px-3 py-1.5 hover:bg-content2/40"
-                          >
-                            <span className="truncate text-[12px] text-foreground">
-                              {m.user?.name ?? m.user?.email ?? m.userId}
-                            </span>
-                            <span className="shrink-0 text-[11px] text-foreground/55">
-                              {m.role}
-                            </span>
-                          </div>
-                        ))}
-                        {membersQuery.data.length > 8 ? (
-                          <p className="px-3 pt-1 text-[11px] text-foreground/45">
-                            +{membersQuery.data.length - 8} more — open in
-                            Studio to see all
-                          </p>
-                        ) : null}
-                      </div>
-                    ) : (
-                      <p className="text-[12px] text-foreground/55">
-                        No members.
-                      </p>
-                    )}
-                  </div>
-
-                  <div>
-                    <h4 className="mb-2 text-[11px] uppercase tracking-wider text-foreground/45">
-                      Settings
-                    </h4>
-                    <pre className="max-h-[180px] overflow-auto rounded-md border border-foreground/[0.06] bg-foreground/[0.02] p-3 font-mono text-[10.5px] text-foreground/70">
-                      {settingsPretty}
-                    </pre>
-                  </div>
-                </div>
-              ) : null}
-            </DrawerBody>
-
-            <DrawerFooter className="border-t border-foreground/[0.06] px-6 py-3">
-              <Button variant="flat" radius="md" size="sm" onPress={close}>
-                Close
-              </Button>
-              {ws ? (
-                <Button
-                  as="a"
-                  href={studioDeepLinkForWorkspace(ws.id)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  color="primary"
-                  variant="solid"
-                  radius="md"
-                  size="sm"
-                  endContent={<ExternalLink className="h-3.5 w-3.5" />}
-                >
-                  Open in Studio
-                </Button>
-              ) : null}
-            </DrawerFooter>
-          </>
-        )}
-      </DrawerContent>
-    </Drawer>
+          <div>
+            <h4 className="mb-2 text-[11px] uppercase tracking-wider text-foreground/45">
+              Settings
+            </h4>
+            <pre className="max-h-[180px] overflow-auto rounded-md border border-foreground/[0.06] bg-foreground/[0.02] p-3 font-mono text-[10.5px] text-foreground/70">
+              {settingsPretty}
+            </pre>
+          </div>
+        </div>
+      ) : null}
+    </DetailDrawer>
   );
 }
 

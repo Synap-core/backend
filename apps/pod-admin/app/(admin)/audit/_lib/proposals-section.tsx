@@ -10,18 +10,11 @@
  * TODO(phase-C+): add a server-side "pod-only" filter to `proposals.list`.
  */
 
-import {
-  Button,
-  Chip,
-  Drawer,
-  DrawerBody,
-  DrawerContent,
-  DrawerHeader,
-  useDisclosure,
-} from "@heroui/react";
+import { Button, Chip, useDisclosure } from "@heroui/react";
 import { Mailbox } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
+import { DetailDrawer } from "../../components/detail-drawer";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -29,6 +22,7 @@ import {
   ResourceRowSkeleton,
 } from "../../components/resource-row";
 import type { StatusKind } from "../../components/status-pill";
+import { useFocusRow } from "../../components/use-focus-row";
 import type { AuditFilters } from "./filter-bar";
 import { formatRelative, shortId } from "./format";
 
@@ -93,6 +87,16 @@ export function ProposalsSection({ filters }: { filters: AuditFilters }) {
     onClose: () => setSelected(null),
   });
 
+  // ?focus=<proposalId> from ⌘K. Open the drawer once the matching proposal
+  // is rendered (proposals only includes pod-level rows).
+  const focusId = useFocusRow({ ready: !list.isLoading });
+  useEffect(() => {
+    if (!focusId || selected) return;
+    const found = podLevel.find((p) => p.id === focusId);
+    if (found) setSelected(found);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusId, podLevel]);
+
   return (
     <>
       <div className="mb-4 flex items-center gap-2">
@@ -132,25 +136,30 @@ export function ProposalsSection({ filters }: { filters: AuditFilters }) {
           <ResourceRowEmpty message="No pod-level proposals match these filters." />
         ) : (
           podLevel.map((p) => (
-            <ResourceRow
+            <div
               key={p.id}
-              Icon={Mailbox}
-              primary={`${prettyTargetType(p.targetType)} · ${p.proposalType}`}
-              secondary={[
-                p.agentUserId ? `agent ${shortId(p.agentUserId)}` : null,
-                formatRelative(p.createdAt),
-                p.workspaceId == null ? "pod-level" : null,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-              status={
-                STATUS_LABEL[p.status] ?? {
-                  kind: "unknown" as StatusKind,
-                  label: p.status,
+              data-row-id={p.id}
+              className="rounded-md transition-shadow"
+            >
+              <ResourceRow
+                Icon={Mailbox}
+                primary={`${prettyTargetType(p.targetType)} · ${p.proposalType}`}
+                secondary={[
+                  p.agentUserId ? `agent ${shortId(p.agentUserId)}` : null,
+                  formatRelative(p.createdAt),
+                  p.workspaceId == null ? "pod-level" : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+                status={
+                  STATUS_LABEL[p.status] ?? {
+                    kind: "unknown" as StatusKind,
+                    label: p.status,
+                  }
                 }
-              }
-              onSelect={() => setSelected(p)}
-            />
+                onSelect={() => setSelected(p)}
+              />
+            </div>
           ))
         )}
       </div>
@@ -178,94 +187,83 @@ function ProposalDrawer({
   onOpenChange: (open: boolean) => void;
 }) {
   return (
-    <Drawer
+    <DetailDrawer
       isOpen={isOpen}
-      onOpenChange={onOpenChange}
-      placement="right"
-      size="md"
-      classNames={{ base: "bg-content1" }}
+      onClose={() => onOpenChange(false)}
+      title="Proposal detail"
+      subtitle={
+        proposal ? (
+          <code className="font-mono">
+            {proposal.proposalType} · {proposal.targetType}
+          </code>
+        ) : undefined
+      }
+      headerAccessory={
+        <span
+          className="glass-icon flex h-7 w-7 items-center justify-center"
+          style={{ background: "rgba(52, 211, 153, 0.15)" }}
+        >
+          <Mailbox className="h-3.5 w-3.5 text-foreground/85" />
+        </span>
+      }
     >
-      <DrawerContent>
-        {() =>
-          proposal && (
-            <>
-              <DrawerHeader className="flex flex-col gap-1.5 border-b border-foreground/[0.05]">
-                <div className="flex items-center gap-2">
-                  <span
-                    className="glass-icon flex h-7 w-7 items-center justify-center"
-                    style={{ background: "rgba(52, 211, 153, 0.15)" }}
-                  >
-                    <Mailbox className="h-3.5 w-3.5 text-foreground/85" />
-                  </span>
-                  <div className="flex flex-col">
-                    <span className="text-[14px] font-medium text-foreground">
-                      Proposal detail
-                    </span>
-                    <code className="text-[11px] text-foreground/55">
-                      {proposal.proposalType} · {proposal.targetType}
-                    </code>
-                  </div>
-                </div>
-              </DrawerHeader>
-              <DrawerBody className="px-5 py-4">
-                <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-[11.5px]">
-                  <Field
-                    k="Status"
-                    v={STATUS_LABEL[proposal.status]?.label ?? proposal.status}
-                  />
-                  <Field k="Target type" v={proposal.targetType} />
-                  <Field k="Target ID" v={proposal.targetId} mono />
-                  <Field
-                    k="Created"
-                    v={new Date(proposal.createdAt).toLocaleString()}
-                  />
-                  <Field
-                    k="Reviewed"
-                    v={
-                      proposal.reviewedAt
-                        ? new Date(proposal.reviewedAt).toLocaleString()
-                        : "—"
-                    }
-                  />
-                  <Field k="Reviewer" v={proposal.reviewedBy ?? "—"} mono />
-                  <Field k="Agent" v={proposal.agentUserId ?? "—"} mono />
-                  <Field k="Author" v={proposal.createdBy ?? "—"} mono />
-                </dl>
+      {proposal ? (
+        <>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-[11.5px]">
+            <Field
+              k="Status"
+              v={STATUS_LABEL[proposal.status]?.label ?? proposal.status}
+            />
+            <Field k="Target type" v={proposal.targetType} />
+            <Field k="Target ID" v={proposal.targetId} mono />
+            <Field
+              k="Created"
+              v={new Date(proposal.createdAt).toLocaleString()}
+            />
+            <Field
+              k="Reviewed"
+              v={
+                proposal.reviewedAt
+                  ? new Date(proposal.reviewedAt).toLocaleString()
+                  : "—"
+              }
+            />
+            <Field k="Reviewer" v={proposal.reviewedBy ?? "—"} mono />
+            <Field k="Agent" v={proposal.agentUserId ?? "—"} mono />
+            <Field k="Author" v={proposal.createdBy ?? "—"} mono />
+          </dl>
 
-                {proposal.rejectionReason && (
-                  <div className="mt-4 rounded-md bg-status-down/10 p-3 text-[12px] text-status-down ring-1 ring-inset ring-status-down/30">
-                    <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide">
-                      Rejection reason
-                    </p>
-                    {proposal.rejectionReason}
-                  </div>
-                )}
+          {proposal.rejectionReason && (
+            <div className="mt-4 rounded-md bg-status-down/10 p-3 text-[12px] text-status-down ring-1 ring-inset ring-status-down/30">
+              <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide">
+                Rejection reason
+              </p>
+              {proposal.rejectionReason}
+            </div>
+          )}
 
-                <div className="mt-4">
-                  <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-foreground/45">
-                    Payload
-                  </p>
-                  <pre className="overflow-auto rounded-md bg-foreground/[0.04] p-3 font-mono text-[11px] text-foreground/85 ring-1 ring-inset ring-foreground/10">
-                    {JSON.stringify(proposal.data, null, 2)}
-                  </pre>
-                </div>
+          <div className="mt-4">
+            <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-foreground/45">
+              Payload
+            </p>
+            <pre className="overflow-auto rounded-md bg-foreground/[0.04] p-3 font-mono text-[11px] text-foreground/85 ring-1 ring-inset ring-foreground/10">
+              {JSON.stringify(proposal.data, null, 2)}
+            </pre>
+          </div>
 
-                {proposal.request != null && (
-                  <div className="mt-4">
-                    <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-foreground/45">
-                      Request
-                    </p>
-                    <pre className="overflow-auto rounded-md bg-foreground/[0.04] p-3 font-mono text-[11px] text-foreground/85 ring-1 ring-inset ring-foreground/10">
-                      {JSON.stringify(proposal.request, null, 2)}
-                    </pre>
-                  </div>
-                )}
-              </DrawerBody>
-            </>
-          )
-        }
-      </DrawerContent>
-    </Drawer>
+          {proposal.request != null && (
+            <div className="mt-4">
+              <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wide text-foreground/45">
+                Request
+              </p>
+              <pre className="overflow-auto rounded-md bg-foreground/[0.04] p-3 font-mono text-[11px] text-foreground/85 ring-1 ring-inset ring-foreground/10">
+                {JSON.stringify(proposal.request, null, 2)}
+              </pre>
+            </div>
+          )}
+        </>
+      ) : null}
+    </DetailDrawer>
   );
 }
 

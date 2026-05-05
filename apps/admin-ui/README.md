@@ -1,4 +1,22 @@
-# Synap Control Tower - Admin UI
+# Synap Control Tower - Admin UI (DEPRECATED)
+
+> **DEPRECATED.** This app has been replaced by `synap-backend/apps/pod-admin`
+> (Next.js + HeroUI, Kratos `pod_admin`-gated). It is kept alive for ONE
+> release as a redirect shell, plus three preserved routes:
+>
+> - `/admin/kratos` — Ory Kratos self-service browser flows
+> - `/admin/bootstrap` — first-admin claim screen on fresh installs
+> - `/admin/connect` — OAuth-style deeplink callback
+>   (`@synap-core/external-connect-client`)
+>
+> Every other path under `/admin/*` redirects to Pod Admin
+> (`VITE_POD_ADMIN_URL`, default `http://localhost:4040`).
+>
+> Once Pod Admin owns the Kratos / bootstrap / connect surfaces too, delete
+> this app. The dashboard / users / workspaces / audit / etc. UIs that used
+> to live here have all moved — see `synap-backend/apps/pod-admin/app/(admin)`.
+
+---
 
 > **Version 2.0** - Internal Admin Tool for Synap System Management
 

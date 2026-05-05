@@ -4,7 +4,14 @@
  * Two checks for every page request below `(admin)/`:
  *
  *   1. Kratos session — `${POD_URL}/.ory/kratos/public/sessions/whoami`.
- *      No session → redirect to `${POD_URL}/auth/login?return=<current>`.
+ *      No session → redirect to `${POD_URL}/admin/kratos?return=<current>`.
+ *      (`/admin/kratos` is the admin-ui SPA route that renders Kratos
+ *      browser flows inline. The pod does NOT expose a standalone
+ *      `/auth/login` page — Caddy proxies `/admin/*` to the backend,
+ *      which serves the admin-ui static SPA. The deprecated admin-ui
+ *      keeps `/admin/kratos` and `/admin/bootstrap` alive for exactly
+ *      this reason; once Kratos rendering is ported into Pod Admin or
+ *      another surface, update this redirect.)
  *
  *   2. pod_admin role — uses `trpc.sync.getStatus` as a "may I admin?"
  *      probe (it's wrapped in `podAdminProcedure`, returning 403 for
@@ -40,8 +47,10 @@ export async function middleware(req: NextRequest) {
   // ── 1. Kratos session ─────────────────────────────────────────────
   const identity = await whoamiFromCookie(cookie);
   if (!identity) {
+    // Land on the legacy admin-ui Kratos surface. Pass `return` so the
+    // self-service page can bounce back here once the user authenticates.
     const loginUrl = new URL(
-      `/auth/login?return=${encodeURIComponent(currentUrl)}`,
+      `/admin/kratos?return=${encodeURIComponent(currentUrl)}`,
       POD_URL
     );
     return NextResponse.redirect(loginUrl);

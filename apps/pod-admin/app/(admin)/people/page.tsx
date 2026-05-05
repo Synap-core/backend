@@ -25,11 +25,6 @@
 import {
   Avatar,
   Button,
-  Drawer,
-  DrawerBody,
-  DrawerContent,
-  DrawerFooter,
-  DrawerHeader,
   Input,
   Modal,
   ModalBody,
@@ -55,8 +50,9 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { trpc } from "../../../lib/trpc";
+import { DetailDrawer } from "../components/detail-drawer";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -65,12 +61,37 @@ import {
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
 import { StatusPill, type StatusKind } from "../components/status-pill";
+import { useFocusRow } from "../components/use-focus-row";
 import { formatRelative, studioDeepLinkForWorkspace } from "./_lib/helpers";
 
 // ─── Page shell ─────────────────────────────────────────────────────
 
 export default function PeoplePage() {
+  return (
+    <Suspense fallback={<PeopleFallback />}>
+      <PeopleInner />
+    </Suspense>
+  );
+}
+
+function PeopleFallback() {
+  return (
+    <div className="px-6 py-6 max-w-[1400px]">
+      <header className="mb-6 flex flex-col gap-1">
+        <h1 className="font-heading text-[22px] font-medium tracking-tight text-foreground">
+          People
+        </h1>
+      </header>
+      <div className="h-9 w-full max-w-md rounded-md bg-foreground/[0.05] shimmer-pulse" />
+    </div>
+  );
+}
+
+function PeopleInner() {
   const inviteDisclosure = useDisclosure();
+  // Read once at the page level so all sections can react to the same
+  // focus param (member rows + agent rows live in different sub-cards).
+  useFocusRow({ ready: true });
 
   return (
     <div className="px-6 py-6 max-w-[1400px]">
@@ -189,16 +210,21 @@ function PodAdminsSection() {
       ) : (
         <div className="-mx-2">
           {admins.map((admin) => (
-            <ResourceRow
+            <div
               key={admin.id}
-              Icon={ShieldCheck}
-              primary={admin.name ?? admin.email}
-              secondary={`${admin.email} · ${admin.role}`}
-              status={{ kind: "healthy", label: admin.role }}
-              actions={
-                <PodAdminActions userId={admin.id} email={admin.email} />
-              }
-            />
+              data-row-id={admin.id}
+              className="rounded-md transition-shadow"
+            >
+              <ResourceRow
+                Icon={ShieldCheck}
+                primary={admin.name ?? admin.email}
+                secondary={`${admin.email} · ${admin.role}`}
+                status={{ kind: "healthy", label: admin.role }}
+                actions={
+                  <PodAdminActions userId={admin.id} email={admin.email} />
+                }
+              />
+            </div>
           ))}
         </div>
       )}
@@ -364,22 +390,27 @@ function WorkspaceMembersSection() {
                 </div>
                 <div className="-mx-2">
                   {bucket.map((m) => (
-                    <ResourceRow
+                    <div
                       key={m.id}
-                      Icon={CircleUser}
-                      primary={m.name ?? m.email}
-                      secondary={`${m.email} · in ${m.workspaceCount} ${
-                        m.workspaceCount === 1 ? "workspace" : "workspaces"
-                      }`}
-                      status={{
-                        kind: rolePillKind(m.primaryRole),
-                        label: m.primaryRole,
-                      }}
-                      onSelect={() => {
-                        setSelectedId(m.id);
-                        drawer.onOpen();
-                      }}
-                    />
+                      data-row-id={m.id}
+                      className="rounded-md transition-shadow"
+                    >
+                      <ResourceRow
+                        Icon={CircleUser}
+                        primary={m.name ?? m.email}
+                        secondary={`${m.email} · in ${m.workspaceCount} ${
+                          m.workspaceCount === 1 ? "workspace" : "workspaces"
+                        }`}
+                        status={{
+                          kind: rolePillKind(m.primaryRole),
+                          label: m.primaryRole,
+                        }}
+                        onSelect={() => {
+                          setSelectedId(m.id);
+                          drawer.onOpen();
+                        }}
+                      />
+                    </div>
                   ))}
                 </div>
               </div>
@@ -407,103 +438,88 @@ function MemberDrawer({
   onClose: () => void;
 }) {
   return (
-    <Drawer
+    <DetailDrawer
       isOpen={isOpen}
       onClose={onClose}
-      placement="right"
-      size="md"
-      backdrop="blur"
+      title={member?.name ?? member?.email ?? "—"}
+      subtitle={
+        member ? <span className="font-mono">{member.email}</span> : undefined
+      }
+      headerAccessory={
+        <Avatar
+          src={member?.avatarUrl ?? undefined}
+          name={member?.name ?? member?.email ?? "?"}
+          size="md"
+          radius="md"
+          classNames={{ base: "shrink-0" }}
+        />
+      }
+      footer={
+        <>
+          <Button variant="flat" radius="md" size="sm" onPress={onClose}>
+            Close
+          </Button>
+          {member && member.workspaces[0] ? (
+            <Button
+              as="a"
+              href={studioDeepLinkForWorkspace(member.workspaces[0].id)}
+              target="_blank"
+              rel="noopener noreferrer"
+              color="primary"
+              variant="solid"
+              radius="md"
+              size="sm"
+            >
+              Open in Studio
+            </Button>
+          ) : null}
+        </>
+      }
     >
-      <DrawerContent>
-        {(close) => (
-          <>
-            <DrawerHeader className="flex flex-col gap-1 border-b border-foreground/[0.06] px-6 py-4">
-              <div className="flex items-center gap-3">
-                <Avatar
-                  src={member?.avatarUrl ?? undefined}
-                  name={member?.name ?? member?.email ?? "?"}
-                  size="md"
-                  radius="md"
-                  classNames={{ base: "shrink-0" }}
-                />
-                <div className="flex min-w-0 flex-col">
-                  <span className="truncate text-[15px] font-medium text-foreground">
-                    {member?.name ?? member?.email ?? "—"}
-                  </span>
-                  <span className="truncate text-[11.5px] font-mono text-foreground/55">
-                    {member?.email ?? ""}
-                  </span>
-                </div>
-              </div>
-            </DrawerHeader>
-            <DrawerBody className="px-6 py-4">
-              {member ? (
-                <div className="flex flex-col gap-4">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] uppercase tracking-wider text-foreground/45">
-                      Primary role
-                    </span>
-                    <StatusPill
-                      kind={rolePillKind(member.primaryRole)}
-                      label={member.primaryRole}
-                    />
-                  </div>
-                  <div>
-                    <h4 className="mb-2 text-[12px] font-medium text-foreground">
-                      Workspaces
-                    </h4>
-                    <div className="flex flex-col gap-1.5">
-                      {member.workspaces.map((ws) => (
-                        <div
-                          key={ws.id}
-                          className="flex items-center justify-between gap-3 rounded-md border border-foreground/[0.06] bg-foreground/[0.02] px-3 py-2"
-                        >
-                          <div className="flex min-w-0 flex-col">
-                            <span className="truncate text-[12.5px] font-medium text-foreground">
-                              {ws.name || ws.id.slice(0, 8)}
-                            </span>
-                            <span className="truncate font-mono text-[10.5px] text-foreground/40">
-                              {ws.id}
-                            </span>
-                          </div>
-                          <div className="flex shrink-0 items-center gap-2">
-                            <span className="text-[11px] text-foreground/55">
-                              {ws.role}
-                            </span>
-                            <span className="tabular text-[11px] text-foreground/40">
-                              {formatRelative(new Date(ws.joinedAt))}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-            </DrawerBody>
-            <DrawerFooter className="border-t border-foreground/[0.06] px-6 py-3">
-              <Button variant="flat" radius="md" size="sm" onPress={close}>
-                Close
-              </Button>
-              {member && member.workspaces[0] ? (
-                <Button
-                  as="a"
-                  href={studioDeepLinkForWorkspace(member.workspaces[0].id)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  color="primary"
-                  variant="solid"
-                  radius="md"
-                  size="sm"
+      {member ? (
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] uppercase tracking-wider text-foreground/45">
+              Primary role
+            </span>
+            <StatusPill
+              kind={rolePillKind(member.primaryRole)}
+              label={member.primaryRole}
+            />
+          </div>
+          <div>
+            <h4 className="mb-2 text-[12px] font-medium text-foreground">
+              Workspaces
+            </h4>
+            <div className="flex flex-col gap-1.5">
+              {member.workspaces.map((ws) => (
+                <div
+                  key={ws.id}
+                  className="flex items-center justify-between gap-3 rounded-md border border-foreground/[0.06] bg-foreground/[0.02] px-3 py-2"
                 >
-                  Open in Studio
-                </Button>
-              ) : null}
-            </DrawerFooter>
-          </>
-        )}
-      </DrawerContent>
-    </Drawer>
+                  <div className="flex min-w-0 flex-col">
+                    <span className="truncate text-[12.5px] font-medium text-foreground">
+                      {ws.name || ws.id.slice(0, 8)}
+                    </span>
+                    <span className="truncate font-mono text-[10.5px] text-foreground/40">
+                      {ws.id}
+                    </span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="text-[11px] text-foreground/55">
+                      {ws.role}
+                    </span>
+                    <span className="tabular text-[11px] text-foreground/40">
+                      {formatRelative(new Date(ws.joinedAt))}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </DetailDrawer>
   );
 }
 
@@ -583,20 +599,25 @@ function AgentUsersSection() {
             // "active" badge.
             const isActive = agent.workspaceMembershipCount > 0;
             return (
-              <ResourceRow
+              <div
                 key={agent.id}
-                Icon={Bot}
-                primary={agent.name ?? agent.email}
-                secondary={`${meta.agentType ?? "agent"} · ${
-                  agent.workspaceMembershipCount
-                } workspace${agent.workspaceMembershipCount === 1 ? "" : "s"} · created ${created}`}
-                status={
-                  isActive
-                    ? { kind: "healthy", label: "active" }
-                    : { kind: "unknown", label: "idle" }
-                }
-                actions={<AgentUserActions userId={agent.id} />}
-              />
+                data-row-id={agent.id}
+                className="rounded-md transition-shadow"
+              >
+                <ResourceRow
+                  Icon={Bot}
+                  primary={agent.name ?? agent.email}
+                  secondary={`${meta.agentType ?? "agent"} · ${
+                    agent.workspaceMembershipCount
+                  } workspace${agent.workspaceMembershipCount === 1 ? "" : "s"} · created ${created}`}
+                  status={
+                    isActive
+                      ? { kind: "healthy", label: "active" }
+                      : { kind: "unknown", label: "idle" }
+                  }
+                  actions={<AgentUserActions userId={agent.id} />}
+                />
+              </div>
             );
           })}
         </div>
