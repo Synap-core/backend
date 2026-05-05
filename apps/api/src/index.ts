@@ -1089,10 +1089,9 @@ app.get("/setup", (c) => {
       border-radius: 8px;
       color: #4ade80;
       font-size: 13px;
-      padding: 10px 14px;
-      margin-top: 16px;
+      padding: 24px 20px;
+      margin-top: 8px;
     }
-    .success-msg a { color: #4ade80; }
     .err-page { text-align: center; }
     .err-page h2 { font-size: 18px; color: #f87171; margin-bottom: 12px; }
     .err-page p { font-size: 13px; color: #666; line-height: 1.6; }
@@ -1145,9 +1144,19 @@ ${
           btn.disabled = false;
           btn.textContent = 'Create account';
         } else {
-          ok.innerHTML = 'Account created! <a href="${publicUrl}/">Log in now &rarr;</a>';
-          ok.style.display = 'block';
           document.getElementById('form').style.display = 'none';
+          document.querySelector('.subtitle').style.display = 'none';
+          ok.innerHTML = \`
+            <div style="text-align:center;padding:8px 0 4px">
+              <div style="font-size:36px;margin-bottom:12px">✓</div>
+              <div style="font-size:15px;font-weight:600;color:#4ade80;margin-bottom:8px">Admin account created</div>
+              <div style="font-size:13px;color:#888;line-height:1.6">
+                You can close this tab.<br/>
+                Your terminal will continue automatically.
+              </div>
+            </div>
+          \`;
+          ok.style.display = 'block';
         }
       } catch (ex) {
         err.textContent = 'Network error — please try again.';
