@@ -276,6 +276,11 @@ app.use("/*", async (c, next) => {
     // so /auth/status (and any future introspection routes) can look up
     // metadata about the calling key without re-running bcrypt.
     c.set("apiKeyId", keyRecord.id);
+    // Propagate identity link so memory routes can dual-write facts to the
+    // linked human user without an extra DB lookup per request.
+    if (keyRecord.linkedUserId) {
+      c.set("linkedUserId", keyRecord.linkedUserId);
+    }
     return next();
   }
 

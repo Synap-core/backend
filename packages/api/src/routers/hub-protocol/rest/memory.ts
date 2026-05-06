@@ -89,6 +89,31 @@ export function registerMemoryRoutes(app: HubHono): void {
         sourceEntityId: body.sourceEntityId,
         sourceMessageId: body.sourceMessageId,
       });
+
+      // Identity linking: when the bearer API key has a linked_user_id, write
+      // the same fact for the linked human so it appears in their timeline too.
+      // Guard: skip under sub-tokens — userId is already remapped to the human
+      // user, so writing to linkedUserId (the pod owner) would be wrong.
+      const isSubToken = !!(c.get("parentKeyId") as string | undefined);
+      const linkedUserId = c.get("linkedUserId") as string | undefined;
+      if (!isSubToken && linkedUserId && linkedUserId !== userId) {
+        void knowledgeRepository
+          .saveFact({
+            userId: linkedUserId,
+            fact: body.fact,
+            confidence: body.confidence ?? 0.8,
+            embedding,
+            sourceEntityId: body.sourceEntityId,
+            sourceMessageId: body.sourceMessageId,
+          })
+          .catch((err: unknown) => {
+            logger.warn(
+              { err, linkedUserId },
+              "identity-link dual-write failed (non-fatal)"
+            );
+          });
+      }
+
       return c.json(record, 200);
     } catch (err) {
       logger.error({ err }, "saveFact failed");

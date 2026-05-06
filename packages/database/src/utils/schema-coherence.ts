@@ -211,6 +211,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "workspace_id",
     addedBy: "0020_api_keys_workspace_scope.sql",
   },
+  {
+    table: "api_keys",
+    column: "linked_user_id",
+    addedBy: "0021_api_keys_linked_user_id.sql",
+  },
 
   // api_key_external_users — sub-token mappings (0018)
   {

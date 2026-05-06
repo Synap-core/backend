@@ -81,6 +81,14 @@ export const apiKeys = pgTable(
     // also a member of. See migration 0020_api_keys_workspace_scope.sql.
     workspaceId: uuid("workspace_id"),
 
+    // Identity link — human user this agent key acts on behalf of.
+    // Set by POST /setup/agent (auto-resolved to pod owner when omitted).
+    // The memory router dual-writes facts to both userId and linkedUserId
+    // so the pod owner's timeline reflects the agent's observations.
+    // NULL = no identity link (standalone service keys, sub-tokens, etc.)
+    // See migration 0021_api_keys_linked_user_id.sql.
+    linkedUserId: text("linked_user_id"),
+
     // Audit Trail
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

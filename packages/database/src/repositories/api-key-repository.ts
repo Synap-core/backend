@@ -24,6 +24,8 @@ export interface CreateApiKeyInput {
   description?: string;
   /** Workspace tag — set when minted via apiKeys.createForWorkspace. */
   workspaceId?: string | null;
+  /** Human user this agent key acts on behalf of (identity link). */
+  linkedUserId?: string | null;
 }
 
 export interface UpdateApiKeyInput {
@@ -68,6 +70,7 @@ export class ApiKeyRepository extends BaseRepository<
         keyType: data.keyType ?? "hub_inbound",
         description: data.description,
         workspaceId: data.workspaceId ?? null,
+        linkedUserId: data.linkedUserId ?? null,
       })
       .returning();
 

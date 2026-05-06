@@ -45,6 +45,8 @@ export type HubVariables = {
   apiKeyId?: string;
   parentKeyId?: string;
   externalUserId?: string;
+  /** Human user the bearer key acts on behalf of (identity link). */
+  linkedUserId?: string;
 };
 
 /**

@@ -10,6 +10,8 @@
  * Failures are warned but never throw — the API response must not be blocked.
  */
 
+import { dispatchWebhooksForEvent } from "./webhook-delivery.js";
+
 function getRealtimeUrl(): string {
   return process.env.REALTIME_URL || "http://localhost:4001";
 }
@@ -72,6 +74,9 @@ export function emitChatEvent(options: ChatBroadcastOptions): void {
     ...(channelId && { channelId }),
     ...(viewId && { viewId }),
   });
+
+  // Fan out to webhook subscribers (fire-and-forget, never blocks)
+  dispatchWebhooksForEvent(event, data);
 
   // Run retries in background — never blocks caller
   (async () => {

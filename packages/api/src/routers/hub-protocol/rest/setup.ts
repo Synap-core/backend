@@ -215,10 +215,29 @@ export function registerSetupRoutes(app: HubHono): void {
       typeof body.agentType === "string" ? body.agentType : "openclaw";
     const requestedWorkspaceId: string | undefined =
       typeof body.workspaceId === "string" ? body.workspaceId : undefined;
+    const linkedUserId: string | undefined =
+      typeof body.linkedUserId === "string" && body.linkedUserId.trim()
+        ? body.linkedUserId.trim()
+        : undefined;
 
     const agentLabel = agentType.charAt(0).toUpperCase() + agentType.slice(1);
 
     try {
+      // ── Auto-resolve linkedUserId: find the pod owner when not explicit ───────
+      // When linkedUserId is not passed in the body, default to the first human
+      // user on the pod. This means all agent keys are automatically attributed
+      // to the pod owner — memory dual-writes then appear in the owner's timeline
+      // without the lifecycle needing to fetch the userId separately.
+      // Explicit body.linkedUserId overrides this (passed as "" to opt out).
+      let resolvedLinkedUserId: string | undefined = linkedUserId;
+      if (resolvedLinkedUserId === undefined) {
+        const humanUser = await db.query.users.findFirst({
+          where: (u, { eq: eqFn }) => eqFn(u.userType, "human"),
+          columns: { id: true },
+        });
+        if (humanUser) resolvedLinkedUserId = humanUser.id;
+      }
+
       // ── Find target workspace (optional — agent exists at pod level) ─────────
       // Workspace is NOT required for provisioning. The agent user and API key
       // are pod-wide resources. Workspace membership is granted opportunistically
@@ -382,6 +401,7 @@ export function registerSetupRoutes(app: HubHono): void {
           userId: agentUserId,
           keyType: "hub_inbound",
           description: `Hub Protocol auth token for ${agentLabel} agent — created via ${authMethod === "jwt" ? "CP-managed" : "self-hosted"} setup`,
+          linkedUserId: resolvedLinkedUserId ?? null,
         },
         agentUserId,
         agentUserId
