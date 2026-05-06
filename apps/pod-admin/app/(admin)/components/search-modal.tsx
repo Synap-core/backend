@@ -123,24 +123,10 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     staleTime: 30_000,
   });
 
-  // listPodMembers ships in the live router but may lag the api-types
-  // snapshot; same trick the People page uses.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const trpcAny = trpc as any;
-  const peopleQuery = (
-    trpcAny.workspaces.listPodMembers.useQuery as (
-      input?: undefined,
-      opts?: { enabled?: boolean; staleTime?: number }
-    ) => {
-      data?: Array<{
-        id: string;
-        email: string;
-        name: string | null;
-        primaryRole: string;
-        workspaceCount: number;
-      }>;
-    }
-  )(undefined, { enabled: isOpen, staleTime: 30_000 });
+  const peopleQuery = trpc.workspaces.listPodMembers.useQuery(undefined, {
+    enabled: isOpen,
+    staleTime: 30_000,
+  });
 
   const agentsQuery = trpc.system.listUsers.useQuery(
     { type: "agent", limit: 200 },

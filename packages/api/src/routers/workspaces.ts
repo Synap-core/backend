@@ -260,24 +260,44 @@ export const workspacesRouter = router({
 
   /**
    * List user's workspaces
+   *
+   * Filters out soft-archived workspaces by default. Pass `includeArchived: true`
+   * to surface them (e.g. for the pod admin "archived" tab).
    */
-  list: protectedProcedure.query(async ({ ctx }) => {
-    const memberships = await db.query.workspaceMembers.findMany({
-      where: eq(workspaceMembers.userId, ctx.userId),
-      with: {
-        workspace: true,
-      },
-    });
+  list: protectedProcedure
+    .input(
+      z
+        .object({
+          includeArchived: z.boolean().default(false),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const memberships = await db.query.workspaceMembers.findMany({
+        where: eq(workspaceMembers.userId, ctx.userId),
+        with: {
+          workspace: true,
+        },
+      });
 
-    return memberships.map((m) => {
-      const workspace = m.workspace!;
-      return {
-        ...workspace,
-        role: m.role,
-        joinedAt: m.joinedAt,
-      };
-    });
-  }),
+      const includeArchived = input?.includeArchived === true;
+
+      return memberships
+        .filter((m) => {
+          const workspace = m.workspace;
+          if (!workspace) return false;
+          if (includeArchived) return true;
+          return workspace.archivedAt == null;
+        })
+        .map((m) => {
+          const workspace = m.workspace!;
+          return {
+            ...workspace,
+            role: m.role,
+            joinedAt: m.joinedAt,
+          };
+        });
+    }),
 
   /**
    * Get workspace details
@@ -664,6 +684,96 @@ export const workspacesRouter = router({
         status: "deleted" as const,
         message: "Workspace deleted successfully.",
       };
+    }),
+
+  /**
+   * Soft-archive a workspace.
+   *
+   * Sets `workspaces.archived_at = now()`. The row stays in the DB and is
+   * filtered out of `list` queries unless `includeArchived: true` is passed.
+   * Restore by calling `archive` again with `restore: true`.
+   *
+   * Authorization: pod admin OR the workspace owner. (Workspace admins do
+   * NOT qualify — owners-only matches the pod-admin destructive-action gate.)
+   */
+  archive: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid(),
+        restore: z.boolean().default(false),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, input.workspaceId),
+      });
+      if (!workspace) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Workspace not found",
+        });
+      }
+
+      // System workspaces (pod-admin, etc.) must never be archived.
+      const settingsRecord = (workspace.settings ?? {}) as Record<
+        string,
+        unknown
+      >;
+      if (settingsRecord.systemSlug) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "System workspaces cannot be archived.",
+        });
+      }
+
+      // Authorization: workspace owner OR pod admin.
+      const isOwner = workspace.ownerId === ctx.userId;
+      let isPodAdmin = false;
+      if (!isOwner) {
+        const podAdminWs = await db.query.workspaces.findFirst({
+          where: drizzleSql`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
+          columns: { id: true },
+        });
+        if (podAdminWs) {
+          const membership = await db.query.workspaceMembers.findFirst({
+            where: and(
+              eq(workspaceMembers.workspaceId, podAdminWs.id),
+              eq(workspaceMembers.userId, ctx.userId),
+              inArray(workspaceMembers.role, ["admin", "owner"])
+            ),
+          });
+          isPodAdmin = !!membership;
+        }
+      }
+      if (!isOwner && !isPodAdmin) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only the workspace owner or a pod admin can archive a workspace.",
+        });
+      }
+
+      const archivedAt = input.restore ? null : new Date();
+      const [updated] = await db
+        .update(workspaces)
+        .set({ archivedAt, updatedAt: new Date() })
+        .where(eq(workspaces.id, input.workspaceId))
+        .returning();
+
+      auditLog({
+        subjectType: "workspaces",
+        action: input.restore ? "unarchive" : "archive",
+        phase: "completed",
+        subjectId: input.workspaceId,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        data: {
+          id: input.workspaceId,
+          archivedAt: archivedAt?.toISOString() ?? null,
+        },
+      });
+
+      return updated;
     }),
 
   /**

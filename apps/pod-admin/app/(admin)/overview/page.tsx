@@ -145,24 +145,116 @@ function SyncCard() {
 // ─── 2. Backups ───────────────────────────────────────────────────────
 
 function BackupsCard() {
-  // No dedicated backup query exists in `trpc.system.*` yet — Phase C
-  // is meant to land `trpc.system.getBackupStatus`. Until then we render
-  // a clearly-stubbed informational panel; the layout slot is reserved.
-  // TODO(phase-C): wire to `trpc.system.getBackupStatus` once the
-  // procedure is added in synap-backend/packages/api/src/routers/system.ts.
+  const { data, isLoading, isError } = trpc.system.getBackupStatus.useQuery(
+    undefined,
+    { staleTime: 60_000 }
+  );
+
+  if (isLoading) {
+    return (
+      <SectionCard title="Backups" hint="Snapshot schedule and recent runs">
+        <CardLoadingPanel />
+      </SectionCard>
+    );
+  }
+  if (isError || !data) {
+    return (
+      <SectionCard title="Backups" hint="Snapshot schedule and recent runs">
+        <CardErrorPanel message="Couldn't load backup status." />
+      </SectionCard>
+    );
+  }
+
+  // Map backup status to a status-pill kind. "ok" → healthy, "stale"
+  // → stale, "never"/"error" → down/unknown.
+  let kind: StatusKind = "unknown";
+  let pillLabel = "Unknown";
+  switch (data.status) {
+    case "ok":
+      kind = "healthy";
+      pillLabel = "Healthy";
+      break;
+    case "stale":
+      kind = "stale";
+      pillLabel = "Stale";
+      break;
+    case "error":
+      kind = "down";
+      pillLabel = "Error";
+      break;
+    case "never":
+      kind = "unknown";
+      pillLabel = "Never";
+      break;
+  }
+
+  if (data.status === "never") {
+    return (
+      <SectionCard
+        title="Backups"
+        hint="Snapshot schedule and recent runs"
+        actions={<StatusPill kind={kind} label={pillLabel} />}
+      >
+        <CardSummary
+          icon={HardDrive}
+          headline="No backups configured"
+          subline="Configure pod backups via your hosting provider."
+        />
+      </SectionCard>
+    );
+  }
+
+  const last = data.lastBackupAt
+    ? formatRelative(
+        data.lastBackupAt instanceof Date
+          ? data.lastBackupAt
+          : new Date(data.lastBackupAt)
+      )
+    : "—";
+  const size = data.sizeBytes != null ? humanizeBytes(data.sizeBytes) : null;
+  const location = data.location ? truncateMiddle(data.location, 36) : null;
+
+  const sublineParts: string[] = [`last ${last}`];
+  if (size) sublineParts.push(size);
+  if (location) sublineParts.push(location);
+
   return (
     <SectionCard
       title="Backups"
       hint="Snapshot schedule and recent runs"
-      actions={<StatusPill kind="unknown" label="Pending" />}
+      actions={<StatusPill kind={kind} label={pillLabel} />}
     >
       <CardSummary
         icon={HardDrive}
-        headline="Backup data not available"
-        subline="A pod-level backup endpoint hasn't shipped yet (Phase C)."
+        headline={
+          data.status === "ok"
+            ? "Backups healthy"
+            : data.status === "stale"
+              ? "Backups stale"
+              : "Backups failing"
+        }
+        subline={sublineParts.join(" · ")}
       />
     </SectionCard>
   );
+}
+
+function humanizeBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[i]}`;
+}
+
+function truncateMiddle(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const half = Math.floor((max - 1) / 2);
+  return `${s.slice(0, half)}…${s.slice(s.length - half)}`;
 }
 
 // ─── 3. Capacity ──────────────────────────────────────────────────────
@@ -336,15 +428,10 @@ function AlertsCard() {
 // ─── 5. Approval queue ────────────────────────────────────────────────
 
 function ApprovalQueueCard() {
-  // `proposals.list` is `protectedProcedure` (any signed-in user), but we
-  // want pod-level proposals only — those have `workspaceId === null`.
-  // The list endpoint itself doesn't expose a "pod-only" filter; we pull
-  // a generous slice of pending and filter client-side. For the tile we
-  // only need the count and a few preview rows.
-  // TODO(phase-C): add a pod-only filter to `proposals.list` (workspaceId
-  // === null) so we can stop paginating client-side.
+  // `proposals.list` accepts `workspaceId: null` for server-side
+  // pod-level filtering — no client-side `.filter()` needed.
   const { data, isLoading, isError } = trpc.proposals.list.useQuery(
-    { status: "pending", limit: 25 },
+    { workspaceId: null, status: "pending", limit: 25 },
     { staleTime: 30_000 }
   );
 
@@ -367,9 +454,7 @@ function ApprovalQueueCard() {
     );
   }
 
-  const podLevel = (data.items ?? []).filter(
-    (p) => (p as unknown as { workspaceId?: string | null }).workspaceId == null
-  );
+  const podLevel = data.items ?? [];
 
   return (
     <SectionCard

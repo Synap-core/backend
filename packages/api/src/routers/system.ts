@@ -26,15 +26,17 @@ import { dynamicRouterRegistry } from "../router-registry.js";
 import { createSynapEvent } from "@synap-core/core";
 import { eventRepository } from "@synap/database";
 import { eventStreamManager } from "../event-stream-manager.js";
-import { db, eq, sqlDrizzle } from "@synap/database";
+import { db, eq, and, sqlDrizzle } from "@synap/database";
 import {
   users,
   workspaces,
   entities,
   documents,
   workspaceMembers,
+  apiKeys,
+  podSettings,
 } from "@synap/database/schema";
-import { count } from "@synap/database";
+import { count, inArray } from "@synap/database";
 import crypto from "node:crypto";
 import { exec as execCb } from "node:child_process";
 import { promisify } from "node:util";
@@ -1517,6 +1519,165 @@ export const systemRouter = router({
         availableSubjectTypes: AUDIT_SUBJECT_TYPES,
       };
     }),
+
+  /**
+   * Hard-delete a user and cascade their pod-side artifacts.
+   *
+   * Cascades:
+   *   - workspace memberships
+   *   - agent users created by the target (users with
+   *     agentMetadata.createdByUserId === target.id; users.user_type='agent')
+   *   - api keys owned by the target
+   *
+   * Safety rails:
+   *   - Cannot delete yourself (FORBIDDEN).
+   *   - Cannot delete the last remaining pod admin (BAD_REQUEST).
+   *   - Pod-admin only.
+   */
+  deleteUser: podAdminProcedure
+    .input(z.object({ userId: z.string().min(1) }))
+    .mutation(async ({ input, ctx }) => {
+      if (ctx.userId === input.userId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You cannot delete your own account.",
+        });
+      }
+
+      // Confirm the target exists.
+      const target = await db.query.users.findFirst({
+        where: eq(users.id, input.userId),
+        columns: { id: true, userType: true },
+      });
+      if (!target) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+      }
+
+      // Last-pod-admin guard. We only run this check when the target is
+      // currently a pod admin themselves — deleting a non-admin can never
+      // affect the admin headcount.
+      const podAdminWorkspace = await db.query.workspaces.findFirst({
+        where: sqlDrizzle`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
+        columns: { id: true },
+      });
+
+      if (podAdminWorkspace) {
+        const targetIsPodAdmin = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
+            eq(workspaceMembers.userId, input.userId),
+            inArray(workspaceMembers.role, ["admin", "owner"])
+          ),
+          columns: { id: true },
+        });
+
+        if (targetIsPodAdmin) {
+          const remainingAdmins = await db
+            .select({ value: count() })
+            .from(workspaceMembers)
+            .where(
+              and(
+                eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
+                inArray(workspaceMembers.role, ["admin", "owner"])
+              )
+            );
+          const remaining = (remainingAdmins[0]?.value ?? 0) - 1;
+          if (remaining <= 0) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "Cannot delete the last pod admin. Promote another user to admin first.",
+            });
+          }
+        }
+      }
+
+      // All cascades + the user delete in one transaction so a partial failure
+      // doesn't leave orphaned rows pointing at a deleted user id.
+      await db.transaction(async (tx) => {
+        // 1. Workspace memberships owned by the target.
+        await tx
+          .delete(workspaceMembers)
+          .where(eq(workspaceMembers.userId, input.userId));
+
+        // 2. Agent users this human spawned. Identified via
+        //    users.agent_metadata->>'createdByUserId' = <target.id>. Their
+        //    own memberships and api keys are cleaned up alongside.
+        const childAgents = await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(
+            and(
+              eq(users.userType, "agent"),
+              sqlDrizzle`${users.agentMetadata}->>'createdByUserId' = ${input.userId}`
+            )
+          );
+        const childAgentIds = childAgents.map((row) => row.id);
+        if (childAgentIds.length > 0) {
+          await tx
+            .delete(workspaceMembers)
+            .where(inArray(workspaceMembers.userId, childAgentIds));
+          await tx
+            .delete(apiKeys)
+            .where(inArray(apiKeys.userId, childAgentIds));
+          await tx.delete(users).where(inArray(users.id, childAgentIds));
+        }
+
+        // 3. API keys owned directly by the target.
+        await tx.delete(apiKeys).where(eq(apiKeys.userId, input.userId));
+
+        // 4. The user row itself.
+        await tx.delete(users).where(eq(users.id, input.userId));
+      });
+
+      return {
+        success: true as const,
+        deletedUserId: input.userId,
+      };
+    }),
+
+  /**
+   * Backup status for the pod admin dashboard.
+   *
+   * Reads from `pod_settings.settings.backup` (singleton row). When no backup
+   * job has ever run / no row exists, returns a `never` stub so the UI can
+   * render the section without crashing. The actual backup runner does not
+   * exist yet; once it lands it should write a `backup` blob into pod_settings
+   * matching the shape returned here.
+   *
+   * TODO: wire to actual backup job once implemented.
+   */
+  getBackupStatus: podAdminProcedure.query(async () => {
+    const [row] = await db
+      .select({ settings: podSettings.settings })
+      .from(podSettings)
+      .orderBy(podSettings.createdAt)
+      .limit(1);
+
+    const blob = (row?.settings ?? {}) as Record<string, unknown>;
+    const backup = (blob.backup ?? null) as {
+      lastBackupAt?: string | null;
+      status?: "ok" | "stale" | "never" | "error";
+      sizeBytes?: number | null;
+      location?: string | null;
+    } | null;
+
+    if (!backup) {
+      return {
+        lastBackupAt: null as Date | null,
+        status: "never" as const,
+        sizeBytes: null as number | null,
+        location: null as string | null,
+      };
+    }
+
+    return {
+      lastBackupAt: backup.lastBackupAt ? new Date(backup.lastBackupAt) : null,
+      status: (backup.status ?? "never") as "ok" | "stale" | "never" | "error",
+      sizeBytes: backup.sizeBytes ?? null,
+      location: backup.location ?? null,
+    };
+  }),
 });
 
 async function firstExistingFile(paths: string[]): Promise<string | null> {

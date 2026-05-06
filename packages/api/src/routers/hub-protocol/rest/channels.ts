@@ -3,7 +3,14 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { db, agents, eq, and } from "@synap/database";
+import {
+  db,
+  agents,
+  channels as channelsTable,
+  eq,
+  and,
+  desc,
+} from "@synap/database";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -17,6 +24,72 @@ import { registerOpenApi } from "./_codecs/_register.js";
 import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
 
 export function registerChannelsRoutes(app: HubHono): void {
+  // ── GET /channels ────────────────────────────────────────────────────────
+  registerOpenApi(app, {
+    method: "get",
+    path: "/channels",
+    tags: ["Channels"],
+    summary: "List channels",
+    description:
+      "Returns channels the authenticated user has access to. Supports optional workspace and type filters.",
+    request: {
+      query: z.object({
+        userId: z.string().optional(),
+        workspaceId: z.string().optional(),
+        channelType: z.string().optional(),
+        limit: z.string().optional(),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Channel list",
+        schema: z.object({ channels: z.array(WireChannelSchema) }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.get("/channels", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const authUserId = c.get("userId") as string;
+    const q = c.req.query();
+    const userId = q.userId ?? authUserId;
+    if (!userId) {
+      return c.json({ error: "userId is required" }, 400);
+    }
+    const workspaceId = q.workspaceId;
+    const limit = q.limit ? Math.min(parseInt(q.limit, 10), 100) : 20;
+    try {
+      const conditions = [eq(channelsTable.userId, userId)];
+      if (workspaceId) {
+        conditions.push(eq(channelsTable.workspaceId, workspaceId));
+      }
+      if (q.channelType) {
+        conditions.push(eq(channelsTable.channelType, q.channelType as never));
+      }
+      const rows = await db
+        .select()
+        .from(channelsTable)
+        .where(and(...conditions))
+        .orderBy(desc(channelsTable.updatedAt))
+        .limit(limit);
+      return c.json({ channels: rows });
+    } catch (err) {
+      logger.error({ err, userId, workspaceId }, "channels.list failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : String(err) },
+        500
+      );
+    }
+  });
+
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
   registerOpenApi(app, {
     method: "post",

@@ -20,9 +20,29 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import { SearchModal } from "./search-modal";
 import { TopNav } from "./top-nav";
+
+/**
+ * Operator identity context — exposes the signed-in operator's email to
+ * any client component below the AdminShell. The email is injected
+ * server-side from `middleware.ts` (`x-pod-admin-email`) and threaded
+ * through the layout so action handlers (e.g. People → Remove user) can
+ * compare against the target row to disable destructive self-actions.
+ */
+const OperatorEmailContext = createContext<string | undefined>(undefined);
+
+export function useOperatorEmail(): string | undefined {
+  return useContext(OperatorEmailContext);
+}
 
 interface AdminShellProps {
   operatorEmail?: string;
@@ -71,16 +91,18 @@ export function AdminShell({
   }, []);
 
   return (
-    <div className="flex h-screen min-h-0 flex-col">
-      <TopNav
-        operatorEmail={operatorEmail}
-        podHost={podHost}
-        lastRefreshed={lastRefreshed}
-        onRefresh={handleRefresh}
-        onOpenSearch={() => setSearchOpen(true)}
-      />
-      {children}
-      <SearchModal isOpen={searchOpen} onClose={() => setSearchOpen(false)} />
-    </div>
+    <OperatorEmailContext.Provider value={operatorEmail}>
+      <div className="flex h-screen min-h-0 flex-col">
+        <TopNav
+          operatorEmail={operatorEmail}
+          podHost={podHost}
+          lastRefreshed={lastRefreshed}
+          onRefresh={handleRefresh}
+          onOpenSearch={() => setSearchOpen(true)}
+        />
+        {children}
+        <SearchModal isOpen={searchOpen} onClose={() => setSearchOpen(false)} />
+      </div>
+    </OperatorEmailContext.Provider>
   );
 }

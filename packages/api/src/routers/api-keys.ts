@@ -5,7 +5,12 @@
  * SECURITY: Keys are displayed ONCE and never stored in plaintext.
  */
 
-import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
+import {
+  router,
+  protectedProcedure,
+  podAdminProcedure,
+  workspaceProcedure,
+} from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { API_KEY_SCOPES } from "@synap/database/schema";
@@ -379,6 +384,60 @@ export const apiKeysRouter = router({
     }),
 
   /**
+   * Admin: revoke every active API key owned by the given user.
+   *
+   * Soft-revoke (sets is_active=false + revoked_at=NOW + revoked_reason).
+   * Idempotent — already-inactive keys are skipped via the `is_active = true`
+   * predicate so re-running returns `revokedCount: 0`. Pod admins cannot
+   * revoke their own keys to avoid locking themselves out.
+   */
+  adminRevokeAllForUser: podAdminProcedure
+    .input(
+      z.object({
+        userId: z.string().min(1),
+        reason: z.string().max(500).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.userId === ctx.userId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "You cannot revoke your own API keys via this admin endpoint.",
+        });
+      }
+
+      const revokedRows = await db
+        .update(apiKeys)
+        .set({
+          isActive: false,
+          revokedAt: new Date(),
+          revokedBy: ctx.userId,
+          revokedReason: input.reason ?? "Bulk revocation by pod admin",
+        })
+        .where(
+          and(eq(apiKeys.userId, input.userId), eq(apiKeys.isActive, true))
+        )
+        .returning({ id: apiKeys.id });
+
+      auditLog({
+        subjectType: "apiKey",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.userId,
+        userId: ctx.userId,
+        data: {
+          targetUserId: input.userId,
+          revokedCount: revokedRows.length,
+          reason: input.reason,
+          bulk: true,
+        },
+      });
+
+      return { revokedCount: revokedRows.length };
+    }),
+
+  /**
    * List all API keys on the pod (metadata only). Pod-admin workspace only.
    */
   listSystemKeys: podAdminProcedure.query(async () => {
@@ -641,5 +700,235 @@ export const apiKeysRouter = router({
           name: key.user.name,
         },
       }));
+    }),
+
+  /**
+   * Workspace-admin: list every API key tagged to ctx.workspaceId.
+   *
+   * Unlike `listWorkspaceKeys` (which infers workspace association from
+   * member->user->keys), this procedure reads the explicit `workspace_id`
+   * column on `api_keys`. Only keys minted via `createForWorkspace` show up
+   * here — legacy pod-wide / user-scoped keys (workspace_id = NULL) are
+   * intentionally excluded so the UI only displays keys it can manage.
+   *
+   * Auth: workspaceProcedure verifies membership; we further require
+   * admin/owner role for any key-management surface.
+   */
+  listForWorkspace: workspaceProcedure.query(async ({ ctx }) => {
+    if (!["owner", "admin"].includes(ctx.workspaceRole)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Workspace admin role required",
+      });
+    }
+
+    const keys = await db.query.apiKeys.findMany({
+      where: eq(apiKeys.workspaceId, ctx.workspaceId),
+      orderBy: (apiKeys, { desc }) => [desc(apiKeys.createdAt)],
+    });
+
+    return keys.map((key) => ({
+      id: key.id,
+      keyName: key.keyName,
+      keyPrefix: key.keyPrefix,
+      keyType: key.keyType,
+      hubId: key.hubId,
+      scope: key.scope,
+      isActive: key.isActive,
+      expiresAt: key.expiresAt,
+      lastUsedAt: key.lastUsedAt,
+      usageCount: key.usageCount,
+      createdAt: key.createdAt,
+      createdBy: key.createdBy,
+      revokedAt: key.revokedAt,
+      revokedReason: key.revokedReason,
+      workspaceId: key.workspaceId,
+    }));
+  }),
+
+  /**
+   * Workspace-admin: create a new API key tagged to ctx.workspaceId.
+   *
+   * The key is bound to the current workspace via `api_keys.workspace_id`
+   * so subsequent listForWorkspace / revokeForWorkspace calls only see and
+   * touch keys that belong to this workspace.
+   *
+   * SECURITY: The plaintext key is returned ONCE. The caller is the owner
+   * of the key (`userId = ctx.userId`).
+   */
+  createForWorkspace: workspaceProcedure
+    .input(
+      z.object({
+        name: z.string().min(1).max(100),
+        scopes: z
+          .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
+          .min(1),
+        expiresAt: z.date().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      if (!["owner", "admin"].includes(ctx.workspaceRole)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Workspace admin role required",
+        });
+      }
+
+      const id = randomUUID();
+
+      // Permission check (mirrors `create`) — workspace-scoped this time.
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        subjectType: "apiKey",
+        action: "create",
+        data: { id, keyName: input.name },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          id,
+          key: null as unknown as string,
+          keyPrefix: "",
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+        };
+      }
+
+      // Workspace-scoped keys are user PATs (not hub-inbound).
+      const keyPrefix = "synap_user_";
+      const key = generateApiKey(keyPrefix);
+
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
+
+      const apiKey = await apiKeyRepo.create(
+        {
+          keyName: input.name,
+          keyPrefix,
+          key,
+          scope: input.scopes,
+          expiresAt: input.expiresAt,
+          userId: ctx.userId,
+          keyType: "user_pat",
+          workspaceId: ctx.workspaceId,
+        },
+        ctx.userId
+      );
+
+      auditLog({
+        subjectType: "apiKey",
+        action: "create",
+        phase: "completed",
+        subjectId: apiKey.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        data: { keyName: input.name, keyPrefix, scope: "workspace" },
+      });
+
+      emitSideEffects({
+        subjectType: "apiKey",
+        action: "create",
+        subjectId: apiKey.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+      });
+
+      return {
+        id: apiKey.id,
+        key, // displayed ONCE
+        keyPrefix,
+        status: "created" as const,
+        message: "Save this key securely. It will not be displayed again.",
+      };
+    }),
+
+  /**
+   * Workspace-admin: revoke an API key that belongs to ctx.workspaceId.
+   *
+   * Anti-cross-workspace mistake: we read the key first and FAIL if its
+   * `workspace_id` does not match `ctx.workspaceId`. This prevents an admin
+   * of workspace A from revoking a key owned by workspace B even if they
+   * happen to know its UUID.
+   */
+  revokeForWorkspace: workspaceProcedure
+    .input(z.object({ keyId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      if (!["owner", "admin"].includes(ctx.workspaceRole)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Workspace admin role required",
+        });
+      }
+
+      const key = await db.query.apiKeys.findFirst({
+        where: eq(apiKeys.id, input.keyId),
+      });
+
+      if (!key) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "API key not found",
+        });
+      }
+
+      // Cross-workspace defense: a workspace admin can only revoke keys
+      // that were minted to THIS workspace. Pod-wide / user-scoped /
+      // other-workspace keys are off-limits via this surface.
+      if (key.workspaceId !== ctx.workspaceId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "API key does not belong to this workspace",
+        });
+      }
+
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        subjectType: "apiKey",
+        action: "delete",
+        data: { id: input.keyId },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
+
+      await apiKeyRepo.revoke(
+        input.keyId,
+        ctx.userId,
+        "Revoked via workspace admin"
+      );
+
+      auditLog({
+        subjectType: "apiKey",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.keyId,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        data: { scope: "workspace" },
+      });
+
+      emitSideEffects({
+        subjectType: "apiKey",
+        action: "delete",
+        subjectId: input.keyId,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+      });
+
+      return { status: "revoked" as const };
     }),
 });

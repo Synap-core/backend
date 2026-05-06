@@ -8,11 +8,14 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure } from "../trpc.js";
+import { router, workspaceProcedure, podAdminProcedure } from "../trpc.js";
 import { db, eq, drizzleSql } from "@synap/database";
-import { workspaces } from "@synap/database/schema";
+import { workspaces, podSettings } from "@synap/database/schema";
 import type { WorkspaceSettings } from "@synap/database/schema";
-import { getDefaultProactiveAiPreferences } from "@synap/database/schema";
+import {
+  getDefaultProactiveAiPreferences,
+  getDefaultPodProactiveDefaults,
+} from "@synap/database/schema";
 
 // ── Zod Schemas ──────────────────────────────────────────────────────────────
 
@@ -112,5 +115,70 @@ export const proactiveRouter = router({
         .where(eq(workspaces.id, ctx.workspaceId));
 
       return merged;
+    }),
+
+  /**
+   * Get pod-wide proactive AI defaults.
+   *
+   * Workspaces inherit from these via `workspace.settings.proactiveAi`. The
+   * pod-level row is a singleton in `pod_settings` (read first row by
+   * created_at). Returns the static default (proactive OFF) if no row exists.
+   * Pod admins only.
+   */
+  getPodDefaults: podAdminProcedure.query(async () => {
+    const [row] = await db
+      .select({ settings: podSettings.settings })
+      .from(podSettings)
+      .orderBy(podSettings.createdAt)
+      .limit(1);
+    const blob = (row?.settings ?? {}) as { proactiveDefaults?: unknown };
+    const defaults =
+      (blob.proactiveDefaults as ReturnType<
+        typeof getDefaultPodProactiveDefaults
+      > | null) ?? getDefaultPodProactiveDefaults();
+    return { defaults };
+  }),
+
+  /**
+   * Upsert the pod-wide proactive AI defaults.
+   *
+   * Workspaces still keep their own per-workspace overrides via
+   * `workspace.settings.proactiveAi`. Pod admins only.
+   */
+  setPodDefaults: podAdminProcedure
+    .input(
+      z.object({
+        enabled: z.boolean(),
+        nudgeDensity: z.enum(["low", "medium", "high"]),
+        schedules: z.object({
+          morningBriefing: z.boolean(),
+          weeklyDigest: z.boolean(),
+          healthCheck: z.boolean(),
+        }),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const [existing] = await db
+        .select({ id: podSettings.id })
+        .from(podSettings)
+        .orderBy(podSettings.createdAt)
+        .limit(1);
+
+      if (existing) {
+        await db
+          .update(podSettings)
+          .set({
+            settings: drizzleSql`coalesce(${podSettings.settings}, '{}'::jsonb) || ${JSON.stringify(
+              { proactiveDefaults: input }
+            )}::jsonb`,
+            updatedAt: new Date(),
+          })
+          .where(eq(podSettings.id, existing.id));
+      } else {
+        await db.insert(podSettings).values({
+          settings: { proactiveDefaults: input },
+        });
+      }
+      return { defaults: input };
     }),
 });

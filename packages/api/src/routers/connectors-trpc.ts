@@ -20,10 +20,11 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import { config, createLogger } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
-import { getDb, db, eq, entityExternalLinks } from "@synap/database";
+import { getDb, db, eq, desc, entityExternalLinks } from "@synap/database";
+import { entities, workspaces } from "@synap/database/schema";
 
 const logger = createLogger({ module: "connectors-trpc" });
 
@@ -482,4 +483,79 @@ export const connectorsRouter = router({
 
       return links;
     }),
+
+  /**
+   * Pod Admin: list ALL active connections across every workspace on this pod.
+   *
+   * Connections are tracked locally via `entity_external_links` (one row per
+   * external record synced through Nango). We collapse to one row per
+   * (provider, nangoConnectionId) so the Pod Admin grid shows distinct
+   * connections rather than every synced entity.
+   *
+   * The connection's effective workspace is inferred from the linked entity's
+   * `workspaceId`. JOINing against `workspaces` populates `workspaceName` so
+   * the grid can group by workspace without an extra round-trip.
+   *
+   * `accountEmail` is not stored on the pod (it lives on the CP) — returned
+   * as `null` for now; clients should hydrate it from the CP if needed.
+   */
+  allConnections: podAdminProcedure.query(async () => {
+    // Collect every (connectionId, provider) pair with the most recent
+    // sync timestamp + first-seen createdAt + originating entity.
+    const rows = await db
+      .select({
+        connectionId: entityExternalLinks.nangoConnectionId,
+        providerId: entityExternalLinks.provider,
+        status: entityExternalLinks.status,
+        lastSyncedAt: entityExternalLinks.lastSyncedAt,
+        createdAt: entityExternalLinks.createdAt,
+        workspaceId: entities.workspaceId,
+        workspaceName: workspaces.name,
+      })
+      .from(entityExternalLinks)
+      .leftJoin(entities, eq(entityExternalLinks.entityId, entities.id))
+      .leftJoin(workspaces, eq(entities.workspaceId, workspaces.id))
+      .orderBy(desc(entityExternalLinks.lastSyncedAt));
+
+    // Collapse to one row per (provider, connectionId) — keep the most
+    // recent lastSyncedAt and the earliest createdAt observed.
+    type ConnectionRow = {
+      connectionId: string;
+      providerId: string;
+      workspaceId: string | null;
+      workspaceName: string | null;
+      accountEmail: string | null;
+      status: string;
+      lastSyncedAt: Date;
+      createdAt: Date;
+    };
+
+    const grouped = new Map<string, ConnectionRow>();
+    for (const r of rows) {
+      const key = `${r.providerId}::${r.connectionId}`;
+      const existing = grouped.get(key);
+      if (!existing) {
+        grouped.set(key, {
+          connectionId: r.connectionId,
+          providerId: r.providerId,
+          workspaceId: r.workspaceId ?? null,
+          workspaceName: r.workspaceName ?? null,
+          accountEmail: null,
+          status: r.status,
+          lastSyncedAt: r.lastSyncedAt,
+          createdAt: r.createdAt,
+        });
+      } else {
+        if (r.lastSyncedAt > existing.lastSyncedAt) {
+          existing.lastSyncedAt = r.lastSyncedAt;
+          existing.status = r.status;
+        }
+        if (r.createdAt < existing.createdAt) {
+          existing.createdAt = r.createdAt;
+        }
+      }
+    }
+
+    return Array.from(grouped.values());
+  }),
 });

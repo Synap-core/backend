@@ -20,7 +20,9 @@
  */
 
 import {
+  addToast,
   Button,
+  Input,
   Modal,
   ModalBody,
   ModalContent,
@@ -28,6 +30,9 @@ import {
   ModalHeader,
   Select,
   SelectItem,
+  Spinner,
+  Switch,
+  Tooltip,
 } from "@heroui/react";
 import {
   Activity,
@@ -42,11 +47,10 @@ import {
   RefreshCw,
   Settings,
   Sparkles,
-  Wrench,
   Zap,
   type LucideIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { trpc } from "../../../lib/trpc";
 import {
   ResourceRow,
@@ -278,19 +282,23 @@ function ProviderCard({
       )}
 
       <div className="mt-auto flex items-center gap-1">
-        <Button
-          size="sm"
-          variant="light"
-          radius="md"
-          isDisabled
-          startContent={<Settings className="h-3 w-3" />}
-          className="text-foreground/55"
-          // TODO(phase-C): open a modal that calls
-          // trpc.intelligenceRegistry.getServiceConfig + .update — gated
-          // behind scoped permissions today.
-        >
-          Configure
-        </Button>
+        <Tooltip content="Pending: intelligenceRegistry.updateServiceConfig">
+          <span className="block">
+            <Button
+              size="sm"
+              variant="light"
+              radius="md"
+              isDisabled
+              startContent={<Settings className="h-3 w-3" />}
+              className="text-foreground/55"
+              // TODO(phase-C): open a modal that calls
+              // trpc.intelligenceRegistry.getServiceConfig + .update — gated
+              // behind scoped permissions today.
+            >
+              Configure
+            </Button>
+          </span>
+        </Tooltip>
         {!card.isBuiltIn && (
           <Button
             size="sm"
@@ -318,15 +326,15 @@ function ProviderCard({
 // ─── 2. Default models ────────────────────────────────────────────────
 
 /**
- * The pod-wide model defaults are not currently exposed by a dedicated
- * tRPC procedure — `getEffectiveService` is workspace-scoped and we
- * intentionally don't pin a workspace in pod-admin. We render a stubbed
- * card listing slot names; "Edit defaults" is wired to a placeholder
- * modal that flags the gap to the operator.
+ * The pod-wide model defaults are now exposed by `intelligence.getPodDefaults`
+ * / `intelligence.setPodDefaults`. Each slot accepts `null` to mean
+ * "Inherit from default IS"; a string is the model id (free-form, since
+ * the registry of valid models is provider-dependent and not enumerated
+ * by the backend yet).
  */
 
 interface ModelSlot {
-  key: string;
+  key: "chat" | "reasoning" | "embedding" | "vision";
   label: string;
   icon: LucideIcon;
   hint: string;
@@ -334,16 +342,16 @@ interface ModelSlot {
 
 const MODEL_SLOTS: ModelSlot[] = [
   {
-    key: "default",
-    label: "Default model",
+    key: "chat",
+    label: "Chat model",
     icon: Sparkles,
     hint: "Used for general chat across new workspaces",
   },
   {
-    key: "fallback",
-    label: "Fallback model",
+    key: "reasoning",
+    label: "Reasoning model",
     icon: Layers,
-    hint: "Pulled when the default is unavailable",
+    hint: "For deeper reasoning and orchestration",
   },
   {
     key: "embedding",
@@ -359,8 +367,27 @@ const MODEL_SLOTS: ModelSlot[] = [
   },
 ];
 
+type DefaultsState = {
+  chatModelId: string | null;
+  reasoningModelId: string | null;
+  embeddingModelId: string | null;
+  visionModelId: string | null;
+};
+
+const SLOT_TO_FIELD: Record<ModelSlot["key"], keyof DefaultsState> = {
+  chat: "chatModelId",
+  reasoning: "reasoningModelId",
+  embedding: "embeddingModelId",
+  vision: "visionModelId",
+};
+
 function DefaultModelsSection() {
   const [editing, setEditing] = useState(false);
+  const query = trpc.intelligence.getPodDefaults.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+
+  const defaults = query.data?.defaults;
 
   return (
     <SectionCard
@@ -374,100 +401,144 @@ function DefaultModelsSection() {
           color="primary"
           startContent={<Settings className="h-3 w-3" />}
           onPress={() => setEditing(true)}
+          isDisabled={query.isLoading || query.isError}
         >
           Edit defaults
         </Button>
       }
     >
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        {MODEL_SLOTS.map((slot) => (
-          <div
-            key={slot.key}
-            className="flex items-start gap-2.5 p-3 rounded-medium ring-1 ring-inset ring-foreground/10 bg-foreground/[0.02]"
-          >
-            <span
-              aria-hidden
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-success/10"
+        {MODEL_SLOTS.map((slot) => {
+          const field = SLOT_TO_FIELD[slot.key];
+          const value = defaults ? defaults[field] : null;
+          return (
+            <div
+              key={slot.key}
+              className="flex items-start gap-2.5 p-3 rounded-medium ring-1 ring-inset ring-foreground/10 bg-foreground/[0.02]"
             >
-              <slot.icon
-                className="h-3.5 w-3.5 text-success"
-                strokeWidth={2}
+              <span
                 aria-hidden
-              />
-            </span>
-            <div className="flex flex-col min-w-0">
-              <span className="text-[12.5px] font-medium text-foreground">
-                {slot.label}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-success/10"
+              >
+                <slot.icon
+                  className="h-3.5 w-3.5 text-success"
+                  strokeWidth={2}
+                  aria-hidden
+                />
               </span>
-              <span className="text-[11px] text-foreground/55 truncate">
-                {slot.hint}
-              </span>
-              <span className="mt-1 text-[11.5px] text-foreground/45 tabular">
-                {/* TODO(phase-C): resolve from
-                    trpc.intelligenceRegistry.getServiceConfig once a
-                    pod-wide defaults procedure exists. */}
-                Inherits from `default` IS
-              </span>
+              <div className="flex flex-col min-w-0">
+                <span className="text-[12.5px] font-medium text-foreground">
+                  {slot.label}
+                </span>
+                <span className="text-[11px] text-foreground/55 truncate">
+                  {slot.hint}
+                </span>
+                <span className="mt-1 text-[11.5px] text-foreground/45 tabular truncate">
+                  {query.isLoading
+                    ? "Loading…"
+                    : value
+                      ? value
+                      : "Inherit from default IS"}
+                </span>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
-      <DefaultModelsModal isOpen={editing} onClose={() => setEditing(false)} />
+      {editing && defaults ? (
+        <DefaultModelsModal
+          initial={defaults}
+          onClose={() => setEditing(false)}
+        />
+      ) : null}
     </SectionCard>
   );
 }
 
 function DefaultModelsModal({
-  isOpen,
+  initial,
   onClose,
 }: {
-  isOpen: boolean;
+  initial: DefaultsState;
   onClose: () => void;
 }) {
+  const utils = trpc.useUtils();
+  const [draft, setDraft] = useState<DefaultsState>(initial);
+
+  const setMutation = trpc.intelligence.setPodDefaults.useMutation({
+    onSuccess: () => {
+      void utils.intelligence.getPodDefaults.invalidate();
+      addToast({
+        title: "Defaults updated",
+        description: "Pod-wide model defaults saved.",
+        color: "default",
+      });
+      onClose();
+    },
+    onError: (err) => {
+      addToast({
+        title: "Save failed",
+        description: err.message,
+        color: "danger",
+      });
+    },
+  });
+
+  function setField(field: keyof DefaultsState, value: string) {
+    setDraft((d) => ({
+      ...d,
+      [field]: value.trim() === "" ? null : value,
+    }));
+  }
+
   return (
-    <Modal isOpen={isOpen} onOpenChange={(o) => !o && onClose()} size="md">
+    <Modal isOpen onOpenChange={(o) => !o && onClose()} size="md">
       <ModalContent className="bg-background">
         <ModalHeader className="flex flex-col gap-0.5 px-5 pt-5 pb-2">
           <span className="text-[14px] font-medium text-foreground">
             Edit pod-wide defaults
           </span>
           <span className="text-[11.5px] text-foreground/55">
-            These apply to new workspaces unless overridden in Studio.
+            Leave a slot empty to inherit from the default IS.
           </span>
         </ModalHeader>
         <ModalBody className="flex flex-col gap-3 px-5 py-3">
-          {MODEL_SLOTS.map((slot) => (
-            <Select
-              key={slot.key}
-              label={slot.label}
-              placeholder="Inherit from default IS"
-              size="sm"
-              variant="bordered"
-              radius="md"
-              isDisabled
-            >
-              {/* TODO(phase-C): list models from the registered IS once a
-                  pod-wide defaults procedure ships. */}
-              <SelectItem key="placeholder">No models loaded</SelectItem>
-            </Select>
-          ))}
-          <div className="rounded-medium ring-1 ring-inset ring-foreground/10 bg-foreground/[0.04] px-3 py-2.5">
-            <p className="text-[11.5px] text-foreground/55">
-              A pod-wide model-defaults procedure has not shipped yet. Today
-              workspaces resolve defaults via{" "}
-              <code className="text-foreground/85 tabular">
-                intelligence.getEffectiveService
-              </code>
-              .
-            </p>
-          </div>
+          {MODEL_SLOTS.map((slot) => {
+            const field = SLOT_TO_FIELD[slot.key];
+            return (
+              <Input
+                key={slot.key}
+                label={slot.label}
+                placeholder="Inherit from default IS"
+                size="sm"
+                variant="bordered"
+                radius="md"
+                value={draft[field] ?? ""}
+                onValueChange={(v) => setField(field, v)}
+                isDisabled={setMutation.isPending}
+                description={slot.hint}
+              />
+            );
+          })}
         </ModalBody>
         <ModalFooter className="flex justify-end gap-2 px-5 pb-5 pt-2">
-          <Button size="sm" variant="light" radius="md" onPress={onClose}>
+          <Button
+            size="sm"
+            variant="light"
+            radius="md"
+            onPress={onClose}
+            isDisabled={setMutation.isPending}
+          >
             Cancel
           </Button>
-          <Button size="sm" color="primary" radius="md" isDisabled>
+          <Button
+            size="sm"
+            color="primary"
+            radius="md"
+            isLoading={setMutation.isPending}
+            onPress={() => setMutation.mutate(draft)}
+          >
             Save
           </Button>
         </ModalFooter>
@@ -553,107 +624,217 @@ function isStatusToPill(
 // ─── 4. Proactive AI defaults ────────────────────────────────────────
 
 /**
- * `trpc.proactive.getPrefs/updatePrefs` is workspace-scoped (writes into
- * `workspaces.settings.proactiveAi`). There is no pod-wide proactive
- * defaults procedure today, so this whole section is stubbed with the
- * intended controls — operators will be able to set these once the
- * backend lands the corresponding procedure.
+ * Pod-wide defaults applied to new workspaces (overridable in Studio).
+ * Backed by `trpc.proactive.getPodDefaults` / `proactive.setPodDefaults`.
+ * Edits are debounced via an explicit Save button so toggles don't fire
+ * a mutation on every interaction.
  */
 
+type ProactiveDraft = {
+  enabled: boolean;
+  nudgeDensity: "low" | "medium" | "high";
+  schedules: {
+    morningBriefing: boolean;
+    weeklyDigest: boolean;
+    healthCheck: boolean;
+  };
+};
+
 function ProactiveDefaultsSection() {
+  const utils = trpc.useUtils();
+  const query = trpc.proactive.getPodDefaults.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+
+  const [draft, setDraft] = useState<ProactiveDraft | null>(null);
+
+  // Seed local draft from server data on first load — afterwards local
+  // edits stay local until Save / Reset.
+  if (draft === null && query.data) {
+    setDraft(query.data.defaults);
+  }
+
+  const setMutation = trpc.proactive.setPodDefaults.useMutation({
+    onSuccess: () => {
+      void utils.proactive.getPodDefaults.invalidate();
+      addToast({
+        title: "Defaults saved",
+        description: "Pod-wide proactive defaults updated.",
+        color: "default",
+      });
+    },
+    onError: (err) => {
+      addToast({
+        title: "Save failed",
+        description: err.message,
+        color: "danger",
+      });
+    },
+  });
+
+  const dirty = useMemo(() => {
+    if (!draft || !query.data) return false;
+    const a = draft;
+    const b = query.data.defaults;
+    return (
+      a.enabled !== b.enabled ||
+      a.nudgeDensity !== b.nudgeDensity ||
+      a.schedules.morningBriefing !== b.schedules.morningBriefing ||
+      a.schedules.weeklyDigest !== b.schedules.weeklyDigest ||
+      a.schedules.healthCheck !== b.schedules.healthCheck
+    );
+  }, [draft, query.data]);
+
+  function updateDraft(patch: Partial<ProactiveDraft>) {
+    setDraft((d) => (d ? { ...d, ...patch } : d));
+  }
+
+  function updateSchedule(key: keyof ProactiveDraft["schedules"], v: boolean) {
+    setDraft((d) =>
+      d ? { ...d, schedules: { ...d.schedules, [key]: v } } : d
+    );
+  }
+
   return (
     <SectionCard
       title="Proactive AI defaults"
       hint="Apply to new workspaces — overridable in Studio"
+      actions={
+        dirty && draft ? (
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="light"
+              radius="md"
+              isDisabled={setMutation.isPending}
+              onPress={() => query.data && setDraft(query.data.defaults)}
+            >
+              Reset
+            </Button>
+            <Button
+              size="sm"
+              color="primary"
+              radius="md"
+              isLoading={setMutation.isPending}
+              onPress={() => setMutation.mutate(draft)}
+            >
+              Save
+            </Button>
+          </div>
+        ) : null
+      }
     >
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-3 rounded-medium ring-1 ring-inset ring-foreground/10 bg-foreground/[0.02] px-3 py-2.5">
-          <div className="flex flex-col gap-0.5">
-            <span className="text-[12.5px] font-medium text-foreground">
-              Default proactive policy
-            </span>
-            <span className="text-[11px] text-foreground/55">
-              Who can trigger proactive AI in a workspace
-            </span>
-          </div>
-          <Select
-            size="sm"
-            radius="md"
-            variant="bordered"
-            placeholder="owner_and_admins"
-            className="max-w-[200px]"
-            isDisabled
-          >
-            <SelectItem key="owner_and_admins">owner_and_admins</SelectItem>
-            <SelectItem key="admins_only">admins_only</SelectItem>
-            <SelectItem key="any_editor">any_editor</SelectItem>
-            <SelectItem key="disabled">disabled</SelectItem>
-          </Select>
+      {query.isLoading || !draft ? (
+        <div className="flex items-center gap-2 px-3 py-4 text-[12.5px] text-foreground/55">
+          <Spinner size="sm" /> Loading proactive defaults…
         </div>
-
-        <div className="flex items-center justify-between gap-3 rounded-medium ring-1 ring-inset ring-foreground/10 bg-foreground/[0.02] px-3 py-2.5">
-          <div className="flex flex-col gap-0.5">
-            <span className="text-[12.5px] font-medium text-foreground">
-              Default nudge density
-            </span>
-            <span className="text-[11px] text-foreground/55">
-              How chatty proactive AI is by default
-            </span>
-          </div>
-          <Select
-            size="sm"
-            radius="md"
-            variant="bordered"
-            placeholder="balanced"
-            className="max-w-[200px]"
-            isDisabled
-          >
-            <SelectItem key="minimal">minimal</SelectItem>
-            <SelectItem key="balanced">balanced</SelectItem>
-            <SelectItem key="proactive">proactive</SelectItem>
-          </Select>
-        </div>
-
-        <div className="flex items-center justify-between gap-3 rounded-medium ring-1 ring-inset ring-foreground/10 bg-foreground/[0.02] px-3 py-2.5">
-          <div className="flex flex-col gap-0.5">
-            <span className="text-[12.5px] font-medium text-foreground">
-              Morning briefing enabled by default
-            </span>
-            <span className="text-[11px] text-foreground/55">
-              Cron-driven daily summary in personal channel
-            </span>
-          </div>
-          <StatusPill kind="unknown" label="Inherit" />
-        </div>
-
-        <div className="rounded-medium ring-1 ring-inset ring-status-stale/30 bg-status-stale/[0.06] px-3 py-2.5">
-          <div className="flex items-start gap-2">
-            <Wrench
-              className="h-3.5 w-3.5 shrink-0 mt-0.5 text-status-stale"
-              strokeWidth={2}
-              aria-hidden
-            />
+      ) : query.isError ? (
+        <ErrorBanner message="Couldn't load pod-wide proactive defaults." />
+      ) : (
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-3 rounded-medium ring-1 ring-inset ring-foreground/10 bg-foreground/[0.02] px-3 py-2.5">
             <div className="flex flex-col gap-0.5">
-              <span className="text-[12px] font-medium text-status-stale">
-                Pod-wide proactive defaults not wired yet
+              <span className="text-[12.5px] font-medium text-foreground">
+                Proactive AI enabled by default
               </span>
-              <p className="text-[11px] text-foreground/55">
-                {/* TODO(phase-C): backend exposes only
-                    `trpc.proactive.getPrefs/updatePrefs` (workspace-scoped).
-                    A pod-wide variant — `proactive.getPodDefaults` /
-                    `proactive.setPodDefaults` — is required to make these
-                    controls writable. */}
-                Current proactive prefs live per-workspace (
-                <code className="text-foreground/85 tabular">
-                  workspaces.settings.proactiveAi
-                </code>
-                ). A pod-defaults procedure is needed before these controls can
-                save.
-              </p>
+              <span className="text-[11px] text-foreground/55">
+                Whether new workspaces start with proactive nudges on
+              </span>
             </div>
+            <Switch
+              size="sm"
+              isSelected={draft.enabled}
+              onValueChange={(v) => updateDraft({ enabled: v })}
+              isDisabled={setMutation.isPending}
+              aria-label="Proactive AI enabled by default"
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-3 rounded-medium ring-1 ring-inset ring-foreground/10 bg-foreground/[0.02] px-3 py-2.5">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[12.5px] font-medium text-foreground">
+                Default nudge density
+              </span>
+              <span className="text-[11px] text-foreground/55">
+                How chatty proactive AI is by default
+              </span>
+            </div>
+            <Select
+              size="sm"
+              radius="md"
+              variant="bordered"
+              className="max-w-[200px]"
+              selectedKeys={[draft.nudgeDensity]}
+              onSelectionChange={(keys) => {
+                const k = Array.from(keys as Set<string>)[0];
+                if (k === "low" || k === "medium" || k === "high") {
+                  updateDraft({ nudgeDensity: k });
+                }
+              }}
+              isDisabled={setMutation.isPending}
+              aria-label="Default nudge density"
+            >
+              <SelectItem key="low">low</SelectItem>
+              <SelectItem key="medium">medium</SelectItem>
+              <SelectItem key="high">high</SelectItem>
+            </Select>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 rounded-medium ring-1 ring-inset ring-foreground/10 bg-foreground/[0.02] px-3 py-2.5">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[12.5px] font-medium text-foreground">
+                Morning briefing
+              </span>
+              <span className="text-[11px] text-foreground/55">
+                Cron-driven daily summary in personal channel
+              </span>
+            </div>
+            <Switch
+              size="sm"
+              isSelected={draft.schedules.morningBriefing}
+              onValueChange={(v) => updateSchedule("morningBriefing", v)}
+              isDisabled={setMutation.isPending}
+              aria-label="Morning briefing enabled"
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-3 rounded-medium ring-1 ring-inset ring-foreground/10 bg-foreground/[0.02] px-3 py-2.5">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[12.5px] font-medium text-foreground">
+                Weekly digest
+              </span>
+              <span className="text-[11px] text-foreground/55">
+                Sunday roll-up of the week's signals
+              </span>
+            </div>
+            <Switch
+              size="sm"
+              isSelected={draft.schedules.weeklyDigest}
+              onValueChange={(v) => updateSchedule("weeklyDigest", v)}
+              isDisabled={setMutation.isPending}
+              aria-label="Weekly digest enabled"
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-3 rounded-medium ring-1 ring-inset ring-foreground/10 bg-foreground/[0.02] px-3 py-2.5">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-[12.5px] font-medium text-foreground">
+                Health check
+              </span>
+              <span className="text-[11px] text-foreground/55">
+                Daily AI sanity sweep across the workspace
+              </span>
+            </div>
+            <Switch
+              size="sm"
+              isSelected={draft.schedules.healthCheck}
+              onValueChange={(v) => updateSchedule("healthCheck", v)}
+              isDisabled={setMutation.isPending}
+              aria-label="Health check enabled"
+            />
           </div>
         </div>
-      </div>
+      )}
     </SectionCard>
   );
 }

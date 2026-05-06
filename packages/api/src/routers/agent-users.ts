@@ -6,10 +6,10 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and } from "@synap/database";
-import { users, workspaceMembers } from "@synap/database/schema";
+import { db, eq, and, inArray } from "@synap/database";
+import { users, workspaceMembers, apiKeys } from "@synap/database/schema";
 import { verifyPermission } from "@synap/database";
 import { randomUUID } from "crypto";
 import { auditLog } from "../utils/audit-log.js";
@@ -290,5 +290,99 @@ export const agentUsersRouter = router({
       });
 
       return { status: "removed" as const };
+    }),
+
+  /**
+   * Pod-admin: remove every agent_user row owned by the given userId.
+   *
+   * "Owned" means rows whose `agentMetadata.createdByUserId` equals the given
+   * userId. Idempotent — running with no matches returns `removedCount: 0`.
+   * Cascade: also soft-revokes every API key owned by each removed agent
+   * (mirrors `apiKeys.adminRevokeAllForUser` inline so a single call cleans
+   * up agents + their hub keys atomically). Admins cannot remove their own
+   * agent rows via this endpoint to prevent self-lockout.
+   */
+  removeByUserId: podAdminProcedure
+    .input(
+      z.object({
+        userId: z.string().min(1),
+        reason: z.string().max(500).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.userId === ctx.userId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "You cannot remove your own agent users via this admin endpoint.",
+        });
+      }
+
+      // Find every agent user created by this userId. agentMetadata is a typed
+      // JSONB column — filter all `userType='agent'` rows then match in-memory
+      // (agent populations are tiny, so portability beats a raw JSON path).
+      const agentRows = await db
+        .select({
+          id: users.id,
+          agentMetadata: users.agentMetadata,
+        })
+        .from(users)
+        .where(eq(users.userType, "agent"));
+
+      const owned = agentRows.filter(
+        (row) =>
+          (row.agentMetadata as Record<string, unknown> | null)
+            ?.createdByUserId === input.userId
+      );
+
+      if (owned.length === 0) {
+        return { removedCount: 0, revokedKeyCount: 0 };
+      }
+
+      const ownedIds = owned.map((r) => r.id);
+      const revokeReason =
+        input.reason ?? "Cascade revoke: agent user removed by pod admin";
+
+      // Cascade: revoke every active API key owned by these agents in one shot.
+      const revokedKeys = await db
+        .update(apiKeys)
+        .set({
+          isActive: false,
+          revokedAt: new Date(),
+          revokedBy: ctx.userId,
+          revokedReason: revokeReason,
+        })
+        .where(
+          and(inArray(apiKeys.userId, ownedIds), eq(apiKeys.isActive, true))
+        )
+        .returning({ id: apiKeys.id });
+
+      // Remove workspace memberships for every owned agent.
+      await db
+        .delete(workspaceMembers)
+        .where(inArray(workspaceMembers.userId, ownedIds));
+
+      // Delete the agent user rows.
+      await db.delete(users).where(inArray(users.id, ownedIds));
+
+      auditLog({
+        subjectType: "agent_user",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.userId,
+        userId: ctx.userId,
+        data: {
+          targetUserId: input.userId,
+          removedCount: ownedIds.length,
+          revokedKeyCount: revokedKeys.length,
+          reason: input.reason,
+          bulk: true,
+        },
+      });
+
+      return {
+        removedCount: ownedIds.length,
+        revokedKeyCount: revokedKeys.length,
+      };
     }),
 });

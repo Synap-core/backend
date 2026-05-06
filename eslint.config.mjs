@@ -9,6 +9,7 @@ export default [
       "**/dist/**",
       "**/node_modules/**",
       "**/.turbo/**",
+      "**/.next/**",
       "**/coverage/**",
       "**/.docusaurus/**",
       "**/.wrangler/**",

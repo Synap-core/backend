@@ -82,6 +82,11 @@ ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "subscription_status" text;
 ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "stripe_customer_id" text;
 ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+-- Soft-archive support (mirrors 0020_workspaces_archived_at.sql)
+ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "archived_at" timestamp with time zone;
+CREATE INDEX IF NOT EXISTS "workspaces_active_idx"
+  ON "workspaces" ("created_at" DESC)
+  WHERE "archived_at" IS NULL;
 
 CREATE TABLE IF NOT EXISTS "workspace_members" (
   "id"            uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1887,6 +1892,7 @@ CREATE TABLE IF NOT EXISTS "api_keys" (
   "usage_count"            bigint  NOT NULL DEFAULT 0,
   "rotated_from_id"        uuid,
   "rotation_scheduled_at"  timestamp with time zone,
+  "workspace_id"           uuid,
   "created_at"             timestamp with time zone NOT NULL DEFAULT now(),
   "created_by"             text,
   "revoked_at"             timestamp with time zone,
@@ -1915,6 +1921,7 @@ ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "last_used_at" timestamp with ti
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "usage_count" bigint DEFAULT 0;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "rotated_from_id" uuid;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "rotation_scheduled_at" timestamp with time zone;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "created_by" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "revoked_at" timestamp with time zone;
@@ -2882,6 +2889,27 @@ CREATE INDEX IF NOT EXISTS "api_keys_realtime_observe_idx"
   ON "api_keys" ("key_prefix")
   WHERE "is_active" = true
     AND 'realtime:observe' = ANY("scope");
+
+-- workspace-scoped API keys (migration 0020_api_keys_workspace_scope.sql)
+CREATE INDEX IF NOT EXISTS "api_keys_workspace_id_idx"
+  ON "api_keys" ("workspace_id")
+  WHERE "workspace_id" IS NOT NULL;
+
+-- ─── Pod settings singleton (migration 0020) ─────────────────────────────────
+--
+-- Mirrors 0020_pod_settings.sql. Pod-wide defaults that workspaces inherit
+-- when their own settings.* slot is unset (intelligence model tiers,
+-- proactive AI defaults).
+
+CREATE TABLE IF NOT EXISTS "pod_settings" (
+  "id"         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "settings"   jsonb NOT NULL DEFAULT '{}'::jsonb,
+  "created_at" timestamp with time zone NOT NULL DEFAULT now(),
+  "updated_at" timestamp with time zone NOT NULL DEFAULT now()
+);
+ALTER TABLE "pod_settings" ADD COLUMN IF NOT EXISTS "settings"   jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE "pod_settings" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone NOT NULL DEFAULT now();
+ALTER TABLE "pod_settings" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone NOT NULL DEFAULT now();
 
 -- ─── _migrations tracking table ──────────────────────────────────────────────
 

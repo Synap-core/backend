@@ -19,7 +19,7 @@
  * work because we derive aggregates from any connectors list query.
  */
 
-import { Button } from "@heroui/react";
+import { Button, Tooltip } from "@heroui/react";
 import {
   AlertTriangle,
   Building2,
@@ -389,55 +389,56 @@ function iconForProvider(providerType: string) {
 // ─── 3. Per-workspace connector grid ─────────────────────────────────
 
 /**
- * Aggregate every connector instance into one row per (workspace,
- * provider) pair. Today the list query we have access to is `feeds.list`
- * (subscriptions, scoped to caller). For a true cross-workspace grid we
- * would need a `connectors.allConnections` admin endpoint — not present
- * yet — so we render what we can and label the gap.
+ * Pod-wide grid of every connector instance, grouped by workspace.
+ * Backed by `trpc.connectors.allConnections` (admin-scope).
  *
  * Click → opens a side Drawer with the row's detail and a deep link out
  * to Studio.
  */
 
-interface FeedRow {
-  id: string;
-  feedId?: string | null;
-  workspaceId?: string | null;
+interface ConnectionRow {
+  connectionId: string;
+  providerId: string;
+  workspaceId: string | null;
+  workspaceName: string | null;
+  accountEmail: string | null;
   status: string;
-  lastFetchedAt?: Date | string | null;
-  errorMessage?: string | null;
-  // Joined config columns from listSubscriptionsWithConfig (nested as
-  // `sourceConfig.{name,providerType}` in the returned row).
-  sourceConfig?: {
-    id?: string;
-    name?: string | null;
-    providerType?: string | null;
-    enabled?: boolean | null;
-  } | null;
+  lastSyncedAt: Date | string;
+  createdAt: Date | string;
 }
 
 function PerWorkspaceGridSection() {
-  const [selected, setSelected] = useState<FeedRow | null>(null);
+  const [selected, setSelected] = useState<ConnectionRow | null>(null);
 
-  // The closest cross-workspace signal we have today is the feeds
-  // subscription list. It's caller-scoped (one userId) — for a real
-  // pod-wide grid we'd need an admin variant. Flagged below.
-  const query = trpc.feeds.list.useQuery(
-    { limit: 100, offset: 0 },
-    { staleTime: 60_000, retry: false }
-  );
+  const query = trpc.connectors.allConnections.useQuery(undefined, {
+    staleTime: 60_000,
+    retry: false,
+  });
 
-  const rows = (query.data ?? []) as unknown as FeedRow[];
+  const rows = (query.data ?? []) as ConnectionRow[];
 
-  // ?focus=<feedId> from ⌘K or Overview alerts (sync errors). Open the
-  // drawer once the matching row is rendered.
+  // ?focus=<connectionId> from ⌘K or Overview alerts (sync errors).
   const focusId = useFocusRow({ ready: !query.isLoading });
   useEffect(() => {
     if (!focusId || selected) return;
-    const found = rows.find((r) => r.id === focusId);
+    const found = rows.find((r) => r.connectionId === focusId);
     if (found) setSelected(found);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusId, rows]);
+
+  // Group by workspaceName (falls back to workspaceId or "Pod-wide").
+  const grouped = useMemo(() => {
+    const out = new Map<string, ConnectionRow[]>();
+    for (const row of rows) {
+      const key =
+        row.workspaceName ??
+        (row.workspaceId ? row.workspaceId.slice(0, 8) : "Pod-wide");
+      const bucket = out.get(key) ?? [];
+      bucket.push(row);
+      out.set(key, bucket);
+    }
+    return [...out.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [rows]);
 
   return (
     <>
@@ -459,84 +460,78 @@ function PerWorkspaceGridSection() {
             }
           />
         ) : rows.length === 0 ? (
-          <div className="flex flex-col gap-2 px-3 py-6 text-center">
-            <p className="text-[12.5px] text-foreground/55">
-              No connector rows.
-            </p>
-            <p className="text-[11px] text-foreground/40">
-              {/* TODO(phase-C): add `trpc.connectors.allConnections`
-                  (admin-scope) so we can render every connector across all
-                  workspaces here. Today we list `feeds.list` rows for the
-                  caller only. */}
-              Pod-wide listing requires `connectors.allConnections` (TODO).
-            </p>
-          </div>
+          <ResourceRowEmpty message="No connectors configured anywhere on this pod." />
         ) : (
-          <div className="overflow-x-auto rounded-medium ring-1 ring-inset ring-foreground/10">
-            <table className="w-full border-collapse text-left text-[12.5px]">
-              <thead>
-                <tr className="border-b border-foreground/[0.05] bg-foreground/[0.02]">
-                  <Th>Workspace</Th>
-                  <Th>Provider</Th>
-                  <Th>Status</Th>
-                  <Th>Last sync</Th>
-                  <Th className="w-16">Actions</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr
-                    key={row.id}
-                    data-row-id={row.id}
-                    onClick={() => setSelected(row)}
-                    className={[
-                      "cursor-pointer border-b border-foreground/[0.05]",
-                      "transition-colors hover:bg-content2/50",
-                      "last:border-b-0",
-                    ].join(" ")}
-                  >
-                    <Td className="text-foreground">
-                      {row.workspaceId
-                        ? row.workspaceId.slice(0, 8)
-                        : "Pod-wide"}
-                    </Td>
-                    <Td className="text-foreground/85">
-                      <span className="inline-flex items-center gap-1.5">
-                        {row.sourceConfig?.providerType ?? "—"}
-                        {row.sourceConfig?.name && (
-                          <span className="text-foreground/45">
-                            {row.sourceConfig.name}
-                          </span>
-                        )}
-                      </span>
-                    </Td>
-                    <Td>
-                      <StatusPill
-                        kind={feedStatusKind(row.status)}
-                        label={row.status}
-                      />
-                    </Td>
-                    <Td className="text-foreground/55 tabular">
-                      {row.lastFetchedAt
-                        ? formatRelative(new Date(row.lastFetchedAt))
-                        : "—"}
-                    </Td>
-                    <Td>
-                      <Button
-                        size="sm"
-                        variant="light"
-                        radius="md"
-                        onPress={() => setSelected(row)}
-                        endContent={<ExternalLink className="h-3 w-3" />}
-                        className="text-foreground/55"
+          <div className="flex flex-col gap-3">
+            {grouped.map(([workspaceLabel, bucket]) => (
+              <div
+                key={workspaceLabel}
+                className="overflow-x-auto rounded-medium ring-1 ring-inset ring-foreground/10"
+              >
+                <div className="flex items-center justify-between gap-3 border-b border-foreground/[0.05] bg-foreground/[0.03] px-3 py-2">
+                  <span className="text-[12px] font-medium text-foreground">
+                    {workspaceLabel}
+                  </span>
+                  <span className="text-[10.5px] tabular text-foreground/55">
+                    {bucket.length} connector
+                    {bucket.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <table className="w-full border-collapse text-left text-[12.5px]">
+                  <thead>
+                    <tr className="border-b border-foreground/[0.05] bg-foreground/[0.02]">
+                      <Th>Provider</Th>
+                      <Th>Account</Th>
+                      <Th>Status</Th>
+                      <Th>Last sync</Th>
+                      <Th className="w-16">Actions</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bucket.map((row) => (
+                      <tr
+                        key={row.connectionId}
+                        data-row-id={row.connectionId}
+                        onClick={() => setSelected(row)}
+                        className={[
+                          "cursor-pointer border-b border-foreground/[0.05]",
+                          "transition-colors hover:bg-content2/50",
+                          "last:border-b-0",
+                        ].join(" ")}
                       >
-                        Open
-                      </Button>
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                        <Td className="text-foreground/85">{row.providerId}</Td>
+                        <Td className="text-foreground/55">
+                          {row.accountEmail ?? "—"}
+                        </Td>
+                        <Td>
+                          <StatusPill
+                            kind={feedStatusKind(row.status)}
+                            label={row.status}
+                          />
+                        </Td>
+                        <Td className="text-foreground/55 tabular">
+                          {row.lastSyncedAt
+                            ? formatRelative(new Date(row.lastSyncedAt))
+                            : "—"}
+                        </Td>
+                        <Td>
+                          <Button
+                            size="sm"
+                            variant="light"
+                            radius="md"
+                            onPress={() => setSelected(row)}
+                            endContent={<ExternalLink className="h-3 w-3" />}
+                            className="text-foreground/55"
+                          >
+                            Open
+                          </Button>
+                        </Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
           </div>
         )}
       </SectionCard>
@@ -550,7 +545,7 @@ function ConnectorDetailDrawer({
   row,
   onClose,
 }: {
-  row: FeedRow | null;
+  row: ConnectionRow | null;
   onClose: () => void;
 }) {
   const studioHref = row?.workspaceId
@@ -561,16 +556,13 @@ function ConnectorDetailDrawer({
     <DetailDrawer
       isOpen={!!row}
       onClose={onClose}
-      title={
-        row?.sourceConfig?.name ??
-        row?.sourceConfig?.providerType ??
-        "Connector"
-      }
+      title={row?.providerId ?? "Connector"}
       subtitle={
         row
-          ? row.workspaceId
-            ? `workspace ${row.workspaceId.slice(0, 8)}`
-            : "Pod-wide"
+          ? (row.workspaceName ??
+            (row.workspaceId
+              ? `workspace ${row.workspaceId.slice(0, 8)}`
+              : "Pod-wide"))
           : undefined
       }
       footer={
@@ -587,25 +579,33 @@ function ConnectorDetailDrawer({
             >
               Open in Studio
             </Button>
-            <Button
-              size="sm"
-              variant="flat"
-              radius="md"
-              startContent={<RefreshCw className="h-3 w-3" />}
-              isDisabled
-            >
-              Re-authenticate
-            </Button>
-            <Button
-              size="sm"
-              variant="light"
-              radius="md"
-              startContent={<Trash2 className="h-3 w-3" />}
-              isDisabled
-              className="ml-auto text-status-down"
-            >
-              Remove
-            </Button>
+            <Tooltip content="Pending: connectors.reauthenticate">
+              <span className="block">
+                <Button
+                  size="sm"
+                  variant="flat"
+                  radius="md"
+                  startContent={<RefreshCw className="h-3 w-3" />}
+                  isDisabled
+                >
+                  Re-authenticate
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip content="Pending: connectors.remove">
+              <span className="ml-auto block">
+                <Button
+                  size="sm"
+                  variant="light"
+                  radius="md"
+                  startContent={<Trash2 className="h-3 w-3" />}
+                  isDisabled
+                  className="text-status-down"
+                >
+                  Remove
+                </Button>
+              </span>
+            </Tooltip>
           </>
         ) : null
       }
@@ -617,31 +617,30 @@ function ConnectorDetailDrawer({
           </DrawerField>
           <DrawerField label="Provider">
             <span className="text-[12.5px] text-foreground/85">
-              {row.sourceConfig?.providerType ?? "—"}
+              {row.providerId}
             </span>
           </DrawerField>
-          <DrawerField label="Last fetched">
+          <DrawerField label="Account">
+            <span className="text-[12.5px] text-foreground/85">
+              {row.accountEmail ?? "—"}
+            </span>
+          </DrawerField>
+          <DrawerField label="Last synced">
             <span className="text-[12.5px] text-foreground/85 tabular">
-              {row.lastFetchedAt
-                ? new Date(row.lastFetchedAt).toLocaleString()
+              {row.lastSyncedAt
+                ? new Date(row.lastSyncedAt).toLocaleString()
                 : "Never"}
             </span>
           </DrawerField>
-          {row.errorMessage && (
-            <DrawerField label="Last error">
-              <p className="text-[11.5px] text-status-down break-words">
-                {row.errorMessage}
-              </p>
-            </DrawerField>
-          )}
-          <DrawerField label="Recent events">
-            {/* TODO(phase-C): wire `trpc.feeds.recentItems` (or an
-                equivalent connector-event log) and render the last 5
-                events with timestamps. */}
-            <p className="text-[11px] text-foreground/45">
-              Recent event timeline requires a connector-event log endpoint
-              (TODO).
-            </p>
+          <DrawerField label="Created">
+            <span className="text-[12.5px] text-foreground/85 tabular">
+              {row.createdAt ? new Date(row.createdAt).toLocaleString() : "—"}
+            </span>
+          </DrawerField>
+          <DrawerField label="Connection ID">
+            <span className="font-mono text-[10.5px] text-foreground/55">
+              {row.connectionId}
+            </span>
           </DrawerField>
         </div>
       ) : null}

@@ -19,6 +19,7 @@
  */
 
 import {
+  addToast,
   Button,
   Input,
   Modal,
@@ -30,11 +31,13 @@ import {
   PopoverContent,
   PopoverTrigger,
   Spinner,
+  Switch,
   Textarea,
   Tooltip,
   useDisclosure,
 } from "@heroui/react";
 import {
+  ArchiveRestore,
   Building2,
   ExternalLink,
   MoreHorizontal,
@@ -82,6 +85,9 @@ type Workspace = {
   memberCount: number;
   createdAt: Date | string;
   updatedAt: Date | string;
+  /** Top-level archived flag (set by `workspaces.archive`). Older rows
+   *  may only carry `settings.archivedAt`; we honour both. */
+  archivedAt?: Date | string | null;
 };
 
 type WorkspaceStatus = {
@@ -91,9 +97,14 @@ type WorkspaceStatus = {
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
-function deriveStatus(ws: Workspace): WorkspaceStatus {
+function isArchived(ws: Workspace): boolean {
+  if (ws.archivedAt) return true;
   const settings = (ws.settings ?? {}) as Record<string, unknown>;
-  if (settings.archivedAt || settings.archived === true) {
+  return Boolean(settings.archivedAt || settings.archived === true);
+}
+
+function deriveStatus(ws: Workspace): WorkspaceStatus {
+  if (isArchived(ws)) {
     return { kind: "stale", label: "Archived" };
   }
   const updated =
@@ -148,7 +159,12 @@ function WorkspacesInner() {
   const createDisclosure = useDisclosure();
   const drawerDisclosure = useDisclosure();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
+  // adminListAll is `void` input — server returns ALL workspaces
+  // (including archived ones). We filter client-side based on the
+  // toggle, treating any row with `archivedAt` (or legacy
+  // `settings.archivedAt`/`settings.archived === true`) as archived.
   const query = trpc.workspaces.adminListAll.useQuery(undefined, {
     staleTime: 30_000,
   });
@@ -169,15 +185,27 @@ function WorkspacesInner() {
   // WorkspaceSettings interface; we treat it as a loose record here so
   // we can read optional keys (`archivedAt`, `systemSlug`) without
   // cluttering the types with optional-everywhere chains.
-  const workspaces = (query.data ?? []) as unknown as Workspace[];
+  const allWorkspaces = (query.data ?? []) as unknown as Workspace[];
+  const workspaces = useMemo(
+    () =>
+      showArchived
+        ? allWorkspaces
+        : allWorkspaces.filter((ws) => !isArchived(ws)),
+    [allWorkspaces, showArchived]
+  );
 
   const stats = useMemo(() => {
     let active = 0;
-    for (const ws of workspaces) {
+    for (const ws of allWorkspaces) {
       if (deriveStatus(ws).label === "Active") active += 1;
     }
-    return { total: workspaces.length, active };
-  }, [workspaces]);
+    return { total: allWorkspaces.length, active };
+  }, [allWorkspaces]);
+
+  const archivedCount = useMemo(
+    () => allWorkspaces.filter((ws) => isArchived(ws)).length,
+    [allWorkspaces]
+  );
 
   const selected =
     selectedId != null
@@ -222,6 +250,19 @@ function WorkspacesInner() {
       <SectionCard
         title="All workspaces"
         hint="Click a row to see details · use Open in Studio to manage"
+        actions={
+          archivedCount > 0 ? (
+            <label className="flex items-center gap-2 text-[11.5px] text-foreground/55">
+              <Switch
+                size="sm"
+                isSelected={showArchived}
+                onValueChange={setShowArchived}
+                aria-label="Show archived workspaces"
+              />
+              Show archived ({archivedCount})
+            </label>
+          ) : null
+        }
       >
         {query.isLoading ? (
           <ResourceRowSkeleton count={4} />
@@ -276,6 +317,7 @@ function WorkspaceRow({
   const status = deriveStatus(ws);
   const settings = (ws.settings ?? {}) as Record<string, unknown>;
   const isSystem = typeof settings.systemSlug === "string";
+  const archived = isArchived(ws);
 
   // The ResourceRow Icon slot is monochrome by design; we use a small
   // colored chip leading the primary text instead, rendered via the
@@ -284,99 +326,219 @@ function WorkspaceRow({
   // doesn't expose extra slots. Trade-off: we accept the monochrome
   // icon for now and let the status pill carry the color signal.
   return (
-    <ResourceRow
-      Icon={Building2}
-      primary={ws.name}
-      secondary={[
-        `${ws.memberCount} member${ws.memberCount === 1 ? "" : "s"}`,
-        `created ${formatRelative(
-          ws.createdAt instanceof Date ? ws.createdAt : new Date(ws.createdAt)
-        )}`,
-        ws.type,
-      ].join(" · ")}
-      status={status}
-      onSelect={onSelect}
-      actions={<WorkspaceRowActions ws={ws} isSystem={isSystem} />}
-    />
+    <div className={archived ? "opacity-60" : undefined}>
+      <ResourceRow
+        Icon={Building2}
+        primary={ws.name}
+        secondary={[
+          `${ws.memberCount} member${ws.memberCount === 1 ? "" : "s"}`,
+          `created ${formatRelative(
+            ws.createdAt instanceof Date ? ws.createdAt : new Date(ws.createdAt)
+          )}`,
+          ws.type,
+        ].join(" · ")}
+        status={status}
+        onSelect={onSelect}
+        actions={
+          <WorkspaceRowActions
+            ws={ws}
+            isSystem={isSystem}
+            archived={archived}
+          />
+        }
+      />
+    </div>
   );
 }
 
 function WorkspaceRowActions({
   ws,
   isSystem,
+  archived,
 }: {
   ws: Workspace;
   isSystem: boolean;
+  archived: boolean;
 }) {
+  const utils = trpc.useUtils();
+  const [confirmArchive, setConfirmArchive] = useState(false);
+
+  const archiveMutation = trpc.workspaces.archive.useMutation({
+    onSuccess: (_data, variables) => {
+      void utils.workspaces.list.invalidate();
+      void utils.workspaces.adminListAll.invalidate();
+      addToast({
+        title: variables.restore ? "Workspace restored" : "Workspace archived",
+        description: variables.restore
+          ? `${ws.name} is back in the active list.`
+          : `${ws.name} is now archived.`,
+        color: "default",
+      });
+      setConfirmArchive(false);
+    },
+    onError: (err) => {
+      addToast({
+        title: archived ? "Restore failed" : "Archive failed",
+        description: err.message,
+        color: "danger",
+      });
+    },
+  });
+
   return (
-    <Popover placement="bottom-end">
-      <PopoverTrigger>
-        <Button
-          isIconOnly
-          variant="light"
-          size="sm"
-          radius="full"
-          aria-label={`Actions for ${ws.name}`}
-          className="text-foreground/40 opacity-0 transition-opacity group-hover:opacity-100"
-        >
-          <MoreHorizontal className="h-3.5 w-3.5" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="min-w-[220px] max-w-[280px] p-1">
-        <div className="flex w-full flex-col">
+    <>
+      <Popover placement="bottom-end">
+        <PopoverTrigger>
           <Button
-            as="a"
-            href={studioDeepLinkForWorkspace(ws.id)}
-            target="_blank"
-            rel="noopener noreferrer"
+            isIconOnly
             variant="light"
             size="sm"
-            radius="sm"
-            className="justify-start text-[12.5px]"
-            startContent={<ExternalLink className="h-3.5 w-3.5" />}
+            radius="full"
+            aria-label={`Actions for ${ws.name}`}
+            className="text-foreground/40 opacity-0 transition-opacity group-hover:opacity-100"
           >
-            Open in Studio
+            <MoreHorizontal className="h-3.5 w-3.5" />
           </Button>
-          <Button
-            as="a"
-            href={studioDeepLinkForWorkspaceSettings(ws.id)}
-            target="_blank"
-            rel="noopener noreferrer"
-            variant="light"
-            size="sm"
-            radius="sm"
-            className="justify-start text-[12.5px]"
-            startContent={<Settings2 className="h-3.5 w-3.5" />}
-          >
-            Settings in Studio
-          </Button>
-          {/* Archive: no `workspaces.archive` mutation exists yet — the
-              field is detected via `settings.archivedAt`. We disable
-              the action and leave the TODO. */}
-          {/* TODO(phase-C): add `workspaces.archive` mutation, then wire
-              this button to it (with a confirm step). */}
-          <Tooltip
-            content={
-              isSystem
-                ? "System workspaces (e.g. pod-admin) can't be archived."
-                : "Coming soon — `workspaces.archive` not yet shipped."
-            }
-          >
-            <span className="block">
+        </PopoverTrigger>
+        <PopoverContent className="min-w-[220px] max-w-[280px] p-1">
+          <div className="flex w-full flex-col">
+            <Button
+              as="a"
+              href={studioDeepLinkForWorkspace(ws.id)}
+              target="_blank"
+              rel="noopener noreferrer"
+              variant="light"
+              size="sm"
+              radius="sm"
+              className="justify-start text-[12.5px]"
+              startContent={<ExternalLink className="h-3.5 w-3.5" />}
+            >
+              Open in Studio
+            </Button>
+            <Button
+              as="a"
+              href={studioDeepLinkForWorkspaceSettings(ws.id)}
+              target="_blank"
+              rel="noopener noreferrer"
+              variant="light"
+              size="sm"
+              radius="sm"
+              className="justify-start text-[12.5px]"
+              startContent={<Settings2 className="h-3.5 w-3.5" />}
+            >
+              Settings in Studio
+            </Button>
+            {archived ? (
               <Button
                 variant="light"
                 size="sm"
                 radius="sm"
-                isDisabled
+                className="w-full justify-start text-[12.5px] text-success"
+                startContent={<ArchiveRestore className="h-3.5 w-3.5" />}
+                isDisabled={archiveMutation.isPending}
+                onPress={() =>
+                  archiveMutation.mutate({
+                    workspaceId: ws.id,
+                    restore: true,
+                  })
+                }
+              >
+                Restore
+              </Button>
+            ) : isSystem ? (
+              <Tooltip content="System workspaces (e.g. pod-admin) can't be archived.">
+                <span className="block">
+                  <Button
+                    variant="light"
+                    size="sm"
+                    radius="sm"
+                    isDisabled
+                    className="w-full justify-start text-[12.5px] text-warning"
+                  >
+                    Archive
+                  </Button>
+                </span>
+              </Tooltip>
+            ) : (
+              <Button
+                variant="light"
+                size="sm"
+                radius="sm"
                 className="w-full justify-start text-[12.5px] text-warning"
+                onPress={() => setConfirmArchive(true)}
               >
                 Archive
               </Button>
-            </span>
-          </Tooltip>
-        </div>
-      </PopoverContent>
-    </Popover>
+            )}
+          </div>
+        </PopoverContent>
+      </Popover>
+
+      {confirmArchive ? (
+        <ConfirmArchiveWorkspaceModal
+          workspaceName={ws.name}
+          isPending={archiveMutation.isPending}
+          onCancel={() => setConfirmArchive(false)}
+          onConfirm={() => archiveMutation.mutate({ workspaceId: ws.id })}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function ConfirmArchiveWorkspaceModal({
+  workspaceName,
+  isPending,
+  onCancel,
+  onConfirm,
+}: {
+  workspaceName: string;
+  isPending: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const { isOpen, onOpenChange } = useDisclosure({
+    defaultOpen: true,
+    onClose: onCancel,
+  });
+
+  return (
+    <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
+      <ModalContent>
+        <ModalHeader className="flex flex-col gap-1 border-b border-foreground/[0.06] px-6 py-4">
+          <h2 className="text-[15px] font-medium text-foreground">
+            Archive {workspaceName}?
+          </h2>
+        </ModalHeader>
+        <ModalBody className="gap-2 px-6 py-4">
+          <p className="text-[12.5px] text-foreground/85">
+            Archived workspaces stay on the pod but are hidden from the default
+            list. You can restore from the "Show archived" toggle.
+          </p>
+        </ModalBody>
+        <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
+          <Button
+            variant="flat"
+            radius="md"
+            size="sm"
+            onPress={onCancel}
+            isDisabled={isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            color="warning"
+            variant="solid"
+            radius="md"
+            size="sm"
+            isLoading={isPending}
+            onPress={onConfirm}
+          >
+            Archive workspace
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
   );
 }
 

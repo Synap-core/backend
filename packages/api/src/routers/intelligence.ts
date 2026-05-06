@@ -7,7 +7,12 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure, podProcedure } from "../trpc.js";
+import {
+  router,
+  workspaceProcedure,
+  podProcedure,
+  podAdminProcedure,
+} from "../trpc.js";
 import type { Context } from "../context.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, desc, or, like, sql, drizzleSql } from "@synap/database";
@@ -24,6 +29,8 @@ import {
   mcpServers,
   compactedStates,
   agents,
+  podSettings,
+  getDefaultPodIntelligenceDefaults,
   type NewIntelligenceCommand,
   type AgentMetadata,
 } from "@synap/database/schema";
@@ -1693,6 +1700,71 @@ export const intelligenceRouter = router({
         properties: e.properties ?? {},
         confidence: e.confidence,
       };
+    }),
+
+  /**
+   * getPodDefaults
+   *
+   * Returns the pod-wide tier-based AI model defaults (chat / reasoning /
+   * embedding / vision). Workspaces inherit from these when their own
+   * `workspace.settings.intelligenceServiceId` is unset; null fields fall
+   * through to the active IS's own defaults.
+   *
+   * Singleton-by-convention: reads the first row from pod_settings ordered by
+   * created_at. If no row exists yet, returns the static default (all nulls).
+   */
+  getPodDefaults: podAdminProcedure.query(async () => {
+    const [row] = await db
+      .select({ settings: podSettings.settings })
+      .from(podSettings)
+      .orderBy(podSettings.createdAt)
+      .limit(1);
+    const blob = (row?.settings ?? {}) as { intelligenceDefaults?: unknown };
+    const defaults =
+      (blob.intelligenceDefaults as ReturnType<
+        typeof getDefaultPodIntelligenceDefaults
+      > | null) ?? getDefaultPodIntelligenceDefaults();
+    return { defaults };
+  }),
+
+  /**
+   * setPodDefaults
+   *
+   * Upserts the pod-wide intelligence defaults. Pass null for any tier to
+   * inherit from the active IS. Pod admins only.
+   */
+  setPodDefaults: podAdminProcedure
+    .input(
+      z.object({
+        chatModelId: z.string().nullable(),
+        reasoningModelId: z.string().nullable(),
+        embeddingModelId: z.string().nullable(),
+        visionModelId: z.string().nullable(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const [existing] = await db
+        .select({ id: podSettings.id })
+        .from(podSettings)
+        .orderBy(podSettings.createdAt)
+        .limit(1);
+
+      if (existing) {
+        await db
+          .update(podSettings)
+          .set({
+            settings: drizzleSql`coalesce(${podSettings.settings}, '{}'::jsonb) || ${JSON.stringify(
+              { intelligenceDefaults: input }
+            )}::jsonb`,
+            updatedAt: new Date(),
+          })
+          .where(eq(podSettings.id, existing.id));
+      } else {
+        await db.insert(podSettings).values({
+          settings: { intelligenceDefaults: input },
+        });
+      }
+      return { defaults: input };
     }),
 
   /**

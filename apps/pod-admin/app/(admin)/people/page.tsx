@@ -23,6 +23,7 @@
  */
 
 import {
+  addToast,
   Avatar,
   Button,
   Input,
@@ -52,6 +53,7 @@ import {
 } from "lucide-react";
 import { Suspense, useMemo, useState } from "react";
 import { trpc } from "../../../lib/trpc";
+import { useOperatorEmail } from "../components/admin-shell";
 import { DetailDrawer } from "../components/detail-drawer";
 import {
   ResourceRow,
@@ -221,7 +223,12 @@ function PodAdminsSection() {
                 secondary={`${admin.email} · ${admin.role}`}
                 status={{ kind: "healthy", label: admin.role }}
                 actions={
-                  <PodAdminActions userId={admin.id} email={admin.email} />
+                  <PodAdminActions
+                    userId={admin.id}
+                    email={admin.email}
+                    isAdmin={admin.role === "owner" || admin.role === "admin"}
+                    adminCount={admins.length}
+                  />
                 }
               />
             </div>
@@ -232,75 +239,195 @@ function PodAdminsSection() {
   );
 }
 
-function PodAdminActions({ userId, email }: { userId: string; email: string }) {
+function PodAdminActions({
+  userId,
+  email,
+  isAdmin,
+  adminCount,
+}: {
+  userId: string;
+  email: string;
+  isAdmin: boolean;
+  adminCount: number;
+}) {
   const utils = trpc.useUtils();
+  const operatorEmail = useOperatorEmail();
+  const [confirmRemove, setConfirmRemove] = useState(false);
+
   const resetMutation = trpc.system.resetUserPassword.useMutation({
     onSuccess: () => {
       void utils.system.listUsers.invalidate();
     },
   });
 
-  // Demote / Remove flows aren't safe to ship without a confirm dialog
-  // and a backed procedure. `workspaces.removeMember` is the demote path
-  // (drop them from pod-admin), `system.deleteUser` does NOT exist yet —
-  // we render the row but disable it.
-  // TODO(phase-C): add `system.deleteUser` to allow full account removal.
+  const deleteMutation = trpc.system.deleteUser.useMutation({
+    onSuccess: () => {
+      void utils.workspaces.adminListAll.invalidate();
+      void utils.workspaces.listPodMembers.invalidate();
+      void utils.system.listUsers.invalidate();
+      addToast({
+        title: "User removed",
+        description: `${email} has been deleted.`,
+        color: "default",
+      });
+      setConfirmRemove(false);
+    },
+    onError: (err) => {
+      addToast({
+        title: "Remove failed",
+        description: err.message,
+        color: "danger",
+      });
+    },
+  });
+
+  // Disable Remove for self-delete and "last pod admin" cases. Demote
+  // remains stubbed (no backed procedure yet).
+  const isSelf = !!operatorEmail && operatorEmail === email;
+  const isLastAdmin = isAdmin && adminCount <= 1;
+  const removeDisabledReason = isSelf
+    ? "You can't remove yourself."
+    : isLastAdmin
+      ? "Pod must have at least one admin."
+      : null;
 
   return (
-    <Popover placement="bottom-end">
-      <PopoverTrigger>
-        <Button
-          isIconOnly
-          variant="light"
-          size="sm"
-          radius="full"
-          aria-label={`Actions for ${email}`}
-          className="text-foreground/40 opacity-0 transition-opacity group-hover:opacity-100"
-        >
-          <MoreHorizontal className="h-3.5 w-3.5" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="min-w-[200px] max-w-[260px] p-1">
-        <div className="flex w-full flex-col">
+    <>
+      <Popover placement="bottom-end">
+        <PopoverTrigger>
           <Button
+            isIconOnly
             variant="light"
             size="sm"
-            radius="sm"
-            isDisabled={resetMutation.isPending}
-            className="justify-start text-[12.5px]"
-            onPress={() => resetMutation.mutate({ mode: "single", userId })}
+            radius="full"
+            aria-label={`Actions for ${email}`}
+            className="text-foreground/40 opacity-0 transition-opacity group-hover:opacity-100"
           >
-            {resetMutation.isPending ? "Resetting…" : "Reset password"}
+            <MoreHorizontal className="h-3.5 w-3.5" />
           </Button>
-          <Tooltip content="Demote requires a confirm step — wiring lands with the side-panel pattern.">
-            <span className="block">
+        </PopoverTrigger>
+        <PopoverContent className="min-w-[200px] max-w-[260px] p-1">
+          <div className="flex w-full flex-col">
+            <Button
+              variant="light"
+              size="sm"
+              radius="sm"
+              isDisabled={resetMutation.isPending}
+              className="justify-start text-[12.5px]"
+              onPress={() => resetMutation.mutate({ mode: "single", userId })}
+            >
+              {resetMutation.isPending ? "Resetting…" : "Reset password"}
+            </Button>
+            <Tooltip content="Pending: workspaces.demoteMember">
+              <span className="block">
+                <Button
+                  variant="light"
+                  size="sm"
+                  radius="sm"
+                  isDisabled
+                  className="w-full justify-start text-[12.5px] text-warning"
+                >
+                  Demote
+                </Button>
+              </span>
+            </Tooltip>
+            {removeDisabledReason ? (
+              <Tooltip content={removeDisabledReason}>
+                <span className="block">
+                  <Button
+                    variant="light"
+                    size="sm"
+                    radius="sm"
+                    isDisabled
+                    className="w-full justify-start text-[12.5px] text-danger"
+                  >
+                    Remove
+                  </Button>
+                </span>
+              </Tooltip>
+            ) : (
               <Button
                 variant="light"
                 size="sm"
                 radius="sm"
-                isDisabled
-                className="w-full justify-start text-[12.5px] text-warning"
-              >
-                Demote
-              </Button>
-            </span>
-          </Tooltip>
-          <Tooltip content="Coming soon — `system.deleteUser` not yet shipped.">
-            <span className="block">
-              <Button
-                variant="light"
-                size="sm"
-                radius="sm"
-                isDisabled
                 className="w-full justify-start text-[12.5px] text-danger"
+                onPress={() => setConfirmRemove(true)}
               >
                 Remove
               </Button>
-            </span>
-          </Tooltip>
-        </div>
-      </PopoverContent>
-    </Popover>
+            )}
+          </div>
+        </PopoverContent>
+      </Popover>
+
+      {confirmRemove ? (
+        <ConfirmRemoveUserModal
+          email={email}
+          isPending={deleteMutation.isPending}
+          onCancel={() => setConfirmRemove(false)}
+          onConfirm={() => deleteMutation.mutate({ userId })}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function ConfirmRemoveUserModal({
+  email,
+  isPending,
+  onCancel,
+  onConfirm,
+}: {
+  email: string;
+  isPending: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const { isOpen, onOpenChange } = useDisclosure({
+    defaultOpen: true,
+    onClose: onCancel,
+  });
+
+  return (
+    <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
+      <ModalContent>
+        <ModalHeader className="flex flex-col gap-1 border-b border-foreground/[0.06] px-6 py-4">
+          <h2 className="text-[15px] font-medium text-foreground">
+            Remove {email}?
+          </h2>
+        </ModalHeader>
+        <ModalBody className="gap-2 px-6 py-4">
+          <p className="text-[12.5px] text-foreground/85">
+            Permanently delete user? This deletes their workspace memberships,
+            agent users, and API keys.
+          </p>
+          <p className="text-[11.5px] text-foreground/55">
+            This cannot be undone.
+          </p>
+        </ModalBody>
+        <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
+          <Button
+            variant="flat"
+            radius="md"
+            size="sm"
+            onPress={onCancel}
+            isDisabled={isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            color="danger"
+            variant="solid"
+            radius="md"
+            size="sm"
+            isLoading={isPending}
+            onPress={onConfirm}
+          >
+            Remove user
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
   );
 }
 
@@ -324,30 +451,11 @@ type PodMember = {
 /**
  * Workspace members surfaces every human across the pod, deduplicated by
  * userId, with the highest role they hold across any workspace.
- *
- * The procedure `workspaces.listPodMembers` is fresh (Phase 6) and might
- * not have made it into the published `@synap-core/api-types` snapshot
- * yet. We tolerate that: the runtime call works, and we cast to the
- * known shape via a typed helper.
  */
 function WorkspaceMembersSection() {
-  // The generated AppRouter snapshot in @synap-core/api-types may lag
-  // the live router by a few commits; this procedure exists in
-  // packages/api/src/routers/workspaces.ts:1435 (Phase 6). When the
-  // snapshot is regenerated this cast disappears.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const trpcAny = trpc as any;
-  const query = (
-    trpcAny.workspaces.listPodMembers.useQuery as (
-      input?: undefined,
-      opts?: { staleTime?: number }
-    ) => {
-      data?: PodMember[];
-      isLoading: boolean;
-      isError: boolean;
-      error?: { message: string } | null;
-    }
-  )(undefined, { staleTime: 60_000 });
+  const query = trpc.workspaces.listPodMembers.useQuery(undefined, {
+    staleTime: 60_000,
+  });
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const drawer = useDisclosure();
@@ -626,58 +734,171 @@ function AgentUsersSection() {
   );
 }
 
-function AgentUserActions({ userId: _userId }: { userId: string }) {
-  // Both actions need procedures we don't have a clean pod-wide call
-  // for: revoke-keys is per-user but `apiKeys.revoke` requires the
-  // caller to be the owner (`key.userId !== ctx.userId` -> NOT_FOUND).
-  // remove-agent uses `agentUsers.remove` but that needs a workspaceId.
-  // TODO(phase-C): add `agentUsers.removeByUserId` (no workspaceId
-  // required) and `apiKeys.adminRevokeAllForUser`.
+function AgentUserActions({ userId }: { userId: string }) {
+  const utils = trpc.useUtils();
+  const [confirm, setConfirm] = useState<null | "revoke" | "remove">(null);
+
+  const revokeMutation = trpc.apiKeys.adminRevokeAllForUser.useMutation({
+    onSuccess: (res) => {
+      void utils.system.listUsers.invalidate();
+      void utils.apiKeys.adminListAll.invalidate();
+      addToast({
+        title: "Keys revoked",
+        description: `${res.revokedCount} key${
+          res.revokedCount === 1 ? "" : "s"
+        } revoked.`,
+        color: "default",
+      });
+      setConfirm(null);
+    },
+    onError: (err) => {
+      addToast({
+        title: "Revoke failed",
+        description: err.message,
+        color: "danger",
+      });
+    },
+  });
+
+  const removeMutation = trpc.agentUsers.removeByUserId.useMutation({
+    onSuccess: (res) => {
+      void utils.system.listUsers.invalidate();
+      void utils.apiKeys.adminListAll.invalidate();
+      addToast({
+        title: "Agent removed",
+        description: `Removed ${res.removedCount} membership${
+          res.removedCount === 1 ? "" : "s"
+        } and revoked ${res.revokedKeyCount} key${
+          res.revokedKeyCount === 1 ? "" : "s"
+        }.`,
+        color: "default",
+      });
+      setConfirm(null);
+    },
+    onError: (err) => {
+      addToast({
+        title: "Remove failed",
+        description: err.message,
+        color: "danger",
+      });
+    },
+  });
+
   return (
-    <Popover placement="bottom-end">
-      <PopoverTrigger>
-        <Button
-          isIconOnly
-          variant="light"
-          size="sm"
-          radius="full"
-          aria-label="Agent actions"
-          className="text-foreground/40 opacity-0 transition-opacity group-hover:opacity-100"
-        >
-          <MoreHorizontal className="h-3.5 w-3.5" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="min-w-[200px] max-w-[260px] p-1">
-        <div className="flex w-full flex-col">
-          <Tooltip content="Coming soon — pod-wide key revocation needs a new admin procedure.">
-            <span className="block">
-              <Button
-                variant="light"
-                size="sm"
-                radius="sm"
-                isDisabled
-                className="w-full justify-start text-[12.5px]"
-              >
-                Revoke keys
-              </Button>
-            </span>
-          </Tooltip>
-          <Tooltip content="Coming soon — pod-wide agent removal needs a new admin procedure.">
-            <span className="block">
-              <Button
-                variant="light"
-                size="sm"
-                radius="sm"
-                isDisabled
-                className="w-full justify-start text-[12.5px] text-danger"
-              >
-                Remove
-              </Button>
-            </span>
-          </Tooltip>
-        </div>
-      </PopoverContent>
-    </Popover>
+    <>
+      <Popover placement="bottom-end">
+        <PopoverTrigger>
+          <Button
+            isIconOnly
+            variant="light"
+            size="sm"
+            radius="full"
+            aria-label="Agent actions"
+            className="text-foreground/40 opacity-0 transition-opacity group-hover:opacity-100"
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="min-w-[200px] max-w-[260px] p-1">
+          <div className="flex w-full flex-col">
+            <Button
+              variant="light"
+              size="sm"
+              radius="sm"
+              className="w-full justify-start text-[12.5px]"
+              onPress={() => setConfirm("revoke")}
+            >
+              Revoke keys
+            </Button>
+            <Button
+              variant="light"
+              size="sm"
+              radius="sm"
+              className="w-full justify-start text-[12.5px] text-danger"
+              onPress={() => setConfirm("remove")}
+            >
+              Remove
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+
+      {confirm === "revoke" ? (
+        <ConfirmAgentActionModal
+          title="Revoke API keys"
+          message="Revoke all API keys for this agent? Existing connections using those keys will fail immediately."
+          confirmLabel="Revoke keys"
+          isPending={revokeMutation.isPending}
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => revokeMutation.mutate({ userId })}
+        />
+      ) : null}
+      {confirm === "remove" ? (
+        <ConfirmAgentActionModal
+          title="Remove agent"
+          message="Remove this agent and revoke all its keys? This drops every workspace membership and cannot be undone."
+          confirmLabel="Remove agent"
+          isPending={removeMutation.isPending}
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => removeMutation.mutate({ userId })}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function ConfirmAgentActionModal({
+  title,
+  message,
+  confirmLabel,
+  isPending,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  isPending: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const { isOpen, onOpenChange } = useDisclosure({
+    defaultOpen: true,
+    onClose: onCancel,
+  });
+
+  return (
+    <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
+      <ModalContent>
+        <ModalHeader className="flex flex-col gap-1 border-b border-foreground/[0.06] px-6 py-4">
+          <h2 className="text-[15px] font-medium text-foreground">{title}</h2>
+        </ModalHeader>
+        <ModalBody className="gap-2 px-6 py-4">
+          <p className="text-[12.5px] text-foreground/85">{message}</p>
+        </ModalBody>
+        <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
+          <Button
+            variant="flat"
+            radius="md"
+            size="sm"
+            onPress={onCancel}
+            isDisabled={isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            color="danger"
+            variant="solid"
+            radius="md"
+            size="sm"
+            isLoading={isPending}
+            onPress={onConfirm}
+          >
+            {confirmLabel}
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
   );
 }
 

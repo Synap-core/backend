@@ -24,7 +24,10 @@ export const MemoryFactSchema = z
 /** Body for POST /memory. */
 export const CreateMemoryRequestSchema = z
   .object({
-    userId: z.string(),
+    userId: z
+      .string()
+      .optional()
+      .describe("Defaults to the authenticated agent's user when omitted."),
     fact: z.string().min(1),
     confidence: z.number().min(0).max(1).optional(),
     embedding: z

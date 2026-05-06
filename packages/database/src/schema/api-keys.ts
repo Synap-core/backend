@@ -74,6 +74,13 @@ export const apiKeys = pgTable(
     // and stand-alone keys. See migration 0018_per_user_sub_tokens.sql.
     parentKeyId: uuid("parent_key_id"),
 
+    // Workspace scope (NULL = pod-wide / user-scoped legacy key).
+    // Set when the key is minted via apiKeys.createForWorkspace so the
+    // workspace-admin UI can list / revoke keys belonging to that
+    // workspace without leaking keys from other workspaces a user is
+    // also a member of. See migration 0020_api_keys_workspace_scope.sql.
+    workspaceId: uuid("workspace_id"),
+
     // Audit Trail
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

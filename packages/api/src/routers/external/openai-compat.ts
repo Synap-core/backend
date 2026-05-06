@@ -40,14 +40,6 @@ const MODEL_TIER_MAP: Record<string, string> = {
   "synap/complex": "complex",
 };
 
-// ── Model alias → agentType override ─────────────────────────────────────────
-// Tier-based aliases always use agentType "meta". Agent-specific aliases route
-// to a named agent persona. IS falls back to OrchestratorAgent for unknown types.
-const MODEL_AGENT_MAP: Record<string, string> = {
-  "synap/hermes": "hermes", // Builder agent (code, deployment, scaffolding)
-  "synap/openclaw": "openclaw", // OpenClaw agent (shell, tools, automation)
-};
-
 // ── Zod schemas ──────────────────────────────────────────────────────────────
 
 const messageSchema = z.object({
@@ -268,14 +260,12 @@ openaiCompatApp.post(
       agentConfig.systemPromptOverride = systemPrompt;
     }
 
-    const resolvedAgentType = MODEL_AGENT_MAP[requestedModel] ?? "meta";
-
     const isBody: Record<string, unknown> = {
       query,
       threadId: resolvedChannelId,
       userId,
       workspaceId: resolvedWorkspaceId,
-      agentType: resolvedAgentType,
+      agentType: "meta",
       dataPodUrl: process.env.PUBLIC_URL ?? process.env.BACKEND_URL ?? "",
       stream: input.stream,
     };
@@ -553,8 +543,26 @@ openaiCompatApp.post(
 
 // ── Models listing (useful for OpenAI-compatible clients) ────────────────────
 
-openaiCompatApp.get("/models", externalApiKeyAuth("chat.stream"), (c) => {
-  const models = [
+/**
+ * Fetch locally available Ollama models. Returns empty array on any error
+ * (Ollama not installed, timeout, etc.) — callers must treat this as best-effort.
+ */
+async function fetchOllamaModels(baseUrl: string): Promise<string[]> {
+  try {
+    const res = await fetch(`${baseUrl}/api/tags`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as { models?: Array<{ name: string }> };
+    return (json.models ?? []).map((m) => m.name).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+openaiCompatApp.get("/models", externalApiKeyAuth("chat.stream"), async (c) => {
+  // Fixed Synap tier aliases — always present regardless of provider config.
+  const tierModels = [
     {
       id: "synap/auto",
       object: "model" as const,
@@ -585,19 +593,40 @@ openaiCompatApp.get("/models", externalApiKeyAuth("chat.stream"), (c) => {
       created: 1700000000,
       owned_by: "synap",
     },
-    {
-      id: "synap/hermes",
-      object: "model" as const,
-      created: 1700000000,
-      owned_by: "synap",
-    },
-    {
-      id: "synap/openclaw",
-      object: "model" as const,
-      created: 1700000000,
-      owned_by: "synap",
-    },
   ];
 
-  return c.json({ object: "list" as const, data: models });
+  // Dynamic models: the user's configured default model (if any) and locally
+  // running Ollama models. Eve writes OLLAMA_BASE_URL to the deploy .env when
+  // Ollama is installed; DEFAULT_AI_MODEL comes from the active provider config.
+  const seen = new Set(tierModels.map((m) => m.id));
+  const extra: typeof tierModels = [];
+
+  const configuredModel = process.env.DEFAULT_AI_MODEL;
+  if (configuredModel && !seen.has(configuredModel)) {
+    seen.add(configuredModel);
+    extra.push({
+      id: configuredModel,
+      object: "model",
+      created: 1700000000,
+      owned_by: "external",
+    });
+  }
+
+  const ollamaBaseUrl = process.env.OLLAMA_BASE_URL;
+  if (ollamaBaseUrl) {
+    const ollamaModels = await fetchOllamaModels(ollamaBaseUrl);
+    for (const name of ollamaModels) {
+      if (!seen.has(name)) {
+        seen.add(name);
+        extra.push({
+          id: name,
+          object: "model",
+          created: 1700000000,
+          owned_by: "ollama",
+        });
+      }
+    }
+  }
+
+  return c.json({ object: "list" as const, data: [...tierModels, ...extra] });
 });

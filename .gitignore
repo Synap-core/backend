@@ -5,6 +5,7 @@ node_modules/
 # Build outputs
 dist/
 build/
+.next/
 *.tsbuildinfo
 
 # Emitted JS/declarations in src (build must output to dist only; prevent accidental commit)

@@ -140,6 +140,9 @@ export * from "./signals.js";
 // NEW: Trusted Issuers (pod-level registry of approved external services)
 export * from "./trusted-issuers.js";
 
+// NEW: Pod Settings (singleton row holding pod-wide defaults — intelligence + proactive)
+export * from "./pod-settings.js";
+
 // NEW: Source Configs & Subscriptions (pluggable feed source providers)
 export * from "./source-configs.js";
 

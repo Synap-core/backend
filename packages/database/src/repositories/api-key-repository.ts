@@ -22,6 +22,8 @@ export interface CreateApiKeyInput {
   keyType?: "hub_inbound" | "user_pat" | "system" | "service";
   /** Human-readable explanation of this key's purpose */
   description?: string;
+  /** Workspace tag — set when minted via apiKeys.createForWorkspace. */
+  workspaceId?: string | null;
 }
 
 export interface UpdateApiKeyInput {
@@ -65,6 +67,7 @@ export class ApiKeyRepository extends BaseRepository<
         usageCount: 0,
         keyType: data.keyType ?? "hub_inbound",
         description: data.description,
+        workspaceId: data.workspaceId ?? null,
       })
       .returning();
 

@@ -511,6 +511,9 @@ export const workspaces = pgTable("workspaces", {
   updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
     .defaultNow()
     .notNull(),
+  // Soft-archive: when set, the workspace is hidden from default list queries.
+  // Restore by setting back to NULL. Added in migration 0020.
+  archivedAt: timestamp("archived_at", { mode: "date", withTimezone: true }),
 });
 
 export const workspaceMembers = pgTable("workspace_members", {

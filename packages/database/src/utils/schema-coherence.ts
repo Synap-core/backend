@@ -206,6 +206,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "parent_key_id",
     addedBy: "0018_per_user_sub_tokens.sql",
   },
+  {
+    table: "api_keys",
+    column: "workspace_id",
+    addedBy: "0020_api_keys_workspace_scope.sql",
+  },
 
   // api_key_external_users — sub-token mappings (0018)
   {
@@ -347,6 +352,20 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "source_subscriptions",
     column: "cursor",
     addedBy: "0008_source_configs.sql",
+  },
+
+  // pod_settings — singleton row holding pod-wide defaults (0020)
+  {
+    table: "pod_settings",
+    column: "settings",
+    addedBy: "0020_pod_settings.sql",
+  },
+
+  // workspaces — soft-archive support (0020)
+  {
+    table: "workspaces",
+    column: "archived_at",
+    addedBy: "0020_workspaces_archived_at.sql",
   },
 ];
 

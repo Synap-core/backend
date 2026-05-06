@@ -67,13 +67,22 @@ export function registerMemoryRoutes(app: HubHono): void {
       );
     }
     const body = c.req.valid("json");
+    const userId = body.userId ?? (c.get("userId") as string | undefined);
+    if (!userId) {
+      return c.json(
+        {
+          error: "userId is required (pass in body or authenticate via Bearer)",
+        },
+        400
+      );
+    }
     try {
       // Embedding is optional — if not provided, use a zero vector.
       const embedding = Array.isArray(body.embedding)
         ? body.embedding
         : new Array(1536).fill(0);
       const record = await knowledgeRepository.saveFact({
-        userId: body.userId,
+        userId,
         fact: body.fact,
         confidence: body.confidence ?? 0.8,
         embedding,

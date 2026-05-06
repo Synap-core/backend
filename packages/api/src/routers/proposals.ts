@@ -165,7 +165,15 @@ export const proposalsRouter = router({
   list: protectedProcedure
     .input(
       paginatedInput.extend({
-        workspaceId: z.string().optional(),
+        /**
+         * Workspace filter — three-state:
+         *   - `string`     → only proposals for that workspace
+         *   - `null`       → only pod-wide proposals (workspaceId IS NULL)
+         *                    used by the Pod Admin Overview which previously
+         *                    fetched all proposals and filtered client-side
+         *   - `undefined`  → no filter (every workspace + pod-wide)
+         */
+        workspaceId: z.string().nullish(),
         targetType: z
           .enum(["document", "entity", "whiteboard", "view", "profile"])
           .optional(),
@@ -181,7 +189,11 @@ export const proposalsRouter = router({
       const conditions = [];
 
       // Filter by Workspace (Security Boundary)
-      if (input.workspaceId) {
+      // Three-state: string = that workspace, null = pod-wide only,
+      // undefined = no filter (return all).
+      if (input.workspaceId === null) {
+        conditions.push(isNull(proposals.workspaceId));
+      } else if (typeof input.workspaceId === "string") {
         conditions.push(eq(proposals.workspaceId, input.workspaceId));
       }
 
