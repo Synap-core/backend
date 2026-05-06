@@ -28,6 +28,9 @@ build/
 *.swo
 *~
 
+# Claude Code (worktrees, local settings, agent scratch state)
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db
