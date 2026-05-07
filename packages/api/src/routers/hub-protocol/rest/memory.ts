@@ -452,11 +452,7 @@ export function registerMemoryRoutes(app: HubHono): void {
         userId,
         fact,
         confidence: body.confidence ?? 0.95,
-        embedding: Array.isArray(body.embedding)
-          ? body.embedding
-          : new Array(1536).fill(0),
-        sourceEntityId: body.sourceEntityId,
-        sourceMessageId: body.sourceMessageId,
+        embedding: new Array(1536).fill(0),
       });
 
       return c.json({ success: true, facts: [record], count: 1 }, 200);
@@ -527,8 +523,6 @@ export function registerMemoryRoutes(app: HubHono): void {
           fact: entryFact,
           confidence: body.confidence ?? 0.9,
           embedding,
-          sourceEntityId: body.sourceEntityId,
-          sourceMessageId: body.sourceMessageId,
         });
         created.push(record);
       }
