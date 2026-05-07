@@ -1,7 +1,8 @@
 {
-  "session_id": "8829b061-4799-4bb5-9320-4da893b4b426",
-  "transcript_path": "/Users/antoine/.claude/projects/-Users-antoine-Documents-Code-synap/8829b061-4799-4bb5-9320-4da893b4b426.jsonl",
+  "session_id": "586a9152-46dc-449d-962c-b6ba680c68e4",
+  "transcript_path": "/Users/antoine/.claude/projects/-Users-antoine-Documents-Code-synap/586a9152-46dc-449d-962c-b6ba680c68e4.jsonl",
   "cwd": "/Users/antoine/Documents/Code/synap/synap-backend",
+  "session_name": "Debug EZUI Kratos authentication discrepancies",
   "model": {
     "id": "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit",
     "display_name": "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit"
@@ -11,27 +12,30 @@
     "project_dir": "/Users/antoine/Documents/Code/synap",
     "added_dirs": []
   },
-  "version": "99.0.0",
+  "version": "2.1.132",
   "output_style": { "name": "default" },
   "cost": {
-    "total_cost_usd": 31.739344999999997,
-    "total_duration_ms": 5475709,
-    "total_api_duration_ms": 5682914,
-    "total_lines_added": 425,
-    "total_lines_removed": 105
+    "total_cost_usd": 37.091570000000004,
+    "total_duration_ms": 7884188,
+    "total_api_duration_ms": 13787220,
+    "total_lines_added": 12,
+    "total_lines_removed": 4
   },
   "context_window": {
-    "total_input_tokens": 5911224,
-    "total_output_tokens": 87329,
-    "context_window_size": 128000,
+    "total_input_tokens": 99066,
+    "total_output_tokens": 446,
+    "context_window_size": 200000,
     "current_usage": {
-      "input_tokens": 74562,
-      "output_tokens": 533,
+      "input_tokens": 99066,
+      "output_tokens": 446,
       "cache_creation_input_tokens": 0,
       "cache_read_input_tokens": 0
     },
-    "used_percentage": 58,
-    "remaining_percentage": 42
+    "used_percentage": 50,
+    "remaining_percentage": 50
   },
-  "exceeds_200k_tokens": false
+  "exceeds_200k_tokens": false,
+  "fast_mode": false,
+  "effort": { "level": "medium" },
+  "thinking": { "enabled": true }
 }

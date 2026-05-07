@@ -43,10 +43,10 @@ const HOST_LOG_DIR = process.env.HOST_LOG_DIR || "/host-log";
  * explicitly listed here returns 404.
  */
 const HOST_LOG_ALLOWLIST = new Set([
-  "cp-callback.log",       // per-phase install-callback outcomes
-  "synap-install.log",      // install.sh stdout
-  "cloud-init-output.log",  // full cloud-init runcmd output
-  "cloud-init.log",         // cloud-init internals
+  "cp-callback.log", // per-phase install-callback outcomes
+  "synap-install.log", // install.sh stdout
+  "cloud-init-output.log", // full cloud-init runcmd output
+  "cloud-init.log", // cloud-init internals
 ]);
 
 const HOST_LOG_MAX_BYTES = 256 * 1024; // 256 KB — tail from end if larger
@@ -57,7 +57,9 @@ const HOST_LOG_MAX_BYTES = 256 * 1024; // 256 KB — tail from end if larger
 // NOT accept a JWKS URL from the request header — eliminating the ability for
 // any caller to substitute their own signing key.
 const CONTROL_PLANE_URL = process.env.CONTROL_PLANE_URL || "";
-const CP_JWKS_URL = CONTROL_PLANE_URL ? `${CONTROL_PLANE_URL}/.well-known/jwks.json` : "";
+const CP_JWKS_URL = CONTROL_PLANE_URL
+  ? `${CONTROL_PLANE_URL}/.well-known/jwks.json`
+  : "";
 
 // ── JWKS Cache ──
 
@@ -112,7 +114,8 @@ function verifyJWT(token, publicKey) {
   const header = JSON.parse(base64UrlDecode(h));
   if (header.alg !== "ES256") throw new Error("unsupported alg");
   const payload = JSON.parse(base64UrlDecode(p));
-  if (payload.exp && payload.exp < Date.now() / 1000) throw new Error("expired");
+  if (payload.exp && payload.exp < Date.now() / 1000)
+    throw new Error("expired");
   if (payload.iss !== "synap-control-plane") throw new Error("bad issuer");
   // ES256 JWT uses raw R||S signature — dsaEncoding: "ieee-p1363"
   const ok = crypto.verify(
@@ -160,7 +163,11 @@ const COMMANDS = {
   },
   archive: {
     script: "archive-pod.sh",
-    args: (p) => [p.presignedUploadUrl || "", p.callbackUrl || "", p.callbackJwt || ""],
+    args: (p) => [
+      p.presignedUploadUrl || "",
+      p.callbackUrl || "",
+      p.callbackJwt || "",
+    ],
   },
   configure: {
     script: "configure-pod.sh",
@@ -174,8 +181,14 @@ const COMMANDS = {
       // them as distinct positional parameters. Passing "--profile canary"
       // as a single string would make $1="--profile canary" and the
       // `--profile)` case wouldn't match.
-      const profileArgs = (p.profiles || []).flatMap((pr) => ["--profile", String(pr)]);
-      const recreateArgs = (p.recreate || []).flatMap((svc) => ["--recreate", String(svc)]);
+      const profileArgs = (p.profiles || []).flatMap((pr) => [
+        "--profile",
+        String(pr),
+      ]);
+      const recreateArgs = (p.recreate || []).flatMap((svc) => [
+        "--recreate",
+        String(svc),
+      ]);
       return [
         p.callbackUrl || "",
         p.callbackJwt || "",
@@ -228,15 +241,24 @@ function buildResultPacket(payload, status, err, extra = {}) {
 
 http
   .createServer(async (req, res) => {
-    if (req.method === "GET" && (req.url === "/health" || req.url === "/api/pod-agent/health")) {
-      return respond(res, 200, { ok: true, agent: "pod-agent", uptime: Math.floor(process.uptime()) });
+    if (
+      req.method === "GET" &&
+      (req.url === "/health" || req.url === "/api/pod-agent/health")
+    ) {
+      return respond(res, 200, {
+        ok: true,
+        agent: "pod-agent",
+        uptime: Math.floor(process.uptime()),
+      });
     }
 
     // Addon health check — used by CP to poll container readiness after provisioning
     // Matches both /addon-health/:addon and /api/pod-agent/addon-health/:addon
     const addonHealthMatch =
       req.method === "GET" &&
-      (req.url || "").match(/^(?:\/api\/pod-agent)?\/addon-health\/([a-zA-Z0-9_-]+)$/);
+      (req.url || "").match(
+        /^(?:\/api\/pod-agent)?\/addon-health\/([a-zA-Z0-9_-]+)$/
+      );
     if (addonHealthMatch) {
       const addonName = addonHealthMatch[1];
       // Try exact container name first, then synap-{addon} prefix (Docker Compose convention)
@@ -247,7 +269,11 @@ http
         const name = names[0];
         execFile(
           "docker",
-          ["inspect", `--format={{.State.Status}} {{.State.Health.Status}}`, name],
+          [
+            "inspect",
+            `--format={{.State.Status}} {{.State.Health.Status}}`,
+            name,
+          ],
           { timeout: 10_000 },
           (err, stdout) => {
             if (err) return checkCandidate(names.slice(1), cb);
@@ -261,7 +287,11 @@ http
           // docker not available or unexpected error path
           const msg = err ? err.message : "container not found";
           log(`addon-health ${addonName}: ${msg}`);
-          return respond(res, 200, { healthy: false, status: "stopped", addon: addonName });
+          return respond(res, 200, {
+            healthy: false,
+            status: "stopped",
+            addon: addonName,
+          });
         }
 
         // output format: "<state> <healthStatus>" e.g. "running healthy", "running ", "exited "
@@ -303,8 +333,12 @@ http
     if (hostLogMatch) {
       try {
         const auth = req.headers["authorization"] || "";
-        if (!auth.startsWith("Bearer ")) return respond(res, 401, { error: "no auth" });
-        if (!CP_JWKS_URL) return respond(res, 503, { error: "CONTROL_PLANE_URL not configured on this pod" });
+        if (!auth.startsWith("Bearer "))
+          return respond(res, 401, { error: "no auth" });
+        if (!CP_JWKS_URL)
+          return respond(res, 503, {
+            error: "CONTROL_PLANE_URL not configured on this pod",
+          });
         const publicKey = await getPublicKey(CP_JWKS_URL);
         const payload = verifyJWT(auth.slice(7), publicKey);
         if (payload.type !== "read-host-log") {
@@ -314,13 +348,19 @@ http
         const params = new URLSearchParams(hostLogMatch[1]);
         const fileParam = params.get("file") || "";
         if (!HOST_LOG_ALLOWLIST.has(fileParam)) {
-          return respond(res, 404, { error: "file not in allowlist", allowlist: Array.from(HOST_LOG_ALLOWLIST) });
+          return respond(res, 404, {
+            error: "file not in allowlist",
+            allowlist: Array.from(HOST_LOG_ALLOWLIST),
+          });
         }
 
         // Resolve and re-verify the file stays inside HOST_LOG_DIR — defense in
         // depth against a malformed allowlist entry or symlink escape.
         const fullPath = path.resolve(HOST_LOG_DIR, fileParam);
-        if (!fullPath.startsWith(HOST_LOG_DIR + path.sep) && fullPath !== path.resolve(HOST_LOG_DIR)) {
+        if (
+          !fullPath.startsWith(HOST_LOG_DIR + path.sep) &&
+          fullPath !== path.resolve(HOST_LOG_DIR)
+        ) {
           return respond(res, 400, { error: "path escape" });
         }
 
@@ -333,7 +373,13 @@ http
           if (size > HOST_LOG_MAX_BYTES) {
             const fd = fs.openSync(fullPath, "r");
             const buf = Buffer.alloc(HOST_LOG_MAX_BYTES);
-            fs.readSync(fd, buf, 0, HOST_LOG_MAX_BYTES, size - HOST_LOG_MAX_BYTES);
+            fs.readSync(
+              fd,
+              buf,
+              0,
+              HOST_LOG_MAX_BYTES,
+              size - HOST_LOG_MAX_BYTES
+            );
             fs.closeSync(fd);
             content = buf.toString("utf8");
             truncated = true;
@@ -342,7 +388,12 @@ http
           }
         } catch (err) {
           if (err.code === "ENOENT") {
-            return respond(res, 200, { file: fileParam, exists: false, size: 0, content: "" });
+            return respond(res, 200, {
+              file: fileParam,
+              exists: false,
+              size: 0,
+              content: "",
+            });
           }
           return respond(res, 500, { error: err.message || "read failed" });
         }
@@ -379,18 +430,29 @@ http
     if (dockerLogsMatch) {
       try {
         const auth = req.headers["authorization"] || "";
-        if (!auth.startsWith("Bearer ")) return respond(res, 401, { error: "no auth" });
-        if (!CP_JWKS_URL) return respond(res, 503, { error: "CONTROL_PLANE_URL not configured" });
+        if (!auth.startsWith("Bearer "))
+          return respond(res, 401, { error: "no auth" });
+        if (!CP_JWKS_URL)
+          return respond(res, 503, {
+            error: "CONTROL_PLANE_URL not configured",
+          });
         const publicKey = await getPublicKey(CP_JWKS_URL);
         const payload = verifyJWT(auth.slice(7), publicKey);
-        if (payload.type !== "read-docker-logs") return respond(res, 403, { error: "wrong jwt type" });
+        if (payload.type !== "read-docker-logs")
+          return respond(res, 403, { error: "wrong jwt type" });
 
         const params = new URLSearchParams(dockerLogsMatch[1] || "");
         const service = params.get("service") || "api";
-        const tail = Math.min(parseInt(params.get("tail") || "200", 10) || 200, 1000);
+        const tail = Math.min(
+          parseInt(params.get("tail") || "200", 10) || 200,
+          1000
+        );
         const containerName = DOCKER_LOG_SERVICES[service];
         if (!containerName) {
-          return respond(res, 400, { error: `unknown service: ${service}`, allowed: Object.keys(DOCKER_LOG_SERVICES) });
+          return respond(res, 400, {
+            error: `unknown service: ${service}`,
+            allowed: Object.keys(DOCKER_LOG_SERVICES),
+          });
         }
 
         log(`docker-logs stream: ${service} (${containerName})`);
@@ -398,20 +460,28 @@ http
         res.writeHead(200, {
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache",
-          "Connection": "keep-alive",
+          Connection: "keep-alive",
           "X-Accel-Buffering": "no",
         });
 
         // Send a ready event so the client knows the stream opened
-        res.write(`event: ready\ndata: ${JSON.stringify({ service, container: containerName })}\n\n`);
+        res.write(
+          `event: ready\ndata: ${JSON.stringify({ service, container: containerName })}\n\n`
+        );
 
-        const proc = spawn("docker", ["logs", "--follow", `--tail=${tail}`, containerName], {
-          stdio: ["ignore", "pipe", "pipe"],
-        });
+        const proc = spawn(
+          "docker",
+          ["logs", "--follow", `--tail=${tail}`, containerName],
+          {
+            stdio: ["ignore", "pipe", "pipe"],
+          }
+        );
 
         function sendLine(line) {
           if (!line) return;
-          res.write(`event: log\ndata: ${JSON.stringify({ line, t: Date.now() })}\n\n`);
+          res.write(
+            `event: log\ndata: ${JSON.stringify({ line, t: Date.now() })}\n\n`
+          );
         }
 
         let stdoutBuf = "";
@@ -432,7 +502,9 @@ http
 
         proc.on("error", (err) => {
           log(`docker-logs proc error for ${containerName}: ${err.message}`);
-          res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
+          res.write(
+            `event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`
+          );
           res.end();
         });
 
@@ -444,7 +516,11 @@ http
 
         // Keepalive comment every 20s so proxies (Caddy, Cloudflare) don't close the stream
         const keepalive = setInterval(() => {
-          try { res.write(": keepalive\n\n"); } catch { clearInterval(keepalive); }
+          try {
+            res.write(": keepalive\n\n");
+          } catch {
+            clearInterval(keepalive);
+          }
         }, 20_000);
 
         req.on("close", () => {
@@ -460,30 +536,40 @@ http
       return;
     }
 
-    if (req.method !== "POST" || (req.url !== "/command" && req.url !== "/api/pod-agent/command")) {
+    if (
+      req.method !== "POST" ||
+      (req.url !== "/command" && req.url !== "/api/pod-agent/command")
+    ) {
       return respond(res, 404, { error: "not found" });
     }
 
     try {
       const auth = req.headers["authorization"] || "";
-      if (!auth.startsWith("Bearer ")) return respond(res, 401, { error: "no auth" });
-      if (!CP_JWKS_URL) return respond(res, 503, { error: "CONTROL_PLANE_URL not configured on this pod" });
+      if (!auth.startsWith("Bearer "))
+        return respond(res, 401, { error: "no auth" });
+      if (!CP_JWKS_URL)
+        return respond(res, 503, {
+          error: "CONTROL_PLANE_URL not configured on this pod",
+        });
 
       const publicKey = await getPublicKey(CP_JWKS_URL);
       const payload = verifyJWT(auth.slice(7), publicKey);
 
       if (payload.nonce) {
-        if (usedNonces.has(payload.nonce)) return respond(res, 409, { error: "replay" });
+        if (usedNonces.has(payload.nonce))
+          return respond(res, 409, { error: "replay" });
         usedNonces.set(payload.nonce, Date.now());
       }
-      if (!COMMANDS[payload.type]) return respond(res, 400, { error: `unknown type: ${payload.type}` });
+      if (!COMMANDS[payload.type])
+        return respond(res, 400, { error: `unknown type: ${payload.type}` });
 
       // exec requires explicit allowExec claim in JWT
       if (payload.type === "exec" && !payload.allowExec) {
         return respond(res, 403, { error: "exec requires allowExec claim" });
       }
 
-      if (activeOps.has(payload.type)) return respond(res, 429, { error: "busy" });
+      if (activeOps.has(payload.type))
+        return respond(res, 429, { error: "busy" });
 
       activeOps.add(payload.type);
       const cmd = COMMANDS[payload.type];
@@ -492,84 +578,112 @@ http
       // exec: run docker exec and return output synchronously
       if (payload.type === "exec") {
         const [container, command] = cmd.args(payload);
-        execFile("docker", ["exec", container, "sh", "-c", command], { timeout: 60_000 }, (err, stdout, stderr) => {
-          activeOps.delete(payload.type);
-          const output = (stdout || "") + (stderr ? `\n[stderr] ${stderr}` : "");
-          if (err) log(`exec failed: ${err.message}`);
-          else log(`exec done`);
+        execFile(
+          "docker",
+          ["exec", container, "sh", "-c", command],
+          { timeout: 60_000 },
+          (err, stdout, stderr) => {
+            activeOps.delete(payload.type);
+            const output =
+              (stdout || "") + (stderr ? `\n[stderr] ${stderr}` : "");
+            if (err) log(`exec failed: ${err.message}`);
+            else log(`exec done`);
 
-          // Callback with output if callbackUrl is provided
+            // Callback with output if callbackUrl is provided
+            if (payload.callbackUrl && payload.callbackJwt) {
+              const packet = buildResultPacket(
+                payload,
+                err ? "failed" : "completed",
+                err,
+                {
+                  execContainer: container,
+                }
+              );
+              const body = JSON.stringify({
+                type: "exec",
+                success: !err,
+                output: output.slice(0, FULL_OUTPUT_MAX),
+                error: err ? err.message : null,
+                correlationId: packet.correlationId,
+                step: packet.step,
+                commandType: packet.commandType,
+                errorSummary: packet.errorSummary,
+                logsSnippet: output.slice(0, LOGS_SNIPPET_MAX),
+                packet: {
+                  ...packet,
+                  logsSnippet: output.slice(0, LOGS_SNIPPET_MAX),
+                },
+              });
+              const cbReq = https.request(payload.callbackUrl, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${payload.callbackJwt}`,
+                  "Content-Length": Buffer.byteLength(body),
+                },
+                timeout: 10_000,
+              });
+              cbReq.on("error", (e) =>
+                log(`exec callback failed: ${e.message}`)
+              );
+              cbReq.end(body);
+            }
+          }
+        );
+
+        return respond(res, 202, { accepted: true, type: "exec" });
+      }
+
+      execFile(
+        "/bin/sh",
+        [`${DEPLOY_DIR}/${cmd.script}`, ...cmd.args(payload)],
+        { cwd: DEPLOY_DIR, timeout: cmd.timeout ?? 600_000 },
+        (err, stdout, stderr) => {
+          activeOps.delete(payload.type);
+          const status = err ? "failed" : "completed";
+          const output =
+            (stdout || "") + (stderr ? `\n[stderr] ${stderr}` : "");
+          if (err)
+            log(
+              `${payload.type} failed: ${err.message}\n${output.slice(0, 2000)}`
+            );
+          else log(`${payload.type} done`);
+
+          // Callback to CP with result (Node.js https, not shell wget)
           if (payload.callbackUrl && payload.callbackJwt) {
-            const packet = buildResultPacket(payload, err ? "failed" : "completed", err, {
-              execContainer: container,
-            });
-            const body = JSON.stringify({
-              type: "exec",
-              success: !err,
-              output: output.slice(0, FULL_OUTPUT_MAX),
+            const packet = buildResultPacket(payload, status, err);
+            const cbBody = JSON.stringify({
+              updateId: payload.updateId,
+              status,
+              version: payload.targetVersion || payload.type,
               error: err ? err.message : null,
+              output: output.slice(0, FULL_OUTPUT_MAX),
               correlationId: packet.correlationId,
               step: packet.step,
               commandType: packet.commandType,
               errorSummary: packet.errorSummary,
               logsSnippet: output.slice(0, LOGS_SNIPPET_MAX),
-              packet: { ...packet, logsSnippet: output.slice(0, LOGS_SNIPPET_MAX) },
+              packet: {
+                ...packet,
+                logsSnippet: output.slice(0, LOGS_SNIPPET_MAX),
+              },
             });
-            const cbReq = https.request(payload.callbackUrl, {
+            const cbUrl = new URL(payload.callbackUrl);
+            const cbReq = https.request(cbUrl, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${payload.callbackJwt}`,
-                "Content-Length": Buffer.byteLength(body),
+                "Content-Length": Buffer.byteLength(cbBody),
               },
               timeout: 10_000,
             });
-            cbReq.on("error", (e) => log(`exec callback failed: ${e.message}`));
-            cbReq.end(body);
+            cbReq.on("response", (r) => log(`callback ${r.statusCode}`));
+            cbReq.on("error", (e) => log(`callback error: ${e.message}`));
+            cbReq.end(cbBody);
           }
-        });
-
-        return respond(res, 202, { accepted: true, type: "exec" });
-      }
-
-      execFile("/bin/sh", [`${DEPLOY_DIR}/${cmd.script}`, ...cmd.args(payload)], { cwd: DEPLOY_DIR, timeout: cmd.timeout ?? 600_000 }, (err, stdout, stderr) => {
-        activeOps.delete(payload.type);
-        const status = err ? "failed" : "completed";
-        const output = (stdout || "") + (stderr ? `\n[stderr] ${stderr}` : "");
-        if (err) log(`${payload.type} failed: ${err.message}\n${output.slice(0, 2000)}`);
-        else log(`${payload.type} done`);
-
-        // Callback to CP with result (Node.js https, not shell wget)
-        if (payload.callbackUrl && payload.callbackJwt) {
-          const packet = buildResultPacket(payload, status, err);
-          const cbBody = JSON.stringify({
-            updateId: payload.updateId,
-            status,
-            version: payload.targetVersion || payload.type,
-            error: err ? err.message : null,
-            output: output.slice(0, FULL_OUTPUT_MAX),
-            correlationId: packet.correlationId,
-            step: packet.step,
-            commandType: packet.commandType,
-            errorSummary: packet.errorSummary,
-            logsSnippet: output.slice(0, LOGS_SNIPPET_MAX),
-            packet: { ...packet, logsSnippet: output.slice(0, LOGS_SNIPPET_MAX) },
-          });
-          const cbUrl = new URL(payload.callbackUrl);
-          const cbReq = https.request(cbUrl, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${payload.callbackJwt}`,
-              "Content-Length": Buffer.byteLength(cbBody),
-            },
-            timeout: 10_000,
-          });
-          cbReq.on("response", (r) => log(`callback ${r.statusCode}`));
-          cbReq.on("error", (e) => log(`callback error: ${e.message}`));
-          cbReq.end(cbBody);
         }
-      });
+      );
 
       respond(res, 202, { accepted: true, type: payload.type });
     } catch (e) {

@@ -20,11 +20,19 @@ body {
 }
 
 :root {
-  --pa-bloom: radial-gradient(60% 50% at 50% -10%, rgba(16, 185, 129, 0.05) 0%, transparent 70%);
+  --pa-bloom: radial-gradient(
+    60% 50% at 50% -10%,
+    rgba(16, 185, 129, 0.05) 0%,
+    transparent 70%
+  );
 }
 
 .dark {
-  --pa-bloom: radial-gradient(70% 55% at 50% -10%, rgba(52, 211, 153, 0.08) 0%, transparent 70%);
+  --pa-bloom: radial-gradient(
+    70% 55% at 50% -10%,
+    rgba(52, 211, 153, 0.08) 0%,
+    transparent 70%
+  );
 }
 
 /* ----------------------------------------------------------------------
@@ -40,7 +48,9 @@ body {
   isolation: isolate;
   border-radius: 8px;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
-  transition: transform 200ms ease-out, box-shadow 200ms ease-out;
+  transition:
+    transform 200ms ease-out,
+    box-shadow 200ms ease-out;
   overflow: hidden;
 }
 .glass-icon::after {
@@ -48,7 +58,11 @@ body {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.22) 0%, transparent 50%);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.22) 0%,
+    transparent 50%
+  );
   pointer-events: none;
   z-index: 1;
 }
@@ -57,7 +71,7 @@ body {
   z-index: 2;
 }
 .glass-icon:hover {
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.30);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
 }
 
 /* ----------------------------------------------------------------------
@@ -113,8 +127,13 @@ body {
  * Resource row pulse — used while a row is loading inline data.
  * ------------------------------------------------------------------- */
 @keyframes pa-shimmer {
-  0%, 100% { opacity: 0.6; }
-  50%      { opacity: 1; }
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 .shimmer-pulse {
   animation: pa-shimmer 1.6s ease-in-out infinite;

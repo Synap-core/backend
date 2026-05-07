@@ -44,6 +44,7 @@ export default [
       "@typescript-eslint/no-empty-object-type": "warn", // Downgrade to warn (generated files use {})
       "no-undef": "off", // TypeScript handles this better
       "no-case-declarations": "warn", // Downgrade to warn (common pattern in switch statements)
+      "react-hooks/exhaustive-deps": "off", // Plugin not installed for root (Next.js apps handle this differently)
     },
   },
 ];

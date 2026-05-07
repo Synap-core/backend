@@ -423,7 +423,6 @@ function PerWorkspaceGridSection() {
     if (!focusId || selected) return;
     const found = rows.find((r) => r.connectionId === focusId);
     if (found) setSelected(found);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusId, rows]);
 
   // Group by workspaceName (falls back to workspaceId or "Pod-wide").

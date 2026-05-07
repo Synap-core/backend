@@ -50,7 +50,7 @@ import {
   Zap,
   type LucideIcon,
 } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import { trpc } from "../../../lib/trpc";
 import {
   ResourceRow,

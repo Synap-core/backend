@@ -177,8 +177,6 @@ function WorkspacesInner() {
       setSelectedId(focusId);
       drawerDisclosure.onOpen();
     }
-    // We intentionally only react when the focus param itself changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusId]);
 
   // The api-types snapshot types `settings` as the structured

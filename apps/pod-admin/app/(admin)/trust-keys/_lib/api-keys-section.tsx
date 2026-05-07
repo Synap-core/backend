@@ -19,7 +19,6 @@
 
 import {
   Button,
-  Chip,
   Dropdown,
   DropdownItem,
   DropdownMenu,

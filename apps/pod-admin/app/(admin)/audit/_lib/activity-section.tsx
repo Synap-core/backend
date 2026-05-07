@@ -145,7 +145,6 @@ export function ActivitySection({
       onAvailableActors(Object.values(actors));
       onAvailableWorkspaces(Object.values(workspaces));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auditQuery.data]);
 
   // Apply client-side filters that the backend didn't apply:
@@ -183,7 +182,6 @@ export function ActivitySection({
     if (!focusId || selected) return;
     const found = filtered.find((e) => e.id === focusId);
     if (found) setSelected(found);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusId, filtered]);
 
   return (

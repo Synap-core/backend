@@ -94,7 +94,6 @@ export function ProposalsSection({ filters }: { filters: AuditFilters }) {
     if (!focusId || selected) return;
     const found = podLevel.find((p) => p.id === focusId);
     if (found) setSelected(found);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusId, podLevel]);
 
   return (

@@ -203,6 +203,12 @@
   },
   "hotPaths": [
     {
+      "path": "",
+      "accessCount": 15,
+      "lastAccessed": 1778178119767,
+      "type": "directory"
+    },
+    {
       "path": "packages/api/src/routers/hub-protocol/rest/memory.ts",
       "accessCount": 4,
       "lastAccessed": 1778175847356,
@@ -212,6 +218,108 @@
       "path": "packages/api/src/routers/hub-protocol/rest/_codecs/memory.ts",
       "accessCount": 3,
       "lastAccessed": 1778175847295,
+      "type": "file"
+    },
+    {
+      "path": "packages/hub-rest-client/src/index.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778177778415,
+      "type": "file"
+    },
+    {
+      "path": "packages/database/src/schema/provisioning-tokens.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778177778454,
+      "type": "file"
+    },
+    {
+      "path": "packages/api/src/routers/hub-protocol-rest.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778177778608,
+      "type": "file"
+    },
+    {
+      "path": "packages/hub-rest-client/src/setup.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778177778680,
+      "type": "file"
+    },
+    {
+      "path": "packages/database/src/schema/api-keys.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778177778701,
+      "type": "file"
+    },
+    {
+      "path": "packages/api/src/routers",
+      "accessCount": 1,
+      "lastAccessed": 1778177778727,
+      "type": "directory"
+    },
+    {
+      "path": "packages/api/src/routers/hub-protocol/rest/setup.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778177778752,
+      "type": "file"
+    },
+    {
+      "path": "packages/api/src/services",
+      "accessCount": 1,
+      "lastAccessed": 1778177813478,
+      "type": "directory"
+    },
+    {
+      "path": "packages/api/src/routers/hub-protocol/rest/_shared.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778177813639,
+      "type": "file"
+    },
+    {
+      "path": "packages/api/src/services/external-registration.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778177855858,
+      "type": "file"
+    },
+    {
+      "path": "packages/api/src/services/api-keys.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778177855891,
+      "type": "file"
+    },
+    {
+      "path": "packages/api/src/services/hub-integration-registration.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778177855955,
+      "type": "file"
+    },
+    {
+      "path": "packages/api/src/utils/jwks-client.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778177910106,
+      "type": "file"
+    },
+    {
+      "path": "packages/database/src/schema/users.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778177910158,
+      "type": "file"
+    },
+    {
+      "path": "apps/api/src",
+      "accessCount": 1,
+      "lastAccessed": 1778177962624,
+      "type": "directory"
+    },
+    {
+      "path": "apps/api/src/routers/provision.ts",
+      "accessCount": 1,
+      "lastAccessed": 1778177963009,
+      "type": "file"
+    },
+    {
+      "path": "synap",
+      "accessCount": 1,
+      "lastAccessed": 1778180658345,
       "type": "file"
     }
   ],

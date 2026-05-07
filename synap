@@ -256,7 +256,15 @@ generate_kratos_config() {
         web_ui="https://${domain}"
     fi
     kratos_ui="${web_ui}/admin/kratos"
-    
+
+    # Kratos public API base URL — localhost in dev, domain URL in production
+    local kratos_public_base_url=""
+    if [ "$is_localhost" = true ]; then
+        kratos_public_base_url="http://localhost:4433"
+    else
+        kratos_public_base_url="https://${domain}/.ory/kratos/public/"
+    fi
+
     # Generate CORS origins
     local cors_origins="        - http://localhost:3000
         - http://localhost:5173
@@ -297,7 +305,7 @@ version: v1.3.1
 dsn: postgres://synap:\${POSTGRES_PASSWORD}@postgres:5432/kratos?sslmode=disable
 serve:
   public:
-    base_url: http://localhost:4433
+    base_url: ${kratos_public_base_url}
     cors:
       enabled: true
       # CORS origins - automatically generated from domain
