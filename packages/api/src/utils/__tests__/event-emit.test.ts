@@ -106,9 +106,9 @@ describe("emitTyped — compile-time type safety", () => {
       // @ts-expect-error — unknown event name
       await emitTyped("not-an-event", {}, target);
 
-      // @ts-expect-error — durationMs typed as number, given string
       const wrongType: Parameters<
         typeof emitTyped<"hermes:task:completed">
+        // @ts-expect-error — durationMs typed as number, given string
       >[1] = { taskId: "t", durationMs: "fast", completedAt: "x" };
       void wrongType;
 

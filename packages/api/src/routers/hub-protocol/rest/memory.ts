@@ -14,8 +14,12 @@ import { db, knowledgeFacts, knowledgeRepository, eq } from "@synap/database";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
   CreateMemoryRequestSchema,
+  MemoryBatchResponseSchema,
   MemoryFactSchema,
   MemorySearchRequestSchema,
+  MemorySessionRequestSchema,
+  MemoryTurnsRequestSchema,
+  MemoryWritesRequestSchema,
 } from "./_codecs/memory.js";
 import { hasScope, logger, type HubHono } from "./_shared.js";
 
@@ -290,6 +294,255 @@ export function registerMemoryRoutes(app: HubHono): void {
       return c.json({ success: true }, 200);
     } catch (err) {
       logger.error({ err, id }, "deleteFact failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /memory/turns ──────────────────────────────────────────────────
+  const turnsRoute = createRoute({
+    method: "post",
+    path: "/memory/turns",
+    tags: ["Memory"],
+    summary: "Store grouped chat turns",
+    description:
+      "Stores user/assistant/system turns grouped by sessionId. Each turn is " +
+      "persisted as a tagged fact for semantic retrieval plus a summary fact.",
+    request: {
+      body: {
+        content: { "application/json": { schema: MemoryTurnsRequestSchema } },
+      },
+    },
+    responses: {
+      200: {
+        description: "Batch result",
+        content: { "application/json": { schema: MemoryBatchResponseSchema } },
+      },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(turnsRoute, async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const body = c.req.valid("json");
+    const userId = body.userId ?? (c.get("userId") as string | undefined);
+    if (!userId) {
+      return c.json({ error: "userId is required" }, 400);
+    }
+    try {
+      const embedding = Array.isArray(body.embedding)
+        ? body.embedding
+        : new Array(1536).fill(0);
+      const created: (typeof knowledgeFacts.$inferSelect)[] = [];
+
+      // Store each turn as a tagged fact
+      for (let i = 0; i < body.turns.length; i++) {
+        const turn = body.turns[i];
+        const turnFact = `${body.sessionId}[turn:${i}] ${turn.role}: ${turn.content}`;
+        const record = await knowledgeRepository.saveFact({
+          userId,
+          fact: turnFact,
+          confidence: body.confidence ?? 0.8,
+          embedding,
+          sourceEntityId: body.sourceEntityId,
+          sourceMessageId: body.sourceMessageId,
+        });
+        created.push(record);
+      }
+
+      // Store a summary fact if provided
+      if (body.summary) {
+        const summaryRecord = await knowledgeRepository.saveFact({
+          userId,
+          fact: `${body.sessionId} [summary] ${body.summary}`,
+          confidence: body.confidence ?? 0.9,
+          embedding,
+          sourceEntityId: body.sourceEntityId,
+          sourceMessageId: body.sourceMessageId,
+        });
+        created.push(summaryRecord);
+      }
+
+      return c.json(
+        {
+          success: true,
+          facts: created,
+          count: created.length,
+        },
+        200
+      );
+    } catch (err) {
+      logger.error({ err }, "saveTurns failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /memory/sessions ───────────────────────────────────────────────
+  const sessionRoute = createRoute({
+    method: "post",
+    path: "/memory/sessions",
+    tags: ["Memory"],
+    summary: "Store session metadata",
+    description:
+      "Stores session metadata as a high-confidence fact for list/dedup purposes.",
+    request: {
+      body: {
+        content: { "application/json": { schema: MemorySessionRequestSchema } },
+      },
+    },
+    responses: {
+      200: {
+        description: "Session metadata stored",
+        content: { "application/json": { schema: MemoryBatchResponseSchema } },
+      },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(sessionRoute, async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const body = c.req.valid("json");
+    const userId = body.userId ?? (c.get("userId") as string | undefined);
+    if (!userId) {
+      return c.json({ error: "userId is required" }, 400);
+    }
+    try {
+      const metadataJson = body.metadata ? JSON.stringify(body.metadata) : "";
+      const tagsStr = body.tags ? body.tags.join(",") : "";
+      const fact = `${body.sessionId} summary: ${body.summary} turns: ${body.turnCount ?? 0} tags: ${tagsStr} metadata: ${metadataJson}`;
+
+      const record = await knowledgeRepository.saveFact({
+        userId,
+        fact,
+        confidence: body.confidence ?? 0.95,
+        embedding: Array.isArray(body.embedding)
+          ? body.embedding
+          : new Array(1536).fill(0),
+        sourceEntityId: body.sourceEntityId,
+        sourceMessageId: body.sourceMessageId,
+      });
+
+      return c.json({ success: true, facts: [record], count: 1 }, 200);
+    } catch (err) {
+      logger.error({ err }, "saveSession failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /memory/writes ─────────────────────────────────────────────────
+  const writesRoute = createRoute({
+    method: "post",
+    path: "/memory/writes",
+    tags: ["Memory"],
+    summary: "Batch structured writes",
+    description:
+      "Batch write of structured memory entries (remember/update/forget).",
+    request: {
+      body: {
+        content: { "application/json": { schema: MemoryWritesRequestSchema } },
+      },
+    },
+    responses: {
+      200: {
+        description: "Batch result",
+        content: { "application/json": { schema: MemoryBatchResponseSchema } },
+      },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(writesRoute, async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const body = c.req.valid("json");
+    const userId = body.userId ?? (c.get("userId") as string | undefined);
+    if (!userId) {
+      return c.json({ error: "userId is required" }, 400);
+    }
+    try {
+      const embedding = Array.isArray(body.embedding)
+        ? body.embedding
+        : new Array(1536).fill(0);
+      const created: (typeof knowledgeFacts.$inferSelect)[] = [];
+
+      for (const entry of body.entries) {
+        const entryFact = `[write:${entry.action}:${entry.target}] ${entry.content}`;
+        const record = await knowledgeRepository.saveFact({
+          userId,
+          fact: entryFact,
+          confidence: body.confidence ?? 0.9,
+          embedding,
+          sourceEntityId: body.sourceEntityId,
+          sourceMessageId: body.sourceMessageId,
+        });
+        created.push(record);
+      }
+
+      return c.json(
+        {
+          success: true,
+          facts: created,
+          count: created.length,
+        },
+        200
+      );
+    } catch (err) {
+      logger.error({ err }, "batchWrite failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

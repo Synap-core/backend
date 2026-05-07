@@ -1,0 +1,37 @@
+{
+  "session_id": "8829b061-4799-4bb5-9320-4da893b4b426",
+  "transcript_path": "/Users/antoine/.claude/projects/-Users-antoine-Documents-Code-synap/8829b061-4799-4bb5-9320-4da893b4b426.jsonl",
+  "cwd": "/Users/antoine/Documents/Code/synap/synap-backend",
+  "model": {
+    "id": "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit",
+    "display_name": "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit"
+  },
+  "workspace": {
+    "current_dir": "/Users/antoine/Documents/Code/synap/synap-backend",
+    "project_dir": "/Users/antoine/Documents/Code/synap",
+    "added_dirs": []
+  },
+  "version": "99.0.0",
+  "output_style": { "name": "default" },
+  "cost": {
+    "total_cost_usd": 24.970940000000002,
+    "total_duration_ms": 3371353,
+    "total_api_duration_ms": 3872282,
+    "total_lines_added": 417,
+    "total_lines_removed": 16
+  },
+  "context_window": {
+    "total_input_tokens": 4610143,
+    "total_output_tokens": 76809,
+    "context_window_size": 128000,
+    "current_usage": {
+      "input_tokens": 79064,
+      "output_tokens": 528,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+    },
+    "used_percentage": 62,
+    "remaining_percentage": 38
+  },
+  "exceeds_200k_tokens": false
+}

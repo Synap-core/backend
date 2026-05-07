@@ -47,7 +47,20 @@ import {
   toRegistrationTrace,
 } from "../../../services/external-registration.js";
 
+import { kratosAdmin } from "@synap/auth";
 import { logger, type HubHono } from "./_shared.js";
+
+/** Check Kratos admin API for any identities. */
+async function checkKratosIdentity(): Promise<boolean> {
+  try {
+    const { data: identities } = await kratosAdmin.listIdentities({
+      pageSize: 1,
+    });
+    return Array.isArray(identities) && identities.length > 0;
+  } catch {
+    return false;
+  }
+}
 
 export function registerSetupRoutes(app: HubHono): void {
   app.post("/setup/agent", async (c) => {
@@ -688,6 +701,9 @@ export function registerSetupRoutes(app: HubHono): void {
   // whether the pod has been bootstrapped yet.
   app.get("/setup/status", async (c) => {
     try {
+      // Primary check: Kratos identities (source of truth for auth).
+      const kratosHasIdentity = await checkKratosIdentity();
+
       const [humanResult] = await db
         .select({ count: count() })
         .from(users)
@@ -698,9 +714,9 @@ export function registerSetupRoutes(app: HubHono): void {
       const workspaceCount = Number(wsResult?.count ?? 0);
 
       return c.json({
-        hasAdmin: humanCount > 0,
+        hasAdmin: kratosHasIdentity || humanCount > 0,
         workspaceCount,
-        needsSetup: humanCount === 0,
+        needsSetup: !kratosHasIdentity && humanCount === 0,
       });
     } catch (err) {
       logger.error({ err }, "setup/status: failed");
@@ -727,12 +743,17 @@ export function registerSetupRoutes(app: HubHono): void {
       );
     }
 
-    // Guard: already has admin?
-    const [humanResult] = await db
-      .select({ count: count() })
-      .from(users)
-      .where(eq(users.userType, "human"));
-    if (Number(humanResult?.count ?? 0) > 0) {
+    // Guard: already has admin? (check Kratos first, then Synap DB fallback)
+    const kratosHasIdentity = await checkKratosIdentity();
+    const dbHasHuman = Number(
+      (
+        await db
+          .select({ count: count() })
+          .from(users)
+          .where(eq(users.userType, "human"))
+      )?.[0]?.count ?? 0
+    );
+    if (kratosHasIdentity || dbHasHuman > 0) {
       return c.json({ error: "Admin already exists" }, 409);
     }
 
@@ -815,12 +836,17 @@ export function registerSetupRoutes(app: HubHono): void {
       );
     }
 
-    // Guard: admin already exists?
-    const [humanResult] = await db
-      .select({ count: count() })
-      .from(users)
-      .where(eq(users.userType, "human"));
-    if (Number(humanResult?.count ?? 0) > 0) {
+    // Guard: admin already exists? (check Kratos first, then Synap DB fallback)
+    const kratosHasIdentity = await checkKratosIdentity();
+    const dbHasHuman = Number(
+      (
+        await db
+          .select({ count: count() })
+          .from(users)
+          .where(eq(users.userType, "human"))
+      )?.[0]?.count ?? 0
+    );
+    if (kratosHasIdentity || dbHasHuman > 0) {
       return c.json({ error: "Admin already exists" }, 409);
     }
 

@@ -297,14 +297,19 @@ export function registerWorkspacesRoutes(app: HubHono): void {
 
     // ── agentType allowlist gate ───────────────────────────────────────────
     // Look up the calling user's agentType from `users.agentMetadata`. Only
-    // agent users with an allowlisted agentType (e.g. `eve`, `coder`) may
-    // call this endpoint. Human users and other agentTypes get 403.
+    // agent users with an allowlisted agentType (e.g. `eve`, `coder`,
+    // `the-arch`) or users with `hub-protocol.write` scope may call this
+    // endpoint. This covers both pre-provisioned agent users and service
+    // tokens that need to bootstrap a workspace on first run.
     const agentType = await resolveCallerAgentType(userId);
-    if (!isAgentTypeAllowedToCreateWorkspaces(agentType)) {
+    if (
+      !isAgentTypeAllowedToCreateWorkspaces(agentType) &&
+      !hasScope(scopes, "hub-protocol.write")
+    ) {
       return c.json(
         {
           error:
-            "Forbidden — workspace creation via Hub Protocol is restricted to allowlisted agentTypes.",
+            "Forbidden — workspace creation via Hub Protocol is restricted to allowlisted agentTypes or users with hub-protocol.write scope.",
           allowedAgentTypes: WORKSPACE_CREATE_AGENT_TYPE_ALLOWLIST,
           callerAgentType: agentType,
         },

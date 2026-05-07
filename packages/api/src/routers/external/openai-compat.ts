@@ -16,7 +16,7 @@
  *   <any other>    — passed through as-is to IS
  */
 
-import { Hono } from "hono";
+import { Hono, Context } from "hono";
 import { z } from "zod";
 import { db, eq, and } from "@synap/database";
 import { workspaceMembers } from "@synap/database/schema";
@@ -29,6 +29,236 @@ import { createLogger } from "@synap-core/core";
 import { externalApiKeyAuth, type ExternalApiVariables } from "./middleware.js";
 
 const logger = createLogger({ module: "openai-compat" });
+
+// ── Custom provider env var parsing ──────────────────────────────────────────
+
+interface CustomProviderEnv {
+  idx: number;
+  name: string;
+  baseUrl: string;
+  apiKey?: string;
+  defaultModel?: string;
+}
+
+/**
+ * Read CUSTOM_PROVIDER_N_* env vars. Returns a sorted list of provider configs.
+ * Env vars are written by @eve/dna wire-ai.ts: CUSTOM_PROVIDER_1_BASE_URL,
+ * CUSTOM_PROVIDER_1_API_KEY, CUSTOM_PROVIDER_1_NAME.
+ */
+function parseCustomProviderEnv(): CustomProviderEnv[] {
+  const result: CustomProviderEnv[] = [];
+  for (let i = 1; i <= 100; i++) {
+    const baseUrl = process.env[`CUSTOM_PROVIDER_${i}_BASE_URL`];
+    if (!baseUrl || baseUrl.trim() === "") break;
+    result.push({
+      idx: i,
+      name: process.env[`CUSTOM_PROVIDER_${i}_NAME`] || `Provider ${i}`,
+      baseUrl: baseUrl.replace(/\/+$/, ""),
+      apiKey: process.env[`CUSTOM_PROVIDER_${i}_API_KEY`],
+      defaultModel: process.env[`CUSTOM_PROVIDER_${i}_DEFAULT_MODEL`],
+    });
+  }
+  return result;
+}
+
+/** Check if a model name belongs to a custom provider */
+function resolveCustomProviderForModel(
+  model: string,
+  providers: CustomProviderEnv[]
+): CustomProviderEnv | null {
+  for (const cp of providers) {
+    if (!cp.defaultModel) continue;
+    // Match by default model name exactly
+    if (model === cp.defaultModel) return cp;
+    // Match if the model contains the provider name (e.g. "custom-mymodel"
+    // when the name is "my" or a prefix of the name matches)
+    if (model.startsWith(cp.name + "/")) return cp;
+  }
+  return null;
+}
+
+/** Proxy a chat completion request to a custom OpenAI-compatible provider */
+async function proxyToCustomProvider(
+  ctx: Context<{ Variables: ExternalApiVariables }>,
+  cp: CustomProviderEnv,
+  input: z.infer<typeof completionRequestSchema>,
+  stream: boolean
+) {
+  const url = `${cp.baseUrl}/v1/chat/completions`;
+  const oaiMessages: Array<{ role: string; content: string }> = [];
+  for (const m of input.messages) {
+    oaiMessages.push({ role: m.role, content: m.content });
+  }
+
+  const body: Record<string, unknown> = {
+    model: input.model,
+    messages: oaiMessages,
+    stream,
+  };
+  if (input.temperature !== undefined) body.temperature = input.temperature;
+  if (input.max_tokens !== undefined) body.max_tokens = input.max_tokens;
+
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 120_000);
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(cp.apiKey ? { Authorization: `Bearer ${cp.apiKey}` } : {}),
+      },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return ctx.json(
+        oaiErrorBody(
+          `Custom provider "${cp.name}" error (${res.status}): ${text.slice(0, 200)}`,
+          "upstream_error",
+          res.status.toString()
+        ),
+        502
+      );
+    }
+
+    if (!stream) {
+      const json = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const content = json.choices?.[0]?.message?.content ?? "";
+      return ctx.json({
+        id: generateId(),
+        object: "chat.completion" as const,
+        created: Math.floor(Date.now() / 1000),
+        model: input.model,
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant" as const, content },
+            finish_reason: "stop" as const,
+          },
+        ],
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      });
+    }
+
+    // Streaming path: transform provider SSE → OpenAI SSE
+    if (!res.body) {
+      return ctx.json(
+        oaiErrorBody(
+          "Custom provider returned empty response",
+          "server_error",
+          "empty_response"
+        ),
+        500
+      );
+    }
+
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    let sentRole = false;
+    let doneFlag = false;
+
+    const transformStream = new ReadableStream({
+      async start(controller) {
+        const reader = res.body!.getReader();
+        let buffer = "";
+
+        function sendDone() {
+          if (doneFlag) return;
+          doneFlag = true;
+          const finalChunk = {
+            id: generateId(),
+            object: "chat.completion.chunk",
+            created: Math.floor(Date.now() / 1000),
+            model: input.model,
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          };
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(finalChunk)}\n\n`)
+          );
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        }
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || !trimmed.startsWith("data: ")) continue;
+              const dataStr = trimmed.slice(6);
+              if (dataStr === "[DONE]") {
+                sendDone();
+                continue;
+              }
+              let event: {
+                delta?: { content?: string; role?: string };
+                finish_reason?: string;
+              };
+              try {
+                event = JSON.parse(dataStr);
+              } catch {
+                continue;
+              }
+              if (event.delta?.content) {
+                const delta: Record<string, string> = {};
+                if (!sentRole) {
+                  delta.role = "assistant";
+                  sentRole = true;
+                }
+                delta.content = event.delta.content;
+                const chunk = {
+                  id: generateId(),
+                  object: "chat.completion.chunk",
+                  created: Math.floor(Date.now() / 1000),
+                  model: input.model,
+                  choices: [{ index: 0, delta, finish_reason: null }],
+                };
+                controller.enqueue(
+                  encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
+                );
+              }
+              if (event.finish_reason) sendDone();
+            }
+          }
+          if (!doneFlag && sentRole) sendDone();
+        } catch {
+          if (!doneFlag) sendDone();
+        } finally {
+          controller.close();
+        }
+      },
+    });
+
+    return ctx.newResponse(transformStream, 200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+      "X-Synap-Model-Tier": "custom",
+    });
+  } catch (err) {
+    clearTimeout(timeout);
+    const msg = err instanceof Error ? err.message : String(err);
+    return ctx.json(
+      oaiErrorBody(
+        `Failed to reach custom provider "${cp.name}" at ${cp.baseUrl}: ${msg}`,
+        "server_error",
+        "upstream_error"
+      ),
+      502
+    );
+  }
+}
 
 // ── Model alias → IS tier mapping ────────────────────────────────────────────
 
@@ -149,6 +379,18 @@ openaiCompatApp.post(
     const knownTier = MODEL_TIER_MAP[requestedModel];
     // knownTier is defined for synap/* aliases, undefined for pass-through models
     const tierLabel = knownTier ?? "passthrough";
+
+    // ── Custom provider check: bypass IS entirely for custom providers ───────
+    const customProviders = parseCustomProviderEnv();
+    if (customProviders.length > 0) {
+      const targetCp = resolveCustomProviderForModel(
+        requestedModel,
+        customProviders
+      );
+      if (targetCp) {
+        return proxyToCustomProvider(c, targetCp, input, input.stream);
+      }
+    }
 
     // ── Resolve workspace ────────────────────────────────────────────────────
     const workspaceIdHeader = c.req.header("x-synap-workspace-id");
@@ -624,6 +866,37 @@ openaiCompatApp.get("/models", externalApiKeyAuth("chat.stream"), async (c) => {
           created: 1700000000,
           owned_by: "ollama",
         });
+      }
+    }
+  }
+
+  // Custom providers: list their default model + try to fetch from their /api/tags endpoint.
+  for (const cp of parseCustomProviderEnv()) {
+    if (cp.defaultModel && !seen.has(cp.defaultModel)) {
+      seen.add(cp.defaultModel);
+      extra.push({
+        id: cp.defaultModel,
+        object: "model",
+        created: 1700000000,
+        owned_by: cp.name,
+      });
+    }
+    // Try to discover additional models from the custom provider's /api/tags (OpenAI-compat doesn't have /models for non-Ollama)
+    // For generic OpenAI-compat providers, just list the default model.
+    // For Ollama-like providers, probe /api/tags.
+    if (cp.defaultModel && !cp.apiKey?.trim()) {
+      // Likely an Ollama instance — probe for additional models
+      const cpModels = await fetchOllamaModels(cp.baseUrl);
+      for (const name of cpModels) {
+        if (!seen.has(name)) {
+          seen.add(name);
+          extra.push({
+            id: name,
+            object: "model",
+            created: 1700000000,
+            owned_by: cp.name,
+          });
+        }
       }
     }
   }
