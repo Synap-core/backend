@@ -1,0 +1,219 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1778174775923,
+  "projectRoot": "/Users/antoine/Documents/Code/synap/synap-backend",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": ">=20",
+        "confidence": "high",
+        "markers": ["package.json"]
+      },
+      {
+        "name": "TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": ["tsconfig.json"]
+      }
+    ],
+    "frameworks": [
+      {
+        "name": "vitest",
+        "version": "4.0.7",
+        "category": "testing"
+      }
+    ],
+    "packageManager": "pnpm",
+    "runtime": "Node.js 20"
+  },
+  "build": {
+    "buildCommand": "pnpm build",
+    "testCommand": "pnpm test",
+    "lintCommand": "pnpm lint",
+    "devCommand": "pnpm dev",
+    "scripts": {
+      "dev": "pnpm --filter api dev",
+      "dev:all": "pnpm --filter api --filter @synap/realtime dev",
+      "dev:realtime": "pnpm --filter @synap/realtime dev",
+      "build": "turbo run build --filter='!admin-ui'",
+      "test": "turbo run test",
+      "test:e2e": "pnpm --filter @synap/test-e2e test",
+      "test:e2e:watch": "pnpm --filter @synap/test-e2e test:watch",
+      "test:system": "pnpm build && tsx scripts/test-system.ts",
+      "db:migrate": "tsx --env-file=.env.development.local packages/database/scripts/migrate.ts",
+      "db:migrate:remote": "tsx --env-file=.env.development.remote packages/database/scripts/migrate.ts",
+      "db:studio": "cd packages/database && pnpm drizzle-kit studio",
+      "create:hub-client": "tsx scripts/create-hub-client.ts",
+      "typecheck": "pnpm build",
+      "publish:packages": "./scripts/publish-packages.sh",
+      "publish:packages:dry-run": "./scripts/publish-packages.sh --dry-run",
+      "lint": "eslint . --cache",
+      "lint:fix": "eslint . --fix --cache",
+      "format": "prettier --check .",
+      "format:fix": "prettier --write .",
+      "run-ci": "run-s lint typecheck test build",
+      "prepare": "husky",
+      "postinstall": "husky || true",
+      "lint:staged": "lint-staged"
+    }
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": true,
+    "workspaces": [],
+    "mainDirectories": ["docs", "scripts"],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "apps": {
+      "path": "apps",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1778174775600,
+      "keyFiles": []
+    },
+    "data": {
+      "path": "data",
+      "purpose": "Data files",
+      "fileCount": 1,
+      "lastAccessed": 1778174775601,
+      "keyFiles": ["synap.db"]
+    },
+    "deploy": {
+      "path": "deploy",
+      "purpose": null,
+      "fileCount": 21,
+      "lastAccessed": 1778174775606,
+      "keyFiles": [
+        "Caddyfile",
+        "Dockerfile",
+        "Dockerfile.api",
+        "Dockerfile.realtime",
+        "README.md"
+      ]
+    },
+    "docker": {
+      "path": "docker",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1778174775914,
+      "keyFiles": []
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 2,
+      "lastAccessed": 1778174775914,
+      "keyFiles": ["README.md"]
+    },
+    "hydra": {
+      "path": "hydra",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1778174775915,
+      "keyFiles": ["hydra.yml"]
+    },
+    "kratos": {
+      "path": "kratos",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1778174775919,
+      "keyFiles": [
+        "identity.schema.json",
+        "oidc.github.jsonnet",
+        "oidc.google.jsonnet"
+      ]
+    },
+    "migrations": {
+      "path": "migrations",
+      "purpose": "Database migrations",
+      "fileCount": 8,
+      "lastAccessed": 1778174775919,
+      "keyFiles": [
+        "0001_add_intelligence_preferences.sql",
+        "0002_add_mcp_endpoint_to_intelligence_services.sql",
+        "0003_add_hnsw_index_entity_vectors.sql",
+        "0004_skills_kind_column.sql",
+        "0005_agent_configs_table.sql"
+      ]
+    },
+    "packages": {
+      "path": "packages",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1778174775920,
+      "keyFiles": []
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 39,
+      "lastAccessed": 1778174775920,
+      "keyFiles": [
+        "README.md",
+        "check-views.ts",
+        "clean-docker-rebuild.sh",
+        "create-admin-cli.ts",
+        "create-admin.ts"
+      ]
+    },
+    "skills": {
+      "path": "skills",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1778174775920,
+      "keyFiles": ["README.md"]
+    },
+    "templates": {
+      "path": "templates",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1778174775921,
+      "keyFiles": [
+        "agent-os.json",
+        "builder-workspace.json",
+        "marketing-campaign.json"
+      ]
+    },
+    "apps/api": {
+      "path": "apps/api",
+      "purpose": "API routes",
+      "fileCount": 4,
+      "lastAccessed": 1778174775921,
+      "keyFiles": ["package.json", "tsconfig.json", "tsconfig.tsbuildinfo"]
+    },
+    "packages/api": {
+      "path": "packages/api",
+      "purpose": "API routes",
+      "fileCount": 9,
+      "lastAccessed": 1778174775923,
+      "keyFiles": [
+        "package.json",
+        "tsconfig.build.json",
+        "tsconfig.gen-types.json"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "packages/api/src/routers/hub-protocol/rest/memory.ts",
+      "accessCount": 4,
+      "lastAccessed": 1778175847356,
+      "type": "file"
+    },
+    {
+      "path": "packages/api/src/routers/hub-protocol/rest/_codecs/memory.ts",
+      "accessCount": 3,
+      "lastAccessed": 1778175847295,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

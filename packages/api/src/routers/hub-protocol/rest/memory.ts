@@ -348,9 +348,6 @@ export function registerMemoryRoutes(app: HubHono): void {
       return c.json({ error: "userId is required" }, 400);
     }
     try {
-      const embedding = Array.isArray(body.embedding)
-        ? body.embedding
-        : new Array(1536).fill(0);
       const created: (typeof knowledgeFacts.$inferSelect)[] = [];
 
       // Store each turn as a tagged fact
@@ -361,11 +358,17 @@ export function registerMemoryRoutes(app: HubHono): void {
           userId,
           fact: turnFact,
           confidence: body.confidence ?? 0.8,
-          embedding,
+          embedding: Array.isArray(body.embedding)
+            ? body.embedding
+            : new Array(1536).fill(0),
           sourceEntityId: body.sourceEntityId,
           sourceMessageId: body.sourceMessageId,
         });
-        created.push(record);
+        created.push(
+          record as typeof knowledgeFacts.$inferSelect & {
+            embedding?: number[];
+          }
+        );
       }
 
       // Store a summary fact if provided
@@ -374,11 +377,17 @@ export function registerMemoryRoutes(app: HubHono): void {
           userId,
           fact: `${body.sessionId} [summary] ${body.summary}`,
           confidence: body.confidence ?? 0.9,
-          embedding,
+          embedding: Array.isArray(body.embedding)
+            ? body.embedding
+            : new Array(1536).fill(0),
           sourceEntityId: body.sourceEntityId,
           sourceMessageId: body.sourceMessageId,
         });
-        created.push(summaryRecord);
+        created.push(
+          summaryRecord as typeof knowledgeFacts.$inferSelect & {
+            embedding?: number[];
+          }
+        );
       }
 
       return c.json(
@@ -511,9 +520,6 @@ export function registerMemoryRoutes(app: HubHono): void {
       return c.json({ error: "userId is required" }, 400);
     }
     try {
-      const embedding = Array.isArray(body.embedding)
-        ? body.embedding
-        : new Array(1536).fill(0);
       const created: (typeof knowledgeFacts.$inferSelect)[] = [];
 
       for (const entry of body.entries) {
@@ -522,9 +528,13 @@ export function registerMemoryRoutes(app: HubHono): void {
           userId,
           fact: entryFact,
           confidence: body.confidence ?? 0.9,
-          embedding,
+          embedding: new Array(1536).fill(0),
         });
-        created.push(record);
+        created.push(
+          record as typeof knowledgeFacts.$inferSelect & {
+            embedding?: number[];
+          }
+        );
       }
 
       return c.json(

@@ -14,24 +14,24 @@
   "version": "99.0.0",
   "output_style": { "name": "default" },
   "cost": {
-    "total_cost_usd": 28.613655,
-    "total_duration_ms": 3679930,
-    "total_api_duration_ms": 4130099,
-    "total_lines_added": 418,
-    "total_lines_removed": 92
+    "total_cost_usd": 31.739344999999997,
+    "total_duration_ms": 5475709,
+    "total_api_duration_ms": 5682914,
+    "total_lines_added": 425,
+    "total_lines_removed": 105
   },
   "context_window": {
-    "total_input_tokens": 5320421,
-    "total_output_tokens": 80462,
+    "total_input_tokens": 5911224,
+    "total_output_tokens": 87329,
     "context_window_size": 128000,
     "current_usage": {
-      "input_tokens": 93808,
-      "output_tokens": 489,
+      "input_tokens": 74562,
+      "output_tokens": 533,
       "cache_creation_input_tokens": 0,
       "cache_read_input_tokens": 0
     },
-    "used_percentage": 73,
-    "remaining_percentage": 27
+    "used_percentage": 58,
+    "remaining_percentage": 42
   },
   "exceeds_200k_tokens": false
 }

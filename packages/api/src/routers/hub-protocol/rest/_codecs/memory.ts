@@ -93,7 +93,7 @@ export const MemorySessionRequestSchema = z
     summary: z.string().min(1).describe("Human-readable session summary."),
     turnCount: z.number().int().positive().optional(),
     tags: z.array(z.string()).optional(),
-    metadata: z.record(z.string()).optional(),
+    metadata: z.record(z.string(), z.string()).optional(),
     confidence: z.number().min(0).max(1).optional(),
   })
   .openapi("MemorySessionRequest");
