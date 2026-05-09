@@ -1,9 +1,9 @@
 {
-  "session_id": "89c288ac-0d80-4563-b4c2-f5f2028bfba6",
-  "transcript_path": "/Users/antoine/.claude/projects/-Users-antoine-Documents-Code-synap/89c288ac-0d80-4563-b4c2-f5f2028bfba6.jsonl",
+  "session_id": "586a9152-46dc-449d-962c-b6ba680c68e4",
+  "transcript_path": "/Users/antoine/.claude/projects/-Users-antoine-Documents-Code-synap/586a9152-46dc-449d-962c-b6ba680c68e4.jsonl",
   "cwd": "/Users/antoine/Documents/Code/synap/synap-backend",
   "effort": { "level": "xhigh" },
-  "session_name": "Complete hestia-cli entry point for internal product",
+  "session_name": "Debug EZUI Kratos authentication discrepancies",
   "model": {
     "id": "claude-opus-4-7[1m]",
     "display_name": "Opus 4.7 (1M context)"
@@ -13,36 +13,33 @@
     "project_dir": "/Users/antoine/Documents/Code/synap",
     "added_dirs": []
   },
-  "version": "2.1.133",
+  "version": "2.1.138",
   "output_style": { "name": "default" },
   "cost": {
-    "total_cost_usd": 14.376840249999997,
-    "total_duration_ms": 4524676,
-    "total_api_duration_ms": 2925760,
-    "total_lines_added": 3066,
-    "total_lines_removed": 46
+    "total_cost_usd": 79.75298500000001,
+    "total_duration_ms": 12822061,
+    "total_api_duration_ms": 4366231,
+    "total_lines_added": 1611,
+    "total_lines_removed": 508
   },
   "context_window": {
-    "total_input_tokens": 212971,
-    "total_output_tokens": 3615,
+    "total_input_tokens": 511215,
+    "total_output_tokens": 179,
     "context_window_size": 1000000,
     "current_usage": {
       "input_tokens": 6,
-      "output_tokens": 3615,
-      "cache_creation_input_tokens": 4845,
-      "cache_read_input_tokens": 208120
+      "output_tokens": 179,
+      "cache_creation_input_tokens": 913,
+      "cache_read_input_tokens": 510296
     },
-    "used_percentage": 21,
-    "remaining_percentage": 79
+    "used_percentage": 51,
+    "remaining_percentage": 49
   },
   "exceeds_200k_tokens": true,
   "fast_mode": false,
   "thinking": { "enabled": true },
   "rate_limits": {
-    "five_hour": {
-      "used_percentage": 14.000000000000002,
-      "resets_at": 1778364600
-    },
-    "seven_day": { "used_percentage": 3, "resets_at": 1778950800 }
+    "five_hour": { "used_percentage": 85, "resets_at": 1778364600 },
+    "seven_day": { "used_percentage": 16, "resets_at": 1778950800 }
   }
 }

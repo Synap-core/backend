@@ -4,6 +4,13 @@
 
 set -e
 
+# Pin the docker compose project name deterministically. Without this,
+# compose falls back to the cwd basename ("deploy") when COMPOSE_PROJECT_NAME
+# is missing from .env — which spawns a parallel orphan stack alongside
+# any existing one (data volumes by name collide, container labels diverge).
+# Operator override is honored: anything in the shell env wins.
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-synap-backend}"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -443,6 +450,174 @@ run_preseed_admin_in_container() {
         sleep 8
     done
     return 1
+}
+
+# ============================================================================
+# SETUP COMMAND — post-install operator actions (admin creation, etc.)
+# ============================================================================
+
+cmd_setup() {
+    local sub="${1:-}"
+    case "$sub" in
+        admin)
+            shift
+            cmd_setup_admin "$@"
+            ;;
+        ""|--help|-h)
+            cat <<EOF
+${BLUE}Synap Setup${NC}
+
+${YELLOW}Subcommands:${NC}
+  ${GREEN}admin${NC}        Create or check the first admin account on a running pod
+
+Run 'synap setup <subcommand> --help' for subcommand-specific options.
+EOF
+            ;;
+        *)
+            echo -e "${RED}Unknown setup subcommand: ${sub}${NC}"
+            echo "Run 'synap setup --help' for available subcommands"
+            exit 1
+            ;;
+    esac
+}
+
+# Pod URL for on-host CLI calls. Defaults to the loopback published by the
+# eve-managed compose override (127.0.0.1:4000). Operator can override via
+# SYNAP_POD_URL when running outside that setup (e.g. dev hosts).
+_synap_pod_url() {
+    echo "${SYNAP_POD_URL:-http://127.0.0.1:4000}"
+}
+
+_synap_bootstrap_token() {
+    if [ ! -f .env ]; then
+        return 1
+    fi
+    grep "^ADMIN_BOOTSTRAP_TOKEN=" .env 2>/dev/null | cut -d'=' -f2- | tr -d ' "' || true
+}
+
+cmd_setup_admin() {
+    local deploy_dir
+    deploy_dir=$(get_deploy_dir)
+    if [ -z "$deploy_dir" ]; then
+        echo -e "${RED}Error: Not in Synap installation directory${NC}"
+        exit 1
+    fi
+    cd "$deploy_dir"
+
+    local email=""
+    local password=""
+    local mode=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --email)         email="$2"; shift 2 ;;
+            --password)      password="$2"; shift 2 ;;
+            --status)        mode="status"; shift ;;
+            --magic-link)    mode="magic-link"; shift ;;
+            --help|-h)
+                cat <<EOF
+${BLUE}Synap Setup Admin${NC}
+
+${YELLOW}Usage:${NC}
+  synap setup admin --email <e> --password <p>     Create admin via container exec (preseed)
+  synap setup admin --email <e> --magic-link       Mint a one-hour browser link
+  synap setup admin --status                       Probe whether the pod still needs setup
+
+${YELLOW}Options:${NC}
+  ${GREEN}--email <email>${NC}      Admin email (required for preseed and magic-link modes)
+  ${GREEN}--password <secret>${NC}  Admin password (preseed mode — runs container script directly)
+  ${GREEN}--magic-link${NC}         Mint a magic-link URL the operator opens in their browser
+  ${GREEN}--status${NC}             Print 'needed' or 'ready' and exit (machine-readable)
+EOF
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Unknown option: $1${NC}"
+                exit 1
+                ;;
+        esac
+    done
+
+    # Status probe — used by callers (eve doctor, eve auth provision) to
+    # decide whether to prompt for admin setup.
+    if [ "$mode" = "status" ]; then
+        local pod_url
+        pod_url=$(_synap_pod_url)
+        local token
+        token=$(_synap_bootstrap_token || true)
+        local auth_header=()
+        if [ -n "$token" ]; then
+            auth_header=(-H "Authorization: Bearer ${token}")
+        fi
+        local body
+        body=$(curl -fsS --max-time 6 "${auth_header[@]}" "${pod_url}/api/hub/setup/status" 2>/dev/null || echo "")
+        if echo "$body" | grep -q '"needsSetup":true'; then
+            echo "needed"
+            exit 0
+        fi
+        if echo "$body" | grep -q '"needsSetup":false'; then
+            echo "ready"
+            exit 0
+        fi
+        echo "unknown"
+        exit 2
+    fi
+
+    # Preseed — direct container exec. Uses the existing helper.
+    if [ -n "$password" ]; then
+        if [ -z "$email" ]; then
+            echo -e "${RED}--password requires --email${NC}"
+            exit 1
+        fi
+        if run_preseed_admin_in_container "$email" "$password"; then
+            echo -e "${GREEN}✅ First admin created.${NC}"
+            exit 0
+        else
+            echo -e "${RED}❌ Preseed admin creation failed. Check 'docker compose logs backend'.${NC}"
+            exit 1
+        fi
+    fi
+
+    # Magic-link — POST to the pod's /setup/magic-link endpoint, print URL.
+    if [ "$mode" = "magic-link" ]; then
+        if [ -z "$email" ]; then
+            echo -e "${RED}--magic-link requires --email${NC}"
+            exit 1
+        fi
+        local pod_url
+        pod_url=$(_synap_pod_url)
+        local token
+        token=$(_synap_bootstrap_token || true)
+        if [ -z "$token" ]; then
+            echo -e "${RED}No ADMIN_BOOTSTRAP_TOKEN in .env — magic link cannot be authorized.${NC}"
+            exit 1
+        fi
+        local body
+        body=$(curl -fsS -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Accept: application/json" \
+            -d "{\"email\":\"${email}\"}" \
+            "${pod_url}/setup/magic-link" 2>&1)
+        local status=$?
+        if [ $status -ne 0 ]; then
+            echo -e "${RED}Failed to mint magic link: ${body}${NC}"
+            exit 1
+        fi
+        local url
+        url=$(echo "$body" | grep -o '"url":"[^"]*"' | cut -d'"' -f4 || echo "")
+        if [ -z "$url" ]; then
+            echo -e "${RED}Pod did not return a magic-link URL. Response: ${body}${NC}"
+            exit 1
+        fi
+        echo "$url"
+        exit 0
+    fi
+
+    # No mode flag and no password — print usage.
+    echo -e "${YELLOW}Specify a mode: --password (preseed), --magic-link, or --status.${NC}"
+    echo "Run 'synap setup admin --help' for details."
+    exit 1
 }
 
 # ============================================================================
@@ -1495,8 +1670,38 @@ cmd_update() {
         echo -e "${RED}Error: Not in Synap installation directory${NC}"
         exit 1
     fi
-    
+
     cd "$deploy_dir"
+
+    # Fail fast on a stub .env that's missing the critical infrastructure
+    # secrets — running compose against it would launch postgres with a blank
+    # password and lock everyone out of the existing volume data. The
+    # `cmd_update` flow ASSUMES `.env` was already populated by `cmd_install`.
+    if [ -f .env ]; then
+        local missing_critical=""
+        for key in POSTGRES_PASSWORD JWT_SECRET KRATOS_SECRETS_COOKIE; do
+            local val=$(grep "^${key}=" .env 2>/dev/null | cut -d'=' -f2-)
+            if [ -z "$val" ]; then
+                missing_critical="${missing_critical} ${key}"
+            fi
+        done
+        if [ -n "$missing_critical" ]; then
+            echo -e "${RED}❌ .env is missing critical secrets:${missing_critical}${NC}"
+            echo -e "${YELLOW}This .env looks like a fresh template (.env.example shape) — running update against it"
+            echo -e "would launch postgres with a blank password and break authentication against existing data."
+            echo ""
+            echo -e "Recovery options:${NC}"
+            echo -e "  1. Restore .env from a backup if you have one (your secrets must match the existing volumes)."
+            echo -e "  2. If your postgres/typesense/minio volumes are empty (no data to preserve), run:"
+            echo -e "       docker volume prune -f && synap install --domain <your-domain>"
+            echo -e "     This generates a fresh .env and reinitializes all storage."
+            echo -e "  3. If you only want the synap CLI to populate the missing secrets WITHOUT touching"
+            echo -e "     your DOMAIN/ADMIN_* values, run \`synap install\` — non-interactive mode preserves"
+            echo -e "     existing values and only regenerates secrets when .env is missing entirely."
+            exit 1
+        fi
+    fi
+
     cleanup_stale_synap_state "$deploy_dir"
     
     # Auto-detect if we're in a git repo (for smart defaults)
@@ -1571,6 +1776,13 @@ cmd_update() {
             echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
             docker compose build realtime
         }
+        # Refresh Kratos images so the migrate one-shot and the running
+        # kratos service line up with the new schema. Best-effort: a
+        # registry hiccup shouldn't block a backend security update, the
+        # existing local image keeps working.
+        echo -e "${BLUE}  Pulling kratos + kratos-migrate...${NC}"
+        docker compose pull kratos kratos-migrate || \
+            echo -e "${YELLOW}⚠️  Kratos image pull failed — continuing with the local image.${NC}"
     fi
     
     # Update .env
@@ -1607,23 +1819,74 @@ cmd_update() {
     # Regenerate kratos.yml (ensures it exists and has correct webhook secret)
     echo -e "${BLUE}📝 Regenerating Kratos configuration...${NC}"
     generate_kratos_config "$domain"
-    
-    # Run migrations (critical - must succeed)
-    echo -e "${BLUE}🔄 Running migrations...${NC}"
+
+    # Ensure the kratos and hydra databases exist before kratos-migrate runs.
+    # postgres's init-databases.sh only fires on a fresh data volume, so an
+    # existing volume from before kratos/hydra were added has neither db
+    # — kratos-migrate then fails with "database does not exist".
+    # Idempotent: \gexec only runs CREATE DATABASE when the row is absent.
+    echo -e "${BLUE}📝 Ensuring kratos and hydra databases exist...${NC}"
+    docker compose exec -T postgres psql -U synap -c \
+        "SELECT 'CREATE DATABASE kratos' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'kratos')\gexec" \
+        2>/dev/null || true
+    docker compose exec -T postgres psql -U synap -c \
+        "SELECT 'CREATE DATABASE hydra' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'hydra')\gexec" \
+        2>/dev/null || true
+
+    # Run migrations (critical - must succeed).
+    # Kratos and backend evolve their schemas independently. Both run before
+    # any service is recreated so an upgrade with both schema changes lands
+    # in one go. Failures abort: continuing with mismatched schema yields
+    # 500s on /self-service/* (Kratos) and broken queries (backend).
+    echo -e "${BLUE}🔄 Running backend migrations...${NC}"
     if ! docker compose run --rm backend-migrate; then
-        echo -e "${RED}❌ Migrations failed!${NC}"
-        echo -e "${YELLOW}⚠️  Backend may not start correctly without migrations${NC}"
+        echo -e "${RED}❌ Backend migrations failed!${NC}"
+        echo -e "${YELLOW}⚠️  Backend will not start correctly without migrations${NC}"
+        if synap_assume_yes; then
+            echo -e "${RED}Aborting in non-interactive mode — investigate and re-run \`synap update\` once migrations succeed.${NC}"
+            exit 1
+        fi
         read -p "Continue anyway? (y/N): " CONTINUE
         if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
             echo "Update cancelled"
             exit 1
         fi
     fi
-    
-    # Restart services
+
+    echo -e "${BLUE}🔄 Running Kratos migrations...${NC}"
+    if ! docker compose run --rm kratos-migrate; then
+        echo -e "${YELLOW}⚠️  Kratos migrations failed — login/registration flows will 500 against the new image.${NC}"
+        if synap_assume_yes; then
+            echo -e "${RED}Aborting in non-interactive mode — investigate and re-run.${NC}"
+            exit 1
+        fi
+        read -p "Continue anyway? (y/N): " CONTINUE
+        if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
+            echo "Update cancelled"
+            exit 1
+        fi
+    fi
+
+    # Restart services. Kratos is force-recreated so it picks up:
+    #   1. The new image just pulled
+    #   2. The freshly-regenerated kratos.yml (kratos reads this at startup)
+    # Without --force-recreate, kratos keeps the old image + old config and
+    # the operator hits 500s on /self-service/* until they restart by hand.
+    #
+    # Caddy is the synap stack's built-in edge proxy. When the operator runs
+    # behind their own edge (eve's Traefik on port 80, an external nginx,
+    # cloudflared, etc.) Caddy can't bind 80/443 and aborts the update.
+    # Set SYNAP_SKIP_EDGE=1 to keep Caddy stopped — backend, realtime, kratos,
+    # and pod-agent come up regardless.
     echo -e "${BLUE}🔄 Restarting services...${NC}"
-    docker compose up -d --remove-orphans backend realtime caddy pod-agent
-    
+    if [ "${SYNAP_SKIP_EDGE:-}" = "1" ]; then
+        echo -e "${BLUE}  (SYNAP_SKIP_EDGE=1: skipping Caddy — external edge proxy assumed)${NC}"
+        docker compose up -d --remove-orphans backend realtime pod-agent
+    else
+        docker compose up -d --remove-orphans backend realtime caddy pod-agent
+    fi
+    docker compose up -d --force-recreate kratos
+
     echo -e "${GREEN}✅ Update complete!${NC}"
 }
 
@@ -3239,6 +3502,10 @@ case "${1:-help}" in
     install)
         shift
         cmd_install "$@"
+        ;;
+    setup)
+        shift
+        cmd_setup "$@"
         ;;
     health)
         cmd_health
