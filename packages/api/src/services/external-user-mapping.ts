@@ -427,9 +427,11 @@ export async function lookupExternalUserMapping(
 /**
  * Whether the per-user sub-token feature is currently enabled on this pod.
  *
- * Default behavior is the legacy single-key mapping. The flag MUST be opt-in
- * — anything other than the literal string "true" disables.
+ * Default is ON. The feature only activates when a request actually sends
+ * `X-External-User-Id` — without that header the flag is a no-op and all
+ * callers resolve to the single-key owner (legacy behavior). Explicit
+ * `HUB_PROTOCOL_SUB_TOKENS=false` disables.
  */
 export function isSubTokenFeatureEnabled(): boolean {
-  return process.env.HUB_PROTOCOL_SUB_TOKENS === "true";
+  return process.env.HUB_PROTOCOL_SUB_TOKENS !== "false";
 }

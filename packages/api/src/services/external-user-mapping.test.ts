@@ -42,21 +42,31 @@ describe("isSubTokenFeatureEnabled", () => {
     }
   });
 
-  it("returns false when the env var is unset (default — single-key behavior)", () => {
+  it("returns true when the env var is unset (default — multi-user enabled)", () => {
     delete process.env.HUB_PROTOCOL_SUB_TOKENS;
+    expect(isSubTokenFeatureEnabled()).toBe(true);
+  });
+
+  it("returns false ONLY for the literal string 'false'", () => {
+    process.env.HUB_PROTOCOL_SUB_TOKENS = "false";
     expect(isSubTokenFeatureEnabled()).toBe(false);
   });
 
-  it("returns false for any string other than the literal 'true'", () => {
-    for (const v of ["1", "yes", "True", "TRUE", "on", "enabled", ""]) {
+  it("returns true for any other value (case-insensitive truthy strings, numbers, etc.)", () => {
+    for (const v of [
+      "1",
+      "yes",
+      "True",
+      "TRUE",
+      "on",
+      "enabled",
+      "",
+      "False",
+      "FALSE",
+    ]) {
       process.env.HUB_PROTOCOL_SUB_TOKENS = v;
-      expect(isSubTokenFeatureEnabled()).toBe(false);
+      expect(isSubTokenFeatureEnabled()).toBe(true);
     }
-  });
-
-  it("returns true ONLY for the literal string 'true'", () => {
-    process.env.HUB_PROTOCOL_SUB_TOKENS = "true";
-    expect(isSubTokenFeatureEnabled()).toBe(true);
   });
 });
 

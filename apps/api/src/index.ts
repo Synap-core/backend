@@ -234,7 +234,8 @@ const kratosPublicUrl =
 const proxyKratosRequest = async (c: HonoContext, kratosPath: string) => {
   try {
     // Forward request to Kratos public API
-    const targetUrl = `${kratosPublicUrl}${kratosPath}`;
+    const search = new URL(c.req.url).search;
+    const targetUrl = `${kratosPublicUrl}${kratosPath}${search}`;
 
     // Prepare headers - forward cookies and other important headers
     const headers: Record<string, string> = {
