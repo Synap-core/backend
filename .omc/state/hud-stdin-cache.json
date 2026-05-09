@@ -1,37 +1,48 @@
 {
-  "session_id": "dd5498a0-ec77-4c7b-8140-07e243c7ce3c",
-  "transcript_path": "/Users/antoine/.claude/projects/-Users-antoine-Documents-Code-synap/dd5498a0-ec77-4c7b-8140-07e243c7ce3c.jsonl",
+  "session_id": "89c288ac-0d80-4563-b4c2-f5f2028bfba6",
+  "transcript_path": "/Users/antoine/.claude/projects/-Users-antoine-Documents-Code-synap/89c288ac-0d80-4563-b4c2-f5f2028bfba6.jsonl",
   "cwd": "/Users/antoine/Documents/Code/synap/synap-backend",
+  "effort": { "level": "xhigh" },
+  "session_name": "Complete hestia-cli entry point for internal product",
   "model": {
-    "id": "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit",
-    "display_name": "cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit"
+    "id": "claude-opus-4-7[1m]",
+    "display_name": "Opus 4.7 (1M context)"
   },
   "workspace": {
     "current_dir": "/Users/antoine/Documents/Code/synap/synap-backend",
     "project_dir": "/Users/antoine/Documents/Code/synap",
     "added_dirs": []
   },
-  "version": "99.0.0",
+  "version": "2.1.133",
   "output_style": { "name": "default" },
   "cost": {
-    "total_cost_usd": 22.953604999999992,
-    "total_duration_ms": 89963027,
-    "total_api_duration_ms": 2142646,
-    "total_lines_added": 86,
-    "total_lines_removed": 30
+    "total_cost_usd": 14.376840249999997,
+    "total_duration_ms": 4524676,
+    "total_api_duration_ms": 2925760,
+    "total_lines_added": 3066,
+    "total_lines_removed": 46
   },
   "context_window": {
-    "total_input_tokens": 4407506,
-    "total_output_tokens": 36643,
-    "context_window_size": 128000,
+    "total_input_tokens": 212971,
+    "total_output_tokens": 3615,
+    "context_window_size": 1000000,
     "current_usage": {
-      "input_tokens": 93483,
-      "output_tokens": 332,
-      "cache_creation_input_tokens": 0,
-      "cache_read_input_tokens": 0
+      "input_tokens": 6,
+      "output_tokens": 3615,
+      "cache_creation_input_tokens": 4845,
+      "cache_read_input_tokens": 208120
     },
-    "used_percentage": 73,
-    "remaining_percentage": 27
+    "used_percentage": 21,
+    "remaining_percentage": 79
   },
-  "exceeds_200k_tokens": false
+  "exceeds_200k_tokens": true,
+  "fast_mode": false,
+  "thinking": { "enabled": true },
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 14.000000000000002,
+      "resets_at": 1778364600
+    },
+    "seven_day": { "used_percentage": 3, "resets_at": 1778950800 }
+  }
 }

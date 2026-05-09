@@ -124,6 +124,9 @@ generate_and_create_env() {
     local TYPESENSE_ADMIN_KEY=$(openssl rand -hex 24)
     local HYDRA_SECRETS_SYSTEM=$(openssl rand -hex 24)
     local SYNAP_SERVICE_ENCRYPTION_KEY=$(openssl rand -hex 32)
+    # PROVISIONING_TOKEN authorizes agent-key minting via POST /v1/agents/provision.
+    # Backend reads it from compose env; .env.example documents it as required.
+    local PROVISIONING_TOKEN=$(openssl rand -hex 32)
     
     local backend_version="latest"
     if [ "$from_source" = "true" ]; then
@@ -174,6 +177,7 @@ TYPESENSE_API_KEY=${TYPESENSE_KEY}
 TYPESENSE_ADMIN_API_KEY=${TYPESENSE_ADMIN_KEY}
 ORY_HYDRA_SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM}
 SYNAP_SERVICE_ENCRYPTION_KEY=${SYNAP_SERVICE_ENCRYPTION_KEY}
+PROVISIONING_TOKEN=${PROVISIONING_TOKEN}
 
 # Allowed CORS origins (comma-separated frontend URLs)
 # Add your Electron app origin or web client URL here
@@ -1582,6 +1586,16 @@ cmd_update() {
         if ! grep -q "^SYNAP_SERVICE_ENCRYPTION_KEY=" .env; then
             echo "SYNAP_SERVICE_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> .env
             echo -e "${YELLOW}⚠️  Added missing SYNAP_SERVICE_ENCRYPTION_KEY to .env${NC}"
+        fi
+
+        # Ensure agent-provisioning token exists. Backend reads it to auth
+        # POST /v1/agents/provision; missing or empty == agent provisioning
+        # is broken. Backfill with a fresh secret on update if absent.
+        if ! grep -q "^PROVISIONING_TOKEN=." .env; then
+            # Strip any empty placeholder line first (e.g. `PROVISIONING_TOKEN=`).
+            sed -i.bak '/^PROVISIONING_TOKEN=\s*$/d' .env && rm -f .env.bak
+            echo "PROVISIONING_TOKEN=$(openssl rand -hex 32)" >> .env
+            echo -e "${YELLOW}⚠️  Added missing PROVISIONING_TOKEN to .env${NC}"
         fi
 
         # Read DOMAIN from .env for kratos config regeneration

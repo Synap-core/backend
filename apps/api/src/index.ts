@@ -60,6 +60,7 @@ import {
 } from "./middleware/security.js";
 import { eventStreamManager, setupEventBroadcasting } from "@synap/api";
 import { authMiddleware } from "@synap/auth";
+import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
 
 // Setup event broadcasting to SSE clients
 const apiLogger = createLogger({ module: "api-server" });
@@ -234,8 +235,11 @@ const kratosPublicUrl =
 const proxyKratosRequest = async (c: HonoContext, kratosPath: string) => {
   try {
     // Forward request to Kratos public API
-    const search = new URL(c.req.url).search;
-    const targetUrl = `${kratosPublicUrl}${kratosPath}${search}`;
+    const targetUrl = buildKratosProxyTargetUrl(
+      kratosPublicUrl,
+      kratosPath,
+      c.req.url
+    );
 
     // Prepare headers - forward cookies and other important headers
     const headers: Record<string, string> = {
