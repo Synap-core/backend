@@ -294,22 +294,18 @@ generate_kratos_config() {
         is_localhost=true
     fi
 
-    # Browser-visible UI for Kratos flows. The auth UI itself stays on the
-    # legacy admin-ui SPA (mounted at `/admin/kratos` on the pod's main host)
-    # because that's where the form templates live. After login Kratos
-    # redirects to `pod_admin_ui` — the new Next.js operator console served
-    # at pod-admin.<bare-root> (separate subdomain). Cookie scope is widened
-    # to the bare root so the kratos session cookie set at pod.<root> is
-    # also valid at pod-admin.<root>.
-    local web_ui=""
-    local kratos_ui=""
+    # Browser-visible UI for Kratos flows. The legacy admin-ui SPA was retired
+    # 2026-05; pod-admin (Next.js, served at pod-admin.<bare-root>) now hosts
+    # all flow renderers natively at /login. Kratos still hits ui_url for
+    # browser-initiated flows (error pages, /self-service/*/browser
+    # redirects) — pointing it at pod-admin/login lets pod-admin re-init the
+    # flow via Kratos public API and render the form locally.
     local pod_admin_ui=""
+    local kratos_ui=""
     local bare_root="$domain"
     if [ "$is_localhost" = true ]; then
-        web_ui="http://localhost:4000"
         pod_admin_ui="http://localhost:4040"
     else
-        web_ui="https://${domain}"
         # Strip the `pod.` FQDN prefix to recover the bare root domain. Eve's
         # toPodFqdn() always passes `pod.<root>`; for hand-rolled installs
         # that bypass eve, $domain may already be the bare root, in which
@@ -317,7 +313,7 @@ generate_kratos_config() {
         bare_root="${domain#pod.}"
         pod_admin_ui="https://pod-admin.${bare_root}"
     fi
-    kratos_ui="${web_ui}/admin/kratos"
+    kratos_ui="${pod_admin_ui}/login"
 
     # Kratos public API base URL — localhost in dev, domain URL in production
     local kratos_public_base_url=""

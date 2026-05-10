@@ -42,7 +42,7 @@ COPY packages/types/package.json            ./packages/types/
 
 # Install ALL workspace deps — turbo build below needs every package's
 # devDeps (tsc, tsup, etc.) resolvable from the host's lockfile.
-RUN --mount=type=cache,id=pnpm-pod-admin,target=/root/.local/share/pnpm/store \
+RUN --mount=type=cache,id=pnpm-synap,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 
 # ── Layer 2: source + build (re-runs on every source change) ──

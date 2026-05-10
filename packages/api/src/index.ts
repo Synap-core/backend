@@ -452,6 +452,27 @@ registerRouter("sync", syncManagementRouter, {
   description: "Pod-to-pod sync peer management and status monitoring",
 });
 
+import { proactiveRouter } from "./routers/proactive.js";
+registerRouter("proactive", proactiveRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Proactive intelligence pod-wide defaults",
+});
+
+import { trustedIssuersRouter } from "./routers/trusted-issuers.js";
+registerRouter("trustedIssuers", trustedIssuersRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Trusted JWT issuer registry (CP-pod handshake)",
+});
+
+import { sourceConfigsRouter } from "./routers/source-configs.js";
+registerRouter("sourceConfigs", sourceConfigsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "External data source configurations",
+});
+
 import { coreRouter } from "./root.js";
 import type { AppRouter } from "./root.js";
 export type { AppRouter };

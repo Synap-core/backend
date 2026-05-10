@@ -34,7 +34,7 @@ COPY packages/test-e2e/package.json      ./packages/test-e2e/
 COPY packages/types/package.json         ./packages/types/
 
 # Install all dependencies — pnpm store is cached across builds
-RUN --mount=type=cache,id=pnpm-backend,target=/root/.local/share/pnpm/store \
+RUN --mount=type=cache,id=pnpm-synap,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 
 # ── Layer 2: source + build (re-runs on every source change) ──
