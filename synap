@@ -1237,6 +1237,8 @@ EOF
         docker compose build backend
         echo -e "${BLUE}  Building realtime...${NC}"
         docker compose build realtime
+        echo -e "${BLUE}  Building pod-admin...${NC}"
+        docker compose build pod-admin
         
         # Verify realtime build succeeded (check for server.js)
         # The main Dockerfile deploys realtime to /app/realtime/dist/server.js
@@ -1263,6 +1265,11 @@ EOF
         docker compose pull realtime --ignore-pull-failures || {
             echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
             docker compose build realtime
+        }
+        echo -e "${BLUE}  Pulling pod-admin...${NC}"
+        docker compose pull pod-admin --ignore-pull-failures || {
+            echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
+            docker compose build pod-admin
         }
     fi
     
@@ -1783,6 +1790,8 @@ cmd_update() {
         docker compose build backend
         echo -e "${BLUE}  Building realtime...${NC}"
         docker compose build realtime
+        echo -e "${BLUE}  Building pod-admin...${NC}"
+        docker compose build pod-admin
         version="local"
     else
         echo -e "${BLUE}📥 Pulling images...${NC}"
@@ -1796,6 +1805,13 @@ cmd_update() {
         docker compose pull realtime || {
             echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
             docker compose build realtime
+        }
+        # Pod-admin is a separate image (Next.js standalone). Pull failure
+        # falls back to local build so the operator console always lands.
+        echo -e "${BLUE}  Pulling pod-admin...${NC}"
+        docker compose pull pod-admin || {
+            echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
+            docker compose build pod-admin
         }
         # Refresh Kratos images so the migrate one-shot and the running
         # kratos service line up with the new schema. Best-effort: a
@@ -1898,13 +1914,13 @@ cmd_update() {
     # behind their own edge (eve's Traefik on port 80, an external nginx,
     # cloudflared, etc.) Caddy can't bind 80/443 and aborts the update.
     # Set SYNAP_SKIP_EDGE=1 to keep Caddy stopped — backend, realtime, kratos,
-    # and pod-agent come up regardless.
+    # pod-agent and pod-admin come up regardless.
     echo -e "${BLUE}🔄 Restarting services...${NC}"
     if [ "${SYNAP_SKIP_EDGE:-}" = "1" ]; then
         echo -e "${BLUE}  (SYNAP_SKIP_EDGE=1: skipping Caddy — external edge proxy assumed)${NC}"
-        docker compose up -d --remove-orphans backend realtime pod-agent
+        docker compose up -d --remove-orphans backend realtime pod-agent pod-admin
     else
-        docker compose up -d --remove-orphans backend realtime caddy pod-agent
+        docker compose up -d --remove-orphans backend realtime caddy pod-agent pod-admin
     fi
     docker compose up -d --force-recreate kratos
 
