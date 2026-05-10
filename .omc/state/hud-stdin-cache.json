@@ -16,33 +16,33 @@
   "version": "2.1.138",
   "output_style": { "name": "default" },
   "cost": {
-    "total_cost_usd": 144.351399,
-    "total_duration_ms": 19482176,
-    "total_api_duration_ms": 6664575,
-    "total_lines_added": 2178,
-    "total_lines_removed": 781
+    "total_cost_usd": 201.50487424999992,
+    "total_duration_ms": 27742150,
+    "total_api_duration_ms": 9618334,
+    "total_lines_added": 2635,
+    "total_lines_removed": 900
   },
   "context_window": {
-    "total_input_tokens": 108939,
-    "total_output_tokens": 0,
+    "total_input_tokens": 458267,
+    "total_output_tokens": 423,
     "context_window_size": 1000000,
     "current_usage": {
       "input_tokens": 6,
-      "output_tokens": 0,
-      "cache_creation_input_tokens": 1278,
-      "cache_read_input_tokens": 107655
+      "output_tokens": 423,
+      "cache_creation_input_tokens": 312,
+      "cache_read_input_tokens": 457949
     },
-    "used_percentage": 11,
-    "remaining_percentage": 89
+    "used_percentage": 46,
+    "remaining_percentage": 54
   },
-  "exceeds_200k_tokens": false,
+  "exceeds_200k_tokens": true,
   "fast_mode": false,
   "thinking": { "enabled": true },
   "rate_limits": {
-    "five_hour": {
-      "used_percentage": 7.000000000000001,
-      "resets_at": 1778382600
-    },
-    "seven_day": { "used_percentage": 21, "resets_at": 1778950800 }
+    "five_hour": { "used_percentage": 34, "resets_at": 1778382600 },
+    "seven_day": {
+      "used_percentage": 28.000000000000004,
+      "resets_at": 1778950800
+    }
   }
 }
