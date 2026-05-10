@@ -257,14 +257,28 @@ generate_kratos_config() {
         is_localhost=true
     fi
 
-    # Browser-visible UI for Kratos flows — same origin as the Data Pod API + admin SPA.
-    # Older templates pointed at localhost:3000 (synap-app); the pod serves auth UI at /admin/kratos.
+    # Browser-visible UI for Kratos flows. The auth UI itself stays on the
+    # legacy admin-ui SPA (mounted at `/admin/kratos` on the pod's main host)
+    # because that's where the form templates live. After login Kratos
+    # redirects to `pod_admin_ui` — the new Next.js operator console served
+    # at pod-admin.<bare-root> (separate subdomain). Cookie scope is widened
+    # to the bare root so the kratos session cookie set at pod.<root> is
+    # also valid at pod-admin.<root>.
     local web_ui=""
     local kratos_ui=""
+    local pod_admin_ui=""
+    local bare_root="$domain"
     if [ "$is_localhost" = true ]; then
         web_ui="http://localhost:4000"
+        pod_admin_ui="http://localhost:4040"
     else
         web_ui="https://${domain}"
+        # Strip the `pod.` FQDN prefix to recover the bare root domain. Eve's
+        # toPodFqdn() always passes `pod.<root>`; for hand-rolled installs
+        # that bypass eve, $domain may already be the bare root, in which
+        # case the prefix strip is a no-op.
+        bare_root="${domain#pod.}"
+        pod_admin_ui="https://pod-admin.${bare_root}"
     fi
     kratos_ui="${web_ui}/admin/kratos"
 
@@ -280,30 +294,37 @@ generate_kratos_config() {
     local cors_origins="        - http://localhost:3000
         - http://localhost:5173
         - http://localhost:3001
-        - http://localhost:4000"
-    
+        - http://localhost:4000
+        - http://localhost:4040"
+
     if [ "$is_localhost" = false ]; then
         cors_origins="$cors_origins
-        - https://${domain}"
+        - https://${domain}
+        - https://pod-admin.${bare_root}"
     fi
-    
+
     # Generate allowed return URLs
     local return_urls="    - http://localhost:3000
     - http://localhost:3000/*
     - http://localhost:4000
-    - http://localhost:4000/*"
-    
+    - http://localhost:4000/*
+    - http://localhost:4040
+    - http://localhost:4040/*"
+
     if [ "$is_localhost" = false ]; then
         return_urls="$return_urls
     - https://${domain}
-    - https://${domain}/*"
+    - https://${domain}/*
+    - https://pod-admin.${bare_root}
+    - https://pod-admin.${bare_root}/*"
     fi
-    
-    # Cookie domain and secure settings
+
+    # Cookie domain and secure settings — scoped to the bare root so the
+    # session cookie set at pod.<root> is also valid at pod-admin.<root>.
     local cookie_domain="localhost"
     local cookie_secure="false"
     if [ "$is_localhost" = false ]; then
-        cookie_domain="$domain"
+        cookie_domain="$bare_root"
         cookie_secure="true"
     fi
     
@@ -341,7 +362,7 @@ $cors_origins
   admin:
     base_url: http://localhost:4434
 selfservice:
-  default_browser_return_url: ${web_ui}/admin/
+  default_browser_return_url: ${pod_admin_ui}/
   allowed_return_urls:
 $return_urls
   methods:
@@ -364,7 +385,7 @@ $return_urls
       ui_url: ${kratos_ui}
     logout:
       after:
-        default_browser_return_url: ${web_ui}/admin/
+        default_browser_return_url: ${pod_admin_ui}/
     login:
       ui_url: ${kratos_ui}
       lifespan: 10m

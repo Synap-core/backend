@@ -183,3 +183,31 @@
         format json
     }
 }
+
+# ─── Pod Admin Console ────────────────────────────────────────────────────────
+# Operator-facing Next.js console served at pod-admin.{$DOMAIN}. Replaces the
+# legacy /admin/* SPA for dashboard surfaces; Kratos's default_browser_return_url
+# points here so post-login users land directly. The legacy SPA stays mounted
+# under /admin/{kratos,bootstrap,connect} on the main host for the three
+# auth-adjacent flows it still owns.
+# ─────────────────────────────────────────────────────────────────────────────
+pod-admin.{$DOMAIN}:80 {
+    # Cloudflare Tunnel HTTP path — same shape as the main host's :80 block.
+    reverse_proxy pod-admin:3000
+}
+
+pod-admin.{$DOMAIN} {
+    reverse_proxy pod-admin:3000
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+}

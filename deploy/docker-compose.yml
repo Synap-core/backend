@@ -177,6 +177,45 @@ services:
       - 127.0.0.11 # Docker's internal DNS
 
   # ============================================================================
+  # POD ADMIN — Next.js operator console served at pod-admin.<domain>
+  #
+  # Replaces the legacy admin-ui SPA for the dashboard surface. The legacy
+  # app stays mounted at /admin/{kratos,bootstrap,connect} on the backend
+  # for the three flows it still owns. Kratos's default_browser_return_url
+  # points here so post-login users land directly on this app.
+  # ============================================================================
+  pod-admin:
+    image: ghcr.io/synap-core/pod-admin:${BACKEND_VERSION:-latest}
+    build:
+      context: ..
+      dockerfile: apps/pod-admin/Dockerfile
+    restart: always
+    environment:
+      NODE_ENV: production
+      # Browser-visible pod URL — used by tRPC client + Kratos self-service.
+      NEXT_PUBLIC_POD_URL: ${PUBLIC_URL:-https://${DOMAIN:-localhost}}
+      # Server-side calls (whoami, sync status). In-cluster, talk to the
+      # backend container directly to avoid a round-trip through the edge.
+      POD_URL: http://backend:4000
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:3000/', (r) => process.exit(r.statusCode < 500 ? 0 : 1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - synap-net
+
+  # ============================================================================
   # CODE MIGRATION SERVICE
   # ============================================================================
   backend-migrate:
