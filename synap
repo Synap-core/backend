@@ -4,12 +4,49 @@
 
 set -e
 
-# Pin the docker compose project name deterministically. Without this,
-# compose falls back to the cwd basename ("deploy") when COMPOSE_PROJECT_NAME
-# is missing from .env — which spawns a parallel orphan stack alongside
-# any existing one (data volumes by name collide, container labels diverge).
-# Operator override is honored: anything in the shell env wins.
-export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-synap-backend}"
+# Pin the docker compose project name deterministically. Compose otherwise
+# falls back to the cwd basename, which on a git checkout is "deploy" — and
+# silently switching project name spawns a parallel orphan stack: NEW empty
+# data volumes are created and the running container loses sight of the
+# operator's existing data (kratos identities, synap users, postgres rows).
+#
+# This is the ROOT CAUSE of the May-2026 wipe report: existing installs
+# created their data under project "deploy" (volume `deploy_postgres_data`),
+# then a later run hard-pinned project to "synap-backend" → compose created
+# `synap-backend_postgres_data` empty, postgres mounted on it, kratos-migrate
+# ran every migration from scratch on the empty schema. The original data
+# was still in `deploy_postgres_data` but orphaned.
+#
+# Pick the project name that owns the actual data volume. Preference order:
+#   1. shell env override (operator knows what they're doing)
+#   2. .env override (operator pinned it)
+#   3. existing data volume — if `deploy_postgres_data` exists and a
+#      synap-backend one does NOT, USE "deploy" so postgres mounts the
+#      already-populated volume on next compose up.
+#   4. fall back to "synap-backend" (the current convention for fresh installs).
+_resolve_compose_project_name() {
+    if [ -n "${COMPOSE_PROJECT_NAME:-}" ]; then
+        echo "$COMPOSE_PROJECT_NAME"
+        return
+    fi
+    if [ -f .env ] && grep -q "^COMPOSE_PROJECT_NAME=" .env 2>/dev/null; then
+        grep "^COMPOSE_PROJECT_NAME=" .env | head -1 | cut -d'=' -f2- | tr -d '"' | tr -d "'"
+        return
+    fi
+    # Probe Docker for existing data volumes — only when docker is available.
+    if command -v docker >/dev/null 2>&1; then
+        local has_deploy
+        has_deploy=$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E '^deploy_postgres_data$' || true)
+        local has_synap
+        has_synap=$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E '^synap-backend_postgres_data$' || true)
+        if [ -n "$has_deploy" ] && [ -z "$has_synap" ]; then
+            echo "deploy"
+            return
+        fi
+    fi
+    echo "synap-backend"
+}
+export COMPOSE_PROJECT_NAME="$(_resolve_compose_project_name)"
 
 # Colors
 RED='\033[0;31m'
