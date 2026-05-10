@@ -1970,9 +1970,31 @@ cmd_update() {
         fi
     fi
 
+    # Kratos + Hydra schema migrations. `compose run --rm` forces a fresh
+    # migrate container every time — bypasses docker compose's
+    # `service_completed_successfully` short-circuit which silently skips
+    # migrate services on subsequent `up`s after they've exited 0 once. If
+    # the kratos/hydra database is empty for ANY reason (volume drift, an
+    # `init-databases.sh` re-create, manual ops), this is the only thing
+    # that brings the schema back. Failure is interactive-blocking; CI /
+    # eve always exits non-zero so the broken state never silently ships.
     echo -e "${BLUE}🔄 Running Kratos migrations...${NC}"
     if ! docker compose run --rm kratos-migrate; then
         echo -e "${YELLOW}⚠️  Kratos migrations failed — login/registration flows will 500 against the new image.${NC}"
+        if synap_assume_yes; then
+            echo -e "${RED}Aborting in non-interactive mode — investigate and re-run.${NC}"
+            exit 1
+        fi
+        read -p "Continue anyway? (y/N): " CONTINUE
+        if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
+            echo "Update cancelled"
+            exit 1
+        fi
+    fi
+
+    echo -e "${BLUE}🔄 Running Hydra migrations...${NC}"
+    if ! docker compose run --rm hydra-migrate; then
+        echo -e "${YELLOW}⚠️  Hydra migrations failed — OAuth2 flows will 500 against the new image.${NC}"
         if synap_assume_yes; then
             echo -e "${RED}Aborting in non-interactive mode — investigate and re-run.${NC}"
             exit 1
@@ -1995,25 +2017,6 @@ cmd_update() {
     # cloudflared, etc.) Caddy can't bind 80/443 and aborts the update.
     # Set SYNAP_SKIP_EDGE=1 to keep Caddy stopped — backend, realtime, kratos,
     # pod-agent and pod-admin come up regardless.
-
-    # Force-run kratos-migrate and hydra-migrate BEFORE bringing services up.
-    # docker compose's `service_completed_successfully` dependency considers
-    # a migrate service "satisfied" once it exited 0 in any prior lifecycle
-    # — so on subsequent `up`s the migrate service is silently skipped. If
-    # the kratos/hydra database gets recreated for any reason between then
-    # and now (volume drift, manual prune, init-databases.sh recreating an
-    # empty `kratos` database), kratos starts against a schema-less DB and
-    # every /self-service/* call returns 500 "relation … does not exist".
-    # `compose run --rm` forces a fresh migrate container every time, which
-    # is idempotent (kratos migrate is INSERT-only against `_kratos_session_devices`-style
-    # bookkeeping) and the canonical fix used by deploy/update-pod.sh.
-    echo -e "${BLUE}🔄 Reapplying auth schema migrations (kratos + hydra)...${NC}"
-    docker compose run --rm kratos-migrate || {
-        echo -e "${YELLOW}⚠️  kratos-migrate exited non-zero — kratos may not start cleanly${NC}"
-    }
-    docker compose run --rm hydra-migrate || {
-        echo -e "${YELLOW}⚠️  hydra-migrate exited non-zero — hydra may not start cleanly${NC}"
-    }
 
     # Pod-agent is profile-gated (compose profile: pod-agent) and only restarted
     # when SYNAP_WITH_POD_AGENT=1 is set. See cmd_install for full rationale.
