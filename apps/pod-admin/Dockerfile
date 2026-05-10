@@ -44,6 +44,14 @@ RUN --mount=type=cache,id=pnpm-pod-admin,target=/root/.local/share/pnpm/store \
 COPY apps/pod-admin ./apps/pod-admin
 COPY packages/api-types ./packages/api-types
 
+# Build api-types FIRST — pod-admin's TypeScript pass imports `AppRouter`
+# from @synap-core/api-types via the workspace symlink, and the package's
+# package.json points `types` at `./dist/index.d.ts`. The repo `.dockerignore`
+# excludes `dist/`, so the compiled types must be regenerated inside the
+# container. Without this step pod-admin's `next build` fails type-checking
+# with the misleading "collides with a built-in method" tRPC error message.
+RUN pnpm --filter @synap-core/api-types build
+
 RUN cd apps/pod-admin && NEXT_TELEMETRY_DISABLED=1 pnpm build
 
 # ============================================================================
