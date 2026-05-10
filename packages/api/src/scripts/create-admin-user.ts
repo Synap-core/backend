@@ -5,8 +5,65 @@
 
 import { kratosAdmin } from "@synap/auth";
 import { getDb } from "@synap/database";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql as drizzleSql } from "drizzle-orm";
 import { users, workspaces, workspaceMembers } from "@synap/database/schema";
+
+/**
+ * Seed the system "pod-admin" workspace if it doesn't exist, then ensure
+ * the given user is an owner of it. The pod-admin workspace is the gate
+ * for `podAdminProcedure` (system.*, sync.getStatus, audit.*, etc.) — without
+ * membership, the operator can sign in but every admin tRPC call returns
+ * 403 "Pod admin access required".
+ */
+async function ensurePodAdminWorkspace(
+  identityId: string,
+  db: Awaited<ReturnType<typeof getDb>>
+): Promise<string> {
+  const existing = await db.query.workspaces.findFirst({
+    where: drizzleSql`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
+    columns: { id: true },
+  });
+
+  let podAdminId: string;
+  if (existing) {
+    podAdminId = existing.id;
+  } else {
+    const [created] = await db
+      .insert(workspaces)
+      .values({
+        ownerId: identityId,
+        name: "Pod Admin",
+        type: "personal",
+        settings: { systemSlug: "pod-admin" },
+      })
+      .returning({ id: workspaces.id });
+    if (!created) throw new Error("Failed to create pod-admin workspace");
+    podAdminId = created.id;
+    console.error(
+      `[create-admin] Created pod-admin system workspace ${podAdminId}`
+    );
+  }
+
+  // Ensure the operator is an owner — first-admin always gets owner; later
+  // admins are added by an existing pod admin via the operator console.
+  const membership = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, podAdminId),
+      eq(workspaceMembers.userId, identityId)
+    ),
+    columns: { role: true },
+  });
+  if (!membership) {
+    await db.insert(workspaceMembers).values({
+      workspaceId: podAdminId,
+      userId: identityId,
+      role: "owner",
+    });
+    console.error(`[create-admin] Granted ${identityId} pod-admin owner`);
+  }
+
+  return podAdminId;
+}
 
 export async function createAdminUser(
   email: string,
@@ -58,6 +115,12 @@ export async function createAdminUser(
     });
 
     console.error(`[create-admin] Created user in backend DB ${identityId}`);
+
+    // Always seed the pod-admin system workspace + owner membership for the
+    // first admin. Without this, `podAdminProcedure` returns 403 for every
+    // admin tRPC call (sync.getStatus, system.*, audit.*) and the pod-admin
+    // console renders the "access required" gate forever.
+    await ensurePodAdminWorkspace(identityId, db);
 
     if (!createWorkspace) {
       console.error(

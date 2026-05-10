@@ -19,10 +19,27 @@
  * tab (the middleware matcher excludes `_next/*` and assets).
  */
 
-const ENV_POD_URL =
+// Two URLs — they differ when pod-admin runs inside the same docker
+// network as the backend:
+//
+//   • INTERNAL_POD_URL — server-side fetches from this Next.js process to
+//     the backend (Kratos /sessions/whoami, tRPC /sync.getStatus). Reads
+//     POD_URL first (typically `http://backend:4000` in compose), falls
+//     back to NEXT_PUBLIC_POD_URL when running locally.
+//   • PUBLIC_POD_URL — URLs the BROWSER sees. Always the public,
+//     browser-resolvable URL. Reads NEXT_PUBLIC_POD_URL only — never
+//     POD_URL, since `http://backend:4000` is unreachable from a
+//     browser and yields ERR_NAME_NOT_RESOLVED on the login redirect.
+//
+// Conflating these two is the bug that sent operators to `http://backend:4000/admin/kratos?return=…`
+// after sign-in.
+const INTERNAL_POD_URL =
   process.env.POD_URL ??
   process.env.NEXT_PUBLIC_POD_URL ??
   "http://localhost:4000";
+
+const PUBLIC_POD_URL =
+  process.env.NEXT_PUBLIC_POD_URL ?? "http://localhost:4000";
 
 export interface KratosIdentity {
   id: string;
@@ -46,7 +63,7 @@ export interface KratosWhoamiResponse {
 export async function whoamiFromCookie(
   cookieHeader: string
 ): Promise<KratosIdentity | null> {
-  const url = `${ENV_POD_URL.replace(/\/$/, "")}/.ory/kratos/public/sessions/whoami`;
+  const url = `${INTERNAL_POD_URL.replace(/\/$/, "")}/.ory/kratos/public/sessions/whoami`;
 
   let res: Response;
   try {
@@ -96,7 +113,7 @@ export async function whoamiFromCookie(
 export async function isPodAdmin(cookieHeader: string): Promise<boolean> {
   // Use the non-batched single-call form for simplicity. The tRPC HTTP
   // contract supports both — see https://trpc.io/docs/client/links/httpLink.
-  const url = `${ENV_POD_URL.replace(/\/$/, "")}/trpc/sync.getStatus`;
+  const url = `${INTERNAL_POD_URL.replace(/\/$/, "")}/trpc/sync.getStatus`;
 
   let res: Response;
   try {
@@ -117,4 +134,7 @@ export async function isPodAdmin(cookieHeader: string): Promise<boolean> {
   return res.status === 200;
 }
 
-export const POD_URL = ENV_POD_URL;
+// Middleware imports this for browser-bound redirects (e.g.
+// `${POD_URL}/admin/kratos?return=…`). Must be the public URL — using
+// the in-cluster URL here was the source of the post-login redirect bug.
+export const POD_URL = PUBLIC_POD_URL;
