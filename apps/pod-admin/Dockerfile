@@ -3,18 +3,20 @@ RUN npm install -g pnpm@10.28.0
 WORKDIR /app
 
 # ============================================================================
-# Builder
+# Builder — install full workspace + build pod-admin and its workspace deps
+#
+# Why the whole workspace: pod-admin imports `@synap-core/api-types` which
+# transitively pulls in `@synap-core/types`, which devDepends on `@synap/database`
+# and `@synap-core/core` — both of which need their own tsconfig + source to
+# compile. Trying to copy a hand-curated subset breaks under topological build
+# (turbo / pnpm). The backend Dockerfile takes the same shape — copy everything,
+# install once, let turbo handle the order.
 # ============================================================================
 FROM base AS builder
 
 RUN apk add --no-cache python3 make g++
 
-# Workspace manifests — pod-admin depends on @synap-core/api-types via workspace.
-# Copy all workspace package.jsons because pnpm's frozen-lockfile resolves
-# against the full graph; the actual install is filtered to pod-admin's
-# transitive closure via `--filter pod-admin...`.
-# Also copy the root tsconfig.json — every package's tsconfig extends it, so
-# missing it breaks api-types' `tsc` (TS5083 "Cannot read file").
+# ── Layer 1: dependency manifests (cached unless lockfile or package.json changes) ──
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.json ./
 COPY apps/admin-ui/package.json     ./apps/admin-ui/
 COPY apps/api/package.json          ./apps/api/
@@ -39,24 +41,18 @@ COPY packages/storage/package.json          ./packages/storage/
 COPY packages/test-e2e/package.json         ./packages/test-e2e/
 COPY packages/types/package.json            ./packages/types/
 
+# Install ALL workspace deps — turbo build below needs every package's
+# devDeps (tsc, tsup, etc.) resolvable from the host's lockfile.
 RUN --mount=type=cache,id=pnpm-pod-admin,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --filter pod-admin...
+    pnpm install --frozen-lockfile
 
-# Source — pod-admin + its workspace dep chain (types ← api-types).
-COPY apps/pod-admin ./apps/pod-admin
-COPY packages/api-types ./packages/api-types
-COPY packages/types ./packages/types
+# ── Layer 2: source + build (re-runs on every source change) ──
+COPY . .
 
-# Build the workspace dep chain FIRST. pod-admin's TypeScript pass imports
-# `AppRouter` from @synap-core/api-types, which itself depends on
-# @synap-core/types. The repo `.dockerignore` excludes every `dist/`, so we
-# have to materialise both packages' compiled output inside the container.
-# `--filter @synap-core/api-types...` (note the trailing `...`) tells pnpm
-# to build api-types plus all of its transitive workspace dependencies in
-# topological order — types first, then api-types.
-RUN pnpm --filter @synap-core/api-types... build
-
-RUN cd apps/pod-admin && NEXT_TELEMETRY_DISABLED=1 pnpm build
+# Build pod-admin via turbo so its workspace deps (api-types, types, etc.) get
+# built first in topological order. concurrency=1 keeps memory bounded.
+RUN NODE_OPTIONS=--max-old-space-size=4096 NEXT_TELEMETRY_DISABLED=1 \
+    pnpm turbo build --filter=pod-admin --concurrency=1
 
 # ============================================================================
 # Runner — Next.js standalone output
