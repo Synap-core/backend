@@ -13,7 +13,9 @@ RUN apk add --no-cache python3 make g++
 # Copy all workspace package.jsons because pnpm's frozen-lockfile resolves
 # against the full graph; the actual install is filtered to pod-admin's
 # transitive closure via `--filter pod-admin...`.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+# Also copy the root tsconfig.json — every package's tsconfig extends it, so
+# missing it breaks api-types' `tsc` (TS5083 "Cannot read file").
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.json ./
 COPY apps/admin-ui/package.json     ./apps/admin-ui/
 COPY apps/api/package.json          ./apps/api/
 COPY apps/pod-admin/package.json    ./apps/pod-admin/
@@ -40,17 +42,19 @@ COPY packages/types/package.json            ./packages/types/
 RUN --mount=type=cache,id=pnpm-pod-admin,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --filter pod-admin...
 
-# Source — pod-admin + its workspace dep.
+# Source — pod-admin + its workspace dep chain (types ← api-types).
 COPY apps/pod-admin ./apps/pod-admin
 COPY packages/api-types ./packages/api-types
+COPY packages/types ./packages/types
 
-# Build api-types FIRST — pod-admin's TypeScript pass imports `AppRouter`
-# from @synap-core/api-types via the workspace symlink, and the package's
-# package.json points `types` at `./dist/index.d.ts`. The repo `.dockerignore`
-# excludes `dist/`, so the compiled types must be regenerated inside the
-# container. Without this step pod-admin's `next build` fails type-checking
-# with the misleading "collides with a built-in method" tRPC error message.
-RUN pnpm --filter @synap-core/api-types build
+# Build the workspace dep chain FIRST. pod-admin's TypeScript pass imports
+# `AppRouter` from @synap-core/api-types, which itself depends on
+# @synap-core/types. The repo `.dockerignore` excludes every `dist/`, so we
+# have to materialise both packages' compiled output inside the container.
+# `--filter @synap-core/api-types...` (note the trailing `...`) tells pnpm
+# to build api-types plus all of its transitive workspace dependencies in
+# topological order — types first, then api-types.
+RUN pnpm --filter @synap-core/api-types... build
 
 RUN cd apps/pod-admin && NEXT_TELEMETRY_DISABLED=1 pnpm build
 
