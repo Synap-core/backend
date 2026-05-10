@@ -179,10 +179,9 @@ services:
   # ============================================================================
   # POD ADMIN — Next.js operator console served at pod-admin.<domain>
   #
-  # Replaces the legacy admin-ui SPA for the dashboard surface. The legacy
-  # app stays mounted at /admin/{kratos,bootstrap,connect} on the backend
-  # for the three flows it still owns. Kratos's default_browser_return_url
-  # points here so post-login users land directly on this app.
+  # Owns /login (Kratos sign-in) and /setup (first-admin bootstrap).
+  # The legacy admin-ui SPA has been retired. Kratos's default_browser_return_url
+  # points to pod-admin so post-login users land directly on this app.
   # ============================================================================
   pod-admin:
     image: ghcr.io/synap-core/pod-admin:${BACKEND_VERSION:-latest}
@@ -404,11 +403,9 @@ services:
       SECRETS_CIPHER: ${KRATOS_SECRETS_CIPHER}
       SERVE_PUBLIC_BASE_URL: https://${DOMAIN}/.ory/kratos/public/
       SERVE_ADMIN_BASE_URL: https://${DOMAIN}/.ory/kratos/admin/
-      # Post-success return URL — must be a route the pod actually serves.
-      # The pod admin SPA mounts /admin/ (see apps/admin-ui/src/App.tsx) and
-      # Kratos flows are rendered inline at /admin/kratos. There is NO /login
-      # route on the pod, so pointing this at /login 404s after every flow.
-      SELFSERVICE_DEFAULT_BROWSER_RETURN_URL: https://${DOMAIN}/admin/
+      # Post-success return URL — pod-admin's /login handles the Kratos flow
+      # natively; on success it navigates to the return target (default: /).
+      SELFSERVICE_DEFAULT_BROWSER_RETURN_URL: https://pod-admin.${DOMAIN}/
       SELFSERVICE_ALLOWED_RETURN_URLS: https://${DOMAIN},https://${DOMAIN}/*
       IDENTITY_SCHEMAS_0_ID: default
       IDENTITY_SCHEMAS_0_URL: file:///etc/config/kratos/identity.schema.json

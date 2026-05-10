@@ -8,7 +8,7 @@
     "dev": "pnpm --filter api dev",
     "dev:all": "pnpm --filter api --filter @synap/realtime dev",
     "dev:realtime": "pnpm --filter @synap/realtime dev",
-    "build": "turbo run build --filter='!admin-ui'",
+    "build": "turbo run build",
     "test": "turbo run test",
     "test:e2e": "pnpm --filter @synap/test-e2e test",
     "test:e2e:watch": "pnpm --filter @synap/test-e2e test:watch",
