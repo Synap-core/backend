@@ -14,7 +14,6 @@ RUN apk add --no-cache python3 make g++
 # Copy workspace config and all package.json files BEFORE source code.
 # This layer is only invalidated when dependencies change, not on every commit.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
-COPY apps/admin-ui/package.json ./apps/admin-ui/
 COPY apps/api/package.json      ./apps/api/
 COPY packages/ai-embeddings/package.json ./packages/ai-embeddings/
 COPY packages/ai/package.json            ./packages/ai/
@@ -52,10 +51,6 @@ RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm turbo build \
 # Build provision-agent script (standalone tsup bundle)
 RUN cd /app/packages/api && npx tsup --config tsup.provision.config.ts
 
-# Build admin-ui SPA
-RUN --mount=type=cache,id=vite-admin,target=/app/apps/admin-ui/.vite \
-    cd apps/admin-ui && npx vite build
-
 # Deploy each service to its own self-contained directory
 RUN pnpm deploy --filter=api --prod --legacy /app/deploy/api
 RUN pnpm deploy --filter=@synap/realtime --prod --legacy /app/deploy/realtime
@@ -89,9 +84,6 @@ COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations/*.sq
 
 # Provision-agent script
 COPY --from=builder --chown=nodejs:nodejs /app/packages/api/dist/scripts ./api/dist/scripts/
-
-# Admin UI static build
-COPY --from=builder --chown=nodejs:nodejs /app/apps/admin-ui/dist ./api/admin-ui/
 
 # Shameful hoist for API node_modules (pnpm deploy --legacy doesn't create top-level symlinks)
 USER root

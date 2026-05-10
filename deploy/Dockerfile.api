@@ -12,7 +12,6 @@ RUN apk add --no-cache python3 make g++
 
 # ── Layer 1: dependency manifests (cached unless lockfile or package.json changes) ──
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
-COPY apps/admin-ui/package.json ./apps/admin-ui/
 COPY apps/api/package.json      ./apps/api/
 COPY packages/ai-embeddings/package.json ./packages/ai-embeddings/
 COPY packages/ai/package.json            ./packages/ai/
@@ -52,10 +51,6 @@ RUN --mount=type=cache,id=turbo-backend,target=/app/.turbo \
 
 # Build provision-agent script separately (standalone bundle, not affected by turbo cache)
 RUN cd /app/packages/api && npx tsup --config tsup.provision.config.ts
-
-# Build admin-ui SPA
-RUN --mount=type=cache,id=vite-admin,target=/app/apps/admin-ui/.vite \
-    cd apps/admin-ui && npx vite build
 
 # Deploy API package (pnpm deploy works perfectly for single package)
 RUN rm -rf /app/deploy && \
@@ -119,9 +114,6 @@ RUN pnpm_dir=/app/node_modules/.pnpm; \
       fi; \
     done
 USER nodejs
-
-# Copy admin-ui static build
-COPY --from=builder --chown=nodejs:nodejs /app/apps/admin-ui/dist ./admin-ui/
 
 # Expose port
 EXPOSE 4000

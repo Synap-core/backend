@@ -92,7 +92,6 @@ jobs:
             || echo "⚠️  Some builds may have failed, continuing..."
 
       - name: Typecheck
-        # Typecheck all packages (admin-ui already excluded from tsconfig.json references)
         run: pnpm typecheck
 
       - name: Start API server for smoke tests

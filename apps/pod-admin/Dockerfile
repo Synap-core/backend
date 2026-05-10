@@ -18,7 +18,6 @@ RUN apk add --no-cache python3 make g++
 
 # ── Layer 1: dependency manifests (cached unless lockfile or package.json changes) ──
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.json ./
-COPY apps/admin-ui/package.json     ./apps/admin-ui/
 COPY apps/api/package.json          ./apps/api/
 COPY apps/pod-admin/package.json    ./apps/pod-admin/
 COPY packages/ai-embeddings/package.json    ./packages/ai-embeddings/
