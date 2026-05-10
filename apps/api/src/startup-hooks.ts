@@ -12,7 +12,12 @@ import {
   db,
   webhookSubscriptions,
   eq,
+  and,
+  inArray,
   ensureSystemProfiles,
+  users,
+  workspaces,
+  workspaceMembers,
 } from "@synap/database";
 import { randomUUID, randomBytes } from "crypto";
 import { sql as drizzleSql } from "drizzle-orm";
@@ -251,6 +256,134 @@ function validateCriticalSecrets(): void {
 }
 
 /**
+ * Pod-admin invariant check.
+ *
+ * The pod-admin invariant: there exists a `workspaces` row with
+ * `settings->>'systemSlug' = 'pod-admin'` AND at least one
+ * `workspace_members` row with role in (owner, admin) for that workspace.
+ *
+ * Without this, every `podAdminProcedure` returns 403 — operators sign in
+ * but find every admin surface gated as "access required". Most common cause
+ * is partial-state data loss (kratos identities survive, synap rows wiped),
+ * which the previous `createAdminUser` could not repair on rerun.
+ *
+ * This check is **non-fatal**: a fresh install legitimately has no admin
+ * yet (the first admin gets created in the install or bootstrap step). We
+ * surface a structured warning the operator can follow to recover, and
+ * record the state on a globally readable signal for the doctor route.
+ */
+let podAdminInvariantState: {
+  healthy: boolean;
+  reason: string;
+  checkedAt: number;
+} = { healthy: false, reason: "not yet checked", checkedAt: 0 };
+
+export function getPodAdminInvariantState(): typeof podAdminInvariantState {
+  return podAdminInvariantState;
+}
+
+export async function verifyPodAdminInvariant(): Promise<void> {
+  try {
+    const podAdminWorkspace = await db.query.workspaces.findFirst({
+      where: drizzleSql`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
+      columns: { id: true },
+    });
+
+    if (!podAdminWorkspace) {
+      // No workspace at all → check whether ANY users exist. If there are
+      // users but no pod-admin workspace, this is a real broken state. If
+      // there are zero users, this is a legitimate fresh install pre-bootstrap.
+      const anyUser = await db.query.users.findFirst({ columns: { id: true } });
+      if (!anyUser) {
+        podAdminInvariantState = {
+          healthy: false,
+          reason: "no users yet — pre-bootstrap install",
+          checkedAt: Date.now(),
+        };
+        logger.info("Pod-admin invariant: pre-bootstrap (no users yet)");
+        return;
+      }
+      podAdminInvariantState = {
+        healthy: false,
+        reason: "users exist but no pod-admin system workspace",
+        checkedAt: Date.now(),
+      };
+      logger.error(
+        "⚠️  Pod-admin invariant BROKEN: users exist but no pod-admin workspace.\n" +
+          "    Recovery: ADMIN_EMAIL=<your-email> ADMIN_PASSWORD=<password> \\\n" +
+          "              pnpm tsx scripts/create-admin-cli.ts\n" +
+          "    Or via the synap CLI:\n" +
+          "              synap setup admin --email <your-email> --password <password>"
+      );
+      return;
+    }
+
+    const owners = await db.query.workspaceMembers.findFirst({
+      where: and(
+        eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
+        inArray(workspaceMembers.role, ["owner", "admin"])
+      ),
+      columns: { userId: true },
+    });
+
+    if (!owners) {
+      podAdminInvariantState = {
+        healthy: false,
+        reason: `pod-admin workspace ${podAdminWorkspace.id} exists but has no owner/admin member`,
+        checkedAt: Date.now(),
+      };
+      logger.error(
+        "⚠️  Pod-admin invariant BROKEN: pod-admin workspace exists but has no owners.\n" +
+          "    Recovery: synap setup admin --email <your-email> --password <password>"
+      );
+      return;
+    }
+
+    // Check the user actually has a `users` row matching the membership.
+    // This catches the "kratos identity exists, synap users wiped" case.
+    const userRow = await db.query.users.findFirst({
+      where: eq(users.id, owners.userId),
+      columns: { id: true, email: true },
+    });
+
+    if (!userRow) {
+      podAdminInvariantState = {
+        healthy: false,
+        reason: `pod-admin owner ${owners.userId} has no users row (orphan membership)`,
+        checkedAt: Date.now(),
+      };
+      logger.error(
+        "⚠️  Pod-admin invariant BROKEN: orphan workspace_members row references missing user.\n" +
+          "    The synap users table appears to have been wiped while keeping " +
+          "Kratos identities and workspace_members.\n" +
+          "    Recovery: synap setup admin --email <your-email> --password <password>"
+      );
+      return;
+    }
+
+    podAdminInvariantState = {
+      healthy: true,
+      reason: `pod-admin owned by ${userRow.email}`,
+      checkedAt: Date.now(),
+    };
+    logger.info(
+      { adminEmail: userRow.email, workspaceId: podAdminWorkspace.id },
+      "Pod-admin invariant: healthy"
+    );
+  } catch (err) {
+    podAdminInvariantState = {
+      healthy: false,
+      reason: `check failed: ${err instanceof Error ? err.message : String(err)}`,
+      checkedAt: Date.now(),
+    };
+    logger.warn(
+      { err },
+      "Pod-admin invariant check failed (non-fatal — will retry next boot)"
+    );
+  }
+}
+
+/**
  * Run all startup hooks
  */
 export async function runStartupHooks(): Promise<void> {
@@ -281,6 +414,10 @@ export async function runStartupHooks(): Promise<void> {
   // Trusted issuers are established at provisioning time via POST /api/provision/seed-trust
   // (authenticated with PROVISIONING_TOKEN). No startup seeding — the pod starts with zero
   // knowledge of the CP URL. Trust is purely provisioning-driven.
+
+  // Pod-admin invariant — non-fatal, surfaces a loud warning if broken so
+  // operators see exactly which recovery command to run.
+  await verifyPodAdminInvariant();
 
   logger.info("✅ Startup hooks complete");
 }

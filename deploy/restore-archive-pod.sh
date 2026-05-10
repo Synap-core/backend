@@ -10,7 +10,7 @@ ARCHIVE_URL="$1"
 CALLBACK_URL="$2"
 CALLBACK_JWT="$3"
 CD="$(dirname "$0")"
-COMPOSE="docker compose -p synap -f $CD/docker-compose.yml"
+COMPOSE="docker compose -p synap-backend -f $CD/docker-compose.yml"
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [restore-archive] $*"; }
 

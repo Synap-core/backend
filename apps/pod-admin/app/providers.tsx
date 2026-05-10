@@ -18,12 +18,39 @@ import { httpBatchLink } from "@trpc/client";
 import SuperJSON from "superjson";
 import { trpc } from "../lib/trpc";
 
+/**
+ * Derive the pod backend URL at runtime so a docker build that didn't
+ * pass `NEXT_PUBLIC_POD_URL` still works in production. The convention
+ * is `pod-admin.<root>` for the operator console and `pod.<root>` for
+ * the pod API + Kratos. When we're served at the former, swap the
+ * hostname to the latter; same scheme, same TLS.
+ *
+ * Used to be: `process.env.NEXT_PUBLIC_POD_URL ?? window.location.origin`,
+ * which baked `undefined` into the bundle if the build env was missing
+ * and then sent every tRPC request to `pod-admin.X/trpc/...` — Next.js
+ * 404s, not the pod backend. Surfaced as 404 HTML on every fetch with
+ * `x-nextjs-prerender: 1` in the response.
+ */
+function derivePodUrlFromCurrentOrigin(origin: string): string {
+  try {
+    const u = new URL(origin);
+    if (u.hostname.startsWith("pod-admin.")) {
+      const root = u.hostname.slice("pod-admin.".length);
+      return `${u.protocol}//pod.${root}`;
+    }
+    // dev / non-pod-admin host: use as-is. Operators running `next dev`
+    // on :4040 with the pod on :4000 still need NEXT_PUBLIC_POD_URL.
+    return origin;
+  } catch {
+    return origin;
+  }
+}
+
 const POD_URL =
   process.env.NEXT_PUBLIC_POD_URL ??
-  // Dev fallback: same-origin (the admin app is reverse-proxied beside
-  // the pod API).  In dev the operator typically runs `next dev` on
-  // :4040 and the pod on :4000, so they MUST set NEXT_PUBLIC_POD_URL.
-  (typeof window !== "undefined" ? window.location.origin : "");
+  (typeof window !== "undefined"
+    ? derivePodUrlFromCurrentOrigin(window.location.origin)
+    : "");
 
 export function Providers({ children }: { children: ReactNode }) {
   // QueryClient + tRPC client created once per mount — `useState` keeps

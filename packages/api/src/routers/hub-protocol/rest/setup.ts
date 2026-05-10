@@ -62,6 +62,88 @@ async function checkKratosIdentity(): Promise<boolean> {
   }
 }
 
+/**
+ * Probe the pod-admin invariant. Returns a structured result the operator
+ * (or eve's post-update probe) can act on.
+ *
+ *   { healthy: true, … }            — pod-admin owner exists, all rows present.
+ *   { healthy: false, kind: 'fresh' } — no users yet, install pre-bootstrap.
+ *   { healthy: false, kind: 'broken_no_workspace' }   — users exist, no pod-admin workspace.
+ *   { healthy: false, kind: 'broken_no_owner' }        — workspace exists, no owners.
+ *   { healthy: false, kind: 'broken_orphan_member' }   — owner row points at missing user.
+ */
+async function computePodAdminInvariant(): Promise<{
+  healthy: boolean;
+  kind: string;
+  reason: string;
+}> {
+  try {
+    const podAdminWorkspace = await db.query.workspaces.findFirst({
+      where: drizzleSql`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
+      columns: { id: true },
+    });
+
+    if (!podAdminWorkspace) {
+      const anyUser = await db.query.users.findFirst({
+        columns: { id: true },
+      });
+      if (!anyUser) {
+        return {
+          healthy: false,
+          kind: "fresh",
+          reason: "no users yet — pre-bootstrap install",
+        };
+      }
+      return {
+        healthy: false,
+        kind: "broken_no_workspace",
+        reason: "users exist but no pod-admin system workspace",
+      };
+    }
+
+    const owner = await db.query.workspaceMembers.findFirst({
+      where: and(
+        eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
+        inArray(workspaceMembers.role, ["owner", "admin"])
+      ),
+      columns: { userId: true },
+    });
+
+    if (!owner) {
+      return {
+        healthy: false,
+        kind: "broken_no_owner",
+        reason: `pod-admin workspace ${podAdminWorkspace.id} has no owner/admin`,
+      };
+    }
+
+    const userRow = await db.query.users.findFirst({
+      where: eq(users.id, owner.userId),
+      columns: { id: true, email: true },
+    });
+
+    if (!userRow) {
+      return {
+        healthy: false,
+        kind: "broken_orphan_member",
+        reason: `pod-admin owner ${owner.userId} has no users row`,
+      };
+    }
+
+    return {
+      healthy: true,
+      kind: "ok",
+      reason: `pod-admin owned by ${userRow.email}`,
+    };
+  } catch (err) {
+    return {
+      healthy: false,
+      kind: "probe_failed",
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 export function registerSetupRoutes(app: HubHono): void {
   app.post("/setup/agent", async (c) => {
     const flowId = randomUUID();
@@ -713,10 +795,20 @@ export function registerSetupRoutes(app: HubHono): void {
       const humanCount = Number(humanResult?.count ?? 0);
       const workspaceCount = Number(wsResult?.count ?? 0);
 
+      // Pod-admin invariant — true when there exists a pod-admin system
+      // workspace AND at least one owner/admin member with a backing users
+      // row. Distinct from `needsSetup`: a pod can have Kratos identities
+      // and synap users but a broken pod-admin invariant (e.g. partial
+      // wipe), in which case `/admin/*` surfaces 403 even though sign-in
+      // works. Eve's post-update probe reads this to surface a recovery
+      // command.
+      const invariant = await computePodAdminInvariant();
+
       return c.json({
         hasAdmin: kratosHasIdentity || humanCount > 0,
         workspaceCount,
         needsSetup: !kratosHasIdentity && humanCount === 0,
+        podAdminInvariant: invariant,
       });
     } catch (err) {
       logger.error({ err }, "setup/status: failed");

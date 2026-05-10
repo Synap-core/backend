@@ -70,3 +70,7 @@ data/
 
 # Cloudflare Wrangler build artifacts
 .wrangler/
+
+# oh-my-claudecode runtime state — local agent memory, sessions, checkpoints,
+# transient HUD/stdin caches. Per-machine, per-session: never source-controlled.
+.omc/

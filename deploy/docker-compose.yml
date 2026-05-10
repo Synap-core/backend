@@ -741,7 +741,22 @@ services:
   # ============================================================================
   # POD AGENT (always-running command receiver for CP-initiated operations)
   # ============================================================================
+  # Pod-agent is the Control-Plane-managed update + diagnostics endpoint. It
+  # is OFF by default — eve installs and standalone self-hosted operators have
+  # no need for it (eve manages updates via the synap CLI delegate; standalone
+  # operators run `synap update` directly). Activate it ONLY when this pod is
+  # registered with synap.dev's Control Plane:
+  #
+  #   docker compose --profile pod-agent up -d pod-agent
+  #
+  # …or set `SYNAP_WITH_POD_AGENT=1` in `.env` so the synap CLI includes it
+  # in install/update bring-up. Leaving it off avoids spawning the agent +
+  # the canary + updater chain that historically wiped operator data via
+  # `update-pod.sh` (now patched, but the surface area is still unnecessary
+  # for non-CP users).
   pod-agent:
+    profiles:
+      - pod-agent
     build:
       context: ./pod-agent
       dockerfile: Dockerfile

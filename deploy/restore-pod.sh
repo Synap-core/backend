@@ -9,7 +9,7 @@ set -e
 CALLBACK_URL="$1"
 CALLBACK_JWT="$2"
 DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
-COMPOSE="docker compose -p synap -f ${DEPLOY_DIR}/docker-compose.yml"
+COMPOSE="docker compose -p synap-backend -f ${DEPLOY_DIR}/docker-compose.yml"
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [restore] $*"; }
 

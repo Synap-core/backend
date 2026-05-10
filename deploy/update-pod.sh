@@ -24,12 +24,19 @@ set -e
 
 VERSION="$1"
 CD="$(dirname "$0")"
-# Match the project name used by install/configure/restore/suspend/archive scripts
-# AND by the directory-based default when the stack was started from /opt/synap.
-# Using -p synap-backend (the old value) created a parallel orphan project and
-# caused every update to run migrations against an empty postgres while the
-# canary failed to find the real backend network. See deploy notes for context.
-COMPOSE="docker compose -p synap -f $CD/docker-compose.yml"
+# CANONICAL PROJECT NAME — must match the synap CLI's `_resolve_compose_project_name`
+# at the top of /opt/synap-backend/synap. The CLI pins `synap-backend`, init scripts
+# use the same, eve's @eve/brain delegate exports the same. Anything else here will
+# spawn a parallel project and orphan the data volumes.
+#
+# History: an earlier revision of this file used `-p synap` AND included a
+# destructive `compose -p synap-backend down -v --remove-orphans` block under
+# the (incorrect) assumption that `synap-backend` was an orphan from broken
+# runs. That block destroyed live volumes on every CP-triggered update —
+# kratos identities, hydra DB, and any data unique to synap_postgres_data —
+# forcing operators to bootstrap a fresh admin every time. The block has been
+# removed. NEVER reintroduce it: the canonical CLI owns project naming.
+COMPOSE="docker compose -p synap-backend -f $CD/docker-compose.yml"
 CANARY_NAME="synap-backend-canary"
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [update] $*"; }
@@ -37,15 +44,6 @@ die() { log "ERROR: $*"; exit 1; }
 
 [ -z "$VERSION" ] && die "version required"
 log "=== Updating to ${VERSION} ==="
-
-# ─── Step 0: Clean up any orphan synap-backend project from broken runs ───────
-# Older versions of this script used `-p synap-backend` which spawned a parallel
-# empty stack on every update attempt. Wipe it before doing real work so we
-# stop wasting RAM/disk on dead containers and conflicting volumes.
-if docker compose -p synap-backend -f "$CD/docker-compose.yml" ps -q 2>/dev/null | grep -q .; then
-  log "Detected orphan synap-backend project — removing (real synap stack is untouched)..."
-  docker compose -p synap-backend -f "$CD/docker-compose.yml" down -v --remove-orphans 2>/dev/null || true
-fi
 
 # Save current version for rollback (in case production swap still fails)
 PREV_VERSION=$(grep "^BACKEND_VERSION=" "$CD/.env" 2>/dev/null | cut -d= -f2 || echo "")

@@ -65,124 +65,144 @@ async function ensurePodAdminWorkspace(
   return podAdminId;
 }
 
+/**
+ * Create or repair a pod admin. Idempotent — every step is "ensure", not
+ * "create-or-throw". Safe to run repeatedly against any partial state:
+ *
+ *   • Kratos identity missing  → create it.
+ *   • Kratos identity present  → look it up, optionally rotate password.
+ *   • `users` row missing      → backfill from the identity.
+ *   • pod-admin workspace      → ensure exists, ensure owner membership.
+ *   • personal workspace       → ensure exists if `createWorkspace`.
+ *
+ * The previous implementation threw on Kratos 409 (identity exists) or on
+ * `users` PK violation (row exists), leaving the operator permanently
+ * locked out whenever any one piece had been wiped while others survived.
+ * Self-heal is the rule now: every invocation either ends in a healthy
+ * pod-admin invariant or reports specifically what failed.
+ */
 export async function createAdminUser(
   email: string,
   password: string,
   name?: string,
-  options?: { createWorkspace?: boolean }
+  options?: { createWorkspace?: boolean; resetPassword?: boolean }
 ): Promise<{ identityId: string; userId: string; workspaceId: string | null }> {
   const createWorkspace = options?.createWorkspace ?? true;
+  const resetPassword = options?.resetPassword ?? false;
   const db = await getDb();
+  const normalizedEmail = email.trim().toLowerCase();
 
   try {
-    console.error(`[create-admin] Starting admin user creation for ${email}`);
+    console.error(
+      `[create-admin] Ensuring pod admin for ${normalizedEmail} (idempotent)`
+    );
 
-    const { data: identity } = await kratosAdmin.createIdentity({
-      createIdentityBody: {
-        schema_id: "default",
-        traits: {
-          email,
-          name: name || email.split("@")[0],
-        },
-        credentials: {
-          password: {
-            config: {
-              password,
+    // Step 1: Kratos identity. Try to create; if 409, look up existing.
+    let identityId: string;
+    try {
+      const { data: identity } = await kratosAdmin.createIdentity({
+        createIdentityBody: {
+          schema_id: "default",
+          traits: {
+            email: normalizedEmail,
+            name: name || normalizedEmail.split("@")[0],
+          },
+          credentials: {
+            password: { config: { password } },
+          },
+          verifiable_addresses: [
+            {
+              value: normalizedEmail,
+              verified: true,
+              via: "email",
+              status: "completed",
             },
-          },
+          ],
         },
-        verifiable_addresses: [
-          {
-            value: email,
-            verified: true,
-            via: "email",
-            status: "completed",
-          },
-        ],
-      },
-    });
+      });
+      identityId = identity.id;
+      console.error(`[create-admin] Created Kratos identity ${identityId}`);
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response
+        ?.status;
+      if (status !== 409) throw err;
+      const existing = await findKratosIdentityByEmail(normalizedEmail);
+      if (!existing) {
+        throw new Error(
+          `Kratos rejected createIdentity with 409 but no identity matching ${normalizedEmail} could be found. Manual intervention required.`
+        );
+      }
+      identityId = existing.id;
+      console.error(
+        `[create-admin] Reusing existing Kratos identity ${identityId}`
+      );
+      if (resetPassword) {
+        await rotateKratosPassword(identityId, password);
+      }
+    }
 
-    const identityId = identity.id;
-    console.error(`[create-admin] Created Kratos identity ${identityId}`);
+    // Step 2: `users` row. Backfill if missing — never throw on PK collision.
+    await ensureUserRow(identityId, normalizedEmail, name);
 
-    await db.insert(users).values({
-      id: identityId,
-      email,
-      name: name || null,
-      emailVerified: true,
-      kratosIdentityId: identityId,
-      lastSyncedAt: new Date(),
-    });
-
-    console.error(`[create-admin] Created user in backend DB ${identityId}`);
-
-    // Always seed the pod-admin system workspace + owner membership for the
-    // first admin. Without this, `podAdminProcedure` returns 403 for every
-    // admin tRPC call (sync.getStatus, system.*, audit.*) and the pod-admin
-    // console renders the "access required" gate forever.
+    // Step 3: pod-admin system workspace + owner membership.
     await ensurePodAdminWorkspace(identityId, db);
 
-    if (!createWorkspace) {
-      console.error(
-        "[create-admin] Skipping default workspace creation by option"
-      );
-      return {
-        identityId,
-        userId: identityId,
-        workspaceId: null,
-      };
+    // Step 4: personal workspace (optional, only when requested).
+    let personalWorkspaceId: string | null = null;
+    if (createWorkspace) {
+      personalWorkspaceId = await ensureWorkspaceForUser(identityId, name);
     }
-
-    // Reuse existing membership/workspace if present.
-    const existingMembership = await db.query.workspaceMembers.findFirst({
-      where: eq(workspaceMembers.userId, identityId),
-    });
-    if (existingMembership) {
-      console.error(
-        `[create-admin] Existing workspace membership found: ${existingMembership.workspaceId}`
-      );
-      return {
-        identityId,
-        userId: identityId,
-        workspaceId: existingMembership.workspaceId,
-      };
-    }
-
-    const [workspace] = await db
-      .insert(workspaces)
-      .values({
-        ownerId: identityId,
-        name: name ? `${name}'s Workspace` : "My Workspace",
-        type: "personal",
-        settings: {},
-      })
-      .returning();
-
-    console.error(`[create-admin] Created default workspace ${workspace.id}`);
-
-    await db.insert(workspaceMembers).values({
-      workspaceId: workspace.id,
-      userId: identityId,
-      role: "admin",
-    });
-
-    console.error(
-      `[create-admin] Added user as admin on workspace ${workspace.id}`
-    );
 
     return {
       identityId,
       userId: identityId,
-      workspaceId: workspace.id,
+      workspaceId: personalWorkspaceId,
     };
   } catch (error: unknown) {
-    console.error(`[create-admin] Failed for ${email}:`, error);
+    console.error(`[create-admin] Failed for ${normalizedEmail}:`, error);
     const err = error as { response?: { data?: unknown } };
     if (err.response?.data) {
       console.error("[create-admin] Kratos API error:", err.response.data);
     }
     throw error;
   }
+}
+
+/**
+ * Rotate a Kratos identity's password. Used by `createAdminUser` when called
+ * with `resetPassword: true` — gives operators a way to recover access when
+ * the admin email is known but the password was lost.
+ */
+async function rotateKratosPassword(
+  identityId: string,
+  password: string
+): Promise<void> {
+  const client = kratosAdmin as unknown as {
+    updateIdentity: (args: {
+      id: string;
+      updateIdentityBody: Record<string, unknown>;
+    }) => Promise<{ data: { id: string } }>;
+    getIdentity: (args: { id: string }) => Promise<{
+      data: {
+        id: string;
+        schema_id: string;
+        traits?: Record<string, unknown>;
+        state?: string;
+        verifiable_addresses?: unknown;
+      };
+    }>;
+  };
+  const { data: current } = await client.getIdentity({ id: identityId });
+  await client.updateIdentity({
+    id: identityId,
+    updateIdentityBody: {
+      schema_id: current.schema_id,
+      state: current.state ?? "active",
+      traits: current.traits ?? {},
+      credentials: { password: { config: { password } } },
+    },
+  });
+  console.error(`[create-admin] Rotated password for ${identityId}`);
 }
 
 export async function findKratosIdentityByEmail(email: string): Promise<{

@@ -1,45 +1,21 @@
 /**
- * Kratos middleware helpers — used by `middleware.ts` to gate every
- * route below `(admin)/`.
+ * Kratos session helpers — server-side only. Used by `middleware.ts` and
+ * the `/login` server component to gate every page.
  *
- * The pod's Kratos public endpoints live under `${POD_URL}/.ory/kratos/public/`.
- * For session checks we forward the inbound request's cookies verbatim and
- * read the JSON body. Two cases:
- *
- *   • 401 / 403 → no session. Redirect to the pod's login page.
- *   • 200       → session OK. Return identity for downstream role checks.
- *
- * Role check (pod_admin): once the session is confirmed, we ask the pod
- * tRPC endpoint for the current user's pod-admin status. A dedicated
- * pod-admin "ping" route doesn't exist yet, so we call `system.getDataPodStats`
- * — `protectedProcedure` will 200 for any signed-in user, but if the user
- * isn't a pod admin we fall back to a follow-up `sync.getStatus` call which
- * uses `podAdminProcedure` and returns 403 for non-admins. Two requests is
- * fine; this only fires on tab navigation, not on every request inside a
- * tab (the middleware matcher excludes `_next/*` and assets).
+ * Both helpers fetch over the Next.js process's network namespace, not the
+ * browser's, so we use the in-cluster URL (`http://backend:4000` in compose)
+ * to avoid TLS / proxy overhead. The browser-public URL is read directly by
+ * components that talk to Kratos client-side (forbidden, top-nav sign-out,
+ * the login form).
  */
 
-// Two URLs — they differ when pod-admin runs inside the same docker
-// network as the backend:
-//
-//   • INTERNAL_POD_URL — server-side fetches from this Next.js process to
-//     the backend (Kratos /sessions/whoami, tRPC /sync.getStatus). Reads
-//     POD_URL first (typically `http://backend:4000` in compose), falls
-//     back to NEXT_PUBLIC_POD_URL when running locally.
-//   • PUBLIC_POD_URL — URLs the BROWSER sees. Always the public,
-//     browser-resolvable URL. Reads NEXT_PUBLIC_POD_URL only — never
-//     POD_URL, since `http://backend:4000` is unreachable from a
-//     browser and yields ERR_NAME_NOT_RESOLVED on the login redirect.
-//
-// Conflating these two is the bug that sent operators to `http://backend:4000/admin/kratos?return=…`
-// after sign-in.
+// Server-side URL: this Next.js process to the backend. Reads POD_URL first
+// (set to `http://backend:4000` in compose), falls back to the public URL
+// when running locally outside docker.
 const INTERNAL_POD_URL =
   process.env.POD_URL ??
   process.env.NEXT_PUBLIC_POD_URL ??
   "http://localhost:4000";
-
-const PUBLIC_POD_URL =
-  process.env.NEXT_PUBLIC_POD_URL ?? "http://localhost:4000";
 
 export interface KratosIdentity {
   id: string;
@@ -133,8 +109,3 @@ export async function isPodAdmin(cookieHeader: string): Promise<boolean> {
   // treat as not admin (operator can ask their pod admin for access).
   return res.status === 200;
 }
-
-// Middleware imports this for browser-bound redirects (e.g.
-// `${POD_URL}/admin/kratos?return=…`). Must be the public URL — using
-// the in-cluster URL here was the source of the post-login redirect bug.
-export const POD_URL = PUBLIC_POD_URL;

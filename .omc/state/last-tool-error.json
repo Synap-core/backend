@@ -1,7 +1,0 @@
-{
-  "tool_name": "Read",
-  "tool_input_preview": "{\"file_path\":\"/Users/antoine/Documents/Code/synap/hestia-cli/packages/@eve/dna/src/docker-util.ts\",\"offset\":1,\"limit\":80}",
-  "error": "File does not exist. Note: your current working directory is /Users/antoine/Documents/Code/synap/synap-backend.",
-  "timestamp": "2026-05-07T18:31:06.730Z",
-  "retry_count": 1
-}

@@ -1313,8 +1313,42 @@ EOF
 
     
     # Start services
+    #
+    # Caddy is the synap stack's built-in edge proxy. When the operator runs
+    # behind their own edge (eve's Traefik on port 80, an external nginx,
+    # cloudflared, etc.) Caddy can't bind 80/443 and aborts the install.
+    # SYNAP_SKIP_EDGE=1 brings up everything-but-caddy. Compose's depends_on
+    # graph still pulls in postgres / redis / minio / typesense / migrations
+    # via the listed leaf services (backend, realtime, pod-admin, etc.).
+    # Mirror cmd_update's behavior so install + update have one rule.
+    #
+    # Pod-agent is profile-gated (compose profile: pod-agent) and only included
+    # when the operator opts in via `SYNAP_WITH_POD_AGENT=1`. CP-managed pods
+    # need it; eve installs and standalone self-hosters do not.
+    local pod_agent_args=()
+    local profile_args=()
+    if [ "${SYNAP_WITH_POD_AGENT:-}" = "1" ]; then
+        pod_agent_args=(pod-agent)
+        profile_args=(--profile pod-agent)
+    fi
+
     echo -e "${BLUE}🚀 Starting Synap...${NC}"
-    docker compose up -d --remove-orphans
+    if [ "${SYNAP_SKIP_EDGE:-}" = "1" ]; then
+        echo -e "${BLUE}  (SYNAP_SKIP_EDGE=1: skipping Caddy — external edge proxy assumed)${NC}"
+        docker compose "${profile_args[@]}" up -d --remove-orphans \
+            postgres redis minio typesense \
+            backend realtime "${pod_agent_args[@]}" pod-admin hydra kratos
+    else
+        docker compose "${profile_args[@]}" up -d --remove-orphans
+    fi
+
+    # Reapply auth schema. On a brand-new volume this is a no-op (compose's
+    # depends_on already ran kratos-migrate / hydra-migrate to completion).
+    # On a rerun against an existing project this is the SAFETY NET — see
+    # cmd_update for the full rationale (compose's `service_completed_successfully`
+    # short-circuit + any volume drift = empty kratos DB + 500s on auth).
+    docker compose run --rm kratos-migrate >/dev/null 2>&1 || true
+    docker compose run --rm hydra-migrate >/dev/null 2>&1 || true
 
     if [ "$ADMIN_BOOTSTRAP_MODE" = "preseed" ]; then
         echo ""
@@ -1811,11 +1845,20 @@ cmd_update() {
     done
     
     echo -e "${BLUE}🔄 Updating Synap...${NC}"
-    
-    # Smart default: if in git repo and no flags, default to build
-    # If not in git repo or --from-image specified, use image
+
+    # Smart defaults when neither --from-image nor --from-source was passed:
+    #   1. If .env has BACKEND_VERSION=local, the operator built locally
+    #      previously. The `:local` tag is a sentinel that never existed
+    #      upstream, so `docker compose pull` would always fail before
+    #      falling through to a rebuild — pure waste. Go straight to build.
+    #   2. Otherwise if we're in a git repo, default to --from-source
+    #      (the operator has source on disk and can rebuild).
+    #   3. Otherwise pull from the registry.
     if [ "$force_build" = false ] && [ "$force_image" = false ]; then
-        if [ "$IN_GIT_REPO" = true ]; then
+        if [ -f .env ] && grep -q "^BACKEND_VERSION=local" .env 2>/dev/null; then
+            force_build=true
+            echo -e "${BLUE}ℹ️  .env has BACKEND_VERSION=local — building from source (skipping wasted pull of :local sentinel)${NC}"
+        elif [ "$IN_GIT_REPO" = true ]; then
             force_build=true
             echo -e "${BLUE}ℹ️  In git repository, defaulting to --from-source${NC}"
         fi
@@ -1952,12 +1995,41 @@ cmd_update() {
     # cloudflared, etc.) Caddy can't bind 80/443 and aborts the update.
     # Set SYNAP_SKIP_EDGE=1 to keep Caddy stopped — backend, realtime, kratos,
     # pod-agent and pod-admin come up regardless.
+
+    # Force-run kratos-migrate and hydra-migrate BEFORE bringing services up.
+    # docker compose's `service_completed_successfully` dependency considers
+    # a migrate service "satisfied" once it exited 0 in any prior lifecycle
+    # — so on subsequent `up`s the migrate service is silently skipped. If
+    # the kratos/hydra database gets recreated for any reason between then
+    # and now (volume drift, manual prune, init-databases.sh recreating an
+    # empty `kratos` database), kratos starts against a schema-less DB and
+    # every /self-service/* call returns 500 "relation … does not exist".
+    # `compose run --rm` forces a fresh migrate container every time, which
+    # is idempotent (kratos migrate is INSERT-only against `_kratos_session_devices`-style
+    # bookkeeping) and the canonical fix used by deploy/update-pod.sh.
+    echo -e "${BLUE}🔄 Reapplying auth schema migrations (kratos + hydra)...${NC}"
+    docker compose run --rm kratos-migrate || {
+        echo -e "${YELLOW}⚠️  kratos-migrate exited non-zero — kratos may not start cleanly${NC}"
+    }
+    docker compose run --rm hydra-migrate || {
+        echo -e "${YELLOW}⚠️  hydra-migrate exited non-zero — hydra may not start cleanly${NC}"
+    }
+
+    # Pod-agent is profile-gated (compose profile: pod-agent) and only restarted
+    # when SYNAP_WITH_POD_AGENT=1 is set. See cmd_install for full rationale.
+    local pod_agent_args=()
+    local profile_args=()
+    if [ "${SYNAP_WITH_POD_AGENT:-}" = "1" ]; then
+        pod_agent_args=(pod-agent)
+        profile_args=(--profile pod-agent)
+    fi
+
     echo -e "${BLUE}🔄 Restarting services...${NC}"
     if [ "${SYNAP_SKIP_EDGE:-}" = "1" ]; then
         echo -e "${BLUE}  (SYNAP_SKIP_EDGE=1: skipping Caddy — external edge proxy assumed)${NC}"
-        docker compose up -d --remove-orphans backend realtime pod-agent pod-admin
+        docker compose "${profile_args[@]}" up -d --remove-orphans backend realtime "${pod_agent_args[@]}" pod-admin
     else
-        docker compose up -d --remove-orphans backend realtime caddy pod-agent pod-admin
+        docker compose "${profile_args[@]}" up -d --remove-orphans backend realtime caddy "${pod_agent_args[@]}" pod-admin
     fi
     docker compose up -d --force-recreate kratos
 
