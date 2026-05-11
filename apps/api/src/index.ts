@@ -1316,6 +1316,67 @@ await (async () => {
   }
 })();
 
+// Kratos config coherence tripwire — non-fatal.
+//
+// Mirrors the schema check above but for `kratos.yml` drift. The most common
+// failure mode is: `.env`'s DOMAIN changed (CP-driven `configure-pod.sh`,
+// manual edit) but kratos.yml was never regenerated, so the running kratos
+// serves a stale `allowed_origins` list. Browsers calling pod-admin then see
+// CORS rejections that look like "no Access-Control-Allow-Origin header" —
+// hard to diagnose because the network 200/4xx pretends to be a CORS bug.
+//
+// We probe Kratos directly with a CORS preflight from the expected
+// pod-admin origin. If the running kratos echoes the Origin back in
+// Access-Control-Allow-Origin, its config is in sync; otherwise we log
+// loudly and emit a structured event the dashboard can surface.
+//
+// NOT fatal — drift here doesn't take down the API, and we don't want a
+// transient kratos restart to block backend boot. The operator's fix is:
+// `./synap start kratos` (which now regenerates kratos.yml).
+void (async () => {
+  const domain = process.env.DOMAIN?.trim();
+  if (!domain || domain === "localhost") return; // dev mode — skip
+
+  // Synap's domain convention: DOMAIN is `pod.<root>`. Strip the pod prefix
+  // to get the bare root, then compute the expected pod-admin origin.
+  const bareRoot = domain.startsWith("pod.") ? domain.slice(4) : domain;
+  const expectedOrigin = `https://pod-admin.${bareRoot}`;
+  const kratosPublicUrl =
+    process.env.KRATOS_PUBLIC_URL?.replace(/\/$/, "") || "http://kratos:4433";
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 3000);
+    const probeUrl = `${kratosPublicUrl}/self-service/login/api`;
+    const res = await fetch(probeUrl, {
+      method: "OPTIONS",
+      headers: {
+        Origin: expectedOrigin,
+        "Access-Control-Request-Method": "GET",
+      },
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    const acao = res.headers.get("access-control-allow-origin") ?? "";
+    if (acao !== expectedOrigin && acao !== "*") {
+      apiLogger.warn(
+        { expectedOrigin, kratosAcao: acao || "<missing>", probeUrl },
+        "Kratos CORS coherence check FAILED — pod-admin will see CORS errors. " +
+          "Run `./synap start kratos` on the pod host to regenerate kratos.yml."
+      );
+    } else {
+      apiLogger.info({ expectedOrigin }, "Kratos CORS coherence check passed");
+    }
+  } catch (err) {
+    // Don't block boot on a probe failure — kratos may be starting up
+    // alongside us and we shouldn't gate the API on it.
+    apiLogger.debug(
+      { err: err instanceof Error ? err.message : String(err) },
+      "Kratos CORS coherence probe could not reach kratos (will retry on next boot)"
+    );
+  }
+})();
+
 // WebSocket upgrade router — handles SSH proxy and recipe runner endpoints
 import { handleWebSocketUpgrade } from "./ws-router.js";
 

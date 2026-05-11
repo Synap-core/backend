@@ -6742,23 +6742,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId?: string | undefined;
 			};
 			output: {
-				workspaceId: string;
-				entityIds: never[];
-				status?: undefined;
-				profileIds?: undefined;
-				viewIds?: undefined;
-			} | {
 				status: "created";
 				workspaceId: string;
 				profileIds: string[];
 				viewIds: string[];
 				entityIds?: undefined;
 			} | {
-				status: "created" | "pending";
 				workspaceId: string;
-				entityIds?: undefined;
+				entityIds: never[];
+				status?: undefined;
 				profileIds?: undefined;
 				viewIds?: undefined;
+			} | {
+				status: "created" | "pending";
+				workspaceId: string;
+				profileIds?: undefined;
+				viewIds?: undefined;
+				entityIds?: undefined;
 			} | {
 				status: "created";
 				workspaceId: string;

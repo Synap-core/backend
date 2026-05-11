@@ -79,13 +79,38 @@ $COMPOSE exec -T postgres psql -U synap -c "SELECT 'CREATE DATABASE hydra' WHERE
 log "Running migrations (old backend still serving)..."
 $COMPOSE run --rm backend-migrate 2>&1 || log "WARN: migration exited non-zero"
 
-# Run Kratos migrations and update Kratos container (non-fatal).
-# Kratos data lives in Postgres, so upgrading the image is safe.
-# This ensures pods provisioned with older Kratos get POST /admin/identities/:id/sessions.
-log "Running Kratos migrations (non-fatal)..."
-$COMPOSE run --rm kratos-migrate 2>/dev/null || log "WARN: kratos-migrate exited non-zero"
-log "Updating Kratos container (non-fatal)..."
-$COMPOSE up -d --force-recreate kratos 2>/dev/null || log "WARN: Kratos container update failed"
+# Run Kratos migrations and update Kratos container.
+#
+# Previously this block ran kratos-migrate with `2>/dev/null || log WARN`,
+# which silently swallowed migration failures. A real failure (transient DB
+# lock, image-pull race, schema drift) left Kratos to boot against an
+# empty/incomplete schema → "Unable to locate the table" crashloop and the
+# operator saw only a single buried WARN line. We now fail loud and abort
+# the update so the prior backend stays serving while the operator inspects.
+#
+# Container recreate is also delegated to the canonical synap CLI
+# (`./synap start kratos`), which auto-regenerates kratos.yml against the
+# current $DOMAIN before bringing kratos up. Without that, a CP-driven
+# DOMAIN change in .env would recreate kratos with a stale CORS list.
+log "Running Kratos migrations..."
+if ! $COMPOSE run --rm kratos-migrate; then
+    die "kratos-migrate failed — aborting update to preserve current state. Inspect with: cd $CD && $COMPOSE run --rm kratos-migrate"
+fi
+
+# Verify the kratos schema actually exists before recreating the kratos
+# container. Belt-and-suspenders against migrations that report success but
+# leave the schema half-applied (we've observed this once when postgres was
+# under load).
+log "Verifying kratos schema..."
+if ! $COMPOSE exec -T postgres psql -U synap -d kratos -c "SELECT 1 FROM identities LIMIT 1" >/dev/null 2>&1; then
+    die "kratos schema missing after migrate (no 'identities' table) — refusing to recreate kratos container"
+fi
+
+log "Recreating Kratos container via canonical synap CLI (regenerates kratos.yml)..."
+if ! (cd "$CD/.." && ./synap start kratos); then
+    log "WARN: synap CLI failed to start kratos — falling back to direct compose recreate"
+    $COMPOSE up -d --force-recreate kratos || die "Kratos container update failed"
+fi
 
 # ─── Step 3: Start canary with new image (old backend still serving) ──────────
 # Clean up any canary left over from a previous failed run

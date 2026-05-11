@@ -90,64 +90,45 @@ export const eventsRouter = router({
     }),
 
   /**
-   * Get events for current user
+   * Read events for the current user — the canonical query endpoint.
    *
-   * V0.6: Refactored to use EventRepository directly
+   * Replaces the legacy `list` + `since` procedures (2026-05-11). One
+   * shape, one wire field name (`type`), one set of filters.
    *
-   * Useful for debugging and audit trails
-   */
-  list: protectedProcedure
-    .input(
-      z.object({
-        limit: z.number().min(1).max(100).default(50),
-        type: z.string().optional(),
-      })
-    )
-    .query(async ({ ctx, input }) => {
-      const userId = requireUserId(ctx.userId);
-
-      // Use EventRepository directly instead of deprecated eventService
-      const eventRepo = getEventRepository();
-      const events = await eventRepo.getUserStream(userId, {
-        limit: input.limit,
-        eventTypes: input.type ? [input.type] : undefined,
-      });
-
-      return events;
-    }),
-
-  /**
-   * Events since a timestamp — the canonical polling endpoint for client
-   * caches that want to know "what has changed for me since I last synced".
+   * Scoping: USER-scoped — `userId = ctx.userId`. Matches the
+   * `workspace_as_lens` principle: a user wants "everything that affected
+   * me", not "everything that affected workspace X". Admins who need
+   * cross-user search use `events.search` (gated).
    *
-   * Scoping: USER-scoped. Returns every event where `userId = ctx.userId`
-   * across all of that user's workspaces. This matches the
-   * `feedback_workspace_as_lens` principle — a polling client wants
-   * "everything that affected me", not "everything that affected workspace
-   * X" (which would force the client to fire N queries for N workspaces).
+   * Two output shapes selected via `lean`:
+   *   • `lean: false` (default) — full record: id, timestamp, type,
+   *     subjectType, subjectId, data, metadata, source, correlationId,
+   *     userId. Use for human-readable activity streams.
+   *   • `lean: true`            — { id, timestamp, type, subjectType,
+   *     subjectId }. Use for high-frequency polling where you only need
+   *     to know "what changed" to invalidate caches.
    *
-   * Shape: only the fields a client needs to decide which query keys to
-   * invalidate — id, timestamp, type, subjectType, subjectId. No `data`
-   * JSONB (keep the response small; clients refetch the affected entity
-   * separately if they need the full payload).
+   * Date inputs use `z.coerce.date()` so callers using either the typed
+   * tRPC client (Date via superjson) or raw `fetch` (ISO string in the
+   * `?input=` envelope) both work without a serialization helper.
    *
-   * Usage pattern (mobile client):
+   * Polling pattern:
    *   every 30s:
-   *     const events = await trpc.events.since.query({ since: lastSyncAt })
-   *     for each event:
-   *       queryClient.invalidateQueries({ queryKey: [...] })
+   *     const events = await trpc.events.read.query({
+   *       since: lastSyncAt, lean: true,
+   *     })
+   *     for each event: queryClient.invalidateQueries({ queryKey: [...] })
    *     lastSyncAt = now
-   *
-   * Intentionally lax: if `limit` is hit, the client just polls again
-   * sooner. No cursor — the polling cadence (30s) dominates any backfill
-   * need for a normal mobile session.
    */
-  since: protectedProcedure
+  read: protectedProcedure
     .input(
       z.object({
-        since: z.date(),
-        limit: z.number().min(1).max(200).default(100),
+        since: z.coerce.date().optional(),
+        until: z.coerce.date().optional(),
+        type: z.string().optional(),
         subjectType: subjectTypeSchema.optional(),
+        limit: z.number().min(1).max(500).default(50),
+        lean: z.boolean().default(false),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -156,22 +137,31 @@ export const eventsRouter = router({
 
       const events = await eventRepo.searchEvents({
         userId,
-        fromDate: input.since,
+        eventType: input.type,
         subjectType: input.subjectType,
+        fromDate: input.since,
+        toDate: input.until,
         limit: input.limit,
       });
 
-      // Return the lean shape — drop `data`/`metadata` JSONB so the
-      // response stays small at polling frequency. Clients invalidate
-      // query keys based on subjectType + subjectId; they fetch the
-      // affected entity through the normal query path if they need it.
-      return events.map((e) => ({
-        id: e.id,
-        timestamp: e.timestamp,
-        type: e.eventType,
-        subjectType: e.subjectType,
-        subjectId: e.subjectId,
-      }));
+      return events.map((e) => {
+        const base = {
+          id: e.id,
+          timestamp: e.timestamp,
+          type: e.eventType,
+          subjectType: e.subjectType,
+          subjectId: e.subjectId,
+        };
+        if (input.lean) return base;
+        return {
+          ...base,
+          data: e.data,
+          metadata: e.metadata,
+          source: e.source,
+          correlationId: e.correlationId,
+          userId: e.userId,
+        };
+      });
     }),
 
   /**

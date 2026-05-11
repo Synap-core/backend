@@ -2121,11 +2121,31 @@ cmd_start() {
         echo -e "${RED}Error: Not in Synap installation directory${NC}"
         exit 1
     fi
-    
+
     cd "$deploy_dir"
-    
+
     local service=${1:-}
-    
+
+    # Self-heal Kratos config before bringing up. `generate_kratos_config` is
+    # idempotent and fast — it reads $DOMAIN from .env and re-templates
+    # kratos.yml with the current CORS list, return URLs and webhook secret.
+    # Without this, kratos comes up against whatever kratos.yml was on disk
+    # the last time `install` or `update` ran. If $DOMAIN drifted (manual
+    # edit, configure-pod.sh, CP update), the running kratos serves stale
+    # `allowed_origins` and the browser sees CORS rejections — exactly the
+    # failure mode that previously required a full `synap update` to fix.
+    # We only regen when bringing up "all" services or kratos specifically,
+    # to keep `start backend` / `start hydra` cheap.
+    if [ -z "$service" ] || [ "$service" = "kratos" ]; then
+        local domain="$(grep '^DOMAIN=' .env 2>/dev/null | cut -d= -f2)"
+        if [ -n "$domain" ]; then
+            echo -e "${BLUE}🔧 Refreshing Kratos config for domain=${domain}…${NC}"
+            generate_kratos_config "$domain"
+        else
+            echo -e "${YELLOW}⚠ DOMAIN not in .env — skipping kratos.yml regeneration${NC}"
+        fi
+    fi
+
     if [ -z "$service" ]; then
         echo -e "${BLUE}🚀 Starting all services...${NC}"
         docker compose up -d --remove-orphans
@@ -2133,7 +2153,7 @@ cmd_start() {
         echo -e "${BLUE}🚀 Starting $service...${NC}"
         docker compose up -d --remove-orphans "$service"
     fi
-    
+
     echo -e "${GREEN}✅ Services started!${NC}"
 }
 

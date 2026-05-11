@@ -78,10 +78,38 @@ fi
 # Force-recreate specific services so they pick up new .env values.
 # Using `up -d --force-recreate` rather than `restart` because Compose
 # only re-evaluates env vars on recreate.
+#
+# Special case for kratos: this script can mutate .env's DOMAIN (the
+# `KEY=VALUE` loop above). If DOMAIN changed and we just force-recreate
+# kratos with the existing kratos.yml on disk, kratos comes up with a
+# stale CORS list — and the next pod-admin login flow rejects with "No
+# Access-Control-Allow-Origin." Route kratos through the canonical synap
+# CLI which regenerates kratos.yml against the current DOMAIN before
+# bringing the container up. Other services are recreated directly since
+# they read .env via compose's env-file mechanism.
 if [ -n "$RECREATE_SERVICES" ]; then
   log "Force-recreating services:$RECREATE_SERVICES"
-  # shellcheck disable=SC2086
-  $COMPOSE up -d --force-recreate --no-deps $RECREATE_SERVICES 2>&1 | tail -20
+  # Split kratos out so we can route it through the synap CLI for regen.
+  NON_KRATOS=""
+  KRATOS_REQUESTED=""
+  for svc in $RECREATE_SERVICES; do
+    if [ "$svc" = "kratos" ]; then
+      KRATOS_REQUESTED="1"
+    else
+      NON_KRATOS="$NON_KRATOS $svc"
+    fi
+  done
+  if [ -n "$NON_KRATOS" ]; then
+    # shellcheck disable=SC2086
+    $COMPOSE up -d --force-recreate --no-deps $NON_KRATOS 2>&1 | tail -20
+  fi
+  if [ -n "$KRATOS_REQUESTED" ]; then
+    log "Recreating kratos via canonical synap CLI (regenerates kratos.yml)..."
+    if ! (cd "$DEPLOY_DIR/.." && ./synap start kratos); then
+      log "WARN: synap CLI failed to start kratos — falling back to direct compose recreate"
+      $COMPOSE up -d --force-recreate --no-deps kratos 2>&1 | tail -20
+    fi
+  fi
 fi
 
 log "=== Configuration complete ==="

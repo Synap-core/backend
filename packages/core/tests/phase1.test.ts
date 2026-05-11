@@ -131,7 +131,7 @@ async function runTests() {
   try {
     // Test that tRPC is properly configured
     const response = await fetch(
-      `${API_URL}/api/trpc/events.list?input=${encodeURIComponent(JSON.stringify({ limit: 10 }))}`
+      `${API_URL}/api/trpc/events.read?input=${encodeURIComponent(JSON.stringify({ limit: 10 }))}`
     );
 
     // Even if unauthorized, we should get a proper tRPC error response
