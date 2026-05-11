@@ -2128,16 +2128,68 @@ export const workspacesRouter = router({
                 with: { workspace: true },
               });
             if (existingByProposal?.workspace) {
+              const ws = existingByProposal.workspace;
+              const wsSettings = ws.settings as WorkspaceSettings | null;
+              const provStatus = wsSettings?.provisioningStatus;
+
+              if (provStatus === "failed") {
+                logger.warn(
+                  {
+                    userId: ctx.userId,
+                    proposalId: input.proposalId,
+                    workspaceId: ws.id,
+                    failedStep: wsSettings?.failedStep,
+                    completedSteps: wsSettings?.completedSteps,
+                  },
+                  "createFromDefinition: resuming failed workspace (by proposalId)"
+                );
+                emitChatEvent({
+                  event: "workspace:creation_progress",
+                  data: {
+                    step: "resume",
+                    pct: 5,
+                    label: `Resuming from step '${wsSettings?.failedStep ?? "unknown"}'`,
+                    status: "progress",
+                  },
+                  userId: ctx.userId,
+                });
+                const resumeResult = await createWorkspaceFromDefinition({
+                  definition: input.definition,
+                  userId: ctx.userId,
+                  workspaceName: input.workspaceName,
+                  createdBy: "user",
+                  workspaceType: input.workspaceType,
+                  linkedAgentId: input.linkedAgentId,
+                  resumeFrom: {
+                    workspaceId: ws.id,
+                    completedSteps: wsSettings?.completedSteps ?? [],
+                  },
+                  onProgress: (step, pct, label) => {
+                    emitChatEvent({
+                      event: "workspace:creation_progress",
+                      data: { step, pct, label, status: "progress" },
+                      userId: ctx.userId,
+                    });
+                  },
+                });
+                return {
+                  status: "created" as const,
+                  workspaceId: resumeResult.workspaceId,
+                  profileIds: resumeResult.profileIds,
+                  viewIds: resumeResult.viewIds,
+                };
+              }
+
               logger.info(
                 {
                   userId: ctx.userId,
                   proposalId: input.proposalId,
-                  workspaceId: existingByProposal.workspace.id,
+                  workspaceId: ws.id,
                 },
                 "createFromDefinition: returning existing workspace by proposalId"
               );
               return {
-                workspaceId: existingByProposal.workspace.id,
+                workspaceId: ws.id,
                 entityIds: [],
               };
             }
@@ -2299,6 +2351,42 @@ export const workspacesRouter = router({
               },
               userId: ctx.userId,
             });
+            // Stamp proposalId onto the failed workspace so the next retry can
+            // find it via the idempotency check and resume rather than creating
+            // a new workspace. Best-effort — a lookup failure here is non-fatal.
+            if (input.proposalId) {
+              try {
+                const failedWs = await db.query.workspaceMembers.findFirst({
+                  where: and(
+                    eq(workspaceMembers.userId, ctx.userId),
+                    drizzleSql`EXISTS (
+                      SELECT 1 FROM workspaces w
+                      WHERE w.id = ${workspaceMembers.workspaceId}
+                        AND w.name = ${input.workspaceName ?? ""}
+                        AND w.settings->>'provisioningStatus' = 'failed'
+                        AND (w.settings->>'proposalId' IS NULL OR w.settings->>'proposalId' = '')
+                    )`
+                  ),
+                  with: { workspace: true },
+                });
+                if (failedWs?.workspace) {
+                  const existingSettings = (failedWs.workspace.settings ??
+                    {}) as WorkspaceSettings;
+                  await db
+                    .update(workspaces)
+                    .set({
+                      settings: {
+                        ...existingSettings,
+                        proposalId: input.proposalId,
+                      } satisfies WorkspaceSettings,
+                    })
+                    .where(eq(workspaces.id, failedWs.workspace.id));
+                }
+              } catch {
+                // non-fatal
+              }
+            }
+
             throw new TRPCError({
               code: "INTERNAL_SERVER_ERROR",
               message: failedStep

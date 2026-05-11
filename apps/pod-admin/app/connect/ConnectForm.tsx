@@ -143,13 +143,9 @@ export function ConnectForm({
 
   const connectMutation = trpc.apiKeys.connectIntegration.useMutation({
     onSuccess: (data) => {
-      // Server returns its own podUrl, but for the deeplink we prefer
-      // the canonical origin the user is actually on — server PUBLIC_URL
-      // can drift in some deployments.
-      const podUrl =
-        typeof window !== "undefined"
-          ? window.location.origin.replace(/\/$/, "")
-          : data.podUrl;
+      // Use the server-returned podUrl (PUBLIC_URL) — not window.location.origin,
+      // which would return the pod-admin subdomain instead of the API domain.
+      const podUrl = data.podUrl.replace(/\/$/, "");
 
       if (hasRedirect && redirectIsAllowed) {
         setStep({ kind: "redirecting", apiKey: data.apiKey });
