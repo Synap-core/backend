@@ -224,6 +224,44 @@ app.get("/metrics", async (c) => {
   });
 });
 
+// ─── Legacy /admin/connect → pod-admin/connect redirect ───────────────
+//
+// The legacy admin-ui SPA at `pod.<root>/admin/*` was retired in the
+// 2026-05 auth refactor; the connect surface moved to pod-admin's
+// native `/connect` page on the `pod-admin.<root>` subdomain.
+//
+// In-the-wild Synap CLI / Raycast / OpenClaw installs still build URLs
+// against `${podUrl}/admin/connect?integration=…&redirect_uri=…`. We
+// 302 those to the new home so existing installs keep working without
+// a CLI/Raycast upgrade. Future releases of those clients should target
+// `pod-admin.<root>/connect` directly via
+// `buildIntegrationConnectUrl()` in `@synap-core/external-connect-client`.
+app.get("/admin/connect", (c) => {
+  const host = c.req.header("host") ?? "";
+  const proto = c.req.header("x-forwarded-proto") ?? "https";
+  const url = new URL(c.req.url);
+
+  // Production: `pod.<root>` → `pod-admin.<root>`. Anything else (raw
+  // IP, localhost, custom CNAME) falls back to the dev pod-admin port.
+  let target: string;
+  if (host.startsWith("pod.")) {
+    const root = host.slice("pod.".length).replace(/:\d+$/, "");
+    target = `${proto}://pod-admin.${root}/connect${url.search}`;
+  } else if (host.startsWith("localhost") || host.startsWith("127.0.0.1")) {
+    target = `http://localhost:4040/connect${url.search}`;
+  } else {
+    // Best effort: assume `<sub>.<root>` and swap `<sub>` → `pod-admin`.
+    const dot = host.indexOf(".");
+    const root =
+      dot > 0
+        ? host.slice(dot + 1).replace(/:\d+$/, "")
+        : host.replace(/:\d+$/, "");
+    target = `${proto}://pod-admin.${root}/connect${url.search}`;
+  }
+
+  return c.redirect(target, 302);
+});
+
 // Ory Kratos routes
 // Kratos handles its own routes via public API
 // We proxy the necessary endpoints for browser-based flows

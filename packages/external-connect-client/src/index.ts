@@ -188,6 +188,14 @@ export function buildFlowTraceUrl(flowId: string): string {
   return `/events?correlationId=${encodeURIComponent(flowId)}`;
 }
 
+/**
+ * @deprecated Use `buildIntegrationConnectUrl` with the pod-admin URL
+ * instead. The legacy admin-ui SPA at `pod.<root>/admin/connect` was
+ * retired in 2026-05; the connect surface now lives at
+ * `pod-admin.<root>/connect`. The backend still 302s the legacy path,
+ * so installed CLIs keep working — but new code should aim straight at
+ * pod-admin to skip the round-trip.
+ */
 export function buildPodAdminConnectUrl(input: {
   podUrl: string;
   integration: IntegrationKind;
@@ -203,6 +211,51 @@ export function buildPodAdminConnectUrl(input: {
     url.searchParams.set("cp_handshake_token", input.cpHandshakeToken);
   }
   return url.toString();
+}
+
+/**
+ * Canonical integration-connect URL builder.
+ *
+ * Targets pod-admin's native `/connect` page directly. Prefer this over
+ * `buildPodAdminConnectUrl` for any new CLI/Raycast/OpenClaw release
+ * — the legacy form goes through a backend 302 hop.
+ *
+ * For `podUrl` callers, derive the pod-admin URL: replace the leading
+ * `pod.` host segment with `pod-admin.` (same scheme, same root).
+ */
+export function buildIntegrationConnectUrl(input: {
+  podAdminUrl: string;
+  integration: IntegrationKind;
+  redirectUri?: string;
+  cpHandshakeToken?: string;
+}): string {
+  const url = new URL(`${input.podAdminUrl.replace(/\/$/, "")}/connect`);
+  url.searchParams.set("integration", input.integration);
+  if (input.redirectUri) {
+    url.searchParams.set("redirect_uri", input.redirectUri);
+  }
+  if (input.cpHandshakeToken) {
+    url.searchParams.set("cp_handshake_token", input.cpHandshakeToken);
+  }
+  return url.toString();
+}
+
+/**
+ * Derive the pod-admin URL from a pod URL by swapping the leading
+ * `pod.` host segment for `pod-admin.`. Returns null for inputs that
+ * don't follow the `pod.<root>` convention (raw IP, localhost) — the
+ * caller should fall back to `buildPodAdminConnectUrl` (legacy path) in
+ * that case so the backend redirect handles routing.
+ */
+export function derivePodAdminUrl(podUrl: string): string | null {
+  try {
+    const u = new URL(podUrl);
+    if (!u.hostname.startsWith("pod.")) return null;
+    u.hostname = `pod-admin.${u.hostname.slice("pod.".length)}`;
+    return u.toString().replace(/\/$/, "");
+  } catch {
+    return null;
+  }
 }
 
 export interface ConnectIntegrationInput {

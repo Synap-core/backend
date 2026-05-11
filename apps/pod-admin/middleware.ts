@@ -54,9 +54,16 @@ export async function middleware(req: NextRequest) {
   }
 
   // ── 2. pod_admin role ─────────────────────────────────────────────
-  const admin = await isPodAdmin(cookie);
-  if (!admin) {
-    return NextResponse.redirect(new URL("/forbidden", req.url));
+  // /connect is a self-service surface for any signed-in pod user
+  // (CLI/Raycast/Claude Desktop key minting). The underlying tRPC
+  // procedure already enforces protectedProcedure semantics — we just
+  // need a valid Kratos session here, not the pod_admin role.
+  const isConnect = req.nextUrl.pathname === "/connect";
+  if (!isConnect) {
+    const admin = await isPodAdmin(cookie);
+    if (!admin) {
+      return NextResponse.redirect(new URL("/forbidden", req.url));
+    }
   }
 
   // Pass identity to downstream pages via request headers — useful for
