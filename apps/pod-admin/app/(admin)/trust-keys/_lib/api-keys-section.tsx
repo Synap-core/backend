@@ -3,18 +3,18 @@
 /**
  * Trust & Keys → API keys sub-tab.
  *
+ * Unified key list (no system/operator split).
+ * Tabs: Active | Revoked
+ * Each row has a type badge: Agent | Operator | System
+ * Revoked keys get a "Delete" action to permanently remove them.
+ *
  * Procedures used:
- *   • trpc.apiKeys.adminListAll      — pod-admin, all operator keys
- *   • trpc.apiKeys.listSystemKeys    — pod-admin, system / hub-internal keys
+ *   • trpc.apiKeys.adminListAll      — pod-admin, all keys
+ *   • trpc.apiKeys.listSystemKeys    — pod-admin, system/hub-internal keys
  *   • trpc.apiKeys.create            — protectedProcedure (any user)
  *   • trpc.apiKeys.revoke            — keyId + reason
  *   • trpc.apiKeys.rotate            — keyId → new plaintext key (shown ONCE)
- *
- * Workspace-scoped keys (those whose owner has only workspace memberships
- * but no pod-admin scope) — the brief says they live in Studio.  We can't
- * tell that purely from the metadata returned, but we DO have `keyType`
- * (e.g. "operator", "integration", "system").  We exclude rows where the
- * key clearly looks workspace-bound — `hubId` starting with "workspace:".
+ *   • trpc.apiKeys.adminDeleteRevoked — permanent delete of revoked key
  */
 
 import {
@@ -32,19 +32,24 @@ import {
   Select,
   SelectItem,
   Snippet,
-  Tooltip,
+  Tab,
+  Tabs,
   addToast,
   useDisclosure,
 } from "@heroui/react";
 import {
   Ban,
+  Bot,
   Copy,
   Eye,
   KeyRound,
   MoreHorizontal,
   Plus,
   RefreshCw,
+  Server,
   ShieldAlert,
+  Trash2,
+  User,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
@@ -59,7 +64,7 @@ import type { StatusKind } from "../../components/status-pill";
 import { useFocusRow } from "../../components/use-focus-row";
 import { formatRelative, shortId } from "./format";
 
-interface AdminKey {
+interface UnifiedKey {
   id: string;
   userId?: string;
   keyName: string;
@@ -75,21 +80,35 @@ interface AdminKey {
   workspaceId?: string | null;
   revokedAt?: Date | string | null;
   revokedReason?: string | null;
+  user?: {
+    id: string;
+    email: string | null;
+    name: string | null;
+    userType?: string | null;
+  };
 }
 
-interface SystemKey {
-  id: string;
-  keyName: string;
-  keyPrefix: string;
-  hubId?: string | null;
-  scope?: string[] | string | null;
-  isActive: boolean;
-  expiresAt?: Date | string | null;
-  lastUsedAt?: Date | string | null;
-  usageCount?: number | null;
-  createdAt?: Date | string | null;
-  user?: { id: string; email: string | null; name: string | null };
+type KeyCategory = "agent" | "system" | "operator";
+
+function categorize(k: UnifiedKey): KeyCategory {
+  if (k.user?.userType === "agent") return "agent";
+  const isHub = k.hubId && !k.hubId.startsWith("integration:");
+  const isInternalPrefix = k.keyPrefix?.startsWith("synap_hub_") ?? false;
+  if (Boolean(isHub) || isInternalPrefix) return "system";
+  return "operator";
 }
+
+const CATEGORY_LABEL: Record<KeyCategory, string> = {
+  agent: "Agent",
+  system: "System",
+  operator: "Operator",
+};
+
+const CATEGORY_ICON: Record<KeyCategory, React.FC<{ className?: string }>> = {
+  agent: Bot,
+  system: Server,
+  operator: User,
+};
 
 const COMMON_SCOPES = [
   "data.read",
@@ -108,15 +127,16 @@ export function ApiKeysSection() {
     staleTime: 60_000,
   });
 
-  // ?focus=<keyId> from ⌘K — receiver wraps each KeyRow with data-row-id.
   useFocusRow({
     ready: !operatorKeys.isLoading && !systemKeys.isLoading,
   });
 
   const utils = trpc.useUtils();
 
+  const [tab, setTab] = useState<"active" | "revoked">("active");
   const [createOpen, setCreateOpen] = useState(false);
-  const [revokeTarget, setRevokeTarget] = useState<AdminKey | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<UnifiedKey | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<UnifiedKey | null>(null);
   const [revealedKey, setRevealedKey] = useState<{
     keyName: string;
     plaintext: string;
@@ -183,67 +203,49 @@ export function ApiKeysSection() {
       }),
   });
 
-  // Filter out workspace-bound keys per the brief.  hubId convention:
-  //   • integration:<host>  → connector / integration key (operator-relevant)
-  //   • workspace:<wsId>    → workspace-scoped (lives in Studio)
-  //   • null                → personal key (operator-relevant)
-  const operator = useMemo<AdminKey[]>(() => {
-    const all = (operatorKeys.data as AdminKey[] | undefined) ?? [];
-    return all.filter((k) => {
-      if (k.hubId && k.hubId.startsWith("workspace:")) return false;
-      if (k.workspaceId) return false;
-      return true;
-    });
-  }, [operatorKeys.data]);
+  const deleteRevoked = trpc.apiKeys.adminDeleteRevoked.useMutation({
+    onSuccess: () => {
+      void utils.apiKeys.adminListAll.invalidate();
+      void utils.apiKeys.listSystemKeys.invalidate();
+      addToast({ title: "Key deleted", color: "default" });
+    },
+    onError: (err) =>
+      addToast({
+        title: "Delete failed",
+        description: err.message,
+        color: "danger",
+      }),
+  });
 
-  const system = useMemo<SystemKey[]>(() => {
-    const all = (systemKeys.data as SystemKey[] | undefined) ?? [];
-    // System keys = those flagged with hub/integration prefix or marked
-    // by hubId. We display all returned by listSystemKeys but de-duplicate
-    // anything that's also in `operator`.  In practice listSystemKeys
-    // returns ALL keys; we narrow it to keys that look system-internal.
-    return all.filter((k) => {
-      const isHub = k.hubId && !k.hubId.startsWith("integration:");
-      const isInternalPrefix = k.keyPrefix?.startsWith("synap_hub_") ?? false;
-      return Boolean(isHub) || isInternalPrefix;
+  // Merge both queries into a single de-duplicated list keyed by id.
+  const allKeys = useMemo<UnifiedKey[]>(() => {
+    const map = new Map<string, UnifiedKey>();
+    for (const k of (operatorKeys.data as UnifiedKey[] | undefined) ?? []) {
+      if (k.hubId?.startsWith("workspace:") || k.workspaceId) continue;
+      map.set(k.id, k);
+    }
+    for (const k of (systemKeys.data as UnifiedKey[] | undefined) ?? []) {
+      if (!map.has(k.id)) map.set(k.id, k);
+    }
+    return Array.from(map.values()).sort((a, b) => {
+      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return tb - ta;
     });
-  }, [systemKeys.data]);
+  }, [operatorKeys.data, systemKeys.data]);
+
+  const active = useMemo(() => allKeys.filter((k) => k.isActive), [allKeys]);
+  const revoked = useMemo(() => allKeys.filter((k) => !k.isActive), [allKeys]);
+
+  const isLoading = operatorKeys.isLoading || systemKeys.isLoading;
+  const isError = operatorKeys.isError || systemKeys.isError;
+  const shown = tab === "active" ? active : revoked;
 
   return (
     <div className="flex flex-col gap-5">
-      {/* System keys — read-only */}
       <SectionCard
-        title="System keys"
-        hint="Pod-internal Hub Protocol and system-service keys"
-      >
-        {systemKeys.isLoading ? (
-          <ResourceRowSkeleton count={2} />
-        ) : systemKeys.isError ? (
-          <ResourceRowError
-            message="Couldn't load system keys."
-            onRetry={() => void systemKeys.refetch()}
-          />
-        ) : system.length === 0 ? (
-          <ResourceRowEmpty message="No system keys present." />
-        ) : (
-          <div className="-mx-2">
-            {system.map((k) => (
-              <div
-                key={k.id}
-                data-row-id={k.id}
-                className="rounded-md transition-shadow"
-              >
-                <KeyRow apiKey={toAdminLike(k)} readOnly />
-              </div>
-            ))}
-          </div>
-        )}
-      </SectionCard>
-
-      {/* Operator keys — full CRUD */}
-      <SectionCard
-        title="Operator keys"
-        hint="Keys created by pod admins for personal use and external integrations"
+        title="API keys"
+        hint="Hub Protocol, agent, and operator keys on this pod"
         actions={
           <Button
             size="sm"
@@ -257,18 +259,62 @@ export function ApiKeysSection() {
           </Button>
         }
       >
-        {operatorKeys.isLoading ? (
+        <div className="mb-3 -mt-1">
+          <Tabs
+            size="sm"
+            selectedKey={tab}
+            onSelectionChange={(k) => setTab(k as "active" | "revoked")}
+            classNames={{
+              tabList: "bg-foreground/[0.04] rounded-lg",
+              tab: "text-[12px]",
+            }}
+          >
+            <Tab
+              key="active"
+              title={
+                <span className="flex items-center gap-1.5">
+                  Active
+                  {active.length > 0 && (
+                    <span className="rounded-full bg-foreground/10 px-1.5 py-px text-[10px] font-medium">
+                      {active.length}
+                    </span>
+                  )}
+                </span>
+              }
+            />
+            <Tab
+              key="revoked"
+              title={
+                <span className="flex items-center gap-1.5">
+                  Revoked
+                  {revoked.length > 0 && (
+                    <span className="rounded-full bg-foreground/10 px-1.5 py-px text-[10px] font-medium">
+                      {revoked.length}
+                    </span>
+                  )}
+                </span>
+              }
+            />
+          </Tabs>
+        </div>
+
+        {isLoading ? (
           <ResourceRowSkeleton count={3} />
-        ) : operatorKeys.isError ? (
+        ) : isError ? (
           <ResourceRowError
             message="Couldn't load API keys."
-            onRetry={() => void operatorKeys.refetch()}
+            onRetry={() => {
+              void operatorKeys.refetch();
+              void systemKeys.refetch();
+            }}
           />
-        ) : operator.length === 0 ? (
-          <ResourceRowEmpty message="No operator keys yet." />
+        ) : shown.length === 0 ? (
+          <ResourceRowEmpty
+            message={tab === "active" ? "No active keys." : "No revoked keys."}
+          />
         ) : (
           <div className="-mx-2">
-            {operator.map((k) => (
+            {shown.map((k) => (
               <div
                 key={k.id}
                 data-row-id={k.id}
@@ -276,8 +322,14 @@ export function ApiKeysSection() {
               >
                 <KeyRow
                   apiKey={k}
-                  onRevoke={() => setRevokeTarget(k)}
-                  onRotate={() => rotate.mutate({ keyId: k.id })}
+                  category={categorize(k)}
+                  onRevoke={k.isActive ? () => setRevokeTarget(k) : undefined}
+                  onRotate={
+                    k.isActive && categorize(k) !== "system"
+                      ? () => rotate.mutate({ keyId: k.id })
+                      : undefined
+                  }
+                  onDelete={!k.isActive ? () => setDeleteTarget(k) : undefined}
                 />
               </div>
             ))}
@@ -285,7 +337,6 @@ export function ApiKeysSection() {
         )}
       </SectionCard>
 
-      {/* Create modal */}
       {createOpen && (
         <CreateKeyModal
           isPending={create.isPending}
@@ -304,7 +355,6 @@ export function ApiKeysSection() {
         />
       )}
 
-      {/* Revoke modal */}
       {revokeTarget && (
         <RevokeKeyModal
           apiKey={revokeTarget}
@@ -317,7 +367,18 @@ export function ApiKeysSection() {
         />
       )}
 
-      {/* One-time key reveal */}
+      {deleteTarget && (
+        <DeleteKeyModal
+          apiKey={deleteTarget}
+          isPending={deleteRevoked.isPending}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={async () => {
+            await deleteRevoked.mutateAsync({ keyId: deleteTarget.id });
+            setDeleteTarget(null);
+          }}
+        />
+      )}
+
       {revealedKey && (
         <RevealKeyModal
           keyName={revealedKey.keyName}
@@ -334,14 +395,16 @@ export function ApiKeysSection() {
 
 function KeyRow({
   apiKey,
-  readOnly,
+  category,
   onRevoke,
   onRotate,
+  onDelete,
 }: {
-  apiKey: AdminKey;
-  readOnly?: boolean;
+  apiKey: UnifiedKey;
+  category: KeyCategory;
   onRevoke?: () => void;
   onRotate?: () => void;
+  onDelete?: () => void;
 }) {
   const status = keyStatus(apiKey);
   const scopes = normalizeScopes(apiKey.scope);
@@ -364,16 +427,25 @@ function KeyRow({
     .filter(Boolean)
     .join(" · ");
 
+  const CategoryIcon = CATEGORY_ICON[category];
+  const hasActions = onRevoke || onRotate || onDelete;
+
   return (
     <ResourceRow
       Icon={KeyRound}
-      primary={apiKey.keyName}
+      primary={
+        <span className="flex items-center gap-1.5">
+          {apiKey.keyName}
+          <span className="flex items-center gap-0.5 rounded bg-foreground/[0.07] px-1 py-px text-[10px] font-medium text-foreground/55">
+            <CategoryIcon className="h-2.5 w-2.5" />
+            {CATEGORY_LABEL[category]}
+          </span>
+        </span>
+      }
       secondary={secondary}
       status={status}
       actions={
-        readOnly ? (
-          <span className="px-2 text-[11px] text-foreground/45">read-only</span>
-        ) : (
+        hasActions ? (
           <Dropdown>
             <DropdownTrigger>
               <Button
@@ -388,7 +460,7 @@ function KeyRow({
               </Button>
             </DropdownTrigger>
             <DropdownMenu aria-label="Key actions">
-              {apiKey.isActive ? (
+              {onRotate ? (
                 <DropdownItem
                   key="rotate"
                   startContent={<RefreshCw className="h-3.5 w-3.5" />}
@@ -398,7 +470,7 @@ function KeyRow({
                   Rotate
                 </DropdownItem>
               ) : null}
-              {apiKey.isActive ? (
+              {onRevoke ? (
                 <DropdownItem
                   key="revoke"
                   color="danger"
@@ -408,8 +480,21 @@ function KeyRow({
                   Revoke
                 </DropdownItem>
               ) : null}
+              {onDelete ? (
+                <DropdownItem
+                  key="delete"
+                  color="danger"
+                  startContent={<Trash2 className="h-3.5 w-3.5" />}
+                  onPress={onDelete}
+                  description="Permanently remove from records"
+                >
+                  Delete
+                </DropdownItem>
+              ) : null}
             </DropdownMenu>
           </Dropdown>
+        ) : (
+          <span className="px-2 text-[11px] text-foreground/45">read-only</span>
         )
       }
     />
@@ -433,15 +518,10 @@ function keyStatus(apiKey: {
 function normalizeScopes(s: string[] | string | null | undefined): string[] {
   if (!s) return [];
   if (Array.isArray(s)) return s;
-  // scope is sometimes stored as a comma-separated text column.
   return s
     .split(",")
     .map((x) => x.trim())
     .filter(Boolean);
-}
-
-function toAdminLike(k: SystemKey): AdminKey {
-  return { ...k };
 }
 
 // ─── Create modal ─────────────────────────────────────────────────────────
@@ -463,7 +543,6 @@ function CreateKeyModal({
     defaultOpen: true,
     onClose,
   });
-
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(["data.read"]);
   const [expiry, setExpiry] = useState<string>("90");
@@ -575,7 +654,7 @@ function RevokeKeyModal({
   onClose,
   onConfirm,
 }: {
-  apiKey: AdminKey;
+  apiKey: UnifiedKey;
   isPending: boolean;
   onClose: () => void;
   onConfirm: (reason: string) => void | Promise<void>;
@@ -628,6 +707,68 @@ function RevokeKeyModal({
             onPress={() => void onConfirm(reason.trim() || "Revoked by admin")}
           >
             Revoke
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+}
+
+// ─── Delete modal ─────────────────────────────────────────────────────────
+
+function DeleteKeyModal({
+  apiKey,
+  isPending,
+  onClose,
+  onConfirm,
+}: {
+  apiKey: UnifiedKey;
+  isPending: boolean;
+  onClose: () => void;
+  onConfirm: () => void | Promise<void>;
+}) {
+  const { isOpen, onOpenChange } = useDisclosure({
+    defaultOpen: true,
+    onClose,
+  });
+
+  return (
+    <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
+      <ModalContent>
+        <ModalHeader className="flex items-center gap-2">
+          <span
+            className="glass-icon flex h-7 w-7 items-center justify-center"
+            style={{ background: "rgba(248, 113, 113, 0.18)" }}
+          >
+            <Trash2 className="h-3.5 w-3.5 text-foreground/85" />
+          </span>
+          <span className="font-medium">Delete {apiKey.keyName}</span>
+        </ModalHeader>
+        <ModalBody className="pb-2">
+          <p className="text-[12.5px] text-foreground/85">
+            This will permanently remove the key record. The key is already
+            revoked and can no longer authenticate. This action cannot be
+            undone.
+          </p>
+        </ModalBody>
+        <ModalFooter>
+          <Button
+            variant="light"
+            size="sm"
+            radius="md"
+            onPress={onClose}
+            isDisabled={isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            color="danger"
+            size="sm"
+            radius="md"
+            isLoading={isPending}
+            onPress={() => void onConfirm()}
+          >
+            Delete permanently
           </Button>
         </ModalFooter>
       </ModalContent>
@@ -701,7 +842,5 @@ function RevealKeyModal({
   );
 }
 
-// Suppress unused warnings for icons referenced for visual symmetry.
 void Copy;
 void Eye;
-void Tooltip;

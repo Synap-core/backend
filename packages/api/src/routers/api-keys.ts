@@ -438,6 +438,38 @@ export const apiKeysRouter = router({
     }),
 
   /**
+   * Permanently delete a single revoked key. Only allowed when isActive=false.
+   * Use this to clean up the revoked-keys graveyard in the pod-admin UI.
+   */
+  adminDeleteRevoked: podAdminProcedure
+    .input(z.object({ keyId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const key = await db.query.apiKeys.findFirst({
+        where: eq(apiKeys.id, input.keyId),
+        columns: { id: true, isActive: true, keyName: true },
+      });
+      if (!key) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Key not found" });
+      }
+      if (key.isActive) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Cannot delete an active key — revoke it first.",
+        });
+      }
+      await db.delete(apiKeys).where(eq(apiKeys.id, input.keyId));
+      auditLog({
+        subjectType: "apiKey",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.keyId,
+        userId: ctx.userId,
+        data: { keyId: input.keyId, keyName: key.keyName, permanent: true },
+      });
+      return { deleted: true };
+    }),
+
+  /**
    * List all API keys on the pod (metadata only). Pod-admin workspace only.
    */
   listSystemKeys: podAdminProcedure.query(async () => {
