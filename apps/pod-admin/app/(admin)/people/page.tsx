@@ -1256,6 +1256,24 @@ function PendingInvitesSection() {
     },
   });
 
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copyTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map()
+  );
+
+  function copyLink(token: string, id: string) {
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    void navigator.clipboard.writeText(`${origin}/invite/${token}`).then(() => {
+      setCopiedId(id);
+      const prev = copyTimers.current.get(id);
+      if (prev) clearTimeout(prev);
+      copyTimers.current.set(
+        id,
+        setTimeout(() => setCopiedId(null), 2000)
+      );
+    });
+  }
+
   const pending = invitesQuery.data ?? [];
 
   if (!invitesQuery.isLoading && pending.length === 0) return null;
@@ -1284,21 +1302,37 @@ function PendingInvitesSection() {
               Icon={Clock}
               primary={inv.email}
               secondary={`${inv.role} · expires ${formatRelative(inv.expiresAt)}`}
-              status={{ kind: "degraded" as StatusKind, label: "pending" }}
+              status={{ kind: "unknown" as StatusKind, label: "pending" }}
               actions={
-                <Button
-                  size="sm"
-                  variant="flat"
-                  radius="md"
-                  color="danger"
-                  isLoading={
-                    revokeMutation.isPending &&
-                    revokeMutation.variables?.id === inv.id
-                  }
-                  onPress={() => revokeMutation.mutate({ id: inv.id })}
-                >
-                  Revoke
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="flat"
+                    radius="md"
+                    aria-label="Copy invite link"
+                    onPress={() => copyLink(inv.token, inv.id)}
+                  >
+                    {copiedId === inv.id ? (
+                      <Check className="h-3.5 w-3.5 text-status-healthy" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    radius="md"
+                    color="danger"
+                    isLoading={
+                      revokeMutation.isPending &&
+                      revokeMutation.variables?.id === inv.id
+                    }
+                    onPress={() => revokeMutation.mutate({ id: inv.id })}
+                  >
+                    Revoke
+                  </Button>
+                </div>
               }
             />
           ))}
