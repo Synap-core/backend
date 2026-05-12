@@ -35,7 +35,7 @@ export const config = {
      * - the /login and /forbidden pages themselves (otherwise the
      *   redirect target would loop through the auth check)
      */
-    "/((?!api|_next/static|_next/image|favicon.ico|robots.txt|login|forbidden|setup).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico|robots.txt|login|forbidden|setup|invite).*)",
   ],
 };
 

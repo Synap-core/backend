@@ -6499,6 +6499,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				token: string;
 				expiresAt: Date;
+				emailSent: boolean;
 			};
 			meta: object;
 		}>;

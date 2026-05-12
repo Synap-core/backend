@@ -43,7 +43,10 @@ import {
 } from "@heroui/react";
 import {
   Bot,
+  Check,
   CircleUser,
+  Clock,
+  Copy,
   Mail,
   MoreHorizontal,
   Plus,
@@ -51,7 +54,7 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { trpc } from "../../../lib/trpc";
 import { useOperatorEmail } from "../components/admin-shell";
 import { DetailDrawer } from "../components/detail-drawer";
@@ -122,6 +125,7 @@ function PeopleInner() {
         <PodAdminsSection />
         <WorkspaceMembersSection />
         <AgentUsersSection />
+        <PendingInvitesSection />
       </div>
 
       <InviteAdminModal
@@ -913,6 +917,8 @@ const ROLE_OPTIONS: Array<{
   { key: "viewer", label: "Viewer" },
 ];
 
+type InviteResult = { token: string; emailSent: boolean; email: string };
+
 function InviteAdminModal({
   isOpen,
   onClose,
@@ -923,25 +929,41 @@ function InviteAdminModal({
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"admin" | "editor" | "viewer">("admin");
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [result, setResult] = useState<InviteResult | null>(null);
+  const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const utils = trpc.useUtils();
   const inviteMutation = trpc.workspaces.createInvite.useMutation({
-    onSuccess: () => {
-      setSuccess(`Invite sent to ${email}.`);
+    onSuccess: (data) => {
+      setResult({
+        token: data.token,
+        emailSent: data.emailSent,
+        email: email.trim(),
+      });
       setError(null);
-      setEmail("");
+      void utils.workspaces.listInvites.invalidate();
       void utils.workspaces.adminListAll.invalidate();
     },
     onError: (e) => {
       setError(e.message);
-      setSuccess(null);
     },
   });
 
+  const inviteUrl = result
+    ? `${typeof window !== "undefined" ? window.location.origin : ""}/invite/${result.token}`
+    : "";
+
+  const handleCopy = useCallback(() => {
+    void navigator.clipboard.writeText(inviteUrl).then(() => {
+      setCopied(true);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
+    });
+  }, [inviteUrl]);
+
   function handleSubmit() {
     setError(null);
-    setSuccess(null);
     if (!email.trim()) return;
     inviteMutation.mutate({ type: "pod", email: email.trim(), role });
   }
@@ -950,7 +972,8 @@ function InviteAdminModal({
     setEmail("");
     setRole("admin");
     setError(null);
-    setSuccess(null);
+    setResult(null);
+    setCopied(false);
     onClose();
   }
 
@@ -969,65 +992,96 @@ function InviteAdminModal({
             Invite a pod admin
           </h2>
           <p className="text-[12px] text-foreground/55">
-            They'll receive an email with a sign-in link valid for 7 days.
+            {result
+              ? "Share this invite link with the recipient."
+              : "Send an invite link valid for 7 days."}
           </p>
         </ModalHeader>
         <ModalBody className="gap-4 px-6 py-4">
-          <div className="flex flex-col gap-1.5">
-            <label
-              htmlFor="invite-email"
-              className="text-[12px] font-medium text-foreground/70"
-            >
-              Email
-            </label>
-            <Input
-              id="invite-email"
-              type="email"
-              placeholder="admin@example.com"
-              value={email}
-              onValueChange={setEmail}
-              radius="md"
-              variant="flat"
-              startContent={<Mail className="h-3.5 w-3.5 text-foreground/40" />}
-              isDisabled={inviteMutation.isPending}
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <label
-              htmlFor="invite-role"
-              className="text-[12px] font-medium text-foreground/70"
-            >
-              Role
-            </label>
-            <Select
-              id="invite-role"
-              aria-label="Role"
-              radius="md"
-              variant="flat"
-              selectedKeys={[role]}
-              onSelectionChange={(keys) => {
-                const next = Array.from(keys)[0];
-                if (typeof next === "string") {
-                  setRole(next as "admin" | "editor" | "viewer");
-                }
-              }}
-              isDisabled={inviteMutation.isPending}
-            >
-              {ROLE_OPTIONS.map((opt) => (
-                <SelectItem key={opt.key}>{opt.label}</SelectItem>
-              ))}
-            </Select>
-          </div>
-          {error ? (
-            <div className="rounded-md bg-status-down/10 px-3 py-2 text-[12px] text-status-down ring-1 ring-inset ring-status-down/20">
-              {error}
+          {result ? (
+            <div className="flex flex-col gap-3">
+              <div
+                className={`rounded-md px-3 py-2 text-[12px] ring-1 ring-inset ${result.emailSent ? "bg-status-healthy/10 text-status-healthy ring-status-healthy/20" : "bg-foreground/[0.04] text-foreground/70 ring-foreground/10"}`}
+              >
+                {result.emailSent
+                  ? `Email sent to ${result.email}. Share the link below as a backup.`
+                  : `Email not configured — share this link with ${result.email} directly.`}
+              </div>
+              <div className="flex items-center gap-2 rounded-md bg-foreground/[0.04] px-3 py-2 ring-1 ring-inset ring-foreground/10">
+                <span className="flex-1 truncate font-mono text-[11px] text-foreground/70">
+                  {inviteUrl}
+                </span>
+                <Button
+                  isIconOnly
+                  size="sm"
+                  variant="flat"
+                  radius="md"
+                  onPress={handleCopy}
+                  aria-label="Copy invite URL"
+                >
+                  {copied ? (
+                    <Check className="h-3.5 w-3.5 text-status-healthy" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              </div>
             </div>
-          ) : null}
-          {success ? (
-            <div className="rounded-md bg-status-healthy/10 px-3 py-2 text-[12px] text-status-healthy ring-1 ring-inset ring-status-healthy/20">
-              {success}
-            </div>
-          ) : null}
+          ) : (
+            <>
+              <div className="flex flex-col gap-1.5">
+                <label
+                  htmlFor="invite-email"
+                  className="text-[12px] font-medium text-foreground/70"
+                >
+                  Email
+                </label>
+                <Input
+                  id="invite-email"
+                  type="email"
+                  placeholder="admin@example.com"
+                  value={email}
+                  onValueChange={setEmail}
+                  radius="md"
+                  variant="flat"
+                  startContent={
+                    <Mail className="h-3.5 w-3.5 text-foreground/40" />
+                  }
+                  isDisabled={inviteMutation.isPending}
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label
+                  htmlFor="invite-role"
+                  className="text-[12px] font-medium text-foreground/70"
+                >
+                  Role
+                </label>
+                <Select
+                  id="invite-role"
+                  aria-label="Role"
+                  radius="md"
+                  variant="flat"
+                  selectedKeys={[role]}
+                  onSelectionChange={(keys) => {
+                    const next = Array.from(keys)[0];
+                    if (typeof next === "string")
+                      setRole(next as "admin" | "editor" | "viewer");
+                  }}
+                  isDisabled={inviteMutation.isPending}
+                >
+                  {ROLE_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.key}>{opt.label}</SelectItem>
+                  ))}
+                </Select>
+              </div>
+              {error ? (
+                <div className="rounded-md bg-status-down/10 px-3 py-2 text-[12px] text-status-down ring-1 ring-inset ring-status-down/20">
+                  {error}
+                </div>
+              ) : null}
+            </>
+          )}
         </ModalBody>
         <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
           <Button
@@ -1037,24 +1091,100 @@ function InviteAdminModal({
             onPress={handleClose}
             isDisabled={inviteMutation.isPending}
           >
-            Cancel
+            {result ? "Done" : "Cancel"}
           </Button>
-          <Button
-            color="primary"
-            variant="solid"
-            radius="md"
-            size="sm"
-            onPress={handleSubmit}
-            isDisabled={!email.trim() || inviteMutation.isPending}
-            startContent={
-              inviteMutation.isPending ? <Spinner size="sm" /> : null
-            }
-          >
-            {inviteMutation.isPending ? "Sending…" : "Send invite"}
-          </Button>
+          {!result ? (
+            <Button
+              color="primary"
+              variant="solid"
+              radius="md"
+              size="sm"
+              onPress={handleSubmit}
+              isDisabled={!email.trim() || inviteMutation.isPending}
+              startContent={
+                inviteMutation.isPending ? <Spinner size="sm" /> : null
+              }
+            >
+              {inviteMutation.isPending ? "Sending…" : "Send invite"}
+            </Button>
+          ) : null}
         </ModalFooter>
       </ModalContent>
     </Modal>
+  );
+}
+
+// ─── Pending invites section ─────────────────────────────────────────
+
+function PendingInvitesSection() {
+  const invitesQuery = trpc.workspaces.listInvites.useQuery(
+    { type: "pod" },
+    { staleTime: 30_000 }
+  );
+
+  const revokeMutation = trpc.workspaces.revokeInvite.useMutation({
+    onSuccess: () => {
+      void invitesQuery.refetch();
+      addToast({ title: "Invite revoked", color: "default" });
+    },
+    onError: (e) => {
+      addToast({
+        title: "Revoke failed",
+        description: e.message,
+        color: "danger",
+      });
+    },
+  });
+
+  const pending = invitesQuery.data ?? [];
+
+  if (!invitesQuery.isLoading && pending.length === 0) return null;
+
+  return (
+    <SectionCard
+      title="Pending invites"
+      hint="Sent but not yet accepted"
+      actions={
+        pending.length > 0 ? (
+          <span className="text-[11px] tabular text-foreground/55">
+            {pending.length} pending
+          </span>
+        ) : null
+      }
+    >
+      {invitesQuery.isLoading ? (
+        <ResourceRowSkeleton count={1} />
+      ) : invitesQuery.isError ? (
+        <ResourceRowError message="Couldn't load pending invites." />
+      ) : (
+        <div className="-mx-2">
+          {pending.map((inv) => (
+            <ResourceRow
+              key={inv.id}
+              Icon={Clock}
+              primary={inv.email}
+              secondary={`${inv.role} · expires ${formatRelative(inv.expiresAt)}`}
+              status={{ kind: "degraded" as StatusKind, label: "pending" }}
+              actions={
+                <Button
+                  size="sm"
+                  variant="flat"
+                  radius="md"
+                  color="danger"
+                  isLoading={
+                    revokeMutation.isPending &&
+                    revokeMutation.variables?.id === inv.id
+                  }
+                  onPress={() => revokeMutation.mutate({ id: inv.id })}
+                >
+                  Revoke
+                </Button>
+              }
+            />
+          ))}
+        </div>
+      )}
+    </SectionCard>
   );
 }
 

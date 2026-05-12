@@ -21,6 +21,7 @@ import {
   apiKeyExternalUsers,
   workspaces,
   workspaceMembers,
+  invites,
   users,
   EventRepository,
   ApiKeyRepository,
@@ -29,7 +30,10 @@ import {
 } from "@synap/database";
 
 import { apiKeyService } from "../../../services/api-keys.js";
-import { createAdminUser } from "../../../scripts/create-admin-user.js";
+import {
+  createAdminUser,
+  ensureUserRow,
+} from "../../../scripts/create-admin-user.js";
 import {
   isSubTokenFeatureEnabled,
   lookupExternalUserMapping,
@@ -968,5 +972,139 @@ export function registerSetupRoutes(app: HubHono): void {
         500
       );
     }
+  });
+
+  // ── POST /setup/accept-invite ──────────────────────────────────────────────
+  //
+  // Public endpoint — no auth required. Validates an invite token, creates a
+  // Kratos identity + users row for the invitee, accepts the invite (adds
+  // workspace membership), and deletes the used token.
+  //
+  // On success the caller should redirect to /login so the user can sign in.
+  app.post("/setup/accept-invite", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return c.json({ error: "Invalid request body" }, 400);
+    }
+
+    const email =
+      typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    const name =
+      typeof body.name === "string" && body.name.trim()
+        ? body.name.trim()
+        : email.split("@")[0];
+    const inviteToken =
+      typeof body.inviteToken === "string" ? body.inviteToken.trim() : "";
+
+    if (!email || !password || !inviteToken) {
+      return c.json(
+        { error: "email, password, and inviteToken are required" },
+        400
+      );
+    }
+    if (password.length < 8) {
+      return c.json({ error: "Password must be at least 8 characters" }, 400);
+    }
+
+    const invite = await db.query.invites.findFirst({
+      where: eq(invites.token, inviteToken),
+    });
+    if (!invite)
+      return c.json({ error: "Invite not found or already used" }, 404);
+    if (invite.expiresAt < new Date())
+      return c.json({ error: "Invite has expired" }, 410);
+    if (invite.email && invite.email.toLowerCase() !== email) {
+      return c.json(
+        { error: "This invite was sent to a different email address" },
+        403
+      );
+    }
+
+    // Create Kratos identity. On 409, tell the user to sign in — do NOT reuse
+    // an existing identity as that would let an attacker accept an invite on
+    // behalf of a user who owns that email.
+    let identityId: string;
+    try {
+      const { data: identity } = await kratosAdmin.createIdentity({
+        createIdentityBody: {
+          schema_id: "default",
+          traits: { email, name },
+          credentials: { password: { config: { password } } },
+          verifiable_addresses: [
+            { value: email, verified: true, via: "email", status: "completed" },
+          ],
+        },
+      });
+      identityId = identity.id;
+      logger.info(
+        { identityId, email },
+        "accept-invite: Kratos identity created"
+      );
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response
+        ?.status;
+      if (status === 409) {
+        return c.json(
+          {
+            error:
+              "An account with this email already exists. Use the Sign in tab to accept the invite.",
+          },
+          409
+        );
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error({ err, email }, "accept-invite: createIdentity failed");
+      return c.json(
+        { error: "Failed to create account", detail: msg.slice(0, 200) },
+        500
+      );
+    }
+
+    await ensureUserRow(identityId, email, name);
+
+    // Accept invite: add workspace membership (workspace or all-pod).
+    if (invite.type === "workspace" && invite.workspaceId) {
+      const alreadyMember = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, invite.workspaceId),
+          eq(workspaceMembers.userId, identityId)
+        ),
+      });
+      if (!alreadyMember) {
+        await db.insert(workspaceMembers).values({
+          workspaceId: invite.workspaceId,
+          userId: identityId,
+          role: invite.role as "owner" | "editor" | "viewer",
+        });
+      }
+    } else {
+      const allWorkspaces = await db.query.workspaces.findMany({
+        columns: { id: true },
+      });
+      for (const ws of allWorkspaces) {
+        const alreadyMember = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, ws.id),
+            eq(workspaceMembers.userId, identityId)
+          ),
+        });
+        if (!alreadyMember) {
+          await db.insert(workspaceMembers).values({
+            workspaceId: ws.id,
+            userId: identityId,
+            role: invite.role as "owner" | "editor" | "viewer",
+          });
+        }
+      }
+    }
+
+    await db.delete(invites).where(eq(invites.id, invite.id));
+    logger.info(
+      { identityId, email, inviteId: invite.id },
+      "accept-invite: account created and invite accepted"
+    );
+
+    return c.json({ userId: identityId, success: true });
   });
 }

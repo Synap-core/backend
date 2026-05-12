@@ -1307,6 +1307,7 @@ export const workspacesRouter = router({
         id: invite.id,
         token: invite.token,
         expiresAt: invite.expiresAt,
+        emailSent: !!cpUrl,
       };
     }),
 
