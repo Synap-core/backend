@@ -232,8 +232,7 @@ connectorsRouter.post("/pull-sync", async (c) => {
 
   const nangoHost = (cpSettings.nangoHost as string) || process.env.NANGO_HOST;
   const nangoKey =
-    (cpSettings.nangoRecordsApiKey as string) ||
-    process.env.NANGO_RECORDS_API_KEY;
+    (cpSettings.nangoRecordsApiKey as string) || process.env.NANGO_SECRET_KEY;
 
   if (!nangoHost || !nangoKey) {
     logger.error(

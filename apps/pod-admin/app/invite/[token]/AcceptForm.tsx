@@ -30,6 +30,7 @@ type InvitePreview =
 
 type PageState =
   | { status: "loading" }
+  | { status: "error"; message: string }
   | { status: "not-found" }
   | { status: "expired" }
   | {
@@ -44,7 +45,7 @@ export function AcceptForm({ token }: { token: string }) {
 
   const previewQuery = trpc.workspaces.previewInvite.useQuery(
     { token },
-    { retry: false, staleTime: Infinity }
+    { retry: 1, staleTime: Infinity }
   );
 
   const acceptMutation = trpc.workspaces.acceptInvite.useMutation({
@@ -53,9 +54,24 @@ export function AcceptForm({ token }: { token: string }) {
     },
   });
 
+  const onLoginSuccess = useCallback(async () => {
+    try {
+      await acceptMutation.mutateAsync({ token });
+    } catch {
+      // error shown via acceptMutation.error
+    }
+  }, [acceptMutation, token]);
+
   useEffect(() => {
     if (previewQuery.isLoading) return;
     void (async () => {
+      if (previewQuery.isError) {
+        setState({
+          status: "error",
+          message: previewQuery.error?.message ?? "Could not load invite.",
+        });
+        return;
+      }
       const preview = previewQuery.data;
       if (!preview) {
         setState({ status: "not-found" });
@@ -68,12 +84,29 @@ export function AcceptForm({ token }: { token: string }) {
       const session = await whoami();
       setState({ status: "ready", preview, session });
     })();
-  }, [previewQuery.isLoading, previewQuery.data]);
+  }, [
+    previewQuery.isLoading,
+    previewQuery.isError,
+    previewQuery.error,
+    previewQuery.data,
+  ]);
 
   if (state.status === "loading")
     return (
       <Shell>
         <LoadingBody />
+      </Shell>
+    );
+  if (state.status === "error")
+    return (
+      <Shell>
+        <ErrorBody
+          message={state.message}
+          onRetry={() => {
+            setState({ status: "loading" });
+            void previewQuery.refetch();
+          }}
+        />
       </Shell>
     );
   if (state.status === "not-found")
@@ -169,13 +202,7 @@ export function AcceptForm({ token }: { token: string }) {
         >
           <LoginPanel
             inviteEmail={preview.email}
-            onSuccess={async () => {
-              try {
-                await acceptMutation.mutateAsync({ token });
-              } catch {
-                // error shown via acceptMutation.error
-              }
-            }}
+            onSuccess={onLoginSuccess}
             acceptError={acceptMutation.error?.message ?? null}
             isAccepting={acceptMutation.isPending}
           />
@@ -516,6 +543,29 @@ function LoadingBody() {
         <div className="h-5 w-48 rounded bg-foreground/[0.06] shimmer-pulse" />
         <div className="h-4 w-64 rounded bg-foreground/[0.04] shimmer-pulse" />
       </div>
+    </>
+  );
+}
+
+function ErrorBody({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <>
+      <AlertCircle className="h-10 w-10 text-warning" />
+      <div className="flex flex-col gap-1.5">
+        <h1 className="font-heading text-[20px] font-medium text-foreground">
+          Something went wrong
+        </h1>
+        <p className="text-[13.5px] text-foreground/55">{message}</p>
+      </div>
+      <Button size="sm" variant="flat" radius="md" onPress={onRetry}>
+        Try again
+      </Button>
     </>
   );
 }

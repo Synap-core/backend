@@ -37,6 +37,16 @@ const NangoSessionResponseSchema = z.object({
   token: z.string(),
 });
 
+const NangoIntegrationSchema = z.object({
+  unique_key: z.string(),
+  provider: z.string(),
+  display_name: z.string().optional(),
+});
+
+const NangoIntegrationsResponseSchema = z.object({
+  configs: z.array(NangoIntegrationSchema),
+});
+
 export class NangoConnector implements SyncConnector {
   readonly name = "nango";
 
@@ -120,6 +130,25 @@ export class NangoConnector implements SyncConnector {
       method: "DELETE",
       headers: this.authHeaders(),
     });
+  }
+
+  async listIntegrations(): Promise<
+    Array<{ uniqueKey: string; provider: string; displayName: string }>
+  > {
+    const res = await fetch(`${this.host}/config`, {
+      headers: this.authHeaders(),
+    });
+
+    if (!res.ok) return [];
+
+    const parsed = NangoIntegrationsResponseSchema.safeParse(await res.json());
+    if (!parsed.success) return [];
+
+    return parsed.data.configs.map((c) => ({
+      uniqueKey: c.unique_key,
+      provider: c.provider,
+      displayName: c.display_name ?? c.provider,
+    }));
   }
 
   async fetchRecords(

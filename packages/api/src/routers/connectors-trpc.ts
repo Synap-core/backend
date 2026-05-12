@@ -25,6 +25,15 @@ import { config, createLogger } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
 import { getDb, db, eq, desc, entityExternalLinks } from "@synap/database";
 import { entities, workspaces } from "@synap/database/schema";
+import { NangoConnector } from "../connectors/NangoConnector.js";
+import { enrichmentProviderRegistry } from "../connectors/index.js";
+
+const nango = new NangoConnector();
+
+/** True when Nango is self-hosted on this pod (NANGO_SECRET_KEY env var set). */
+function isLocalNango(): boolean {
+  return nango.isConfigured();
+}
 
 const logger = createLogger({ module: "connectors-trpc" });
 
