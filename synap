@@ -2032,6 +2032,40 @@ cmd_update() {
     fi
     docker compose up -d --force-recreate kratos
 
+    # Idempotent admin seed — ensures the users/workspace rows exist after
+    # every update. create-admin-cli.js is a no-op when the admin already
+    # exists, so this is safe to run unconditionally. Without it, a fresh
+    # install followed by `synap update` would leave the pod with a Kratos
+    # identity but no users/workspace_members rows, causing 401/403 on all
+    # tRPC calls even for authenticated sessions.
+    local update_admin_email=""
+    local update_admin_password=""
+    local update_bootstrap_mode=""
+    if [ -f .env ]; then
+        update_admin_email=$(grep "^ADMIN_EMAIL=" .env 2>/dev/null | cut -d'=' -f2-)
+        update_admin_password=$(grep "^ADMIN_PASSWORD=" .env 2>/dev/null | cut -d'=' -f2-)
+        update_bootstrap_mode=$(grep "^ADMIN_BOOTSTRAP_MODE=" .env 2>/dev/null | cut -d'=' -f2-)
+    fi
+
+    if [ -n "$update_admin_email" ] && [ -n "$update_admin_password" ]; then
+        echo -e "${BLUE}👤 Ensuring admin provisioning is complete...${NC}"
+        if run_preseed_admin_in_container "$update_admin_email" "$update_admin_password"; then
+            echo -e "${GREEN}✅ Admin provisioning confirmed.${NC}"
+        else
+            echo -e "${YELLOW}⚠️  Admin provisioning failed (pod may still be starting). Run manually if needed:${NC}"
+            echo "  ./synap setup admin --email ${update_admin_email} --password <password>"
+        fi
+        unset update_admin_password
+    elif [ "$update_bootstrap_mode" = "token" ]; then
+        # Token-bootstrap: admin was set up via the browser UI — no password in
+        # .env is correct. The users/workspace rows were created during that flow.
+        echo -e "${BLUE}ℹ️  Token bootstrap mode — skipping auto-provision (admin set up via browser).${NC}"
+    else
+        # Preseed mode but credentials missing — something is off. Warn the operator.
+        echo -e "${YELLOW}⚠️  ADMIN_EMAIL/ADMIN_PASSWORD not found in .env — skipping auto-provisioning.${NC}"
+        echo "  If this is a fresh pod, run: ./synap setup admin --email <email> --password <password>"
+    fi
+
     echo -e "${GREEN}✅ Update complete!${NC}"
 }
 

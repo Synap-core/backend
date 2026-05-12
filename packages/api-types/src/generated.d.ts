@@ -1539,27 +1539,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: EventRecord;
 			meta: object;
 		}>;
-		list: import("@trpc/server").TRPCQueryProcedure<{
+		read: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				limit?: number | undefined;
+				since?: unknown;
+				until?: unknown;
 				type?: string | undefined;
-			};
-			output: EventRecord[];
-			meta: object;
-		}>;
-		since: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				since: Date;
-				limit?: number | undefined;
 				subjectType?: "user" | "message" | "apiKey" | "system" | "chat" | "workspace" | "entity" | "document" | "project" | "task" | "relation" | "member" | undefined;
+				limit?: number | undefined;
+				lean?: boolean | undefined;
 			};
-			output: {
+			output: ({
 				id: string;
 				timestamp: Date;
 				type: string;
 				subjectType: string;
 				subjectId: string;
-			}[];
+			} | {
+				data: Record<string, unknown>;
+				metadata: Record<string, unknown> | undefined;
+				source: string;
+				correlationId: string | undefined;
+				userId: string;
+				id: string;
+				timestamp: Date;
+				type: string;
+				subjectType: string;
+				subjectId: string;
+			})[];
 			meta: object;
 		}>;
 		search: import("@trpc/server").TRPCQueryProcedure<{
@@ -6958,7 +6964,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 				offset?: number | undefined;
 				workspaceIds?: string[] | undefined;
-				type?: "calendar" | "table" | "list" | "whiteboard" | "all" | "graph" | "timeline" | "kanban" | "grid" | "gallery" | "gantt" | "mindmap" | undefined;
+				type?: "calendar" | "table" | "whiteboard" | "list" | "all" | "graph" | "timeline" | "kanban" | "grid" | "gallery" | "gantt" | "mindmap" | undefined;
 				excludeAutoCreated?: boolean | undefined;
 			};
 			output: PaginatedResponse<{

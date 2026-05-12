@@ -269,6 +269,8 @@ export const workspacesRouter = router({
       z
         .object({
           includeArchived: z.boolean().default(false),
+          /** When provided, only return workspaces whose settings.appId matches. */
+          appId: z.string().optional(),
         })
         .optional()
     )
@@ -281,13 +283,18 @@ export const workspacesRouter = router({
       });
 
       const includeArchived = input?.includeArchived === true;
+      const appIdFilter = input?.appId;
 
       return memberships
         .filter((m) => {
           const workspace = m.workspace;
           if (!workspace) return false;
-          if (includeArchived) return true;
-          return workspace.archivedAt == null;
+          if (!includeArchived && workspace.archivedAt != null) return false;
+          if (appIdFilter) {
+            const s = (workspace.settings ?? {}) as Record<string, unknown>;
+            if (s.appId !== appIdFilter) return false;
+          }
+          return true;
         })
         .map((m) => {
           const workspace = m.workspace!;
@@ -2095,6 +2102,12 @@ export const workspacesRouter = router({
          * Used by Eve (Builder Workspace = "builder-workspace-v1") and DevPlane.
          */
         proposalId: z.string().optional(),
+        /**
+         * Optional: app identifier stamped into `settings.appId`.
+         * Enables filtering workspaces.list by app (e.g. "crm", "studio", "canvas").
+         * Separates the app-ownership concern from the proposalId idempotency key.
+         */
+        appId: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -2188,6 +2201,23 @@ export const workspacesRouter = router({
                 },
                 "createFromDefinition: returning existing workspace by proposalId"
               );
+              // Opportunistically stamp appId if the caller provides one and
+              // the workspace doesn't have it yet (migration path for pre-Phase-1 workspaces).
+              if (input.appId && !wsSettings?.appId) {
+                try {
+                  await db
+                    .update(workspaces)
+                    .set({
+                      settings: {
+                        ...(wsSettings ?? {}),
+                        appId: input.appId,
+                      } satisfies WorkspaceSettings,
+                    })
+                    .where(eq(workspaces.id, ws.id));
+                } catch {
+                  /* non-fatal */
+                }
+              }
               return {
                 workspaceId: ws.id,
                 entityIds: [],
@@ -2378,6 +2408,7 @@ export const workspacesRouter = router({
                       settings: {
                         ...existingSettings,
                         proposalId: input.proposalId,
+                        ...(input.appId ? { appId: input.appId } : {}),
                       } satisfies WorkspaceSettings,
                     })
                     .where(eq(workspaces.id, failedWs.workspace.id));
@@ -2395,10 +2426,10 @@ export const workspacesRouter = router({
             });
           }
 
-          // Stamp caller-supplied proposalId into settings so future calls with
-          // the same proposalId hit the idempotency check above. Best-effort: a
-          // failure here just means the next call may create a duplicate.
-          if (input.proposalId) {
+          // Stamp caller-supplied proposalId and appId into settings. Best-effort:
+          // a failure here just means the next call may create a duplicate (proposalId)
+          // or the workspace won't appear in app-filtered list queries (appId).
+          if (input.proposalId || input.appId) {
             try {
               const ws = await db.query.workspaces.findFirst({
                 where: eq(workspaces.id, result.workspaceId),
@@ -2411,7 +2442,10 @@ export const workspacesRouter = router({
                 .set({
                   settings: {
                     ...existingSettings,
-                    proposalId: input.proposalId,
+                    ...(input.proposalId
+                      ? { proposalId: input.proposalId }
+                      : {}),
+                    ...(input.appId ? { appId: input.appId } : {}),
                   } satisfies WorkspaceSettings,
                 })
                 .where(eq(workspaces.id, result.workspaceId));
@@ -2421,8 +2455,9 @@ export const workspacesRouter = router({
                   err,
                   workspaceId: result.workspaceId,
                   proposalId: input.proposalId,
+                  appId: input.appId,
                 },
-                "Failed to stamp proposalId into workspace settings (non-fatal)"
+                "Failed to stamp proposalId/appId into workspace settings (non-fatal)"
               );
             }
           }

@@ -36,7 +36,7 @@ import { z } from "zod";
  * endpoint-specific filters.
  */
 export const paginatedInput = z.object({
-  limit: z.number().min(1).max(100).default(50),
+  limit: z.number().min(1).max(1000).default(50),
   offset: z.number().min(0).default(0),
 });
 
@@ -120,7 +120,7 @@ export function normalizePaginationInput(input: {
   offset?: number;
 }): { limit: number; offset: number } {
   return {
-    limit: Math.min(Math.max(1, input.limit ?? 50), 100),
+    limit: Math.min(Math.max(1, input.limit ?? 50), 1000),
     offset: Math.max(0, input.offset ?? 0),
   };
 }
