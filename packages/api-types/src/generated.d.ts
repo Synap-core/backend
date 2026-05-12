@@ -3888,6 +3888,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 			meta: object;
 		}>;
+		createSystemKey: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				keyName: string;
+				scope: string[];
+				expiresInDays?: number | undefined;
+			};
+			output: {
+				id: any;
+				key: string;
+				keyPrefix: string;
+				status: "created";
+				message: string;
+			};
+			meta: object;
+		}>;
 		connectIntegration: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				integration: "custom" | "openclaw" | "cli" | "raycast";

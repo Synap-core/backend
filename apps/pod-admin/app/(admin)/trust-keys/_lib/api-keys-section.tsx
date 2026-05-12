@@ -160,6 +160,32 @@ export function ApiKeysSection() {
       }),
   });
 
+  const createSystem = trpc.apiKeys.createSystemKey.useMutation({
+    onSuccess: (res: {
+      key: string;
+      id: string;
+      keyPrefix: string;
+      status: string;
+      message: string;
+    }) => {
+      void utils.apiKeys.adminListAll.invalidate();
+      void utils.apiKeys.listSystemKeys.invalidate();
+      if (res.key) {
+        setRevealedKey({
+          keyName: "New system key",
+          plaintext: res.key,
+          note: "created",
+        });
+      }
+    },
+    onError: (err: { message: string }) =>
+      addToast({
+        title: "Create failed",
+        description: err.message,
+        color: "danger",
+      }),
+  });
+
   const revoke = trpc.apiKeys.revoke.useMutation({
     onSuccess: () => {
       void utils.apiKeys.adminListAll.invalidate();
@@ -330,16 +356,40 @@ export function ApiKeysSection() {
 
       {createOpen && (
         <CreateKeyModal
-          isPending={create.isPending}
+          isPending={create.isPending || createSystem.isPending}
           onClose={() => setCreateOpen(false)}
           onConfirm={async (input) => {
-            const res = await create.mutateAsync(input);
-            if (res && "key" in res && typeof res.key === "string" && res.key) {
-              setRevealedKey({
+            if (input.kind === "system") {
+              const res = await createSystem.mutateAsync({
                 keyName: input.keyName,
-                plaintext: res.key,
-                note: "created",
+                scope: input.scope,
+                expiresInDays: input.expiresInDays,
               });
+              if (res.key) {
+                setRevealedKey({
+                  keyName: input.keyName,
+                  plaintext: res.key,
+                  note: "created",
+                });
+              }
+            } else {
+              const res = await create.mutateAsync({
+                keyName: input.keyName,
+                scope: input.scope,
+                expiresInDays: input.expiresInDays,
+              });
+              if (
+                res &&
+                "key" in res &&
+                typeof res.key === "string" &&
+                res.key
+              ) {
+                setRevealedKey({
+                  keyName: input.keyName,
+                  plaintext: res.key,
+                  note: "created",
+                });
+              }
             }
             setCreateOpen(false);
           }}
@@ -508,6 +558,22 @@ function normalizeScopes(s: string[] | string | null | undefined): string[] {
 
 // ─── Create modal ─────────────────────────────────────────────────────────
 
+type CreateKeyInput = {
+  kind: "personal" | "system";
+  keyName: string;
+  scope: string[];
+  expiresInDays?: number;
+};
+
+const SYSTEM_SCOPES = [
+  "hub-protocol.read",
+  "hub-protocol.write",
+  "data.read",
+  "data.write",
+  "setup.agent",
+  "sync",
+];
+
 function CreateKeyModal({
   isPending,
   onClose,
@@ -515,16 +581,13 @@ function CreateKeyModal({
 }: {
   isPending: boolean;
   onClose: () => void;
-  onConfirm: (input: {
-    keyName: string;
-    scope: string[];
-    expiresInDays?: number;
-  }) => void | Promise<void>;
+  onConfirm: (input: CreateKeyInput) => void | Promise<void>;
 }) {
   const { isOpen, onOpenChange } = useDisclosure({
     defaultOpen: true,
     onClose,
   });
+  const [kind, setKind] = useState<"personal" | "system">("personal");
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(["data.read"]);
   const [expiry, setExpiry] = useState<string>("90");
@@ -534,6 +597,8 @@ function CreateKeyModal({
       prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
     );
   }
+
+  const availableScopes = kind === "system" ? SYSTEM_SCOPES : COMMON_SCOPES;
 
   return (
     <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
@@ -547,10 +612,45 @@ function CreateKeyModal({
           </span>
           <span className="font-medium">New API key</span>
         </ModalHeader>
-        <ModalBody className="gap-3 pb-2">
+        <ModalBody className="gap-4 pb-2">
+          {/* Key kind */}
+          <div className="grid grid-cols-2 gap-2">
+            {(["personal", "system"] as const).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => {
+                  setKind(k);
+                  setScopes(
+                    k === "system"
+                      ? ["hub-protocol.read", "hub-protocol.write"]
+                      : ["data.read"]
+                  );
+                }}
+                className={[
+                  "flex flex-col gap-0.5 rounded-lg border px-3 py-2.5 text-left transition-colors",
+                  kind === k
+                    ? "border-primary/40 bg-primary/[0.07] ring-1 ring-inset ring-primary/30"
+                    : "border-foreground/10 bg-foreground/[0.03] hover:bg-foreground/[0.06]",
+                ].join(" ")}
+              >
+                <span className="text-[12.5px] font-medium text-foreground capitalize">
+                  {k}
+                </span>
+                <span className="text-[11px] text-foreground/55">
+                  {k === "personal"
+                    ? "Your personal access token (synap_user_)"
+                    : "For automation & scripts — CLI/Raycast use /admin/connect"}
+                </span>
+              </button>
+            ))}
+          </div>
+
           <Input
             label="Key name"
-            placeholder="e.g. Raycast laptop"
+            placeholder={
+              kind === "system" ? "e.g. n8n automation" : "e.g. Raycast laptop"
+            }
             value={name}
             onValueChange={setName}
             size="sm"
@@ -561,7 +661,7 @@ function CreateKeyModal({
               Scopes
             </p>
             <div className="flex flex-wrap gap-1.5">
-              {COMMON_SCOPES.map((s) => {
+              {availableScopes.map((s) => {
                 const active = scopes.includes(s);
                 return (
                   <button
@@ -614,6 +714,7 @@ function CreateKeyModal({
             isLoading={isPending}
             onPress={() =>
               void onConfirm({
+                kind,
                 keyName: name.trim(),
                 scope: scopes,
                 expiresInDays: expiry === "never" ? undefined : Number(expiry),

@@ -189,6 +189,7 @@ export const apiKeysRouter = router({
           scope: input.scope,
           expiresAt,
           userId: ctx.userId,
+          keyType: input.hubId ? "hub_inbound" : "user_pat",
         },
         ctx.userId
       );
@@ -498,6 +499,65 @@ export const apiKeysRouter = router({
       },
     }));
   }),
+
+  /**
+   * Create a system-wide service key (synap_hub_live_ prefix, keyType=system).
+   * Pod-admin only. Tied to the operator's userId for audit purposes.
+   */
+  createSystemKey: podAdminProcedure
+    .input(
+      z.object({
+        keyName: z.string().min(1).max(100),
+        scope: z
+          .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
+          .min(1),
+        expiresInDays: z.number().int().min(1).max(365).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const keyPrefix =
+        process.env.NODE_ENV === "production"
+          ? "synap_hub_live_"
+          : "synap_hub_test_";
+      const key = generateApiKey(keyPrefix);
+      const expiresAt = input.expiresInDays
+        ? new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000)
+        : undefined;
+
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
+
+      const apiKey = await apiKeyRepo.create(
+        {
+          keyName: input.keyName,
+          keyPrefix,
+          key,
+          scope: input.scope,
+          expiresAt,
+          userId: ctx.userId,
+          keyType: "system",
+        },
+        ctx.userId
+      );
+
+      auditLog({
+        subjectType: "apiKey",
+        action: "create",
+        phase: "completed",
+        subjectId: apiKey.id,
+        userId: ctx.userId,
+        data: { keyName: input.keyName, keyPrefix, keyType: "system" },
+      });
+
+      return {
+        id: apiKey.id,
+        key,
+        keyPrefix,
+        status: "created" as const,
+        message: "Save this key securely. It will not be displayed again.",
+      };
+    }),
 
   /**
    * Connect an integration — create a scoped Hub Protocol API key in one call.
