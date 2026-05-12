@@ -39,17 +39,14 @@ import {
 } from "@heroui/react";
 import {
   Ban,
-  Bot,
   Copy,
   Eye,
   KeyRound,
   MoreHorizontal,
   Plus,
   RefreshCw,
-  Server,
   ShieldAlert,
   Trash2,
-  User,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
@@ -102,12 +99,6 @@ const CATEGORY_LABEL: Record<KeyCategory, string> = {
   agent: "Agent",
   system: "System",
   operator: "Operator",
-};
-
-const CATEGORY_ICON: Record<KeyCategory, React.FC<{ className?: string }>> = {
-  agent: Bot,
-  system: Server,
-  operator: User,
 };
 
 const COMMON_SCOPES = [
@@ -427,22 +418,13 @@ function KeyRow({
     .filter(Boolean)
     .join(" · ");
 
-  const CategoryIcon = CATEGORY_ICON[category];
   const hasActions = onRevoke || onRotate || onDelete;
 
   return (
     <ResourceRow
       Icon={KeyRound}
-      primary={
-        <span className="flex items-center gap-1.5">
-          {apiKey.keyName}
-          <span className="flex items-center gap-0.5 rounded bg-foreground/[0.07] px-1 py-px text-[10px] font-medium text-foreground/55">
-            <CategoryIcon className="h-2.5 w-2.5" />
-            {CATEGORY_LABEL[category]}
-          </span>
-        </span>
-      }
-      secondary={secondary}
+      primary={apiKey.keyName}
+      secondary={`[${CATEGORY_LABEL[category]}] ${secondary}`}
       status={status}
       actions={
         hasActions ? (

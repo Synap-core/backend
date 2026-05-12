@@ -3858,6 +3858,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		adminDeleteRevoked: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				keyId: string;
+			};
+			output: {
+				deleted: boolean;
+			};
+			meta: object;
+		}>;
 		listSystemKeys: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: {
