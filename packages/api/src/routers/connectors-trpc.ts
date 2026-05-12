@@ -291,10 +291,29 @@ export const connectorsRouter = router({
   /**
    * List available providers with their connection status for this pod.
    * Also returns the connector limit for the current tier.
+   *
+   * Local mode: reads integrations directly from self-hosted Nango.
+   * CP mode: proxies to Control Plane.
    */
   providers: protectedProcedure
     .input(cpUrlInput)
     .query(async ({ ctx, input }) => {
+      if (isLocalNango()) {
+        const integrations = await nango.listIntegrations();
+        const connections = await nango.listConnections(ctx.userId);
+        const connectedProviders = new Set(connections.map((c) => c.provider));
+        return {
+          providers: integrations.map((i) => ({
+            id: i.uniqueKey,
+            provider: i.provider,
+            displayName: i.displayName,
+            connected: connectedProviders.has(i.uniqueKey),
+          })),
+          connectorLimit: -1,
+          tier: "local",
+        };
+      }
+
       const cpUrl = await resolveCpUrl(input?.cpUrl);
       if (!cpUrl) {
         throw new TRPCError({
@@ -316,17 +335,24 @@ export const connectorsRouter = router({
 
       return {
         providers: result.providers,
-        connectorLimit: limit, // -1 = unlimited
+        connectorLimit: limit,
         tier,
       };
     }),
 
   /**
    * List user's active connections for this pod.
+   *
+   * Local mode: queries self-hosted Nango directly.
+   * CP mode: proxies to Control Plane.
    */
   connections: protectedProcedure
     .input(cpUrlInput)
     .query(async ({ ctx, input }) => {
+      if (isLocalNango()) {
+        return nango.listConnections(ctx.userId);
+      }
+
       const cpUrl = await resolveCpUrl(input?.cpUrl);
       if (!cpUrl) {
         throw new TRPCError({
@@ -349,7 +375,9 @@ export const connectorsRouter = router({
 
   /**
    * Get a Nango Connect session token for the OAuth UI.
-   * Enforces tier-based connector limits before issuing the session.
+   *
+   * Local mode: creates session directly on self-hosted Nango — no CP needed.
+   * CP mode: proxies to CP which enforces tier-based connector limits.
    */
   session: protectedProcedure
     .input(
@@ -358,10 +386,33 @@ export const connectorsRouter = router({
           cpUrl: z.string().url().optional(),
           /** Restrict session to a single provider (skips Nango picker). */
           providerId: z.string().min(1).optional(),
+          /** Workspace context for metadata (optional, defaults to user's primary workspace). */
+          workspaceId: z.string().optional(),
         })
         .optional()
     )
     .mutation(async ({ ctx, input }) => {
+      if (isLocalNango()) {
+        let workspaceId = input?.workspaceId ?? "";
+        if (!workspaceId) {
+          // Resolve from DB when not supplied by client
+          const database = await getDb();
+          const ws = await database.query.workspaces.findFirst();
+          workspaceId = ws?.id ?? "unknown";
+        }
+
+        const session = await nango.createSession(
+          ctx.userId,
+          input?.providerId ?? "*",
+          workspaceId
+        );
+        return {
+          token: session.sessionToken,
+          nangoHost: process.env.NANGO_HOST ?? "http://localhost:3003",
+          connectLink: session.redirectUrl,
+        };
+      }
+
       const cpUrl = await resolveCpUrl(input?.cpUrl);
       if (!cpUrl) {
         throw new TRPCError({
@@ -379,7 +430,6 @@ export const connectorsRouter = router({
         });
       }
 
-      // ── Tier-based connector limit ──
       const tier = cp.tier ?? "solo";
       const limit = getConnectorLimit(tier);
 
@@ -389,10 +439,7 @@ export const connectorsRouter = router({
           sessionToken: getSessionToken(ctx.req),
           query: { podId },
         })) as {
-          providers: Array<{
-            connected?: boolean;
-            connectionId?: string | null;
-          }>;
+          providers: Array<{ connected?: boolean }>;
         };
 
         const connectedCount = providersResult.providers.filter(
@@ -425,6 +472,9 @@ export const connectorsRouter = router({
 
   /**
    * Disconnect a connector.
+   *
+   * Local mode: revokes connection directly on self-hosted Nango.
+   * CP mode: proxies to Control Plane.
    */
   disconnect: protectedProcedure
     .input(
@@ -434,6 +484,11 @@ export const connectorsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      if (isLocalNango()) {
+        await nango.revokeConnection(input.connectionId);
+        return { success: true };
+      }
+
       const cpUrl = await resolveCpUrl(input.cpUrl);
       if (!cpUrl) {
         throw new TRPCError({
@@ -449,6 +504,43 @@ export const connectorsRouter = router({
       });
 
       return { success: true };
+    }),
+
+  /**
+   * Enrich an entity using an external enrichment provider (Apify, Apollo.io).
+   * Returns structured data that the caller can merge into entity properties.
+   */
+  enrich: protectedProcedure
+    .input(
+      z.object({
+        provider: z.enum(["apify", "apollo"]),
+        capability: z.enum(["person", "company", "leads"]),
+        input: z.record(z.string(), z.unknown()),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const provider = enrichmentProviderRegistry.get(input.provider);
+      if (!provider) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Enrichment provider "${input.provider}" not registered`,
+        });
+      }
+      if (!provider.isConfigured()) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `Enrichment provider "${input.provider}" is not configured — check API key`,
+        });
+      }
+      if (!provider.capabilities.includes(input.capability)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Provider "${input.provider}" does not support capability "${input.capability}"`,
+        });
+      }
+
+      const results = await provider.enrich(input.input);
+      return { results };
     }),
 
   /**

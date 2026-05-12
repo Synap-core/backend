@@ -62,6 +62,17 @@ export function AcceptForm({ token }: { token: string }) {
     }
   }, [acceptMutation, token]);
 
+  // Called by LoginPanel when it discovers an existing Kratos session during
+  // flow init — bypasses AcceptForm's whoami() which may have returned null on
+  // first render. We re-evaluate state with the real session so the email-match
+  // guard runs before any acceptance attempt.
+  const onSessionDetected = useCallback((session: KratosSession) => {
+    setState((prev) => {
+      if (prev.status !== "ready") return prev;
+      return { ...prev, session };
+    });
+  }, []);
+
   useEffect(() => {
     if (previewQuery.isLoading) return;
     void (async () => {
@@ -203,6 +214,7 @@ export function AcceptForm({ token }: { token: string }) {
           <LoginPanel
             inviteEmail={preview.email}
             onSuccess={onLoginSuccess}
+            onSessionDetected={onSessionDetected}
             acceptError={acceptMutation.error?.message ?? null}
             isAccepting={acceptMutation.isPending}
           />
@@ -317,11 +329,13 @@ function RegisterPanel({
 function LoginPanel({
   inviteEmail,
   onSuccess,
+  onSessionDetected,
   acceptError,
   isAccepting,
 }: {
   inviteEmail: string;
   onSuccess: () => Promise<void>;
+  onSessionDetected: (session: KratosSession) => void;
   acceptError: string | null;
   isAccepting: boolean;
 }) {
@@ -338,7 +352,9 @@ function LoginPanel({
         const r = await createLoginFlow();
         if (cancelled) return;
         if (r.existingSession) {
-          void onSuccess();
+          // Notify parent to re-evaluate with the real session — DO NOT call
+          // onSuccess() here because the email-match guard hasn't run yet.
+          onSessionDetected(r.existingSession);
           return;
         }
         if (!r.flow) throw new Error("No flow returned");
@@ -360,7 +376,7 @@ function LoginPanel({
     return () => {
       cancelled = true;
     };
-  }, [inviteEmail, onSuccess]);
+  }, [inviteEmail, onSessionDetected]);
 
   const onSubmit = useCallback(
     async (e: React.FormEvent) => {

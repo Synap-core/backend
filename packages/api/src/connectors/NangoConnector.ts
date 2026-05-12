@@ -85,7 +85,8 @@ export class NangoConnector implements SyncConnector {
       headers: this.authHeaders(),
       body: JSON.stringify({
         end_user: { id: userId, display_name: userId },
-        allowed_integrations: [provider],
+        // Omit allowed_integrations to show all configured integrations
+        ...(provider !== "*" ? { allowed_integrations: [provider] } : {}),
         metadata: { workspaceId },
       }),
     });

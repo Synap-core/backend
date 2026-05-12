@@ -100,6 +100,12 @@ export {
   type CPRelayConfig,
 } from "./providers/CPRelayProvider.js";
 
+export {
+  NangoProvider,
+  NangoProviderConfigSchema,
+  type NangoProviderConfig,
+} from "./providers/NangoProvider.js";
+
 export { sourceProviderRegistry } from "./providers/SourceProviderRegistry.js";
 export type { SourceProviderRegistry } from "./providers/SourceProviderRegistry.js";
 
@@ -109,9 +115,11 @@ export type { SourceProviderRegistry } from "./providers/SourceProviderRegistry.
 import { sourceProviderRegistry as _registry } from "./providers/SourceProviderRegistry.js";
 import { HTTPAPIProvider as _HTTPAPIProvider } from "./providers/HTTPAPIProvider.js";
 import { CPRelayProvider as _CPRelayProvider } from "./providers/CPRelayProvider.js";
+import { NangoProvider as _NangoProvider } from "./providers/NangoProvider.js";
 
 _registry.register(new _HTTPAPIProvider());
 _registry.register(new _CPRelayProvider());
+_registry.register(new _NangoProvider());
 
 // ============================================================================
 // Classifiers
