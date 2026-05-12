@@ -342,6 +342,12 @@ export interface WorkspaceSettings {
    * when no CP package is involved.
    */
   proposalId?: string;
+  /**
+   * App that owns this workspace (e.g. "crm", "studio", "canvas", "devplane").
+   * Stamped at creation time via `createFromDefinition`. Used by `workspaces.list`
+   * to filter workspaces to the calling app's own set.
+   */
+  appId?: string;
 
   // ─── Installed Packs ─────────────────────────────────────────────────────────
   /**
