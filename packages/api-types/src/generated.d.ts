@@ -1460,6 +1460,11 @@ export type PaginatedResponse<T> = {
 		offset: number;
 	};
 };
+export interface EnrichmentResult {
+	source: string;
+	confidence: number;
+	data: Record<string, unknown>;
+}
 export interface SourceProviderCapabilities {
 	/** True when the provider honors and returns cursors across fetches. */
 	supportsCursor: boolean;
@@ -10031,6 +10036,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				cpUrl?: string | undefined;
 				providerId?: string | undefined;
+				workspaceId?: string | undefined;
 			} | undefined;
 			output: {
 				token: string;
@@ -10046,6 +10052,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				success: boolean;
+			};
+			meta: object;
+		}>;
+		enrich: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				provider: "apify" | "apollo";
+				capability: "leads" | "company" | "person";
+				input: Record<string, unknown>;
+			};
+			output: {
+				results: EnrichmentResult[];
 			};
 			meta: object;
 		}>;

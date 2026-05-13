@@ -169,6 +169,170 @@ function hashRecord(record: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
+// Core sync logic — shared between pull-sync (CP mode) and nango-webhook
+// ---------------------------------------------------------------------------
+
+interface SyncParams {
+  userId: string;
+  provider: string;
+  nangoConnectionId: string;
+  model: string;
+  nangoHost: string;
+  nangoKey: string;
+}
+
+interface SyncResult {
+  created: number;
+  updated: number;
+  skipped: number;
+  recordCount: number;
+}
+
+async function runNangoSync(
+  params: SyncParams
+): Promise<SyncResult | { error: string; status: number }> {
+  const { userId, provider, nangoConnectionId, model, nangoHost, nangoKey } =
+    params;
+
+  // Fetch records from Nango Records API
+  let records: NangoRecord[];
+  try {
+    const url = new URL(`/records`, nangoHost);
+    url.searchParams.set("model", model);
+    url.searchParams.set("connection_id", nangoConnectionId);
+    url.searchParams.set("provider_config_key", provider);
+
+    const response = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${nangoKey}` },
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => "");
+      logger.error(
+        { status: response.status, body: errBody },
+        "Failed to fetch Nango records"
+      );
+      return { error: "Failed to fetch records from Nango", status: 502 };
+    }
+
+    const data = (await response.json()) as Record<string, unknown>;
+    records = (data.records || data.data || []) as NangoRecord[];
+  } catch (err) {
+    logger.error({ err }, "Nango records fetch failed");
+    const ws = await getDb()
+      .then((d) => d.query.workspaces.findFirst())
+      .catch(() => null);
+    if (ws) {
+      emitSideEffects({
+        subjectType: "connector_sync",
+        action: "sync_completed",
+        subjectId: nangoConnectionId,
+        userId,
+        workspaceId: ws.id,
+        data: { provider, syncStatus: "error" },
+      });
+    }
+    return { error: "Failed to fetch records", status: 502 };
+  }
+
+  if (records.length === 0) {
+    return { created: 0, updated: 0, skipped: 0, recordCount: 0 };
+  }
+
+  const database = await getDb();
+  const ws = await database.query.workspaces.findFirst();
+  if (!ws) return { error: "No workspace found", status: 404 };
+
+  const eventRepo = new EventRepository(sql);
+  const entityRepo = new EntityRepository(database, eventRepo);
+
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  for (const record of records) {
+    const mapped = mapNangoRecord(provider, model, record);
+    if (!mapped) {
+      skipped++;
+      continue;
+    }
+
+    const recordHash = hashRecord(record);
+
+    try {
+      const existingLink = await database.query.entityExternalLinks.findFirst({
+        where: and(
+          eq(entityExternalLinks.provider, provider),
+          eq(entityExternalLinks.externalId, mapped.externalId)
+        ),
+      });
+
+      if (existingLink) {
+        if (existingLink.syncHash === recordHash) {
+          skipped++;
+          continue;
+        }
+        await entityRepo.update(
+          existingLink.entityId,
+          { title: mapped.title, properties: mapped.properties },
+          userId
+        );
+        await database
+          .update(entityExternalLinks)
+          .set({ syncHash: recordHash, lastSyncedAt: new Date() })
+          .where(eq(entityExternalLinks.id, existingLink.id));
+        updated++;
+      } else {
+        const createdEntity = await entityRepo.create(
+          {
+            profileSlug: mapped.profileSlug,
+            title: mapped.title,
+            properties: mapped.properties,
+            workspaceId: ws.id,
+            userId,
+            skipValidation: true,
+          },
+          userId
+        );
+        await database.insert(entityExternalLinks).values({
+          entityId: createdEntity.id,
+          provider,
+          externalId: mapped.externalId,
+          nangoConnectionId,
+          status: "active",
+          syncHash: recordHash,
+        });
+        created++;
+      }
+    } catch (err) {
+      logger.warn(
+        { err, externalId: mapped.externalId, provider },
+        "Failed to upsert entity from connector"
+      );
+      skipped++;
+    }
+  }
+
+  logger.info({ provider, model, created, updated, skipped }, "Sync completed");
+
+  emitSideEffects({
+    subjectType: "connector_sync",
+    action: "sync_completed",
+    subjectId: nangoConnectionId,
+    userId,
+    workspaceId: ws.id,
+    data: {
+      provider,
+      syncStatus: "success",
+      entitiesProcessed: created + updated,
+    },
+  });
+
+  return { created, updated, skipped, recordCount: records.length };
+}
+
+// ---------------------------------------------------------------------------
 // POST /pull-sync — Receive sync-ready JWT, pull records from Nango
 // ---------------------------------------------------------------------------
 
@@ -224,7 +388,7 @@ connectorsRouter.post("/pull-sync", async (c) => {
     "Pull-sync: received sync-ready signal"
   );
 
-  // Resolve Nango host and API key from workspace settings (provisioned by CP)
+  // Resolve Nango credentials from workspace settings (CP mode) or env (local mode)
   const database = await getDb();
   const ws = await database.query.workspaces.findFirst();
   const wsSettings = (ws?.settings as Record<string, unknown>) ?? {};
@@ -235,188 +399,130 @@ connectorsRouter.post("/pull-sync", async (c) => {
     (cpSettings.nangoRecordsApiKey as string) || process.env.NANGO_SECRET_KEY;
 
   if (!nangoHost || !nangoKey) {
-    logger.error(
-      "Nango not configured — missing nangoHost or nangoRecordsApiKey in workspace settings"
-    );
+    logger.error("Nango not configured — missing nangoHost / NANGO_SECRET_KEY");
     return c.json({ error: "Nango not configured on this pod" }, 503);
   }
 
-  // Fetch records from Nango Records API
-  let records: NangoRecord[];
-  try {
-    const url = new URL(`/records`, nangoHost);
-    url.searchParams.set("model", model);
-    url.searchParams.set("connection_id", nangoConnectionId);
-    url.searchParams.set("provider_config_key", provider);
-
-    const response = await fetch(url.toString(), {
-      headers: {
-        Authorization: `Bearer ${nangoKey}`,
-      },
-      signal: AbortSignal.timeout(30_000),
-    });
-
-    if (!response.ok) {
-      const errBody = await response.text().catch(() => "");
-      logger.error(
-        { status: response.status, body: errBody },
-        "Failed to fetch Nango records"
-      );
-      return c.json({ error: "Failed to fetch records from Nango" }, 502);
-    }
-
-    const data = (await response.json()) as Record<string, unknown>;
-    records = (data.records || data.data || []) as NangoRecord[];
-  } catch (err) {
-    logger.error({ err }, "Nango records fetch failed");
-    // Automation side-effects: connector.sync.completed (error) for connector_sync triggers
-    const wsForErr = await getDb()
-      .then((d) => d.query.workspaces.findFirst())
-      .catch(() => null);
-    if (wsForErr) {
-      emitSideEffects({
-        subjectType: "connector_sync",
-        action: "sync_completed",
-        subjectId: nangoConnectionId,
-        userId,
-        workspaceId: wsForErr.id,
-        data: {
-          provider,
-          syncStatus: "error",
-        },
-      });
-    }
-    return c.json({ error: "Failed to fetch records" }, 502);
-  }
-
-  logger.info(
-    { provider, model, recordCount: records.length },
-    "Fetched records from Nango"
-  );
-
-  if (records.length === 0) {
-    return c.json({ success: true, entitiesProcessed: 0 });
-  }
-
-  // Get repositories (database already resolved above for Nango config)
-  const eventRepo = new EventRepository(sql);
-  const entityRepo = new EntityRepository(database, eventRepo);
-
-  if (!ws) {
-    return c.json({ error: "No workspace found" }, 404);
-  }
-
-  let created = 0;
-  let updated = 0;
-  let skipped = 0;
-
-  for (const record of records) {
-    const mapped = mapNangoRecord(provider, model, record);
-    if (!mapped) {
-      skipped++;
-      continue;
-    }
-
-    const recordHash = hashRecord(record);
-
-    try {
-      // Check if we already have this external record linked
-      const existingLink = await database.query.entityExternalLinks.findFirst({
-        where: and(
-          eq(entityExternalLinks.provider, provider),
-          eq(entityExternalLinks.externalId, mapped.externalId)
-        ),
-      });
-
-      if (existingLink) {
-        // Check if the record actually changed
-        if (existingLink.syncHash === recordHash) {
-          skipped++;
-          continue;
-        }
-
-        // Update existing entity
-        await entityRepo.update(
-          existingLink.entityId,
-          {
-            title: mapped.title,
-            properties: mapped.properties,
-          },
-          userId
-        );
-
-        // Update sync hash
-        await database
-          .update(entityExternalLinks)
-          .set({
-            syncHash: recordHash,
-            lastSyncedAt: new Date(),
-          })
-          .where(eq(entityExternalLinks.id, existingLink.id));
-
-        updated++;
-      } else {
-        // Create new entity
-        const createdEntity = await entityRepo.create(
-          {
-            profileSlug: mapped.profileSlug,
-            title: mapped.title,
-            properties: mapped.properties,
-            workspaceId: ws.id,
-            userId,
-            skipValidation: true, // External data may not match profile schema exactly
-          },
-          userId
-        );
-
-        // Create external link
-        await database.insert(entityExternalLinks).values({
-          entityId: createdEntity.id,
-          provider,
-          externalId: mapped.externalId,
-          nangoConnectionId,
-          status: "active",
-          syncHash: recordHash,
-        });
-
-        created++;
-      }
-    } catch (err) {
-      logger.warn(
-        { err, externalId: mapped.externalId, provider },
-        "Failed to upsert entity from connector"
-      );
-      skipped++;
-    }
-  }
-
-  logger.info(
-    { provider, model, created, updated, skipped },
-    "Pull-sync completed"
-  );
-
-  // Automation side-effects: connector.sync.completed for connector_sync triggers
-  if (ws) {
-    emitSideEffects({
-      subjectType: "connector_sync",
-      action: "sync_completed",
-      subjectId: nangoConnectionId,
-      userId,
-      workspaceId: ws.id,
-      data: {
-        provider,
-        syncStatus: "success",
-        entitiesProcessed: created + updated,
-      },
-    });
-  }
+  const result = await runNangoSync({
+    userId,
+    provider,
+    nangoConnectionId,
+    model,
+    nangoHost,
+    nangoKey,
+  });
+  if ("error" in result)
+    return c.json(
+      { error: result.error },
+      result.status as 400 | 401 | 403 | 404 | 500 | 502 | 503
+    );
 
   return c.json({
     success: true,
-    entitiesProcessed: created + updated,
-    created,
-    updated,
-    skipped,
+    entitiesProcessed: result.created + result.updated,
+    created: result.created,
+    updated: result.updated,
+    skipped: result.skipped,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /nango-webhook — Self-hosted Nango sync notification
+//
+// Called by Nango (self-hosted) when a sync job completes. No CP JWT needed;
+// authenticity is verified via HMAC-SHA256 of the raw body using the pod's
+// NANGO_SECRET_KEY. This is the local-mode equivalent of /pull-sync.
+//
+// Nango webhook payload shape:
+//   { from, type, connectionId, providerConfigKey, model, success, ... }
+//
+// connectionId is set to the userId (from end_user.id in createSession).
+// ---------------------------------------------------------------------------
+
+const NangoWebhookSchema = z.object({
+  from: z.string(),
+  type: z.string(),
+  connectionId: z.string().min(1),
+  providerConfigKey: z.string().min(1),
+  model: z.string().min(1),
+  success: z.boolean().optional(),
+});
+
+connectorsRouter.post("/nango-webhook", async (c) => {
+  const nangoKey = process.env.NANGO_SECRET_KEY;
+  if (!nangoKey) {
+    // Self-hosted Nango not configured — ignore webhook
+    return c.json({ ok: true, skipped: true });
+  }
+
+  const rawBody = await c.req.text();
+  const signature = c.req.header("x-nango-signature") ?? "";
+
+  // Validate HMAC signature
+  const expected = `sha256=${crypto
+    .createHmac("sha256", nangoKey)
+    .update(rawBody)
+    .digest("hex")}`;
+
+  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+    logger.warn({ signature }, "nango-webhook: invalid HMAC signature");
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+
+  let body: unknown;
+  try {
+    body = JSON.parse(rawBody);
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+
+  const parsed = NangoWebhookSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: "Unexpected webhook payload" }, 400);
+  }
+
+  const { connectionId, providerConfigKey, model, success } = parsed.data;
+
+  if (success === false) {
+    logger.info(
+      { connectionId, providerConfigKey, model },
+      "nango-webhook: sync failed, skipping ingest"
+    );
+    return c.json({ ok: true, skipped: true });
+  }
+
+  // connectionId = userId (we set end_user.id = userId in createSession)
+  const userId = connectionId;
+  const nangoHost = process.env.NANGO_HOST ?? "http://localhost:3003";
+
+  logger.info(
+    { userId, provider: providerConfigKey, model },
+    "nango-webhook: triggering sync ingest"
+  );
+
+  const result = await runNangoSync({
+    userId,
+    provider: providerConfigKey,
+    nangoConnectionId: connectionId,
+    model,
+    nangoHost,
+    nangoKey,
+  });
+
+  if ("error" in result) {
+    logger.error({ error: result.error }, "nango-webhook: sync ingest failed");
+    return c.json(
+      { error: result.error },
+      result.status as 400 | 401 | 403 | 404 | 500 | 502 | 503
+    );
+  }
+
+  return c.json({
+    ok: true,
+    entitiesProcessed: result.created + result.updated,
+    created: result.created,
+    updated: result.updated,
+    skipped: result.skipped,
   });
 });
 

@@ -68,7 +68,11 @@ import {
 import { SectionCard } from "../components/section-card";
 import { StatusPill, type StatusKind } from "../components/status-pill";
 import { useFocusRow } from "../components/use-focus-row";
-import { formatRelative, studioDeepLinkForWorkspace } from "./_lib/helpers";
+import {
+  formatExpiresAt,
+  formatRelative,
+  studioDeepLinkForWorkspace,
+} from "./_lib/helpers";
 
 // ─── Page shell ─────────────────────────────────────────────────────
 
@@ -1301,7 +1305,7 @@ function PendingInvitesSection() {
               key={inv.id}
               Icon={Clock}
               primary={inv.email}
-              secondary={`${inv.role} · expires ${formatRelative(inv.expiresAt)}`}
+              secondary={`${inv.role} · expires ${formatExpiresAt(inv.expiresAt)}`}
               status={{ kind: "unknown" as StatusKind, label: "pending" }}
               actions={
                 <div className="flex items-center gap-1">

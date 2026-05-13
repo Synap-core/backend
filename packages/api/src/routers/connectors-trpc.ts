@@ -507,6 +507,34 @@ export const connectorsRouter = router({
     }),
 
   /**
+   * Returns the configured/not-configured status of each enrichment provider.
+   * Used by settings UI to show API key status without exposing the keys.
+   */
+  enrichmentProviders: protectedProcedure.query(() => {
+    const providers = [
+      {
+        name: "apollo" as const,
+        displayName: "Apollo.io",
+        description: "People & company search",
+        envVar: "APOLLO_API_KEY",
+        capabilities: ["person", "company"] as const,
+        configured:
+          enrichmentProviderRegistry.get("apollo")?.isConfigured() ?? false,
+      },
+      {
+        name: "apify" as const,
+        displayName: "Apify",
+        description: "Web scraping & lead generation",
+        envVar: "APIFY_TOKEN",
+        capabilities: ["person", "company", "leads"] as const,
+        configured:
+          enrichmentProviderRegistry.get("apify")?.isConfigured() ?? false,
+      },
+    ];
+    return providers;
+  }),
+
+  /**
    * Enrich an entity using an external enrichment provider (Apify, Apollo.io).
    * Returns structured data that the caller can merge into entity properties.
    */

@@ -21,6 +21,7 @@ import {
   desc,
   inArray,
   or,
+  gt,
   workspaces,
   workspaceMembers,
   invites,
@@ -1357,7 +1358,8 @@ export const workspacesRouter = router({
         return db.query.invites.findMany({
           where: and(
             eq(invites.type, "workspace"),
-            eq(invites.workspaceId, input.workspaceId)
+            eq(invites.workspaceId, input.workspaceId),
+            gt(invites.expiresAt, new Date())
           ),
           orderBy: [desc(invites.createdAt)],
         });
@@ -1371,7 +1373,10 @@ export const workspacesRouter = router({
         if (!ownerMembership) throw new TRPCError({ code: "FORBIDDEN" });
 
         return db.query.invites.findMany({
-          where: eq(invites.type, "pod"),
+          where: and(
+            eq(invites.type, "pod"),
+            gt(invites.expiresAt, new Date())
+          ),
           orderBy: [desc(invites.createdAt)],
         });
       }
