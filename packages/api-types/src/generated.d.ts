@@ -9595,6 +9595,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				disabledToolIds?: string[] | undefined;
 				maxStepsOverride?: number | null | undefined;
 				modelOverride?: string | null | undefined;
+				targetUserId?: string | undefined;
 			};
 			output: {
 				config: {

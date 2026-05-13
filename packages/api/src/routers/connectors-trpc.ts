@@ -605,7 +605,7 @@ export const connectorsRouter = router({
       await database
         .update(workspaces)
         .set({
-          settings: drizzleSql`settings || ${JSON.stringify({ enrichment: merged })}::jsonb`,
+          settings: drizzleSql`COALESCE(settings, '{}'::jsonb) || ${JSON.stringify({ enrichment: merged })}::jsonb`,
         })
         .where(eq(workspaces.id, ws.id));
 
@@ -676,6 +676,51 @@ export const connectorsRouter = router({
       allowedCpUrls: allowedUrls,
       envVar: config.server.controlPlaneUrl ?? null,
     };
+  }),
+
+  /**
+   * Sync status per provider for the current workspace.
+   * Returns the most recent lastSyncedAt + entity count per provider.
+   * Used to display "Last synced X ago" on connector cards.
+   */
+  syncStatus: protectedProcedure.query(async ({ ctx }) => {
+    const rows = await db
+      .select({
+        provider: entityExternalLinks.provider,
+        connectionId: entityExternalLinks.nangoConnectionId,
+        lastSyncedAt: entityExternalLinks.lastSyncedAt,
+      })
+      .from(entityExternalLinks)
+      .orderBy(desc(entityExternalLinks.lastSyncedAt));
+
+    // Collapse to one row per provider for the current user's connections.
+    // Connection IDs are `{userId}:{podId}:{provider}` — filter by userId prefix.
+    const byProvider = new Map<
+      string,
+      { lastSyncedAt: Date; entityCount: number }
+    >();
+
+    for (const r of rows) {
+      if (!r.connectionId.startsWith(ctx.userId + ":")) continue;
+      const existing = byProvider.get(r.provider);
+      if (!existing) {
+        byProvider.set(r.provider, {
+          lastSyncedAt: r.lastSyncedAt,
+          entityCount: 1,
+        });
+      } else {
+        existing.entityCount++;
+        if (r.lastSyncedAt > existing.lastSyncedAt) {
+          existing.lastSyncedAt = r.lastSyncedAt;
+        }
+      }
+    }
+
+    return Array.from(byProvider.entries()).map(([provider, info]) => ({
+      provider,
+      lastSyncedAt: info.lastSyncedAt,
+      entityCount: info.entityCount,
+    }));
   }),
 
   /**

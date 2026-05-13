@@ -903,3 +903,34 @@ openaiCompatApp.get("/models", externalApiKeyAuth("chat.stream"), async (c) => {
 
   return c.json({ object: "list" as const, data: [...tierModels, ...extra] });
 });
+
+/**
+ * GET /v1/config
+ *
+ * Returns the active AI provider configuration as seen by Synap IS at runtime.
+ * Used by the Eve dashboard to show which provider/model each component is
+ * actually configured to use, rather than relying solely on secrets.json.
+ *
+ * Auth: same Bearer API key as /v1/models.
+ */
+openaiCompatApp.get("/config", externalApiKeyAuth("chat.stream"), (c) => {
+  const provider = process.env.DEFAULT_AI_PROVIDER ?? null;
+  const model = process.env.DEFAULT_AI_MODEL ?? null;
+  const ollamaUrl = process.env.OLLAMA_BASE_URL ?? null;
+
+  const customProviders = parseCustomProviderEnv().map((cp) => ({
+    name: cp.name,
+    baseUrl: cp.baseUrl,
+    defaultModel: cp.defaultModel ?? null,
+  }));
+
+  return c.json({
+    provider,
+    model,
+    ollamaEnabled: !!ollamaUrl,
+    customProviders,
+    hasOpenai: !!process.env.OPENAI_API_KEY,
+    hasAnthropic: !!process.env.ANTHROPIC_API_KEY,
+    hasOpenrouter: !!process.env.OPENROUTER_API_KEY,
+  });
+});
