@@ -10055,6 +10055,32 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		enrichmentProviders: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: ({
+				name: "apollo";
+				displayName: string;
+				description: string;
+				envVar: string;
+				capabilities: readonly [
+					"person",
+					"company"
+				];
+				configured: boolean;
+			} | {
+				name: "apify";
+				displayName: string;
+				description: string;
+				envVar: string;
+				capabilities: readonly [
+					"person",
+					"company",
+					"leads"
+				];
+				configured: boolean;
+			})[];
+			meta: object;
+		}>;
 		enrich: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				provider: "apify" | "apollo";

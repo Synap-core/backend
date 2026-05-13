@@ -23,7 +23,14 @@ import { z } from "zod";
 import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import { config, createLogger } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
-import { getDb, db, eq, desc, entityExternalLinks } from "@synap/database";
+import {
+  getDb,
+  db,
+  eq,
+  desc,
+  entityExternalLinks,
+  drizzleSql,
+} from "@synap/database";
 import { entities, workspaces } from "@synap/database/schema";
 import { NangoConnector } from "../connectors/NangoConnector.js";
 import { enrichmentProviderRegistry } from "../connectors/index.js";
@@ -33,6 +40,27 @@ const nango = new NangoConnector();
 /** True when Nango is self-hosted on this pod (NANGO_SECRET_KEY env var set). */
 function isLocalNango(): boolean {
   return nango.isConfigured();
+}
+
+async function getEnrichmentKeys(): Promise<{
+  apolloApiKey?: string | null;
+  apifyToken?: string | null;
+}> {
+  try {
+    const database = await getDb();
+    const ws = await database.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const enrichment = ((ws?.settings as Record<string, unknown>)?.enrichment ??
+      {}) as Record<string, unknown>;
+    return {
+      apolloApiKey:
+        (enrichment.apolloApiKey as string | null | undefined) || null,
+      apifyToken: (enrichment.apifyToken as string | null | undefined) || null,
+    };
+  } catch {
+    return {};
+  }
 }
 
 const logger = createLogger({ module: "connectors-trpc" });
@@ -508,10 +536,11 @@ export const connectorsRouter = router({
 
   /**
    * Returns the configured/not-configured status of each enrichment provider.
-   * Used by settings UI to show API key status without exposing the keys.
+   * Checks workspace settings first (user-configured keys), then env vars.
    */
-  enrichmentProviders: protectedProcedure.query(() => {
-    const providers = [
+  enrichmentProviders: protectedProcedure.query(async () => {
+    const keys = await getEnrichmentKeys();
+    return [
       {
         name: "apollo" as const,
         displayName: "Apollo.io",
@@ -519,7 +548,10 @@ export const connectorsRouter = router({
         envVar: "APOLLO_API_KEY",
         capabilities: ["person", "company"] as const,
         configured:
-          enrichmentProviderRegistry.get("apollo")?.isConfigured() ?? false,
+          enrichmentProviderRegistry
+            .get("apollo")
+            ?.isConfigured(keys.apolloApiKey) ?? false,
+        hasCustomKey: !!keys.apolloApiKey,
       },
       {
         name: "apify" as const,
@@ -528,11 +560,57 @@ export const connectorsRouter = router({
         envVar: "APIFY_TOKEN",
         capabilities: ["person", "company", "leads"] as const,
         configured:
-          enrichmentProviderRegistry.get("apify")?.isConfigured() ?? false,
+          enrichmentProviderRegistry
+            .get("apify")
+            ?.isConfigured(keys.apifyToken) ?? false,
+        hasCustomKey: !!keys.apifyToken,
       },
     ];
-    return providers;
   }),
+
+  /**
+   * Save enrichment provider API keys to workspace settings.
+   * Pass undefined to leave an existing key unchanged; pass empty string to clear it.
+   */
+  saveEnrichmentKeys: protectedProcedure
+    .input(
+      z.object({
+        apolloApiKey: z.string().optional(),
+        apifyToken: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const database = await getDb();
+      const ws = await database.query.workspaces.findFirst({
+        columns: { id: true, settings: true },
+      });
+      if (!ws)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No workspace found",
+        });
+
+      const existing = ((ws.settings as Record<string, unknown>)?.enrichment ??
+        {}) as Record<string, unknown>;
+      const merged = {
+        ...existing,
+        ...(input.apolloApiKey !== undefined
+          ? { apolloApiKey: input.apolloApiKey || null }
+          : {}),
+        ...(input.apifyToken !== undefined
+          ? { apifyToken: input.apifyToken || null }
+          : {}),
+      };
+
+      await database
+        .update(workspaces)
+        .set({
+          settings: drizzleSql`settings || ${JSON.stringify({ enrichment: merged })}::jsonb`,
+        })
+        .where(eq(workspaces.id, ws.id));
+
+      return { success: true };
+    }),
 
   /**
    * Enrich an entity using an external enrichment provider (Apify, Apollo.io).
@@ -547,6 +625,12 @@ export const connectorsRouter = router({
       })
     )
     .mutation(async ({ input }) => {
+      const keys = await getEnrichmentKeys();
+      const apiKey =
+        input.provider === "apollo"
+          ? (keys.apolloApiKey ?? undefined)
+          : (keys.apifyToken ?? undefined);
+
       const provider = enrichmentProviderRegistry.get(input.provider);
       if (!provider) {
         throw new TRPCError({
@@ -554,10 +638,10 @@ export const connectorsRouter = router({
           message: `Enrichment provider "${input.provider}" not registered`,
         });
       }
-      if (!provider.isConfigured()) {
+      if (!provider.isConfigured(apiKey)) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message: `Enrichment provider "${input.provider}" is not configured — check API key`,
+          message: `Enrichment provider "${input.provider}" is not configured — add an API key in Settings → Enrichment`,
         });
       }
       if (!provider.capabilities.includes(input.capability)) {
@@ -567,7 +651,7 @@ export const connectorsRouter = router({
         });
       }
 
-      const results = await provider.enrich(input.input);
+      const results = await provider.enrich(input.input, apiKey);
       return { results };
     }),
 

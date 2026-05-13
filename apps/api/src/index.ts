@@ -903,8 +903,13 @@ app.get("/api/events/stream", (c) => {
 app.use("/trpc/*", async (c, next) => {
   const path = c.req.path;
 
-  // health.* and setup.* are always public (no session required)
-  if (path.includes("health.") || path.includes("setup.")) {
+  // health.*, setup.*, and invite-preview/accept are always public
+  if (
+    path.includes("health.") ||
+    path.includes("setup.") ||
+    path.includes("workspaces.previewInvite") ||
+    path.includes("workspaces.acceptInviteViaCp")
+  ) {
     return next();
   }
 

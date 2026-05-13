@@ -16,12 +16,15 @@ export class ApifyProvider implements EnrichmentProvider {
     "leads",
   ];
 
-  isConfigured(): boolean {
-    return !!process.env.APIFY_API_TOKEN;
+  isConfigured(apiKey?: string): boolean {
+    return !!(apiKey ?? process.env.APIFY_API_TOKEN);
   }
 
-  async enrich(input: EnrichmentInput): Promise<EnrichmentResult[]> {
-    const token = process.env.APIFY_API_TOKEN;
+  async enrich(
+    input: EnrichmentInput,
+    apiKey?: string
+  ): Promise<EnrichmentResult[]> {
+    const token = apiKey ?? process.env.APIFY_API_TOKEN;
     if (!token) return [];
 
     const actorId = input.actorId as string;

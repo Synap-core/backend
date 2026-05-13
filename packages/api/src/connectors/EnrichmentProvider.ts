@@ -13,8 +13,8 @@ export type EnrichmentCapability = "person" | "company" | "leads";
 export interface EnrichmentProvider {
   readonly name: string;
   readonly capabilities: EnrichmentCapability[];
-  isConfigured(): boolean;
-  enrich(input: EnrichmentInput): Promise<EnrichmentResult[]>;
+  isConfigured(apiKey?: string): boolean;
+  enrich(input: EnrichmentInput, apiKey?: string): Promise<EnrichmentResult[]>;
 }
 
 export class EnrichmentProviderRegistry {

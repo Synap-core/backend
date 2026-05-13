@@ -98,23 +98,39 @@ export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
   }
 
   // Get session from Kratos — try X-Session-Token first (API clients),
-  // then fall back to cookie-based auth (browser)
-  const session = sessionToken
-    ? await getKratosSessionByToken(sessionToken)
-    : await getKratosSession(cookie);
+  // then fall back to cookie-based auth (browser).
+  // getKratosSession/ByToken returns null for 401/403 (invalid session),
+  // and throws for network errors or Kratos unavailability.
+  let session: unknown;
+  try {
+    session = sessionToken
+      ? await getKratosSessionByToken(sessionToken)
+      : await getKratosSession(cookie);
+  } catch {
+    return c.json(
+      {
+        error: "auth_service_unavailable",
+        message: "Kratos is temporarily unreachable. Please retry.",
+      },
+      503
+    );
+  }
 
-  if (!session || !session.identity) {
+  const validSession = session as {
+    identity?: { id: string; traits: { email: string; name: string } };
+  } | null;
+  if (!validSession?.identity) {
     return c.json({ error: "Invalid session" }, 401);
   }
 
   // Add to context
   c.set("user", {
-    id: session.identity.id,
-    email: session.identity.traits.email,
-    name: session.identity.traits.name,
+    id: validSession.identity.id,
+    email: validSession.identity.traits.email,
+    name: validSession.identity.traits.name,
   });
-  c.set("userId", session.identity.id);
-  c.set("session", session);
+  c.set("userId", validSession.identity.id);
+  c.set("session", validSession);
   c.set("authenticated", true);
 
   return next();

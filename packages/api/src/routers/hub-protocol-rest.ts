@@ -170,6 +170,8 @@ app.use("/*", async (c, next) => {
     // entire flow (callers don't have a key yet — that's why they're
     // exchanging).
     "/auth/exchange",
+    // Invite acceptance — the invitee has no API key yet; token is the capability
+    "/setup/accept-invite",
   ];
   if (skipAuthPaths.some((p) => reqPath === p || reqPath.endsWith(p))) {
     return next();

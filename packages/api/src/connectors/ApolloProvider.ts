@@ -21,13 +21,16 @@ export class ApolloProvider implements EnrichmentProvider {
   readonly name = "apollo";
   readonly capabilities: EnrichmentCapability[] = ["person", "company"];
 
-  isConfigured(): boolean {
-    return !!process.env.APOLLO_API_KEY;
+  isConfigured(apiKey?: string): boolean {
+    return !!(apiKey ?? process.env.APOLLO_API_KEY);
   }
 
-  async enrich(input: EnrichmentInput): Promise<EnrichmentResult[]> {
-    const apiKey = process.env.APOLLO_API_KEY;
-    if (!apiKey) return [];
+  async enrich(
+    input: EnrichmentInput,
+    apiKey?: string
+  ): Promise<EnrichmentResult[]> {
+    const resolvedKey = apiKey ?? process.env.APOLLO_API_KEY;
+    if (!resolvedKey) return [];
 
     const endpoint = input.endpoint as ApolloEndpoint;
     const params = (input.params ?? {}) as Record<string, unknown>;
@@ -39,7 +42,7 @@ export class ApolloProvider implements EnrichmentProvider {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": apiKey,
+        "x-api-key": resolvedKey,
       },
       body: JSON.stringify(params),
     });

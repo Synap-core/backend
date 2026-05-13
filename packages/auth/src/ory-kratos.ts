@@ -56,19 +56,25 @@ export async function getKratosSession(cookie: string): Promise<any | null> {
   }
 
   try {
-    const { data: session } = await kratosPublic.toSession({
-      cookie,
-    });
+    const { data: session } = await kratosPublic.toSession({ cookie });
     return session;
   } catch (error: any) {
-    console.error("[getKratosSession] Error validating session:", {
-      message: error.message,
-      code: error.code,
-      status: error.response?.status,
-      data: error.response?.data,
-      url: kratosPublicUrl,
-    });
-    return null;
+    const status = error.response?.status as number | undefined;
+    // 401/403 = session is genuinely invalid or expired — caller returns 401
+    if (status === 401 || status === 403) {
+      return null;
+    }
+    // Network error or Kratos unavailable — throw so caller can surface 503
+    console.error(
+      "[getKratosSession] Kratos unreachable or unexpected error:",
+      {
+        message: error.message,
+        code: error.code,
+        status,
+        url: kratosPublicUrl,
+      }
+    );
+    throw error;
   }
 }
 
@@ -103,11 +109,19 @@ export async function getKratosSessionByToken(
     });
     return session;
   } catch (error: any) {
-    console.error("[getKratosSessionByToken] Error validating token:", {
-      message: error.message,
-      status: error.response?.status,
-    });
-    return null;
+    const status = error.response?.status as number | undefined;
+    if (status === 401 || status === 403) {
+      return null;
+    }
+    console.error(
+      "[getKratosSessionByToken] Kratos unreachable or unexpected error:",
+      {
+        message: error.message,
+        status,
+        url: kratosPublicUrl,
+      }
+    );
+    throw error;
   }
 }
 
