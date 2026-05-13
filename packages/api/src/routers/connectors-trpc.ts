@@ -550,7 +550,7 @@ export const connectorsRouter = router({
         configured:
           enrichmentProviderRegistry
             .get("apollo")
-            ?.isConfigured(keys.apolloApiKey) ?? false,
+            ?.isConfigured(keys.apolloApiKey ?? undefined) ?? false,
         hasCustomKey: !!keys.apolloApiKey,
       },
       {
@@ -562,7 +562,7 @@ export const connectorsRouter = router({
         configured:
           enrichmentProviderRegistry
             .get("apify")
-            ?.isConfigured(keys.apifyToken) ?? false,
+            ?.isConfigured(keys.apifyToken ?? undefined) ?? false,
         hasCustomKey: !!keys.apifyToken,
       },
     ];
