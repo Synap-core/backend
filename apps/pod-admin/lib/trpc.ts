@@ -15,9 +15,25 @@ import type { AppRouter } from "@synap-core/api-types";
 export const trpc = createTRPCReact<AppRouter>();
 
 /**
- * Pod URL — where the pod's tRPC endpoint lives. Same origin as Kratos
- * so cookies are sent automatically. Set via `NEXT_PUBLIC_POD_URL` in
- * dev (typically `http://localhost:4000`); empty string in production
- * means "same origin" which is the deployed reality.
+ * Derive the pod API URL from the current browser origin.
+ * pod-admin runs at `pod-admin.<root>` while the pod API lives at
+ * `pod.<root>` — swap the subdomain so all fetch calls target the
+ * right host. Falls back to origin as-is for local dev (non-pod-admin
+ * hostnames), where NEXT_PUBLIC_POD_URL should be set explicitly.
  */
-export const POD_URL = process.env.NEXT_PUBLIC_POD_URL ?? "";
+function derivePodUrl(): string {
+  if (process.env.NEXT_PUBLIC_POD_URL) return process.env.NEXT_PUBLIC_POD_URL;
+  if (typeof window === "undefined") return "";
+  try {
+    const u = new URL(window.location.origin);
+    if (u.hostname.startsWith("pod-admin.")) {
+      const root = u.hostname.slice("pod-admin.".length);
+      return `${u.protocol}//pod.${root}`;
+    }
+  } catch {
+    // ignore
+  }
+  return window.location.origin;
+}
+
+export const POD_URL = derivePodUrl();

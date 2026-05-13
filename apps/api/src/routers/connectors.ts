@@ -24,6 +24,7 @@ import { verifyCpJwtWithTrust } from "@synap/api";
 import { emitSideEffects } from "@synap/jobs";
 import { createLogger } from "@synap-core/core";
 import crypto from "crypto";
+import { matchAttendeesToContacts } from "../services/connector-matching.js";
 
 const logger = createLogger({ module: "connectors-router" });
 
@@ -250,6 +251,7 @@ async function runNangoSync(
   let created = 0;
   let updated = 0;
   let skipped = 0;
+  const createdEntityIds: string[] = [];
 
   for (const record of records) {
     const mapped = mapNangoRecord(provider, model, record);
@@ -303,6 +305,7 @@ async function runNangoSync(
           status: "active",
           syncHash: recordHash,
         });
+        createdEntityIds.push(createdEntity.id);
         created++;
       }
     } catch (err) {
@@ -315,6 +318,13 @@ async function runNangoSync(
   }
 
   logger.info({ provider, model, created, updated, skipped }, "Sync completed");
+
+  // Match calendar attendees / email senders to existing person entities
+  if (createdEntityIds.length > 0) {
+    matchAttendeesToContacts(ws.id, createdEntityIds).catch((err) =>
+      logger.warn({ err }, "Attendee matching failed (non-fatal)")
+    );
+  }
 
   emitSideEffects({
     subjectType: "connector_sync",

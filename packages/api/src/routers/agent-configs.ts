@@ -62,12 +62,31 @@ export const agentConfigsRouter = router({
     .input(
       z.object({
         agentType: z.string().min(1),
+        /** When set, creates the config for this agent user instead of the caller.
+         *  The target must be an agent-type user in the same workspace. */
+        targetUserId: z.string().optional(),
         ...AgentConfigInputSchema.shape,
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const userId = requireUserId(ctx.userId);
-      const { agentType, ...fields } = input;
+      const callerId = requireUserId(ctx.userId);
+      const { agentType, targetUserId, ...fields } = input;
+
+      let userId = callerId;
+      if (targetUserId && targetUserId !== callerId) {
+        const { users } = await import("@synap/database/schema");
+        const target = await db.query.users.findFirst({
+          where: and(eq(users.id, targetUserId), eq(users.userType, "agent")),
+          columns: { id: true },
+        });
+        if (!target) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "targetUserId must be an existing agent user",
+          });
+        }
+        userId = targetUserId;
+      }
 
       const [config] = await db
         .insert(agentConfigs)

@@ -10067,6 +10067,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					"company"
 				];
 				configured: boolean;
+				hasCustomKey: boolean;
 			} | {
 				name: "apify";
 				displayName: string;
@@ -10078,7 +10079,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					"leads"
 				];
 				configured: boolean;
+				hasCustomKey: boolean;
 			})[];
+			meta: object;
+		}>;
+		saveEnrichmentKeys: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				apolloApiKey?: string | undefined;
+				apifyToken?: string | undefined;
+			};
+			output: {
+				success: boolean;
+			};
 			meta: object;
 		}>;
 		enrich: import("@trpc/server").TRPCMutationProcedure<{
