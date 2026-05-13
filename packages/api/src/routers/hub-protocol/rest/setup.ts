@@ -16,8 +16,10 @@ import {
   eq,
   and,
   inArray,
+  isNull,
   count,
   drizzleSql,
+  apiKeys,
   apiKeyExternalUsers,
   workspaces,
   workspaceMembers,
@@ -481,6 +483,32 @@ export function registerSetupRoutes(app: HubHono): void {
       }
 
       // ── 3. Create Hub Protocol API key ──────────────────────────────────────
+      // Idempotent path: when the caller passes `idempotent: true`, skip
+      // revocation and re-mint if a valid (non-revoked) key already exists.
+      // This is used by Eve's workspace-membership repair so it can add the
+      // agent to the workspace without rotating a healthy key on every update.
+      if (body.idempotent === true) {
+        const existingKey = await db.query.apiKeys.findFirst({
+          where: and(
+            eq(apiKeys.userId, agentUserId),
+            eq(apiKeys.keyType, "hub_inbound"),
+            isNull(apiKeys.revokedAt)
+          ),
+          columns: { id: true },
+        });
+        if (existingKey) {
+          logger.info(
+            { agentUserId, agentType, keyId: existingKey.id },
+            "setup/agent: idempotent — valid key exists, skipping revoke+mint"
+          );
+          return c.json({
+            agentUserId,
+            workspaceId: ws?.id ?? null,
+            alreadyValid: true,
+          });
+        }
+      }
+
       await revokeActiveHubInboundKeysForUser(db, {
         userId: agentUserId,
         revokedBy: agentUserId,

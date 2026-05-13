@@ -184,3 +184,11 @@ export function buildRequestFromProposal(row: Proposal): UpdateRequest {
         : undefined,
   };
 }
+
+// Display utilities (pure, browser-safe)
+export {
+  isLikelyUUID,
+  resolveAuthorName,
+  resolveTargetName,
+  buildFallbackTitle,
+} from "./proposal-utils.js";

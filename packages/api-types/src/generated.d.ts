@@ -10119,6 +10119,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		syncStatus: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				provider: string;
+				lastSyncedAt: Date;
+				entityCount: number;
+			}[];
+			meta: object;
+		}>;
 		entitySources: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				entityId: string;
