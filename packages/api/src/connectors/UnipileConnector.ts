@@ -121,12 +121,14 @@ export class UnipileConnector implements MessagingConnector {
   }
 
   async getAuthUrl(userId: string, redirectUrl: string): Promise<string> {
-    const res = await fetch(`${this.dsn}/api/v2/hosted/accounts/link`, {
+    const res = await fetch(`${this.dsn}/api/v1/hosted/accounts/link`, {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify({
         type: "create",
+        api_url: this.dsn,
         expiresOn: new Date(Date.now() + 3600_000).toISOString(),
+        notify_url: `${process.env.NEXT_PUBLIC_API_URL ?? ""}/webhooks/messaging`,
         success_redirect_url: redirectUrl,
         failure_redirect_url: redirectUrl,
         name: userId,
@@ -140,7 +142,7 @@ export class UnipileConnector implements MessagingConnector {
   }
 
   async getAccounts(_userId: string): Promise<MessagingAccount[]> {
-    const res = await fetch(`${this.dsn}/api/v2/accounts`, {
+    const res = await fetch(`${this.dsn}/api/v1/accounts`, {
       headers: this.headers(),
     });
     if (!res.ok) return [];
@@ -165,7 +167,7 @@ export class UnipileConnector implements MessagingConnector {
       limit: "50",
     });
     if (cursor) params.set("cursor", cursor);
-    const res = await fetch(`${this.dsn}/api/v2/chats?${params}`, {
+    const res = await fetch(`${this.dsn}/api/v1/chats?${params}`, {
       headers: this.headers(),
     });
     if (!res.ok) return { items: [] };
@@ -193,7 +195,7 @@ export class UnipileConnector implements MessagingConnector {
     threadId: string
   ): Promise<Message[]> {
     const res = await fetch(
-      `${this.dsn}/api/v2/chats/${threadId}/messages?account_id=${externalAccountId}`,
+      `${this.dsn}/api/v1/chats/${threadId}/messages?account_id=${externalAccountId}`,
       { headers: this.headers() }
     );
     if (!res.ok) return [];
@@ -217,7 +219,7 @@ export class UnipileConnector implements MessagingConnector {
     threadId: string,
     body: string
   ): Promise<void> {
-    const res = await fetch(`${this.dsn}/api/v2/chats/${threadId}/messages`, {
+    const res = await fetch(`${this.dsn}/api/v1/chats/${threadId}/messages`, {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify({ account_id: externalAccountId, text: body }),
