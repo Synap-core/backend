@@ -6,34 +6,50 @@
  */
 
 import { z } from "zod";
+import { randomUUID } from "crypto";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import type { Context } from "../context.js";
 import { TRPCError } from "@trpc/server";
 import {
   db,
+  EventRepository,
   proposals,
   documents,
   eq,
   and,
   or,
   desc,
+  inArray,
   isNull,
   gt,
+  entities,
+  users,
   getWorkspaceMembership,
   normalizeDocumentType,
   ProfileResolutionService,
+  sql,
 } from "@synap/database";
+import type { EventRecord } from "@synap/database";
 import { ProposalStatus, workspaces } from "@synap/database/schema";
 import type { WorkspaceSettings } from "@synap/database/schema";
-import type { StoredProposalData } from "@synap-core/types";
+import type {
+  ProposalReviewChange,
+  ProposalReviewEvent,
+  ProposalReviewModel,
+  StoredProposalData,
+} from "@synap-core/types";
 import {
   isDocumentContentProposalData,
   isRequestShapedProposalData,
   buildRequestFromProposal,
+  buildFallbackTitle,
+  isLikelyUUID,
 } from "@synap-core/types/proposals";
+import type { UpdateRequest } from "@synap-core/types/proposals";
 import { storage } from "@synap/storage";
 import { requireUserId } from "../utils/user-scoped.js";
 import { auditLog } from "../utils/audit-log.js";
+import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 import { channelsRouter } from "./channels.js";
@@ -157,6 +173,297 @@ function reportProposalOutcome(params: {
   })();
 }
 
+type ProposalRow = typeof proposals.$inferSelect;
+type DisplayEnrichedProposal = ProposalRow & {
+  request: UpdateRequest;
+  authorName?: string;
+  targetName?: string;
+  review: ProposalReviewModel;
+};
+
+async function enrichProposalsForDisplay(
+  rows: ProposalRow[]
+): Promise<DisplayEnrichedProposal[]> {
+  const requests = rows.map((row) => buildRequestFromProposal(row));
+  const entityIds = uniqueStrings(
+    requests
+      .filter((request) => request.targetType === "entity")
+      .map((request) => request.targetId)
+      .filter(isLikelyUUID)
+  );
+  const userIds = uniqueStrings(
+    rows.flatMap((row, idx) => [
+      row.agentUserId ?? undefined,
+      row.createdBy ?? undefined,
+      requests[idx]?.sourceId || undefined,
+    ])
+  );
+  const correlationIds = uniqueStrings(
+    requests.map((request) => request.correlationId)
+  );
+
+  const eventRepo = new EventRepository(sql);
+  const [entityRows, userRows, traceEntries] = await Promise.all([
+    entityIds.length > 0
+      ? db
+          .select({
+            id: entities.id,
+            title: entities.title,
+            preview: entities.preview,
+            type: entities.type,
+          })
+          .from(entities)
+          .where(inArray(entities.id, entityIds))
+      : Promise.resolve([]),
+    userIds.length > 0
+      ? db
+          .select({
+            id: users.id,
+            name: users.name,
+            email: users.email,
+            userType: users.userType,
+            agentMetadata: users.agentMetadata,
+          })
+          .from(users)
+          .where(inArray(users.id, userIds))
+      : Promise.resolve([]),
+    correlationIds.length > 0
+      ? Promise.all(
+          correlationIds.map(
+            async (correlationId) =>
+              [
+                correlationId,
+                await eventRepo.getCorrelatedEvents(correlationId),
+              ] as const
+          )
+        )
+      : Promise.resolve([] as Array<readonly [string, EventRecord[]]>),
+  ]);
+
+  const entityById = new Map(entityRows.map((row) => [row.id, row]));
+  const userById = new Map(userRows.map((row) => [row.id, row]));
+  const traceByCorrelationId = new Map<string, EventRecord[]>(traceEntries);
+
+  return rows.map((row, idx) => {
+    const request = requests[idx]!;
+    const payload =
+      request.data && typeof request.data === "object"
+        ? request.data
+        : undefined;
+    const entityMeta = entityById.get(request.targetId);
+    const targetName =
+      request.targetName ??
+      displayLabelFromRecord(payload) ??
+      entityMeta?.title ??
+      entityMeta?.preview ??
+      undefined;
+    const profileSlug =
+      stringProp(payload, "profileSlug") ??
+      stringProp(payload, "type") ??
+      entityMeta?.type ??
+      undefined;
+    const authorRow = userById.get(
+      row.agentUserId ?? row.createdBy ?? request.sourceId
+    );
+    const authorName = authorRow ? displayNameForUser(authorRow) : undefined;
+    const summary =
+      request.summary ??
+      buildFallbackTitle({
+        changeType: request.changeType,
+        profileSlug,
+        targetType: request.targetType,
+        targetName,
+      });
+
+    return {
+      ...row,
+      authorName,
+      targetName,
+      request: {
+        ...request,
+        targetName,
+        summary,
+      },
+      review: buildProposalReviewModel({
+        row,
+        request: {
+          ...request,
+          targetName,
+          summary,
+        },
+        authorName,
+        targetName,
+        events: request.correlationId
+          ? (traceByCorrelationId.get(request.correlationId) ?? [])
+          : [],
+      }),
+    };
+  });
+}
+
+function buildProposalReviewModel(params: {
+  row: ProposalRow;
+  request: UpdateRequest;
+  authorName?: string;
+  targetName?: string;
+  events: Awaited<ReturnType<EventRepository["getCorrelatedEvents"]>>;
+}): ProposalReviewModel {
+  const { row, request, authorName, targetName, events } = params;
+  const requestData =
+    request.data && typeof request.data === "object" ? request.data : {};
+  const reviewEvents = events.map(toProposalReviewEvent);
+  const requestedEvent =
+    reviewEvents.find((event) => event.phase === "requested") ??
+    reviewEvents.find((event) => event.eventType.endsWith(".requested"));
+  const validatedEvent =
+    reviewEvents.find((event) => event.phase === "validated") ??
+    reviewEvents.find((event) => event.eventType.endsWith(".validated"));
+  const completedEvent =
+    reviewEvents.find((event) => event.phase === "completed") ??
+    reviewEvents.find((event) => event.eventType.endsWith(".completed"));
+
+  return {
+    summary:
+      request.summary ??
+      buildFallbackTitle({
+        changeType: request.changeType,
+        targetType: request.targetType,
+        targetName,
+      }),
+    actorName: authorName,
+    targetName,
+    reasoning: request.reasoning,
+    source: request.source,
+    sourceId: request.sourceId,
+    sourceMessageId: row.sourceMessageId,
+    threadId: row.threadId,
+    commandRunId: row.commandRunId,
+    correlationId: request.correlationId,
+    requestedEventId: request.requestedEventId ?? requestedEvent?.eventId,
+    validatedEventId: request.validatedEventId ?? validatedEvent?.eventId,
+    completedEventId: request.completedEventId ?? completedEvent?.eventId,
+    changes: buildProposalChanges(requestData, request.changeType),
+    events: reviewEvents,
+  };
+}
+
+function toProposalReviewEvent(event: {
+  id: string;
+  eventType: string;
+  subjectType: string;
+  subjectId: string;
+  timestamp: Date;
+  userId: string;
+  source?: string;
+  correlationId?: string;
+}): ProposalReviewEvent {
+  const parts = event.eventType.split(".");
+  return {
+    eventId: event.id,
+    eventType: event.eventType,
+    subjectType: event.subjectType,
+    subjectId: event.subjectId,
+    action: parts.length >= 2 ? parts[1] : undefined,
+    phase: parts.length >= 3 ? parts[2] : undefined,
+    timestamp: event.timestamp.toISOString(),
+    userId: event.userId,
+    source: event.source,
+    correlationId: event.correlationId,
+  };
+}
+
+function buildProposalChanges(
+  data: Record<string, unknown>,
+  changeType: string
+): ProposalReviewChange[] {
+  const changes: ProposalReviewChange[] = [];
+  const operation =
+    changeType === "delete"
+      ? "delete"
+      : changeType === "create"
+        ? "create"
+        : "update";
+
+  for (const key of ["title", "description", "profileSlug", "documentId"]) {
+    if (data[key] !== undefined) {
+      changes.push({
+        path: key,
+        label: labelFromPath(key),
+        operation,
+        after: data[key],
+        valueType: valueTypeOf(data[key]),
+      });
+    }
+  }
+
+  const properties =
+    data.properties && typeof data.properties === "object"
+      ? (data.properties as Record<string, unknown>)
+      : {};
+  for (const [key, value] of Object.entries(properties)) {
+    changes.push({
+      path: `properties.${key}`,
+      label: labelFromPath(key),
+      operation,
+      after: value,
+      valueType: valueTypeOf(value),
+    });
+  }
+
+  return changes;
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return Array.from(
+    new Set(values.filter((value): value is string => Boolean(value)))
+  );
+}
+
+function stringProp(
+  record: Record<string, unknown> | undefined,
+  key: string
+): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function displayLabelFromRecord(
+  record: Record<string, unknown> | undefined
+): string | undefined {
+  return (
+    stringProp(record, "title") ??
+    stringProp(record, "name") ??
+    stringProp(record, "displayName") ??
+    stringProp(record, "label")
+  );
+}
+
+function displayNameForUser(row: {
+  name: string | null;
+  email: string;
+  userType: string;
+  agentMetadata: { agentType?: string; description?: string } | null;
+}): string | undefined {
+  if (row.name) return row.name;
+  if (row.userType === "agent") {
+    return row.agentMetadata?.agentType ?? row.agentMetadata?.description;
+  }
+  return row.email || undefined;
+}
+
+function labelFromPath(path: string): string {
+  return path
+    .replace(/^properties\./, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function valueTypeOf(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
 export const proposalsRouter = router({
   /**
    * List proposals (Inbox)
@@ -252,12 +559,10 @@ export const proposalsRouter = router({
         offset: input.offset,
       });
 
-      // Enrich each proposal with a pre-formed `request` object so the
-      // frontend doesn't need to reconstruct it from the JSONB data column.
-      const enriched = rows.map((row) => ({
-        ...row,
-        request: buildRequestFromProposal(row),
-      }));
+      // Enrich each proposal with a pre-formed `request` object and resolved
+      // display metadata. Eve/Studio can render useful labels without leaking
+      // raw UUIDs into the main review surface.
+      const enriched = await enrichProposalsForDisplay(rows);
 
       const { items, pagination } = buildPaginatedResponse(enriched, input);
 
@@ -322,8 +627,7 @@ export const proposalsRouter = router({
       }
 
       return {
-        ...proposal,
-        request: buildRequestFromProposal(proposal),
+        ...(await enrichProposalsForDisplay([proposal]))[0],
       };
     }),
 
@@ -899,7 +1203,7 @@ export const proposalsRouter = router({
         // Emit .validated event with the same correlationId as the .requested event.
         // The materialization hook (setup-event-broadcasting.ts) will pick this up
         // and enqueue it to the materializer worker via pg-boss.
-        await auditLog({
+        const validatedEvent = await auditLog({
           subjectType: targetType,
           action: changeType,
           phase: "validated",
@@ -916,6 +1220,10 @@ export const proposalsRouter = router({
           },
           source: "api",
         });
+
+        if (validatedEvent) {
+          payload.validatedEventId = validatedEvent.id;
+        }
       } else {
         // Payload doesn't match any known request shape and targetType was not
         // handled by a specific branch above — throw rather than silently succeed.
@@ -929,6 +1237,7 @@ export const proposalsRouter = router({
         .update(proposals)
         .set({
           status: ProposalStatus.APPROVED,
+          ...(isRequestShapedProposalData(payload) ? { data: payload } : {}),
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
@@ -1130,7 +1439,7 @@ export const proposalsRouter = router({
 
             const subjectId = (eventPayload.id as string) || proposal.targetId;
 
-            await auditLog({
+            const validatedEvent = await auditLog({
               subjectType: targetType,
               action: changeType,
               phase: "validated",
@@ -1147,12 +1456,19 @@ export const proposalsRouter = router({
               },
               source: "api",
             });
+
+            if (validatedEvent) {
+              payload.validatedEventId = validatedEvent.id;
+            }
           }
 
           await db
             .update(proposals)
             .set({
               status: ProposalStatus.APPROVED,
+              ...(payload && isRequestShapedProposalData(payload)
+                ? { data: payload }
+                : {}),
               reviewedBy: userId,
               reviewedAt: new Date(),
               updatedAt: new Date(),
@@ -1248,35 +1564,30 @@ export const proposalsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
-      // Insert proposal directly into DB
-      const [proposal] = await db
-        .insert(proposals)
-        .values({
-          workspaceId: (input.data.workspaceId as string) || "",
-          targetType: input.targetType,
-          targetId: input.targetId || "",
-          proposalType: "user_suggestion",
-          data: {
-            ...input.data,
-            changeType: input.changeType,
-            reasoning: input.reasoning,
-            submittedBy: userId,
-          },
-          status: ProposalStatus.PENDING,
-        })
-        .returning();
-
-      // Side-effects: fire proposal.created event for automation triggers
-      emitSideEffects({
-        subjectType: "proposal",
-        action: "created",
-        subjectId: proposal.id,
+      const workspaceId = (input.data.workspaceId as string) || null;
+      const targetId = input.targetId || randomUUID();
+      const { proposal } = await createEventBackedProposal({
         userId,
-        workspaceId: (input.data.workspaceId as string) || undefined,
-        data: {
-          proposalStatus: "created",
-          targetType: input.targetType,
+        workspaceId,
+        targetType: input.targetType,
+        targetId,
+        proposalType: input.changeType,
+        action: input.changeType,
+        summary: buildFallbackTitle({
           changeType: input.changeType,
+          targetType: input.targetType,
+        }),
+        data: {
+          requestId: randomUUID(),
+          source: "user",
+          sourceId: userId,
+          workspaceId,
+          targetType: input.targetType,
+          targetId,
+          changeType: input.changeType,
+          data: input.data,
+          reasoning: input.reasoning,
+          submittedBy: userId,
         },
       });
 
@@ -1350,22 +1661,23 @@ export const proposalsRouter = router({
         input.replacementText +
         currentContent.slice(to);
 
-      const [proposal] = await db
-        .insert(proposals)
-        .values({
-          workspaceId,
-          targetType: "document",
-          targetId: input.documentId,
-          proposalType: "user_edit",
-          data: {
-            proposedContent,
-            range: [from, to],
-            originalSnippet: currentContent.slice(from, to),
-            replacementText: input.replacementText,
-          },
-          status: ProposalStatus.PENDING,
-        })
-        .returning();
+      const { proposal } = await createEventBackedProposal({
+        userId: ctx.userId,
+        workspaceId,
+        targetType: "document",
+        targetId: input.documentId,
+        proposalType: "user_edit",
+        action: "update",
+        summary: "Suggest document edit",
+        data: {
+          source: "user",
+          sourceId: ctx.userId,
+          proposedContent,
+          range: [from, to],
+          originalSnippet: currentContent.slice(from, to),
+          replacementText: input.replacementText,
+        },
+      });
 
       if (!proposal) {
         throw new TRPCError({

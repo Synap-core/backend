@@ -17,6 +17,7 @@ import { db, documents, normalizeDocumentType } from "@synap/database";
 import { auditLog } from "../../utils/audit-log.js";
 import { emitSideEffects } from "@synap/jobs";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
 
 export const documentsRouter = router({
   /**
@@ -47,6 +48,23 @@ export const documentsRouter = router({
       const documentId = randomUUID();
       // Prefer explicit agentUserId from request; API key owner is a system account.
       const agentUserId = input.agentUserId ?? input.userId;
+      const correlationId = randomUUID();
+      const requestedEvent = await auditLog({
+        subjectType: "document",
+        action: "create",
+        phase: "requested",
+        subjectId: documentId,
+        userId: agentUserId,
+        workspaceId: input.workspaceId ?? undefined,
+        correlationId,
+        source: input.agentUserId ? "intelligence" : "api",
+        data: {
+          title: input.title,
+          type: input.type,
+          workspaceId: input.workspaceId ?? null,
+          userId: input.userId,
+        },
+      });
 
       // Governance check — AI agent creating a document requires proposal by default
       const perm = await checkPermissionOrPropose({
@@ -57,6 +75,8 @@ export const documentsRouter = router({
         action: "create",
         source: "intelligence",
         reasoning: input.reasoning,
+        correlationId,
+        requestedEventId: requestedEvent?.id,
         sourceMessageId: ctx.sourceMessageId ?? undefined,
         data: {
           id: documentId,
@@ -215,8 +235,7 @@ export const documentsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const { db, eq } = await import("@synap/database");
-      const { documents, entities, proposals, ProposalStatus } =
-        await import("@synap/database/schema");
+      const { documents, entities } = await import("@synap/database/schema");
 
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 7);
@@ -243,26 +262,30 @@ export const documentsRouter = router({
         input.sourceMessageId ?? ctx.sourceMessageId ?? undefined;
       const threadId = input.threadId ?? undefined;
 
-      const [proposal] = await db
-        .insert(proposals)
-        .values({
-          workspaceId: workspaceId,
-          targetType: "document",
-          targetId: input.documentId,
-          proposalType: input.proposalType,
-          data: {
-            proposedBy: "ai",
-            changes: input.changes,
-            originalContent: input.originalContent,
-            proposedContent: input.proposedContent,
-            expiresAt: expiresAt.toISOString(),
-          },
-          status: ProposalStatus.PENDING,
-          createdBy,
-          ...(threadId ? { threadId } : {}),
-          ...(sourceMessageId ? { sourceMessageId } : {}),
-        })
-        .returning();
+      const { proposal } = await createEventBackedProposal({
+        userId: createdBy,
+        workspaceId,
+        targetType: "document",
+        targetId: input.documentId,
+        proposalType: input.proposalType,
+        action: "update",
+        source: "intelligence",
+        summary: "AI document edit proposal",
+        agentUserId: input.agentUserId ?? null,
+        createdBy,
+        threadId: threadId ?? null,
+        sourceMessageId: sourceMessageId ?? null,
+        expiresAt,
+        data: {
+          source: "agent",
+          sourceId: createdBy,
+          proposedBy: "ai",
+          changes: input.changes,
+          originalContent: input.originalContent,
+          proposedContent: input.proposedContent,
+          expiresAt: expiresAt.toISOString(),
+        },
+      });
 
       const { broadcastSuccess } = await import("@synap/jobs");
       await broadcastSuccess(input.userId, "ai:proposal", {

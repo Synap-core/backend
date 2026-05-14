@@ -10,11 +10,12 @@
  * Returns immediately — no async event pipeline.
  */
 
-import { db, proposals, eq } from "@synap/database";
+import { db, proposals, eq, entities } from "@synap/database";
 import { users, workspaces, ProposalStatus } from "@synap/database/schema";
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 import type { RequestShapedProposalData } from "@synap-core/types";
+import { isLikelyUUID } from "@synap-core/types/proposals";
 import { broadcastNotification, emitSideEffects } from "@synap/jobs";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
@@ -188,6 +189,8 @@ export interface PermissionCheckOpts {
   data: Record<string, unknown>;
   /** Correlation ID linking this check to the .requested event */
   correlationId?: string;
+  /** Concrete .requested event ID when the caller already appended one. */
+  requestedEventId?: string;
   /** AI reasoning for why this action is proposed */
   reasoning?: string;
   /** Provenance: which chat thread triggered this proposal */
@@ -225,6 +228,7 @@ export async function checkPermissionOrPropose(
     source,
     data,
     correlationId,
+    requestedEventId,
     threadId,
     commandRunId,
     sourceMessageId,
@@ -337,6 +341,7 @@ export async function checkPermissionOrPropose(
             source,
             data,
             correlationId,
+            requestedEventId,
             reasoning:
               opts.reasoning ??
               "Destructive action in agent-owned workspace requires human approval.",
@@ -369,6 +374,8 @@ export async function checkPermissionOrPropose(
               data: {
                 ...data,
                 agentUserId,
+                ...(correlationId ? { correlationId } : {}),
+                ...(requestedEventId ? { requestedEventId } : {}),
                 _autoApprove: {
                   matchedPattern: autoApproveFor.find((p) =>
                     p.endsWith(".*")
@@ -399,6 +406,7 @@ export async function checkPermissionOrPropose(
           source,
           data,
           correlationId,
+          requestedEventId,
           reasoning: opts.reasoning,
           threadId,
           commandRunId,
@@ -432,6 +440,7 @@ export async function checkPermissionOrPropose(
           source,
           data,
           correlationId,
+          requestedEventId,
           reasoning: opts.reasoning,
           threadId,
           commandRunId,
@@ -463,17 +472,18 @@ export function buildProposalSummary(
   data: Record<string, unknown>
 ): string {
   const actionVerb = action.charAt(0).toUpperCase() + action.slice(1);
-  const label = (data.title || data.name || data.slug || data.id) as
+  const label = (data.targetName || data.title || data.name || data.slug) as
     | string
     | undefined;
   if (label) return `${actionVerb} ${subjectType} "${label}"`;
+  if (action === "delete" && data.id) return `${actionVerb} ${subjectType}`;
   return `${actionVerb} ${subjectType}`;
 }
 
 /**
  * Build the envelope of fields returned on any "proposed" response. Used both
- * by `createProposal()` (via the perm helper) and by any caller that creates
- * a proposal directly via `db.insert(proposals)`.
+ * by `createProposal()` (via the perm helper) and by event-backed proposal
+ * callers that need to return the same review URL/summary envelope.
  */
 export function buildProposalResponseFields(opts: {
   proposalId: string;
@@ -503,6 +513,115 @@ export function buildProposalResponseFields(opts: {
   };
 }
 
+export interface CreatePendingProposalInput {
+  userId: string;
+  workspaceId: string | null;
+  targetType: string;
+  targetId: string;
+  proposalType: string;
+  data: Record<string, unknown>;
+  agentUserId?: string | null;
+  createdBy?: string | null;
+  threadId?: string | null;
+  commandRunId?: string | null;
+  sourceMessageId?: string | null;
+  expiresAt?: Date | null;
+  notificationDescription?: string;
+}
+
+/**
+ * Canonical pending proposal insert path.
+ *
+ * Permission-gated mutations and explicit proposal requests both use this so
+ * notifications, proposal_event automation hooks, provenance, and expiry stay
+ * consistent.
+ */
+export async function createPendingProposal(input: CreatePendingProposalInput) {
+  const [proposal] = await db
+    .insert(proposals)
+    .values({
+      workspaceId: input.workspaceId,
+      targetType: input.targetType,
+      targetId: input.targetId,
+      proposalType: input.proposalType,
+      data: input.data,
+      status: ProposalStatus.PENDING,
+      createdBy: input.createdBy ?? input.agentUserId ?? input.userId,
+      expiresAt:
+        input.expiresAt ??
+        new Date(Date.now() + PROPOSAL_TTL_DAYS * 24 * 60 * 60 * 1000),
+      ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
+      ...(input.threadId ? { threadId: input.threadId } : {}),
+      ...(input.commandRunId ? { commandRunId: input.commandRunId } : {}),
+      ...(input.sourceMessageId
+        ? { sourceMessageId: input.sourceMessageId }
+        : {}),
+    })
+    .returning();
+
+  try {
+    const requestId =
+      typeof input.data.requestId === "string"
+        ? input.data.requestId
+        : proposal.id;
+    await broadcastNotification({
+      userId: input.userId,
+      requestId,
+      message: {
+        type: "proposal:created",
+        data: {
+          proposalId: proposal.id,
+          targetType: input.targetType,
+          targetId: input.targetId,
+          changeType: input.proposalType,
+          status: ProposalStatus.PENDING,
+        },
+        requestId,
+        status: "success",
+        timestamp: new Date().toISOString(),
+      },
+    });
+  } catch {
+    // Broadcast failure is non-critical.
+  }
+
+  emitSideEffects({
+    subjectType: "proposal",
+    action: "created",
+    subjectId: proposal.id,
+    userId: input.userId,
+    workspaceId: input.workspaceId ?? undefined,
+    data: {
+      proposalStatus: "created",
+      targetType: input.targetType,
+      changeType: input.proposalType,
+      correlationId:
+        typeof input.data.correlationId === "string"
+          ? input.data.correlationId
+          : undefined,
+      requestedEventId:
+        typeof input.data.requestedEventId === "string"
+          ? input.data.requestedEventId
+          : undefined,
+    },
+  });
+
+  if (input.workspaceId) {
+    NotificationService.fromProposal({
+      proposalId: proposal.id,
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      proposalType: `${input.targetType}.${input.proposalType}`,
+      description:
+        input.notificationDescription ??
+        `${input.proposalType} ${input.targetType}`,
+      agentUserId: input.agentUserId ?? undefined,
+    }).catch(() => {});
+  }
+
+  return proposal;
+}
+
 /**
  * Create a proposal for an AI-sourced action that requires review.
  */
@@ -515,6 +634,7 @@ async function createProposal(opts: {
   source?: string;
   data: Record<string, unknown>;
   correlationId?: string;
+  requestedEventId?: string;
   reasoning?: string;
   threadId?: string;
   commandRunId?: string;
@@ -536,6 +656,7 @@ async function createProposal(opts: {
     source,
     data,
     correlationId,
+    requestedEventId,
     reasoning,
     threadId,
     commandRunId,
@@ -549,83 +670,47 @@ async function createProposal(opts: {
   const singularType = subjectType.endsWith("s")
     ? subjectType.slice(0, -1)
     : subjectType;
+  const targetName = await resolveProposalTargetName(
+    singularType,
+    targetId,
+    data
+  );
+  const summary = buildProposalSummary(singularType, action, {
+    ...data,
+    ...(targetName ? { targetName } : {}),
+  });
 
-  const proposalData: RequestShapedProposalData & { correlationId?: string } = {
+  const proposalData: RequestShapedProposalData = {
     requestId: randomUUID(),
     source: (source || "intelligence") as RequestShapedProposalData["source"],
     sourceId: userId,
     workspaceId,
     targetType: singularType as RequestShapedProposalData["targetType"],
     targetId,
+    ...(targetName ? { targetName } : {}),
     changeType: action as RequestShapedProposalData["changeType"],
     data,
     reasoning: reasoning || "AI proposal requires review",
+    summary,
     ...(correlationId ? { correlationId } : {}),
+    ...(requestedEventId ? { requestedEventId } : {}),
   };
 
-  const [proposal] = await db
-    .insert(proposals)
-    .values({
-      workspaceId,
-      targetType: singularType,
-      targetId,
-      proposalType: action,
-      data: proposalData,
-      status: ProposalStatus.PENDING,
-      createdBy: userId,
-      expiresAt: new Date(Date.now() + PROPOSAL_TTL_DAYS * 24 * 60 * 60 * 1000),
-      ...(agentUserId ? { agentUserId } : {}),
-      ...(threadId ? { threadId } : {}),
-      ...(commandRunId ? { commandRunId } : {}),
-      ...(sourceMessageId ? { sourceMessageId } : {}),
-    })
-    .returning();
-
-  // Broadcast proposal notification (non-critical)
-  try {
-    const requestId = (data.requestId as string) || randomUUID();
-    await broadcastNotification({
-      userId,
-      requestId,
-      message: {
-        type: "proposal:created",
-        data: {
-          proposalId: proposal.id,
-          targetType: singularType,
-          targetId,
-          changeType: action,
-          status: ProposalStatus.PENDING,
-        },
-        requestId,
-        status: "success",
-        timestamp: new Date().toISOString(),
-      },
-    });
-  } catch {
-    // Broadcast failure is non-critical
-  }
-
-  // Automation side-effects: proposal.created.completed for proposal_event triggers
-  emitSideEffects({
-    subjectType: "proposal",
-    action: "created",
-    subjectId: proposal.id,
+  const proposal = await createPendingProposal({
     userId,
     workspaceId,
-    data: { proposalStatus: "created" },
+    targetType: singularType,
+    targetId,
+    proposalType: action,
+    data: proposalData as unknown as Record<string, unknown>,
+    agentUserId: agentUserId ?? undefined,
+    createdBy: userId,
+    threadId: threadId ?? null,
+    commandRunId: commandRunId ?? null,
+    sourceMessageId: sourceMessageId ?? null,
+    notificationDescription: reasoning ?? `${action} ${singularType}`,
   });
 
-  // Unified notification system — persist to notifications table + emit notification:new
-  NotificationService.fromProposal({
-    proposalId: proposal.id,
-    workspaceId,
-    userId,
-    proposalType: `${singularType}.${action}`,
-    description: reasoning ?? `${action} ${singularType}`,
-    agentUserId: agentUserId ?? undefined,
-  }).catch(() => {});
-
-  const summary = buildProposalSummary(singularType, action, data);
   const reviewPath = `/proposals/${proposal.id}`;
   return {
     granted: false,
@@ -635,4 +720,38 @@ async function createProposal(opts: {
     reviewPath,
     reviewUrl: `${STUDIO_APP_URL}${reviewPath}`,
   };
+}
+
+async function resolveProposalTargetName(
+  subjectType: string,
+  targetId: string,
+  data: Record<string, unknown>
+): Promise<string | undefined> {
+  const inline =
+    stringField(data, "title") ??
+    stringField(data, "name") ??
+    stringField(data, "displayName") ??
+    stringField(data, "label");
+  if (inline) return inline;
+
+  if (subjectType !== "entity" || !isLikelyUUID(targetId)) return undefined;
+
+  try {
+    const [entity] = await db
+      .select({ title: entities.title, preview: entities.preview })
+      .from(entities)
+      .where(eq(entities.id, targetId))
+      .limit(1);
+    return entity?.title ?? entity?.preview ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stringField(
+  record: Record<string, unknown>,
+  key: string
+): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
 }

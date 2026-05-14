@@ -43,7 +43,18 @@ export interface UpdateRequest {
   requestId: string;
 
   /** Who initiated the change? */
-  source: "user" | "ai" | "system";
+  source:
+    | "user"
+    | "ai"
+    | "system"
+    | "intelligence"
+    | "agent"
+    | "openwebui-pipeline"
+    | "openclaw"
+    | "extension"
+    | "cli"
+    | "n8n"
+    | "raycast";
   sourceId: string;
 
   /** Context */
@@ -52,6 +63,8 @@ export interface UpdateRequest {
   /** Target Entity */
   targetType: "document" | "entity" | "whiteboard" | "view" | "profile";
   targetId: string;
+  /** Human-readable target label resolved server-side when available. */
+  targetName?: string;
 
   /** What kind of change? (aligns with EventAction) */
   changeType: EventAction;
@@ -75,6 +88,60 @@ export interface UpdateRequest {
 
   /** AI Reasoning / Context */
   reasoning?: string;
+  /** Short human-readable summary resolved server-side when available. */
+  summary?: string;
+
+  /**
+   * Event-chain linkage.
+   *
+   * `correlationId` groups the requested/validated/completed events for this
+   * proposal. `requestedEventId` points at the concrete `.requested` event when
+   * the write path created one before pausing for review.
+   */
+  correlationId?: string;
+  requestedEventId?: string;
+  validatedEventId?: string;
+  completedEventId?: string;
+}
+
+export interface ProposalReviewChange {
+  path: string;
+  label: string;
+  operation: "create" | "update" | "delete" | "set";
+  before?: unknown;
+  after?: unknown;
+  valueType?: string;
+}
+
+export interface ProposalReviewEvent {
+  eventId: string;
+  eventType: string;
+  phase?: string;
+  action?: string;
+  subjectType: string;
+  subjectId: string;
+  timestamp: string;
+  userId: string;
+  source?: string;
+  correlationId?: string;
+}
+
+export interface ProposalReviewModel {
+  summary: string;
+  actorName?: string;
+  targetName?: string;
+  reasoning?: string;
+  source?: UpdateRequest["source"];
+  sourceId?: string;
+  sourceMessageId?: string | null;
+  threadId?: string | null;
+  commandRunId?: string | null;
+  correlationId?: string;
+  requestedEventId?: string;
+  validatedEventId?: string;
+  completedEventId?: string;
+  changes: ProposalReviewChange[];
+  events: ProposalReviewEvent[];
 }
 
 /**
@@ -164,25 +231,73 @@ export interface ProposalWithRequest extends Proposal {
  */
 export function buildRequestFromProposal(row: Proposal): UpdateRequest {
   const raw = row.data as Record<string, unknown> | null;
-  const source = (raw?.source as UpdateRequest["source"]) ?? "user";
+  const source = normalizeProposalSource(raw?.source);
   const sourceId =
-    (typeof raw?.sourceId === "string" ? raw.sourceId : "") || "";
+    (typeof raw?.sourceId === "string" ? raw.sourceId : "") ||
+    row.agentUserId ||
+    row.createdBy ||
+    "";
   const changeType =
     (raw?.changeType as UpdateRequest["changeType"]) ?? "update";
+  const data =
+    raw && typeof raw.data === "object" && raw.data !== null
+      ? (raw.data as UpdateRequest["data"])
+      : raw && typeof raw === "object"
+        ? (raw as UpdateRequest["data"])
+        : undefined;
 
   return {
-    requestId: row.id,
-    source: source === "ai" || source === "system" ? source : "user",
+    requestId: (typeof raw?.requestId === "string" && raw.requestId) || row.id,
+    source,
     sourceId,
     workspaceId: row.workspaceId,
-    targetType: row.targetType as UpdateRequest["targetType"],
-    targetId: row.targetId,
+    targetType:
+      (raw?.targetType as UpdateRequest["targetType"] | undefined) ??
+      (row.targetType as UpdateRequest["targetType"]),
+    targetId:
+      (typeof raw?.targetId === "string" && raw.targetId) || row.targetId,
     changeType,
-    data:
-      raw && typeof raw === "object"
-        ? (raw as UpdateRequest["data"])
+    targetName:
+      typeof raw?.targetName === "string" ? raw.targetName : undefined,
+    data,
+    reasoning: typeof raw?.reasoning === "string" ? raw.reasoning : undefined,
+    summary:
+      (typeof raw?._summary === "string" && raw._summary) ||
+      (typeof raw?.summary === "string" && raw.summary) ||
+      undefined,
+    correlationId:
+      typeof raw?.correlationId === "string" ? raw.correlationId : undefined,
+    requestedEventId:
+      typeof raw?.requestedEventId === "string"
+        ? raw.requestedEventId
+        : undefined,
+    validatedEventId:
+      typeof raw?.validatedEventId === "string"
+        ? raw.validatedEventId
+        : undefined,
+    completedEventId:
+      typeof raw?.completedEventId === "string"
+        ? raw.completedEventId
         : undefined,
   };
+}
+
+function normalizeProposalSource(source: unknown): UpdateRequest["source"] {
+  switch (source) {
+    case "ai":
+    case "system":
+    case "intelligence":
+    case "agent":
+    case "openwebui-pipeline":
+    case "openclaw":
+    case "extension":
+    case "cli":
+    case "n8n":
+    case "raycast":
+      return source;
+    default:
+      return "user";
+  }
 }
 
 // Display utilities (pure, browser-safe)

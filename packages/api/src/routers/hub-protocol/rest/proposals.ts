@@ -4,7 +4,6 @@
 
 import { TRPCError } from "@trpc/server";
 import { z } from "@hono/zod-openapi";
-import { db } from "@synap/database";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -22,6 +21,7 @@ import {
   logger,
   type HubHono,
 } from "./_shared.js";
+import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
 
 export function registerProposalsRoutes(app: HubHono): void {
   // ── OpenAPI metadata for /proposals* routes ──────────────────────────────
@@ -195,30 +195,40 @@ export function registerProposalsRoutes(app: HubHono): void {
       );
     }
     try {
-      const { proposals, ProposalStatus } =
-        await import("@synap/database/schema");
-      const { randomUUID } = await import("crypto");
-      const id = randomUUID();
-      const dataWithSummary = body.summary
-        ? { ...body.data, _summary: body.summary }
-        : body.data;
-      const [row] = await db
-        .insert(proposals)
-        .values({
-          id,
-          workspaceId: body.workspaceId ?? null,
-          targetType: body.targetType,
-          targetId: body.targetId,
-          proposalType: body.proposalType,
-          data: dataWithSummary,
-          status: ProposalStatus.PENDING,
-          agentUserId: body.agentUserId ?? null,
-          threadId: body.channelId ?? null,
-          sourceMessageId: body.sourceMessageId ?? null,
-          createdBy: body.agentUserId ?? null,
-        })
-        .returning({ id: proposals.id });
-      return c.json({ id: row.id, status: "pending" });
+      const userId = body.agentUserId ?? (c.get("userId") as string);
+      const action = inferProposalAction(body.proposalType);
+      const isRequestShaped =
+        typeof body.data.requestId === "string" &&
+        typeof body.data.targetType === "string" &&
+        typeof body.data.changeType === "string";
+      const { proposal } = await createEventBackedProposal({
+        userId,
+        workspaceId: body.workspaceId ?? null,
+        targetType: body.targetType,
+        targetId: body.targetId,
+        proposalType: body.proposalType,
+        action,
+        source: "intelligence",
+        summary: body.summary,
+        agentUserId: body.agentUserId ?? null,
+        createdBy: body.agentUserId ?? userId,
+        threadId: body.channelId ?? null,
+        sourceMessageId: body.sourceMessageId ?? null,
+        data: isRequestShaped
+          ? {
+              ...body.data,
+              source: body.data.source ?? "agent",
+              sourceId: body.data.sourceId ?? userId,
+            }
+          : {
+              ...body.data,
+              source: "agent",
+              sourceId: userId,
+              changeType: action,
+              ...(body.summary ? { summary: body.summary } : {}),
+            },
+      });
+      return c.json({ id: proposal.id, status: "pending" });
     } catch (err) {
       logger.error({ err }, "createProposal failed");
       return c.json(
@@ -227,4 +237,9 @@ export function registerProposalsRoutes(app: HubHono): void {
       );
     }
   });
+}
+
+function inferProposalAction(proposalType: string): string {
+  const parts = proposalType.split(".");
+  return parts[1] || parts[0] || "update";
 }

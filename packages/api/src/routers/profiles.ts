@@ -180,7 +180,7 @@ export const profilesRouter = router({
       }
 
       // 1. Emit .requested event
-      auditLog({
+      const requestedEvent = await auditLog({
         subjectType: "profile",
         action: "create",
         phase: "requested",
@@ -206,6 +206,7 @@ export const profilesRouter = router({
         source: input.source,
         reasoning: input.reasoning,
         correlationId,
+        requestedEventId: requestedEvent?.id,
         data: {
           id: profileId,
           slug: input.slug,

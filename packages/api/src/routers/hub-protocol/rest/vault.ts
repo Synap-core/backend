@@ -2,9 +2,8 @@
  * Hub Protocol REST — vault (AI requests vault access via proposal)
  */
 
-import { db } from "@synap/database";
-
 import { NotificationService } from "../../../notifications/NotificationService.js";
+import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -77,34 +76,31 @@ export function registerVaultRoutes(app: HubHono): void {
     const ttl = body.ttl ?? 60;
 
     try {
-      const { proposals, ProposalStatus } =
-        await import("@synap/database/schema");
-      const { randomUUID } = await import("crypto");
-      const id = randomUUID();
-      const [row] = await db
-        .insert(proposals)
-        .values({
-          id,
-          workspaceId,
-          targetType: "vault",
-          targetId: `${body.service}:${body.secretType}`,
-          proposalType: "vault.request",
-          data: {
-            secretType: body.secretType,
-            service: body.service,
-            purpose: body.purpose,
-            accessLevel,
-            ttl,
-            requestedBy: "ai",
-            _summary: `AI requests ${body.secretType} for ${body.service}: ${body.purpose}`,
-          },
-          status: ProposalStatus.PENDING,
-          agentUserId: userId ?? null,
-          threadId: body.channelId ?? null,
-          sourceMessageId: body.sourceMessageId ?? null,
-          createdBy: userId ?? null,
-        })
-        .returning({ id: proposals.id });
+      const summary = `AI requests ${body.secretType} for ${body.service}: ${body.purpose}`;
+      const { proposal: row } = await createEventBackedProposal({
+        userId,
+        workspaceId,
+        targetType: "vault",
+        targetId: `${body.service}:${body.secretType}`,
+        proposalType: "vault.request",
+        action: "request",
+        source: "intelligence",
+        summary,
+        agentUserId: userId ?? null,
+        createdBy: userId ?? null,
+        threadId: body.channelId ?? null,
+        sourceMessageId: body.sourceMessageId ?? null,
+        data: {
+          secretType: body.secretType,
+          service: body.service,
+          purpose: body.purpose,
+          accessLevel,
+          ttl,
+          requestedBy: "ai",
+          source: "agent",
+          sourceId: userId,
+        },
+      });
 
       // Emit urgent notification — shows as banner (not toast) in the UI
       NotificationService.create({

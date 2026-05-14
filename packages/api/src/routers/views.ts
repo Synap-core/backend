@@ -111,6 +111,19 @@ export const viewsRouter = router({
       // Resolve workspace ID: prefer explicit input, fall back to context header
       const effectiveWorkspaceId = input.workspaceId || ctx.workspaceId || "";
 
+      // Emit .requested before the proposal gate so pending proposals are tied
+      // to a real event-chain node.
+      const requestedEvent = await auditLog({
+        subjectType: "view",
+        action: "create",
+        phase: "requested",
+        subjectId: correlationId,
+        userId: ctx.userId,
+        workspaceId: effectiveWorkspaceId,
+        correlationId,
+        data: { name: input.name, type: input.type },
+      });
+
       // If workspace available, check permissions (including AI proposal gate)
       if (effectiveWorkspaceId) {
         const perm = await checkPermissionOrPropose({
@@ -122,6 +135,7 @@ export const viewsRouter = router({
           source: input.source,
           reasoning: input.reasoning,
           correlationId,
+          requestedEventId: requestedEvent?.id,
           data: {
             name: input.name,
             type: input.type,
@@ -142,18 +156,6 @@ export const viewsRouter = router({
           };
         }
       }
-
-      // Emit .requested event
-      auditLog({
-        subjectType: "view",
-        action: "create",
-        phase: "requested",
-        subjectId: correlationId,
-        userId: ctx.userId,
-        workspaceId: effectiveWorkspaceId,
-        correlationId,
-        data: { name: input.name, type: input.type },
-      });
 
       // Compute category from view type
       const category = getViewCategory(input.type);

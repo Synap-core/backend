@@ -6,6 +6,7 @@
  */
 
 import { EventRepository, sql } from "@synap/database";
+import type { EventRecord } from "@synap/database";
 import { createUnifiedEvent } from "@synap/jobs";
 import type { SubjectType, EventAction, EventPhase } from "@synap/jobs";
 
@@ -26,7 +27,9 @@ export interface AuditLogOpts {
  * Append an audit log entry to the events table.
  * Fire-and-forget — failures are logged but don't propagate.
  */
-export async function auditLog(opts: AuditLogOpts): Promise<void> {
+export async function auditLog(
+  opts: AuditLogOpts
+): Promise<EventRecord | null> {
   try {
     const eventRepo = new EventRepository(sql);
 
@@ -53,7 +56,7 @@ export async function auditLog(opts: AuditLogOpts): Promise<void> {
       correlationId: opts.correlationId,
     });
 
-    await eventRepo.append({
+    return await eventRepo.append({
       id: event.id,
       version: event.version,
       type: event.type,
@@ -76,5 +79,6 @@ export async function auditLog(opts: AuditLogOpts): Promise<void> {
   } catch (error) {
     // Audit logging is non-critical — log and continue
     console.warn("[audit-log] Failed to append audit event:", error);
+    return null;
   }
 }

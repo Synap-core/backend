@@ -286,7 +286,7 @@ export const entitiesRouter = router({
       }
 
       // 1. Emit .requested event — records intent regardless of outcome
-      auditLog({
+      const requestedEvent = await auditLog({
         subjectType: "entity",
         action: "create",
         phase: "requested",
@@ -315,6 +315,7 @@ export const entitiesRouter = router({
         source: input.source,
         reasoning: input.reasoning,
         correlationId,
+        requestedEventId: requestedEvent?.id,
         sourceMessageId: ctx.sourceMessageId ?? undefined,
         data: {
           id: entityId,
@@ -467,7 +468,7 @@ export const entitiesRouter = router({
       }
 
       // 4. Emit .completed event + side-effects
-      auditLog({
+      await auditLog({
         subjectType: "entity",
         action: "create",
         phase: "completed",
@@ -956,7 +957,7 @@ export const entitiesRouter = router({
       const correlationId = randomUUID();
 
       // 1. Emit .requested event
-      auditLog({
+      const requestedEvent = await auditLog({
         subjectType: "entity",
         action: "update",
         phase: "requested",
@@ -983,6 +984,7 @@ export const entitiesRouter = router({
         source: input.source,
         reasoning: input.reasoning,
         correlationId,
+        requestedEventId: requestedEvent?.id,
         data: {
           id: input.id,
           title: input.title,
@@ -1060,7 +1062,7 @@ export const entitiesRouter = router({
       }
 
       // 4. Emit .completed event + side-effects
-      auditLog({
+      await auditLog({
         subjectType: "entity",
         action: "update",
         phase: "completed",
@@ -1114,7 +1116,7 @@ export const entitiesRouter = router({
       const correlationId = randomUUID();
 
       // 1. Emit .requested event
-      auditLog({
+      const requestedEvent = await auditLog({
         subjectType: "entity",
         action: "delete",
         phase: "requested",
@@ -1135,6 +1137,7 @@ export const entitiesRouter = router({
         source: input.source,
         reasoning: input.reasoning,
         correlationId,
+        requestedEventId: requestedEvent?.id,
         data: { id: input.id },
       });
 
