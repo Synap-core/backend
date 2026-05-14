@@ -613,6 +613,82 @@ export const connectorsRouter = router({
     }),
 
   /**
+   * Get messaging service configuration status (keys are never returned to the client).
+   */
+  getMessagingConfig: protectedProcedure.query(async () => {
+    const database = await getDb();
+    const ws = await database.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cfg = ((ws?.settings as Record<string, unknown>)?.messaging ??
+      {}) as Record<string, unknown>;
+    const hasDsn =
+      !!(cfg.unipileDsn as string | undefined) || !!process.env.UNIPILE_DSN;
+    const hasApiKey =
+      !!(cfg.unipileApiKey as string | undefined) ||
+      !!process.env.UNIPILE_API_KEY;
+    const hasWebhookSecret =
+      !!(cfg.unipileWebhookSecret as string | undefined) ||
+      !!process.env.UNIPILE_WEBHOOK_SECRET;
+    const fromEnv = !cfg.unipileDsn && !cfg.unipileApiKey;
+    return {
+      configured: hasDsn && hasApiKey,
+      hasDsn,
+      hasApiKey,
+      hasWebhookSecret,
+      fromEnv,
+    };
+  }),
+
+  /**
+   * Save messaging service credentials to workspace settings.
+   * Pass undefined to leave a key unchanged; pass empty string to clear it.
+   */
+  saveMessagingConfig: protectedProcedure
+    .input(
+      z.object({
+        unipileDsn: z.string().optional(),
+        unipileApiKey: z.string().optional(),
+        unipileWebhookSecret: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const database = await getDb();
+      const ws = await database.query.workspaces.findFirst({
+        columns: { id: true, settings: true },
+      });
+      if (!ws)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No workspace found",
+        });
+
+      const existing = ((ws.settings as Record<string, unknown>)?.messaging ??
+        {}) as Record<string, unknown>;
+      const merged = {
+        ...existing,
+        ...(input.unipileDsn !== undefined
+          ? { unipileDsn: input.unipileDsn || null }
+          : {}),
+        ...(input.unipileApiKey !== undefined
+          ? { unipileApiKey: input.unipileApiKey || null }
+          : {}),
+        ...(input.unipileWebhookSecret !== undefined
+          ? { unipileWebhookSecret: input.unipileWebhookSecret || null }
+          : {}),
+      };
+
+      await database
+        .update(workspaces)
+        .set({
+          settings: drizzleSql`COALESCE(settings, '{}'::jsonb) || ${JSON.stringify({ messaging: merged })}::jsonb`,
+        })
+        .where(eq(workspaces.id, ws.id));
+
+      return { success: true };
+    }),
+
+  /**
    * Enrich an entity using an external enrichment provider (Apify, Apollo.io).
    * Returns structured data that the caller can merge into entity properties.
    */

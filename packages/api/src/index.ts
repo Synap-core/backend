@@ -23,6 +23,7 @@ export { systemRouter } from "./routers/system.js";
 export { hubRouter } from "./routers/hub.js";
 export { hubProtocolRestApp } from "./routers/hub-protocol-rest.js";
 export { syncReceiveApp } from "./routers/sync.js";
+export { webhooksInboundRouter } from "./routers/webhooks-inbound.js";
 export { createHubProtocolCallerContext } from "./routers/hub-protocol/utils.js";
 export { proposalsRouter } from "./routers/proposals.js";
 export { resolveIntelligenceService } from "./utils/intelligence-routing.js";

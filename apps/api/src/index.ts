@@ -42,6 +42,7 @@ import {
   externalChatApp,
   chatStreamApp,
   openaiCompatApp,
+  webhooksInboundRouter,
 } from "@synap/api";
 import { serve } from "@hono/node-server";
 import {
@@ -932,6 +933,9 @@ app.route("/api/provision", provisionRouter);
 // Connector sync endpoint (ES256 JWT from CP, pulls records from Nango)
 import { connectorsRouter as connectorsRestRouter } from "./routers/connectors.js";
 app.route("/api/connectors", connectorsRestRouter);
+
+// Inbound webhooks from third-party providers (e.g. Unipile messaging events)
+app.route("/api/webhooks", webhooksInboundRouter);
 
 // Webhook routes (before auth - uses webhook secret auth)
 import { webhookRouter } from "./webhooks/index.js";

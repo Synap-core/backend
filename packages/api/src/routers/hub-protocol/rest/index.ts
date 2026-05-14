@@ -39,5 +39,6 @@ export { registerNotificationsRoutes } from "./notifications.js";
 export { registerEntityShareRoutes } from "./entity-share.js";
 export { registerSetupRoutes } from "./setup.js";
 export { registerAgentsRoutes } from "./agents.js";
+export { registerMessagingRoutes } from "./messaging.js";
 
 export type { HubHono } from "./_shared.js";

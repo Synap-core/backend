@@ -1237,13 +1237,15 @@ export interface UpdateRequest {
 	/** Unique ID for this specific request */
 	requestId: string;
 	/** Who initiated the change? */
-	source: "user" | "ai" | "system";
+	source: "user" | "ai" | "system" | "intelligence" | "agent" | "openwebui-pipeline" | "openclaw" | "extension" | "cli" | "n8n" | "raycast";
 	sourceId: string;
 	/** Context */
 	workspaceId: string | null;
 	/** Target Entity */
 	targetType: "document" | "entity" | "whiteboard" | "view" | "profile";
 	targetId: string;
+	/** Human-readable target label resolved server-side when available. */
+	targetName?: string;
 	/** What kind of change? (aligns with EventAction) */
 	changeType: EventAction;
 	/**
@@ -1263,6 +1265,56 @@ export interface UpdateRequest {
 	};
 	/** AI Reasoning / Context */
 	reasoning?: string;
+	/** Short human-readable summary resolved server-side when available. */
+	summary?: string;
+	/**
+	 * Event-chain linkage.
+	 *
+	 * `correlationId` groups the requested/validated/completed events for this
+	 * proposal. `requestedEventId` points at the concrete `.requested` event when
+	 * the write path created one before pausing for review.
+	 */
+	correlationId?: string;
+	requestedEventId?: string;
+	validatedEventId?: string;
+	completedEventId?: string;
+}
+export interface ProposalReviewChange {
+	path: string;
+	label: string;
+	operation: "create" | "update" | "delete" | "set";
+	before?: unknown;
+	after?: unknown;
+	valueType?: string;
+}
+export interface ProposalReviewEvent {
+	eventId: string;
+	eventType: string;
+	phase?: string;
+	action?: string;
+	subjectType: string;
+	subjectId: string;
+	timestamp: string;
+	userId: string;
+	source?: string;
+	correlationId?: string;
+}
+export interface ProposalReviewModel {
+	summary: string;
+	actorName?: string;
+	targetName?: string;
+	reasoning?: string;
+	source?: UpdateRequest["source"];
+	sourceId?: string;
+	sourceMessageId?: string | null;
+	threadId?: string | null;
+	commandRunId?: string | null;
+	correlationId?: string;
+	requestedEventId?: string;
+	validatedEventId?: string;
+	completedEventId?: string;
+	changes: ProposalReviewChange[];
+	events: ProposalReviewEvent[];
 }
 declare enum MessageLinkTargetType {
 	ENTITY = "entity",
@@ -2978,8 +3030,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status?: "pending" | "rejected" | "validated" | "all" | undefined;
 			};
 			output: {
-				items: {
-					request: UpdateRequest;
+				items: ({
 					workspaceId: string | null;
 					sourceMessageId: string | null;
 					id: string;
@@ -2999,15 +3050,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reviewedAt: Date | null;
 					rejectionReason: string | null;
 					comments: unknown;
-				}[];
+				} & {
+					request: UpdateRequest;
+					authorName?: string;
+					targetName?: string;
+					review: ProposalReviewModel;
+				})[];
 				pagination: {
 					hasMore: boolean;
 					total?: number;
 					limit: number;
 					offset: number;
 				};
-				proposals: {
-					request: UpdateRequest;
+				proposals: ({
 					workspaceId: string | null;
 					sourceMessageId: string | null;
 					id: string;
@@ -3027,7 +3082,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reviewedAt: Date | null;
 					rejectionReason: string | null;
 					comments: unknown;
-				}[];
+				} & {
+					request: UpdateRequest;
+					authorName?: string;
+					targetName?: string;
+					review: ProposalReviewModel;
+				})[];
 			};
 			meta: object;
 		}>;
@@ -3036,7 +3096,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId: string;
 			};
 			output: {
-				request: UpdateRequest;
 				workspaceId: string | null;
 				sourceMessageId: string | null;
 				id: string;
@@ -3056,6 +3115,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewedAt: Date | null;
 				rejectionReason: string | null;
 				comments: unknown;
+				request: UpdateRequest;
+				authorName?: string;
+				targetName?: string;
+				review: ProposalReviewModel;
 			};
 			meta: object;
 		}>;

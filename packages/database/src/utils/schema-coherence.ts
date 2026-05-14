@@ -372,6 +372,13 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "archived_at",
     addedBy: "0020_workspaces_archived_at.sql",
   },
+
+  // messaging_accounts — provider-agnostic messaging connector (0022)
+  {
+    table: "messaging_accounts",
+    column: "user_id",
+    addedBy: "0022_messaging_accounts.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

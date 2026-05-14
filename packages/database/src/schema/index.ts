@@ -149,5 +149,5 @@ export * from "./source-configs.js";
 // NEW: Feeds (feed scheduling & status)
 export * from "./feeds.js";
 
-// NEW: Feeds (feed scheduling & status)
-export * from "./feeds.js";
+// NEW: Messaging Accounts (provider-agnostic connected messaging accounts)
+export * from "./messaging-accounts.js";

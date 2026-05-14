@@ -333,7 +333,8 @@ generate_kratos_config() {
     if [ "$is_localhost" = false ]; then
         cors_origins="$cors_origins
         - https://${domain}
-        - https://pod-admin.${bare_root}"
+        - https://pod-admin.${bare_root}
+        - https://*.synap.live"
     fi
 
     # Generate allowed return URLs

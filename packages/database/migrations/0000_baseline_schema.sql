@@ -2912,6 +2912,26 @@ ALTER TABLE "pod_settings" ADD COLUMN IF NOT EXISTS "settings"   jsonb NOT NULL 
 ALTER TABLE "pod_settings" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone NOT NULL DEFAULT now();
 ALTER TABLE "pod_settings" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone NOT NULL DEFAULT now();
 
+-- ─── messaging_accounts ──────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS messaging_accounts (
+  id           TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider     TEXT NOT NULL,
+  external_id  TEXT NOT NULL,
+  display_name TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL DEFAULT 'connected',
+  metadata     JSONB NOT NULL DEFAULT '{}',
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_messaging_accounts_user_id
+  ON messaging_accounts(user_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messaging_accounts_user_provider_external
+  ON messaging_accounts(user_id, provider, external_id);
+
 -- ─── _migrations tracking table ──────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS "_migrations" (
