@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { z } from "zod";
 import type {
   MessagingConnector,
@@ -122,12 +121,11 @@ export class UnipileConnector implements MessagingConnector {
   }
 
   async getAuthUrl(userId: string, redirectUrl: string): Promise<string> {
-    const res = await fetch(`${this.dsn}/api/v1/hosted/accounts/link`, {
+    const res = await fetch(`${this.dsn}/api/v2/hosted/accounts/link`, {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify({
         type: "create",
-        api_url: this.dsn,
         expiresOn: new Date(Date.now() + 3600_000).toISOString(),
         success_redirect_url: redirectUrl,
         failure_redirect_url: redirectUrl,
@@ -142,7 +140,7 @@ export class UnipileConnector implements MessagingConnector {
   }
 
   async getAccounts(_userId: string): Promise<MessagingAccount[]> {
-    const res = await fetch(`${this.dsn}/api/v1/accounts`, {
+    const res = await fetch(`${this.dsn}/api/v2/accounts`, {
       headers: this.headers(),
     });
     if (!res.ok) return [];
@@ -167,7 +165,7 @@ export class UnipileConnector implements MessagingConnector {
       limit: "50",
     });
     if (cursor) params.set("cursor", cursor);
-    const res = await fetch(`${this.dsn}/api/v1/chats?${params}`, {
+    const res = await fetch(`${this.dsn}/api/v2/chats?${params}`, {
       headers: this.headers(),
     });
     if (!res.ok) return { items: [] };
@@ -195,7 +193,7 @@ export class UnipileConnector implements MessagingConnector {
     threadId: string
   ): Promise<Message[]> {
     const res = await fetch(
-      `${this.dsn}/api/v1/chats/${threadId}/messages?account_id=${externalAccountId}`,
+      `${this.dsn}/api/v2/chats/${threadId}/messages?account_id=${externalAccountId}`,
       { headers: this.headers() }
     );
     if (!res.ok) return [];
@@ -219,7 +217,7 @@ export class UnipileConnector implements MessagingConnector {
     threadId: string,
     body: string
   ): Promise<void> {
-    const res = await fetch(`${this.dsn}/api/v1/chats/${threadId}/messages`, {
+    const res = await fetch(`${this.dsn}/api/v2/chats/${threadId}/messages`, {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify({ account_id: externalAccountId, text: body }),
@@ -231,16 +229,16 @@ export class UnipileConnector implements MessagingConnector {
     headers: Record<string, string>,
     rawBody: string | Buffer
   ): Promise<WebhookEvent | null> {
-    const sig =
-      headers["x-unipile-signature"] ?? headers["X-Unipile-Signature"];
-    if (this.webhookSecret && sig) {
-      const body =
-        typeof rawBody === "string" ? rawBody : rawBody.toString("utf8");
-      const expected = crypto
-        .createHmac("sha256", this.webhookSecret)
-        .update(body)
-        .digest("hex");
-      if (sig !== expected) return null;
+    // Unipile V2 uses a static custom header for webhook auth (not HMAC).
+    // When a webhook is created, you supply a custom header key/value pair.
+    // Unipile sends that header verbatim on every webhook request.
+    // We check the value of "unipile-auth" (case-insensitive) against the stored token.
+    if (this.webhookSecret) {
+      const authHeader =
+        headers["unipile-auth"] ??
+        headers["Unipile-Auth"] ??
+        headers["x-unipile-auth"];
+      if (authHeader !== this.webhookSecret) return null;
     }
     try {
       const payload = JSON.parse(

@@ -10157,6 +10157,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		getMessagingConfig: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				configured: boolean;
+				hasDsn: boolean;
+				hasApiKey: boolean;
+				hasWebhookSecret: boolean;
+				fromEnv: boolean;
+			};
+			meta: object;
+		}>;
+		saveMessagingConfig: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				unipileDsn?: string | undefined;
+				unipileApiKey?: string | undefined;
+				unipileWebhookSecret?: string | undefined;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
 		enrich: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				provider: "apify" | "apollo";
