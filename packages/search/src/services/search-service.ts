@@ -15,12 +15,20 @@ export interface UnifiedSearchOptions {
   collections?: string[];
   limit?: number;
   page?: number;
+  entityTypes?: string[];
+  documentTypes?: string[];
+  viewTypes?: string[];
+  tags?: string[];
+  status?: string[];
+  prefix?: boolean;
+  facetBy?: string[];
 }
 
 export interface SearchResponse {
   results: SearchResult[];
   found: number;
   searchTimeMs: number;
+  facetCounts?: Record<string, Record<string, number>>;
 }
 
 export class SearchService {
@@ -49,19 +57,31 @@ export class SearchService {
 
     // Build multi-search request
     const searches: MultiSearchRequestSchema["searches"] = collections.map(
-      (collection) => ({
-        collection,
-        q: options.query,
-        query_by: this.getQueryFields(collection),
-        filter_by: this.buildFilter(options),
-        sort_by: "_text_match:desc,updatedAt:desc",
-        per_page: options.limit || 20,
-        page: options.page || 1,
-        highlight_full_fields: this.getQueryFields(collection),
-        highlight_affix_num_tokens: 3,
-        prioritize_exact_match: true,
-        prioritize_token_position: true,
-      })
+      (collection) => {
+        const searchParams: any = {
+          collection,
+          q: options.query,
+          query_by: this.getQueryFields(collection),
+          filter_by: this.buildFilter({ ...options, collection }),
+          sort_by: "_text_match:desc,updatedAt:desc",
+          per_page: options.limit || 20,
+          page: options.page || 1,
+          highlight_full_fields: this.getQueryFields(collection),
+          highlight_affix_num_tokens: 3,
+          prioritize_exact_match: !options.prefix,
+          prioritize_token_position: true,
+        };
+
+        if (options.prefix) {
+          searchParams.infix = ["title", "content"];
+        }
+
+        if (options.facetBy?.length) {
+          searchParams.facet_by = options.facetBy.join(",");
+        }
+
+        return searchParams;
+      }
     );
 
     // Execute multi-search
@@ -99,10 +119,29 @@ export class SearchService {
     // Sort by text match score (unified ranking)
     allResults.sort((a, b) => b.textMatch - a.textMatch);
 
+    // Extract facet counts
+    const facetCounts: Record<string, Record<string, number>> = {};
+    if (options.facetBy?.length) {
+      response.results.forEach((result: any, index: number) => {
+        if (result.facet_counts) {
+          const collection = collections[index];
+          facetCounts[collection] = {};
+          result.facet_counts.forEach((fc: any) => {
+            facetCounts[collection][fc.field_name] = fc.stats?.total || 0;
+            fc.counts.forEach((c: any) => {
+              facetCounts[collection][`${fc.field_name}.${c.value}`] = c.count;
+            });
+          });
+        }
+      });
+    }
+
     return {
       results: allResults.slice(0, options.limit || 20),
       found: totalFound,
       searchTimeMs: totalSearchTime,
+      facetCounts:
+        Object.keys(facetCounts).length > 0 ? facetCounts : undefined,
     };
   }
 
@@ -117,20 +156,37 @@ export class SearchService {
       workspaceId?: string;
       limit?: number;
       page?: number;
+      entityTypes?: string[];
+      documentTypes?: string[];
+      viewTypes?: string[];
+      tags?: string[];
+      status?: string[];
+      prefix?: boolean;
+      facetBy?: string[];
     }
   ): Promise<SearchResponse> {
     const client = getTypesenseAdminClient();
 
-    const searchParams = {
+    const searchParams: any = {
       q: query,
       query_by: this.getQueryFields(collection),
-      filter_by: this.buildFilter(options),
+      filter_by: this.buildFilter({ ...options, collection }),
       sort_by: "_text_match:desc,updatedAt:desc",
       per_page: options.limit || 20,
       page: options.page || 1,
       highlight_full_fields: this.getQueryFields(collection),
       highlight_affix_num_tokens: 3,
+      prioritize_exact_match: !options.prefix,
+      prioritize_token_position: true,
     };
+
+    if (options.prefix) {
+      searchParams.infix = ["title", "content"];
+    }
+
+    if (options.facetBy?.length) {
+      searchParams.facet_by = options.facetBy.join(",");
+    }
 
     const result = await client
       .collections(collection)
@@ -145,10 +201,24 @@ export class SearchService {
       textMatch: hit.text_match || 0,
     }));
 
+    // Extract facet counts
+    let facetCounts: Record<string, Record<string, number>> | undefined;
+    if (options.facetBy?.length && (result as any).facet_counts) {
+      facetCounts = {};
+      facetCounts[collection] = {};
+      (result as any).facet_counts.forEach((fc: any) => {
+        facetCounts![collection][fc.field_name] = fc.stats?.total || 0;
+        fc.counts.forEach((c: any) => {
+          facetCounts![collection][`${fc.field_name}.${c.value}`] = c.count;
+        });
+      });
+    }
+
     return {
       results,
       found: result.found || 0,
       searchTimeMs: result.search_time_ms || 0,
+      facetCounts,
     };
   }
 
@@ -160,19 +230,55 @@ export class SearchService {
   }
 
   /**
-   * Build filter for multi-tenancy
+   * Build filter for multi-tenancy and optional filters
    */
   private buildFilter(options: {
     userId: string;
     workspaceId?: string;
+    collection?: string;
+    entityTypes?: string[];
+    documentTypes?: string[];
+    viewTypes?: string[];
+    tags?: string[];
+    status?: string[];
   }): string {
-    // Backtick-quote values so UUIDs/IDs with hyphens parse correctly
     const filters: string[] = [`userId:=\`${options.userId}\``];
 
     if (options.workspaceId) {
-      // Workspace-scoped search must also include pod-wide records.
       filters.push(
         `(workspaceId:=\`${options.workspaceId}\` || workspaceId:=\`${POD_WIDE_WORKSPACE_SCOPE}\`)`
+      );
+    }
+
+    const collection = options.collection;
+
+    if (collection === "entities" && options.entityTypes?.length) {
+      filters.push(
+        `entityType:=(${options.entityTypes.map((t) => `\`${t}\``).join("|")})`
+      );
+    }
+
+    if (collection === "documents" && options.documentTypes?.length) {
+      filters.push(
+        `documentType:=(${options.documentTypes.map((t) => `\`${t}\``).join("|")})`
+      );
+    }
+
+    if (collection === "views" && options.viewTypes?.length) {
+      filters.push(
+        `viewType:=(${options.viewTypes.map((t) => `\`${t}\``).join("|")})`
+      );
+    }
+
+    if (options.tags?.length) {
+      for (const tag of options.tags) {
+        filters.push(`tags:=\`${tag}\``);
+      }
+    }
+
+    if (options.status?.length) {
+      filters.push(
+        `status:=(${options.status.map((s) => `\`${s}\``).join("|")})`
       );
     }
 

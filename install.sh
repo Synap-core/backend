@@ -199,6 +199,10 @@ success "Config files downloaded"
 # ─── Generate Kratos config ────────────────────────────────────────────────────
 heading "Generating Kratos config"
 
+# Root domain (strip leading "pod." so the session cookie and Eve subdomain
+# entries are scoped to the shared parent, e.g. "team.example.com").
+ROOT_DOMAIN="${DOMAIN#pod.}"
+
 cat > "$INSTALL_DIR/config/kratos/kratos.yml" << KRATOS_EOF
 version: v1.3.1
 
@@ -219,6 +223,7 @@ serve:
       enabled: true
       allowed_origins:
         - https://$DOMAIN
+        - https://eve.$ROOT_DOMAIN
       allowed_headers:
         - Authorization
         - Content-Type
@@ -236,6 +241,8 @@ selfservice:
   allowed_return_urls:
     - https://$DOMAIN
     - https://$DOMAIN/*
+    - https://eve.$ROOT_DOMAIN
+    - https://eve.$ROOT_DOMAIN/*
 
   methods:
     password:
@@ -272,7 +279,7 @@ selfservice:
 
 session:
   cookie:
-    domain: $DOMAIN
+    domain: $ROOT_DOMAIN
     same_site: Lax
 
 identity:

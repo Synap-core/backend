@@ -97,15 +97,31 @@ export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
     return next();
   }
 
-  // Get session from Kratos — try X-Session-Token first (API clients),
-  // then fall back to cookie-based auth (browser).
-  // getKratosSession/ByToken returns null for 401/403 (invalid session),
-  // and throws for network errors or Kratos unavailability.
+  // Get session from Kratos.
+  // Priority: X-Session-Token header → cookie (browser flow) → cookie value
+  // as raw session token (API flow tokens stored in ory_kratos_session cookie).
+  //
+  // The third path handles Eve's login flow: kratos-auth/route.ts stores the
+  // raw API `session_token` as the ory_kratos_session cookie value. Kratos
+  // rejects that raw token when forwarded as a cookie (it expects an encrypted
+  // browser-flow cookie), but accepts it as X-Session-Token.
   let session: unknown;
   try {
-    session = sessionToken
-      ? await getKratosSessionByToken(sessionToken)
-      : await getKratosSession(cookie);
+    if (sessionToken) {
+      session = await getKratosSessionByToken(sessionToken);
+    } else {
+      // Try as encrypted browser cookie first
+      session = await getKratosSession(cookie);
+
+      // If cookie validation failed, extract ory_kratos_session value and try
+      // it as a raw session token (handles API-flow tokens stored as cookies)
+      if (!session) {
+        const match = cookie.match(/(?:^|;\s*)ory_kratos_session=([^;]+)/);
+        if (match?.[1]) {
+          session = await getKratosSessionByToken(match[1]).catch(() => null);
+        }
+      }
+    }
   } catch {
     return c.json(
       {

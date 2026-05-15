@@ -128,7 +128,7 @@ export class UnipileConnector implements MessagingConnector {
         type: "create",
         api_url: this.dsn,
         expiresOn: new Date(Date.now() + 3600_000).toISOString(),
-        notify_url: `${process.env.NEXT_PUBLIC_API_URL ?? ""}/webhooks/messaging`,
+        notify_url: `${process.env.PUBLIC_URL ?? ""}/api/webhooks/messaging`,
         success_redirect_url: redirectUrl,
         failure_redirect_url: redirectUrl,
         name: userId,
@@ -251,6 +251,17 @@ export class UnipileConnector implements MessagingConnector {
       const provider = mapProviderType(
         (payload.provider ?? payload.account_type ?? "unknown") as string
       );
+
+      // notify_url callback from hosted auth: { status: "CREATION_SUCCESS", account_id, name }
+      const status = payload.status as string | undefined;
+      if (status === "CREATION_SUCCESS" || status === "RECONNECTED") {
+        return {
+          type: "account.created",
+          accountExternalId: accountId,
+          provider,
+          userId: (payload.name ?? "") as string,
+        };
+      }
 
       if (eventType === "message_created" || eventType === "new_message") {
         const msg = payload.message as Record<string, unknown>;

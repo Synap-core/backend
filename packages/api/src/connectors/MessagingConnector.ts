@@ -43,6 +43,12 @@ export type WebhookEvent =
       type: "account.disconnected";
       accountExternalId: string;
       provider: string;
+    }
+  | {
+      type: "account.created";
+      accountExternalId: string;
+      provider: string;
+      userId: string;
     };
 
 export interface MessagingConnector {

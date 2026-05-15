@@ -85,10 +85,31 @@ export function registerMessagingRoutes(app: HubHono): void {
       return c.json({ error: "Messaging connector not configured" }, 503);
     const userId = c.get("userId") as string;
     try {
-      const dbAccounts = await db.query.messagingAccounts.findMany({
+      let dbAccounts = await db.query.messagingAccounts.findMany({
         where: eq(messagingAccounts.userId, userId),
       });
       const liveAccounts = await connector.getAccounts(userId).catch(() => []);
+
+      // Auto-seed: if DB has no accounts but Unipile has some (e.g. connected via
+      // Unipile dashboard directly), claim all live accounts for this user.
+      if (dbAccounts.length === 0 && liveAccounts.length > 0) {
+        for (const account of liveAccounts) {
+          await db
+            .insert(messagingAccounts)
+            .values({
+              userId,
+              provider: account.provider,
+              externalId: account.externalId,
+              displayName: account.displayName,
+              status: account.status,
+            })
+            .onConflictDoNothing();
+        }
+        dbAccounts = await db.query.messagingAccounts.findMany({
+          where: eq(messagingAccounts.userId, userId),
+        });
+      }
+
       const liveByExternalId = new Map(
         liveAccounts.map((a) => [a.externalId, a])
       );

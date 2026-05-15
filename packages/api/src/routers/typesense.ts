@@ -31,6 +31,13 @@ export const typesenseRouter = router({
           .optional(),
         limit: z.number().min(1).max(100).default(20),
         page: z.number().min(1).default(1),
+        entityTypes: z.array(z.string()).optional(),
+        documentTypes: z.array(z.string()).optional(),
+        viewTypes: z.array(z.string()).optional(),
+        tags: z.array(z.string()).optional(),
+        status: z.array(z.string()).optional(),
+        prefix: z.boolean().default(false),
+        facetBy: z.array(z.string()).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -42,6 +49,13 @@ export const typesenseRouter = router({
           collections: input.collections,
           limit: input.limit,
           page: input.page,
+          entityTypes: input.entityTypes,
+          documentTypes: input.documentTypes,
+          viewTypes: input.viewTypes,
+          tags: input.tags,
+          status: input.status,
+          prefix: input.prefix,
+          facetBy: input.facetBy,
         });
       } catch (error: any) {
         const message =
@@ -72,6 +86,13 @@ export const typesenseRouter = router({
         workspaceId: z.string().optional(),
         limit: z.number().min(1).max(100).default(20),
         page: z.number().min(1).default(1),
+        entityTypes: z.array(z.string()).optional(),
+        documentTypes: z.array(z.string()).optional(),
+        viewTypes: z.array(z.string()).optional(),
+        tags: z.array(z.string()).optional(),
+        status: z.array(z.string()).optional(),
+        prefix: z.boolean().default(false),
+        facetBy: z.array(z.string()).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -84,6 +105,13 @@ export const typesenseRouter = router({
             workspaceId: input.workspaceId,
             limit: input.limit,
             page: input.page,
+            entityTypes: input.entityTypes,
+            documentTypes: input.documentTypes,
+            viewTypes: input.viewTypes,
+            tags: input.tags,
+            status: input.status,
+            prefix: input.prefix,
+            facetBy: input.facetBy,
           }
         );
       } catch (error: any) {

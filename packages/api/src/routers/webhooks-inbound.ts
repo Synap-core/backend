@@ -127,6 +127,48 @@ webhooksInboundRouter.post("/messaging", async (c) => {
         },
         "Conversation entity upserted"
       );
+    } else if (event.type === "account.created") {
+      // notify_url callback: auto-sync the newly connected account into our DB
+      const connector = await getMessagingConnector();
+      if (connector) {
+        const liveAccounts = await connector
+          .getAccounts(event.userId)
+          .catch(() => []);
+        const account = liveAccounts.find(
+          (a) => a.externalId === event.accountExternalId
+        );
+        if (account) {
+          await db
+            .insert(messagingAccounts)
+            .values({
+              userId: event.userId,
+              provider: account.provider,
+              externalId: account.externalId,
+              displayName: account.displayName,
+              status: account.status,
+            })
+            .onConflictDoUpdate({
+              target: [
+                messagingAccounts.userId,
+                messagingAccounts.provider,
+                messagingAccounts.externalId,
+              ],
+              set: {
+                displayName: account.displayName,
+                status: account.status,
+                updatedAt: new Date(),
+              },
+            });
+          logger.info(
+            {
+              userId: event.userId,
+              externalId: event.accountExternalId,
+              provider: account.provider,
+            },
+            "Account auto-synced after hosted auth connection"
+          );
+        }
+      }
     } else if (event.type === "account.reconnection_required") {
       await db
         .update(messagingAccounts)

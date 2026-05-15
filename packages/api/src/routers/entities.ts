@@ -48,6 +48,7 @@ import { emitSideEffects, getBoss } from "@synap/events";
 import { randomUUID } from "crypto";
 import { syncPropertyToRelations } from "../utils/property-relation-sync.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
+import { dispatchWebhooksForEvent } from "../utils/webhook-delivery.js";
 
 /**
  * Standard entity shape for API responses.
@@ -1013,12 +1014,12 @@ export const entitiesRouter = router({
 
       // Snapshot old properties for relation sync (before update)
       let oldEntity:
-        | { profileId: string | null; properties: unknown }
+        | { profileId: string | null; properties: unknown; type: string | null }
         | undefined;
       if (input.properties) {
         oldEntity = await database.query.entities.findFirst({
           where: eq(entities.id, input.id),
-          columns: { profileId: true, properties: true },
+          columns: { profileId: true, properties: true, type: true },
         });
       }
 
@@ -1079,6 +1080,32 @@ export const entitiesRouter = router({
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
       });
+
+      // Dispatch webhooks for entity property updates (fire-and-forget, non-blocking)
+      if (input.properties && oldEntity) {
+        const oldProps =
+          (oldEntity.properties as Record<string, unknown>) ?? {};
+        const changedProperties: Record<string, unknown> = {};
+        const mergedProps = { ...oldProps, ...input.properties };
+        for (const key of new Set([
+          ...Object.keys(oldProps),
+          ...Object.keys(input.properties),
+        ])) {
+          if (
+            JSON.stringify(oldProps[key]) !== JSON.stringify(mergedProps[key])
+          ) {
+            changedProperties[key] = mergedProps[key];
+          }
+        }
+        if (Object.keys(changedProperties).length > 0) {
+          dispatchWebhooksForEvent("entity.update.completed", {
+            entityId: input.id,
+            entityType: oldEntity.type,
+            workspaceId: ctx.workspaceId,
+            changedProperties,
+          });
+        }
+      }
 
       // Dispatch entity embedding job (non-blocking — only if searchable fields changed)
       if (input.title !== undefined || input.description !== undefined) {
