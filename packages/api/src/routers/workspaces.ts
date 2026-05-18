@@ -1235,7 +1235,7 @@ export const workspacesRouter = router({
       // clean it up so the new invite can be accepted without a Kratos 409.
       const staleUser = await db.query.users.findFirst({
         where: eq(users.email, input.email.trim().toLowerCase()),
-        columns: { id: true, kratosIdentityId: true },
+        columns: { id: true },
       });
       if (staleUser) {
         const hasAnyMembership = await db.query.workspaceMembers.findFirst({
@@ -1243,14 +1243,10 @@ export const workspacesRouter = router({
           columns: { workspaceId: true },
         });
         if (!hasAnyMembership) {
-          if (staleUser.kratosIdentityId) {
-            try {
-              await kratosAdmin.deleteIdentity({
-                id: staleUser.kratosIdentityId,
-              });
-            } catch {
-              // Identity may have already been removed — proceed with DB cleanup.
-            }
+          try {
+            await kratosAdmin.deleteIdentity({ id: staleUser.id });
+          } catch {
+            // Identity may have already been removed — proceed with DB cleanup.
           }
           await db.delete(users).where(eq(users.id, staleUser.id));
         }
@@ -1875,21 +1871,13 @@ export const workspacesRouter = router({
           columns: { workspaceId: true },
         });
         if (!remainingMembership) {
-          const userRow = await db.query.users.findFirst({
-            where: eq(users.id, input.userId),
-            columns: { kratosIdentityId: true },
-          });
-          if (userRow?.kratosIdentityId) {
-            try {
-              await kratosAdmin.deleteIdentity({
-                id: userRow.kratosIdentityId,
-              });
-            } catch (err) {
-              logger.warn(
-                { err, userId: input.userId },
-                "Failed to delete Kratos identity on pod removal — re-invite may not work"
-              );
-            }
+          try {
+            await kratosAdmin.deleteIdentity({ id: input.userId });
+          } catch (err) {
+            logger.warn(
+              { err, userId: input.userId },
+              "Failed to delete Kratos identity on pod removal — re-invite may not work"
+            );
           }
           await db.delete(users).where(eq(users.id, input.userId));
         }

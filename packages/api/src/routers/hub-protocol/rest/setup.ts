@@ -1079,7 +1079,7 @@ export function registerSetupRoutes(app: HubHono): void {
         // keep the security guard and refuse.
         const existingUser = await db.query.users.findFirst({
           where: eq(users.email, email),
-          columns: { id: true, kratosIdentityId: true },
+          columns: { id: true },
         });
         const isStale =
           existingUser &&
@@ -1090,11 +1090,7 @@ export function registerSetupRoutes(app: HubHono): void {
 
         if (isStale && existingUser) {
           try {
-            if (existingUser.kratosIdentityId) {
-              await kratosAdmin.deleteIdentity({
-                id: existingUser.kratosIdentityId,
-              });
-            }
+            await kratosAdmin.deleteIdentity({ id: existingUser.id });
             await db.delete(users).where(eq(users.id, existingUser.id));
           } catch (cleanupErr) {
             logger.warn(

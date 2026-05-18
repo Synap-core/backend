@@ -105,8 +105,9 @@ export class NangoConnector implements SyncConnector {
     });
 
     if (!res.ok) {
+      const body = await res.text().catch(() => "");
       throw new Error(
-        `Nango createSession failed: ${res.status} ${res.statusText}`
+        `Nango createSession failed: ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 300)}` : ""}`
       );
     }
 
