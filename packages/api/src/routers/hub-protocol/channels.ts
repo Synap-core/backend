@@ -34,11 +34,7 @@ import {
   MessageRole,
   MessageAuthorType,
 } from "@synap/database/schema";
-import { AI_CHANNEL_FAMILY_VALUES } from "@synap-core/types";
-import {
-  resolveOrCreateChannel,
-  mapLegacyFamily,
-} from "../../utils/resolve-or-create-channel.js";
+import { resolveOrCreateChannel } from "../../utils/resolve-or-create-channel.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import { emitTyped } from "../../utils/event-emit.js";
 import { makeExcerpt } from "../../utils/excerpt.js";
@@ -114,18 +110,35 @@ async function assertAgentInWorkspace(
 
 export const channelsRouter = router({
   /**
-   * Resolve or create an AI channel from structural family.
+   * Resolve or create a channel using V2 channel type vocabulary.
    * Canonical contract used by hub/rest adapters.
    */
-  resolveAiChannel: scopedProcedure(["hub-protocol.write"])
+  resolveOrCreateChannel: scopedProcedure(["hub-protocol.write"])
     .input(
       z.object({
         userId: z.string(),
         workspaceId: z.string().uuid().optional(),
-        family: z.enum(AI_CHANNEL_FAMILY_VALUES),
+        channelType: z.enum([
+          ChannelType.PERSONAL,
+          ChannelType.THREAD,
+          ChannelType.SUB_THREAD,
+          ChannelType.AGENT_COLLAB,
+        ]),
         agentId: z.string().uuid().optional(),
+        agentSlug: z.string().optional(),
         contextObjectId: z.string().uuid().optional(),
-        contextObjectType: z.enum(["entity", "document", "view"]).optional(),
+        contextObjectType: z
+          .enum([
+            "workspace",
+            "entity",
+            "document",
+            "view",
+            "project",
+            "task",
+            "user",
+            "external",
+          ])
+          .optional(),
         parentChannelId: z.string().uuid().optional(),
         branchPurpose: z.string().max(500).optional(),
       })
@@ -134,13 +147,11 @@ export const channelsRouter = router({
       const channel = await resolveOrCreateChannel({
         userId: input.userId,
         workspaceId: input.workspaceId,
-        ...mapLegacyFamily({
-          family: input.family,
-          workspaceId: input.workspaceId,
-          contextObjectType: input.contextObjectType,
-          contextObjectId: input.contextObjectId,
-        }),
+        channelType: input.channelType,
+        contextObjectType: input.contextObjectType,
+        contextObjectId: input.contextObjectId,
         agentId: input.agentId,
+        agentSlug: input.agentSlug,
         parentChannelId: input.parentChannelId,
         branchPurpose: input.branchPurpose,
       });

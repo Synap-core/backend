@@ -114,21 +114,6 @@ export interface SendMessageRequest {
 }
 
 /**
- * AI channel family describes structural routing, not product labels.
- * - personal: user's pod-wide personal AI channel
- * - context: channel anchored to a concrete context object (entity/document/view)
- * - branch: branch channel with a parent channel
- */
-export const AI_CHANNEL_FAMILY_VALUES = [
-  "agent",
-  "workspace_group",
-  "context",
-  "branch",
-] as const;
-
-export type AIChannelFamily = (typeof AI_CHANNEL_FAMILY_VALUES)[number];
-
-/**
  * Send message response
  */
 export interface SendMessageResponse {

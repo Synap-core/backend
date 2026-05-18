@@ -8,18 +8,8 @@
  *   2. Workspace members  — every human across every workspace, deduped.
  *   3. Agent users        — non-human (`userType="agent"`) identities.
  *
- * Each section pulls its own query and renders independently — one slow
- * call doesn't block the others. Rows use the shared `ResourceRow`; the
- * actions column lives in a HeroUI Popover so the destructive options
- * stay one click off the surface.
- *
- * Workspace members open a Drawer showing per-workspace breakdown — the
- * Pod Admin app intentionally never edits workspace internals (Studio
- * owns those surfaces). Every "Open in Studio" link deep-links there.
- *
- * Stubs are clearly marked. Where the underlying tRPC procedure doesn't
- * exist yet, we render a disabled action with a tooltip and a TODO
- * comment pointing at the gap.
+ * `listPodMembers` is lifted to the page level so both PodAdminsSection
+ * and WorkspaceMembersSection share the same data + a single UserDetailDrawer.
  */
 
 import {
@@ -36,8 +26,6 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-  Select,
-  SelectItem,
   Spinner,
   Tooltip,
   useDisclosure,
@@ -48,14 +36,16 @@ import {
   CircleUser,
   Clock,
   Copy,
+  KeyRound,
   Mail,
   MoreHorizontal,
   Plus,
   ShieldCheck,
+  Trash2,
   Users,
   type LucideIcon,
 } from "lucide-react";
-import { Suspense, useCallback, useMemo, useRef, useState } from "react";
+import { Suspense, useMemo, useRef, useState } from "react";
 import { trpc } from "../../../lib/trpc";
 import { useOperatorEmail } from "../components/admin-shell";
 import { DetailDrawer } from "../components/detail-drawer";
@@ -74,7 +64,24 @@ import {
   studioDeepLinkForWorkspace,
 } from "./_lib/helpers";
 
-// ─── Page shell ─────────────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────
+
+type PodMember = {
+  id: string;
+  email: string;
+  name: string | null;
+  avatarUrl: string | null;
+  primaryRole: "owner" | "admin" | "editor" | "viewer";
+  workspaceCount: number;
+  workspaces: Array<{
+    id: string;
+    name: string;
+    role: string;
+    joinedAt: Date | string;
+  }>;
+};
+
+// ─── Page shell ──────────────────────────────────────────────────────
 
 export default function PeoplePage() {
   return (
@@ -99,9 +106,23 @@ function PeopleFallback() {
 
 function PeopleInner() {
   const inviteDisclosure = useDisclosure();
-  // Read once at the page level so all sections can react to the same
-  // focus param (member rows + agent rows live in different sub-cards).
   useFocusRow({ ready: true });
+
+  // Lifted so both PodAdminsSection and WorkspaceMembersSection share data.
+  const podMembersQuery = trpc.workspaces.listPodMembers.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+
+  // Single shared drawer for all human user detail.
+  const [selectedMember, setSelectedMember] = useState<PodMember | null>(null);
+  const [selectedIsPodAdmin, setSelectedIsPodAdmin] = useState(false);
+  const drawerDisclosure = useDisclosure();
+
+  function openMember(member: PodMember, isPodAdmin: boolean) {
+    setSelectedMember(member);
+    setSelectedIsPodAdmin(isPodAdmin);
+    drawerDisclosure.onOpen();
+  }
 
   return (
     <div className="px-6 py-6 max-w-[1400px]">
@@ -127,11 +148,26 @@ function PeopleInner() {
       </header>
 
       <div className="flex flex-col gap-4">
-        <PodAdminsSection />
-        <WorkspaceMembersSection />
+        <PodAdminsSection
+          podMembers={podMembersQuery.data}
+          onOpenMember={openMember}
+        />
+        <WorkspaceMembersSection
+          members={podMembersQuery.data ?? []}
+          isLoading={podMembersQuery.isLoading}
+          isError={podMembersQuery.isError}
+          onOpenMember={(m) => openMember(m, false)}
+        />
         <AgentUsersSection />
         <PendingInvitesSection />
       </div>
+
+      <UserDetailDrawer
+        member={selectedMember}
+        isPodAdmin={selectedIsPodAdmin}
+        isOpen={drawerDisclosure.isOpen}
+        onClose={drawerDisclosure.onClose}
+      />
 
       <AddPeopleModal
         isOpen={inviteDisclosure.isOpen}
@@ -141,25 +177,259 @@ function PeopleInner() {
   );
 }
 
-// ─── 1. Pod admins ──────────────────────────────────────────────────
+// ─── Shared: UserDetailDrawer ────────────────────────────────────────
 
-/**
- * Pod admins are humans whose membership in the `pod-admin` (operational)
- * workspace has role `owner` or `admin`. We surface them here so the
- * operator has a single place to see who can sign into this surface.
- *
- * The list is derived client-side from `workspaces.adminListAll` +
- * `workspaces.listMembers(pod-admin)`. There is no dedicated procedure
- * yet — TODO(phase-C): add `users.listPodAdmins` so we can drop two
- * round-trips.
- */
-function PodAdminsSection() {
+function UserDetailDrawer({
+  member,
+  isPodAdmin,
+  isOpen,
+  onClose,
+}: {
+  member: PodMember | null;
+  isPodAdmin: boolean;
+  isOpen: boolean;
+  onClose: () => void;
+}) {
+  const operatorEmail = useOperatorEmail();
+  const utils = trpc.useUtils();
+  const [confirmRemove, setConfirmRemove] = useState(false);
+
+  const isSelf = !!operatorEmail && operatorEmail === member?.email;
+
+  const resetMutation = trpc.system.resetUserPassword.useMutation({
+    onSuccess: () => {
+      addToast({
+        title: "Password reset",
+        description: `Reset sent to ${member?.email}.`,
+        color: "default",
+      });
+    },
+    onError: (err) => {
+      addToast({
+        title: "Reset failed",
+        description: err.message,
+        color: "danger",
+      });
+    },
+  });
+
+  const removeMutation = trpc.workspaces.removeFromPod.useMutation({
+    onSuccess: () => {
+      void utils.workspaces.listPodMembers.invalidate();
+      void utils.workspaces.adminListAll.invalidate();
+      void utils.workspaces.listInvites.invalidate();
+      addToast({
+        title: "User removed",
+        description: `${member?.email} has been removed from the pod.`,
+        color: "default",
+      });
+      setConfirmRemove(false);
+      onClose();
+    },
+    onError: (err) => {
+      addToast({
+        title: "Remove failed",
+        description: err.message,
+        color: "danger",
+      });
+      setConfirmRemove(false);
+    },
+  });
+
+  return (
+    <DetailDrawer
+      isOpen={isOpen}
+      onClose={onClose}
+      title={member?.name ?? member?.email ?? "—"}
+      subtitle={
+        member ? <span className="font-mono">{member.email}</span> : undefined
+      }
+      headerAccessory={
+        <Avatar
+          src={member?.avatarUrl ?? undefined}
+          name={member?.name ?? member?.email ?? "?"}
+          size="md"
+          radius="md"
+          classNames={{ base: "shrink-0" }}
+        />
+      }
+      footer={
+        <>
+          <Button variant="flat" radius="md" size="sm" onPress={onClose}>
+            Close
+          </Button>
+          {member?.workspaces[0] ? (
+            <Button
+              as="a"
+              href={studioDeepLinkForWorkspace(member.workspaces[0].id)}
+              target="_blank"
+              rel="noopener noreferrer"
+              color="primary"
+              variant="solid"
+              radius="md"
+              size="sm"
+            >
+              Open in Studio
+            </Button>
+          ) : null}
+        </>
+      }
+    >
+      {member ? (
+        <div className="flex flex-col gap-5">
+          {/* Identity */}
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusPill
+              kind={rolePillKind(member.primaryRole)}
+              label={member.primaryRole}
+            />
+            {isPodAdmin && <StatusPill kind="healthy" label="Pod admin" />}
+          </div>
+
+          {/* Workspace memberships */}
+          <div>
+            <h4 className="mb-2 text-[12px] font-medium text-foreground">
+              Workspaces ({member.workspaces.length})
+            </h4>
+            <div className="flex flex-col gap-1.5">
+              {member.workspaces.map((ws) => (
+                <div
+                  key={ws.id}
+                  className="flex items-center justify-between gap-3 rounded-md border border-foreground/[0.06] bg-foreground/[0.02] px-3 py-2"
+                >
+                  <div className="flex min-w-0 flex-col">
+                    <span className="truncate text-[12.5px] font-medium text-foreground">
+                      {ws.name || ws.id.slice(0, 8)}
+                    </span>
+                    <span className="truncate font-mono text-[10.5px] text-foreground/40">
+                      {ws.id}
+                    </span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <StatusPill kind={rolePillKind(ws.role)} label={ws.role} />
+                    <span className="tabular text-[11px] text-foreground/40">
+                      {formatRelative(new Date(ws.joinedAt))}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="border-t border-foreground/[0.06] pt-4">
+            <h4 className="mb-2 text-[12px] font-medium text-foreground">
+              Actions
+            </h4>
+            <div className="flex flex-col gap-2">
+              <Button
+                variant="flat"
+                size="sm"
+                radius="md"
+                startContent={<KeyRound className="h-3.5 w-3.5" />}
+                isDisabled={resetMutation.isPending}
+                isLoading={resetMutation.isPending}
+                className="justify-start text-[12.5px]"
+                onPress={() =>
+                  member &&
+                  resetMutation.mutate({ mode: "single", userId: member.id })
+                }
+              >
+                Reset password
+              </Button>
+
+              {isSelf ? (
+                <Tooltip content="You can't remove yourself.">
+                  <span className="block">
+                    <Button
+                      variant="flat"
+                      size="sm"
+                      radius="md"
+                      color="danger"
+                      isDisabled
+                      startContent={<Trash2 className="h-3.5 w-3.5" />}
+                      className="w-full justify-start text-[12.5px]"
+                    >
+                      Remove from pod
+                    </Button>
+                  </span>
+                </Tooltip>
+              ) : (
+                <Button
+                  variant="flat"
+                  size="sm"
+                  radius="md"
+                  color="danger"
+                  startContent={<Trash2 className="h-3.5 w-3.5" />}
+                  className="justify-start text-[12.5px]"
+                  onPress={() => setConfirmRemove(true)}
+                >
+                  Remove from pod
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {confirmRemove && member ? (
+        <Modal isOpen onClose={() => setConfirmRemove(false)} size="md">
+          <ModalContent>
+            <ModalHeader className="flex flex-col gap-1 border-b border-foreground/[0.06] px-6 py-4">
+              <h2 className="text-[15px] font-medium text-foreground">
+                Remove {member.email}?
+              </h2>
+            </ModalHeader>
+            <ModalBody className="gap-2 px-6 py-4">
+              <p className="text-[12.5px] text-foreground/85">
+                This removes them from all workspaces and deletes their pod
+                account. They can be re-invited with the same email afterwards.
+              </p>
+              <p className="text-[11.5px] text-foreground/55">
+                This cannot be undone.
+              </p>
+            </ModalBody>
+            <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
+              <Button
+                variant="flat"
+                radius="md"
+                size="sm"
+                onPress={() => setConfirmRemove(false)}
+                isDisabled={removeMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button
+                color="danger"
+                variant="solid"
+                radius="md"
+                size="sm"
+                isLoading={removeMutation.isPending}
+                onPress={() => removeMutation.mutate({ userId: member.id })}
+              >
+                Remove user
+              </Button>
+            </ModalFooter>
+          </ModalContent>
+        </Modal>
+      ) : null}
+    </DetailDrawer>
+  );
+}
+
+// ─── 1. Pod admins ───────────────────────────────────────────────────
+
+function PodAdminsSection({
+  podMembers,
+  onOpenMember,
+}: {
+  podMembers: PodMember[] | undefined;
+  onOpenMember: (member: PodMember, isPodAdmin: boolean) => void;
+}) {
   const workspacesQuery = trpc.workspaces.adminListAll.useQuery(undefined, {
     staleTime: 60_000,
   });
 
-  // Find the pod-admin workspace by `settings.systemSlug === "pod-admin"`
-  // — the same gate the backend uses to identify it.
   const podAdminWorkspaceId = useMemo(() => {
     if (!workspacesQuery.data) return undefined;
     for (const ws of workspacesQuery.data) {
@@ -171,10 +441,7 @@ function PodAdminsSection() {
 
   const membersQuery = trpc.workspaces.listMembers.useQuery(
     { workspaceId: podAdminWorkspaceId ?? "" },
-    {
-      enabled: !!podAdminWorkspaceId,
-      staleTime: 60_000,
-    }
+    { enabled: !!podAdminWorkspaceId, staleTime: 60_000 }
   );
 
   const isLoading =
@@ -196,7 +463,6 @@ function PodAdminsSection() {
         email: m.user.email,
         avatarUrl: m.user.avatarUrl,
         role: m.role,
-        joinedAt: m.joinedAt,
       }));
   }, [membersQuery.data]);
 
@@ -220,262 +486,53 @@ function PodAdminsSection() {
         <ResourceRowEmpty message="No pod admins yet — invite one above." />
       ) : (
         <div className="-mx-2">
-          {admins.map((admin) => (
-            <div
-              key={admin.id}
-              data-row-id={admin.id}
-              className="rounded-md transition-shadow"
-            >
-              <ResourceRow
-                Icon={ShieldCheck}
-                primary={admin.name ?? admin.email}
-                secondary={`${admin.email} · ${admin.role}`}
-                status={{ kind: "healthy", label: admin.role }}
-                actions={
-                  <PodAdminActions
-                    userId={admin.id}
-                    email={admin.email}
-                    isAdmin={admin.role === "owner" || admin.role === "admin"}
-                    adminCount={admins.length}
-                  />
-                }
-              />
-            </div>
-          ))}
+          {admins.map((admin) => {
+            // Look up full workspace breakdown from the shared pod members query.
+            const fullMember = podMembers?.find((m) => m.id === admin.id) ?? {
+              id: admin.id,
+              email: admin.email,
+              name: admin.name,
+              avatarUrl: admin.avatarUrl,
+              primaryRole: admin.role as PodMember["primaryRole"],
+              workspaceCount: 0,
+              workspaces: [],
+            };
+            return (
+              <div
+                key={admin.id}
+                data-row-id={admin.id}
+                className="rounded-md transition-shadow"
+              >
+                <ResourceRow
+                  Icon={ShieldCheck}
+                  primary={admin.name ?? admin.email}
+                  secondary={`${admin.email} · ${admin.role}`}
+                  status={{ kind: "healthy", label: admin.role }}
+                  onSelect={() => onOpenMember(fullMember, true)}
+                />
+              </div>
+            );
+          })}
         </div>
       )}
     </SectionCard>
   );
 }
 
-function PodAdminActions({
-  userId,
-  email,
-  isAdmin,
-  adminCount,
+// ─── 2. Workspace members ────────────────────────────────────────────
+
+function WorkspaceMembersSection({
+  members,
+  isLoading,
+  isError,
+  onOpenMember,
 }: {
-  userId: string;
-  email: string;
-  isAdmin: boolean;
-  adminCount: number;
+  members: PodMember[];
+  isLoading: boolean;
+  isError: boolean;
+  onOpenMember: (member: PodMember) => void;
 }) {
-  const utils = trpc.useUtils();
-  const operatorEmail = useOperatorEmail();
-  const [confirmRemove, setConfirmRemove] = useState(false);
-
-  const resetMutation = trpc.system.resetUserPassword.useMutation({
-    onSuccess: () => {
-      void utils.system.listUsers.invalidate();
-    },
-  });
-
-  const deleteMutation = trpc.system.deleteUser.useMutation({
-    onSuccess: () => {
-      void utils.workspaces.adminListAll.invalidate();
-      void utils.workspaces.listPodMembers.invalidate();
-      void utils.system.listUsers.invalidate();
-      addToast({
-        title: "User removed",
-        description: `${email} has been deleted.`,
-        color: "default",
-      });
-      setConfirmRemove(false);
-    },
-    onError: (err) => {
-      addToast({
-        title: "Remove failed",
-        description: err.message,
-        color: "danger",
-      });
-    },
-  });
-
-  // Disable Remove for self-delete and "last pod admin" cases. Demote
-  // remains stubbed (no backed procedure yet).
-  const isSelf = !!operatorEmail && operatorEmail === email;
-  const isLastAdmin = isAdmin && adminCount <= 1;
-  const removeDisabledReason = isSelf
-    ? "You can't remove yourself."
-    : isLastAdmin
-      ? "Pod must have at least one admin."
-      : null;
-
-  return (
-    <>
-      <Popover placement="bottom-end">
-        <PopoverTrigger>
-          <Button
-            isIconOnly
-            variant="light"
-            size="sm"
-            radius="full"
-            aria-label={`Actions for ${email}`}
-            className="text-foreground/40 opacity-0 transition-opacity group-hover:opacity-100"
-          >
-            <MoreHorizontal className="h-3.5 w-3.5" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="min-w-[200px] max-w-[260px] p-1">
-          <div className="flex w-full flex-col">
-            <Button
-              variant="light"
-              size="sm"
-              radius="sm"
-              isDisabled={resetMutation.isPending}
-              className="justify-start text-[12.5px]"
-              onPress={() => resetMutation.mutate({ mode: "single", userId })}
-            >
-              {resetMutation.isPending ? "Resetting…" : "Reset password"}
-            </Button>
-            <Tooltip content="Pending: workspaces.demoteMember">
-              <span className="block">
-                <Button
-                  variant="light"
-                  size="sm"
-                  radius="sm"
-                  isDisabled
-                  className="w-full justify-start text-[12.5px] text-warning"
-                >
-                  Demote
-                </Button>
-              </span>
-            </Tooltip>
-            {removeDisabledReason ? (
-              <Tooltip content={removeDisabledReason}>
-                <span className="block">
-                  <Button
-                    variant="light"
-                    size="sm"
-                    radius="sm"
-                    isDisabled
-                    className="w-full justify-start text-[12.5px] text-danger"
-                  >
-                    Remove
-                  </Button>
-                </span>
-              </Tooltip>
-            ) : (
-              <Button
-                variant="light"
-                size="sm"
-                radius="sm"
-                className="w-full justify-start text-[12.5px] text-danger"
-                onPress={() => setConfirmRemove(true)}
-              >
-                Remove
-              </Button>
-            )}
-          </div>
-        </PopoverContent>
-      </Popover>
-
-      {confirmRemove ? (
-        <ConfirmRemoveUserModal
-          email={email}
-          isPending={deleteMutation.isPending}
-          onCancel={() => setConfirmRemove(false)}
-          onConfirm={() => deleteMutation.mutate({ userId })}
-        />
-      ) : null}
-    </>
-  );
-}
-
-function ConfirmRemoveUserModal({
-  email,
-  isPending,
-  onCancel,
-  onConfirm,
-}: {
-  email: string;
-  isPending: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const { isOpen, onOpenChange } = useDisclosure({
-    defaultOpen: true,
-    onClose: onCancel,
-  });
-
-  return (
-    <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
-      <ModalContent>
-        <ModalHeader className="flex flex-col gap-1 border-b border-foreground/[0.06] px-6 py-4">
-          <h2 className="text-[15px] font-medium text-foreground">
-            Remove {email}?
-          </h2>
-        </ModalHeader>
-        <ModalBody className="gap-2 px-6 py-4">
-          <p className="text-[12.5px] text-foreground/85">
-            Permanently delete user? This deletes their workspace memberships,
-            agent users, and API keys.
-          </p>
-          <p className="text-[11.5px] text-foreground/55">
-            This cannot be undone.
-          </p>
-        </ModalBody>
-        <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
-          <Button
-            variant="flat"
-            radius="md"
-            size="sm"
-            onPress={onCancel}
-            isDisabled={isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            color="danger"
-            variant="solid"
-            radius="md"
-            size="sm"
-            isLoading={isPending}
-            onPress={onConfirm}
-          >
-            Remove user
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
-  );
-}
-
-// ─── 2. Workspace members ───────────────────────────────────────────
-
-type PodMember = {
-  id: string;
-  email: string;
-  name: string | null;
-  avatarUrl: string | null;
-  primaryRole: "owner" | "admin" | "editor" | "viewer";
-  workspaceCount: number;
-  workspaces: Array<{
-    id: string;
-    name: string;
-    role: string;
-    joinedAt: Date | string;
-  }>;
-};
-
-/**
- * Workspace members surfaces every human across the pod, deduplicated by
- * userId, with the highest role they hold across any workspace.
- */
-function WorkspaceMembersSection() {
-  const query = trpc.workspaces.listPodMembers.useQuery(undefined, {
-    staleTime: 60_000,
-  });
-
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const drawer = useDisclosure();
-
-  const members = query.data ?? [];
   const grouped = useMemo(() => groupByPrimaryRole(members), [members]);
-
-  const selected =
-    selectedId != null
-      ? (members.find((m) => m.id === selectedId) ?? null)
-      : null;
 
   return (
     <SectionCard
@@ -489,9 +546,9 @@ function WorkspaceMembersSection() {
         ) : null
       }
     >
-      {query.isLoading ? (
+      {isLoading ? (
         <ResourceRowSkeleton count={3} />
-      ) : query.isError ? (
+      ) : isError ? (
         <ResourceRowError message="Couldn't load workspace members." />
       ) : members.length === 0 ? (
         <ResourceRowEmpty message="No workspace members yet." />
@@ -522,10 +579,7 @@ function WorkspaceMembersSection() {
                           kind: rolePillKind(m.primaryRole),
                           label: m.primaryRole,
                         }}
-                        onSelect={() => {
-                          setSelectedId(m.id);
-                          drawer.onOpen();
-                        }}
+                        onSelect={() => onOpenMember(m)}
                       />
                     </div>
                   ))}
@@ -535,144 +589,12 @@ function WorkspaceMembersSection() {
           })}
         </div>
       )}
-
-      <MemberDrawer
-        member={selected}
-        isOpen={drawer.isOpen}
-        onClose={drawer.onClose}
-      />
     </SectionCard>
   );
 }
 
-function MemberDrawer({
-  member,
-  isOpen,
-  onClose,
-}: {
-  member: PodMember | null;
-  isOpen: boolean;
-  onClose: () => void;
-}) {
-  return (
-    <DetailDrawer
-      isOpen={isOpen}
-      onClose={onClose}
-      title={member?.name ?? member?.email ?? "—"}
-      subtitle={
-        member ? <span className="font-mono">{member.email}</span> : undefined
-      }
-      headerAccessory={
-        <Avatar
-          src={member?.avatarUrl ?? undefined}
-          name={member?.name ?? member?.email ?? "?"}
-          size="md"
-          radius="md"
-          classNames={{ base: "shrink-0" }}
-        />
-      }
-      footer={
-        <>
-          <Button variant="flat" radius="md" size="sm" onPress={onClose}>
-            Close
-          </Button>
-          {member && member.workspaces[0] ? (
-            <Button
-              as="a"
-              href={studioDeepLinkForWorkspace(member.workspaces[0].id)}
-              target="_blank"
-              rel="noopener noreferrer"
-              color="primary"
-              variant="solid"
-              radius="md"
-              size="sm"
-            >
-              Open in Studio
-            </Button>
-          ) : null}
-        </>
-      }
-    >
-      {member ? (
-        <div className="flex flex-col gap-4">
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] uppercase tracking-wider text-foreground/45">
-              Primary role
-            </span>
-            <StatusPill
-              kind={rolePillKind(member.primaryRole)}
-              label={member.primaryRole}
-            />
-          </div>
-          <div>
-            <h4 className="mb-2 text-[12px] font-medium text-foreground">
-              Workspaces
-            </h4>
-            <div className="flex flex-col gap-1.5">
-              {member.workspaces.map((ws) => (
-                <div
-                  key={ws.id}
-                  className="flex items-center justify-between gap-3 rounded-md border border-foreground/[0.06] bg-foreground/[0.02] px-3 py-2"
-                >
-                  <div className="flex min-w-0 flex-col">
-                    <span className="truncate text-[12.5px] font-medium text-foreground">
-                      {ws.name || ws.id.slice(0, 8)}
-                    </span>
-                    <span className="truncate font-mono text-[10.5px] text-foreground/40">
-                      {ws.id}
-                    </span>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span className="text-[11px] text-foreground/55">
-                      {ws.role}
-                    </span>
-                    <span className="tabular text-[11px] text-foreground/40">
-                      {formatRelative(new Date(ws.joinedAt))}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </DetailDrawer>
-  );
-}
+// ─── 3. Agent users ──────────────────────────────────────────────────
 
-function groupByPrimaryRole(
-  members: PodMember[]
-): Record<"owner" | "admin" | "editor" | "viewer", PodMember[]> {
-  const out: Record<"owner" | "admin" | "editor" | "viewer", PodMember[]> = {
-    owner: [],
-    admin: [],
-    editor: [],
-    viewer: [],
-  };
-  for (const m of members) {
-    if (m.primaryRole in out) out[m.primaryRole].push(m);
-  }
-  return out;
-}
-
-function rolePillKind(role: string): StatusKind {
-  if (role === "owner") return "healthy";
-  if (role === "admin") return "stale";
-  if (role === "editor") return "unknown";
-  return "unknown";
-}
-
-// ─── 3. Agent users ─────────────────────────────────────────────────
-
-/**
- * Agent users are non-human identities (`userType: "agent"`). They exist
- * pod-wide even though each is bound to one workspace — that's why they
- * surface here, not in Studio's per-workspace settings.
- *
- * Discovery uses `system.listUsers` filtered to `type: "agent"`. The
- * dedicated `agentUsers.list` procedure requires a workspaceId and isn't
- * usable for a pod-wide roster.
- */
 function AgentUsersSection() {
   const query = trpc.system.listUsers.useQuery(
     { type: "agent", limit: 200 },
@@ -708,12 +630,6 @@ function AgentUsersSection() {
             const created = agent.createdAt
               ? formatRelative(new Date(agent.createdAt))
               : "—";
-            // Active status: heuristic — workspaceMembershipCount > 0
-            // means the agent is reachable in at least one workspace.
-            // A real "key was used recently" hook would need
-            // apiKeys.adminListAll + lastUsedAt.
-            // TODO(phase-C): join apiKeys.lastUsedAt for an accurate
-            // "active" badge.
             const isActive = agent.workspaceMembershipCount > 0;
             return (
               <div
@@ -753,9 +669,7 @@ function AgentUserActions({ userId }: { userId: string }) {
       void utils.apiKeys.adminListAll.invalidate();
       addToast({
         title: "Keys revoked",
-        description: `${res.revokedCount} key${
-          res.revokedCount === 1 ? "" : "s"
-        } revoked.`,
+        description: `${res.revokedCount} key${res.revokedCount === 1 ? "" : "s"} revoked.`,
         color: "default",
       });
       setConfirm(null);
@@ -777,9 +691,7 @@ function AgentUserActions({ userId }: { userId: string }) {
         title: "Agent removed",
         description: `Removed ${res.removedCount} membership${
           res.removedCount === 1 ? "" : "s"
-        } and revoked ${res.revokedKeyCount} key${
-          res.revokedKeyCount === 1 ? "" : "s"
-        }.`,
+        } and revoked ${res.revokedKeyCount} key${res.revokedKeyCount === 1 ? "" : "s"}.`,
         color: "default",
       });
       setConfirm(null);
@@ -908,6 +820,114 @@ function ConfirmAgentActionModal({
         </ModalFooter>
       </ModalContent>
     </Modal>
+  );
+}
+
+// ─── Pending invites ─────────────────────────────────────────────────
+
+function PendingInvitesSection() {
+  const invitesQuery = trpc.workspaces.listInvites.useQuery(
+    { type: "pod" },
+    { staleTime: 30_000 }
+  );
+
+  const revokeMutation = trpc.workspaces.revokeInvite.useMutation({
+    onSuccess: () => {
+      void invitesQuery.refetch();
+      addToast({ title: "Invite revoked", color: "default" });
+    },
+    onError: (e) => {
+      addToast({
+        title: "Revoke failed",
+        description: e.message,
+        color: "danger",
+      });
+    },
+  });
+
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copyTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map()
+  );
+
+  function copyLink(token: string, id: string) {
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    void navigator.clipboard.writeText(`${origin}/invite/${token}`).then(() => {
+      setCopiedId(id);
+      const prev = copyTimers.current.get(id);
+      if (prev) clearTimeout(prev);
+      copyTimers.current.set(
+        id,
+        setTimeout(() => setCopiedId(null), 2000)
+      );
+    });
+  }
+
+  const pending = invitesQuery.data ?? [];
+
+  if (!invitesQuery.isLoading && pending.length === 0) return null;
+
+  return (
+    <SectionCard
+      title="Pending invites"
+      hint="Sent but not yet accepted"
+      actions={
+        pending.length > 0 ? (
+          <span className="text-[11px] tabular text-foreground/55">
+            {pending.length} pending
+          </span>
+        ) : null
+      }
+    >
+      {invitesQuery.isLoading ? (
+        <ResourceRowSkeleton count={1} />
+      ) : invitesQuery.isError ? (
+        <ResourceRowError message="Couldn't load pending invites." />
+      ) : (
+        <div className="-mx-2">
+          {pending.map((inv) => (
+            <ResourceRow
+              key={inv.id}
+              Icon={Clock}
+              primary={inv.email}
+              secondary={`${inv.role} · expires ${formatExpiresAt(inv.expiresAt)}`}
+              status={{ kind: "unknown" as StatusKind, label: "pending" }}
+              actions={
+                <div className="flex items-center gap-1">
+                  <Button
+                    isIconOnly
+                    size="sm"
+                    variant="flat"
+                    radius="md"
+                    aria-label="Copy invite link"
+                    onPress={() => copyLink(inv.token, inv.id)}
+                  >
+                    {copiedId === inv.id ? (
+                      <Check className="h-3.5 w-3.5 text-status-healthy" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="flat"
+                    radius="md"
+                    color="danger"
+                    isLoading={
+                      revokeMutation.isPending &&
+                      revokeMutation.variables?.id === inv.id
+                    }
+                    onPress={() => revokeMutation.mutate({ id: inv.id })}
+                  >
+                    Revoke
+                  </Button>
+                </div>
+              }
+            />
+          ))}
+        </div>
+      )}
+    </SectionCard>
   );
 }
 
@@ -1056,7 +1076,6 @@ function AddPeopleModal({
 
         <ModalBody className="gap-4 px-6 py-4">
           {results ? (
-            /* ── Success state ── */
             <div className="flex flex-col gap-2">
               {results.map((r, i) => {
                 const url = `${origin}/invite/${r.token}`;
@@ -1098,7 +1117,6 @@ function AddPeopleModal({
               })}
             </div>
           ) : (
-            /* ── Form state ── */
             <>
               <Input
                 label="Email"
@@ -1238,113 +1256,28 @@ function AddPeopleModal({
   );
 }
 
-// ─── Pending invites section ─────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────
 
-function PendingInvitesSection() {
-  const invitesQuery = trpc.workspaces.listInvites.useQuery(
-    { type: "pod" },
-    { staleTime: 30_000 }
-  );
-
-  const revokeMutation = trpc.workspaces.revokeInvite.useMutation({
-    onSuccess: () => {
-      void invitesQuery.refetch();
-      addToast({ title: "Invite revoked", color: "default" });
-    },
-    onError: (e) => {
-      addToast({
-        title: "Revoke failed",
-        description: e.message,
-        color: "danger",
-      });
-    },
-  });
-
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const copyTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
-    new Map()
-  );
-
-  function copyLink(token: string, id: string) {
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    void navigator.clipboard.writeText(`${origin}/invite/${token}`).then(() => {
-      setCopiedId(id);
-      const prev = copyTimers.current.get(id);
-      if (prev) clearTimeout(prev);
-      copyTimers.current.set(
-        id,
-        setTimeout(() => setCopiedId(null), 2000)
-      );
-    });
+function groupByPrimaryRole(
+  members: PodMember[]
+): Record<"owner" | "admin" | "editor" | "viewer", PodMember[]> {
+  const out: Record<"owner" | "admin" | "editor" | "viewer", PodMember[]> = {
+    owner: [],
+    admin: [],
+    editor: [],
+    viewer: [],
+  };
+  for (const m of members) {
+    if (m.primaryRole in out) out[m.primaryRole].push(m);
   }
-
-  const pending = invitesQuery.data ?? [];
-
-  if (!invitesQuery.isLoading && pending.length === 0) return null;
-
-  return (
-    <SectionCard
-      title="Pending invites"
-      hint="Sent but not yet accepted"
-      actions={
-        pending.length > 0 ? (
-          <span className="text-[11px] tabular text-foreground/55">
-            {pending.length} pending
-          </span>
-        ) : null
-      }
-    >
-      {invitesQuery.isLoading ? (
-        <ResourceRowSkeleton count={1} />
-      ) : invitesQuery.isError ? (
-        <ResourceRowError message="Couldn't load pending invites." />
-      ) : (
-        <div className="-mx-2">
-          {pending.map((inv) => (
-            <ResourceRow
-              key={inv.id}
-              Icon={Clock}
-              primary={inv.email}
-              secondary={`${inv.role} · expires ${formatExpiresAt(inv.expiresAt)}`}
-              status={{ kind: "unknown" as StatusKind, label: "pending" }}
-              actions={
-                <div className="flex items-center gap-1">
-                  <Button
-                    isIconOnly
-                    size="sm"
-                    variant="flat"
-                    radius="md"
-                    aria-label="Copy invite link"
-                    onPress={() => copyLink(inv.token, inv.id)}
-                  >
-                    {copiedId === inv.id ? (
-                      <Check className="h-3.5 w-3.5 text-status-healthy" />
-                    ) : (
-                      <Copy className="h-3.5 w-3.5" />
-                    )}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="flat"
-                    radius="md"
-                    color="danger"
-                    isLoading={
-                      revokeMutation.isPending &&
-                      revokeMutation.variables?.id === inv.id
-                    }
-                    onPress={() => revokeMutation.mutate({ id: inv.id })}
-                  >
-                    Revoke
-                  </Button>
-                </div>
-              }
-            />
-          ))}
-        </div>
-      )}
-    </SectionCard>
-  );
+  return out;
 }
 
-// Suppress unused-import warnings for icons referenced by lookup only.
+function rolePillKind(role: string): StatusKind {
+  if (role === "owner") return "healthy";
+  if (role === "admin") return "stale";
+  return "unknown";
+}
+
+// Suppress unused-import warnings for icons referenced only by type.
 void (Users as LucideIcon);

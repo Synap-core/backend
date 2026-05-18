@@ -54,6 +54,7 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { assertPackageTierAccess } from "../utils/tier-check.js";
 import { emitSideEffects, getBoss } from "@synap/events";
+import { kratosAdmin } from "@synap/auth";
 import { config, createLogger } from "@synap-core/core";
 import {
   ensureAgentThread,
@@ -1838,6 +1839,34 @@ export const workspacesRouter = router({
             workspaceId: wid,
             error: err instanceof Error ? err.message : "Unknown error",
           });
+        }
+      }
+
+      // If user has no remaining memberships, clean up their pod identity
+      // so the same email can be re-invited later.
+      if (removed.length > 0) {
+        const remainingMembership = await db.query.workspaceMembers.findFirst({
+          where: eq(workspaceMembers.userId, input.userId),
+          columns: { workspaceId: true },
+        });
+        if (!remainingMembership) {
+          const userRow = await db.query.users.findFirst({
+            where: eq(users.id, input.userId),
+            columns: { kratosIdentityId: true },
+          });
+          if (userRow?.kratosIdentityId) {
+            try {
+              await kratosAdmin.deleteIdentity({
+                id: userRow.kratosIdentityId,
+              });
+            } catch (err) {
+              logger.warn(
+                { err, userId: input.userId },
+                "Failed to delete Kratos identity on pod removal — re-invite may not work"
+              );
+            }
+          }
+          await db.delete(users).where(eq(users.id, input.userId));
         }
       }
 

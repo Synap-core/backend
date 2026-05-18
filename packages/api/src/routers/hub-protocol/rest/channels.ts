@@ -181,10 +181,10 @@ export function registerChannelsRoutes(app: HubHono): void {
         workspaceId: body.workspaceId,
         userId: body.userId,
       });
-      const result = await caller.channels.resolveAiChannel({
+      const result = await caller.channels.resolveOrCreateChannel({
         userId: body.userId,
         workspaceId: body.workspaceId,
-        family: "context",
+        channelType: "thread",
         contextObjectId: body.contextObjectId,
         contextObjectType: body.contextObjectType,
       });
@@ -228,10 +228,10 @@ export function registerChannelsRoutes(app: HubHono): void {
       if (!agent) {
         return c.json({ error: "Orchestrator agent not found" }, 404);
       }
-      const result = await caller.channels.resolveAiChannel({
+      const result = await caller.channels.resolveOrCreateChannel({
         userId,
         workspaceId,
-        family: "agent",
+        channelType: "personal",
         agentId: agent.id,
       });
       return c.json(result?.channel);

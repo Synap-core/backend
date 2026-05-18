@@ -58,10 +58,7 @@ import {
   resolveIntelligenceServiceByAgentId,
 } from "../utils/intelligence-routing.js";
 import { validateExternalUrl } from "../utils/validate-url.js";
-import {
-  resolveOrCreateChannel,
-  mapLegacyFamily,
-} from "../utils/resolve-or-create-channel.js";
+import { resolveOrCreateChannel } from "../utils/resolve-or-create-channel.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { emitTyped } from "../utils/event-emit.js";
 import { makeExcerpt } from "../utils/excerpt.js";
@@ -70,7 +67,6 @@ import { MessageLinksRepository } from "@synap/database";
 import {
   MessageLinkTargetType,
   MessageLinkRelationshipType,
-  AI_CHANNEL_FAMILY_VALUES,
 } from "@synap-core/types";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
@@ -160,7 +156,9 @@ async function deriveFeedQueries(
 }
 
 const CHANNEL_TYPE_VALUES = [
+  ChannelType.PERSONAL,
   ChannelType.THREAD,
+  ChannelType.SUB_THREAD,
   ChannelType.FEED,
   ChannelType.EXTERNAL,
   ChannelType.AGENT_COLLAB,
@@ -529,45 +527,10 @@ async function listChannelsWithFlags(params: {
 
 export const channelsRouter = router({
   /**
-   * Resolve AI channel by structural family.
-   */
-  resolveAiChannel: protectedProcedure
-    .input(
-      z.object({
-        workspaceId: z.string().uuid().optional(),
-        family: z.enum(AI_CHANNEL_FAMILY_VALUES).default("agent"),
-        contextObjectId: z.string().uuid().optional(),
-        contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
-        parentChannelId: z.string().uuid().optional(),
-        branchPurpose: z.string().max(500).optional(),
-        /** Agent slug to assign when creating the channel (e.g. "networking"). */
-        agentSlug: z.string().max(100).optional(),
-      })
-    )
-    .query(async ({ input, ctx }) => {
-      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
-      const channel = await resolveOrCreateChannel({
-        userId: ctx.userId,
-        workspaceId,
-        ...mapLegacyFamily({
-          family: input.family,
-          workspaceId,
-          contextObjectType: input.contextObjectType,
-          contextObjectId: input.contextObjectId,
-        }),
-        parentChannelId: input.parentChannelId,
-        branchPurpose: input.branchPurpose,
-        agentSlug: input.agentSlug,
-      });
-      return { channel };
-    }),
-
-  /**
    * Resolve or create a channel using the canonical V2 channelType vocabulary.
    *
-   * Replaces `resolveAiChannel` for new frontend code. Speaks the spec's
-   * model directly — channelType + optional contextObjectType + scope — so
-   * there's no longer a translation layer between the wire and the database.
+   * Speaks the spec's model directly — channelType + optional contextObjectType
+   * + scope — so there's no translation layer between the wire and the database.
    *
    * Spec: synap-team-docs/content/team/platform/channel-system.mdx
    */
@@ -995,8 +958,15 @@ export const channelsRouter = router({
         attachmentEntityIds: z.array(z.string().uuid()).max(10).optional(),
         /** Deep Analysis mode — routes to the COMPLEX tier (Opus) for max reasoning quality */
         deepAnalysis: z.boolean().optional(),
-        /** Structural family for resolving default channel when channelId is omitted */
-        aiChannelFamily: z.enum(AI_CHANNEL_FAMILY_VALUES).optional(),
+        /** Channel type for resolving default channel when channelId is omitted (V2 vocab) */
+        channelType: z
+          .enum([
+            ChannelType.PERSONAL,
+            ChannelType.THREAD,
+            ChannelType.SUB_THREAD,
+            ChannelType.AGENT_COLLAB,
+          ])
+          .optional(),
         contextObjectId: z.string().uuid().optional(),
         contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
         branchPurpose: z.string().max(500).optional(),
@@ -1065,12 +1035,9 @@ export const channelsRouter = router({
         const resolvedChannel = await resolveOrCreateChannel({
           userId,
           workspaceId,
-          ...mapLegacyFamily({
-            family: input.aiChannelFamily ?? "agent",
-            workspaceId,
-            contextObjectType: input.contextObjectType,
-            contextObjectId: input.contextObjectId,
-          }),
+          channelType: input.channelType ?? ChannelType.PERSONAL,
+          contextObjectType: input.contextObjectType,
+          contextObjectId: input.contextObjectId,
           parentChannelId: input.parentChannelId,
           branchPurpose: input.branchPurpose,
         });
