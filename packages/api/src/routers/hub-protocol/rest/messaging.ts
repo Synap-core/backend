@@ -175,11 +175,10 @@ export function registerMessagingRoutes(app: HubHono): void {
       const url = await connector.getAuthUrl(userId, redirectUrl);
       return c.json({ url }, 200);
     } catch (err) {
-      logger.error({ err, userId }, "GET /messaging/auth-url failed");
-      return c.json(
-        { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
+      const message = err instanceof Error ? err.message : "Unknown error";
+      logger.error({ err, userId, message }, "GET /messaging/auth-url failed");
+      c.header("Cache-Control", "no-store");
+      return c.json({ error: message }, 500);
     }
   });
 

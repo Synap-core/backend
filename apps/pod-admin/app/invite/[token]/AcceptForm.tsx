@@ -199,7 +199,16 @@ export function AcceptForm({ token }: { token: string }) {
           <RegisterPanel
             token={token}
             inviteEmail={preview.email}
-            onSuccess={() => window.location.assign("/login?return=/")}
+            onSuccess={() => {
+              const crmUrl = process.env.NEXT_PUBLIC_CRM_URL;
+              if (crmUrl) {
+                window.location.assign(
+                  `${crmUrl}/login?podUrl=${encodeURIComponent(POD_URL)}`
+                );
+              } else {
+                window.location.assign("/login?return=/");
+              }
+            }}
           />
         </Tab>
         <Tab

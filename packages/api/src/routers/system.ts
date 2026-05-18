@@ -46,6 +46,7 @@ import {
   setDynamicCorsOrigins,
 } from "../utils/cors-cache.js";
 import { getTrustedIssuerSeedHealth } from "../utils/startup-health.js";
+import { kratosAdmin } from "@synap/auth";
 
 const execAsync = promisify(execCb);
 
@@ -1017,14 +1018,6 @@ export const systemRouter = router({
       })
     )
     .mutation(async ({ input }) => {
-      const kratosAdminUrl = process.env.KRATOS_ADMIN_URL;
-      if (!kratosAdminUrl) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "KRATOS_ADMIN_URL is not configured on this pod",
-        });
-      }
-
       const targets =
         input.mode === "all_humans"
           ? await db.query.users.findMany({
@@ -1058,42 +1051,32 @@ export const systemRouter = router({
 
       for (const target of targets) {
         const tempPassword = crypto.randomBytes(12).toString("base64url");
-        const updateResp = await fetch(
-          `${kratosAdminUrl}/admin/identities/${target.id}`,
-          {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
+        try {
+          const identity = await kratosAdmin.getIdentity({ id: target.id });
+          await kratosAdmin.updateIdentity({
+            id: target.id,
+            updateIdentityBody: {
+              schema_id: identity.data.schema_id,
+              state: (identity.data.state ?? "active") as never,
+              traits: identity.data.traits ?? { email: target.email },
               credentials: {
                 password: { config: { password: tempPassword } },
               },
-            }),
-          }
-        ).catch((error: unknown) => {
+            },
+          });
+          results.push({
+            userId: target.id,
+            email: target.email,
+            tempPassword,
+          });
+        } catch (error: unknown) {
           failures.push({
             userId: target.id,
             email: target.email,
-            error: error instanceof Error ? error.message : "Network error",
+            error:
+              error instanceof Error ? error.message : "Kratos update failed",
           });
-          return null;
-        });
-
-        if (!updateResp) continue;
-        if (!updateResp.ok) {
-          const body = await updateResp.text().catch(() => "");
-          failures.push({
-            userId: target.id,
-            email: target.email,
-            error: `Kratos ${updateResp.status}: ${body.slice(0, 240)}`,
-          });
-          continue;
         }
-
-        results.push({
-          userId: target.id,
-          email: target.email,
-          tempPassword,
-        });
       }
 
       if (results.length === 0) {

@@ -1073,25 +1073,41 @@ export function registerSetupRoutes(app: HubHono): void {
       const status = (err as { response?: { status?: number } })?.response
         ?.status;
       if (status === 409) {
-        // Identity already exists. If the account is stale (no workspace
-        // memberships) we can safely delete it and retry — this covers users
-        // who were removed without full cleanup. If it's an active account we
-        // keep the security guard and refuse.
+        // Identity already exists. Two stale cases we can safely clean up:
+        //   A) users row exists + no workspace memberships (removed without cleanup)
+        //   B) orphaned Kratos identity with no users row at all
+        // Active accounts (has memberships) keep the security guard.
         const existingUser = await db.query.users.findFirst({
           where: eq(users.email, email),
           columns: { id: true },
         });
-        const isStale =
+
+        let kratosIdentityId: string | null = existingUser?.id ?? null;
+
+        if (!existingUser) {
+          // Orphaned identity — look it up in Kratos directly.
+          const { data: matches } = await kratosAdmin.listIdentities({
+            credentialsIdentifier: email,
+            pageSize: 1,
+          });
+          kratosIdentityId = matches?.[0]?.id ?? null;
+        }
+
+        const hasActiveMembership =
           existingUser &&
-          !(await db.query.workspaceMembers.findFirst({
+          !!(await db.query.workspaceMembers.findFirst({
             where: eq(workspaceMembers.userId, existingUser.id),
             columns: { workspaceId: true },
           }));
 
-        if (isStale && existingUser) {
+        const isStale = kratosIdentityId && !hasActiveMembership;
+
+        if (isStale) {
           try {
-            await kratosAdmin.deleteIdentity({ id: existingUser.id });
-            await db.delete(users).where(eq(users.id, existingUser.id));
+            await kratosAdmin.deleteIdentity({ id: kratosIdentityId! });
+            if (existingUser) {
+              await db.delete(users).where(eq(users.id, existingUser.id));
+            }
           } catch (cleanupErr) {
             logger.warn(
               { cleanupErr, email },
