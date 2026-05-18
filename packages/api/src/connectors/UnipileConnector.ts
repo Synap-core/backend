@@ -127,7 +127,6 @@ export class UnipileConnector implements MessagingConnector {
       headers: this.headers(),
       body: JSON.stringify({
         type: "create",
-        api_url: this.dsn,
         expiresOn: new Date(Date.now() + 3600_000).toISOString(),
         // Only include notify_url when PUBLIC_URL is a valid absolute URL —
         // Unipile rejects the request if this is empty or relative.

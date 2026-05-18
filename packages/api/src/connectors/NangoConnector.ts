@@ -100,7 +100,6 @@ export class NangoConnector implements SyncConnector {
         end_user: { id: userId, display_name: userId },
         // Omit allowed_integrations to show all configured integrations
         ...(provider !== "*" ? { allowed_integrations: [provider] } : {}),
-        metadata: { workspaceId },
       }),
     });
 
