@@ -48,6 +48,7 @@ import {
   RelationDefRepository,
   SYSTEM_RELATION_TYPES,
   sql,
+  inArray,
 } from "@synap/database";
 import {
   relations,

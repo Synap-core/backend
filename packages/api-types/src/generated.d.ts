@@ -2183,6 +2183,36 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		batchCreate: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				entities: {
+					refKey: string;
+					profileSlug: string;
+					title: string;
+					description?: string | undefined;
+					properties?: Record<string, unknown> | undefined;
+					content?: string | undefined;
+					source?: "user" | "system" | "ai" | "intelligence" | "agent" | "cli" | undefined;
+					profileHints?: {
+						displayName?: string | undefined;
+						icon?: string | undefined;
+						color?: string | undefined;
+						description?: string | undefined;
+					} | undefined;
+				}[];
+			};
+			output: {
+				created: number;
+				skipped: number;
+				profilesCreated: number;
+				entityIds: Record<string, string>;
+				errors: {
+					refKey: string;
+					error: string;
+				}[];
+			};
+			meta: object;
+		}>;
 		adminGet: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
@@ -6189,6 +6219,34 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		batchCreate: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				relations: {
+					sourceEntityId: string;
+					targetEntityId: string;
+					type: string;
+					metadata?: Record<string, unknown> | undefined;
+					typeHints?: {
+						displayName?: string | undefined;
+						description?: string | undefined;
+						isDirectional?: boolean | undefined;
+						uiHints?: Record<string, unknown> | undefined;
+					} | undefined;
+				}[];
+			};
+			output: {
+				created: number;
+				skipped: number;
+				relationDefsCreated: number;
+				errors: {
+					sourceEntityId: string;
+					targetEntityId: string;
+					type: string;
+					error: string;
+				}[];
+			};
+			meta: object;
+		}>;
 	}>>;
 	graph: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -7021,6 +7079,107 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				count: number;
+			};
+			meta: object;
+		}>;
+		applyDefinition: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				definition: {
+					[x: string]: unknown;
+					workspaceName?: string | undefined;
+					description?: string | undefined;
+					profiles?: {
+						slug: string;
+						displayName: string;
+						icon?: string | undefined;
+						color?: string | undefined;
+						description?: string | undefined;
+						scope?: string | undefined;
+						properties?: {
+							slug: string;
+							valueType: string;
+							label?: string | undefined;
+							inputType?: string | undefined;
+							placeholder?: string | undefined;
+							enumValues?: string[] | undefined;
+							constraints?: Record<string, unknown> | undefined;
+							targetProfileSlug?: string | undefined;
+						}[] | undefined;
+						uiHints?: {
+							icon?: string | undefined;
+							color?: string | undefined;
+							description?: string | undefined;
+						} | undefined;
+						propertyDefs?: {
+							slug: string;
+							valueType: string;
+							required?: boolean | undefined;
+							constraints?: {
+								[x: string]: unknown;
+								enum?: string[] | undefined;
+							} | undefined;
+							uiHints?: {
+								label?: string | undefined;
+								inputType?: string | undefined;
+								placeholder?: string | undefined;
+							} | undefined;
+						}[] | undefined;
+					}[] | undefined;
+					views?: Record<string, unknown>[] | undefined;
+					bentoLayout?: Record<string, unknown>[] | undefined;
+					bentoViewBlocks?: Record<string, unknown>[] | undefined;
+					bentoViewName?: string | undefined;
+					suggestedEntities?: {
+						profileSlug: string;
+						title: string;
+						properties?: Record<string, unknown> | undefined;
+						content?: string | undefined;
+						refKey?: string | undefined;
+					}[] | undefined;
+					seedEntities?: {
+						profileSlug: string;
+						title: string;
+						properties?: Record<string, unknown> | undefined;
+						content?: string | undefined;
+						refKey?: string | undefined;
+					}[] | undefined;
+					suggestedRelations?: {
+						sourceRef: string;
+						targetRef: string;
+						type: string;
+						metadata?: Record<string, unknown> | undefined;
+					}[] | undefined;
+					relationDefs?: {
+						slug: string;
+						displayName: string;
+						description?: string | undefined;
+						isDirectional?: boolean | undefined;
+						uiHints?: Record<string, unknown> | undefined;
+					}[] | undefined;
+					entityLinks?: Record<string, unknown>[] | undefined;
+					displayTemplates?: Record<string, unknown>[] | undefined;
+					layoutConfig?: Record<string, unknown> | undefined;
+					profileEntityBentoTemplates?: Record<string, unknown> | undefined;
+				};
+				mode?: "update" | "create" | undefined;
+				workspaceId?: string | undefined;
+				proposalId?: string | undefined;
+				appId?: string | undefined;
+			};
+			output: {
+				workspaceId: string;
+				profilesCreated: number;
+				entitiesCreated: number;
+				entitiesSkipped: number;
+				relationsCreated: number;
+				relationsSkipped: number;
+				relationDefsCreated: number;
+				entityIds: Record<string, string>;
+				errors: {
+					stage: string;
+					error: string;
+					refKey?: string | undefined;
+				}[];
 			};
 			meta: object;
 		}>;

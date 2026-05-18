@@ -1579,7 +1579,7 @@ export const entitiesRouter = router({
             color: hints.color,
             description: hints.description,
           },
-          scope: "workspace" as const,
+          scope: "workspace" as any,
           workspaceId: ctx.workspaceId,
           userId: ctx.userId,
         });

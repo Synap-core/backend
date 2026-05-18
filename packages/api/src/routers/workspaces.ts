@@ -3276,10 +3276,8 @@ export const workspacesRouter = router({
         }
 
         // 2. Batch create entities
-        const entityRepo = new EntityRepository(database, eventRepo);
-        const profileRepo = new (
-          await import("@synap/database")
-        ).ProfileRepository(database);
+        const { ProfileRepository } = await import("@synap/database");
+        const profileRepo = new ProfileRepository(database);
         const profileCache = new Map<string, string>();
 
         // Pre-load existing profiles
@@ -3313,11 +3311,13 @@ export const workspacesRouter = router({
           if (profileDef && !profileHintsMap.has(e.profileSlug)) {
             profileHintsMap.set(e.profileSlug, {
               displayName:
-                profileDef.displayName ?? profileDef.uiHints?.displayName,
-              icon: profileDef.icon ?? profileDef.uiHints?.icon,
-              color: profileDef.color ?? profileDef.uiHints?.color,
+                profileDef.displayName ??
+                (profileDef.uiHints as any)?.displayName,
+              icon: profileDef.icon ?? (profileDef.uiHints as any)?.icon,
+              color: profileDef.color ?? (profileDef.uiHints as any)?.color,
               description:
-                profileDef.description ?? profileDef.uiHints?.description,
+                profileDef.description ??
+                (profileDef.uiHints as any)?.description,
             });
           }
         }
@@ -3334,7 +3334,7 @@ export const workspacesRouter = router({
                 color: hints.color,
                 description: hints.description,
               },
-              scope: "workspace" as const,
+              scope: "workspace" as any,
               workspaceId: input.workspaceId,
               userId: ctx.userId,
             });
@@ -3366,6 +3366,7 @@ export const workspacesRouter = router({
         const entityIds: Record<string, string> = {};
         let entitiesCreated = 0;
         let entitiesSkipped = 0;
+        const entityRepo = new EntityRepository(database, eventRepo);
 
         for (const e of allEntities) {
           const cacheKey = `${e.profileSlug}:${e.title}`;
@@ -3479,20 +3480,20 @@ export const workspacesRouter = router({
         };
       }
 
-      // ── CREATE mode: delegate to createFromDefinition ───────────────────
-      const createResult = await workspacesRouter.createFromDefinition.mutate({
-        definition: input.definition,
-        proposalId: input.proposalId,
-        appId: input.appId,
+      // ── CREATE mode: delegate to createWorkspaceFromDefinition directly ─
+      const createResult = await createWorkspaceFromDefinition({
+        definition: input.definition as WorkspaceDefinitionInput,
+        userId: ctx.userId,
         workspaceName: input.definition.workspaceName,
+        createdBy: "user",
         workspaceType: "personal",
+        onProgress: () => {},
       });
 
       // After workspace is created, apply entities and relations
       const workspaceId = createResult.workspaceId;
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
-      const entityRepo = new EntityRepository(database, eventRepo);
       const relationRepo = new RelationRepository(database, eventRepo);
       const relDefRepo = new RelationDefRepository(database);
 
@@ -3558,7 +3559,7 @@ export const workspacesRouter = router({
 
       return {
         workspaceId,
-        profilesCreated: 0, // handled by createFromDefinition
+        profilesCreated: 0,
         entitiesCreated: allEntities.length,
         entitiesSkipped: 0,
         relationsCreated,
