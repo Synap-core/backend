@@ -1231,6 +1231,31 @@ export const workspacesRouter = router({
         }
       }
 
+      // If a stale account exists for this email (no workspace memberships),
+      // clean it up so the new invite can be accepted without a Kratos 409.
+      const staleUser = await db.query.users.findFirst({
+        where: eq(users.email, input.email.trim().toLowerCase()),
+        columns: { id: true, kratosIdentityId: true },
+      });
+      if (staleUser) {
+        const hasAnyMembership = await db.query.workspaceMembers.findFirst({
+          where: eq(workspaceMembers.userId, staleUser.id),
+          columns: { workspaceId: true },
+        });
+        if (!hasAnyMembership) {
+          if (staleUser.kratosIdentityId) {
+            try {
+              await kratosAdmin.deleteIdentity({
+                id: staleUser.kratosIdentityId,
+              });
+            } catch {
+              // Identity may have already been removed — proceed with DB cleanup.
+            }
+          }
+          await db.delete(users).where(eq(users.id, staleUser.id));
+        }
+      }
+
       const token = randomBytes(32).toString("hex");
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
