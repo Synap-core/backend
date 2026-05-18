@@ -121,6 +121,7 @@ export class UnipileConnector implements MessagingConnector {
   }
 
   async getAuthUrl(userId: string, redirectUrl: string): Promise<string> {
+    const publicUrl = process.env.PUBLIC_URL?.trim();
     const res = await fetch(`${this.dsn}/api/v1/hosted/accounts/link`, {
       method: "POST",
       headers: this.headers(),
@@ -128,16 +129,25 @@ export class UnipileConnector implements MessagingConnector {
         type: "create",
         api_url: this.dsn,
         expiresOn: new Date(Date.now() + 3600_000).toISOString(),
-        notify_url: `${process.env.PUBLIC_URL ?? ""}/api/webhooks/messaging`,
+        // Only include notify_url when PUBLIC_URL is a valid absolute URL —
+        // Unipile rejects the request if this is empty or relative.
+        ...(publicUrl
+          ? { notify_url: `${publicUrl}/api/webhooks/messaging` }
+          : {}),
         success_redirect_url: redirectUrl,
         failure_redirect_url: redirectUrl,
         name: userId,
       }),
     });
-    if (!res.ok) throw new Error(`Unipile getAuthUrl failed: ${res.status}`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(
+        `Unipile getAuthUrl failed: ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 300)}` : ""}`
+      );
+    }
     const parsed = UnipileAuthLinkResponseSchema.safeParse(await res.json());
     if (!parsed.success)
-      throw new Error("Unipile getAuthUrl: unexpected response");
+      throw new Error("Unipile getAuthUrl: unexpected response shape");
     return parsed.data.url;
   }
 

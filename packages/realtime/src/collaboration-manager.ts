@@ -124,6 +124,7 @@ export class CollaborationManager {
     socketId: string;
     viewId: string;
     isTyping: boolean;
+    documentId?: string;
   }): void {
     const session = this.presenceManager.getSession(params.socketId);
     if (session) {
@@ -138,6 +139,7 @@ export class CollaborationManager {
           userId: session.userId,
           userName: session.userName,
           isTyping: params.isTyping,
+          documentId: params.documentId,
           timestamp: Date.now(),
         });
     }

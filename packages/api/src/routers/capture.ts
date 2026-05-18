@@ -378,6 +378,59 @@ export const captureRouter = router({
       };
     }),
 
+  // ── analyzeBulkMapping (AI-driven CSV mapping plan) ─────────────────────
+  //
+  // Given the headers + a few sample rows of a tabular bulk input (CSV, paste,
+  // spreadsheet) plus the workspace's available profiles and relations,
+  // returns a structured plan describing how each column should be routed to
+  // entity types, properties, and relation metadata.
+  //
+  // Read-only: callers show the plan to the user, who confirms before any
+  // import happens. Falls back gracefully — returns null if IS is unavailable.
+  analyzeBulkMapping: podProcedure
+    .use(aiRateLimitMiddleware)
+    .input(
+      z.object({
+        headers: z.array(z.string()).min(1).max(200),
+        sampleRows: z.array(z.array(z.string())).min(1).max(20),
+        intent: z.string().min(1).max(500),
+        availableProfiles: z
+          .array(
+            z.object({
+              slug: z.string(),
+              displayName: z.string(),
+              description: z.string().optional(),
+              propertyHints: z.string().optional(),
+            })
+          )
+          .min(1),
+        availableRelations: z.array(z.string()).optional(),
+        contextHint: z.string().max(500).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const workspaceId = ctx.workspaceId; // string | null — pod-wide allowed
+
+      const { client } = await resolveIntelligenceService({
+        userId,
+        workspaceId: workspaceId ?? undefined,
+        capability: "default",
+      });
+
+      const plan = await client.analyzeBulkMapping(input);
+
+      if (!plan) {
+        logger.warn(
+          { userId, headerCount: input.headers.length },
+          "analyzeBulkMapping returned null — marking IS as credential_error"
+        );
+        markServiceCredentialError();
+      }
+
+      return plan;
+    }),
+
   // ── execute (batch entity + relation creation) ─────────────────────────
 
   /**

@@ -63,6 +63,10 @@ export const ConversationMessageMetadataSchema = z.object({
   model: z.string().optional(),
   tokens: z.number().optional(),
   latency: z.number().optional(),
+  /** UUID of the IntelligenceService that produced this message. */
+  intelligenceServiceId: z.string().optional(),
+  /** UUID of the agent that produced this message. */
+  agentId: z.string().optional(),
 });
 
 export type ConversationMessageMetadata = z.infer<

@@ -64,6 +64,34 @@ export interface IntelligenceHubRequest {
   channelKind?: "pm" | "group";
 }
 
+// ── Bulk CSV-mapping analysis types ─────────────────────────────────────────
+//
+// Mirror of the IS `PlanSchema` in apps/intelligence-hub/src/routes/
+// structure-csv-mapping.ts. Kept structurally identical so the client can
+// pass the response through to callers unchanged.
+
+export interface ColumnMappingProposal {
+  header: string;
+  slug: string;
+  label: string;
+  valueType: "string" | "number" | "date" | "boolean";
+  scope: "primary" | "companion" | "context" | "skip";
+  scopeTarget?: string;
+  isNew: boolean;
+  confidence: number;
+  reasoning: string;
+}
+
+export interface ImportAnalysisPlan {
+  rowEntityType: string;
+  rowEntityReasoning: string;
+  titleColumn: string | null;
+  titleFallback?: string;
+  columnMappings: ColumnMappingProposal[];
+  warnings: string[];
+  overallConfidence: number;
+}
+
 // Re-export from types package
 export type {
   HubResponse,
@@ -798,6 +826,63 @@ export class IntelligenceHubClient {
       }
     } finally {
       if (signal) signal.removeEventListener("abort", abortListener);
+    }
+  }
+
+  /**
+   * Bulk CSV-mapping analysis.
+   *
+   * Given the headers + a few sample rows of a tabular bulk input plus the
+   * workspace's available profiles, returns a plan describing how each column
+   * should be routed to entity types, properties and relation metadata.
+   *
+   * Read-only — the caller shows the plan to the user, no mutations happen.
+   * Falls back gracefully — returns null on failure.
+   */
+  async analyzeBulkMapping(input: {
+    headers: string[];
+    sampleRows: string[][];
+    intent: string;
+    availableProfiles: Array<{
+      slug: string;
+      displayName: string;
+      description?: string;
+      propertyHints?: string;
+    }>;
+    availableRelations?: string[];
+    contextHint?: string;
+  }): Promise<ImportAnalysisPlan | null> {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 25_000);
+      try {
+        const response = await fetch(
+          `${this.baseUrl}/api/analyze-bulk-mapping`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-API-Key": this.apiKey,
+            },
+            body: JSON.stringify(input),
+            signal: controller.signal,
+          }
+        );
+        if (!response.ok) {
+          console.warn(
+            `[IntelligenceHubClient] analyzeBulkMapping failed: ${response.status} ${response.statusText} (baseUrl=${this.baseUrl}, hasApiKey=${!!this.apiKey})`
+          );
+          return null;
+        }
+        return (await response.json()) as ImportAnalysisPlan;
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (err) {
+      console.warn(
+        `[IntelligenceHubClient] analyzeBulkMapping error: ${err instanceof Error ? err.message : String(err)} (baseUrl=${this.baseUrl})`
+      );
+      return null;
     }
   }
 

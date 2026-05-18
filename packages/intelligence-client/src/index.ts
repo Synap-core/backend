@@ -16,6 +16,8 @@ export type {
   TokenUsage,
   AIStep,
   CreatedProposal,
+  ImportAnalysisPlan,
+  ColumnMappingProposal,
 } from "./intelligence-hub-client.js";
 
 export {

@@ -14,6 +14,9 @@ import { CollaborationManager } from "./collaboration-manager.js";
 import { setupYjsServer, type YjsServerInstance } from "./yjs-server.js";
 import { setupBridge } from "./bridge.js";
 import { validateRealtimeApiKey } from "./api-key-auth.js";
+import { getKratosSessionByToken } from "@synap/auth";
+import { db, and, eq } from "@synap/database";
+import { workspaceMembers } from "@synap/database/schema";
 
 const PORT = parseInt(process.env.REALTIME_PORT || "4001", 10);
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
@@ -109,6 +112,9 @@ presenceNamespace.use(async (socket, next) => {
   const auth = socket.handshake.auth as Record<string, unknown>;
   const apiKey = typeof auth.apiKey === "string" ? auth.apiKey : null;
   const userId = typeof auth.userId === "string" ? auth.userId : null;
+  const token = typeof auth.token === "string" ? auth.token : null;
+  const workspaceId =
+    typeof auth.workspaceId === "string" ? auth.workspaceId : null;
 
   if (apiKey) {
     const validated = await validateRealtimeApiKey(apiKey);
@@ -129,7 +135,44 @@ presenceNamespace.use(async (socket, next) => {
   }
 
   if (userId) {
-    socket.data.principal = { kind: "user", userId };
+    if (!token) {
+      console.error("[Presence] Missing session token for user handshake");
+      return next(new Error("Realtime auth: missing session token"));
+    }
+
+    let session: Awaited<ReturnType<typeof getKratosSessionByToken>> | null;
+    try {
+      session = await getKratosSessionByToken(token);
+    } catch {
+      return next(new Error("Realtime auth: session validation unavailable"));
+    }
+
+    const resolvedUserId =
+      typeof session?.identity?.id === "string" ? session.identity.id : null;
+    if (!resolvedUserId || session?.active === false) {
+      console.error("[Presence] Invalid or inactive user session");
+      return next(new Error("Realtime auth: invalid session"));
+    }
+
+    if (resolvedUserId !== userId) {
+      console.error("[Presence] Handshake userId does not match session");
+      return next(new Error("Realtime auth: user mismatch"));
+    }
+
+    if (workspaceId) {
+      const membership = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, workspaceId),
+          eq(workspaceMembers.userId, resolvedUserId)
+        ),
+      });
+      if (!membership) {
+        console.error("[Presence] User is not a member of requested workspace");
+        return next(new Error("Realtime auth: workspace access denied"));
+      }
+    }
+
+    socket.data.principal = { kind: "user", userId: resolvedUserId };
     return next();
   }
 
@@ -246,17 +289,32 @@ presenceNamespace.on("connection", (socket) => {
   });
 
   // Event: Typing indicator
-  socket.on("typing", (isTyping: boolean) => {
-    collaborationManager.setTyping({
-      socketId: socket.id,
-      viewId: effectiveViewId,
-      isTyping,
-    });
-  });
+  socket.on(
+    "typing",
+    (payload: boolean | { isTyping?: boolean; documentId?: string }) => {
+      const isTyping =
+        typeof payload === "boolean" ? payload : payload?.isTyping === true;
+      const documentId =
+        typeof payload === "object" && typeof payload?.documentId === "string"
+          ? payload.documentId
+          : undefined;
+      collaborationManager.setTyping({
+        socketId: socket.id,
+        viewId: effectiveViewId,
+        isTyping,
+        documentId,
+      });
+    }
+  );
 
-  // Event: Heartbeat (keep session alive)
+  // Event: Heartbeat (keep session alive). Accept both the legacy fire-and-
+  // forget event and the client heartbeat that expects an explicit pong.
   socket.on("heartbeat", () => {
     collaborationManager.heartbeat(socket.id);
+  });
+  socket.on("ping_heartbeat", () => {
+    collaborationManager.heartbeat(socket.id);
+    socket.emit("pong_heartbeat");
   });
 
   // Event: Custom collaboration event

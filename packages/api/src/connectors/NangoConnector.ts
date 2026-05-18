@@ -50,16 +50,29 @@ const NangoIntegrationsResponseSchema = z.object({
 export class NangoConnector implements SyncConnector {
   readonly name = "nango";
 
+  constructor(
+    private readonly overrides?: {
+      host?: string;
+      secretKey?: string;
+    }
+  ) {}
+
   private get host(): string {
-    return process.env.NANGO_HOST ?? "http://localhost:3003";
+    return (
+      this.overrides?.host || process.env.NANGO_HOST || "http://localhost:3003"
+    );
   }
 
   private get secretKey(): string | undefined {
-    return process.env.NANGO_SECRET_KEY;
+    return this.overrides?.secretKey || process.env.NANGO_SECRET_KEY;
   }
 
   isConfigured(): boolean {
     return !!this.secretKey;
+  }
+
+  getHost(): string {
+    return this.host;
   }
 
   private authHeaders(): Record<string, string> {

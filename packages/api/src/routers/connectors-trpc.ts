@@ -35,11 +35,33 @@ import { entities, workspaces } from "@synap/database/schema";
 import { NangoConnector } from "../connectors/NangoConnector.js";
 import { enrichmentProviderRegistry } from "../connectors/index.js";
 
+/** Env-based connector used for quick isConfigured() checks at startup. */
 const nango = new NangoConnector();
 
-/** True when Nango is self-hosted on this pod (NANGO_SECRET_KEY env var set). */
-function isLocalNango(): boolean {
-  return nango.isConfigured();
+/**
+ * Returns a configured NangoConnector when self-hosted Nango is available,
+ * checking env vars first then workspace.settings.nango as fallback.
+ * Returns null when neither is configured (pod must use CP-managed Nango).
+ */
+async function getLocalNango(): Promise<NangoConnector | null> {
+  if (nango.isConfigured()) return nango;
+
+  try {
+    const database = await getDb();
+    const ws = await database.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cfg = ((ws?.settings as Record<string, unknown>)?.nango ?? {}) as {
+      secretKey?: string;
+      host?: string;
+    };
+    if (cfg.secretKey) {
+      return new NangoConnector({ secretKey: cfg.secretKey, host: cfg.host });
+    }
+  } catch {
+    // DB not ready — env-only fallback
+  }
+  return null;
 }
 
 async function getEnrichmentKeys(): Promise<{
@@ -326,9 +348,10 @@ export const connectorsRouter = router({
   providers: protectedProcedure
     .input(cpUrlInput)
     .query(async ({ ctx, input }) => {
-      if (isLocalNango()) {
-        const integrations = await nango.listIntegrations();
-        const connections = await nango.listConnections(ctx.userId);
+      const localNango = await getLocalNango();
+      if (localNango) {
+        const integrations = await localNango.listIntegrations();
+        const connections = await localNango.listConnections(ctx.userId);
         const connectedProviders = new Set(connections.map((c) => c.provider));
         return {
           providers: integrations.map((i) => ({
@@ -377,8 +400,9 @@ export const connectorsRouter = router({
   connections: protectedProcedure
     .input(cpUrlInput)
     .query(async ({ ctx, input }) => {
-      if (isLocalNango()) {
-        return nango.listConnections(ctx.userId);
+      const localNango = await getLocalNango();
+      if (localNango) {
+        return localNango.listConnections(ctx.userId);
       }
 
       const cpUrl = await resolveCpUrl(input?.cpUrl);
@@ -420,7 +444,8 @@ export const connectorsRouter = router({
         .optional()
     )
     .mutation(async ({ ctx, input }) => {
-      if (isLocalNango()) {
+      const localNango = await getLocalNango();
+      if (localNango) {
         let workspaceId = input?.workspaceId ?? "";
         if (!workspaceId) {
           // Resolve from DB when not supplied by client
@@ -429,14 +454,14 @@ export const connectorsRouter = router({
           workspaceId = ws?.id ?? "unknown";
         }
 
-        const session = await nango.createSession(
+        const session = await localNango.createSession(
           ctx.userId,
           input?.providerId ?? "*",
           workspaceId
         );
         return {
           token: session.sessionToken,
-          nangoHost: process.env.NANGO_HOST ?? "http://localhost:3003",
+          nangoHost: localNango.getHost(),
           connectLink: session.redirectUrl,
         };
       }
@@ -450,13 +475,9 @@ export const connectorsRouter = router({
       }
 
       const cp = await getControlPlaneSettings();
+      // podId may be absent on pods provisioned before the CP wrote it to DB.
+      // We pass it when available but do not hard-block — the CP will reject if it requires it.
       const podId = cp.podId ?? null;
-      if (!podId) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "Pod ID not configured",
-        });
-      }
 
       const tier = cp.tier ?? "solo";
       const limit = getConnectorLimit(tier);
@@ -465,7 +486,7 @@ export const connectorsRouter = router({
         const providersResult = (await cpFetch(cpUrl, "/providers", {
           method: "GET",
           sessionToken: getSessionToken(ctx.req),
-          query: { podId },
+          query: podId ? { podId } : undefined,
         })) as {
           providers: Array<{ connected?: boolean }>;
         };
@@ -486,7 +507,7 @@ export const connectorsRouter = router({
         method: "POST",
         sessionToken: getSessionToken(ctx.req),
         body: {
-          podId,
+          ...(podId ? { podId } : {}),
           ...(input?.providerId ? { providerId: input.providerId } : {}),
         },
       })) as { token: string; nangoHost?: string; connectLink?: string };
@@ -512,8 +533,9 @@ export const connectorsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      if (isLocalNango()) {
-        await nango.revokeConnection(input.connectionId);
+      const localNango = await getLocalNango();
+      if (localNango) {
+        await localNango.revokeConnection(input.connectionId);
         return { success: true };
       }
 
@@ -557,7 +579,7 @@ export const connectorsRouter = router({
         name: "apify" as const,
         displayName: "Apify",
         description: "Web scraping & lead generation",
-        envVar: "APIFY_TOKEN",
+        envVar: "APIFY_API_TOKEN",
         capabilities: ["person", "company", "leads"] as const,
         configured:
           enrichmentProviderRegistry
@@ -689,6 +711,137 @@ export const connectorsRouter = router({
     }),
 
   /**
+   * Probe for sibling services on the same parent domain as PUBLIC_URL.
+   * e.g. pod at https://pod.team.acme.xyz → checks https://nango.team.acme.xyz
+   * No user-supplied URLs — derived from the pod's own PUBLIC_URL env var only.
+   */
+  autodiscover: protectedProcedure.query(async () => {
+    const publicUrl = process.env.PUBLIC_URL?.trim();
+    const localNango = await getLocalNango();
+
+    let nangoCandidate: {
+      url: string;
+      reachable: boolean;
+      configured: boolean;
+    } | null = null;
+
+    if (publicUrl) {
+      let parsed: URL | null = null;
+      try {
+        parsed = new URL(publicUrl);
+      } catch {
+        // invalid PUBLIC_URL — skip discovery
+      }
+
+      if (parsed) {
+        const parts = parsed.hostname.split(".");
+        // Need at least 3 parts (sub.domain.tld) to swap the first label
+        if (parts.length >= 3) {
+          const parent = parts.slice(1).join(".");
+          const candidateUrl = `${parsed.protocol}//nango.${parent}`;
+
+          let reachable = false;
+          try {
+            // Try /healthz first, then root — accept any HTTP response (even 401/403)
+            const res = await fetch(`${candidateUrl}/healthz`, {
+              method: "HEAD",
+              signal: AbortSignal.timeout(3000),
+            }).catch(() =>
+              fetch(candidateUrl, {
+                method: "HEAD",
+                signal: AbortSignal.timeout(3000),
+              })
+            );
+            reachable = res.status < 500;
+          } catch {
+            reachable = false;
+          }
+
+          nangoCandidate = {
+            url: candidateUrl,
+            reachable,
+            configured: localNango !== null,
+          };
+        }
+      }
+    }
+
+    return {
+      nango: nangoCandidate ?? {
+        url: null,
+        reachable: false,
+        configured: localNango !== null,
+      },
+    };
+  }),
+
+  /**
+   * Get Nango self-hosted configuration status (secrets never returned).
+   */
+  getNangoConfig: protectedProcedure.query(async () => {
+    const database = await getDb();
+    const ws = await database.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cfg = ((ws?.settings as Record<string, unknown>)?.nango ??
+      {}) as Record<string, unknown>;
+    const hasSecretKey =
+      !!(cfg.secretKey as string | undefined) || !!process.env.NANGO_SECRET_KEY;
+    const fromEnv = !cfg.secretKey && !!process.env.NANGO_SECRET_KEY;
+    return {
+      configured: hasSecretKey,
+      hasSecretKey,
+      host: (cfg.host as string | undefined) ?? process.env.NANGO_HOST ?? null,
+      fromEnv,
+    };
+  }),
+
+  /**
+   * Save self-hosted Nango credentials to workspace settings.
+   * Pass undefined to leave a key unchanged; pass empty string to clear it.
+   */
+  saveNangoConfig: protectedProcedure
+    .input(
+      z.object({
+        secretKey: z.string().optional(),
+        host: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const database = await getDb();
+      const ws = await database.query.workspaces.findFirst({
+        columns: { id: true, settings: true },
+      });
+      if (!ws)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No workspace found",
+        });
+
+      const existing = ((ws.settings as Record<string, unknown>)?.nango ??
+        {}) as Record<string, unknown>;
+      const merged = {
+        ...existing,
+        ...(input.secretKey !== undefined
+          ? { secretKey: input.secretKey || null }
+          : {}),
+        ...(input.host !== undefined ? { host: input.host || null } : {}),
+      };
+
+      await database
+        .update(workspaces)
+        .set({
+          settings: drizzleSql`COALESCE(settings, '{}'::jsonb) || ${JSON.stringify({ nango: merged })}::jsonb`,
+        })
+        .where(eq(workspaces.id, ws.id));
+
+      // Bust the local nango cache so next call re-reads from DB
+      cpSettingsCache = null;
+
+      return { success: true };
+    }),
+
+  /**
    * Enrich an entity using an external enrichment provider (Apify, Apollo.io).
    * Returns structured data that the caller can merge into entity properties.
    */
@@ -727,7 +880,18 @@ export const connectorsRouter = router({
         });
       }
 
-      const results = await provider.enrich(input.input, apiKey);
+      let results: Awaited<ReturnType<typeof provider.enrich>>;
+      try {
+        results = await provider.enrich(input.input, apiKey);
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Enrichment request failed";
+        logger.warn(
+          { provider: input.provider, err },
+          "Enrichment provider error"
+        );
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
+      }
       return { results };
     }),
 

@@ -1723,7 +1723,13 @@ export const channelsRouter = router({
       const assistantMessageHash = createHash("sha256")
         .update(`${assistantMessageId}${fullContent}${userMessageHash}`)
         .digest("hex");
-      const messageMetadata = { aiSteps };
+      // Provenance metadata: IS + agent that produced this message. Surfaces
+      // a "Synap · agent-name" badge in chat clients (Eve, Relay, Studio).
+      const messageMetadata = {
+        aiSteps,
+        intelligenceServiceId: resolvedService.serviceId,
+        agentId: resolvedAgentId,
+      };
 
       await db.insert(messages).values({
         id: assistantMessageId,

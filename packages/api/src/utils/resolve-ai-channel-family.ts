@@ -66,13 +66,22 @@ export async function resolveAiChannelByFamily(
 
   // ── Per-agent personal thread ──────────────────────────────────────────────
   if (family === "agent") {
-    if (!agentId) {
+    // Accept either agentId or agentSlug; agentSlug falls back to "orchestrator"
+    // when the supplied slug doesn't match an active agent — matches the
+    // pattern used below for branch/context families.
+    const resolvedAgentId =
+      agentId ??
+      (agentSlug
+        ? ((await resolveSlugToAgentId(agentSlug)) ??
+          (await resolveSlugToAgentId("orchestrator")))
+        : await resolveSlugToAgentId("orchestrator"));
+    if (!resolvedAgentId) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: 'agentId is required for family="agent"',
+        message: 'agentId or agentSlug is required for family="agent"',
       });
     }
-    return ensureAgentThread(userId, agentId);
+    return ensureAgentThread(userId, resolvedAgentId);
   }
 
   // ── Workspace group thread ─────────────────────────────────────────────────

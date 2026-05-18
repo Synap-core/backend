@@ -1365,6 +1365,26 @@ export interface ImportModelingSuggestion {
 		reason?: string;
 	}>;
 }
+export interface ColumnMappingProposal {
+	header: string;
+	slug: string;
+	label: string;
+	valueType: "string" | "number" | "date" | "boolean";
+	scope: "primary" | "companion" | "context" | "skip";
+	scopeTarget?: string;
+	isNew: boolean;
+	confidence: number;
+	reasoning: string;
+}
+export interface ImportAnalysisPlan {
+	rowEntityType: string;
+	rowEntityReasoning: string;
+	titleColumn: string | null;
+	titleFallback?: string;
+	columnMappings: ColumnMappingProposal[];
+	warnings: string[];
+	overallConfidence: number;
+}
 /**
  * Node shape for the workspace branch tree response.
  * Defined at module scope so tsc can include it in declaration output.
@@ -1723,6 +1743,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					score: number;
 				}[]>;
 			};
+			meta: object;
+		}>;
+		analyzeBulkMapping: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				headers: string[];
+				sampleRows: string[][];
+				intent: string;
+				availableProfiles: {
+					slug: string;
+					displayName: string;
+					description?: string | undefined;
+					propertyHints?: string | undefined;
+				}[];
+				availableRelations?: string[] | undefined;
+				contextHint?: string | undefined;
+			};
+			output: ImportAnalysisPlan | null;
 			meta: object;
 		}>;
 		execute: import("@trpc/server").TRPCMutationProcedure<{

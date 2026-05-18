@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@cloudflare/workers-types": "^4.20240117.0",
+    "@synap/auth": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/events": "workspace:*",
     "@synap/storage": "workspace:*",
