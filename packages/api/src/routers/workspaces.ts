@@ -341,6 +341,13 @@ export const workspacesRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
       }
 
+      if (workspace.archivedAt != null) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "This workspace has been archived.",
+        });
+      }
+
       // Ensure default workspace setup (for existing workspaces created before these features)
       // These are one-time operations per workspace - same pattern as whiteboard
       const {

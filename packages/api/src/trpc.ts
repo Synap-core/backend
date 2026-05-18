@@ -150,6 +150,18 @@ export const workspaceProcedure = protectedProcedure.use(async (opts) => {
     });
   }
 
+  const workspace = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, ctx.workspaceId),
+    columns: { archivedAt: true },
+  });
+
+  if (workspace?.archivedAt != null) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "This workspace has been archived.",
+    });
+  }
+
   logger.debug(
     { userId: ctx.userId, workspaceId: ctx.workspaceId, role: membership.role },
     "Workspace procedure - membership validated"
@@ -201,6 +213,18 @@ export const podProcedure = protectedProcedure.use(async (opts) => {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "Access denied to workspace",
+    });
+  }
+
+  const workspace = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, ctx.workspaceId),
+    columns: { archivedAt: true },
+  });
+
+  if (workspace?.archivedAt != null) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "This workspace has been archived.",
     });
   }
 
