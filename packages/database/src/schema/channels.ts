@@ -2,11 +2,11 @@
  * Channels Schema — V2
  *
  * A channel is a conversation surface with a context scope.
- * 4 canonical types replace legacy chat channel variants.
+ * 6 canonical types (V2 spec) replace legacy chat channel variants.
  * `channelPurpose` is removed — absorbed into channelType.
  * `scope` and `feedScope` are new.
  *
- * See docs/CHANNEL-SYSTEM.md for the full design spec.
+ * See synap-team-docs/content/team/platform/channel-system.mdx for the spec.
  */
 
 import {
@@ -23,11 +23,17 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { agents } from "./agents.js";
 
 /**
- * Channel Types (V2)
+ * Channel Types (V2) — 6 canonical types per the channel-system spec.
  *
- * THREAD       — A conversation linked to a specific context object.
- *                Unified model for chat, comments, and branches.
- *                Behavior is controlled by threadKind + parentChannelId + agentType.
+ * PERSONAL     — The user's permanent AI assistant channel — pod-wide. One per
+ *                user across the entire data pod. AI always active.
+ *                (Was: `thread` + `threadKind=personal` during the drift phase.)
+ * THREAD       — A conversation linked to a specific context object
+ *                (workspace, entity, document, view, project, task).
+ *                AI participation controlled by agentType.
+ * SUB_THREAD   — A specialised sub-agent task spawned within a parent channel.
+ *                Always has parentChannelId. AI always active.
+ *                (Was: `thread` + `threadKind=branch` during the drift phase.)
  * FEED         — Proactive AI broadcast channel. AI posts, users read.
  *                feedScope determines user-level vs workspace-level.
  * EXTERNAL     — Ingested conversation from an external platform (WhatsApp, Slack, Gmail, etc.)
@@ -37,6 +43,8 @@ import { agents } from "./agents.js";
  */
 export const ChannelType = {
   THREAD: "thread",
+  PERSONAL: "personal", // NEW (V2 restore) — was thread + threadKind=personal
+  SUB_THREAD: "sub_thread", // NEW (V2 restore) — was thread + threadKind=branch
   FEED: "feed",
   EXTERNAL: "external",
   AGENT_COLLAB: "agent_collab",
@@ -44,7 +52,12 @@ export const ChannelType = {
 export type ChannelType = (typeof ChannelType)[keyof typeof ChannelType];
 
 /**
- * Thread behavior variants for ChannelType.THREAD.
+ * @deprecated Phase 4 of the V2 restore drops this enum and the
+ * `thread_kind` column was already dropped in migration 0010. New code MUST
+ * NOT read or write `channels.threadKind`. Discrimination now happens via
+ * `channelType` (personal | sub_thread | thread | …) plus `contextObjectType`.
+ * The enum is kept here so existing TS references still compile during the
+ * transition; remove once all callers stop importing it.
  */
 export const ThreadKind = {
   PERSONAL: "personal",
@@ -140,6 +153,8 @@ export const channels = pgTable(
     channelType: text("channel_type", {
       enum: [
         ChannelType.THREAD,
+        ChannelType.PERSONAL,
+        ChannelType.SUB_THREAD,
         ChannelType.FEED,
         ChannelType.EXTERNAL,
         ChannelType.AGENT_COLLAB,

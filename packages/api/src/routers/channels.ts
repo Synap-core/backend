@@ -35,7 +35,6 @@ import {
   channelContextItems,
   entities as entitiesTable,
   ChannelType,
-  ThreadKind,
   FeedScope,
   ChannelStatus,
   MessageRole,
@@ -162,17 +161,6 @@ const CHANNEL_TYPE_VALUES = [
   ChannelType.FEED,
   ChannelType.EXTERNAL,
   ChannelType.AGENT_COLLAB,
-] as const;
-
-const THREAD_KIND_VALUES = [
-  ThreadKind.PERSONAL,
-  ThreadKind.WORKSPACE,
-  ThreadKind.ENTITY,
-  ThreadKind.DOCUMENT,
-  ThreadKind.VIEW,
-  ThreadKind.PROJECT,
-  ThreadKind.TASK,
-  ThreadKind.BRANCH,
 ] as const;
 
 const CONTEXT_OBJECT_TYPE_VALUES = ["entity", "document", "view"] as const;
@@ -454,7 +442,6 @@ async function listChannelsWithFlags(params: {
   userId: string;
   workspaceId?: string;
   channelType?: (typeof CHANNEL_TYPE_VALUES)[number];
-  threadKind?: (typeof THREAD_KIND_VALUES)[number];
   feedScope?: FeedScope;
   contextObjectId?: string;
   contextObjectType?: (typeof CONTEXT_OBJECT_TYPE_VALUES)[number];
@@ -478,7 +465,7 @@ async function listChannelsWithFlags(params: {
         eq(channels.workspaceId, params.workspaceId),
         and(
           eq(channels.channelType, ChannelType.THREAD),
-          eq(channels.threadKind, ThreadKind.PERSONAL)
+          eq(channels.channelType, ChannelType.PERSONAL)
         ),
         eq(channels.channelType, ChannelType.FEED)
       )!
@@ -487,10 +474,6 @@ async function listChannelsWithFlags(params: {
 
   if (params.channelType) {
     conditions.push(eq(channels.channelType, params.channelType));
-  }
-
-  if (params.threadKind) {
-    conditions.push(eq(channels.threadKind, params.threadKind));
   }
 
   if (params.feedScope) {
@@ -624,8 +607,7 @@ export const channelsRouter = router({
             parentChannelId: input.parentChannelId,
             branchPurpose: input.branchPurpose,
             agentConfig: input.agentConfig,
-            channelType: ChannelType.THREAD,
-            threadKind: ThreadKind.BRANCH,
+            channelType: ChannelType.SUB_THREAD,
             status: ChannelStatus.ACTIVE,
           })
           .returning();
@@ -687,7 +669,6 @@ export const channelsRouter = router({
           userId: ctx.userId,
           workspaceId: workspaceId ?? null,
           channelType: ChannelType.THREAD,
-          threadKind: ThreadKind.PERSONAL,
           status: ChannelStatus.ACTIVE,
           assignedAgentId: assignedAgentId ?? null,
           title: input.title,
@@ -1234,8 +1215,8 @@ export const channelsRouter = router({
       const effectiveAgentRef =
         channel.assignedAgentId ?? channel.senderAgentId;
       const channelKind: "pm" | "group" =
-        channel.threadKind === ThreadKind.PERSONAL ||
-        (channel.threadKind === ThreadKind.BRANCH && !channel.workspaceId)
+        channel.channelType === ChannelType.PERSONAL ||
+        (channel.channelType === ChannelType.SUB_THREAD && !channel.workspaceId)
           ? "pm"
           : "group";
       const isAiChannel =
@@ -1873,8 +1854,7 @@ export const channelsRouter = router({
             branchedFromMessageId: assistantMessageId,
             branchPurpose:
               branchDecision.suggestedPurpose || branchDecision.reason,
-            channelType: ChannelType.THREAD,
-            threadKind: ThreadKind.BRANCH,
+            channelType: ChannelType.SUB_THREAD,
             status: ChannelStatus.ACTIVE,
           })
           .returning();
@@ -1972,7 +1952,7 @@ export const channelsRouter = router({
       const isPodWideChannel =
         channel.channelType === ChannelType.FEED ||
         (channel.channelType === ChannelType.THREAD &&
-          channel.threadKind === ThreadKind.PERSONAL);
+          channel.channelType === ChannelType.PERSONAL);
       if (
         !isPodWideChannel &&
         ctx.workspaceId &&
@@ -2013,7 +1993,6 @@ export const channelsRouter = router({
       z.object({
         workspaceId: z.string().uuid().optional(),
         channelType: z.enum(CHANNEL_TYPE_VALUES).optional(),
-        threadKind: z.enum(THREAD_KIND_VALUES).optional(),
         limit: z.number().min(1).max(100).default(20),
         contextObjectId: z.string().uuid().optional(),
         contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
@@ -2025,7 +2004,6 @@ export const channelsRouter = router({
         userId: ctx.userId,
         workspaceId: input.workspaceId,
         channelType: input.channelType,
-        threadKind: input.threadKind,
         contextObjectId: input.contextObjectId,
         contextObjectType: input.contextObjectType,
         assignedAgentId: input.assignedAgentId,
@@ -2046,7 +2024,6 @@ export const channelsRouter = router({
     .input(
       z.object({
         workspaceId: z.string().uuid().optional(),
-        threadKind: z.enum(THREAD_KIND_VALUES).optional(),
         contextObjectId: z.string().uuid().optional(),
         contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
         limit: z.number().min(1).max(100).default(20),
@@ -2058,7 +2035,6 @@ export const channelsRouter = router({
         userId: ctx.userId,
         workspaceId: input.workspaceId,
         channelType: ChannelType.THREAD,
-        threadKind: input.threadKind,
         contextObjectId: input.contextObjectId,
         contextObjectType: input.contextObjectType,
         limit: input.limit + 1,
@@ -2348,7 +2324,7 @@ export const channelsRouter = router({
       if (
         !branch ||
         branch.channelType !== ChannelType.THREAD ||
-        branch.threadKind !== ThreadKind.BRANCH
+        branch.channelType !== ChannelType.SUB_THREAD
       ) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Branch not found" });
       }
@@ -2414,7 +2390,7 @@ export const channelsRouter = router({
       const isPodWideChannel =
         channel.channelType === ChannelType.FEED ||
         (channel.channelType === ChannelType.THREAD &&
-          channel.threadKind === ThreadKind.PERSONAL);
+          channel.channelType === ChannelType.PERSONAL);
       if (
         !isPodWideChannel &&
         ctx.workspaceId &&
@@ -2608,7 +2584,7 @@ export const channelsRouter = router({
           eq(channels.id, input.channelId),
           eq(channels.userId, ctx.userId),
           eq(channels.channelType, ChannelType.THREAD),
-          eq(channels.threadKind, ThreadKind.BRANCH)
+          eq(channels.channelType, ChannelType.SUB_THREAD)
         ),
       });
       if (!channel) return { pruned: false };
@@ -2700,13 +2676,13 @@ export const channelsRouter = router({
         (c) =>
           c.status === "active" &&
           c.channelType === ChannelType.THREAD &&
-          c.threadKind === ThreadKind.BRANCH
+          c.channelType === ChannelType.SUB_THREAD
       );
       const mergedBranches = allChannels.filter(
         (c) =>
           c.status === "merged" &&
           c.channelType === ChannelType.THREAD &&
-          c.threadKind === ThreadKind.BRANCH
+          c.channelType === ChannelType.SUB_THREAD
       );
 
       return {
@@ -2714,7 +2690,7 @@ export const channelsRouter = router({
         flatBranches: allChannels.filter(
           (c) =>
             c.channelType === ChannelType.THREAD &&
-            c.threadKind === ThreadKind.BRANCH
+            c.channelType === ChannelType.SUB_THREAD
         ),
         activeBranches,
         mergedBranches,
@@ -2960,7 +2936,6 @@ export const channelsRouter = router({
           userId: ctx.userId,
           workspaceId: ctx.workspaceId,
           channelType: ChannelType.EXTERNAL,
-          threadKind: ThreadKind.WORKSPACE,
           title: input.title,
           externalSource: input.externalSource,
           externalChannelId: input.externalChannelId,
