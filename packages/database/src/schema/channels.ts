@@ -187,19 +187,7 @@ export const channels = pgTable(
     contextObjectType: text("context_object_type"),
     contextObjectId: uuid("context_object_id"),
 
-    // Thread behavior + hierarchy
-    threadKind: text("thread_kind", {
-      enum: [
-        ThreadKind.PERSONAL,
-        ThreadKind.WORKSPACE,
-        ThreadKind.ENTITY,
-        ThreadKind.DOCUMENT,
-        ThreadKind.VIEW,
-        ThreadKind.PROJECT,
-        ThreadKind.TASK,
-        ThreadKind.BRANCH,
-      ],
-    }),
+    // Thread hierarchy — sub_thread channels carry a parent reference.
     parentChannelId: uuid("parent_channel_id"), // Self-reference to channels.id
     branchedFromMessageId: uuid("branched_from_message_id"), // Reference to messages.id
     branchPurpose: text("branch_purpose"), // Task description for branch threads

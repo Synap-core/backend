@@ -1951,8 +1951,7 @@ export const channelsRouter = router({
       // Personal-style threads and feed channels are pod-wide.
       const isPodWideChannel =
         channel.channelType === ChannelType.FEED ||
-        (channel.channelType === ChannelType.THREAD &&
-          channel.channelType === ChannelType.PERSONAL);
+        channel.channelType === ChannelType.PERSONAL;
       if (
         !isPodWideChannel &&
         ctx.workspaceId &&
@@ -2321,11 +2320,7 @@ export const channelsRouter = router({
         where: eq(channels.id, input.branchId),
       });
 
-      if (
-        !branch ||
-        branch.channelType !== ChannelType.THREAD ||
-        branch.channelType !== ChannelType.SUB_THREAD
-      ) {
+      if (!branch || branch.channelType !== ChannelType.SUB_THREAD) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Branch not found" });
       }
 
@@ -2389,8 +2384,7 @@ export const channelsRouter = router({
       }
       const isPodWideChannel =
         channel.channelType === ChannelType.FEED ||
-        (channel.channelType === ChannelType.THREAD &&
-          channel.channelType === ChannelType.PERSONAL);
+        channel.channelType === ChannelType.PERSONAL;
       if (
         !isPodWideChannel &&
         ctx.workspaceId &&
@@ -2673,24 +2667,16 @@ export const channelsRouter = router({
       const tree = buildBranchTree(allChannels, input.rootChannelId);
 
       const activeBranches = allChannels.filter(
-        (c) =>
-          c.status === "active" &&
-          c.channelType === ChannelType.THREAD &&
-          c.channelType === ChannelType.SUB_THREAD
+        (c) => c.status === "active" && c.channelType === ChannelType.SUB_THREAD
       );
       const mergedBranches = allChannels.filter(
-        (c) =>
-          c.status === "merged" &&
-          c.channelType === ChannelType.THREAD &&
-          c.channelType === ChannelType.SUB_THREAD
+        (c) => c.status === "merged" && c.channelType === ChannelType.SUB_THREAD
       );
 
       return {
         tree,
         flatBranches: allChannels.filter(
-          (c) =>
-            c.channelType === ChannelType.THREAD &&
-            c.channelType === ChannelType.SUB_THREAD
+          (c) => c.channelType === ChannelType.SUB_THREAD
         ),
         activeBranches,
         mergedBranches,
