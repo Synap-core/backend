@@ -15,7 +15,6 @@ import {
   ChannelType,
   ChannelScope,
   FeedScope,
-  ThreadKind,
   ChannelStatus,
   MessageRole,
   MessageAuthorType,

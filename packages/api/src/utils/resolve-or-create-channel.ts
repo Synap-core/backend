@@ -252,3 +252,44 @@ export async function resolveOrCreateChannel(
     message: `channelType="${channelType}" is not bootstrapped via resolveOrCreateChannel — use the dedicated create procedure.`,
   });
 }
+
+/**
+ * Translate the legacy `aiChannelFamily` enum into the V2 channelType + context
+ * tuple that `resolveOrCreateChannel` expects. The `family` vocabulary is kept
+ * on public APIs for backward compatibility with existing frontends; this
+ * helper is the single boundary that maps it into the canonical model.
+ */
+export type LegacyChannelFamily =
+  | "agent"
+  | "workspace_group"
+  | "context"
+  | "branch";
+
+export function mapLegacyFamily(args: {
+  family: LegacyChannelFamily;
+  workspaceId?: string;
+  contextObjectType?: ContextObjectType;
+  contextObjectId?: string;
+}): Pick<
+  ResolveOrCreateChannelParams,
+  "channelType" | "contextObjectType" | "contextObjectId"
+> {
+  switch (args.family) {
+    case "agent":
+      return { channelType: ChannelType.PERSONAL };
+    case "workspace_group":
+      return {
+        channelType: ChannelType.THREAD,
+        contextObjectType: "workspace",
+        contextObjectId: args.workspaceId,
+      };
+    case "branch":
+      return { channelType: ChannelType.SUB_THREAD };
+    case "context":
+      return {
+        channelType: ChannelType.THREAD,
+        contextObjectType: args.contextObjectType,
+        contextObjectId: args.contextObjectId,
+      };
+  }
+}

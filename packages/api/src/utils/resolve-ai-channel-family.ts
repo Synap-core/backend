@@ -4,7 +4,6 @@ import {
   channels,
   ChannelStatus,
   ChannelType,
-  ThreadKind,
   agents,
   type Channel,
 } from "@synap/database/schema";

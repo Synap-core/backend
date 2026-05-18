@@ -25,11 +25,7 @@ import {
   desc,
   inArray,
 } from "@synap/database";
-import {
-  ChannelType,
-  ThreadKind,
-  type MessageRole,
-} from "@synap/database/schema";
+import { ChannelType, type MessageRole } from "@synap/database/schema";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {

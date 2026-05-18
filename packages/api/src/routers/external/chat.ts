@@ -17,7 +17,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { db, eq, and, inArray, or } from "@synap/database";
 import { channels, workspaceMembers } from "@synap/database/schema";
-import { ChannelType, ThreadKind, ChannelStatus } from "@synap/database/schema";
+import { ChannelType, ChannelStatus } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
 import {
   ensureAgentThread,
