@@ -457,18 +457,52 @@ export const connectorsRouter = router({
           workspaceId = ws?.id ?? "unknown";
         }
 
+        // Validate the requested integration key exists in Nango before
+        // passing it as allowed_integrations — Nango rejects unknown keys.
+        // Fall back to "*" (show all integrations picker) if not found.
+        let effectiveProvider = input?.providerId ?? "*";
+        if (effectiveProvider !== "*") {
+          const integrations = await localNango.listIntegrations();
+          const exists = integrations.some(
+            (i) => i.uniqueKey === effectiveProvider
+          );
+          if (!exists) effectiveProvider = "*";
+        }
+
         let session: Awaited<ReturnType<typeof localNango.createSession>>;
         try {
           session = await localNango.createSession(
             ctx.userId,
-            input?.providerId ?? "*",
+            effectiveProvider,
             workspaceId
           );
         } catch (err) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: `Nango session failed: ${err instanceof Error ? err.message : String(err)}`,
-          });
+          const msg = err instanceof Error ? err.message : String(err);
+          // Nango can list an integration in /config but still reject it in
+          // /connect/sessions (e.g. not fully configured). Retry with "*" so
+          // the user gets the generic picker instead of a hard 500.
+          if (
+            effectiveProvider !== "*" &&
+            msg.toLowerCase().includes("integration does not exist")
+          ) {
+            try {
+              session = await localNango.createSession(
+                ctx.userId,
+                "*",
+                workspaceId
+              );
+            } catch (retryErr) {
+              throw new TRPCError({
+                code: "INTERNAL_SERVER_ERROR",
+                message: `Nango session failed: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`,
+              });
+            }
+          } else {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: `Nango session failed: ${msg}`,
+            });
+          }
         }
         return {
           token: session.sessionToken,

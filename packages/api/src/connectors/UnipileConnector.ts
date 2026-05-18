@@ -121,27 +121,33 @@ export class UnipileConnector implements MessagingConnector {
   }
 
   async getAuthUrl(userId: string, redirectUrl: string): Promise<string> {
-    const publicUrl = process.env.PUBLIC_URL?.trim();
+    // Unipile schema requires full ISO 8601 with ms: YYYY-MM-DDTHH:MM:SS.sssZ
+    const expiresOn = new Date(Date.now() + 3600_000).toISOString();
+
+    // notify_url receives CREATION_SUCCESS callbacks to auto-sync the new account
+    const publicUrl = process.env.PUBLIC_URL?.replace(/\/+$/, "");
+    const notifyUrl = publicUrl
+      ? `${publicUrl}/api/webhooks/messaging`
+      : undefined;
+
+    const body: Record<string, string> = {
+      type: "create",
+      expiresOn,
+      success_redirect_url: redirectUrl,
+      failure_redirect_url: redirectUrl,
+      name: userId,
+    };
+    if (notifyUrl) body.notify_url = notifyUrl;
+
     const res = await fetch(`${this.dsn}/api/v1/hosted/accounts/link`, {
       method: "POST",
       headers: this.headers(),
-      body: JSON.stringify({
-        type: "create",
-        expiresOn: new Date(Date.now() + 3600_000).toISOString(),
-        // Only include notify_url when PUBLIC_URL is a valid absolute URL —
-        // Unipile rejects the request if this is empty or relative.
-        ...(publicUrl
-          ? { notify_url: `${publicUrl}/api/webhooks/messaging` }
-          : {}),
-        success_redirect_url: redirectUrl,
-        failure_redirect_url: redirectUrl,
-        name: userId,
-      }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
-      const body = await res.text().catch(() => "");
+      const errBody = await res.text().catch(() => "");
       throw new Error(
-        `Unipile getAuthUrl failed: ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 300)}` : ""}`
+        `Unipile getAuthUrl failed: ${res.status} ${res.statusText}${errBody ? ` — ${errBody}` : ""}`
       );
     }
     const parsed = UnipileAuthLinkResponseSchema.safeParse(await res.json());
