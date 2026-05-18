@@ -70,13 +70,10 @@ externalChatApp.get(
         inArray(channels.workspaceId, workspaceIds),
         or(
           eq(channels.channelType, ChannelType.AGENT_COLLAB),
+          eq(channels.channelType, ChannelType.SUB_THREAD),
           and(
             eq(channels.channelType, ChannelType.THREAD),
-            inArray(channels.threadKind, [
-              ThreadKind.PERSONAL,
-              ThreadKind.WORKSPACE,
-              ThreadKind.BRANCH,
-            ])
+            eq(channels.contextObjectType, "workspace")
           )
         )!,
         eq(channels.status, ChannelStatus.ACTIVE)

@@ -14,7 +14,6 @@ import {
   ChannelType,
   ChannelScope,
   FeedScope,
-  ThreadKind,
   ChannelStatus,
 } from "../schema/channels.js";
 import { EventRepository } from "./event-repository.js";
@@ -28,7 +27,6 @@ export interface CreateChannelData {
   channelType?: ChannelType;
   contextObjectType?: string;
   contextObjectId?: string;
-  threadKind?: ThreadKind;
   parentChannelId?: string;
   branchedFromMessageId?: string;
   branchPurpose?: string;
@@ -76,7 +74,6 @@ export class ChannelRepository {
         feedScope: data.feedScope,
         contextObjectType: data.contextObjectType,
         contextObjectId: data.contextObjectId,
-        threadKind: data.threadKind,
         parentChannelId: data.parentChannelId,
         branchedFromMessageId: data.branchedFromMessageId,
         branchPurpose: data.branchPurpose,
@@ -231,7 +228,7 @@ export class ChannelRepository {
         and(
           eq(channels.userId, userId),
           eq(channels.assignedAgentId, agentId),
-          eq(channels.threadKind, ThreadKind.PERSONAL),
+          eq(channels.channelType, ChannelType.PERSONAL),
           eq(channels.status, ChannelStatus.ACTIVE)
         )
       )
@@ -242,8 +239,7 @@ export class ChannelRepository {
     return this.create({
       userId,
       workspaceId: undefined, // pod-wide
-      channelType: ChannelType.THREAD,
-      threadKind: ThreadKind.PERSONAL,
+      channelType: ChannelType.PERSONAL,
       scope: ChannelScope.POD,
       assignedAgentId: agentId,
     });

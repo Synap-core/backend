@@ -109,10 +109,7 @@ export function registerThreadsRoutes(app: HubHono): void {
     try {
       let whereClause;
       const podWideFilter = or(
-        and(
-          eq(channels.channelType, ChannelType.THREAD),
-          eq(channels.threadKind, ThreadKind.PERSONAL)
-        ),
+        eq(channels.channelType, ChannelType.PERSONAL),
         eq(channels.channelType, ChannelType.FEED)
       );
 

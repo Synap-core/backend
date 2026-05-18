@@ -25,7 +25,6 @@ import {
   ChannelType,
   ChannelScope,
   FeedScope,
-  ThreadKind,
   ChannelStatus,
   MessageRole,
   MessageAuthorType,
@@ -144,7 +143,7 @@ async function ensurePersonalChatChannel(
     where: and(
       eq(channels.userId, userId),
       eq(channels.channelType, ChannelType.THREAD),
-      eq(channels.threadKind, ThreadKind.PERSONAL),
+      eq(channels.channelType, ChannelType.PERSONAL),
       eq(channels.status, ChannelStatus.ACTIVE)
     ),
   });
@@ -155,8 +154,7 @@ async function ensurePersonalChatChannel(
     .values({
       userId,
       workspaceId: null, // pod-wide
-      channelType: ChannelType.THREAD,
-      threadKind: ThreadKind.PERSONAL,
+      channelType: ChannelType.PERSONAL,
       scope: ChannelScope.POD,
       status: ChannelStatus.ACTIVE,
     })

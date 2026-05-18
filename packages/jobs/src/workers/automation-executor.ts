@@ -45,7 +45,6 @@ import {
   ChannelType,
   ChannelScope,
   FeedScope,
-  ThreadKind,
   ChannelStatus,
 } from "@synap/database/schema";
 import type {
@@ -530,7 +529,7 @@ async function executeOutputStep(
           where: and(
             eq(channels.userId, ownerId),
             eq(channels.channelType, ChannelType.THREAD),
-            eq(channels.threadKind, ThreadKind.PERSONAL),
+            eq(channels.channelType, ChannelType.PERSONAL),
             eq(channels.status, ChannelStatus.ACTIVE)
           ),
           columns: { id: true },
@@ -544,8 +543,7 @@ async function executeOutputStep(
               id: randomUUID(),
               userId: ownerId,
               workspaceId: null, // pod-wide
-              channelType: ChannelType.THREAD,
-              threadKind: ThreadKind.PERSONAL,
+              channelType: ChannelType.PERSONAL,
               scope: ChannelScope.POD,
               status: ChannelStatus.ACTIVE,
               senderAgentId: null,

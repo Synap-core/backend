@@ -145,7 +145,8 @@ export async function ensureWorkspaceGroupChannel(
     where: and(
       eq(channels.userId, userId),
       eq(channels.workspaceId, workspaceId),
-      eq(channels.threadKind, ThreadKind.WORKSPACE),
+      eq(channels.channelType, ChannelType.THREAD),
+      eq(channels.contextObjectType, "workspace"),
       eq(channels.status, ChannelStatus.ACTIVE)
     ),
   });
@@ -158,7 +159,8 @@ export async function ensureWorkspaceGroupChannel(
       userId,
       workspaceId,
       channelType: ChannelType.THREAD,
-      threadKind: ThreadKind.WORKSPACE,
+      contextObjectType: "workspace",
+      contextObjectId: workspaceId,
       scope: ChannelScope.WORKSPACE,
       status: ChannelStatus.ACTIVE,
       assignedAgentId: null,

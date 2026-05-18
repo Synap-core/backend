@@ -289,7 +289,6 @@ export interface Channel {
   feedScope: FeedScope | null;
   contextObjectType: string | null;
   contextObjectId: string | null;
-  threadKind: ThreadKind | null;
   parentChannelId: string | null;
   branchedFromMessageId: string | null;
   branchPurpose: string | null;

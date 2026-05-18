@@ -27,7 +27,6 @@ import {
   messages,
   ChannelType,
   ChannelScope,
-  ThreadKind,
   ChannelStatus,
   MessageRole,
   MessageAuthorType,
@@ -186,7 +185,7 @@ async function resolvePersonalChannelId(userId: string): Promise<string> {
     where: and(
       eq(channels.userId, userId),
       eq(channels.channelType, ChannelType.THREAD),
-      eq(channels.threadKind, ThreadKind.PERSONAL),
+      eq(channels.channelType, ChannelType.PERSONAL),
       eq(channels.status, ChannelStatus.ACTIVE)
     ),
     columns: { id: true },
@@ -198,8 +197,7 @@ async function resolvePersonalChannelId(userId: string): Promise<string> {
     .values({
       userId,
       workspaceId: null, // pod-wide
-      channelType: ChannelType.THREAD,
-      threadKind: ThreadKind.PERSONAL,
+      channelType: ChannelType.PERSONAL,
       scope: ChannelScope.POD,
       status: ChannelStatus.ACTIVE,
       senderAgentId: null,

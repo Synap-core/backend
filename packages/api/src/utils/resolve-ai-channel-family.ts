@@ -142,8 +142,7 @@ export async function resolveAiChannelByFamily(
         parentChannelId,
         branchPurpose: branchPurpose ?? "Branch",
         assignedAgentId: orchestratorAgentId,
-        channelType: ChannelType.THREAD,
-        threadKind: ThreadKind.BRANCH,
+        channelType: ChannelType.SUB_THREAD,
         status: ChannelStatus.ACTIVE,
         metadata: { origin: "family:branch" },
       })
@@ -168,19 +167,11 @@ export async function resolveAiChannelByFamily(
     });
   }
 
-  const mappedThreadKind =
-    contextObjectType === "entity"
-      ? ThreadKind.ENTITY
-      : contextObjectType === "document"
-        ? ThreadKind.DOCUMENT
-        : ThreadKind.VIEW;
-
   const existing = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, userId),
       eq(channels.workspaceId, workspaceId),
       eq(channels.channelType, ChannelType.THREAD),
-      eq(channels.threadKind, mappedThreadKind),
       eq(channels.contextObjectId, contextObjectId),
       eq(channels.contextObjectType, contextObjectType),
       eq(channels.status, ChannelStatus.ACTIVE)
@@ -197,7 +188,6 @@ export async function resolveAiChannelByFamily(
       userId,
       workspaceId,
       channelType: ChannelType.THREAD,
-      threadKind: mappedThreadKind,
       contextObjectId,
       contextObjectType,
       status: ChannelStatus.ACTIVE,
