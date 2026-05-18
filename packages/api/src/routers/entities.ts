@@ -1476,6 +1476,181 @@ export const entitiesRouter = router({
     }),
 
   /**
+   * Batch create entities in a single call.
+   *
+   * Auto-creates missing profiles on the fly (workspace-scoped, with optional
+   * displayName/icon/color). Each entity is identified by a caller-supplied
+   * `refKey` (e.g. "app:web", "pkg:@synap-core/client") so relations can
+   * reference them without knowing UUIDs ahead of time.
+   *
+   * Idempotent: entities with the same (profileSlug, title) in the same
+   * workspace are returned as-is, not duplicated.
+   */
+  batchCreate: workspaceProcedure
+    .input(
+      z.object({
+        entities: z.array(
+          z.object({
+            /** Stable caller-supplied reference key (e.g. "app:web", "pkg:@synap-core/client") */
+            refKey: z.string().min(1),
+            profileSlug: z.string().min(1),
+            title: z.string().min(1),
+            description: z.string().optional(),
+            properties: z.record(z.string(), z.unknown()).optional(),
+            content: z.string().optional(),
+            source: z
+              .enum(["user", "ai", "intelligence", "system", "agent", "cli"])
+              .optional(),
+            /** If the profile doesn't exist, create it with these hints */
+            profileHints: z
+              .object({
+                displayName: z.string().optional(),
+                icon: z.string().optional(),
+                color: z.string().optional(),
+                description: z.string().optional(),
+              })
+              .optional(),
+          })
+        ),
+      })
+    )
+    .output(
+      z.object({
+        created: z.number(),
+        skipped: z.number(),
+        profilesCreated: z.number(),
+        entityIds: z.record(z.string(), z.string()), // refKey → entityId
+        errors: z.array(
+          z.object({
+            refKey: z.string(),
+            error: z.string(),
+          })
+        ),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const entityRepo = new EntityRepository(database, eventRepo);
+      const profileRepo = new (
+        await import("@synap/database")
+      ).ProfileRepository(database);
+
+      // 1. Ensure all profiles exist (auto-create missing ones)
+      const profileCache = new Map<string, string>(); // slug → id
+      let profilesCreated = 0;
+
+      // Gather unique profile slugs that need hints
+      const profileHintsMap = new Map<
+        string,
+        {
+          displayName?: string;
+          icon?: string;
+          color?: string;
+          description?: string;
+        }
+      >();
+      for (const e of input.entities) {
+        if (e.profileHints && !profileHintsMap.has(e.profileSlug)) {
+          profileHintsMap.set(e.profileSlug, e.profileHints);
+        }
+      }
+
+      for (const entity of input.entities) {
+        if (profileCache.has(entity.profileSlug)) continue;
+
+        // Try to resolve existing profile
+        const existing = await profileRepo.getBySlugForWorkspace(
+          entity.profileSlug,
+          ctx.workspaceId
+        );
+        if (existing) {
+          profileCache.set(entity.profileSlug, existing.id);
+          continue;
+        }
+
+        // Profile doesn't exist — create it
+        const hints = profileHintsMap.get(entity.profileSlug) ?? {};
+        const newProfile = await profileRepo.create({
+          slug: entity.profileSlug,
+          displayName: hints.displayName ?? entity.profileSlug,
+          uiHints: {
+            icon: hints.icon,
+            color: hints.color,
+            description: hints.description,
+          },
+          scope: "workspace" as const,
+          workspaceId: ctx.workspaceId,
+          userId: ctx.userId,
+        });
+        profileCache.set(entity.profileSlug, newProfile.id);
+        profilesCreated++;
+      }
+
+      // 2. Check for existing entities (idempotency by profileSlug + title)
+      const existingEntities = await database.query.entities.findMany({
+        where: and(
+          eq(entities.userId, ctx.userId),
+          eq(entities.workspaceId, ctx.workspaceId),
+          inArray(
+            entities.type,
+            input.entities.map((e) => e.profileSlug)
+          )
+        ),
+      });
+
+      const existingByKey = new Map<string, string>(); // "slug:title" → entityId
+      for (const e of existingEntities) {
+        existingByKey.set(`${e.type}:${e.title}`, e.id);
+      }
+
+      // 3. Create missing entities
+      const entityIds: Record<string, string> = {};
+      const errors: Array<{ refKey: string; error: string }> = [];
+      let created = 0;
+      let skipped = 0;
+
+      for (const entity of input.entities) {
+        const cacheKey = `${entity.profileSlug}:${entity.title}`;
+
+        // Already exists → skip
+        if (existingByKey.has(cacheKey)) {
+          entityIds[entity.refKey] = existingByKey.get(cacheKey)!;
+          skipped++;
+          continue;
+        }
+
+        try {
+          const profileId = profileCache.get(entity.profileSlug);
+          if (!profileId) {
+            throw new Error(`Profile ${entity.profileSlug} not in cache`);
+          }
+
+          const result = await entityRepo.create(
+            {
+              profileId,
+              title: entity.title,
+              properties: entity.properties,
+              workspaceId: ctx.workspaceId,
+              userId: ctx.userId,
+              skipValidation: true, // seed data — trust the input
+            },
+            ctx.userId
+          );
+          entityIds[entity.refKey] = result.id;
+          created++;
+        } catch (err) {
+          errors.push({
+            refKey: entity.refKey,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      return { created, skipped, profilesCreated, entityIds, errors };
+    }),
+
+  /**
    * Admin: get full entity detail by id (pod-admin only).
    */
   adminGet: podAdminProcedure

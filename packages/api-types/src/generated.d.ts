@@ -2462,13 +2462,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						model?: string | undefined;
 						tokens?: number | undefined;
 						latency?: number | undefined;
+						intelligenceServiceId?: string | undefined;
+						agentId?: string | undefined;
 					} | null;
 					deletedAt: Date | null;
 					content: string;
 					channelId: string;
 					parentId: string | null;
-					role: "user" | "system" | "assistant";
-					authorType: "human" | "external" | "ai_agent" | "bot";
+					role: "user" | "assistant" | "system";
+					authorType: "human" | "ai_agent" | "external" | "bot";
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
 					inboxItemId: string | null;
@@ -2706,7 +2708,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "view" | "entity" | "document" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "pending" | "none" | "resolved";
+					conflictStatus: "none" | "pending" | "resolved";
 					relevanceScore: number | null;
 				}[] | undefined;
 				branchTree: any;
@@ -2882,7 +2884,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "view" | "entity" | "document" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "pending" | "none" | "resolved";
+					conflictStatus: "none" | "pending" | "resolved";
 					relevanceScore: number | null;
 				}[];
 				entities: {
@@ -2895,7 +2897,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "view" | "entity" | "document" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "pending" | "none" | "resolved";
+					conflictStatus: "none" | "pending" | "resolved";
 					relevanceScore: number | null;
 				}[];
 				documents: {
@@ -2908,7 +2910,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "view" | "entity" | "document" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "pending" | "none" | "resolved";
+					conflictStatus: "none" | "pending" | "resolved";
 					relevanceScore: number | null;
 				}[];
 			};
@@ -10210,6 +10212,41 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unipileDsn?: string | undefined;
 				unipileApiKey?: string | undefined;
 				unipileWebhookSecret?: string | undefined;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		autodiscover: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				nango: {
+					url: string;
+					reachable: boolean;
+					configured: boolean;
+				} | {
+					url: null;
+					reachable: false;
+					configured: boolean;
+				};
+			};
+			meta: object;
+		}>;
+		getNangoConfig: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				configured: boolean;
+				hasSecretKey: boolean;
+				host: string | null;
+				fromEnv: boolean;
+			};
+			meta: object;
+		}>;
+		saveNangoConfig: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				secretKey?: string | undefined;
+				host?: string | undefined;
 			};
 			output: {
 				success: boolean;

@@ -26,12 +26,16 @@ import {
   workspaceMembers,
   invites,
   intelligenceServices,
+  entities,
+  relations,
   getDb,
   EventRepository,
   WorkspaceRepository,
   WorkspaceMemberRepository,
   DocumentRepository,
   EntityRepository,
+  RelationRepository,
+  RelationDefRepository,
   drizzleSql,
   sql,
   users,
@@ -3046,5 +3050,522 @@ export const workspacesRouter = router({
         .where(eq(workspaces.id, input.workspaceId));
 
       return { count: input.servers.length };
+    }),
+
+  /**
+   * Apply a comprehensive workspace definition in a single call.
+   *
+   * Orchestrates:
+   * 1. Profiles + views via createWorkspaceFromDefinition
+   * 2. Relation definitions (auto-created from relation defs in definition)
+   * 3. Entities (batch create with auto-profile creation)
+   * 4. Relations (batch create with auto-relationDef creation)
+   *
+   * Supports two modes:
+   * - "create": creates a new workspace (delegates to createFromDefinition)
+   * - "update": populates/updates an existing workspace (skips workspace/profiles/views creation)
+   *
+   * Idempotent: entities and relations are upserted by their natural keys.
+   */
+  applyDefinition: protectedProcedure
+    .input(
+      z.object({
+        /** Reuse the full WorkspaceDefinitionInput schema */
+        definition: z
+          .object({
+            workspaceName: z.string().optional(),
+            description: z.string().optional(),
+            profiles: z
+              .array(
+                z.object({
+                  slug: z.string(),
+                  displayName: z.string(),
+                  icon: z.string().optional(),
+                  color: z.string().optional(),
+                  description: z.string().optional(),
+                  scope: z.string().optional(),
+                  properties: z
+                    .array(
+                      z.object({
+                        slug: z.string(),
+                        label: z.string().optional(),
+                        valueType: z.string(),
+                        inputType: z.string().optional(),
+                        placeholder: z.string().optional(),
+                        enumValues: z.array(z.string()).optional(),
+                        constraints: z
+                          .record(z.string(), z.unknown())
+                          .optional(),
+                        targetProfileSlug: z.string().optional(),
+                      })
+                    )
+                    .optional(),
+                  uiHints: z
+                    .object({
+                      icon: z.string().optional(),
+                      color: z.string().optional(),
+                      description: z.string().optional(),
+                    })
+                    .optional(),
+                  propertyDefs: z
+                    .array(
+                      z.object({
+                        slug: z.string(),
+                        valueType: z.string(),
+                        required: z.boolean().optional(),
+                        constraints: z
+                          .object({ enum: z.array(z.string()).optional() })
+                          .passthrough()
+                          .optional(),
+                        uiHints: z
+                          .object({
+                            label: z.string().optional(),
+                            inputType: z.string().optional(),
+                            placeholder: z.string().optional(),
+                          })
+                          .optional(),
+                      })
+                    )
+                    .optional(),
+                })
+              )
+              .optional(),
+            views: z.array(z.record(z.string(), z.unknown())).optional(),
+            bentoLayout: z.array(z.record(z.string(), z.unknown())).optional(),
+            bentoViewBlocks: z
+              .array(z.record(z.string(), z.unknown()))
+              .optional(),
+            bentoViewName: z.string().optional(),
+            suggestedEntities: z
+              .array(
+                z.object({
+                  profileSlug: z.string(),
+                  title: z.string(),
+                  properties: z.record(z.string(), z.unknown()).optional(),
+                  content: z.string().optional(),
+                  refKey: z.string().optional(), // stable reference for relations
+                })
+              )
+              .optional(),
+            seedEntities: z
+              .array(
+                z.object({
+                  profileSlug: z.string(),
+                  title: z.string(),
+                  properties: z.record(z.string(), z.unknown()).optional(),
+                  content: z.string().optional(),
+                  refKey: z.string().optional(),
+                })
+              )
+              .optional(),
+            suggestedRelations: z
+              .array(
+                z.object({
+                  sourceRef: z.string(), // refKey or "profileSlug:title"
+                  targetRef: z.string(),
+                  type: z.string(),
+                  metadata: z.record(z.string(), z.unknown()).optional(),
+                })
+              )
+              .optional(),
+            /** Additional relation definitions to ensure exist */
+            relationDefs: z
+              .array(
+                z.object({
+                  slug: z.string(),
+                  displayName: z.string(),
+                  description: z.string().optional(),
+                  isDirectional: z.boolean().optional(),
+                  uiHints: z.record(z.string(), z.unknown()).optional(),
+                })
+              )
+              .optional(),
+            entityLinks: z.array(z.record(z.string(), z.unknown())).optional(),
+            displayTemplates: z
+              .array(z.record(z.string(), z.unknown()))
+              .optional(),
+            layoutConfig: z.record(z.string(), z.unknown()).optional(),
+            profileEntityBentoTemplates: z
+              .record(z.string(), z.unknown())
+              .optional(),
+          })
+          .passthrough(),
+        /** "create" = new workspace, "update" = populate existing workspace */
+        mode: z.enum(["create", "update"]).default("update"),
+        /** Required for "update" mode: which workspace to populate */
+        workspaceId: z.string().uuid().optional(),
+        /** Optional: stable idempotency key for "create" mode */
+        proposalId: z.string().optional(),
+        /** Optional: app identifier for workspace filtering */
+        appId: z.string().optional(),
+      })
+    )
+    .output(
+      z.object({
+        workspaceId: z.string(),
+        profilesCreated: z.number(),
+        entitiesCreated: z.number(),
+        entitiesSkipped: z.number(),
+        relationsCreated: z.number(),
+        relationsSkipped: z.number(),
+        relationDefsCreated: z.number(),
+        entityIds: z.record(z.string(), z.string()),
+        errors: z.array(
+          z.object({
+            stage: z.string(),
+            refKey: z.string().optional(),
+            error: z.string(),
+          })
+        ),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const errors: Array<{ stage: string; refKey?: string; error: string }> =
+        [];
+
+      // ── UPDATE mode: populate existing workspace ────────────────────────
+      if (input.mode === "update") {
+        if (!input.workspaceId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "workspaceId is required for update mode",
+          });
+        }
+
+        // Verify membership
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, input.workspaceId),
+            eq(workspaceMembers.userId, ctx.userId)
+          ),
+        });
+        if (!membership) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
+        }
+
+        const database = await getDb();
+        const eventRepo = new EventRepository(sql);
+
+        // 1. Ensure relation definitions exist
+        const relDefRepo = new RelationDefRepository(database);
+        let relationDefsCreated = 0;
+        const existingDefs = await relDefRepo.list(input.workspaceId);
+        const existingDefSlugs = new Set(existingDefs.map((d) => d.slug));
+
+        for (const rd of input.definition.relationDefs ?? []) {
+          if (existingDefSlugs.has(rd.slug)) continue;
+          try {
+            await relDefRepo.create({
+              slug: rd.slug,
+              displayName: rd.displayName,
+              description: rd.description,
+              workspaceId: input.workspaceId,
+              userId: ctx.userId,
+              uiHints: rd.uiHints,
+              isDirectional: rd.isDirectional ?? true,
+            });
+            existingDefSlugs.add(rd.slug);
+            relationDefsCreated++;
+          } catch (err) {
+            errors.push({
+              stage: "relationDefs",
+              refKey: rd.slug,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+
+        // 2. Batch create entities
+        const entityRepo = new EntityRepository(database, eventRepo);
+        const profileRepo = new (
+          await import("@synap/database")
+        ).ProfileRepository(database);
+        const profileCache = new Map<string, string>();
+
+        // Pre-load existing profiles
+        const existingProfiles = await profileRepo.getAccessibleProfiles(
+          ctx.userId,
+          input.workspaceId
+        );
+        for (const p of existingProfiles) {
+          profileCache.set(p.slug, p.id);
+        }
+
+        // Auto-create missing profiles
+        let profilesCreated = 0;
+        const profileHintsMap = new Map<
+          string,
+          {
+            displayName?: string;
+            icon?: string;
+            color?: string;
+            description?: string;
+          }
+        >();
+        const allEntities =
+          input.definition.suggestedEntities ??
+          input.definition.seedEntities ??
+          [];
+        for (const e of allEntities) {
+          const profileDef = input.definition.profiles?.find(
+            (p) => p.slug === e.profileSlug
+          );
+          if (profileDef && !profileHintsMap.has(e.profileSlug)) {
+            profileHintsMap.set(e.profileSlug, {
+              displayName:
+                profileDef.displayName ?? profileDef.uiHints?.displayName,
+              icon: profileDef.icon ?? profileDef.uiHints?.icon,
+              color: profileDef.color ?? profileDef.uiHints?.color,
+              description:
+                profileDef.description ?? profileDef.uiHints?.description,
+            });
+          }
+        }
+
+        for (const e of allEntities) {
+          if (profileCache.has(e.profileSlug)) continue;
+          const hints = profileHintsMap.get(e.profileSlug) ?? {};
+          try {
+            const newProfile = await profileRepo.create({
+              slug: e.profileSlug,
+              displayName: hints.displayName ?? e.profileSlug,
+              uiHints: {
+                icon: hints.icon,
+                color: hints.color,
+                description: hints.description,
+              },
+              scope: "workspace" as const,
+              workspaceId: input.workspaceId,
+              userId: ctx.userId,
+            });
+            profileCache.set(e.profileSlug, newProfile.id);
+            profilesCreated++;
+          } catch (err) {
+            errors.push({
+              stage: "profiles",
+              refKey: e.profileSlug,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+
+        // Check existing entities for idempotency
+        const existingEntities = await database.query.entities.findMany({
+          where: and(
+            eq(entities.userId, ctx.userId),
+            eq(entities.workspaceId, input.workspaceId)
+          ),
+          columns: { id: true, type: true, title: true },
+        });
+        const existingEntityKeys = new Map<string, string>();
+        for (const e of existingEntities) {
+          existingEntityKeys.set(`${e.type}:${e.title}`, e.id);
+        }
+
+        // Create entities
+        const entityIds: Record<string, string> = {};
+        let entitiesCreated = 0;
+        let entitiesSkipped = 0;
+
+        for (const e of allEntities) {
+          const cacheKey = `${e.profileSlug}:${e.title}`;
+          const refKey = e.refKey ?? cacheKey;
+
+          if (existingEntityKeys.has(cacheKey)) {
+            entityIds[refKey] = existingEntityKeys.get(cacheKey)!;
+            entitiesSkipped++;
+            continue;
+          }
+
+          const profileId = profileCache.get(e.profileSlug);
+          if (!profileId) {
+            errors.push({
+              stage: "entities",
+              refKey,
+              error: `Profile ${e.profileSlug} not found`,
+            });
+            continue;
+          }
+
+          try {
+            const result = await entityRepo.create(
+              {
+                profileId,
+                title: e.title,
+                properties: e.properties,
+                workspaceId: input.workspaceId,
+                userId: ctx.userId,
+                skipValidation: true,
+              },
+              ctx.userId
+            );
+            entityIds[refKey] = result.id;
+            entitiesCreated++;
+          } catch (err) {
+            errors.push({
+              stage: "entities",
+              refKey,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+
+        // 3. Batch create relations
+        const relationRepo = new RelationRepository(database, eventRepo);
+        const existingRelations = await database.query.relations.findMany({
+          where: eq(relations.workspaceId, input.workspaceId),
+          columns: { sourceEntityId: true, targetEntityId: true, type: true },
+        });
+        const existingRelKeys = new Set<string>();
+        for (const r of existingRelations) {
+          existingRelKeys.add(
+            `${r.sourceEntityId}:${r.targetEntityId}:${r.type}`
+          );
+        }
+
+        let relationsCreated = 0;
+        let relationsSkipped = 0;
+
+        for (const rel of input.definition.suggestedRelations ?? []) {
+          const sourceId = entityIds[rel.sourceRef];
+          const targetId = entityIds[rel.targetRef];
+          if (!sourceId || !targetId) {
+            errors.push({
+              stage: "relations",
+              refKey: `${rel.sourceRef}->${rel.targetRef}`,
+              error: `Source or target entity not found: ${rel.sourceRef}=${sourceId}, ${rel.targetRef}=${targetId}`,
+            });
+            continue;
+          }
+
+          const key = `${sourceId}:${targetId}:${rel.type}`;
+          if (existingRelKeys.has(key)) {
+            relationsSkipped++;
+            continue;
+          }
+
+          try {
+            await relationRepo.create(
+              {
+                sourceEntityId: sourceId,
+                targetEntityId: targetId,
+                type: rel.type,
+                workspaceId: input.workspaceId,
+                userId: ctx.userId,
+                metadata: rel.metadata,
+              },
+              ctx.userId
+            );
+            relationsCreated++;
+          } catch (err) {
+            errors.push({
+              stage: "relations",
+              refKey: `${rel.sourceRef}->${rel.targetRef}`,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+
+        return {
+          workspaceId: input.workspaceId,
+          profilesCreated,
+          entitiesCreated,
+          entitiesSkipped,
+          relationsCreated,
+          relationsSkipped,
+          relationDefsCreated,
+          entityIds,
+          errors,
+        };
+      }
+
+      // ── CREATE mode: delegate to createFromDefinition ───────────────────
+      const createResult = await workspacesRouter.createFromDefinition.mutate({
+        definition: input.definition,
+        proposalId: input.proposalId,
+        appId: input.appId,
+        workspaceName: input.definition.workspaceName,
+        workspaceType: "personal",
+      });
+
+      // After workspace is created, apply entities and relations
+      const workspaceId = createResult.workspaceId;
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const entityRepo = new EntityRepository(database, eventRepo);
+      const relationRepo = new RelationRepository(database, eventRepo);
+      const relDefRepo = new RelationDefRepository(database);
+
+      // Entity IDs from createFromDefinition (suggestedEntities)
+      const entityIds: Record<string, string> = {};
+      const allEntities =
+        input.definition.suggestedEntities ??
+        input.definition.seedEntities ??
+        [];
+      const createEntityIds = (createResult as any).entityIds ?? [];
+      for (
+        let i = 0;
+        i < allEntities.length && i < createEntityIds.length;
+        i++
+      ) {
+        const e = allEntities[i];
+        const refKey = e.refKey ?? `${e.profileSlug}:${e.title}`;
+        entityIds[refKey] = createEntityIds[i];
+      }
+
+      // Create relation definitions
+      let relationDefsCreated = 0;
+      const existingDefs = await relDefRepo.list(workspaceId);
+      const existingDefSlugs = new Set(existingDefs.map((d) => d.slug));
+      for (const rd of input.definition.relationDefs ?? []) {
+        if (existingDefSlugs.has(rd.slug)) continue;
+        await relDefRepo.create({
+          slug: rd.slug,
+          displayName: rd.displayName,
+          description: rd.description,
+          workspaceId,
+          userId: ctx.userId,
+          uiHints: rd.uiHints,
+          isDirectional: rd.isDirectional ?? true,
+        });
+        relationDefsCreated++;
+      }
+
+      // Create relations
+      let relationsCreated = 0;
+      let relationsSkipped = 0;
+      for (const rel of input.definition.suggestedRelations ?? []) {
+        const sourceId = entityIds[rel.sourceRef];
+        const targetId = entityIds[rel.targetRef];
+        if (!sourceId || !targetId) continue;
+        try {
+          await relationRepo.create(
+            {
+              sourceEntityId: sourceId,
+              targetEntityId: targetId,
+              type: rel.type,
+              workspaceId,
+              userId: ctx.userId,
+              metadata: rel.metadata,
+            },
+            ctx.userId
+          );
+          relationsCreated++;
+        } catch {
+          relationsSkipped++;
+        }
+      }
+
+      return {
+        workspaceId,
+        profilesCreated: 0, // handled by createFromDefinition
+        entitiesCreated: allEntities.length,
+        entitiesSkipped: 0,
+        relationsCreated,
+        relationsSkipped,
+        relationDefsCreated,
+        entityIds,
+        errors,
+      };
     }),
 });

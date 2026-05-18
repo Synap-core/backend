@@ -843,4 +843,157 @@ export const relationsRouter = router({
 
       return { jobId };
     }),
+
+  /**
+   * Batch create relations in a single call.
+   *
+   * Auto-creates missing relation definitions on the fly (workspace-scoped).
+   * Entities are referenced by UUID.
+   *
+   * Idempotent: relations with the same (sourceEntityId, targetEntityId, type)
+   * in the same workspace are skipped, not duplicated.
+   */
+  batchCreate: protectedProcedure
+    .input(
+      z.object({
+        relations: z.array(
+          z.object({
+            sourceEntityId: z.string().uuid(),
+            targetEntityId: z.string().uuid(),
+            type: z.string().min(1),
+            metadata: z.record(z.string(), z.unknown()).optional(),
+            /** If the relation type doesn't exist as a def, create it with these hints */
+            typeHints: z
+              .object({
+                displayName: z.string().optional(),
+                description: z.string().optional(),
+                isDirectional: z.boolean().optional(),
+                uiHints: z.record(z.string(), z.unknown()).optional(),
+              })
+              .optional(),
+          })
+        ),
+      })
+    )
+    .output(
+      z.object({
+        created: z.number(),
+        skipped: z.number(),
+        relationDefsCreated: z.number(),
+        errors: z.array(
+          z.object({
+            sourceEntityId: z.string(),
+            targetEntityId: z.string(),
+            type: z.string(),
+            error: z.string(),
+          })
+        ),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const effectiveWorkspaceId = ctx.workspaceId;
+      if (!effectiveWorkspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "workspaceId is required (set X-Workspace-Id header)",
+        });
+      }
+
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const relationRepo = new RelationRepository(database, eventRepo);
+      const relDefRepo = new RelationDefRepository(database);
+
+      // 1. Ensure all relation definitions exist (auto-create missing ones)
+      const existingDefs = await relDefRepo.list(effectiveWorkspaceId);
+      const existingDefSlugs = new Set(existingDefs.map((d) => d.slug));
+      const systemTypes = new Set(SYSTEM_RELATION_TYPES as readonly string[]);
+      let relationDefsCreated = 0;
+
+      for (const rel of input.relations) {
+        if (systemTypes.has(rel.type)) continue;
+        if (existingDefSlugs.has(rel.type)) continue;
+
+        // Create the relation def
+        const hints = rel.typeHints ?? {};
+        await relDefRepo.create({
+          slug: rel.type,
+          displayName: hints.displayName ?? rel.type.replace(/_/g, " "),
+          description: hints.description,
+          workspaceId: effectiveWorkspaceId,
+          userId: ctx.userId,
+          uiHints: hints.uiHints,
+          isDirectional: hints.isDirectional ?? true,
+        });
+        existingDefSlugs.add(rel.type);
+        relationDefsCreated++;
+      }
+
+      // 2. Check for existing relations (idempotency)
+      const existingRelations = await database.query.relations.findMany({
+        where: and(
+          eq(relations.workspaceId, effectiveWorkspaceId),
+          inArray(
+            relations.type,
+            input.relations.map((r) => r.type)
+          )
+        ),
+        columns: {
+          id: true,
+          sourceEntityId: true,
+          targetEntityId: true,
+          type: true,
+        },
+      });
+
+      const existingRelKeys = new Set<string>();
+      for (const r of existingRelations) {
+        existingRelKeys.add(
+          `${r.sourceEntityId}:${r.targetEntityId}:${r.type}`
+        );
+      }
+
+      // 3. Create missing relations
+      let created = 0;
+      let skipped = 0;
+      const errors: Array<{
+        sourceEntityId: string;
+        targetEntityId: string;
+        type: string;
+        error: string;
+      }> = [];
+
+      for (const rel of input.relations) {
+        const key = `${rel.sourceEntityId}:${rel.targetEntityId}:${rel.type}`;
+
+        if (existingRelKeys.has(key)) {
+          skipped++;
+          continue;
+        }
+
+        try {
+          await relationRepo.create(
+            {
+              sourceEntityId: rel.sourceEntityId,
+              targetEntityId: rel.targetEntityId,
+              type: rel.type,
+              workspaceId: effectiveWorkspaceId,
+              userId: ctx.userId,
+              metadata: rel.metadata,
+            },
+            ctx.userId
+          );
+          created++;
+        } catch (err) {
+          errors.push({
+            sourceEntityId: rel.sourceEntityId,
+            targetEntityId: rel.targetEntityId,
+            type: rel.type,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      return { created, skipped, relationDefsCreated, errors };
+    }),
 });
