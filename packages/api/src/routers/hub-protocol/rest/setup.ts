@@ -1073,20 +1073,87 @@ export function registerSetupRoutes(app: HubHono): void {
       const status = (err as { response?: { status?: number } })?.response
         ?.status;
       if (status === 409) {
+        // Identity already exists. If the account is stale (no workspace
+        // memberships) we can safely delete it and retry — this covers users
+        // who were removed without full cleanup. If it's an active account we
+        // keep the security guard and refuse.
+        const existingUser = await db.query.users.findFirst({
+          where: eq(users.email, email),
+          columns: { id: true, kratosIdentityId: true },
+        });
+        const isStale =
+          existingUser &&
+          !(await db.query.workspaceMembers.findFirst({
+            where: eq(workspaceMembers.userId, existingUser.id),
+            columns: { workspaceId: true },
+          }));
+
+        if (isStale && existingUser) {
+          try {
+            if (existingUser.kratosIdentityId) {
+              await kratosAdmin.deleteIdentity({
+                id: existingUser.kratosIdentityId,
+              });
+            }
+            await db.delete(users).where(eq(users.id, existingUser.id));
+          } catch (cleanupErr) {
+            logger.warn(
+              { cleanupErr, email },
+              "accept-invite: stale identity cleanup failed"
+            );
+            return c.json({ error: "Failed to clean up stale account" }, 500);
+          }
+          // Retry identity creation with the new credentials.
+          try {
+            const { data: identity } = await kratosAdmin.createIdentity({
+              createIdentityBody: {
+                schema_id: "default",
+                traits: { email, name },
+                credentials: { password: { config: { password } } },
+                verifiable_addresses: [
+                  {
+                    value: email,
+                    verified: true,
+                    via: "email",
+                    status: "completed",
+                  },
+                ],
+              },
+            });
+            identityId = identity.id;
+            logger.info(
+              { identityId, email },
+              "accept-invite: stale identity replaced"
+            );
+          } catch (retryErr) {
+            const msg =
+              retryErr instanceof Error ? retryErr.message : String(retryErr);
+            logger.error(
+              { retryErr, email },
+              "accept-invite: createIdentity retry failed"
+            );
+            return c.json(
+              { error: "Failed to create account", detail: msg.slice(0, 200) },
+              500
+            );
+          }
+        } else {
+          return c.json(
+            {
+              error:
+                "An account with this email already exists. Use the Sign in tab to accept the invite.",
+            },
+            409
+          );
+        }
+      } else {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error({ err, email }, "accept-invite: createIdentity failed");
         return c.json(
-          {
-            error:
-              "An account with this email already exists. Use the Sign in tab to accept the invite.",
-          },
-          409
+          { error: "Failed to create account", detail: msg.slice(0, 200) },
+          500
         );
       }
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error({ err, email }, "accept-invite: createIdentity failed");
-      return c.json(
-        { error: "Failed to create account", detail: msg.slice(0, 200) },
-        500
-      );
     }
 
     await ensureUserRow(identityId, email, name);
