@@ -184,7 +184,6 @@ async function resolvePersonalChannelId(userId: string): Promise<string> {
   const existing = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, userId),
-      eq(channels.channelType, ChannelType.THREAD),
       eq(channels.channelType, ChannelType.PERSONAL),
       eq(channels.status, ChannelStatus.ACTIVE)
     ),

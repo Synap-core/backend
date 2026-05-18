@@ -52,26 +52,6 @@ export const ChannelType = {
 export type ChannelType = (typeof ChannelType)[keyof typeof ChannelType];
 
 /**
- * @deprecated Phase 4 of the V2 restore drops this enum and the
- * `thread_kind` column was already dropped in migration 0010. New code MUST
- * NOT read or write `channels.threadKind`. Discrimination now happens via
- * `channelType` (personal | sub_thread | thread | …) plus `contextObjectType`.
- * The enum is kept here so existing TS references still compile during the
- * transition; remove once all callers stop importing it.
- */
-export const ThreadKind = {
-  PERSONAL: "personal",
-  WORKSPACE: "workspace",
-  ENTITY: "entity",
-  DOCUMENT: "document",
-  VIEW: "view",
-  PROJECT: "project",
-  TASK: "task",
-  BRANCH: "branch",
-} as const;
-export type ThreadKind = (typeof ThreadKind)[keyof typeof ThreadKind];
-
-/**
  * Channel Scope
  *
  * Controls visibility and filtering. Orthogonal to type.

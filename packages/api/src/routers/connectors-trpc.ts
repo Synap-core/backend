@@ -33,7 +33,11 @@ import {
 } from "@synap/database";
 import { entities, workspaces } from "@synap/database/schema";
 import { NangoConnector } from "../connectors/NangoConnector.js";
-import { enrichmentProviderRegistry } from "../connectors/index.js";
+import {
+  enrichmentProviderRegistry,
+  getMessagingConnector,
+  UnipileConnector,
+} from "../connectors/index.js";
 
 /** Env-based connector used for quick isConfigured() checks at startup. */
 const nango = new NangoConnector();
@@ -367,10 +371,9 @@ export const connectorsRouter = router({
 
       const cpUrl = await resolveCpUrl(input?.cpUrl);
       if (!cpUrl) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "No Control Plane configured",
-        });
+        // Neither local Nango nor CP is configured — return empty list so the
+        // UI shows "no connectors" rather than an error.
+        return { providers: [], connectorLimit: -1, tier: "local" };
       }
 
       const cp = await getControlPlaneSettings();
@@ -454,11 +457,19 @@ export const connectorsRouter = router({
           workspaceId = ws?.id ?? "unknown";
         }
 
-        const session = await localNango.createSession(
-          ctx.userId,
-          input?.providerId ?? "*",
-          workspaceId
-        );
+        let session: Awaited<ReturnType<typeof localNango.createSession>>;
+        try {
+          session = await localNango.createSession(
+            ctx.userId,
+            input?.providerId ?? "*",
+            workspaceId
+          );
+        } catch (err) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `Nango session failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
         return {
           token: session.sessionToken,
           nangoHost: localNango.getHost(),
@@ -894,6 +905,154 @@ export const connectorsRouter = router({
       }
       return { results };
     }),
+
+  /**
+   * Probe every external service and return real health status.
+   * Used by the settings health panel so users can see exactly what's
+   * failing and why without reading server logs.
+   */
+  diagnose: protectedProcedure.query(async () => {
+    type ServiceHealth = {
+      configured: boolean;
+      reachable: boolean;
+      authenticated: boolean;
+      error: string | null;
+    };
+
+    async function probeNango(): Promise<ServiceHealth> {
+      const n = await getLocalNango();
+      if (!n)
+        return {
+          configured: false,
+          reachable: false,
+          authenticated: false,
+          error: "No secret key configured",
+        };
+      const result = await n.probe();
+      return { configured: true, ...result };
+    }
+
+    async function probeUnipile(): Promise<ServiceHealth> {
+      const connector = await getMessagingConnector();
+      if (!connector)
+        return {
+          configured: false,
+          reachable: false,
+          authenticated: false,
+          error: "DSN or API key not configured",
+        };
+      const result = await (connector as UnipileConnector).probe();
+      return { configured: true, ...result };
+    }
+
+    async function probeApollo(
+      apiKey: string | null | undefined
+    ): Promise<ServiceHealth> {
+      if (!apiKey)
+        return {
+          configured: false,
+          reachable: false,
+          authenticated: false,
+          error: "No API key configured",
+        };
+      try {
+        const res = await fetch("https://api.apollo.io/v1/auth/health", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_key: apiKey }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (res.status === 401 || res.status === 403) {
+          return {
+            configured: true,
+            reachable: true,
+            authenticated: false,
+            error: "Invalid API key",
+          };
+        }
+        if (!res.ok) {
+          return {
+            configured: true,
+            reachable: true,
+            authenticated: false,
+            error: `Apollo returned ${res.status}`,
+          };
+        }
+        return {
+          configured: true,
+          reachable: true,
+          authenticated: true,
+          error: null,
+        };
+      } catch (err) {
+        return {
+          configured: true,
+          reachable: false,
+          authenticated: false,
+          error: `Cannot reach Apollo: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    async function probeApify(
+      token: string | null | undefined
+    ): Promise<ServiceHealth> {
+      if (!token)
+        return {
+          configured: false,
+          reachable: false,
+          authenticated: false,
+          error: "No token configured",
+        };
+      try {
+        const res = await fetch(
+          `https://api.apify.com/v2/users/me?token=${token}`,
+          {
+            signal: AbortSignal.timeout(8000),
+          }
+        );
+        if (res.status === 401 || res.status === 403) {
+          return {
+            configured: true,
+            reachable: true,
+            authenticated: false,
+            error: "Invalid token",
+          };
+        }
+        if (!res.ok) {
+          return {
+            configured: true,
+            reachable: true,
+            authenticated: false,
+            error: `Apify returned ${res.status}`,
+          };
+        }
+        return {
+          configured: true,
+          reachable: true,
+          authenticated: true,
+          error: null,
+        };
+      } catch (err) {
+        return {
+          configured: true,
+          reachable: false,
+          authenticated: false,
+          error: `Cannot reach Apify: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    const keys = await getEnrichmentKeys();
+    const [nango, unipile, apollo, apify] = await Promise.all([
+      probeNango(),
+      probeUnipile(),
+      probeApollo(keys.apolloApiKey),
+      probeApify(keys.apifyToken),
+    ]);
+
+    return { nango, unipile, apollo, apify };
+  }),
 
   /**
    * Diagnostic: returns what the pod sees for CP connection settings.

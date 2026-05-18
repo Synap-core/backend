@@ -165,6 +165,40 @@ export class NangoConnector implements SyncConnector {
     }));
   }
 
+  async probe(): Promise<{
+    reachable: boolean;
+    authenticated: boolean;
+    error: string | null;
+  }> {
+    try {
+      const res = await fetch(`${this.host}/config`, {
+        headers: this.authHeaders(),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.status === 401 || res.status === 403) {
+        return {
+          reachable: true,
+          authenticated: false,
+          error: `Invalid secret key (${res.status})`,
+        };
+      }
+      if (!res.ok) {
+        return {
+          reachable: true,
+          authenticated: false,
+          error: `Nango returned ${res.status}`,
+        };
+      }
+      return { reachable: true, authenticated: true, error: null };
+    } catch (err) {
+      return {
+        reachable: false,
+        authenticated: false,
+        error: `Cannot reach ${this.host}: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
   async fetchRecords(
     connectionId: string,
     model: string,

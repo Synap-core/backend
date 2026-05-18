@@ -42,19 +42,26 @@ export interface HubDocument {
 export interface HubChannel {
   id: string;
   name: string;
-  type: "thread" | "feed" | "external" | "agent_collab";
-  threadKind?:
+  type:
     | "personal"
+    | "thread"
+    | "sub_thread"
+    | "feed"
+    | "external"
+    | "agent_collab";
+  workspaceId: string | null;
+  agentType?: string;
+  contextObjectType?:
     | "workspace"
     | "entity"
     | "document"
     | "view"
     | "project"
     | "task"
-    | "branch"
+    | "user"
+    | "external"
     | null;
-  workspaceId: string | null;
-  agentType?: string;
+  contextObjectId?: string | null;
   createdAt: string;
 }
 
@@ -316,16 +323,25 @@ export interface HubThread {
   id: string;
   name?: string;
   type:
-    | "ai_thread"
-    | "branch"
-    | "entity_comments"
-    | "document_review"
-    | "view_discussion"
-    | "direct"
-    | "external_import";
-  threadKind?: "personal" | "workspace" | "external";
+    | "personal"
+    | "thread"
+    | "sub_thread"
+    | "feed"
+    | "external"
+    | "agent_collab";
   workspaceId?: string;
   agentType?: string;
+  contextObjectType?:
+    | "workspace"
+    | "entity"
+    | "document"
+    | "view"
+    | "project"
+    | "task"
+    | "user"
+    | "external";
+  contextObjectId?: string;
+  parentChannelId?: string;
   linkedEntityIds?: string[];
   linkedDocumentIds?: string[];
   createdAt: string;

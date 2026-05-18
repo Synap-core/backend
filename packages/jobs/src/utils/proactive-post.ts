@@ -7,7 +7,7 @@
  *
  * Surfaces:
  *   feed         → proactive feed channel (channelType='feed', feedScope='user')
- *   chat         → personal chat thread (channelType='thread', threadKind='personal')
+ *   chat         → personal chat thread (channelType=PERSONAL)
  *   notification → direct insert to notifications table
  *   suppress     → no-op
  *
@@ -142,7 +142,6 @@ async function ensurePersonalChatChannel(
   const existing = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, userId),
-      eq(channels.channelType, ChannelType.THREAD),
       eq(channels.channelType, ChannelType.PERSONAL),
       eq(channels.status, ChannelStatus.ACTIVE)
     ),

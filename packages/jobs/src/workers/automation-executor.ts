@@ -513,7 +513,7 @@ async function executeOutputStep(
 
     case "channel_message": {
       // Accepts explicit channelId OR channelType:'personal_thread'|'proactive'
-      // 'personal_thread'  → user's personal thread (channelType='thread', threadKind='personal')
+      // 'personal_thread'  → user's personal thread (channelType=PERSONAL)
       // 'proactive' → user's feed channel (channelType='feed', feedScope='user') — automation outputs
       let channelId = config.channelId as string | undefined;
       const content = config.content as string;
@@ -523,12 +523,11 @@ async function executeOutputStep(
         throw new Error("channel_message requires content");
       }
 
-      // Resolve personal thread (channelType='thread', threadKind='personal')
+      // Resolve personal thread (channelType=PERSONAL)
       if (!channelId && config.channelType === "personal_thread") {
         const personalChannel = await db.query.channels.findFirst({
           where: and(
             eq(channels.userId, ownerId),
-            eq(channels.channelType, ChannelType.THREAD),
             eq(channels.channelType, ChannelType.PERSONAL),
             eq(channels.status, ChannelStatus.ACTIVE)
           ),

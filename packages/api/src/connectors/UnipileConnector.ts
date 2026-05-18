@@ -237,6 +237,41 @@ export class UnipileConnector implements MessagingConnector {
     if (!res.ok) throw new Error(`Unipile sendMessage failed: ${res.status}`);
   }
 
+  async probe(): Promise<{
+    reachable: boolean;
+    authenticated: boolean;
+    error: string | null;
+  }> {
+    try {
+      const res = await fetch(`${this.dsn}/api/v1/accounts?limit=1`, {
+        headers: this.headers(),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.status === 401 || res.status === 403) {
+        return {
+          reachable: true,
+          authenticated: false,
+          error: `Invalid API key (${res.status})`,
+        };
+      }
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        return {
+          reachable: true,
+          authenticated: false,
+          error: `Unipile returned ${res.status}${body ? `: ${body.slice(0, 200)}` : ""}`,
+        };
+      }
+      return { reachable: true, authenticated: true, error: null };
+    } catch (err) {
+      return {
+        reachable: false,
+        authenticated: false,
+        error: `Cannot reach Unipile DSN: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+
   async parseWebhook(
     headers: Record<string, string>,
     rawBody: string | Buffer

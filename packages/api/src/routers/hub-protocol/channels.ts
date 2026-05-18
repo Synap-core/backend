@@ -35,7 +35,10 @@ import {
   MessageAuthorType,
 } from "@synap/database/schema";
 import { AI_CHANNEL_FAMILY_VALUES } from "@synap-core/types";
-import { resolveAiChannelByFamily } from "../../utils/resolve-ai-channel-family.js";
+import {
+  resolveOrCreateChannel,
+  mapLegacyFamily,
+} from "../../utils/resolve-or-create-channel.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import { emitTyped } from "../../utils/event-emit.js";
 import { makeExcerpt } from "../../utils/excerpt.js";
@@ -128,13 +131,16 @@ export const channelsRouter = router({
       })
     )
     .mutation(async ({ input }) => {
-      const channel = await resolveAiChannelByFamily({
+      const channel = await resolveOrCreateChannel({
         userId: input.userId,
         workspaceId: input.workspaceId,
-        family: input.family,
+        ...mapLegacyFamily({
+          family: input.family,
+          workspaceId: input.workspaceId,
+          contextObjectType: input.contextObjectType,
+          contextObjectId: input.contextObjectId,
+        }),
         agentId: input.agentId,
-        contextObjectId: input.contextObjectId,
-        contextObjectType: input.contextObjectType,
         parentChannelId: input.parentChannelId,
         branchPurpose: input.branchPurpose,
       });
@@ -705,10 +711,10 @@ export const channelsRouter = router({
           message: "Orchestrator agent not found",
         });
       }
-      const channel = await resolveAiChannelByFamily({
+      const channel = await resolveOrCreateChannel({
         userId: input.userId,
         workspaceId: input.workspaceId,
-        family: "agent",
+        channelType: ChannelType.PERSONAL,
         agentId: resolvedAgentId,
       });
       return { channel };

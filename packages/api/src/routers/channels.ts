@@ -58,7 +58,10 @@ import {
   resolveIntelligenceServiceByAgentId,
 } from "../utils/intelligence-routing.js";
 import { validateExternalUrl } from "../utils/validate-url.js";
-import { resolveAiChannelByFamily } from "../utils/resolve-ai-channel-family.js";
+import {
+  resolveOrCreateChannel,
+  mapLegacyFamily,
+} from "../utils/resolve-or-create-channel.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { emitTyped } from "../utils/event-emit.js";
 import { makeExcerpt } from "../utils/excerpt.js";
@@ -542,14 +545,75 @@ export const channelsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const channel = await resolveAiChannelByFamily({
+      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
+      const channel = await resolveOrCreateChannel({
         userId: ctx.userId,
-        workspaceId: input.workspaceId ?? ctx.workspaceId ?? undefined,
-        family: input.family,
-        contextObjectId: input.contextObjectId,
-        contextObjectType: input.contextObjectType,
+        workspaceId,
+        ...mapLegacyFamily({
+          family: input.family,
+          workspaceId,
+          contextObjectType: input.contextObjectType,
+          contextObjectId: input.contextObjectId,
+        }),
         parentChannelId: input.parentChannelId,
         branchPurpose: input.branchPurpose,
+        agentSlug: input.agentSlug,
+      });
+      return { channel };
+    }),
+
+  /**
+   * Resolve or create a channel using the canonical V2 channelType vocabulary.
+   *
+   * Replaces `resolveAiChannel` for new frontend code. Speaks the spec's
+   * model directly — channelType + optional contextObjectType + scope — so
+   * there's no longer a translation layer between the wire and the database.
+   *
+   * Spec: synap-team-docs/content/team/platform/channel-system.mdx
+   */
+  resolveOrCreateChannel: protectedProcedure
+    .input(
+      z.object({
+        channelType: z.enum([
+          ChannelType.PERSONAL,
+          ChannelType.THREAD,
+          ChannelType.SUB_THREAD,
+          ChannelType.FEED,
+          ChannelType.EXTERNAL,
+          ChannelType.AGENT_COLLAB,
+        ]),
+        workspaceId: z.string().uuid().optional(),
+        contextObjectType: z
+          .enum([
+            "workspace",
+            "entity",
+            "document",
+            "view",
+            "project",
+            "task",
+            "user",
+            "external",
+          ])
+          .optional(),
+        contextObjectId: z.string().uuid().optional(),
+        parentChannelId: z.string().uuid().optional(),
+        branchPurpose: z.string().max(500).optional(),
+        /** Agent UUID — preferred for PERSONAL channels when known. */
+        agentId: z.string().uuid().optional(),
+        /** Agent slug — fallback identifier, resolves with orchestrator default. */
+        agentSlug: z.string().max(100).optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const channel = await resolveOrCreateChannel({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId ?? ctx.workspaceId ?? undefined,
+        channelType: input.channelType,
+        contextObjectType: input.contextObjectType,
+        contextObjectId: input.contextObjectId,
+        parentChannelId: input.parentChannelId,
+        branchPurpose: input.branchPurpose,
+        agentId: input.agentId,
         agentSlug: input.agentSlug,
       });
       return { channel };
@@ -998,12 +1062,15 @@ export const channelsRouter = router({
             message: "You are not a member of this workspace",
           });
         }
-        const resolvedChannel = await resolveAiChannelByFamily({
+        const resolvedChannel = await resolveOrCreateChannel({
           userId,
           workspaceId,
-          family: input.aiChannelFamily ?? "agent",
-          contextObjectId: input.contextObjectId,
-          contextObjectType: input.contextObjectType,
+          ...mapLegacyFamily({
+            family: input.aiChannelFamily ?? "agent",
+            workspaceId,
+            contextObjectType: input.contextObjectType,
+            contextObjectId: input.contextObjectId,
+          }),
           parentChannelId: input.parentChannelId,
           branchPurpose: input.branchPurpose,
         });
@@ -2157,10 +2224,10 @@ export const channelsRouter = router({
   getOrCreateAgentThread: workspaceProcedure
     .input(z.object({ agentId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const channel = await resolveAiChannelByFamily({
+      const channel = await resolveOrCreateChannel({
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
-        family: "agent",
+        channelType: ChannelType.PERSONAL,
         agentId: input.agentId,
       });
       return { channel };
@@ -2173,10 +2240,12 @@ export const channelsRouter = router({
   getOrCreateWorkspaceGroup: workspaceProcedure
     .input(z.object({}))
     .query(async ({ ctx }) => {
-      const channel = await resolveAiChannelByFamily({
+      const channel = await resolveOrCreateChannel({
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
-        family: "workspace_group",
+        channelType: ChannelType.THREAD,
+        contextObjectType: "workspace",
+        contextObjectId: ctx.workspaceId,
       });
       return { channel };
     }),
@@ -3045,7 +3114,7 @@ export const channelsRouter = router({
       const userId = ctx.userId;
 
       // 1. Resolve the archetype source_config seeded by CP provisioning
-      const archetypeConfig = await db.query.sourceConfigs.findFirst({
+      let archetypeConfig = await db.query.sourceConfigs.findFirst({
         where: and(
           eq(sourceConfigs.userId, userId),
           drizzleSql`metadata->>'archetype' = ${input.archetype}`,
@@ -3054,10 +3123,76 @@ export const channelsRouter = router({
       });
 
       if (!archetypeConfig) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: `Feed sources for archetype "${input.archetype}" are not provisioned on this pod yet. Re-provision or contact support.`,
-        });
+        // Self-hosted pod with no CP provisioning — auto-seed a default
+        // http-api source config using the HN Algolia JSON API so feeds
+        // work out of the box without a Control Plane.
+        const ARCHETYPE_SOURCES: Record<
+          string,
+          { name: string; endpoint: string; query: string }
+        > = {
+          leads: {
+            name: "HN Hiring (default)",
+            endpoint: "https://hn.algolia.com/api/v1/search",
+            query: "tags=ask_hn,hiring&hitsPerPage=25",
+          },
+          hiring: {
+            name: "HN Who's Hiring (default)",
+            endpoint: "https://hn.algolia.com/api/v1/search",
+            query: "tags=ask_hn,hiring&hitsPerPage=25",
+          },
+          investors: {
+            name: "HN Funding News (default)",
+            endpoint: "https://hn.algolia.com/api/v1/search",
+            query: "query=seed+funding+venture&tags=story&hitsPerPage=25",
+          },
+          trends: {
+            name: "HN Trending (default)",
+            endpoint: "https://hn.algolia.com/api/v1/search",
+            query: "tags=front_page&hitsPerPage=25",
+          },
+          competitors: {
+            name: "HN Tech News (default)",
+            endpoint: "https://hn.algolia.com/api/v1/search",
+            query: "query=startup+product+launch&tags=story&hitsPerPage=25",
+          },
+          press: {
+            name: "HN Press (default)",
+            endpoint: "https://hn.algolia.com/api/v1/search",
+            query: "query=announcement+launch&tags=story&hitsPerPage=25",
+          },
+        };
+        const src =
+          ARCHETYPE_SOURCES[input.archetype] ?? ARCHETYPE_SOURCES.trends!;
+        const [seeded] = await db
+          .insert(sourceConfigs)
+          .values({
+            id: randomUUID(),
+            userId,
+            workspaceId: null,
+            providerType: "http-api",
+            name: src.name,
+            config: {
+              endpoint: `${src.endpoint}?${src.query}`,
+              method: "GET",
+              itemsPath: "hits",
+              mapping: {
+                title: "title",
+                url: "url",
+                externalId: "objectID",
+                publishedAt: "created_at",
+                excerpt: "story_text",
+                author: "author",
+              },
+            },
+            metadata: {
+              archetype: input.archetype,
+              isArchetypeSeed: true,
+              selfHostedDefault: true,
+            },
+            enabled: true,
+          })
+          .returning();
+        archetypeConfig = seeded!;
       }
 
       // 2. Upsert the user's personal feed channel
