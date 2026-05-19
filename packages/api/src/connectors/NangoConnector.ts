@@ -110,7 +110,20 @@ export class NangoConnector implements SyncConnector {
       );
     }
 
-    const parsed = NangoSessionResponseSchema.safeParse(await res.json());
+    const rawText = await res.text();
+    let json: unknown;
+    try {
+      json = JSON.parse(rawText);
+    } catch {
+      // Nango returned HTML — usually means the Connect UI endpoint doesn't
+      // exist on this self-hosted version. Requires Nango v0.40.0+.
+      throw new Error(
+        `Nango createSession: server returned HTML instead of JSON — ` +
+          `ensure self-hosted Nango is v0.40.0+ with the Connect UI enabled. ` +
+          `Response preview: ${rawText.slice(0, 200)}`
+      );
+    }
+    const parsed = NangoSessionResponseSchema.safeParse(json);
     if (!parsed.success)
       throw new Error("Nango createSession: unexpected response shape");
 

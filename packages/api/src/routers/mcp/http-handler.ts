@@ -5,21 +5,25 @@
  * over HTTP. External agents (ZeroClaw, OpenClaw, Claude Desktop, Cursor)
  * can use this endpoint to read/write Synap data with full governance.
  *
- * Protocol: JSON-RPC 2.0 over HTTP POST (MCP Streamable HTTP transport spec 2025-03-26)
+ * Protocol: MCP Streamable HTTP transport spec 2025-03-26
  * Auth:     Hub Protocol API key in Authorization: Bearer <key>
- * Endpoint: POST /mcp   (single request/response — stateless)
- *           GET  /mcp   (manifest / capabilities)
+ * Endpoint: POST /mcp   — JSON-RPC 2.0 request (SSE stream or JSON response)
+ *           GET  /mcp   — SSE stream for server-initiated messages
+ *           DELETE /mcp — End session
+ *
+ * Transport: WebStandardStreamableHTTPServerTransport (SDK 1.29.0, stateless mode)
+ * Auth is checked before handing off to the SDK transport.
  *
  * All write tools go through checkPermissionOrPropose() — same governance as
  * any other Hub Protocol caller.
  */
 
 import { Hono } from "hono";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { apiKeyService } from "../../services/api-keys.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { tools } from "./tools/index.js";
-import { resources } from "./resources/index.js";
-import { prompts } from "./prompts/index.js";
+import { createMCPServer } from "./index.js";
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 
@@ -29,14 +33,11 @@ function extractBearer(authHeader: string | null): string | null {
   return m ? m[1].trim() : null;
 }
 
-// ── JSON-RPC helpers ──────────────────────────────────────────────────────────
-
 function jsonRpcError(id: unknown, code: number, message: string) {
-  return { jsonrpc: "2.0", id, error: { code, message } };
-}
-
-function jsonRpcResult(id: unknown, result: unknown) {
-  return { jsonrpc: "2.0", id, result };
+  return Response.json(
+    { jsonrpc: "2.0", id, error: { code, message } },
+    { status: 401 }
+  );
 }
 
 // ── Hono app ──────────────────────────────────────────────────────────────────
@@ -44,10 +45,27 @@ function jsonRpcResult(id: unknown, result: unknown) {
 const mcpHttpApp = new Hono();
 
 /**
- * GET /mcp — Capabilities manifest (no auth required)
- * Lets external agents discover this MCP server's capabilities.
+ * GET /mcp — Two roles depending on Accept header:
+ *   - Accept: text/event-stream  → SSE stream for server-initiated messages (spec 2025-03-26)
+ *   - Any other Accept           → Capabilities manifest (backward-compat discovery)
+ *
+ * The SDK transport handles the SSE branch. For non-SSE clients we fall through
+ * to the legacy JSON manifest so existing integrations keep working.
  */
 mcpHttpApp.get("/", async (c) => {
+  const accept = c.req.header("accept") ?? "";
+
+  if (accept.includes("text/event-stream")) {
+    // SSE branch — hand off to the transport (no auth required per spec for GET)
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: undefined, // stateless
+    });
+    const server = createMCPServer();
+    await server.connect(transport);
+    return transport.handleRequest(c.req.raw);
+  }
+
+  // Legacy JSON capabilities manifest — no auth required
   const toolList = await tools.list();
   return c.json({
     name: "Synap",
@@ -72,183 +90,84 @@ mcpHttpApp.get("/", async (c) => {
 });
 
 /**
- * POST /mcp — JSON-RPC 2.0 endpoint for MCP messages
+ * POST /mcp — JSON-RPC 2.0 endpoint for MCP messages (spec 2025-03-26).
+ *
+ * If the client sends Accept: text/event-stream the SDK transport streams the
+ * response as an SSE event. Otherwise it returns a single JSON-RPC response.
+ * Both paths are handled transparently by WebStandardStreamableHTTPServerTransport.
+ *
+ * Auth is validated here before the SDK sees the request. On auth failure we
+ * return a JSON-RPC error directly so MCP clients surface a useful message.
+ *
+ * Each request gets its own transport instance (stateless mode — no session ID).
  */
 mcpHttpApp.post("/", async (c) => {
   // ── 1. Auth ──────────────────────────────────────────────────────────────
   const token = extractBearer(c.req.header("authorization") ?? null);
   if (!token) {
-    return c.json(
-      jsonRpcError(
-        null,
-        -32600,
-        "Missing Authorization: Bearer <hub-protocol-api-key>"
-      ),
-      401
+    return jsonRpcError(
+      null,
+      -32600,
+      "Missing Authorization: Bearer <hub-protocol-api-key>"
     );
   }
 
   const keyRecord = await apiKeyService.validateApiKey(token);
   if (!keyRecord || !keyRecord.userId) {
-    return c.json(
-      jsonRpcError(null, -32600, "Invalid or expired API key"),
-      401
-    );
+    return jsonRpcError(null, -32600, "Invalid or expired API key");
   }
-
-  const userId = keyRecord.userId;
-  const scopes: string[] = (keyRecord.scope as string[]) ?? [];
 
   // ── 1b. Per-key rate limit (100 req/min) ─────────────────────────────────
   try {
     checkHubRateLimit(keyRecord.id, "mcp");
   } catch {
-    return c.json(
-      jsonRpcError(null, -32000, "Rate limit exceeded. Please slow down."),
-      429
-    );
+    return jsonRpcError(null, -32000, "Rate limit exceeded. Please slow down.");
   }
 
-  // ── 2. Parse JSON-RPC body ───────────────────────────────────────────────
-  let body: {
-    jsonrpc: string;
-    method: string;
-    params?: unknown;
-    id?: unknown;
-  };
+  // ── 2. Hand off to the SDK transport ─────────────────────────────────────
+  // A new server + transport per request is correct for stateless mode.
+  // The SDK server already has all tool/resource/prompt handlers registered
+  // via createMCPServer() — we only replace the transport layer.
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined, // stateless — no Mcp-Session-Id header
+    enableJsonResponse: false, // prefer SSE when client accepts it
+  });
+
+  const server = createMCPServer();
+  await server.connect(transport);
+
+  // Pre-parse body so the transport doesn't have to consume the stream twice.
+  let parsedBody: unknown;
   try {
-    body = await c.req.json();
+    parsedBody = await c.req.json();
   } catch {
-    return c.json(jsonRpcError(null, -32700, "Parse error"), 400);
-  }
-
-  if (body.jsonrpc !== "2.0" || !body.method) {
-    return c.json(
-      jsonRpcError(body.id ?? null, -32600, "Invalid JSON-RPC 2.0 request"),
-      400
+    return Response.json(
+      {
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: -32700, message: "Parse error" },
+      },
+      { status: 400 }
     );
   }
 
-  const { id, method, params } = body;
+  return transport.handleRequest(c.req.raw, { parsedBody });
+});
 
-  // ── 2b. Handle JSON-RPC notifications ────────────────────────────────────
-  // Notifications have no `id` field. Per JSON-RPC 2.0 spec, the server MUST
-  // NOT respond with a result object. MCP uses these for lifecycle events:
-  //
-  //   notifications/initialized — client says "handshake done, ready for work"
-  //   notifications/cancelled   — client aborts an in-flight request
-  //   notifications/progress    — client progress updates
-  //   notifications/roots/list_changed
-  //
-  // Return 202 Accepted with empty body. If we return a JSON-RPC error for
-  // notifications (like "method not found"), mcp-remote falls back to SSE
-  // transport and then errors out on content-type mismatch.
-  if (id === undefined || id === null) {
-    if (method === "notifications/initialized") {
-      // Client signals it completed the initialize handshake. No-op for us.
-    }
-    // All notifications: acknowledge with 202, no body.
-    return c.body(null, 202);
-  }
-
-  // ── 3. Route method ──────────────────────────────────────────────────────
-  try {
-    switch (method) {
-      // ── Tool methods ───────────────────────────────────────────────────
-      case "tools/list": {
-        const toolList = await tools.list();
-        return c.json(jsonRpcResult(id, { tools: toolList }));
-      }
-
-      case "tools/call": {
-        const p = params as
-          | { name: string; arguments?: Record<string, unknown> }
-          | undefined;
-        if (!p?.name) {
-          return c.json(
-            jsonRpcError(id, -32602, "tools/call requires params.name"),
-            400
-          );
-        }
-        const result = await tools.execute(
-          p.name,
-          p.arguments ?? {},
-          userId,
-          scopes
-        );
-        return c.json(jsonRpcResult(id, result));
-      }
-
-      // ── Resource methods ───────────────────────────────────────────────
-      case "resources/list": {
-        const resourceList = await resources.list();
-        return c.json(jsonRpcResult(id, { resources: resourceList }));
-      }
-
-      case "resources/read": {
-        const p = params as { uri: string } | undefined;
-        if (!p?.uri) {
-          return c.json(
-            jsonRpcError(id, -32602, "resources/read requires params.uri"),
-            400
-          );
-        }
-        const result = await resources.read(p.uri, userId, scopes);
-        return c.json(jsonRpcResult(id, result));
-      }
-
-      // ── Prompt methods ─────────────────────────────────────────────────
-      case "prompts/list": {
-        const promptList = await prompts.list();
-        return c.json(jsonRpcResult(id, { prompts: promptList }));
-      }
-
-      case "prompts/get": {
-        const p = params as
-          | { name: string; arguments?: Record<string, string> }
-          | undefined;
-        if (!p?.name) {
-          return c.json(
-            jsonRpcError(id, -32602, "prompts/get requires params.name"),
-            400
-          );
-        }
-        const result = await prompts.get(p.name, p.arguments);
-        return c.json(jsonRpcResult(id, result));
-      }
-
-      // ── Initialize (handshake) ─────────────────────────────────────────
-      case "initialize": {
-        return c.json(
-          jsonRpcResult(id, {
-            protocolVersion: "2024-11-05",
-            capabilities: {
-              tools: { listChanged: false },
-              resources: { listChanged: false, subscribe: false },
-              prompts: { listChanged: false },
-            },
-            serverInfo: { name: "Synap", version: "1.0.0" },
-          })
-        );
-      }
-
-      // ── ping ───────────────────────────────────────────────────────────
-      case "ping": {
-        return c.json(jsonRpcResult(id, {}));
-      }
-
-      default: {
-        // Per JSON-RPC 2.0: method-not-found is an application-level error,
-        // returned in the response body with HTTP 200. Returning HTTP 404
-        // confuses MCP clients (they interpret it as transport failure and
-        // fall back to alternate transports that we don't implement).
-        return c.json(jsonRpcError(id, -32601, `Method not found: ${method}`));
-      }
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return c.json(jsonRpcError(id, -32603, `Internal error: ${msg}`), 500);
-  }
+/**
+ * DELETE /mcp — End session (spec 2025-03-26, optional).
+ *
+ * In stateless mode there is no session to terminate, but the spec says
+ * servers SHOULD support this method. We hand it to a fresh transport which
+ * will return 200 OK per the spec.
+ */
+mcpHttpApp.delete("/", async (c) => {
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+  });
+  const server = createMCPServer();
+  await server.connect(transport);
+  return transport.handleRequest(c.req.raw);
 });
 
 export { mcpHttpApp };

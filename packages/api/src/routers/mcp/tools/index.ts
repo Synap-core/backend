@@ -270,28 +270,37 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
-            type: {
+            profileSlug: {
               type: "string",
               description:
                 "Entity profile slug (e.g., note, task, project, event, person, contact, company, deal, bookmark, article). Use synap_list_profiles to discover available types.",
             },
             title: { type: "string" },
             description: { type: "string" },
-            metadata: { type: "object" },
+            properties: {
+              type: "object",
+              description:
+                "Typed entity properties (profileSlug-specific fields)",
+            },
           },
-          required: ["type", "title"],
+          required: ["profileSlug", "title"],
         },
       },
       {
         name: "synap_update_entity",
         description:
-          "Update an entity's title, description, or properties. Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for status changes (task todo→done), property updates, corrections.",
+          "Update an entity's title, description, or properties (JSONB). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for status changes (task todo→done), property updates, corrections.",
         inputSchema: {
           type: "object",
           properties: {
             entityId: { type: "string" },
             title: { type: "string" },
             description: { type: "string" },
+            properties: {
+              type: "object",
+              description:
+                "Partial properties to merge into entity.properties JSONB",
+            },
             metadata: { type: "object" },
           },
           required: ["entityId"],
@@ -376,6 +385,200 @@ export const tools = {
             },
           },
           required: ["sourceEntityId", "targetEntityId", "workspaceId"],
+        },
+      },
+
+      // ── Session bootstrap & governance ─────────────────────────────────────
+      {
+        name: "synap_orient",
+        description:
+          "Bootstrap context for a new session. Returns the user's identity scopes, accessible workspaces, and available profiles. Call this first in every new session before any other tool.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "synap_governance",
+        description:
+          "Read workspace governance policy and count of pending proposals. Use before writes to understand auto-approve rules and whether proposals will be created.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: { type: "string", description: "Workspace UUID" },
+          },
+          required: ["workspaceId"],
+        },
+      },
+
+      // ── Capture ─────────────────────────────────────────────────────────────
+      {
+        name: "synap_capture",
+        description:
+          "Parse unstructured text into structured entity proposals via the AI capture pipeline. Returns proposed entities ready to inspect or materialize. Optionally hint a profileSlug to guide extraction.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            text: {
+              type: "string",
+              description: "Free-form text to parse (max 8000 chars)",
+            },
+            profileSlug: {
+              type: "string",
+              description:
+                "Optional profile hint to guide entity type extraction",
+            },
+            workspaceId: { type: "string" },
+          },
+          required: ["text"],
+        },
+      },
+
+      // ── Workspace & view creation ───────────────────────────────────────────
+      {
+        name: "synap_create_workspace",
+        description:
+          "Create a workspace from a definition (name + optional WorkspaceProposal definition object). Pass a stable proposalId for idempotency — same id + user returns the existing workspace.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Workspace display name" },
+            definition: {
+              type: "object",
+              description: "Optional WorkspaceProposal definition fields",
+            },
+            proposalId: {
+              type: "string",
+              description: "Idempotency key (optional)",
+            },
+          },
+          required: ["name"],
+        },
+      },
+      {
+        name: "synap_create_view",
+        description:
+          "Create a view in a workspace. Type controls layout: table, kanban, list, gallery, calendar, bento, masonry, flow. profileId scopes the view to one entity type.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            type: {
+              type: "string",
+              enum: [
+                "table",
+                "kanban",
+                "list",
+                "gallery",
+                "calendar",
+                "bento",
+                "masonry",
+                "flow",
+              ],
+            },
+            workspaceId: { type: "string" },
+            profileId: {
+              type: "string",
+              description: "Profile UUID to scope the view (optional)",
+            },
+            config: {
+              type: "object",
+              description:
+                "View configuration (groupBy, sortBy, filters, etc.)",
+            },
+          },
+          required: ["name", "type", "workspaceId"],
+        },
+      },
+
+      // ── Channel & messaging ─────────────────────────────────────────────────
+      {
+        name: "synap_get_channel",
+        description:
+          "Get or create a channel. Use mode 'personal' to get the user's personal AI thread for a workspace. Use mode 'by-context' to get/create a thread scoped to an entity or document.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            mode: {
+              type: "string",
+              enum: ["personal", "by-context"],
+            },
+            workspaceId: { type: "string" },
+            contextObjectType: {
+              type: "string",
+              enum: ["entity", "document"],
+              description: "Required for mode 'by-context'",
+            },
+            contextObjectId: {
+              type: "string",
+              description: "Required for mode 'by-context'",
+            },
+          },
+          required: ["mode", "workspaceId"],
+        },
+      },
+      {
+        name: "synap_post_message",
+        description:
+          "Post a message to a Synap channel or thread with optional AI triggering. Unlike synap_send_message, this handles thread creation from a channelId and can trigger an AI response.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            channelId: {
+              type: "string",
+              description: "Channel UUID to post into",
+            },
+            content: { type: "string" },
+            role: {
+              type: "string",
+              enum: ["user", "assistant", "system"],
+              default: "assistant",
+            },
+            triggerAI: {
+              type: "boolean",
+              description: "Set true to trigger an AI response after posting",
+              default: false,
+            },
+          },
+          required: ["channelId", "content"],
+        },
+      },
+
+      // ── Proposals & knowledge ───────────────────────────────────────────────
+      {
+        name: "synap_revise_proposal",
+        description:
+          "Update the summary or reasoning of a pending proposal (e.g. after user feedback). Does not re-run the event pipeline.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            proposalId: { type: "string", description: "Proposal UUID" },
+            summary: { type: "string" },
+            reasoning: { type: "string" },
+          },
+          required: ["proposalId"],
+        },
+      },
+      {
+        name: "synap_write_knowledge",
+        description:
+          "Create or update a knowledge document by key (namespace:slug format, e.g. 'deploy:backend'). Upserts the entry — safe to call repeatedly to keep docs current.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            key: {
+              type: "string",
+              description: "Knowledge key in namespace:slug format",
+            },
+            content: {
+              type: "string",
+              description: "Document content (markdown)",
+            },
+            namespace: { type: "string" },
+            workspaceId: { type: "string" },
+          },
+          required: ["key", "content"],
         },
       },
     ];

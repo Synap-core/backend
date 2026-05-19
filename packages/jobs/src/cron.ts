@@ -77,5 +77,12 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("sync-push-supplementary", "*/5 * * * *", {});
   logger.info("Registered cron: sync-push-supplementary (every 5min)");
 
+  // Hermes trigger (every 60s — dispatches idle devplane features to Hermes AI)
+  // Only schedule when Hermes is configured.
+  if (process.env.HERMES_TRIGGER_URL) {
+    await boss.schedule("hermes-trigger", "* * * * *", {});
+    logger.info("Registered cron: hermes-trigger (every 1min)");
+  }
+
   logger.info("All cron schedules registered");
 }

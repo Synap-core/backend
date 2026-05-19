@@ -53,7 +53,11 @@ export type WebhookEvent =
 
 export interface MessagingConnector {
   isConfigured(): boolean;
-  getAuthUrl(userId: string, redirectUrl: string): Promise<string>;
+  getAuthUrl(
+    userId: string,
+    redirectUrl: string,
+    providers?: string[]
+  ): Promise<string>;
   getAccounts(userId: string): Promise<MessagingAccount[]>;
   getConversations(
     externalAccountId: string,

@@ -143,7 +143,10 @@ export function registerMessagingRoutes(app: HubHono): void {
     tags: ["Messaging"],
     summary: "Get hosted auth URL for connecting a new account",
     request: {
-      query: z.object({ redirectUrl: z.string() }),
+      query: z.object({
+        redirectUrl: z.string(),
+        provider: z.string().optional(),
+      }),
     },
     responses: {
       200: {
@@ -170,9 +173,10 @@ export function registerMessagingRoutes(app: HubHono): void {
     if (!connector)
       return c.json({ error: "Messaging connector not configured" }, 503);
     const userId = c.get("userId") as string;
-    const { redirectUrl } = c.req.valid("query");
+    const { redirectUrl, provider } = c.req.valid("query");
+    const providers = provider ? [provider] : undefined;
     try {
-      const url = await connector.getAuthUrl(userId, redirectUrl);
+      const url = await connector.getAuthUrl(userId, redirectUrl, providers);
       return c.json({ url }, 200);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";

@@ -13,6 +13,8 @@ import type { HubHono } from "./_shared.js";
 import { db, webhookSubscriptions, eq, and } from "@synap/database";
 import { randomBytes } from "crypto";
 import { z } from "zod";
+import { ErrorSchema } from "./_codecs/_openapi.js";
+import { registerOpenApi } from "./_codecs/_register.js";
 
 const CreateWebhookSchema = z.object({
   url: z.string().url(),
@@ -20,7 +22,83 @@ const CreateWebhookSchema = z.object({
   secret: z.string().optional(),
 });
 
+const WebhookResponseSchema = z.object({
+  id: z.string(),
+  url: z.string(),
+  eventTypes: z.array(z.string()),
+  secret: z.string().optional(),
+  active: z.boolean(),
+  createdAt: z.string(),
+});
+
+const WebhookListItemSchema = z.object({
+  id: z.string(),
+  url: z.string(),
+  eventTypes: z.array(z.string()),
+  active: z.boolean(),
+  createdAt: z.string(),
+  lastTriggeredAt: z.string().nullable().optional(),
+});
+
+const WebhookIdParamsSchema = z.object({ id: z.string() });
+
 export function registerWebhooksRoutes(app: HubHono) {
+  // ── OpenAPI metadata ─────────────────────────────────────────────────────
+  registerOpenApi(app, {
+    method: "post",
+    path: "/webhooks",
+    tags: ["Webhooks"],
+    summary: "Create a webhook subscription",
+    description:
+      "Registers a webhook URL to receive real-time event notifications for the specified event types.",
+    request: {
+      body: CreateWebhookSchema,
+    },
+    responses: {
+      201: {
+        description: "Webhook subscription created",
+        schema: WebhookResponseSchema,
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/webhooks",
+    tags: ["Webhooks"],
+    summary: "List webhook subscriptions",
+    description:
+      "Returns all webhook subscriptions belonging to the authenticated agent user.",
+    responses: {
+      200: {
+        description: "List of webhook subscriptions",
+        schema: z.array(WebhookListItemSchema),
+      },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "delete",
+    path: "/webhooks/{id}",
+    tags: ["Webhooks"],
+    summary: "Delete a webhook subscription",
+    description: "Permanently removes a webhook subscription by ID.",
+    request: {
+      params: WebhookIdParamsSchema,
+    },
+    responses: {
+      200: {
+        description: "Subscription deleted",
+        schema: z.object({ success: z.boolean() }),
+      },
+      404: { description: "Subscription not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
   app.post("/webhooks", async (c) => {
     const userId = c.get("userId");
     let body: unknown;

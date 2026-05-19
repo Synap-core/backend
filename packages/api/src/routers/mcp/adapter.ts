@@ -16,6 +16,8 @@ import {
   knowledgeKeysRepository,
   knowledgeRepository,
   messages,
+  workspaceMembers,
+  workspaces,
 } from "@synap/database";
 import {
   proposals,
@@ -24,6 +26,7 @@ import {
   eq,
   and,
   desc,
+  inArray,
 } from "@synap/database";
 import { randomUUID, createHash } from "crypto";
 import type { Context } from "../../types/context.js";
@@ -173,9 +176,12 @@ export async function executeMCPToolViaHubProtocol(
       requireScope(apiKeyScopes, "mcp.write", toolName);
       const result = await caller.entities.createEntity({
         userId,
-        type: args.type as string,
+        profileSlug:
+          (args.profileSlug as string | undefined) ||
+          (args.type as string | undefined),
         title: args.title as string,
         description: args.description as string | undefined,
+        properties: args.properties as Record<string, unknown> | undefined,
         aiMetadata: { model: "mcp", reasoning: `MCP tool: ${toolName}` },
       });
       return ok(result);
@@ -188,7 +194,10 @@ export async function executeMCPToolViaHubProtocol(
         userId,
         title: args.title as string | undefined,
         preview: args.description as string | undefined,
-        metadata: args.metadata as Record<string, unknown> | undefined,
+        // properties merges into the JSONB column; metadata is a legacy alias
+        metadata: (args.properties ?? args.metadata) as
+          | Record<string, unknown>
+          | undefined,
       });
       return ok(result);
     }
@@ -331,6 +340,241 @@ export async function executeMCPToolViaHubProtocol(
         previousHash: "",
       });
       return ok({ success: true, channelId });
+    }
+
+    // ── Session bootstrap & governance ──────────────────────────────────────
+    case "synap_orient": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      await getDb();
+      // Fetch workspaces the user belongs to
+      const memberRows = await db
+        .select({ workspaceId: workspaceMembers.workspaceId })
+        .from(workspaceMembers)
+        .where(eq(workspaceMembers.userId, userId));
+      const wsIds = memberRows.map((r) => r.workspaceId);
+      const wsList =
+        wsIds.length > 0
+          ? await db
+              .select({ id: workspaces.id, name: workspaces.name })
+              .from(workspaces)
+              .where(inArray(workspaces.id, wsIds))
+          : [];
+      // Fetch profiles for first workspace as a representative sample
+      const firstWsId = wsIds[0];
+      const profiles = firstWsId
+        ? await caller.profiles.listProfiles({ userId, workspaceId: firstWsId })
+        : [];
+      return ok({
+        me: { userId, scopes: apiKeyScopes },
+        workspaces: wsList,
+        profiles,
+      });
+    }
+
+    case "synap_governance": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      const wsId = args.workspaceId as string;
+      const { getEffectiveGovernance } =
+        await import("../../utils/permission-check.js");
+      const policy = await getEffectiveGovernance(wsId);
+      const pendingCount = await db
+        .select({ count: proposals.id })
+        .from(proposals)
+        .where(
+          and(
+            eq(proposals.workspaceId, wsId),
+            eq(proposals.status, ProposalStatus.PENDING)
+          )
+        )
+        .then((rows) => rows.length);
+      return ok({ ...policy, pendingProposals: pendingCount });
+    }
+
+    // ── Capture ──────────────────────────────────────────────────────────────
+    case "synap_capture": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      const { captureRouter } = await import("../capture.js");
+      // Resolve workspace: use provided or fall back to user's first workspace
+      let captureWsId = args.workspaceId as string | undefined;
+      if (!captureWsId) {
+        const row = await db
+          .select({ workspaceId: workspaceMembers.workspaceId })
+          .from(workspaceMembers)
+          .where(eq(workspaceMembers.userId, userId))
+          .limit(1)
+          .then((r) => r[0]);
+        captureWsId = row?.workspaceId;
+      }
+      if (!captureWsId) {
+        return ok({ error: "No accessible workspace found for this user" });
+      }
+      const captureCtx = await createHubProtocolCallerContext(
+        userId,
+        apiKeyScopes,
+        captureWsId
+      );
+      const captureCaller = captureRouter.createCaller(
+        captureCtx as Parameters<typeof captureRouter.createCaller>[0]
+      );
+      const result = await captureCaller.structure({
+        text: args.text as string,
+        context: args.profileSlug
+          ? `Hint: profile is ${args.profileSlug}`
+          : undefined,
+      });
+      return ok(result);
+    }
+
+    // ── Workspace & view creation ─────────────────────────────────────────────
+    case "synap_create_workspace": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      const { createWorkspaceFromDefinitionIdempotent } =
+        await import("../../services/workspace-creation-service.js");
+      const { workspaceId: newWsId, created } =
+        await createWorkspaceFromDefinitionIdempotent({
+          definition: (args.definition ?? {}) as Parameters<
+            typeof createWorkspaceFromDefinitionIdempotent
+          >[0]["definition"],
+          userId,
+          proposalId: args.proposalId as string | undefined,
+          workspaceName: args.name as string,
+          createdBy: "provisioning",
+        });
+      return ok({ workspaceId: newWsId, created });
+    }
+
+    case "synap_create_view": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      const result = await caller.views.createView({
+        userId,
+        workspaceId: args.workspaceId as string,
+        name: args.name as string,
+        type: args.type as string,
+        profileId: args.profileId as string | undefined,
+        config: args.config as Record<string, unknown> | undefined,
+      });
+      return ok(result);
+    }
+
+    // ── Channel & messaging ───────────────────────────────────────────────────
+    case "synap_get_channel": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      const mode = args.mode as string;
+      const wsId = args.workspaceId as string;
+      if (mode === "personal") {
+        const result = await caller.channels.ensurePersonal({
+          userId,
+          workspaceId: wsId,
+        });
+        return ok(result);
+      }
+      if (!args.contextObjectType || !args.contextObjectId) {
+        return ok({
+          error:
+            "contextObjectType and contextObjectId are required for mode 'by-context'",
+        });
+      }
+      const result = await caller.channels.resolveOrCreateChannel({
+        userId,
+        workspaceId: wsId,
+        channelType: "thread" as const,
+        contextObjectType: args.contextObjectType as "entity" | "document",
+        contextObjectId: args.contextObjectId as string,
+      });
+      return ok(result);
+    }
+
+    case "synap_post_message": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      const channelId = args.channelId as string;
+      const content = args.content as string;
+      const role = (args.role as string) || "assistant";
+      const triggerAI = Boolean(args.triggerAI);
+      const msgId = randomUUID();
+      const hash = createHash("sha256")
+        .update(`${msgId}${content}`)
+        .digest("hex");
+      const roleEnum =
+        role === "user"
+          ? MessageRole.USER
+          : role === "system"
+            ? MessageRole.SYSTEM
+            : MessageRole.ASSISTANT;
+      await db.insert(messages).values({
+        id: msgId,
+        channelId,
+        role: roleEnum,
+        content,
+        userId,
+        hash,
+        previousHash: "",
+      });
+      if (triggerAI) {
+        const { emitChatEvent } =
+          await import("../../utils/chat-realtime-broadcast.js");
+        const { EventNames } = await import("@synap-core/types/events");
+        emitChatEvent({
+          event: EventNames.CHAT_MESSAGE,
+          data: {
+            threadId: channelId,
+            message: {
+              id: msgId,
+              threadId: channelId,
+              role: roleEnum,
+              content,
+              userId,
+              timestamp: new Date(),
+              previousHash: "",
+              hash,
+            },
+            userId,
+            triggerAI: true,
+          },
+          workspaceId: null,
+          userId,
+        });
+      }
+      return ok({ success: true, messageId: msgId, channelId });
+    }
+
+    // ── Proposals & knowledge ─────────────────────────────────────────────────
+    case "synap_revise_proposal": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      const proposalId = args.proposalId as string;
+      const updateData: Record<string, unknown> = {};
+      if (args.summary !== undefined) updateData.summary = args.summary;
+      if (args.reasoning !== undefined) updateData.reasoning = args.reasoning;
+      if (Object.keys(updateData).length === 0) {
+        return ok({ error: "Provide at least one of: summary, reasoning" });
+      }
+      await db
+        .update(proposals)
+        .set({
+          ...(updateData as { summary?: string; reasoning?: string }),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(proposals.id, proposalId),
+            eq(proposals.status, ProposalStatus.PENDING)
+          )
+        );
+      return ok({ success: true, proposalId });
+    }
+
+    case "synap_write_knowledge": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      const key = args.key as string;
+      const content = args.content as string;
+      const wsId = (args.workspaceId as string | undefined) || userId;
+      const record = await knowledgeKeysRepository.upsert(key, {
+        key,
+        value: content,
+        status: "active",
+        workspaceId: wsId,
+        author: userId,
+      });
+      return ok(record);
     }
 
     default:

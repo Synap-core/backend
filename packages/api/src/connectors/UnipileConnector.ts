@@ -120,7 +120,30 @@ export class UnipileConnector implements MessagingConnector {
     };
   }
 
-  async getAuthUrl(userId: string, redirectUrl: string): Promise<string> {
+  // Maps Synap provider IDs to Unipile provider constants
+  private toUnipileProviders(providers?: string[]): string[] | string {
+    if (!providers || providers.length === 0) return "*:MESSAGING";
+    const map: Record<string, string> = {
+      linkedin: "LINKEDIN",
+      whatsapp: "WHATSAPP",
+      telegram: "TELEGRAM",
+      instagram: "INSTAGRAM",
+      messenger: "MESSENGER",
+      twitter: "TWITTER",
+      gmail: "GOOGLE",
+      slack: "MAIL",
+    };
+    const mapped = providers
+      .map((p) => map[p.toLowerCase()])
+      .filter(Boolean) as string[];
+    return mapped.length > 0 ? mapped : "*:MESSAGING";
+  }
+
+  async getAuthUrl(
+    userId: string,
+    redirectUrl: string,
+    providers?: string[]
+  ): Promise<string> {
     // Unipile schema requires full ISO 8601 with ms: YYYY-MM-DDTHH:MM:SS.sssZ
     const expiresOn = new Date(Date.now() + 3600_000).toISOString();
 
@@ -130,9 +153,13 @@ export class UnipileConnector implements MessagingConnector {
       ? `${publicUrl}/api/webhooks/messaging`
       : undefined;
 
-    const body: Record<string, string> = {
+    const body: Record<string, unknown> = {
       type: "create",
       expiresOn,
+      // api_url is required by Unipile — must be the DSN of the Unipile server
+      api_url: this.dsn,
+      // providers is required — which platforms to offer in the hosted auth UI
+      providers: this.toUnipileProviders(providers),
       success_redirect_url: redirectUrl,
       failure_redirect_url: redirectUrl,
       name: userId,

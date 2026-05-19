@@ -73,6 +73,10 @@ import {
 } from "./sync-push-supplementary.js";
 import { handleHydrationSummaryPost } from "./hydration-summary-post.js";
 import { handleEntityExtract } from "./entity-extract-worker.js";
+import {
+  handleHermesTrigger,
+  HERMES_TRIGGER_QUEUE,
+} from "./hermes-trigger-worker.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -118,6 +122,7 @@ const ALL_QUEUES = [
   SYNC_PUSH_FILES_QUEUE,
   SYNC_PUSH_SUPPLEMENTARY_QUEUE,
   "hydration-summary-post",
+  HERMES_TRIGGER_QUEUE,
 ];
 
 /**
@@ -341,6 +346,13 @@ export async function registerAllWorkers(): Promise<void> {
 
   // Note: Delivery retry and dead letter workers removed to avoid circular dependency
   // (jobs → api → jobs). Retry functionality is handled inline in DeliveryService.
+
+  // Hermes trigger (cron: every 60s — dispatches idle devplane features to Hermes)
+  // Only active when HERMES_TRIGGER_URL env var is set.
+  if (process.env.HERMES_TRIGGER_URL) {
+    await boss.work(HERMES_TRIGGER_QUEUE, async () => handleHermesTrigger());
+    logger.info("Registered worker: hermes-trigger");
+  }
 
   logger.info("All workers registered");
 }
