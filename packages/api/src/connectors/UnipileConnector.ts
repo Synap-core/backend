@@ -130,8 +130,8 @@ export class UnipileConnector implements MessagingConnector {
       instagram: "INSTAGRAM",
       messenger: "MESSENGER",
       twitter: "TWITTER",
-      gmail: "GOOGLE",
-      slack: "MAIL",
+      gmail: "GMAIL",
+      slack: "SLACK",
     };
     const mapped = providers
       .map((p) => map[p.toLowerCase()])
@@ -260,6 +260,19 @@ export class UnipileConnector implements MessagingConnector {
     }));
   }
 
+  async deleteAccount(externalId: string): Promise<void> {
+    const res = await fetch(`${this.dsn}/api/v1/accounts/${externalId}`, {
+      method: "DELETE",
+      headers: this.headers(),
+    });
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
+      throw new Error(
+        `Unipile deleteAccount failed: ${res.status}${errBody ? ` — ${errBody.slice(0, 200)}` : ""}`
+      );
+    }
+  }
+
   async sendMessage(
     externalAccountId: string,
     threadId: string,
@@ -305,6 +318,51 @@ export class UnipileConnector implements MessagingConnector {
         authenticated: false,
         error: `Cannot reach Unipile DSN: ${err instanceof Error ? err.message : String(err)}`,
       };
+    }
+  }
+
+  async ensureWebhooksRegistered(publicUrl: string): Promise<void> {
+    const webhookUrl = `${publicUrl.replace(/\/+$/, "")}/api/webhooks/messaging`;
+
+    // Fetch existing webhooks to avoid duplicates
+    const listRes = await fetch(`${this.dsn}/api/v1/webhooks`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (listRes.ok) {
+      const body = (await listRes.json()) as {
+        items?: Array<{ url?: string }>;
+      };
+      const alreadyRegistered = (body.items ?? []).some(
+        (w) => w.url === webhookUrl
+      );
+      if (alreadyRegistered) return;
+    }
+
+    // Register the webhook for all message events
+    const payload: Record<string, unknown> = {
+      url: webhookUrl,
+      events: [
+        "message_created",
+        "account_reconnection_required",
+        "account_disconnected",
+      ],
+    };
+    if (this.webhookSecret) {
+      payload.headers = { "unipile-auth": this.webhookSecret };
+    }
+
+    const regRes = await fetch(`${this.dsn}/api/v1/webhooks`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!regRes.ok) {
+      const errBody = await regRes.text().catch(() => "");
+      throw new Error(
+        `Unipile webhook registration failed: ${regRes.status}${errBody ? ` — ${errBody.slice(0, 200)}` : ""}`
+      );
     }
   }
 

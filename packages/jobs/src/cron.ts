@@ -77,6 +77,11 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("sync-push-supplementary", "*/5 * * * *", {});
   logger.info("Registered cron: sync-push-supplementary (every 5min)");
 
+  // CRM daily digest (daily at 08:55 UTC — fires just before most workdays start)
+  // Only runs if at least one user has connected messaging accounts.
+  await boss.schedule("crm-daily-digest", "55 8 * * *", {});
+  logger.info("Registered cron: crm-daily-digest (daily at 08:55 UTC)");
+
   // Hermes trigger (every 60s — dispatches idle devplane features to Hermes AI)
   // Only schedule when Hermes is configured.
   if (process.env.HERMES_TRIGGER_URL) {

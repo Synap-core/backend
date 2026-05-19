@@ -14,16 +14,21 @@
  *   the channel owner's account.
  */
 
+import { createHash } from "crypto";
 import { createRoute, z } from "@hono/zod-openapi";
-import { sql as drizzleSql } from "drizzle-orm";
+import { sql as drizzleSql, desc } from "drizzle-orm";
 import {
   db,
   eq,
   and,
   messagingAccounts,
   channels,
+  messages,
   ChannelType,
   ChannelScope,
+  MessageRole,
+  MessageAuthorType,
+  MessageCategory,
 } from "@synap/database";
 import type { MessagingAccount as DbMessagingAccount } from "@synap/database";
 
@@ -92,6 +97,10 @@ type ChannelMetadata = {
   accountId?: string;
   participantName?: string;
   linkedByUserId?: string;
+  // Cached by webhook handler on every inbound message (avoids Unipile calls in linked-unread)
+  lastMessageAt?: string;
+  lastMessagePreview?: string;
+  unread?: boolean;
 };
 
 export function registerMessagingRoutes(app: HubHono): void {
@@ -154,19 +163,21 @@ export function registerMessagingRoutes(app: HubHono): void {
         const liveByExternalId = new Map(
           liveAccounts.map((a) => [a.externalId, a])
         );
-        const result = dbAccounts.map((row: DbMessagingAccount) => {
-          const live = liveByExternalId.get(row.externalId);
-          return {
-            id: row.id,
-            externalId: row.externalId,
-            provider: row.provider,
-            displayName: live?.displayName ?? row.displayName,
-            status: (live?.status ?? row.status) as
-              | "connected"
-              | "reconnection_required"
-              | "disconnected",
-          };
-        });
+        const result = dbAccounts
+          .filter((row: DbMessagingAccount) => row.status !== "disconnected")
+          .map((row: DbMessagingAccount) => {
+            const live = liveByExternalId.get(row.externalId);
+            return {
+              id: row.id,
+              externalId: row.externalId,
+              provider: row.provider,
+              displayName: live?.displayName ?? row.displayName,
+              status: (live?.status ?? row.status) as
+                | "connected"
+                | "reconnection_required"
+                | "disconnected",
+            };
+          });
         return c.json(result, 200);
       } catch (err) {
         logger.error({ err, userId }, "GET /messaging/accounts failed");
@@ -292,6 +303,19 @@ export function registerMessagingRoutes(app: HubHono): void {
               },
             });
         }
+
+        // Ensure Unipile message-event webhooks are registered so inbound
+        // messages reach our endpoint. Non-fatal: sync succeeds even if this fails.
+        const publicUrl = process.env.PUBLIC_URL;
+        if (publicUrl) {
+          connector.ensureWebhooksRegistered(publicUrl).catch((err) => {
+            logger.warn(
+              { err },
+              "POST /messaging/accounts/sync: webhook registration failed (non-fatal)"
+            );
+          });
+        }
+
         return c.json({ synced: liveAccounts.length }, 200);
       } catch (err) {
         logger.error({ err, userId }, "POST /messaging/accounts/sync failed");
@@ -341,15 +365,30 @@ export function registerMessagingRoutes(app: HubHono): void {
       const userId = c.get("userId") as string;
       const { accountId } = c.req.valid("param");
       try {
+        // Look up the externalId before deleting the DB row
+        const row = await db.query.messagingAccounts.findFirst({
+          where: and(
+            eq(messagingAccounts.id, accountId),
+            eq(messagingAccounts.userId, userId)
+          ),
+        });
+
+        if (!row) return c.json({ success: true }, 200);
+
+        // Mark as disconnected in DB first so it's hidden immediately
         await db
           .update(messagingAccounts)
           .set({ status: "disconnected", updatedAt: new Date() })
-          .where(
-            and(
-              eq(messagingAccounts.id, accountId),
-              eq(messagingAccounts.userId, userId)
-            )
+          .where(eq(messagingAccounts.id, accountId));
+
+        // Actually remove from Unipile so sync doesn't revive it. Non-fatal.
+        connector.deleteAccount(row.externalId).catch((err) => {
+          logger.warn(
+            { err, externalId: row.externalId },
+            "DELETE /messaging/accounts: Unipile delete failed (non-fatal)"
           );
+        });
+
         return c.json({ success: true }, 200);
       } catch (err) {
         logger.error(
@@ -440,55 +479,75 @@ export function registerMessagingRoutes(app: HubHono): void {
             userAccounts.map((a) => [a.provider, a])
           );
 
-          const results = await Promise.all(
-            entityChannels.map(async (ch) => {
-              const meta = (ch.metadata ?? {}) as ChannelMetadata;
-              const accountId = meta.accountId ?? "";
-              const provider = ch.externalSource ?? "";
-              const threadId = ch.externalChannelId ?? "";
+          // Build per-channel metadata; determine effective account per channel
+          type ConvSummary = {
+            externalThreadId: string;
+            participantName: string;
+            participantExternalId: string;
+            lastMessageAt: string;
+            lastMessagePreview: string;
+            unread: boolean;
+          };
+          type Entry = {
+            ch: (typeof entityChannels)[0];
+            meta: ChannelMetadata;
+            provider: string;
+            effectiveAccountId: string;
+            readOnly: boolean;
+          };
+          const entries: Entry[] = entityChannels.map((ch) => {
+            const meta = (ch.metadata ?? {}) as ChannelMetadata;
+            const provider = ch.externalSource ?? "";
+            const ownAccount = userAccountByProvider.get(provider);
+            const effectiveAccountId =
+              ownAccount?.externalId ?? meta.accountId ?? "";
+            return {
+              ch,
+              meta,
+              provider,
+              effectiveAccountId,
+              readOnly: !ownAccount,
+            };
+          });
 
-              // Determine if current user can reply
-              const ownAccount = userAccountByProvider.get(provider);
-              const readOnly = !ownAccount;
-              const effectiveAccountId = ownAccount?.externalId ?? accountId;
-
-              // Fetch live conversation summary from Unipile
-              let participantName = meta.participantName ?? "Unknown";
-              let lastMessageAt = new Date().toISOString();
-              let lastMessagePreview = "";
-              let unread = false;
-              let participantExternalId = "";
-
+          // Batch: fetch conversations once per unique effective account
+          const uniqueAccountIds = [
+            ...new Set(
+              entries.map((e) => e.effectiveAccountId).filter(Boolean)
+            ),
+          ];
+          const convCache = new Map<string, ConvSummary[]>();
+          await Promise.all(
+            uniqueAccountIds.map(async (accountId) => {
               try {
-                const { items } =
-                  await connector.getConversations(effectiveAccountId);
-                const match = items.find(
-                  (i) => i.externalThreadId === threadId
-                );
-                if (match) {
-                  participantName = match.participantName;
-                  participantExternalId = match.participantExternalId;
-                  lastMessageAt = match.lastMessageAt;
-                  lastMessagePreview = match.lastMessagePreview;
-                  unread = match.unread;
-                }
+                const { items } = await connector.getConversations(accountId);
+                convCache.set(accountId, items);
               } catch {
-                // non-fatal — return stored metadata
+                convCache.set(accountId, []);
               }
+            })
+          );
 
+          const results = entries.map(
+            ({ ch, meta, provider, effectiveAccountId, readOnly }) => {
+              const threadId = ch.externalChannelId ?? "";
+              const match = (convCache.get(effectiveAccountId) ?? []).find(
+                (i) => i.externalThreadId === threadId
+              );
               return {
                 channelId: ch.id,
                 externalThreadId: threadId,
                 provider,
-                participantName,
-                participantExternalId,
-                lastMessageAt,
-                lastMessagePreview,
-                unread,
+                participantName:
+                  match?.participantName ?? meta.participantName ?? "Unknown",
+                participantExternalId: match?.participantExternalId ?? "",
+                lastMessageAt: match?.lastMessageAt ?? new Date().toISOString(),
+                lastMessagePreview: match?.lastMessagePreview ?? "",
+                unread: match?.unread ?? false,
                 accountId: effectiveAccountId,
                 readOnly,
               };
-            })
+            }
           );
 
           return c.json({ conversations: results }, 200);
@@ -736,6 +795,182 @@ export function registerMessagingRoutes(app: HubHono): void {
     }
   );
 
+  // ── POST /messaging/channels/:channelId/mark-read ─────────────────────────
+  // Clears the unread flag in channel metadata. Called when the user opens
+  // a thread in CommunicationsTab. Keeps linked-unread count accurate.
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/messaging/channels/{channelId}/mark-read",
+      tags: ["Messaging"],
+      summary: "Clear unread flag for a linked channel",
+      request: { params: z.object({ channelId: z.string() }) },
+      responses: {
+        200: {
+          description: "Marked as read",
+          content: {
+            "application/json": {
+              schema: z
+                .object({ success: z.boolean() })
+                .openapi("MarkReadResult"),
+            },
+          },
+        },
+        404: {
+          description: "Channel not found",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+        500: {
+          description: "Internal error",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+      },
+    }),
+    async (c) => {
+      const { channelId } = c.req.valid("param");
+      try {
+        const [updated] = await db
+          .update(channels)
+          .set({
+            metadata: drizzleSql`${channels.metadata} || '{"unread":false}'::jsonb`,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(channels.id as any, channelId),
+              eq(channels.channelType, ChannelType.EXTERNAL)
+            )
+          )
+          .returning({ id: channels.id });
+        if (!updated) return c.json({ error: "Channel not found" }, 404);
+        return c.json({ success: true }, 200);
+      } catch (err) {
+        logger.error(
+          { err, channelId },
+          "POST /messaging/channels/:channelId/mark-read failed"
+        );
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          500
+        );
+      }
+    }
+  );
+
+  // ── GET /messaging/linked-unread ─────────────────────────────────────────
+  // Returns all unread conversations linked to entities via EXTERNAL channels.
+  // Pure DB query using channel metadata cache — no Unipile calls.
+  // Cache is updated by the webhook handler on every inbound message.
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/messaging/linked-unread",
+      tags: ["Messaging"],
+      summary: "All unread conversations linked to entities",
+      responses: {
+        200: {
+          description: "Unread linked conversations",
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  items: z.array(
+                    z
+                      .object({
+                        entityId: z.string(),
+                        channelId: z.string(),
+                        externalThreadId: z.string(),
+                        provider: z.string(),
+                        participantName: z.string(),
+                        lastMessagePreview: z.string(),
+                        lastMessageAt: z.string(),
+                      })
+                      .openapi("LinkedUnreadItem")
+                  ),
+                })
+                .openapi("LinkedUnreadResult"),
+            },
+          },
+        },
+        500: {
+          description: "Internal error",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+        503: {
+          description: "Connector not configured",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+      },
+    }),
+    async (c) => {
+      const connector = await getMessagingConnector();
+      if (!connector)
+        return c.json({ error: "Messaging connector not configured" }, 503);
+      const userId = c.get("userId") as string;
+
+      try {
+        const allLinked = await db.query.channels.findMany({
+          where: and(
+            eq(channels.channelType, ChannelType.EXTERNAL),
+            eq(channels.contextObjectType, "entity")
+          ),
+        });
+        if (allLinked.length === 0) return c.json({ items: [] }, 200);
+
+        const userAccounts = await db.query.messagingAccounts.findMany({
+          where: and(
+            eq(messagingAccounts.userId, userId),
+            eq(messagingAccounts.status, "connected")
+          ),
+        });
+        const accountByProvider = new Map(
+          userAccounts.map((a) => [a.provider, a])
+        );
+
+        type ChEntry = {
+          ch: (typeof allLinked)[0];
+          meta: ChannelMetadata;
+          effectiveAccountId: string;
+        };
+        const entries: ChEntry[] = allLinked
+          .map((ch) => {
+            const meta = (ch.metadata ?? {}) as ChannelMetadata;
+            const provider = ch.externalSource ?? "";
+            const ownAccount = accountByProvider.get(provider);
+            const effectiveAccountId =
+              ownAccount?.externalId ?? meta.accountId ?? "";
+            return { ch, meta, effectiveAccountId };
+          })
+          .filter((e) => e.effectiveAccountId !== "");
+
+        // Use channel metadata cache (populated by webhook handler on every inbound message).
+        // No Unipile calls needed — O(1) DB query instead of O(N accounts) API calls.
+        const items = entries
+          .map(({ ch, meta }) => {
+            if (!meta.unread) return null;
+            return {
+              entityId: (ch.contextObjectId ?? "") as string,
+              channelId: ch.id,
+              externalThreadId: ch.externalChannelId ?? "",
+              provider: ch.externalSource ?? "",
+              participantName: meta.participantName ?? "Unknown",
+              lastMessagePreview: meta.lastMessagePreview ?? "",
+              lastMessageAt: meta.lastMessageAt ?? new Date().toISOString(),
+            };
+          })
+          .filter((x): x is NonNullable<typeof x> => x !== null);
+
+        return c.json({ items }, 200);
+      } catch (err) {
+        logger.error({ err, userId }, "GET /messaging/linked-unread failed");
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          500
+        );
+      }
+    }
+  );
+
   // ── GET /messaging/conversations/:threadId/messages ───────────────────────
   app.openapi(
     createRoute({
@@ -825,13 +1060,136 @@ export function registerMessagingRoutes(app: HubHono): void {
       const connector = await getMessagingConnector();
       if (!connector)
         return c.json({ error: "Messaging connector not configured" }, 503);
+      const userId = c.get("userId") as string;
       const { threadId } = c.req.valid("param");
       const { accountId, body } = c.req.valid("json");
       try {
         await connector.sendMessage(accountId, threadId, body);
+
+        // Mirror the outbound message into the messages table so the DB inbox
+        // shows a complete conversation history (inbound + outbound).
+        const linkedChannel = await db.query.channels.findFirst({
+          where: and(
+            eq(channels.channelType, ChannelType.EXTERNAL),
+            eq(channels.externalId as any, threadId)
+          ),
+          columns: { id: true },
+        });
+        if (linkedChannel) {
+          const msgHash = createHash("sha256")
+            .update(`outbound:${threadId}:${Date.now()}:${body}`)
+            .digest("hex");
+          await db
+            .insert(messages)
+            .values({
+              channelId: linkedChannel.id,
+              userId,
+              role: MessageRole.USER,
+              authorType: MessageAuthorType.HUMAN,
+              messageCategory: MessageCategory.CHAT,
+              content: body,
+              hash: msgHash,
+            })
+            .onConflictDoNothing();
+        }
+
         return c.json({ success: true }, 200);
       } catch (err) {
         logger.error({ err, threadId, accountId }, "POST send failed");
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          500
+        );
+      }
+    }
+  );
+
+  // ── GET /messaging/channels ───────────────────────────────────────────────
+  // DB-backed list of all EXTERNAL channels for the current user.
+  // Returns threads stored from webhooks — no Unipile calls.
+  // Used by the CRM Channels inbox page.
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/messaging/channels",
+      tags: ["Messaging"],
+      summary: "List all external channels (DB-backed inbox)",
+      request: {
+        query: z.object({
+          provider: z.string().optional(),
+          unreadOnly: z.enum(["true", "false"]).optional(),
+        }),
+      },
+      responses: {
+        200: {
+          description: "External channels list",
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  channels: z.array(
+                    z
+                      .object({
+                        channelId: z.string(),
+                        provider: z.string(),
+                        threadId: z.string(),
+                        title: z.string(),
+                        participantName: z.string(),
+                        lastMessageAt: z.string(),
+                        lastMessagePreview: z.string(),
+                        unread: z.boolean(),
+                        entityId: z.string().nullable(),
+                        messageCount: z.number(),
+                      })
+                      .openapi("ExternalChannelItem")
+                  ),
+                })
+                .openapi("ExternalChannelsResult"),
+            },
+          },
+        },
+        500: {
+          description: "Internal error",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+      },
+    }),
+    async (c) => {
+      const userId = c.get("userId") as string;
+      const { provider, unreadOnly } = c.req.valid("query");
+
+      try {
+        const rows = await db.query.channels.findMany({
+          where: and(
+            eq(channels.channelType, ChannelType.EXTERNAL),
+            eq(channels.userId, userId),
+            ...(provider ? [eq(channels.externalSource as any, provider)] : [])
+          ),
+          orderBy: [desc(channels.updatedAt)],
+        });
+
+        const result = rows
+          .map((ch) => {
+            const meta = (ch.metadata ?? {}) as ChannelMetadata;
+            if (unreadOnly === "true" && !meta.unread) return null;
+            return {
+              channelId: ch.id,
+              provider: ch.externalSource ?? "",
+              threadId: ch.externalChannelId ?? "",
+              title: ch.title ?? meta.participantName ?? "Unknown",
+              participantName: meta.participantName ?? ch.title ?? "Unknown",
+              lastMessageAt: meta.lastMessageAt ?? ch.updatedAt.toISOString(),
+              lastMessagePreview: meta.lastMessagePreview ?? "",
+              unread: meta.unread ?? false,
+              entityId: ch.contextObjectId ?? null,
+              messageCount: 0,
+            };
+          })
+          .filter((x): x is NonNullable<typeof x> => x !== null);
+
+        return c.json({ channels: result }, 200);
+      } catch (err) {
+        logger.error({ err, userId }, "GET /messaging/channels failed");
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
           500

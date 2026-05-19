@@ -23,6 +23,19 @@ export interface WorkerMetadata {
  */
 export const workerRegistry: WorkerMetadata[] = [
   // ============================================================================
+  // Messaging Workers (external conversation routing)
+  // ============================================================================
+  {
+    id: "crm-daily-digest",
+    name: "CRM Daily Digest",
+    description:
+      "Posts a morning summary of unread linked conversations and overdue follow-ups to each user's personal channel. Runs daily at 08:55 UTC.",
+    triggers: ["cron:55 8 * * *"],
+    outputs: ["message.create.completed"],
+    category: "ai",
+  },
+
+  // ============================================================================
   // Table Workers (handle CRUD for database tables)
   // ============================================================================
   {

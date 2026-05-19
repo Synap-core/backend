@@ -60,7 +60,7 @@ mcpHttpApp.get("/", async (c) => {
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless
     });
-    const server = createMCPServer();
+    const server = createMCPServer(c.req.query("workspaceId") ?? undefined);
     await server.connect(transport);
     return transport.handleRequest(c.req.raw);
   }
@@ -133,7 +133,9 @@ mcpHttpApp.post("/", async (c) => {
     enableJsonResponse: false, // prefer SSE when client accepts it
   });
 
-  const server = createMCPServer();
+  // Optional workspace scoping: ?workspaceId= narrows all tool calls to one workspace.
+  const defaultWorkspaceId = c.req.query("workspaceId") ?? undefined;
+  const server = createMCPServer(defaultWorkspaceId, keyRecord.userId);
   await server.connect(transport);
 
   // Pre-parse body so the transport doesn't have to consume the stream twice.

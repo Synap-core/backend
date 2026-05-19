@@ -22,9 +22,17 @@ import { tools } from "./tools/index.js";
 import { prompts } from "./prompts/index.js";
 
 /**
- * Create and configure MCP server
+ * Create and configure MCP server.
+ *
+ * @param defaultWorkspaceId — when supplied (e.g. from ?workspaceId= in the HTTP
+ *   URL), the server injects it into every tool call that accepts workspaceId
+ *   but didn't receive one explicitly. This lets the CLI register a
+ *   workspace-scoped MCP URL so Claude Code stays focused on one workspace.
  */
-export function createMCPServer() {
+export function createMCPServer(
+  defaultWorkspaceId?: string,
+  sessionUserId?: string
+) {
   const server = new Server(
     {
       name: "synap-mcp-server",
@@ -85,11 +93,20 @@ export function createMCPServer() {
       "mcp.write",
     ];
 
+    const args = request.params.arguments ?? {};
+    // Auto-inject workspace scope when the URL carries ?workspaceId= and the
+    // tool didn't receive one explicitly from the model.
+    const scopedArgs =
+      defaultWorkspaceId && !args.workspaceId
+        ? { workspaceId: defaultWorkspaceId, ...args }
+        : args;
+
     return await tools.execute(
       request.params.name,
-      request.params.arguments ?? {},
+      scopedArgs,
       userId,
-      apiKeyScopes
+      apiKeyScopes,
+      sessionUserId
     );
   });
 

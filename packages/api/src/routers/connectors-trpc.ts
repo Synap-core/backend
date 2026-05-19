@@ -336,7 +336,16 @@ async function cpFetch(
     });
   }
 
-  return response.json();
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    logger.warn({ path, preview: text.slice(0, 200) }, "CP returned non-JSON");
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `Connector service returned non-JSON. Check your Control Plane URL. Preview: ${text.slice(0, 100)}`,
+    });
+  }
 }
 
 // ─── Shared input schema ──────────────────────────────────────────────────────
@@ -511,7 +520,10 @@ export const connectorsRouter = router({
         }
         return {
           token: session.sessionToken,
-          nangoHost: localNango.getHost(),
+          // Return the public-facing Connect URL for browser use, NOT the
+          // internal API host (e.g. http://eve-arms-nango:3003) which the
+          // browser cannot reach.
+          nangoHost: localNango.getConnectUrl(),
           connectLink: session.redirectUrl,
         };
       }

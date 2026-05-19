@@ -78,6 +78,14 @@ export const OperationalEventTypes = {
   // ── Feed items ───────────────────────────────────────────────────────────
   /** Fires once per entity created from the feed pipeline (post-classification, post-threshold). */
   FEED_NEW_ITEM: "feed.new_item.completed",
+
+  // ── External messaging ───────────────────────────────────────────────────
+  /**
+   * Fires when an inbound message arrives on an external conversation thread
+   * that is linked to a CRM entity via an EXTERNAL channel.
+   * data: { entityId, provider, threadId, participantName, messagePreview, channelId }
+   */
+  EXTERNAL_MESSAGE_RECEIVED: "external_message.received.completed",
 } as const;
 
 export type OperationalEventType =

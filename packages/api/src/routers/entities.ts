@@ -49,6 +49,7 @@ import { randomUUID } from "crypto";
 import { syncPropertyToRelations } from "../utils/property-relation-sync.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { dispatchWebhooksForEvent } from "../utils/webhook-delivery.js";
+import { userVisibleWhere } from "../utils/user-visible-where.js";
 
 /**
  * Standard entity shape for API responses.
@@ -600,6 +601,73 @@ export const entitiesRouter = router({
                 isNull(entities.workspaceId)
               )
         );
+      }
+
+      const results = await db.query.entities.findMany({
+        where: and(...conditions),
+        orderBy: [desc(entities.createdAt)],
+        limit: input.limit + 1,
+        offset: input.offset,
+      });
+
+      const { items, pagination } = buildPaginatedResponse(
+        results.map(toApiEntity),
+        input
+      );
+
+      return {
+        items,
+        pagination,
+        /** @deprecated Use `items` instead */
+        entities: items,
+        /** @deprecated Use `pagination.hasMore` instead */
+        hasMore: pagination.hasMore,
+      };
+    }),
+
+  /**
+   * List entities visible to the user across EVERY workspace they belong to,
+   * plus pod-wide globals. The user-wide sibling of `list`.
+   *
+   * Used by surfaces above the workspace level — Eve OS, cross-workspace
+   * search, dashboards, AI agents that span contexts. The principle is in
+   * synap-app's CLAUDE.md: "Workspaces are lenses, not scopes. Filter by
+   * USER, never by workspace, for all flows crossing pod↔outside boundary."
+   *
+   * Same input + output shape as `list` so consumers can swap variants
+   * without restructuring the call site. No `globalOnly` flag — that's a
+   * `.list`-only optimisation for one workspace at a time.
+   */
+  listAll: podProcedure
+    .input(
+      paginatedInput.extend({
+        profileSlug: z.string().optional(),
+        /** When true and profileSlug is set, also return entities of child profiles. */
+        includeDescendants: z.boolean().optional().default(false),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const conditions: any[] = [
+        isNull(entities.deletedAt),
+        userVisibleWhere(entities.workspaceId, ctx.userId),
+      ];
+
+      if (input.profileSlug) {
+        const database = await getDb();
+        const profileService = new ProfileResolutionService(database);
+        let profileSlugs = [input.profileSlug];
+        if (input.includeDescendants) {
+          const descendants = await profileService.getDescendantSlugs(
+            input.profileSlug,
+            ctx.workspaceId ?? undefined
+          );
+          profileSlugs = [input.profileSlug, ...descendants];
+        }
+        if (profileSlugs.length === 1) {
+          conditions.push(eq(entities.type, profileSlugs[0]));
+        } else {
+          conditions.push(inArray(entities.type, profileSlugs));
+        }
       }
 
       const results = await db.query.entities.findMany({

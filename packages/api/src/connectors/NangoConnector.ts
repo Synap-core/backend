@@ -80,6 +80,11 @@ export class NangoConnector implements SyncConnector {
     return !!this.secretKey;
   }
 
+  /** Public-facing URL for browser use (may differ from internal API host). */
+  getConnectUrl(): string {
+    return this.connectUrl;
+  }
+
   getHost(): string {
     return this.host;
   }

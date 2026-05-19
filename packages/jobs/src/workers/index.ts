@@ -72,6 +72,10 @@ import {
   SYNC_PUSH_SUPPLEMENTARY_QUEUE,
 } from "./sync-push-supplementary.js";
 import { handleHydrationSummaryPost } from "./hydration-summary-post.js";
+import {
+  handleCrmDailyDigest,
+  CRM_DAILY_DIGEST_QUEUE,
+} from "./crm-daily-digest.js";
 import { handleEntityExtract } from "./entity-extract-worker.js";
 import {
   handleHermesTrigger,
@@ -123,6 +127,7 @@ const ALL_QUEUES = [
   SYNC_PUSH_SUPPLEMENTARY_QUEUE,
   "hydration-summary-post",
   HERMES_TRIGGER_QUEUE,
+  CRM_DAILY_DIGEST_QUEUE,
 ];
 
 /**
@@ -353,6 +358,13 @@ export async function registerAllWorkers(): Promise<void> {
     await boss.work(HERMES_TRIGGER_QUEUE, async () => handleHermesTrigger());
     logger.info("Registered worker: hermes-trigger");
   }
+
+  // CRM daily digest (cron: daily at 08:55 UTC)
+  // Posts unread linked messages + overdue follow-ups to each user's personal channel.
+  await boss.work(CRM_DAILY_DIGEST_QUEUE, async ([job]: any[]) =>
+    handleCrmDailyDigest(job)
+  );
+  logger.info("Registered worker: crm-daily-digest");
 
   logger.info("All workers registered");
 }

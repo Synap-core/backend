@@ -191,7 +191,7 @@ export const tools = {
               description: "Workspace ID (optional)",
             },
           },
-          required: ["workspaceId"],
+          required: [],
         },
       },
       {
@@ -210,7 +210,7 @@ export const tools = {
               description: "Workspace ID (optional)",
             },
           },
-          required: ["entityId", "workspaceId"],
+          required: ["entityId"],
         },
       },
       {
@@ -384,7 +384,7 @@ export const tools = {
               description: "Workspace ID (optional)",
             },
           },
-          required: ["sourceEntityId", "targetEntityId", "workspaceId"],
+          required: ["sourceEntityId", "targetEntityId"],
         },
       },
 
@@ -591,9 +591,16 @@ export const tools = {
     name: string,
     args: Record<string, unknown>,
     userId: string,
-    apiKeyScopes: string[]
+    apiKeyScopes: string[],
+    sessionUserId?: string
   ): Promise<CallToolResult> {
     const { executeMCPToolViaHubProtocol } = await import("../adapter.js");
-    return await executeMCPToolViaHubProtocol(name, args, userId, apiKeyScopes);
+    return await executeMCPToolViaHubProtocol(
+      name,
+      args,
+      userId,
+      apiKeyScopes,
+      sessionUserId
+    );
   },
 };

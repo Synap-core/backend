@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { Hono } from "hono";
 import { createLogger } from "@synap-core/core";
 import { sql as drizzleSql } from "drizzle-orm";
@@ -6,9 +7,16 @@ import {
   eq,
   and,
   messagingAccounts,
-  entities,
   workspaces,
+  channels,
+  messages,
+  ChannelType,
+  ChannelScope,
+  MessageRole,
+  MessageAuthorType,
+  MessageCategory,
 } from "@synap/database";
+import { emitSideEffects } from "@synap/events";
 import { getMessagingConnector } from "../connectors/index.js";
 
 const logger = createLogger({ module: "webhooks-inbound" });
@@ -59,74 +67,114 @@ webhooksInboundRouter.post("/messaging", async (c) => {
         return c.json({ ok: true });
       }
 
-      // Look up a person entity whose email/linkedinUrl/whatsapp matches the sender
-      // We use the message senderName as a fallback identifier
       const senderName = event.message.senderName;
+      const messagePreview = event.message.body.slice(0, 120);
 
-      let contactEntityId: string | null = null;
-      try {
-        const matchedPerson = await db.query.entities.findFirst({
-          where: and(
-            eq(entities.workspaceId, workspace.id),
-            eq(entities.type, "person"),
-            drizzleSql`(
-              ${entities.properties}->>'email' = ${senderName}
-              OR ${entities.properties}->>'linkedinUrl' = ${senderName}
-              OR ${entities.properties}->>'whatsapp' = ${senderName}
-            )`
-          ),
-        });
-        contactEntityId = matchedPerson?.id ?? null;
-      } catch {
-        // Non-fatal — proceed without contact link
-      }
+      // ── Upsert the EXTERNAL channel row ────────────────────────────────────
+      // This is the canonical Synap representation of the external thread.
+      // We use (externalSource, externalId) as the unique dedup key.
+      let channelId: string;
 
-      // Upsert a conversation entity: query first, then insert or update
-      const conversationProps = {
-        platform: event.provider,
-        threadId: event.threadId,
-        contactEntityId,
-        accountId: account.id,
-        lastMessageAt: event.message.sentAt,
-        lastMessagePreview: event.message.body.slice(0, 120),
-        unread: true,
-      };
-
-      const existingConversation = await db.query.entities.findFirst({
+      const existingChannel = await db.query.channels.findFirst({
         where: and(
-          eq(entities.workspaceId, workspace.id),
-          eq(entities.type, "conversation"),
-          drizzleSql`${entities.properties}->>'threadId' = ${event.threadId}`,
-          drizzleSql`${entities.properties}->>'platform' = ${event.provider}`
+          eq(channels.channelType, ChannelType.EXTERNAL),
+          eq(channels.externalSource as any, event.provider),
+          eq(channels.externalId as any, event.threadId)
         ),
+        columns: { id: true, metadata: true },
       });
 
-      if (existingConversation) {
+      if (existingChannel) {
+        channelId = existingChannel.id;
+        // Update last-message cache in metadata
         await db
-          .update(entities)
+          .update(channels)
           .set({
-            properties: drizzleSql`${entities.properties} || ${JSON.stringify(conversationProps)}::jsonb`,
+            metadata: drizzleSql`${channels.metadata} || ${JSON.stringify({
+              lastMessageAt: event.message.sentAt,
+              lastMessagePreview: messagePreview,
+              unread: true,
+            })}::jsonb`,
             updatedAt: new Date(),
           })
-          .where(eq(entities.id, existingConversation.id));
+          .where(eq(channels.id, channelId));
       } else {
-        await db.insert(entities).values({
-          userId: account.userId,
-          workspaceId: workspace.id,
-          type: "conversation",
-          title: senderName,
-          properties: conversationProps,
-        });
+        const [inserted] = await db
+          .insert(channels)
+          .values({
+            userId: account.userId,
+            workspaceId: workspace.id,
+            channelType: ChannelType.EXTERNAL,
+            scope: ChannelScope.WORKSPACE,
+            title: senderName,
+            externalSource: event.provider,
+            externalChannelId: event.threadId,
+            externalId: event.threadId,
+            metadata: {
+              accountId: account.externalId,
+              participantName: senderName,
+              lastMessageAt: event.message.sentAt,
+              lastMessagePreview: messagePreview,
+              unread: true,
+            },
+          })
+          .returning({ id: channels.id });
+        channelId = inserted.id;
+        logger.info(
+          { channelId, provider: event.provider, threadId: event.threadId },
+          "Auto-created EXTERNAL channel for inbound message"
+        );
       }
 
+      // ── Store the message in the messages table ─────────────────────────────
+      // role=user + authorType=external = inbound message from an external contact
+      const msgHash = createHash("sha256")
+        .update(
+          `${event.provider}:${event.threadId}:${event.message.sentAt}:${event.message.body}`
+        )
+        .digest("hex");
+
+      await db
+        .insert(messages)
+        .values({
+          channelId,
+          userId: account.userId,
+          role: MessageRole.USER,
+          authorType: MessageAuthorType.EXTERNAL,
+          messageCategory: MessageCategory.CHAT,
+          externalSource: event.provider,
+          content: event.message.body,
+          hash: msgHash,
+          timestamp: new Date(event.message.sentAt),
+        })
+        .onConflictDoNothing(); // idempotent — webhook may fire more than once
+
       logger.info(
-        {
-          accountId: account.id,
-          threadId: event.threadId,
-          workspaceId: workspace.id,
-        },
-        "Conversation entity upserted"
+        { channelId, provider: event.provider, threadId: event.threadId },
+        "Inbound message stored"
       );
+
+      // ── Fire automation event ────────────────────────────────────────────────
+      // Fire for ALL inbound messages (pre-linked or not). Automations with
+      // eventPattern "external_message.received.completed" will match.
+      const contextEntityId = (existingChannel as any)?.contextObjectId ?? null;
+      await emitSideEffects({
+        subjectType: "external_message",
+        action: "received",
+        subjectId: (contextEntityId ?? channelId) as string,
+        userId: account.userId,
+        workspaceId: workspace.id,
+        data: {
+          entityId: contextEntityId as string,
+          channelId,
+          provider: event.provider,
+          threadId: event.threadId,
+          participantName: senderName,
+          messagePreview,
+        },
+      }).catch((err) => {
+        logger.warn({ err, channelId }, "emitSideEffects failed (non-fatal)");
+      });
     } else if (event.type === "account.created") {
       // notify_url callback: auto-sync the newly connected account into our DB
       const connector = await getMessagingConnector();

@@ -69,11 +69,20 @@ function requireScope(scopes: string[], scope: string, toolName: string): void {
 
 // ── Tool execution ────────────────────────────────────────────────────────────
 
+async function getUserWorkspaceIds(userId: string): Promise<string[]> {
+  const rows = await db
+    .select({ workspaceId: workspaceMembers.workspaceId })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.userId, userId));
+  return rows.map((r) => r.workspaceId);
+}
+
 export async function executeMCPToolViaHubProtocol(
   toolName: string,
   args: Record<string, unknown>,
   userId: string,
-  apiKeyScopes: string[]
+  apiKeyScopes: string[],
+  _sessionUserId?: string
 ): Promise<CallToolResult> {
   const caller = await createHubProtocolCaller(userId, apiKeyScopes);
 
@@ -250,26 +259,53 @@ export async function executeMCPToolViaHubProtocol(
     case "synap_list_profiles": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
       const wsId = args.workspaceId as string | undefined;
-      if (!wsId) {
-        return ok({
-          error: "workspaceId is required for listing profiles",
+      if (wsId) {
+        const result = await caller.profiles.listProfiles({
+          userId,
+          workspaceId: wsId,
         });
+        return ok(result);
       }
-      const result = await caller.profiles.listProfiles({
-        userId,
-        workspaceId: wsId,
-      });
-      return ok(result);
+      const wsIds = await getUserWorkspaceIds(userId);
+      if (wsIds.length === 0) return ok([]);
+      const perWs = await Promise.all(
+        wsIds.map((id) =>
+          caller.profiles
+            .listProfiles({ userId, workspaceId: id })
+            .then((res) =>
+              res.profiles.map(
+                (p) =>
+                  ({
+                    ...(p as Record<string, unknown>),
+                    workspaceId: id,
+                  }) as Record<string, unknown>
+              )
+            )
+            .catch(() => [] as Array<Record<string, unknown>>)
+        )
+      );
+      const seen = new Set<string>();
+      const merged: Array<Record<string, unknown>> = [];
+      for (const profiles of perWs) {
+        for (const p of profiles) {
+          const slug = p.slug as string;
+          if (!seen.has(slug)) {
+            seen.add(slug);
+            merged.push(p);
+          }
+        }
+      }
+      return ok(merged);
     }
 
     case "synap_get_relations": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
-      const relWsId = args.workspaceId as string | undefined;
+      let relWsId = args.workspaceId as string | undefined;
       if (!relWsId) {
-        return ok({
-          error: "workspaceId is required for listing relations",
-        });
+        const ids = await getUserWorkspaceIds(userId);
+        relWsId = ids[0];
       }
+      if (!relWsId) return ok({ error: "No accessible workspace found" });
       const result = await caller.relations.listRelations({
         userId,
         workspaceId: relWsId,
@@ -280,12 +316,12 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_link_entities": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
-      const linkWsId = args.workspaceId as string | undefined;
+      let linkWsId = args.workspaceId as string | undefined;
       if (!linkWsId) {
-        return ok({
-          error: "workspaceId is required for creating relations",
-        });
+        const ids = await getUserWorkspaceIds(userId);
+        linkWsId = ids[0];
       }
+      if (!linkWsId) return ok({ error: "No accessible workspace found" });
       const result = await caller.relations.createRelation({
         userId,
         workspaceId: linkWsId,
@@ -367,7 +403,12 @@ export async function executeMCPToolViaHubProtocol(
       return ok({
         me: { userId, scopes: apiKeyScopes },
         workspaces: wsList,
+        workspaceCount: wsList.length,
         profiles,
+        note:
+          wsList.length > 1
+            ? `You have ${wsList.length} workspaces. MCP tools auto-scope to all when no workspaceId is given. Pass workspaceId to narrow to one workspace.`
+            : `Single workspace: ${wsList[0]?.name ?? "none"}. All tools default to this workspace.`,
       });
     }
 

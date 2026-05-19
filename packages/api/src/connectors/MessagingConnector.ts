@@ -73,4 +73,14 @@ export interface MessagingConnector {
     headers: Record<string, string>,
     rawBody: string | Buffer
   ): Promise<WebhookEvent | null>;
+  /**
+   * Permanently remove an account from the provider.
+   * The externalId is the provider-side account ID (e.g. Unipile account ID).
+   */
+  deleteAccount(externalId: string): Promise<void>;
+  /**
+   * Idempotent: ensures persistent message-event webhooks are registered with
+   * the provider. Called after account sync so inbound messages reach our endpoint.
+   */
+  ensureWebhooksRegistered(publicUrl: string): Promise<void>;
 }
