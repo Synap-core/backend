@@ -54,12 +54,21 @@ export class NangoConnector implements SyncConnector {
     private readonly overrides?: {
       host?: string;
       secretKey?: string;
+      /** Public-facing URL for browser redirects (may differ from internal API host). */
+      connectUrl?: string;
     }
   ) {}
 
   private get host(): string {
     return (
       this.overrides?.host || process.env.NANGO_HOST || "http://localhost:3003"
+    );
+  }
+
+  /** Public URL used in browser redirects — defaults to host when not set. */
+  private get connectUrl(): string {
+    return (
+      this.overrides?.connectUrl || process.env.NANGO_CONNECT_URL || this.host
     );
   }
 
@@ -129,7 +138,8 @@ export class NangoConnector implements SyncConnector {
 
     return {
       sessionToken: parsed.data.token,
-      redirectUrl: `${this.host}/connect?token=${parsed.data.token}`,
+      // Use public connectUrl for browser redirects (may differ from internal API host)
+      redirectUrl: `${this.connectUrl}/connect?token=${parsed.data.token}`,
     };
   }
 

@@ -195,8 +195,12 @@ export class UnipileConnector implements MessagingConnector {
       externalId: a.id,
       provider: mapProviderType(a.type),
       displayName: a.name ?? a.username ?? a.id,
-      status:
-        a.connection_status === "OK" ? "connected" : "reconnection_required",
+      // Treat missing/unknown status optimistically; only explicit failure states → reconnection_required
+      status: ["RECONNECTION_REQUIRED", "CREDENTIALS", "ERROR"].includes(
+        (a.connection_status ?? "").toUpperCase()
+      )
+        ? "reconnection_required"
+        : "connected",
     }));
   }
 

@@ -203,6 +203,18 @@
           "label": "Dispatched At",
           "valueType": "string",
           "inputType": "text"
+        },
+        {
+          "slug": "t3code_cwd",
+          "label": "T3 Code Working Directory",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "t3code_resume_cursor",
+          "label": "T3 Code Resume Cursor",
+          "valueType": "string",
+          "inputType": "text"
         }
       ]
     },

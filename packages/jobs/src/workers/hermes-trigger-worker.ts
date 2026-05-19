@@ -22,19 +22,14 @@ const logger = createLogger({ module: "hermes-trigger-worker" });
 
 export const HERMES_TRIGGER_QUEUE = "hermes-trigger";
 
-type AgentPhase =
-  | "gathering_context"
-  | "planning"
-  | "executing"
-  | "verifying"
-  | "debugging";
+// Hermes handles entity-only phases (no file system access required).
+// Code execution phases (executing / verifying / debugging) are handled
+// by the Eve CodexFeaturePoller daemon via T3 Code + Codex.
+type AgentPhase = "gathering_context" | "planning";
 
 const PHASE_TIMEOUTS_MS: Record<AgentPhase, number> = {
   gathering_context: 5 * 60 * 1000,
   planning: 8 * 60 * 1000,
-  executing: 45 * 60 * 1000,
-  verifying: 15 * 60 * 1000,
-  debugging: 45 * 60 * 1000,
 };
 
 function buildSystemPrompt(
@@ -88,65 +83,6 @@ function buildSystemPrompt(
       ]
         .filter(Boolean)
         .join("\n");
-
-    case "executing":
-      return [
-        "You are a software developer executing a feature implementation plan.",
-        `Feature entity ID: ${featureId}`,
-        channelLine,
-        "",
-        "Tasks:",
-        "1. Read the feature's `plan` property for the step-by-step plan.",
-        "2. Implement each step using Synap MCP tools to read and modify code.",
-        "3. Follow the plan exactly. Do not skip steps.",
-        "",
-        "When done:",
-        channelId ? `1. Post an execution summary to the feature channel.` : "",
-        `${channelId ? "2" : "1"}. Call: ${update({ execution_summary: "<summary of changes made>", agent_status: "verifying" })}`,
-      ]
-        .filter(Boolean)
-        .join("\n");
-
-    case "verifying":
-      return [
-        "You are a QA engineer verifying a feature implementation.",
-        `Feature entity ID: ${featureId}`,
-        channelLine,
-        "",
-        "Tasks:",
-        "1. Read the feature's `acceptance_criteria` and `execution_summary`.",
-        "2. Review the code changes and verify they satisfy all acceptance criteria.",
-        "3. Note any issues, missing cases, or bugs found.",
-        "",
-        "When done:",
-        channelId
-          ? `1. Post the verification report to the feature channel.`
-          : "",
-        `${channelId ? "2" : "1"}. Call: ${update({
-          verification_report:
-            "<# Verification Report\\n\\n## Status: PASS | FAIL\\n\\n## Findings\\n- …>",
-          agent_status: "awaiting_review",
-        })}`,
-      ]
-        .filter(Boolean)
-        .join("\n");
-
-    case "debugging":
-      return [
-        "You are a software developer fixing issues identified during verification.",
-        `Feature entity ID: ${featureId}`,
-        channelLine,
-        "",
-        "Tasks:",
-        "1. Read the feature's `verification_report` to understand the issues.",
-        "2. Fix each issue precisely. Do not change unrelated code.",
-        "",
-        "When done:",
-        channelId ? `1. Post a debug summary to the feature channel.` : "",
-        `${channelId ? "2" : "1"}. Call: ${update({ debug_summary: "<what was fixed>", agent_status: "verifying" })}`,
-      ]
-        .filter(Boolean)
-        .join("\n");
   }
 }
 
@@ -183,13 +119,10 @@ function buildUserMessage(
     if (prompt) lines.push("", `### Goal`, "", prompt);
   }
 
-  if ((phase === "planning" || phase === "executing") && props.description) {
+  if (phase === "planning" && props.description) {
     lines.push("", `### Description`, "", String(props.description));
   }
-  if (
-    (phase === "planning" || phase === "executing") &&
-    props.acceptance_criteria
-  ) {
+  if (phase === "planning" && props.acceptance_criteria) {
     lines.push(
       "",
       `### Acceptance Criteria`,
@@ -199,39 +132,6 @@ function buildUserMessage(
   }
   if (phase === "planning" && props.technical_notes) {
     lines.push("", `### Technical Notes`, "", String(props.technical_notes));
-  }
-  if (phase === "executing" && props.plan) {
-    lines.push("", `### Implementation Plan`, "", String(props.plan));
-  }
-  if (
-    (phase === "verifying" || phase === "debugging") &&
-    props.acceptance_criteria
-  ) {
-    lines.push(
-      "",
-      `### Acceptance Criteria`,
-      "",
-      String(props.acceptance_criteria)
-    );
-  }
-  if (
-    (phase === "verifying" || phase === "debugging") &&
-    props.execution_summary
-  ) {
-    lines.push(
-      "",
-      `### Execution Summary`,
-      "",
-      String(props.execution_summary)
-    );
-  }
-  if (phase === "debugging" && props.verification_report) {
-    lines.push(
-      "",
-      `### Verification Report (issues to fix)`,
-      "",
-      String(props.verification_report)
-    );
   }
 
   return lines.join("\n");
@@ -251,7 +151,9 @@ export async function handleHermesTrigger(): Promise<void> {
       and(
         eq(entities.type, "devplane_feature"),
         sql`${entities.properties}->>'agent_status' = 'dispatched'`,
-        sql`${entities.properties}->>'dispatched_at' IS NOT NULL`
+        sql`${entities.properties}->>'dispatched_at' IS NOT NULL`,
+        // Only time out Hermes phases — code phases are timed out by the Eve CodexFeaturePoller
+        sql`${entities.properties}->>'agent_phase' = ANY(ARRAY['gathering_context','planning']::text[])`
       )
     )
     .limit(20);
@@ -286,7 +188,7 @@ export async function handleHermesTrigger(): Promise<void> {
     .where(
       and(
         eq(entities.type, "devplane_feature"),
-        sql`${entities.properties}->>'agent_status' = ANY(ARRAY['gathering_context','planning','executing','verifying','debugging']::text[])`
+        sql`${entities.properties}->>'agent_status' = ANY(ARRAY['gathering_context','planning']::text[])`
       )
     )
     .limit(5);

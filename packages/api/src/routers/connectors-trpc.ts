@@ -58,9 +58,14 @@ async function getLocalNango(): Promise<NangoConnector | null> {
     const cfg = ((ws?.settings as Record<string, unknown>)?.nango ?? {}) as {
       secretKey?: string;
       host?: string;
+      connectUrl?: string;
     };
     if (cfg.secretKey) {
-      return new NangoConnector({ secretKey: cfg.secretKey, host: cfg.host });
+      return new NangoConnector({
+        secretKey: cfg.secretKey,
+        host: cfg.host,
+        connectUrl: cfg.connectUrl,
+      });
     }
   } catch {
     // DB not ready — env-only fallback
@@ -837,6 +842,10 @@ export const connectorsRouter = router({
       configured: hasSecretKey,
       hasSecretKey,
       host: (cfg.host as string | undefined) ?? process.env.NANGO_HOST ?? null,
+      connectUrl:
+        (cfg.connectUrl as string | undefined) ??
+        process.env.NANGO_CONNECT_URL ??
+        null,
       fromEnv,
     };
   }),
@@ -850,6 +859,7 @@ export const connectorsRouter = router({
       z.object({
         secretKey: z.string().optional(),
         host: z.string().optional(),
+        connectUrl: z.string().optional(),
       })
     )
     .mutation(async ({ input }) => {
@@ -871,6 +881,9 @@ export const connectorsRouter = router({
           ? { secretKey: input.secretKey || null }
           : {}),
         ...(input.host !== undefined ? { host: input.host || null } : {}),
+        ...(input.connectUrl !== undefined
+          ? { connectUrl: input.connectUrl || null }
+          : {}),
       };
 
       await database
