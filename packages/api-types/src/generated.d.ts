@@ -10379,6 +10379,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				configured: boolean;
 				hasSecretKey: boolean;
 				host: string | null;
+				connectUrl: string | null;
 				fromEnv: boolean;
 			};
 			meta: object;
@@ -10387,6 +10388,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				secretKey?: string | undefined;
 				host?: string | undefined;
+				connectUrl?: string | undefined;
 			};
 			output: {
 				success: boolean;
