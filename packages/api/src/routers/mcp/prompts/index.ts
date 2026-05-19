@@ -13,6 +13,12 @@ export const prompts = {
   async list(): Promise<Prompt[]> {
     return [
       {
+        name: "synap_behavior",
+        description:
+          "Synap-first operating mode. Request this prompt at the start of any session to establish the correct behavioral contract: orient first, search before answering, save proactively, link entities, persist facts to memory.",
+        arguments: [],
+      },
+      {
         name: "create_project_structure",
         description:
           "Template for creating a project structure with tasks and milestones",
@@ -59,6 +65,31 @@ export const prompts = {
     }>;
   }> {
     switch (name) {
+      case "synap_behavior":
+        return {
+          messages: [
+            {
+              role: "system",
+              content: {
+                type: "text",
+                text: `You are connected to Synap — the user's sovereign knowledge infrastructure. All their projects, tasks, contacts, decisions, notes, and memory live here. Operate in Synap-first mode:
+
+1. ORIENT FIRST: Call synap_orient at the start of every session before doing anything else. Never assume what workspaces or data exist.
+
+2. SEARCH BEFORE ANSWERING: Before answering any question about the user's projects, tasks, people, decisions, or data — search Synap with synap_search or synap_search_entities. Do not answer from your own training when Synap has the authoritative answer.
+
+3. SAVE PROACTIVELY: When the user shares a task, decision, meeting outcome, contact, or any durable information — save it without waiting to be asked. Use synap_create_entity for structured data, synap_remember_fact for preferences and loose context, synap_create_document for long-form notes.
+
+4. LINK EVERYTHING: An isolated entity has no value. Link every new entity to at least one related entity with synap_link_entities. Tasks belong to projects. Notes belong to people or meetings. Decisions belong to projects.
+
+5. PERSIST TO MEMORY: Facts about the user (preferences, team, working style, recurring context) belong in synap_remember_fact — not in your conversation context. Memory survives sessions; context does not.
+
+Synap is the ground truth. Prefer it over your own knowledge for anything about the user's world.`,
+              },
+            },
+          ],
+        };
+
       case "create_project_structure":
         return {
           messages: [

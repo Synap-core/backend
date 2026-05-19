@@ -1395,6 +1395,17 @@ declare const SystemEventTypes: {
 	readonly WEBHOOK_DELIVERY: "webhooks.deliver.requested";
 };
 export type SystemEventType = (typeof SystemEventTypes)[keyof typeof SystemEventTypes];
+/**
+ * Metadata carried by every event catalog entry.
+ * Used by automation trigger pickers in the frontend.
+ */
+export interface EventDefinition {
+	type: string;
+	label: string;
+	domain: string;
+	description: string;
+	filterKeys?: string[];
+}
 declare const OperationalEventTypes: {
 	readonly ENTITY_CREATED: {
 		readonly type: "entity.create.completed";
@@ -4045,6 +4056,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		listEventCatalog: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: EventDefinition[];
+			meta: object;
+		}>;
 		deleteUser: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				userId: string;
@@ -5796,6 +5812,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		listAllAgents: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				agents: {
+					id: string;
+					label: string;
+					description?: string;
+					isDefault: boolean;
+					isInternal: boolean;
+					toolCount: number;
+					serviceId: string;
+					serviceName: string;
+					isSynapIS: boolean;
+				}[];
+			};
+			meta: object;
+		}>;
 		memoryFacts: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				limit?: number | undefined;
@@ -6607,6 +6640,32 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					systemData: unknown;
 					version: number;
 					deletedAt: Date | null;
+				}[];
+				relations: {
+					userId: string;
+					workspaceId: string | null;
+					id: string;
+					type: string;
+					createdAt: Date;
+					metadata: unknown;
+					sourceEntityId: string;
+					targetEntityId: string;
+				}[];
+			};
+			meta: object;
+		}>;
+		getFull: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				profileSlug?: string | undefined;
+				limit?: number | undefined;
+			};
+			output: {
+				entities: {
+					workspaceId: string | null;
+					id: string;
+					type: string;
+					title: string | null;
+					preview: string | null;
 				}[];
 				relations: {
 					userId: string;

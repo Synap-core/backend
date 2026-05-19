@@ -332,8 +332,7 @@ export function registerMessagingRoutes(app: HubHono): void {
   );
 
   // ── GET /messaging/service-config ─────────────────────────────────────────
-  // Returns the resolved Unipile connector config (masked for display).
-  // Used by the CRM Channels settings to show current config state.
+  // Returns the resolved connector config with active source + migration info.
   app.openapi(
     createRoute({
       method: "get",
@@ -348,9 +347,17 @@ export function registerMessagingRoutes(app: HubHono): void {
               schema: z
                 .object({
                   configured: z.boolean(),
-                  dsn: z.string().nullable().optional(),
-                  hasApiKey: z.boolean().optional(),
-                  hasWebhookSecret: z.boolean().optional(),
+                  source: z
+                    .enum(["vault", "workspace_settings", "env"])
+                    .nullable(),
+                  dsn: z.string().nullable(),
+                  hasApiKey: z.boolean(),
+                  hasWebhookSecret: z.boolean(),
+                  migration: z.object({
+                    available: z.boolean(),
+                    hasDsn: z.boolean(),
+                    hasApiKey: z.boolean(),
+                  }),
                 })
                 .openapi("MessagingServiceConfig"),
             },
@@ -360,17 +367,120 @@ export function registerMessagingRoutes(app: HubHono): void {
     }),
     async (c) => {
       const userId = c.get("userId") as string;
-      const cfg = await getServiceSecret("messaging-connector", userId);
-      if (!cfg) return c.json({ configured: false }, 200);
+
+      const ws = await db.query.workspaces.findFirst({
+        columns: { settings: true },
+      });
+      const wsCfg = ((ws?.settings as Record<string, unknown>)?.messaging ??
+        {}) as Record<string, unknown>;
+      const wsDsn = wsCfg.unipileDsn as string | undefined;
+      const wsApiKey = wsCfg.unipileApiKey as string | undefined;
+      const wsWebhookSecret = wsCfg.unipileWebhookSecret as string | undefined;
+
+      const vaultCfg = await getServiceSecret("messaging-connector", userId);
+
+      const safeHostname = (raw: string | undefined) => {
+        if (!raw) return null;
+        try {
+          return new URL(raw).hostname;
+        } catch {
+          return null;
+        }
+      };
+
+      let source: "vault" | "workspace_settings" | "env" | null = null;
+      let dsn: string | null = null;
+      let hasApiKey = false;
+      let hasWebhookSecret = false;
+
+      if (vaultCfg?.dsn && vaultCfg?.apiKey) {
+        source = "vault";
+        dsn = safeHostname(vaultCfg.dsn);
+        hasApiKey = true;
+        hasWebhookSecret = !!vaultCfg.webhookSecret;
+      } else if (wsDsn && wsApiKey) {
+        source = "workspace_settings";
+        dsn = safeHostname(wsDsn);
+        hasApiKey = true;
+        hasWebhookSecret = !!wsWebhookSecret;
+      } else if (process.env.UNIPILE_DSN && process.env.UNIPILE_API_KEY) {
+        source = "env";
+        dsn = safeHostname(process.env.UNIPILE_DSN);
+        hasApiKey = true;
+        hasWebhookSecret = !!process.env.UNIPILE_WEBHOOK_SECRET;
+      }
+
       return c.json(
         {
-          configured: true,
-          dsn: cfg.dsn ? new URL(cfg.dsn).hostname : null,
-          hasApiKey: !!cfg.apiKey,
-          hasWebhookSecret: !!cfg.webhookSecret,
+          configured: source !== null,
+          source,
+          dsn,
+          hasApiKey,
+          hasWebhookSecret,
+          migration: {
+            available: !!(wsDsn && wsApiKey) && source !== "vault",
+            hasDsn: !!wsDsn,
+            hasApiKey: !!wsApiKey,
+          },
         },
         200
       );
+    }
+  );
+
+  // ── POST /messaging/service-config/migrate ────────────────────────────────
+  // Atomically copies workspace.settings.messaging credentials into vault.
+  // Must be declared BEFORE the generic POST /service-config (Hono static-first).
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/messaging/service-config/migrate",
+      tags: ["Messaging"],
+      summary: "Migrate workspace settings messaging credentials to vault",
+      responses: {
+        200: {
+          description: "Migrated",
+          content: {
+            "application/json": {
+              schema: z
+                .object({ ok: z.boolean() })
+                .openapi("MessagingMigrateResult"),
+            },
+          },
+        },
+        400: {
+          description: "No credentials to migrate",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+      },
+    }),
+    async (c) => {
+      const userId = c.get("userId") as string;
+      const ws = await db.query.workspaces.findFirst({
+        columns: { settings: true },
+      });
+      const wsCfg = ((ws?.settings as Record<string, unknown>)?.messaging ??
+        {}) as Record<string, unknown>;
+      const dsn = wsCfg.unipileDsn as string | undefined;
+      const apiKey = wsCfg.unipileApiKey as string | undefined;
+      const webhookSecret = wsCfg.unipileWebhookSecret as string | undefined;
+      if (!dsn || !apiKey) {
+        return c.json(
+          { error: "No workspace settings credentials to migrate" },
+          400
+        );
+      }
+      await upsertServiceSecret(
+        "messaging-connector",
+        userId,
+        "Unipile Messaging Connector",
+        {
+          dsn,
+          apiKey,
+          ...(webhookSecret ? { webhookSecret } : {}),
+        }
+      );
+      return c.json({ ok: true }, 200);
     }
   );
 
