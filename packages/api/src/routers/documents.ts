@@ -35,7 +35,7 @@ import {
 import { requireUserId } from "../utils/user-scoped.js";
 import { randomUUID } from "crypto";
 import { auditLog } from "../utils/audit-log.js";
-import { emitSideEffects, getBoss } from "@synap/jobs";
+import { emitSideEffects, getBoss } from "@synap/events";
 
 // ============================================================================
 // SCHEMAS

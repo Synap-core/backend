@@ -29,7 +29,7 @@ import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
 import { markServiceCredentialError } from "../utils/credential-auto-repair.js";
-import { emitSideEffects } from "@synap/jobs";
+import { emitSideEffects } from "@synap/events";
 import { eventRepository } from "@synap/database";
 import { randomUUID as _captureUUID } from "crypto";
 

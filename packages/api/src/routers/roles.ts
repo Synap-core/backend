@@ -20,7 +20,7 @@ import {
 import { roles } from "@synap/database/schema";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
-import { emitSideEffects } from "@synap/jobs";
+import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
 
 export const rolesRouter = router({

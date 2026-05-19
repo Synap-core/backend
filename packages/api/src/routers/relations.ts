@@ -61,7 +61,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
-import { emitSideEffects } from "@synap/jobs";
+import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
 import {
   syncRelationToPropertyOnCreate,

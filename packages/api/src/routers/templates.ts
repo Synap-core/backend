@@ -25,7 +25,7 @@ import {
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { auditLog } from "../utils/audit-log.js";
-import { emitSideEffects } from "@synap/jobs";
+import { emitSideEffects } from "@synap/events";
 
 export const templatesRouter = router({
   // List templates (user's + workspace's)

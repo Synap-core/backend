@@ -15,7 +15,7 @@ import { documentsRouter as regularDocumentsRouter } from "../documents.js";
 import { createHubProtocolCallerContext } from "./utils.js";
 import { db, documents, normalizeDocumentType } from "@synap/database";
 import { auditLog } from "../../utils/audit-log.js";
-import { emitSideEffects } from "@synap/jobs";
+import { emitSideEffects } from "@synap/events";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
 

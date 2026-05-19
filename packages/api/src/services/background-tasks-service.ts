@@ -15,7 +15,7 @@
 import { randomUUID } from "crypto";
 import { type SQL } from "drizzle-orm";
 import { db, eq, and, desc, backgroundTasks } from "@synap/database";
-import { emitSideEffects } from "@synap/jobs";
+import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 
 import { auditLog } from "../utils/audit-log.js";

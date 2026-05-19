@@ -504,6 +504,8 @@ export class EventRepository {
       toDate?: Date;
       limit?: number;
       offset?: number;
+      /** Filter by the action verb (middle segment of type, e.g. "create", "update"). */
+      actions?: string[];
     } = {}
   ): Promise<EventRecord[]> {
     let query = "SELECT * FROM events WHERE 1=1";
@@ -553,6 +555,14 @@ export class EventRepository {
       query += ` AND correlation_id = $${paramIndex}`;
       params.push(filters.correlationId);
       paramIndex++;
+    }
+
+    if (filters.actions && filters.actions.length > 0) {
+      const placeholders = filters.actions
+        .map(() => `$${paramIndex++}`)
+        .join(", ");
+      query += ` AND split_part(type, '.', 2) IN (${placeholders})`;
+      params.push(...filters.actions);
     }
 
     if (filters.fromDate) {

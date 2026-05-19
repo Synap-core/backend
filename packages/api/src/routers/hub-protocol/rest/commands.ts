@@ -408,7 +408,7 @@ export function registerCommandsRoutes(app: HubHono): void {
     try {
       const { checkPermissionOrPropose } =
         await import("../../../utils/permission-check.js");
-      const { emitSideEffects } = await import("@synap/jobs");
+      const { emitSideEffects } = await import("@synap/events");
 
       // Permission check — goes through proposal system
       const permResult = await checkPermissionOrPropose({

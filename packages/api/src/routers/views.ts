@@ -47,7 +47,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { ViewEvents } from "../lib/event-helpers.js";
 import { auditLog } from "../utils/audit-log.js";
-import { emitSideEffects } from "@synap/jobs";
+import { emitSideEffects } from "@synap/events";
 import { verifyPermission, getWorkspaceMembership } from "@synap/database";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { randomUUID } from "crypto";

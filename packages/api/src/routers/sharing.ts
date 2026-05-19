@@ -19,7 +19,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { verifyPermission } from "@synap/database";
 import { auditLog } from "../utils/audit-log.js";
-import { emitSideEffects } from "@synap/jobs";
+import { emitSideEffects } from "@synap/events";
 import {
   generateShareToken,
   hashToken,

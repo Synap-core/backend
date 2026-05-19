@@ -125,6 +125,22 @@ export const OperationalEventTypes = {
     filterKeys: ["relationType"],
   },
 
+  // ── Documents ────────────────────────────────────────────────────────────
+  DOCUMENT_CREATED: {
+    type: "document.create.completed",
+    label: "Document created",
+    domain: "Documents",
+    description: "Fires after a document is created.",
+    filterKeys: ["profileSlug"],
+  },
+  DOCUMENT_UPDATED: {
+    type: "document.update.completed",
+    label: "Document updated",
+    domain: "Documents",
+    description: "Fires after a document is updated.",
+    filterKeys: ["profileSlug"],
+  },
+
   // ── Quick capture ────────────────────────────────────────────────────────
   CAPTURE_COMPLETE: {
     type: "capture.complete.completed",
@@ -132,6 +148,15 @@ export const OperationalEventTypes = {
     domain: "Capture",
     description: "A capture finished processing.",
     filterKeys: ["profileSlug"],
+  },
+
+  // ── Commands ─────────────────────────────────────────────────────────────
+  COMMAND_EXECUTED: {
+    type: "command.execute.completed",
+    label: "Command executed",
+    domain: "Commands",
+    description: "Fires after a command finishes execution.",
+    filterKeys: ["commandSlug"],
   },
 
   // ── Connector sync ───────────────────────────────────────────────────────
@@ -154,7 +179,7 @@ export const OperationalEventTypes = {
 
   // ── Notifications ────────────────────────────────────────────────────────
   NOTIFICATION_CREATED: {
-    type: "notification.created",
+    type: "notification.created.completed",
     label: "Notification created",
     domain: "Notifications",
     description: "A notification was raised.",

@@ -16,7 +16,8 @@ import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 import type { RequestShapedProposalData } from "@synap-core/types";
 import { isLikelyUUID } from "@synap-core/types/proposals";
-import { broadcastNotification, emitSideEffects } from "@synap/jobs";
+import { broadcastNotification } from "@synap/jobs";
+import { emitSideEffects } from "@synap/events";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
 

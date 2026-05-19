@@ -1391,10 +1391,12 @@ export const systemRouter = router({
   listAuditLogs: podAdminProcedure
     .input(
       z.object({
-        workspaceId: z.string().optional(),
-        userId: z.string().optional(),
-        subjectType: z.string().optional(),
-        action: z.string().optional(),
+        workspaceId: z.string().nullable().optional(),
+        userId: z.string().nullable().optional(),
+        subjectType: z.string().nullable().optional(),
+        // Accept both singular and plural for backward compat with older clients.
+        action: z.string().nullable().optional(),
+        actions: z.array(z.string()).optional(),
         fromDate: z.string().datetime().optional(),
         toDate: z.string().datetime().optional(),
         limit: z.number().min(1).max(200).default(50),
@@ -1403,6 +1405,19 @@ export const systemRouter = router({
     )
     .query(async ({ input }) => {
       const AUDIT_SUBJECT_TYPES = [
+        "entity",
+        "document",
+        "relation",
+        "capture",
+        "command",
+        "connector",
+        "notification",
+        "external_message",
+        "external_channel",
+        "messaging_account",
+        "feed_item",
+        "inbox_item",
+        "backgroundTask",
         "workspaces",
         "workspace_members",
         "api_keys",
@@ -1414,28 +1429,28 @@ export const systemRouter = router({
         "trusted_issuers",
       ];
 
+      // Merge singular action → actions array; coerce null → undefined.
+      const actions =
+        input.actions ?? (input.action ? [input.action] : undefined);
+
       const events = await eventRepository.searchEvents({
-        userId: input.userId,
-        subjectType: input.subjectType as unknown as undefined,
+        userId: input.userId ?? undefined,
+        subjectType: input.subjectType ?? undefined,
         subjectTypes: input.subjectType ? undefined : AUDIT_SUBJECT_TYPES,
-        workspaceId: input.workspaceId,
+        actions,
+        workspaceId: input.workspaceId ?? undefined,
         fromDate: input.fromDate ? new Date(input.fromDate) : undefined,
         toDate: input.toDate ? new Date(input.toDate) : undefined,
         limit: input.limit,
         offset: input.offset,
       });
 
-      // Filter by action client-side (event type format: "table.action.phase").
-      // Also restrict to phase=completed so we surface successful audit events.
+      // Restrict to phase=completed so we surface only successful audit events.
+      // Action filtering is now handled by searchEvents on the backend.
       const filtered = events.filter((ev) => {
         const parts = ev.eventType.split(".");
         const phase = parts[parts.length - 1];
-        if (phase !== "completed") return false;
-        if (input.action) {
-          const verb = parts[1];
-          if (verb !== input.action) return false;
-        }
-        return true;
+        return phase === "completed";
       });
 
       // Batch-resolve actor user info so the UI can show readable names.

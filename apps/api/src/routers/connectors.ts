@@ -21,7 +21,7 @@ import {
 } from "@synap/database";
 import { entityExternalLinks } from "@synap/database/schema";
 import { verifyCpJwtWithTrust } from "@synap/api";
-import { emitSideEffects } from "@synap/jobs";
+import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import crypto from "crypto";
 import { matchAttendeesToContacts } from "../services/connector-matching.js";

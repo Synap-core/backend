@@ -474,6 +474,48 @@ registerRouter("sourceConfigs", sourceConfigsRouter, {
   description: "External data source configurations",
 });
 
+import { notifCenterRouter } from "./routers/notif-center.js";
+registerRouter("notifCenter", notifCenterRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Notification center — user-wide list and mark-read",
+});
+
+import { agentsRouter } from "./routers/agents.js";
+registerRouter("agents", agentsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Agent registry and sync",
+});
+
+import { auditRouter } from "./routers/audit.js";
+registerRouter("audit", auditRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Audit log access",
+});
+
+import { devplaneRouter } from "./routers/devplane.js";
+registerRouter("devplane", devplaneRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Developer plane tooling",
+});
+
+import { feedsRouter } from "./routers/feeds.js";
+registerRouter("feeds", feedsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Activity feeds",
+});
+
+import { sourceSubscriptionsRouter } from "./routers/source-subscriptions.js";
+registerRouter("sourceSubscriptions", sourceSubscriptionsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "External data source subscriptions",
+});
+
 import { coreRouter } from "./root.js";
 import type { AppRouter } from "./root.js";
 export type { AppRouter };

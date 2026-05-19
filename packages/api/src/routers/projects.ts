@@ -22,7 +22,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
-import { emitSideEffects } from "@synap/jobs";
+import { emitSideEffects } from "@synap/events";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
 export const projectsRouter = router({

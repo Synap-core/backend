@@ -1396,23 +1396,217 @@ declare const SystemEventTypes: {
 };
 export type SystemEventType = (typeof SystemEventTypes)[keyof typeof SystemEventTypes];
 declare const OperationalEventTypes: {
-	readonly ENTITY_CREATED: "entity.create.completed";
-	readonly ENTITY_UPDATED: "entity.update.completed";
-	readonly ENTITY_DELETED: "entity.delete.completed";
-	readonly PROPOSAL_CREATED: "proposal.created.completed";
-	readonly PROPOSAL_APPROVED: "proposal.approved.completed";
-	readonly PROPOSAL_REJECTED: "proposal.rejected.completed";
-	readonly RELATION_CREATED: "relation.create.completed";
-	readonly RELATION_DELETED: "relation.delete.completed";
-	readonly CAPTURE_COMPLETE: "capture.complete.completed";
-	readonly CONNECTOR_SYNC_COMPLETE: "connector_sync.complete.completed";
-	readonly PROACTIVE_POST: "proactive.post.completed";
-	readonly NOTIFICATION_CREATED: "notification.created";
-	readonly CHANNEL_MESSAGE_CREATED: "channel_message.created.completed";
-	/** Fires once per entity created from the feed pipeline (post-classification, post-threshold). */
-	readonly FEED_NEW_ITEM: "feed.new_item.completed";
+	readonly ENTITY_CREATED: {
+		readonly type: "entity.create.completed";
+		readonly label: "Entity created";
+		readonly domain: "Entity";
+		readonly description: "Fires after any entity is successfully created.";
+		readonly filterKeys: [
+			"profileSlug"
+		];
+	};
+	readonly ENTITY_UPDATED: {
+		readonly type: "entity.update.completed";
+		readonly label: "Entity updated";
+		readonly domain: "Entity";
+		readonly description: "Fires after any entity field or property is updated.";
+		readonly filterKeys: [
+			"profileSlug",
+			"changedKeys",
+			"changed.<fieldName>",
+			"<fieldName>"
+		];
+	};
+	readonly ENTITY_DELETED: {
+		readonly type: "entity.delete.completed";
+		readonly label: "Entity deleted";
+		readonly domain: "Entity";
+		readonly description: "Fires after an entity is permanently deleted.";
+		readonly filterKeys: [
+			"profileSlug"
+		];
+	};
+	readonly PROPOSAL_CREATED: {
+		readonly type: "proposal.created.completed";
+		readonly label: "Proposal created";
+		readonly domain: "Proposals";
+		readonly description: "A new AI proposal is pending review.";
+		readonly filterKeys: [
+			"proposalStatus",
+			"targetType",
+			"changeType"
+		];
+	};
+	readonly PROPOSAL_APPROVED: {
+		readonly type: "proposal.approved.completed";
+		readonly label: "Proposal approved";
+		readonly domain: "Proposals";
+		readonly description: "An AI proposal was approved and applied.";
+		readonly filterKeys: [
+			"proposalStatus",
+			"targetType"
+		];
+	};
+	readonly PROPOSAL_REJECTED: {
+		readonly type: "proposal.rejected.completed";
+		readonly label: "Proposal rejected";
+		readonly domain: "Proposals";
+		readonly description: "An AI proposal was rejected.";
+		readonly filterKeys: [
+			"proposalStatus",
+			"targetType"
+		];
+	};
+	readonly RELATION_CREATED: {
+		readonly type: "relation.create.completed";
+		readonly label: "Relation created";
+		readonly domain: "Relations";
+		readonly description: "Two entities were linked.";
+		readonly filterKeys: [
+			"relationType"
+		];
+	};
+	readonly RELATION_DELETED: {
+		readonly type: "relation.delete.completed";
+		readonly label: "Relation deleted";
+		readonly domain: "Relations";
+		readonly description: "A relation between entities was removed.";
+		readonly filterKeys: [
+			"relationType"
+		];
+	};
+	readonly CAPTURE_COMPLETE: {
+		readonly type: "capture.complete.completed";
+		readonly label: "Capture completed";
+		readonly domain: "Capture";
+		readonly description: "A capture finished processing.";
+		readonly filterKeys: [
+			"profileSlug"
+		];
+	};
+	readonly CONNECTOR_SYNC_COMPLETE: {
+		readonly type: "connector_sync.complete.completed";
+		readonly label: "Connector synced";
+		readonly domain: "Connectors";
+		readonly description: "A connector finished a sync run.";
+		readonly filterKeys: [
+			"provider",
+			"syncStatus"
+		];
+	};
+	readonly PROACTIVE_POST: {
+		readonly type: "proactive.post.completed";
+		readonly label: "Proactive post";
+		readonly domain: "Intelligence";
+		readonly description: "The proactive AI posted a message into your channel.";
+		readonly filterKeys: [
+			"proactiveType"
+		];
+	};
+	readonly NOTIFICATION_CREATED: {
+		readonly type: "notification.created";
+		readonly label: "Notification created";
+		readonly domain: "Notifications";
+		readonly description: "A notification was raised.";
+		readonly filterKeys: [
+			"notificationType",
+			"category"
+		];
+	};
+	readonly CHANNEL_MESSAGE_CREATED: {
+		readonly type: "channel_message.created.completed";
+		readonly label: "Channel message created";
+		readonly domain: "Messaging";
+		readonly description: "A new message was posted into a Synap channel.";
+		readonly filterKeys: [
+			"channelId",
+			"messageRole"
+		];
+	};
+	readonly FEED_NEW_ITEM: {
+		readonly type: "feed.new_item.completed";
+		readonly label: "Feed new item";
+		readonly domain: "Feed";
+		readonly description: "A new item appeared in the intelligence feed.";
+		readonly filterKeys: [
+			"feedArchetype",
+			"feedMinRelevanceScore"
+		];
+	};
+	readonly EXTERNAL_MESSAGE_RECEIVED: {
+		readonly type: "external_message.received.completed";
+		readonly label: "External message received";
+		readonly domain: "Messaging";
+		readonly description: "An inbound message arrived on a connected external channel.";
+		readonly filterKeys: [
+			"provider",
+			"channelId"
+		];
+	};
+	readonly EXTERNAL_CHANNEL_CREATED: {
+		readonly type: "external_channel.created.completed";
+		readonly label: "External channel created";
+		readonly domain: "Messaging";
+		readonly description: "A new external conversation channel was auto-created.";
+		readonly filterKeys: [
+			"provider"
+		];
+	};
+	readonly MESSAGING_ACCOUNT_CREATED: {
+		readonly type: "messaging_account.created.completed";
+		readonly label: "Messaging account connected";
+		readonly domain: "Messaging";
+		readonly description: "A messaging account was connected.";
+		readonly filterKeys: [
+			"provider"
+		];
+	};
+	readonly MESSAGING_ACCOUNT_RECONNECTION_REQUIRED: {
+		readonly type: "messaging_account.reconnection_required.completed";
+		readonly label: "Messaging account needs reconnection";
+		readonly domain: "Messaging";
+		readonly description: "A messaging account requires reconnection.";
+		readonly filterKeys: [
+			"provider"
+		];
+	};
+	readonly MESSAGING_ACCOUNT_DISCONNECTED: {
+		readonly type: "messaging_account.disconnected.completed";
+		readonly label: "Messaging account disconnected";
+		readonly domain: "Messaging";
+		readonly description: "A messaging account was disconnected.";
+		readonly filterKeys: [
+			"provider"
+		];
+	};
+	readonly INBOX_ITEM_RECEIVED: {
+		readonly type: "inbox_item.received.completed";
+		readonly label: "Inbox item received";
+		readonly domain: "Inbox";
+		readonly description: "A new item arrived from an external integration.";
+		readonly filterKeys: [
+			"sourceType"
+		];
+	};
+	readonly INBOX_ITEM_ANALYZED: {
+		readonly type: "inbox_item.analyzed.completed";
+		readonly label: "Inbox item analyzed";
+		readonly domain: "Inbox";
+		readonly description: "An inbox item was analyzed by the intelligence service.";
+		readonly filterKeys: [
+			"sourceType"
+		];
+	};
+	readonly USER_UPDATED: {
+		readonly type: "user.updated.completed";
+		readonly label: "User updated";
+		readonly domain: "Identity";
+		readonly description: "A user identity was updated.";
+		readonly filterKeys: [
+		];
+	};
 };
-export type OperationalEventType = (typeof OperationalEventTypes)[keyof typeof OperationalEventTypes];
+export type OperationalEventType = (typeof OperationalEventTypes)[keyof typeof OperationalEventTypes]["type"];
 /**
  * All possible event type values
  */
@@ -1910,6 +2104,66 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileSlug?: string | undefined;
 				includeDescendants?: boolean | undefined;
 				globalOnly?: boolean | undefined;
+			};
+			output: {
+				items: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					type: string;
+					profileId: string | null;
+					title: string | null;
+					preview: string | null;
+					documentId: string | null;
+					properties: Record<string, unknown>;
+					fileUrl: string | null;
+					filePath: string | null;
+					fileSize: number | null;
+					fileType: string | null;
+					checksum: string | null;
+					version: number;
+					createdAt: Date;
+					updatedAt: Date;
+					deletedAt: Date | null;
+					systemData?: Record<string, unknown> | undefined;
+				}[];
+				pagination: {
+					hasMore: boolean;
+					total?: number;
+					limit: number;
+					offset: number;
+				};
+				entities: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					type: string;
+					profileId: string | null;
+					title: string | null;
+					preview: string | null;
+					documentId: string | null;
+					properties: Record<string, unknown>;
+					fileUrl: string | null;
+					filePath: string | null;
+					fileSize: number | null;
+					fileType: string | null;
+					checksum: string | null;
+					version: number;
+					createdAt: Date;
+					updatedAt: Date;
+					deletedAt: Date | null;
+					systemData?: Record<string, unknown> | undefined;
+				}[];
+				hasMore: boolean;
+			};
+			meta: object;
+		}>;
+		listAll: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				limit?: number | undefined;
+				offset?: number | undefined;
+				profileSlug?: string | undefined;
+				includeDescendants?: boolean | undefined;
 			};
 			output: {
 				items: {
@@ -10496,6 +10750,38 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				status?: "read" | "unread" | "dismissed" | "all" | undefined;
+				category?: "data" | "system" | "ai" | "governance" | "inbox" | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+			};
+			output: {
+				notifications: {
+					id: string;
+					workspaceId: string | null;
+					userId: string;
+					type: string;
+					category: "data" | "system" | "ai" | "governance" | "inbox";
+					priority: "normal" | "low" | "high" | "urgent";
+					title: string;
+					body: string;
+					icon: string | null;
+					sourceType: string;
+					sourceId: string | null;
+					workspaceUrl: string | null;
+					actions: unknown;
+					groupKey: string | null;
+					status: "read" | "unread" | "dismissed" | "actioned";
+					readAt: Date | null;
+					expiresAt: Date | null;
+					createdAt: Date;
+				}[];
+				total: number;
+			};
+			meta: object;
+		}>;
+		listAll: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				status?: "read" | "unread" | "dismissed" | "all" | undefined;
 				category?: "data" | "system" | "ai" | "governance" | "inbox" | undefined;

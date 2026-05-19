@@ -703,15 +703,7 @@ async function deliverToFeedInternal(
     .returning();
 
   // Note: Side effects should be emitted by the caller to avoid circular dependency
-  // The caller can use emitSideEffects from @synap/jobs if needed
-  // await emitSideEffects({
-  //   workspaceId: request.workspaceId,
-  //   userId: request.userId,
-  //   subjectType: "message",
-  //   action: "create",
-  //   subjectId: message.id,
-  //   data: { channelId: feedChannelId },
-  // });
+  // The caller can use emitSideEffects from @synap/events if needed
 
   return message.id;
 }
@@ -796,15 +788,7 @@ async function deliverToChatInternal(
     .returning();
 
   // Note: Side effects should be emitted by the caller to avoid circular dependency
-  // The caller can use emitSideEffects from @synap/jobs if needed
-  // await emitSideEffects({
-  //   workspaceId: request.workspaceId,
-  //   userId: request.userId,
-  //   subjectType: "message",
-  //   action: "create",
-  //   subjectId: message.id,
-  //   data: { channelId },
-  // });
+  // The caller can use emitSideEffects from @synap/events if needed
 
   return message.id;
 }
