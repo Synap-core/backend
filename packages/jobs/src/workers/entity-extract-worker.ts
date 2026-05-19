@@ -689,7 +689,7 @@ export async function handleEntityExtract(job: {
           await eventRepo.append({
             id: randomUUID(),
             version: "v1",
-            type: OperationalEventTypes.FEED_NEW_ITEM,
+            type: OperationalEventTypes.FEED_NEW_ITEM.type,
             subjectType: "feed",
             subjectId: entityId,
             userId,

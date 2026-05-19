@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "crypto";
 import { z } from "zod";
 import type {
   MessagingConnector,
@@ -379,7 +380,15 @@ export class UnipileConnector implements MessagingConnector {
         headers["unipile-auth"] ??
         headers["Unipile-Auth"] ??
         headers["x-unipile-auth"];
-      if (authHeader !== this.webhookSecret) return null;
+      if (
+        !authHeader ||
+        authHeader.length !== this.webhookSecret.length ||
+        !timingSafeEqual(
+          Buffer.from(authHeader),
+          Buffer.from(this.webhookSecret)
+        )
+      )
+        return null;
     }
     try {
       const payload = JSON.parse(

@@ -38,6 +38,18 @@ export type SystemEventType =
 // ============================================================================
 
 /**
+ * Metadata carried by every event catalog entry.
+ * Used by automation trigger pickers in the frontend.
+ */
+export interface EventDefinition {
+  type: string; // the dot-separated event type used in automation triggers
+  label: string; // human-readable name for pickers
+  domain: string; // grouping in the UI picker
+  description: string; // one-line description for picker tooltips
+  filterKeys?: string[]; // data keys callers may pass for trigger filtering
+}
+
+/**
  * Operational Event Types
  *
  * Events emitted by backend workers, cron jobs, and pipeline completions.
@@ -47,49 +59,207 @@ export type SystemEventType =
  */
 export const OperationalEventTypes = {
   // ── Entity lifecycle ─────────────────────────────────────────────────────
-  ENTITY_CREATED: "entity.create.completed",
-  ENTITY_UPDATED: "entity.update.completed",
-  ENTITY_DELETED: "entity.delete.completed",
+  ENTITY_CREATED: {
+    type: "entity.create.completed",
+    label: "Entity created",
+    domain: "Entity",
+    description: "Fires after any entity is successfully created.",
+    filterKeys: ["profileSlug"],
+  },
+  ENTITY_UPDATED: {
+    type: "entity.update.completed",
+    label: "Entity updated",
+    domain: "Entity",
+    description: "Fires after any entity field or property is updated.",
+    filterKeys: [
+      "profileSlug",
+      "changedKeys",
+      "changed.<fieldName>",
+      "<fieldName>",
+    ],
+  },
+  ENTITY_DELETED: {
+    type: "entity.delete.completed",
+    label: "Entity deleted",
+    domain: "Entity",
+    description: "Fires after an entity is permanently deleted.",
+    filterKeys: ["profileSlug"],
+  },
 
   // ── Proposal governance ──────────────────────────────────────────────────
-  PROPOSAL_CREATED: "proposal.created.completed",
-  PROPOSAL_APPROVED: "proposal.approved.completed",
-  PROPOSAL_REJECTED: "proposal.rejected.completed",
+  PROPOSAL_CREATED: {
+    type: "proposal.created.completed",
+    label: "Proposal created",
+    domain: "Proposals",
+    description: "A new AI proposal is pending review.",
+    filterKeys: ["proposalStatus", "targetType", "changeType"],
+  },
+  PROPOSAL_APPROVED: {
+    type: "proposal.approved.completed",
+    label: "Proposal approved",
+    domain: "Proposals",
+    description: "An AI proposal was approved and applied.",
+    filterKeys: ["proposalStatus", "targetType"],
+  },
+  PROPOSAL_REJECTED: {
+    type: "proposal.rejected.completed",
+    label: "Proposal rejected",
+    domain: "Proposals",
+    description: "An AI proposal was rejected.",
+    filterKeys: ["proposalStatus", "targetType"],
+  },
 
   // ── Relations ────────────────────────────────────────────────────────────
-  RELATION_CREATED: "relation.create.completed",
-  RELATION_DELETED: "relation.delete.completed",
+  RELATION_CREATED: {
+    type: "relation.create.completed",
+    label: "Relation created",
+    domain: "Relations",
+    description: "Two entities were linked.",
+    filterKeys: ["relationType"],
+  },
+  RELATION_DELETED: {
+    type: "relation.delete.completed",
+    label: "Relation deleted",
+    domain: "Relations",
+    description: "A relation between entities was removed.",
+    filterKeys: ["relationType"],
+  },
 
   // ── Quick capture ────────────────────────────────────────────────────────
-  CAPTURE_COMPLETE: "capture.complete.completed",
+  CAPTURE_COMPLETE: {
+    type: "capture.complete.completed",
+    label: "Capture completed",
+    domain: "Capture",
+    description: "A capture finished processing.",
+    filterKeys: ["profileSlug"],
+  },
 
   // ── Connector sync ───────────────────────────────────────────────────────
-  CONNECTOR_SYNC_COMPLETE: "connector_sync.complete.completed",
+  CONNECTOR_SYNC_COMPLETE: {
+    type: "connector_sync.complete.completed",
+    label: "Connector synced",
+    domain: "Connectors",
+    description: "A connector finished a sync run.",
+    filterKeys: ["provider", "syncStatus"],
+  },
 
   // ── Proactive intelligence ───────────────────────────────────────────────
-  PROACTIVE_POST: "proactive.post.completed",
+  PROACTIVE_POST: {
+    type: "proactive.post.completed",
+    label: "Proactive post",
+    domain: "Intelligence",
+    description: "The proactive AI posted a message into your channel.",
+    filterKeys: ["proactiveType"],
+  },
 
   // ── Notifications ────────────────────────────────────────────────────────
-  NOTIFICATION_CREATED: "notification.created",
+  NOTIFICATION_CREATED: {
+    type: "notification.created",
+    label: "Notification created",
+    domain: "Notifications",
+    description: "A notification was raised.",
+    filterKeys: ["notificationType", "category"],
+  },
 
   // ── Channel messages ─────────────────────────────────────────────────────
-  CHANNEL_MESSAGE_CREATED: "channel_message.created.completed",
+  CHANNEL_MESSAGE_CREATED: {
+    type: "channel_message.created.completed",
+    label: "Channel message created",
+    domain: "Messaging",
+    description: "A new message was posted into a Synap channel.",
+    filterKeys: ["channelId", "messageRole"],
+  },
 
   // ── Feed items ───────────────────────────────────────────────────────────
-  /** Fires once per entity created from the feed pipeline (post-classification, post-threshold). */
-  FEED_NEW_ITEM: "feed.new_item.completed",
+  FEED_NEW_ITEM: {
+    type: "feed.new_item.completed",
+    label: "Feed new item",
+    domain: "Feed",
+    description: "A new item appeared in the intelligence feed.",
+    filterKeys: ["feedArchetype", "feedMinRelevanceScore"],
+  },
 
   // ── External messaging ───────────────────────────────────────────────────
-  /**
-   * Fires when an inbound message arrives on an external conversation thread
-   * that is linked to a CRM entity via an EXTERNAL channel.
-   * data: { entityId, provider, threadId, participantName, messagePreview, channelId }
-   */
-  EXTERNAL_MESSAGE_RECEIVED: "external_message.received.completed",
-} as const;
+  EXTERNAL_MESSAGE_RECEIVED: {
+    type: "external_message.received.completed",
+    label: "External message received",
+    domain: "Messaging",
+    description: "An inbound message arrived on a connected external channel.",
+    filterKeys: ["provider", "channelId"],
+  },
+  EXTERNAL_CHANNEL_CREATED: {
+    type: "external_channel.created.completed",
+    label: "External channel created",
+    domain: "Messaging",
+    description: "A new external conversation channel was auto-created.",
+    filterKeys: ["provider"],
+  },
+  MESSAGING_ACCOUNT_CREATED: {
+    type: "messaging_account.created.completed",
+    label: "Messaging account connected",
+    domain: "Messaging",
+    description: "A messaging account was connected.",
+    filterKeys: ["provider"],
+  },
+  MESSAGING_ACCOUNT_RECONNECTION_REQUIRED: {
+    type: "messaging_account.reconnection_required.completed",
+    label: "Messaging account needs reconnection",
+    domain: "Messaging",
+    description: "A messaging account requires reconnection.",
+    filterKeys: ["provider"],
+  },
+  MESSAGING_ACCOUNT_DISCONNECTED: {
+    type: "messaging_account.disconnected.completed",
+    label: "Messaging account disconnected",
+    domain: "Messaging",
+    description: "A messaging account was disconnected.",
+    filterKeys: ["provider"],
+  },
+
+  // ── Inbox items ──────────────────────────────────────────────────────────
+  INBOX_ITEM_RECEIVED: {
+    type: "inbox_item.received.completed",
+    label: "Inbox item received",
+    domain: "Inbox",
+    description: "A new item arrived from an external integration.",
+    filterKeys: ["sourceType"],
+  },
+  INBOX_ITEM_ANALYZED: {
+    type: "inbox_item.analyzed.completed",
+    label: "Inbox item analyzed",
+    domain: "Inbox",
+    description: "An inbox item was analyzed by the intelligence service.",
+    filterKeys: ["sourceType"],
+  },
+
+  // ── User / identity ──────────────────────────────────────────────────────
+  USER_UPDATED: {
+    type: "user.updated.completed",
+    label: "User updated",
+    domain: "Identity",
+    description: "A user identity was updated.",
+    filterKeys: [],
+  },
+} as const satisfies Record<string, EventDefinition>;
 
 export type OperationalEventType =
-  (typeof OperationalEventTypes)[keyof typeof OperationalEventTypes];
+  (typeof OperationalEventTypes)[keyof typeof OperationalEventTypes]["type"];
+
+/**
+ * Convenience: get the type string from a catalog key.
+ */
+export function getEventType<K extends keyof typeof OperationalEventTypes>(
+  key: K
+): (typeof OperationalEventTypes)[K]["type"] {
+  return OperationalEventTypes[key].type;
+}
+
+/**
+ * Helper to get all picker-visible entries for frontend.
+ */
+export function getEventCatalog(): EventDefinition[] {
+  return Object.values(OperationalEventTypes) as EventDefinition[];
+}
 
 // ============================================================================
 // COMBINED EVENT TYPES
@@ -98,10 +268,14 @@ export type OperationalEventType =
 /**
  * EventTypes — all operational + system event type constants.
  * This is the complete set of strings that automation triggers can match.
+ * Each entry is the `.type` string for backwards-compatibility with callers
+ * that spread this object.
  */
 export const EventTypes = {
   ...SystemEventTypes,
-  ...OperationalEventTypes,
+  ...Object.fromEntries(
+    Object.entries(OperationalEventTypes).map(([k, v]) => [k, v.type])
+  ),
 } as const;
 
 /**
@@ -117,7 +291,15 @@ import { isGeneratedEventType } from "./generator.js";
  * Covers both OperationalEventTypes and GeneratedEventTypes (schema-level).
  */
 export function isValidEventType(eventType: string): boolean {
-  if (Object.values(EventTypes).includes(eventType as EventType)) return true;
+  const operationalTypes = Object.values(OperationalEventTypes).map(
+    (e) => e.type
+  );
+  if (
+    Object.values(SystemEventTypes).includes(eventType as SystemEventType) ||
+    operationalTypes.includes(eventType as OperationalEventType)
+  ) {
+    return true;
+  }
   return isGeneratedEventType(eventType);
 }
 
@@ -125,5 +307,11 @@ export function isValidEventType(eventType: string): boolean {
  * All operational + system event type strings as a readonly array.
  */
 export function getAllEventTypes(): readonly EventType[] {
-  return Object.values(EventTypes);
+  const operationalTypes = Object.values(OperationalEventTypes).map(
+    (e) => e.type as OperationalEventType
+  );
+  return [
+    ...(Object.values(SystemEventTypes) as SystemEventType[]),
+    ...operationalTypes,
+  ];
 }

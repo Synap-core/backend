@@ -7,9 +7,16 @@
  * webhooks. Identity seeding is handled synchronously by seed-admin.
  */
 
+import { timingSafeEqual } from "crypto";
 import { Hono } from "hono";
 import { syncUserFromKratos } from "@synap/api";
 import { createLogger } from "@synap-core/core";
+import { emitSideEffects } from "@synap/events";
+
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
 
 const logger = createLogger({ module: "kratos-webhook" });
 
@@ -25,21 +32,12 @@ kratosWebhookRouter.post("/", async (c) => {
     const secret = c.req.header("X-Webhook-Secret");
     const expectedSecret = process.env.KRATOS_WEBHOOK_SECRET;
 
-    console.log(
-      "[Webhook Debug] Received:",
-      secret ? `${secret.substring(0, 4)}...` : "undefined"
-    );
-    console.log(
-      "[Webhook Debug] Expected:",
-      expectedSecret ? `${expectedSecret.substring(0, 4)}...` : "undefined"
-    );
-
     if (!expectedSecret) {
       logger.error("KRATOS_WEBHOOK_SECRET not configured");
       return c.json({ error: "Webhook not configured" }, 500);
     }
 
-    if (secret !== expectedSecret) {
+    if (!secret || !safeCompare(secret, expectedSecret)) {
       logger.warn(
         {
           receivedLength: secret?.length,
@@ -64,6 +62,15 @@ kratosWebhookRouter.post("/", async (c) => {
 
       // Sync updated user data
       await syncUserFromKratos(identityId);
+
+      await emitSideEffects({
+        subjectType: "user",
+        action: "updated",
+        subjectId: identityId,
+        userId: identityId,
+      }).catch((err) =>
+        logger.warn({ err }, "emitSideEffects failed (non-fatal)")
+      );
 
       logger.info(
         { identityId },

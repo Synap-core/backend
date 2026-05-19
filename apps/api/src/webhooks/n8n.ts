@@ -5,10 +5,10 @@
  * Uses webhook secret authentication instead of user auth.
  */
 
+import { timingSafeEqual } from "crypto";
 import { Hono } from "hono";
 import { createLogger } from "@synap-core/core";
-import { createSynapEvent } from "@synap-core/core";
-import { eventRepository } from "@synap/database";
+import { emitSideEffects } from "@synap/events";
 import { z } from "zod";
 
 const logger = createLogger({ module: "n8n-webhooks" });
@@ -25,11 +25,12 @@ const webhookAuth = async (c: any, next: () => Promise<void>) => {
     return c.json({ error: "Webhook authentication not configured" }, 500);
   }
 
-  if (secret !== expectedSecret) {
-    logger.warn(
-      { receivedSecret: secret?.substring(0, 10) },
-      "Invalid webhook secret"
-    );
+  if (
+    !secret ||
+    secret.length !== expectedSecret.length ||
+    !timingSafeEqual(Buffer.from(secret), Buffer.from(expectedSecret))
+  ) {
+    logger.warn("Invalid webhook secret");
     return c.json({ error: "Unauthorized" }, 401);
   }
 
@@ -84,27 +85,25 @@ n8nWebhookRouter.post("/inbox", webhookAuth, async (c) => {
         const validated = InboxItemSchema.parse(item);
         const itemId = `inbox_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-        await eventRepository.append(
-          createSynapEvent({
-            type: "inbox.item.received",
-            subjectId: itemId,
-            subjectType: "inbox_item",
-            data: {
-              provider: validated.provider,
-              account: validated.account,
-              externalId: validated.externalId,
-              type: validated.type,
-              title: validated.title,
-              preview: validated.preview,
-              timestamp: validated.timestamp,
-              deepLink: validated.deepLink,
-              rawData: validated.data,
-              workspaceId,
-            },
-            userId,
-            source: "api",
-          })
-        );
+        // TODO: derive userId/workspaceId from a per-tenant DB-scoped secret instead of trusting headers
+        await emitSideEffects({
+          subjectType: "inbox_item",
+          action: "received",
+          subjectId: itemId,
+          userId,
+          workspaceId,
+          data: {
+            provider: validated.provider,
+            account: validated.account,
+            externalId: validated.externalId,
+            type: validated.type,
+            title: validated.title,
+            preview: validated.preview,
+            timestamp: validated.timestamp,
+            deepLink: validated.deepLink,
+            rawData: validated.data,
+          },
+        });
 
         results.published++;
       } catch (error: any) {

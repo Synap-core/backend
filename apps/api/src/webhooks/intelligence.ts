@@ -4,11 +4,17 @@
  * Handles callbacks from intelligence services (e.g., analysis results).
  */
 
+import { timingSafeEqual } from "crypto";
 import { Hono } from "hono";
 import { createLogger } from "@synap-core/core";
-import { createSynapEvent } from "@synap-core/core";
-import { db, inboxItems, eq, eventRepository } from "@synap/database";
+import { db, inboxItems, eq } from "@synap/database";
+import { emitSideEffects } from "@synap/events";
 import { z } from "zod";
+
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
 
 const logger = createLogger({ module: "intelligence-webhooks" });
 
@@ -36,6 +42,21 @@ const AnalysisCallbackSchema = z.object({
  * Called by intelligence services to return analysis results.
  */
 intelligenceWebhookRouter.post("/callback", async (c) => {
+  // Auth: Bearer token check
+  const expectedToken = process.env.INTELLIGENCE_SERVICE_API_KEY;
+  if (expectedToken) {
+    const authHeader = c.req.header("Authorization") ?? "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (!safeCompare(token, expectedToken)) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+  } else {
+    // TODO: INTELLIGENCE_SERVICE_API_KEY should be required in production
+    logger.warn(
+      "INTELLIGENCE_SERVICE_API_KEY not set — skipping auth (dev mode)"
+    );
+  }
+
   try {
     const body = await c.req.json();
     const { requestId, itemId, analysis } = AnalysisCallbackSchema.parse(body);
@@ -49,15 +70,14 @@ intelligenceWebhookRouter.post("/callback", async (c) => {
 
     const userId = inboxItem?.userId ?? "system";
 
-    await eventRepository.append(
-      createSynapEvent({
-        type: "inbox.item.analyzed",
-        subjectId: itemId,
-        subjectType: "inbox_item",
-        data: { requestId, analysis },
-        userId,
-        source: "intelligence",
-      })
+    await emitSideEffects({
+      subjectType: "inbox_item",
+      action: "analyzed",
+      subjectId: itemId,
+      userId,
+      data: { requestId, analysis },
+    }).catch((err) =>
+      logger.warn({ err }, "emitSideEffects failed (non-fatal)")
     );
 
     logger.info({ requestId, itemId }, "Intelligence callback processed");

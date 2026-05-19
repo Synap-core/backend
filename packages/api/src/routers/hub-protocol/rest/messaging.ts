@@ -163,8 +163,10 @@ export function registerMessagingRoutes(app: HubHono): void {
         const liveByExternalId = new Map(
           liveAccounts.map((a) => [a.externalId, a])
         );
+        // Unipile is the source of truth for live status.
+        // Merge live status first, then filter — so a DB-"disconnected" row
+        // that Unipile still has running gets revived rather than hidden.
         const result = dbAccounts
-          .filter((row: DbMessagingAccount) => row.status !== "disconnected")
           .map((row: DbMessagingAccount) => {
             const live = liveByExternalId.get(row.externalId);
             return {
@@ -177,7 +179,8 @@ export function registerMessagingRoutes(app: HubHono): void {
                 | "reconnection_required"
                 | "disconnected",
             };
-          });
+          })
+          .filter((row) => row.status !== "disconnected");
         return c.json(result, 200);
       } catch (err) {
         logger.error({ err, userId }, "GET /messaging/accounts failed");

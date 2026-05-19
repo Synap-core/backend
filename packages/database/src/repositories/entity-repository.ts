@@ -417,8 +417,9 @@ export class EntityRepository extends BaseRepository<
       where: and(eq(entities.id, id), eq(entities.userId, userId)),
     });
 
+    // Idempotent: entity already gone — treat as success
     if (!entity) {
-      throw new Error("Entity not found");
+      return;
     }
 
     // Cascade delete document if configured and exists
@@ -435,7 +436,7 @@ export class EntityRepository extends BaseRepository<
       .returning({ id: entities.id });
 
     if (result.length === 0) {
-      throw new Error("Entity not found");
+      return; // deleted between check and write — idempotent
     }
 
     // Emit completed event with metadata

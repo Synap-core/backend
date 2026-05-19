@@ -1140,19 +1140,11 @@ export const entitiesRouter = router({
         correlationId,
       });
 
-      emitSideEffects({
-        subjectType: "entity",
-        action: "update",
-        subjectId: input.id,
-        userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
-      });
-
-      // Dispatch webhooks for entity property updates (fire-and-forget, non-blocking)
+      // Compute changed properties before emit so automation triggers can filter on them
+      const changedProperties: Record<string, unknown> = {};
       if (input.properties && oldEntity) {
         const oldProps =
           (oldEntity.properties as Record<string, unknown>) ?? {};
-        const changedProperties: Record<string, unknown> = {};
         const mergedProps = { ...oldProps, ...input.properties };
         for (const key of new Set([
           ...Object.keys(oldProps),
@@ -1164,6 +1156,33 @@ export const entitiesRouter = router({
             changedProperties[key] = mergedProps[key];
           }
         }
+      }
+
+      emitSideEffects({
+        subjectType: "entity",
+        action: "update",
+        subjectId: input.id,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        data: {
+          profileSlug: input.profileSlug ?? oldEntity?.type ?? undefined,
+          ...(Object.keys(changedProperties).length > 0
+            ? {
+                changedKeys: Object.keys(changedProperties),
+                ...Object.fromEntries(
+                  Object.keys(changedProperties).map((k) => [
+                    `changed.${k}`,
+                    true,
+                  ])
+                ),
+                ...changedProperties,
+              }
+            : {}),
+        },
+      });
+
+      // Dispatch webhooks for entity property updates (fire-and-forget, non-blocking)
+      if (input.properties && oldEntity) {
         if (Object.keys(changedProperties).length > 0) {
           dispatchWebhooksForEvent("entity.update.completed", {
             entityId: input.id,
@@ -1287,6 +1306,13 @@ export const entitiesRouter = router({
         }
       }
 
+      // Snapshot profileSlug before deletion for automation trigger filtering
+      const [deletedEntityRow] = await database
+        .select({ type: entities.type })
+        .from(entities)
+        .where(eq(entities.id, input.id))
+        .limit(1);
+
       await entityRepo.delete(input.id, ctx.userId, {
         deleteDocument: userPref,
       });
@@ -1308,6 +1334,7 @@ export const entitiesRouter = router({
         subjectId: input.id,
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
+        data: { profileSlug: deletedEntityRow?.type ?? undefined },
       });
 
       return { status: "deleted", message: "Entity deleted" };

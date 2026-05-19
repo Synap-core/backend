@@ -6,10 +6,10 @@ import {
   db,
   eq,
   and,
-  messagingAccounts,
   workspaces,
   channels,
   messages,
+  messagingAccounts,
   ChannelType,
   ChannelScope,
   MessageRole,
@@ -18,6 +18,7 @@ import {
 } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { getMessagingConnector } from "../connectors/index.js";
+import { MessagingAccountService } from "../services/messaging-account-service.js";
 
 const logger = createLogger({ module: "webhooks-inbound" });
 
@@ -81,7 +82,7 @@ webhooksInboundRouter.post("/messaging", async (c) => {
           eq(channels.externalSource as any, event.provider),
           eq(channels.externalId as any, event.threadId)
         ),
-        columns: { id: true, metadata: true },
+        columns: { id: true, metadata: true, contextObjectId: true },
       });
 
       if (existingChannel) {
@@ -186,27 +187,13 @@ webhooksInboundRouter.post("/messaging", async (c) => {
           (a) => a.externalId === event.accountExternalId
         );
         if (account) {
-          await db
-            .insert(messagingAccounts)
-            .values({
-              userId: event.userId,
-              provider: account.provider,
-              externalId: account.externalId,
-              displayName: account.displayName,
-              status: account.status,
-            })
-            .onConflictDoUpdate({
-              target: [
-                messagingAccounts.userId,
-                messagingAccounts.provider,
-                messagingAccounts.externalId,
-              ],
-              set: {
-                displayName: account.displayName,
-                status: account.status,
-                updatedAt: new Date(),
-              },
-            });
+          await MessagingAccountService.upsert({
+            userId: event.userId,
+            provider: account.provider,
+            externalId: account.externalId,
+            displayName: account.displayName,
+            status: account.status,
+          });
           logger.info(
             {
               userId: event.userId,
@@ -218,29 +205,23 @@ webhooksInboundRouter.post("/messaging", async (c) => {
         }
       }
     } else if (event.type === "account.reconnection_required") {
-      await db
-        .update(messagingAccounts)
-        .set({ status: "reconnection_required", updatedAt: new Date() })
-        .where(
-          and(
-            eq(messagingAccounts.externalId, event.accountExternalId),
-            eq(messagingAccounts.provider, event.provider)
-          )
-        );
+      await MessagingAccountService.updateStatus(
+        event.accountExternalId,
+        event.provider,
+        "reconnection_required",
+        event.accountExternalId
+      );
       logger.info(
         { externalId: event.accountExternalId },
         "Account reconnection required"
       );
     } else if (event.type === "account.disconnected") {
-      await db
-        .update(messagingAccounts)
-        .set({ status: "disconnected", updatedAt: new Date() })
-        .where(
-          and(
-            eq(messagingAccounts.externalId, event.accountExternalId),
-            eq(messagingAccounts.provider, event.provider)
-          )
-        );
+      await MessagingAccountService.updateStatus(
+        event.accountExternalId,
+        event.provider,
+        "disconnected",
+        event.accountExternalId
+      );
       logger.info(
         { externalId: event.accountExternalId },
         "Account disconnected"

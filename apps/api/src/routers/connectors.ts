@@ -474,7 +474,10 @@ connectorsRouter.post("/nango-webhook", async (c) => {
     .update(rawBody)
     .digest("hex")}`;
 
-  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+  if (
+    Buffer.byteLength(signature) !== Buffer.byteLength(expected) ||
+    !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+  ) {
     logger.warn({ signature }, "nango-webhook: invalid HMAC signature");
     return c.json({ error: "Invalid signature" }, 401);
   }

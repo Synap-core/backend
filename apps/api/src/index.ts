@@ -934,12 +934,19 @@ app.route("/api/provision", provisionRouter);
 import { connectorsRouter as connectorsRestRouter } from "./routers/connectors.js";
 app.route("/api/connectors", connectorsRestRouter);
 
-// Inbound webhooks from third-party providers (e.g. Unipile messaging events)
+// Unified inbound webhook surface — all third-party providers under /api/webhooks/*
+// Auth is per-provider (HMAC, Bearer token, or static secret — handled inside each router).
+// /api/webhooks/messaging  → Unipile (messaging events)
+// /api/webhooks/n8n        → N8N inbox ingestion
+// /api/webhooks/kratos     → Ory Kratos identity updates
+// /api/webhooks/intelligence → IS analysis callbacks
+import { n8nWebhookRouter } from "./webhooks/n8n.js";
+import { kratosWebhookRouter } from "./webhooks/kratos.js";
+import { intelligenceWebhookRouter } from "./webhooks/intelligence.js";
 app.route("/api/webhooks", webhooksInboundRouter);
-
-// Webhook routes (before auth - uses webhook secret auth)
-import { webhookRouter } from "./webhooks/index.js";
-app.route("/webhooks", webhookRouter);
+app.route("/api/webhooks/n8n", n8nWebhookRouter);
+app.route("/api/webhooks/kratos", kratosWebhookRouter);
+app.route("/api/webhooks/intelligence", intelligenceWebhookRouter);
 
 // Pod-to-Pod Sync receive endpoint (Bearer token auth from registered peers)
 import { syncReceiveApp } from "@synap/api";

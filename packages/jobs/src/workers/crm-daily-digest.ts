@@ -17,7 +17,7 @@
 
 import type PgBoss from "pg-boss";
 import { randomUUID, createHash } from "node:crypto";
-import { db, eq, and, lt, ne } from "@synap/database";
+import { db, eq, and } from "@synap/database";
 import {
   channels,
   messages,
@@ -255,28 +255,31 @@ export async function handleCrmDailyDigest(_job: PgBoss.Job): Promise<void> {
       if (!content) continue; // Nothing to report for this user
 
       const channelId = await resolvePersonalChannelId(userId);
-      const messageId = randomUUID();
+      const tempId = randomUUID();
       const hash = createHash("sha256")
-        .update(`${messageId}${content}`)
+        .update(`${tempId}${content}`)
         .digest("hex");
 
-      await db.insert(messages).values({
-        id: messageId,
-        channelId,
-        role: MessageRole.ASSISTANT,
-        authorType: MessageAuthorType.AGENT,
-        category: MessageCategory.PROACTIVE,
-        content,
-        contentHash: hash,
-        metadata: {
-          agentType: "orchestrator",
-          source: "crm-daily-digest",
-          unreadCount: unreadThreads.length,
-          overdueCount: overdueFollowUps.length,
-        },
-      });
+      const [inserted] = await db
+        .insert(messages)
+        .values({
+          channelId,
+          userId,
+          role: MessageRole.ASSISTANT,
+          authorType: MessageAuthorType.AI_AGENT,
+          messageCategory: MessageCategory.SYSTEM_NOTIFICATION,
+          content,
+          hash,
+          metadata: {
+            agentType: "orchestrator",
+            source: "crm-daily-digest",
+            unreadCount: unreadThreads.length,
+            overdueCount: overdueFollowUps.length,
+          } as any,
+        })
+        .returning({ id: messages.id });
 
-      broadcastMessageCreated({ channelId, messageId, userId });
+      broadcastMessageCreated({ channelId, messageId: inserted.id, userId });
 
       logger.info(
         {

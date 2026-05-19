@@ -30,6 +30,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
+import { emitSideEffects } from "@synap/events";
 import { getNotificationDef } from "./registry.js";
 import type {
   NotificationCategory,
@@ -223,6 +224,20 @@ export const NotificationService = {
           timestamp: new Date(),
         })
         .catch(() => {}); // non-blocking, non-fatal
+
+      // Trigger automation side-effects for notification.created event type
+      emitSideEffects({
+        subjectType: "notification",
+        action: "created",
+        subjectId: row.id,
+        userId: input.userId,
+        workspaceId: input.workspaceId ?? undefined,
+        data: {
+          notificationId: row.id,
+          notificationType: input.type,
+          category: def.category,
+        },
+      }).catch(() => {}); // non-blocking, non-fatal
 
       // Emit real-time event to all workspace members
       const payload: NotificationPayload = {
