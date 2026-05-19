@@ -2201,6 +2201,57 @@ export const channelsRouter = router({
     }),
 
   /**
+   * Get or create a personal AI thread for an agent identified by type/slug.
+   * Auto-bootstraps a stub agent record when none exists — IS sync will enrich it later.
+   * Use this instead of getOrCreateAgentThread when you have an agentType string (e.g. from
+   * the IS manifest) rather than a DB UUID.
+   */
+  getOrCreateAgentThreadByType: workspaceProcedure
+    .input(z.object({ agentType: z.string().min(1).max(100) }))
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.userId!;
+
+      // Find existing stub (intelligenceServiceId IS NULL = Synap IS placeholder).
+      // NULLs are non-equal in Postgres unique indexes so we check explicitly.
+      let agentRow = await db.query.agents.findFirst({
+        where: and(
+          eq(agents.slug, input.agentType),
+          eq(agents.active, true),
+          isNull(agents.intelligenceServiceId)
+        ),
+        columns: { id: true },
+      });
+
+      if (!agentRow) {
+        const [created] = await db
+          .insert(agents)
+          .values({
+            slug: input.agentType,
+            name: input.agentType, // IS sync will overwrite with manifest display name
+            ownerType: "synap",
+            active: true,
+            capabilities: [],
+          })
+          .returning({ id: agents.id });
+        agentRow = created;
+      }
+
+      if (!agentRow) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to resolve agent stub",
+        });
+      }
+
+      const channel = await resolveOrCreateChannel({
+        userId,
+        channelType: ChannelType.PERSONAL,
+        agentId: agentRow.id,
+      });
+      return { channel };
+    }),
+
+  /**
    * Get or create the workspace-wide group thread.
    * One per (userId, workspaceId). Agents can be @mentioned; no assigned agent by default.
    */
