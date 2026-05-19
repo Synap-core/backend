@@ -5,7 +5,7 @@ import { ApifyProvider } from "./ApifyProvider.js";
 import { ApolloProvider } from "./ApolloProvider.js";
 import { UnipileConnector } from "./UnipileConnector.js";
 import type { MessagingConnector } from "./MessagingConnector.js";
-import { db } from "@synap/database";
+import { db, getServiceSecret } from "@synap/database";
 
 syncConnectorRegistry.register(new NangoConnector());
 enrichmentProviderRegistry.register(new ApifyProvider());
@@ -13,15 +13,32 @@ enrichmentProviderRegistry.register(new ApolloProvider());
 
 /**
  * Returns a configured MessagingConnector, reading credentials from:
- * 1. workspace.settings.messaging (set via Settings UI)
- * 2. UNIPILE_* env vars (fallback for server-managed deployments)
- * Returns null when neither source is configured.
+ * 1. Vault (server-encrypted secret with serviceId='messaging-connector')
+ * 2. workspace.settings.messaging (set via Settings UI)
+ * 3. UNIPILE_* env vars (fallback for server-managed deployments)
+ * Returns null when no source is configured.
  */
 export async function getMessagingConnector(): Promise<MessagingConnector | null> {
   try {
     const ws = await db.query.workspaces.findFirst({
-      columns: { settings: true },
+      columns: { settings: true, ownerId: true },
     });
+
+    if (ws?.ownerId) {
+      const vaultCfg = await getServiceSecret(
+        "messaging-connector",
+        ws.ownerId
+      );
+      if (vaultCfg?.dsn && vaultCfg?.apiKey) {
+        return new UnipileConnector({
+          dsn: vaultCfg.dsn,
+          apiKey: vaultCfg.apiKey,
+          webhookSecret: vaultCfg.webhookSecret,
+        });
+      }
+    }
+
+    // Fall back to workspace.settings.messaging
     const cfg = ((ws?.settings as Record<string, unknown>)?.messaging ??
       {}) as Record<string, unknown>;
     const dsn =

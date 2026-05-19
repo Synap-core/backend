@@ -46,7 +46,7 @@ import {
   encryptConfig,
   decryptConfig,
   isServerVaultAvailable,
-} from "../utils/server-vault.js";
+} from "@synap/database";
 
 const logger = createLogger({ module: "intelligence-registry" });
 

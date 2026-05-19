@@ -18,7 +18,7 @@ import {
   router,
 } from "../trpc.js";
 import { EventTypeSchemas } from "@synap-core/core";
-import { getAllEventTypes, getBoss } from "@synap/events";
+import { getAllEventTypes, getBoss, getEventCatalog } from "@synap/events";
 import { getAllGeneratedEventTypes, parseEventType } from "@synap/events";
 import { testConnection } from "@synap/search";
 import { dynamicToolRegistry } from "@synap/ai";
@@ -1517,6 +1517,10 @@ export const systemRouter = router({
         availableSubjectTypes: AUDIT_SUBJECT_TYPES,
       };
     }),
+
+  listEventCatalog: protectedProcedure.query(() => {
+    return getEventCatalog();
+  }),
 
   /**
    * Hard-delete a user and cascade their pod-side artifacts.

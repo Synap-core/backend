@@ -656,6 +656,123 @@ export const intelligenceRouter = router({
     return { agents: rows };
   }),
 
+  /**
+   * listAllAgents
+   *
+   * Returns the unified agent roster across all connected IS instances.
+   * Primary IS manifest is fetched live; custom IS manifests come from the 1h DB cache.
+   * Each entry includes the originating serviceId and serviceName so the UI can group
+   * or label agents by their source IS.
+   */
+  listAllAgents: workspaceProcedure.query(async ({ ctx }) => {
+    const userId = requireUserId(ctx.userId);
+    const workspaceId = ctx.workspaceId!;
+
+    type AgentEntry = {
+      id: string;
+      label: string;
+      description?: string;
+      isDefault: boolean;
+      isInternal: boolean;
+      toolCount: number;
+      serviceId: string;
+      serviceName: string;
+      isSynapIS: boolean;
+    };
+
+    const seen = new Map<
+      string,
+      { displayName: string; isSynap: boolean; specialisations: AgentEntry[] }
+    >();
+
+    // 1. Primary IS (workspace-resolved): fetch live manifest
+    try {
+      const { serviceId, endpoint, serviceApiKey } =
+        await resolveIntelligenceService({ userId, workspaceId });
+      const isSynap = serviceId === "default";
+      const res = await fetch(`${endpoint}/api/manifest`, {
+        headers: { Authorization: `Bearer ${serviceApiKey}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.ok) {
+        const manifest = (await res.json()) as {
+          specialisations?: Array<{
+            id: string;
+            label: string;
+            description?: string;
+            isDefault?: boolean;
+            isInternal?: boolean;
+            toolCount?: number;
+          }>;
+          displayName?: string;
+        };
+        const name =
+          manifest.displayName ?? (isSynap ? "Synap Agent" : serviceId);
+        seen.set(serviceId, {
+          displayName: name,
+          isSynap,
+          specialisations: (manifest.specialisations ?? []).map((s) => ({
+            id: s.id,
+            label: s.label,
+            description: s.description,
+            isDefault: s.isDefault ?? false,
+            isInternal: s.isInternal ?? false,
+            toolCount: s.toolCount ?? 0,
+            serviceId,
+            serviceName: name,
+            isSynapIS: isSynap,
+          })),
+        });
+      }
+    } catch {
+      // primary IS unreachable — continue with custom IS cached data
+    }
+
+    // 2. All registered custom IS: use cached manifests from DB (skip already-loaded)
+    try {
+      const customServices = await db.query.intelligenceServices.findMany({
+        columns: { serviceId: true, name: true, metadata: true },
+      });
+      for (const svc of customServices) {
+        if (seen.has(svc.serviceId)) continue;
+        const meta = (svc.metadata ?? {}) as Record<string, unknown>;
+        const manifest = meta.agentManifest as
+          | {
+              specialisations?: Array<{
+                id: string;
+                label: string;
+                description?: string;
+                isDefault?: boolean;
+                isInternal?: boolean;
+                toolCount?: number;
+              }>;
+            }
+          | null
+          | undefined;
+        if (!manifest) continue;
+        seen.set(svc.serviceId, {
+          displayName: svc.name,
+          isSynap: false,
+          specialisations: (manifest.specialisations ?? []).map((s) => ({
+            id: s.id,
+            label: s.label,
+            description: s.description,
+            isDefault: s.isDefault ?? false,
+            isInternal: s.isInternal ?? false,
+            toolCount: s.toolCount ?? 0,
+            serviceId: svc.serviceId,
+            serviceName: svc.name,
+            isSynapIS: false,
+          })),
+        });
+      }
+    } catch {
+      // DB error — return whatever we fetched live
+    }
+
+    return { agents: [...seen.values()].flatMap((m) => m.specialisations) };
+  }),
+
   // ── Memory Proxy ─────────────────────────────────────────────────────────
 
   /** List memory facts for current user */

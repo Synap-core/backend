@@ -25,7 +25,7 @@ import {
   parseVaultReference,
   resolveVaultSecret,
 } from "../utils/vault-resolver.js";
-import { encryptServerSide } from "../utils/server-vault.js";
+import { encryptServerSide } from "@synap/database";
 
 // ─── Shared types ─────────────────────────────────────────────────────────────
 

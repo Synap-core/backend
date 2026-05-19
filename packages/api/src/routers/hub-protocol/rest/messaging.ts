@@ -32,6 +32,7 @@ import {
 } from "@synap/database";
 import type { MessagingAccount as DbMessagingAccount } from "@synap/database";
 
+import { getServiceSecret, upsertServiceSecret } from "@synap/database";
 import { getMessagingConnector } from "../../../connectors/index.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { logger, type HubHono } from "./_shared.js";
@@ -327,6 +328,106 @@ export function registerMessagingRoutes(app: HubHono): void {
           500
         );
       }
+    }
+  );
+
+  // ── GET /messaging/service-config ─────────────────────────────────────────
+  // Returns the resolved Unipile connector config (masked for display).
+  // Used by the CRM Channels settings to show current config state.
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/messaging/service-config",
+      tags: ["Messaging"],
+      summary: "Get current messaging connector config state (masked)",
+      responses: {
+        200: {
+          description: "Config state",
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  configured: z.boolean(),
+                  dsn: z.string().nullable().optional(),
+                  hasApiKey: z.boolean().optional(),
+                  hasWebhookSecret: z.boolean().optional(),
+                })
+                .openapi("MessagingServiceConfig"),
+            },
+          },
+        },
+      },
+    }),
+    async (c) => {
+      const userId = c.get("userId") as string;
+      const cfg = await getServiceSecret("messaging-connector", userId);
+      if (!cfg) return c.json({ configured: false }, 200);
+      return c.json(
+        {
+          configured: true,
+          dsn: cfg.dsn ? new URL(cfg.dsn).hostname : null,
+          hasApiKey: !!cfg.apiKey,
+          hasWebhookSecret: !!cfg.webhookSecret,
+        },
+        200
+      );
+    }
+  );
+
+  // ── POST /messaging/service-config ────────────────────────────────────────
+  // Stores Unipile connector credentials in the vault (server-encrypted).
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/messaging/service-config",
+      tags: ["Messaging"],
+      summary: "Store Unipile connector credentials in the vault",
+      request: {
+        body: {
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  dsn: z.string(),
+                  apiKey: z.string(),
+                  webhookSecret: z.string().optional(),
+                })
+                .openapi("MessagingServiceConfigInput"),
+            },
+          },
+        },
+      },
+      responses: {
+        200: {
+          description: "Stored successfully",
+          content: {
+            "application/json": {
+              schema: z
+                .object({ ok: z.boolean() })
+                .openapi("MessagingServiceConfigResult"),
+            },
+          },
+        },
+        400: {
+          description: "Missing required fields",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+      },
+    }),
+    async (c) => {
+      const userId = c.get("userId") as string;
+      const { dsn, apiKey, webhookSecret } = c.req.valid("json");
+      await upsertServiceSecret(
+        "messaging-connector",
+        userId,
+        "Unipile Messaging Connector",
+        {
+          dsn,
+          apiKey,
+          ...(webhookSecret ? { webhookSecret } : {}),
+        }
+      );
+      return c.json({ ok: true }, 200);
     }
   );
 

@@ -37,6 +37,26 @@ export * from "./errors/index.js";
 // Utilities
 export * from "./utils/preferences.js";
 
+// Server-side vault encryption
+export {
+  encryptServerSide,
+  decryptServerSide,
+  encryptConfig,
+  decryptConfig,
+  isServerVaultAvailable,
+  type ServerEncryptedBlob,
+} from "./utils/server-vault.js";
+
+// Vault reference resolver
+export {
+  isVaultReference,
+  parseVaultReference,
+  resolveVaultSecret,
+  resolveVaultReferences,
+  getServiceSecret,
+  upsertServiceSecret,
+} from "./utils/vault-resolver.js";
+
 // Schema coherence tripwire — pod-startup guard against schema drift
 export {
   validateSchemaCoherence,

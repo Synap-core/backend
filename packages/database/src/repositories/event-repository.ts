@@ -567,13 +567,13 @@ export class EventRepository {
 
     if (filters.fromDate) {
       query += ` AND timestamp >= $${paramIndex}`;
-      params.push(filters.fromDate);
+      params.push(filters.fromDate.toISOString());
       paramIndex++;
     }
 
     if (filters.toDate) {
       query += ` AND timestamp <= $${paramIndex}`;
-      params.push(filters.toDate);
+      params.push(filters.toDate.toISOString());
       paramIndex++;
     }
 
@@ -638,13 +638,13 @@ export class EventRepository {
 
     if (filters.fromDate) {
       query += ` AND timestamp >= $${paramIndex}`;
-      params.push(filters.fromDate);
+      params.push(filters.fromDate.toISOString());
       paramIndex++;
     }
 
     if (filters.toDate) {
       query += ` AND timestamp <= $${paramIndex}`;
-      params.push(filters.toDate);
+      params.push(filters.toDate.toISOString());
       paramIndex++;
     }
 

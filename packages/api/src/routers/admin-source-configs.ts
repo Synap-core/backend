@@ -28,10 +28,7 @@ import { createLogger, config } from "@synap-core/core";
 import { db, drizzleSql, inArray } from "@synap/database";
 import { sourceConfigs, secrets } from "@synap/database";
 import { verifyCpJwt } from "../utils/jwks-client.js";
-import {
-  encryptServerSide,
-  isServerVaultAvailable,
-} from "../utils/server-vault.js";
+import { encryptServerSide, isServerVaultAvailable } from "@synap/database";
 import { sourceProviderRegistry } from "@synap/feed-service";
 
 const logger = createLogger({ module: "admin-source-configs" });

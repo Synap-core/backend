@@ -1475,6 +1475,24 @@ declare const OperationalEventTypes: {
 			"relationType"
 		];
 	};
+	readonly DOCUMENT_CREATED: {
+		readonly type: "document.create.completed";
+		readonly label: "Document created";
+		readonly domain: "Documents";
+		readonly description: "Fires after a document is created.";
+		readonly filterKeys: [
+			"profileSlug"
+		];
+	};
+	readonly DOCUMENT_UPDATED: {
+		readonly type: "document.update.completed";
+		readonly label: "Document updated";
+		readonly domain: "Documents";
+		readonly description: "Fires after a document is updated.";
+		readonly filterKeys: [
+			"profileSlug"
+		];
+	};
 	readonly CAPTURE_COMPLETE: {
 		readonly type: "capture.complete.completed";
 		readonly label: "Capture completed";
@@ -1482,6 +1500,15 @@ declare const OperationalEventTypes: {
 		readonly description: "A capture finished processing.";
 		readonly filterKeys: [
 			"profileSlug"
+		];
+	};
+	readonly COMMAND_EXECUTED: {
+		readonly type: "command.execute.completed";
+		readonly label: "Command executed";
+		readonly domain: "Commands";
+		readonly description: "Fires after a command finishes execution.";
+		readonly filterKeys: [
+			"commandSlug"
 		];
 	};
 	readonly CONNECTOR_SYNC_COMPLETE: {
@@ -1504,7 +1531,7 @@ declare const OperationalEventTypes: {
 		];
 	};
 	readonly NOTIFICATION_CREATED: {
-		readonly type: "notification.created";
+		readonly type: "notification.created.completed";
 		readonly label: "Notification created";
 		readonly domain: "Notifications";
 		readonly description: "A notification was raised.";
@@ -3979,10 +4006,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		listAuditLogs: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				workspaceId?: string | undefined;
-				userId?: string | undefined;
-				subjectType?: string | undefined;
-				action?: string | undefined;
+				workspaceId?: string | null | undefined;
+				userId?: string | null | undefined;
+				subjectType?: string | null | undefined;
+				action?: string | null | undefined;
+				actions?: string[] | undefined;
 				fromDate?: string | undefined;
 				toDate?: string | undefined;
 				limit?: number | undefined;

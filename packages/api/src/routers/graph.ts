@@ -11,9 +11,10 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, protectedProcedure } from "../trpc.js";
-import { db, eq, and, or, inArray, desc } from "@synap/database";
+import { router, protectedProcedure, podProcedure } from "../trpc.js";
+import { db, eq, and, or, inArray, isNull, desc } from "@synap/database";
 import { entities, relations } from "@synap/database/schema";
+import { userVisibleWhere } from "../utils/user-visible-where.js";
 
 /**
  * Get a single node with full graph context
@@ -191,6 +192,53 @@ export const graphRouter = router({
         entities: fetchedEntities,
         relations: fetchedRelations,
       };
+    }),
+
+  /**
+   * Fetch all entities + relations in one query — no ID list required.
+   * Replaces the entities.list → getSubgraph two-step for full-graph views.
+   */
+  getFull: podProcedure
+    .input(
+      z.object({
+        profileSlug: z.string().optional(),
+        limit: z.number().int().min(1).max(2000).default(500),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const entityRows = await db.query.entities.findMany({
+        where: and(
+          userVisibleWhere(entities.workspaceId, ctx.userId),
+          isNull(entities.deletedAt),
+          input.profileSlug ? eq(entities.type, input.profileSlug) : undefined
+        ),
+        columns: {
+          id: true,
+          type: true,
+          title: true,
+          preview: true,
+          workspaceId: true,
+        },
+        limit: input.limit,
+        orderBy: [desc(entities.updatedAt)],
+      });
+
+      if (entityRows.length === 0) {
+        return { entities: [], relations: [] };
+      }
+
+      const ids = entityRows.map((e) => e.id);
+      const relationRows = await db.query.relations.findMany({
+        where: and(
+          eq(relations.userId, ctx.userId),
+          or(
+            inArray(relations.sourceEntityId, ids),
+            inArray(relations.targetEntityId, ids)
+          )
+        ),
+      });
+
+      return { entities: entityRows, relations: relationRows };
     }),
 
   /**
