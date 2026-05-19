@@ -544,9 +544,9 @@ export const entitiesRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const userCondition = eq(entities.userId, ctx.userId);
-
-      const conditions: any[] = [userCondition, isNull(entities.deletedAt)];
+      // Visibility is gated by workspace membership (workspaceProcedure).
+      // userId is attribution only — all workspace members see all workspace entities.
+      const conditions: any[] = [isNull(entities.deletedAt)];
 
       if (input.profileSlug) {
         // Resolve profile slugs to query (optionally including child profiles)
@@ -576,8 +576,7 @@ export const entitiesRouter = router({
         );
 
         if (entityScope === "pod") {
-          // Pod-wide: show all entities of this type regardless of workspace
-          // (userCondition already ensures ownership — no workspaceId filter needed)
+          // Pod-wide: no workspace filter — visible to all workspace members.
         } else {
           // Workspace-scoped: this workspace + global entities.
           // Workspace-less callers (hydration) see pod-wide only.

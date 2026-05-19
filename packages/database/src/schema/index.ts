@@ -151,4 +151,3 @@ export * from "./feeds.js";
 
 // NEW: Messaging Accounts (provider-agnostic connected messaging accounts)
 export * from "./messaging-accounts.js";
-export * from "./messaging-thread-links.js";
