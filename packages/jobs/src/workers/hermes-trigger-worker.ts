@@ -37,14 +37,6 @@ const PHASE_TIMEOUTS_MS: Record<AgentPhase, number> = {
   debugging: 45 * 60 * 1000,
 };
 
-const DISPATCHABLE_PHASES: AgentPhase[] = [
-  "gathering_context",
-  "planning",
-  "executing",
-  "verifying",
-  "debugging",
-];
-
 function buildSystemPrompt(
   phase: AgentPhase,
   featureId: string,

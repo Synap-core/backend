@@ -4,11 +4,11 @@
     "icon": "wrench",
     "color": "#7C3AED",
     "tags": ["builder", "developer", "agents", "tasks"],
-    "description": "Builder workspace — apps, features, services, packages, environments, deployments, recipes, decisions, incidents, plus delegated agent tasks/projects/skills/providers.",
+    "description": "Builder workspace \u2014 apps, features, services, packages, environments, deployments, recipes, decisions, incidents, plus delegated agent tasks/projects/skills/providers.",
     "isPublic": true
   },
   "workspaceName": "Builder",
-  "description": "Developer + agent intelligence layer. Combines the DevPlane developer schema (apps, packages, services, environments, deployments, recipes, decisions, incidents) with the OpenClaw delegation primitives (project, task, skill, provider). Agents are pod-level identities — not tracked as workspace entities.",
+  "description": "Developer + agent intelligence layer. Combines the DevPlane developer schema (apps, packages, services, environments, deployments, recipes, decisions, incidents) with the OpenClaw delegation primitives (project, task, skill, provider). Agents are pod-level identities \u2014 not tracked as workspace entities.",
   "proposalId": "builder-workspace-v1",
   "icon": "wrench",
   "color": "#7C3AED",
@@ -127,6 +127,82 @@
           "label": "AI Channel ID",
           "valueType": "string",
           "inputType": "text"
+        },
+        {
+          "slug": "agent_status",
+          "label": "Agent Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "idea",
+            "gathering_context",
+            "dispatched",
+            "planning",
+            "plan_ready",
+            "executing",
+            "verifying",
+            "debugging",
+            "awaiting_review",
+            "done",
+            "error"
+          ],
+          "constraints": {
+            "defaultValue": "idea"
+          }
+        },
+        {
+          "slug": "agent_phase",
+          "label": "Agent Phase",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "task_prompt",
+          "label": "Task Prompt",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "acceptance_criteria",
+          "label": "Acceptance Criteria",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "technical_notes",
+          "label": "Technical Notes",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "plan",
+          "label": "Implementation Plan",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "execution_summary",
+          "label": "Execution Summary",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "verification_report",
+          "label": "Verification Report",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "debug_summary",
+          "label": "Debug Summary",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "dispatched_at",
+          "label": "Dispatched At",
+          "valueType": "string",
+          "inputType": "text"
         }
       ]
     },
@@ -196,7 +272,7 @@
       "displayName": "Package",
       "icon": "package",
       "color": "amber",
-      "description": "An npm/pnpm package — tracked with health, graph edges, and publish history",
+      "description": "An npm/pnpm package \u2014 tracked with health, graph edges, and publish history",
       "properties": [
         {
           "slug": "packageName",
@@ -286,7 +362,7 @@
       "displayName": "Server",
       "icon": "server",
       "color": "teal",
-      "description": "A server or deployment target — SSH-accessible, provider-agnostic",
+      "description": "A server or deployment target \u2014 SSH-accessible, provider-agnostic",
       "properties": [
         {
           "slug": "envType",
@@ -853,7 +929,11 @@
           "valueType": "entity_id",
           "targetProfileSlug": "person"
         },
-        { "slug": "project-start", "label": "Start Date", "valueType": "date" },
+        {
+          "slug": "project-start",
+          "label": "Start Date",
+          "valueType": "date"
+        },
         {
           "slug": "project-deadline",
           "label": "Deadline",
@@ -882,7 +962,11 @@
             "Monitoring"
           ]
         },
-        { "slug": "project-goal", "label": "Goal", "valueType": "string" },
+        {
+          "slug": "project-goal",
+          "label": "Goal",
+          "valueType": "string"
+        },
         {
           "slug": "project-outcome",
           "label": "Expected Outcome",
@@ -911,7 +995,9 @@
             "Failed",
             "Cancelled"
           ],
-          "constraints": { "defaultValue": "Queued" }
+          "constraints": {
+            "defaultValue": "Queued"
+          }
         },
         {
           "slug": "task-priority",
@@ -919,7 +1005,9 @@
           "valueType": "string",
           "inputType": "select",
           "enumValues": ["Critical", "High", "Medium", "Low"],
-          "constraints": { "defaultValue": "Medium" }
+          "constraints": {
+            "defaultValue": "Medium"
+          }
         },
         {
           "slug": "task-project",
@@ -944,7 +1032,11 @@
             "Custom"
           ]
         },
-        { "slug": "task-due-date", "label": "Due Date", "valueType": "date" },
+        {
+          "slug": "task-due-date",
+          "label": "Due Date",
+          "valueType": "date"
+        },
         {
           "slug": "task-effort-hours",
           "label": "Effort Estimate (hrs)",
@@ -977,7 +1069,7 @@
       "displayName": "Skill",
       "icon": "zap",
       "color": "#7C3AED",
-      "description": "An installed agent capability — a ClawHub skill, custom script, or API integration",
+      "description": "An installed agent capability \u2014 a ClawHub skill, custom script, or API integration",
       "properties": [
         {
           "slug": "skill-trust",
@@ -985,7 +1077,9 @@
           "valueType": "string",
           "inputType": "select",
           "enumValues": ["Trusted", "Review", "Untrusted", "Blocked"],
-          "constraints": { "defaultValue": "Review" }
+          "constraints": {
+            "defaultValue": "Review"
+          }
         },
         {
           "slug": "skill-category",
@@ -1010,7 +1104,11 @@
           "label": "Source URL",
           "valueType": "string"
         },
-        { "slug": "skill-version", "label": "Version", "valueType": "string" },
+        {
+          "slug": "skill-version",
+          "label": "Version",
+          "valueType": "string"
+        },
         {
           "slug": "skill-install-date",
           "label": "Install Date",
@@ -1050,7 +1148,7 @@
       "displayName": "Provider",
       "icon": "database",
       "color": "#B5451B",
-      "description": "An LLM or API provider — tracks cost, key health, and agent usage",
+      "description": "An LLM or API provider \u2014 tracks cost, key health, and agent usage",
       "properties": [
         {
           "slug": "provider-type",
@@ -1072,7 +1170,9 @@
           "valueType": "string",
           "inputType": "select",
           "enumValues": ["Valid", "Expiring", "Expired", "No Key (Local)"],
-          "constraints": { "defaultValue": "Valid" }
+          "constraints": {
+            "defaultValue": "Valid"
+          }
         },
         {
           "slug": "provider-model",
@@ -1104,7 +1204,11 @@
           "label": "Base URL / Endpoint",
           "valueType": "string"
         },
-        { "slug": "provider-notes", "label": "Notes", "valueType": "string" }
+        {
+          "slug": "provider-notes",
+          "label": "Notes",
+          "valueType": "string"
+        }
       ]
     }
   ],
@@ -1123,14 +1227,17 @@
       "scopeProfileSlug": "task",
       "groupBy": "task-status",
       "defaultView": true,
-      "description": "All delegated tasks by status: Backlog → Queued → Running → Review → Done."
+      "description": "All delegated tasks by status: Backlog \u2192 Queued \u2192 Running \u2192 Review \u2192 Done."
     },
     {
       "name": "Deployments",
       "type": "calendar",
       "scopeProfileSlug": "devplane_deployment",
       "startField": "deployedAt",
-      "config": { "dateField": "deployedAt", "colorBy": "deployStatus" },
+      "config": {
+        "dateField": "deployedAt",
+        "colorBy": "deployStatus"
+      },
       "description": "Deployment events on a calendar so release cadence is visible at a glance."
     },
     {
@@ -1207,7 +1314,12 @@
   "bentoLayout": [
     {
       "widgetType": "section-header",
-      "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+      "pos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 2
+      },
       "config": {
         "title": "Builder",
         "subtitle": "Apps, packages, deployments, and delegated tasks in one lens.",
@@ -1216,7 +1328,12 @@
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 0, "y": 2, "w": 3, "h": 2 },
+      "pos": {
+        "x": 0,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
       "config": {
         "profileSlug": "devplane_app",
         "label": "Apps",
@@ -1225,7 +1342,12 @@
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 3, "y": 2, "w": 3, "h": 2 },
+      "pos": {
+        "x": 3,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
       "config": {
         "profileSlug": "task",
         "label": "Tasks",
@@ -1234,7 +1356,12 @@
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 6, "y": 2, "w": 3, "h": 2 },
+      "pos": {
+        "x": 6,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
       "config": {
         "profileSlug": "devplane_deployment",
         "label": "Deployments",
@@ -1246,7 +1373,12 @@
     {
       "kind": "view",
       "viewName": "Task Board",
-      "pos": { "x": 0, "y": 4, "w": 12, "h": 6 }
+      "pos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 6
+      }
     }
   ]
 }
