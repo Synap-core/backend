@@ -187,7 +187,6 @@ export const entitiesRouter = router({
         .from(entities)
         .where(
           and(
-            eq(entities.userId, ctx.userId),
             or(
               eq(entities.workspaceId, ctx.workspaceId),
               isNull(entities.workspaceId)
@@ -811,7 +810,6 @@ export const entitiesRouter = router({
         .from(entities)
         .where(
           and(
-            eq(entities.userId, ctx.userId),
             or(
               eq(entities.workspaceId, ctx.workspaceId),
               isNull(entities.workspaceId)
@@ -848,7 +846,7 @@ export const entitiesRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const conditions: any[] = [eq(entities.userId, ctx.userId)];
+      const conditions: any[] = [];
 
       if (input.profileSlug) {
         conditions.push(eq(entities.type, input.profileSlug));
@@ -897,7 +895,6 @@ export const entitiesRouter = router({
       const entity = await db.query.entities.findFirst({
         where: and(
           eq(entities.documentId, input.documentId),
-          eq(entities.userId, ctx.userId),
           or(
             eq(entities.workspaceId, ctx.workspaceId),
             isNull(entities.workspaceId)
@@ -941,13 +938,8 @@ export const entitiesRouter = router({
       const entity = await db.query.entities.findFirst({
         where: and(
           eq(entities.id, input.id),
-          eq(entities.userId, ctx.userId),
-          ctx.workspaceId
-            ? or(
-                eq(entities.workspaceId, ctx.workspaceId),
-                isNull(entities.workspaceId)
-              )
-            : isNull(entities.workspaceId)
+          isNull(entities.deletedAt),
+          userVisibleWhere(entities.workspaceId, ctx.userId)
         ),
       });
 

@@ -258,6 +258,34 @@ export interface WorkspaceSettings {
     { blocks: Array<Record<string, unknown>> }
   >;
 
+  /**
+   * Per-profile renderer override for THIS workspace (Profile Renderer North Star).
+   * Each value is a RendererTarget (from @synap-core/renderer-runtime). Stored as
+   * Record<string, unknown> here to avoid pulling a frontend type into the schema
+   * package — runtime validation lives in the routers and the canonical type is
+   * re-exported by @synap-core/profile-renderer.
+   *
+   * Resolution chain in ProfileResolutionService.getEffectiveRenderer():
+   *   1. this workspace overlay (profileRenderers[slug][slot])
+   *   2. profile system default (profiles.default_list_renderer / .default_detail_renderer)
+   *   3. hardcoded system fallback
+   *
+   * Example:
+   *   {
+   *     "contact": { detail: { kind: "cell", cellKey: "form-detail", props: {} } },
+   *     "task":    { list:   { kind: "view", viewId: "uuid-task-kanban" } }
+   *   }
+   *
+   * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+   */
+  profileRenderers?: Record<
+    string,
+    {
+      list?: Record<string, unknown>;
+      detail?: Record<string, unknown>;
+    }
+  >;
+
   /** UUID of the main whiteboard view for this workspace */
   mainWhiteboardId?: string;
 

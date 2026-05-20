@@ -131,8 +131,8 @@ export class UnipileConnector implements MessagingConnector {
       instagram: "INSTAGRAM",
       messenger: "MESSENGER",
       twitter: "TWITTER",
-      gmail: "GMAIL",
-      slack: "SLACK",
+      gmail: "GOOGLE",
+      outlook: "OUTLOOK",
     };
     const mapped = providers
       .map((p) => map[p.toLowerCase()])

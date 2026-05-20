@@ -32,6 +32,16 @@ export interface CreateProfileInput {
    * Pass `null` to explicitly mark this profile as private (no cross-workspace semantics).
    */
   semanticSlug?: string | null;
+  /**
+   * System-default renderer for the LIST slot (Profile Renderer North Star).
+   * Stored as JSONB. Shape: RendererTarget from @synap-core/renderer-runtime.
+   * NULL means "use the hardcoded system fallback".
+   */
+  defaultListRenderer?: Record<string, unknown> | null;
+  /**
+   * System-default renderer for the DETAIL slot.
+   */
+  defaultDetailRenderer?: Record<string, unknown> | null;
 }
 
 export class ProfileRepository {
@@ -320,6 +330,10 @@ export class ProfileRepository {
     if (input.userId !== undefined) updateData.userId = input.userId || null;
     if (input.workspaceId !== undefined)
       updateData.workspaceId = input.workspaceId || null;
+    if (input.defaultListRenderer !== undefined)
+      updateData.defaultListRenderer = input.defaultListRenderer;
+    if (input.defaultDetailRenderer !== undefined)
+      updateData.defaultDetailRenderer = input.defaultDetailRenderer;
 
     // Increment version on update
     const current = await this.getById(id);

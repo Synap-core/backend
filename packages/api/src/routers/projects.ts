@@ -60,7 +60,6 @@ export const projectsRouter = router({
 
       const conditions: any[] = [
         eq(entities.workspaceId, ctx.workspaceId),
-        eq(entities.userId, ctx.userId),
         eq(entities.profileId, projectProfile.id),
       ];
 
@@ -140,7 +139,6 @@ export const projectsRouter = router({
       const entity = await db.query.entities.findFirst({
         where: and(
           eq(entities.id, input.id),
-          eq(entities.userId, ctx.userId),
           eq(entities.workspaceId, ctx.workspaceId),
           eq(entities.profileId, projectProfile.id)
         ),

@@ -118,6 +118,36 @@ export const hubProfilesRouter = router({
     }),
 
   /**
+   * Get the effective renderer for a profile in a workspace, by slot.
+   * External agents (Eve, Hermes, IS) use this to discover how to surface an
+   * entity profile without going through tRPC. Requires hub-protocol.read.
+   *
+   * Returns both slots when `slot` is omitted. Resolution mirrors the regular
+   * tRPC procedure (workspace overlay → profile default → hardcoded fallback).
+   */
+  getEffectiveRenderers: scopedProcedure(["hub-protocol.read"])
+    .input(
+      z.object({
+        userId: z.string(),
+        workspaceId: z.string().uuid(),
+        profileSlug: z.string(),
+        slot: z.enum(["list", "detail"]).optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const callerContext = await createHubProtocolCallerContext(
+        input.userId,
+        ctx.scopes || [],
+        input.workspaceId
+      );
+      const caller = regularProfilesRouter.createCaller(callerContext);
+      return caller.getEffectiveRenderers({
+        profileSlug: input.profileSlug,
+        slot: input.slot,
+      });
+    }),
+
+  /**
    * Create a property definition for a profile.
    *
    * Requires: hub-protocol.write scope

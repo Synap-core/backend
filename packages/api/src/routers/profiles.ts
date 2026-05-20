@@ -20,6 +20,7 @@ import {
   eq,
   sql,
 } from "@synap/database";
+import type { RendererRef } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
@@ -29,6 +30,60 @@ import { randomUUID } from "crypto";
 const logger = createLogger({ module: "profiles-router" });
 
 const ProfileScopeSchema = z.enum(["system", "shared", "workspace", "user"]);
+
+/**
+ * Zod schema for RendererRef.
+ *
+ * Mirrors RendererTarget from @synap-core/renderer-runtime. Discriminated union
+ * by `kind`. Used to validate JSONB payloads written into:
+ *   - profiles.default_(list|detail)_renderer (system default)
+ *   - workspaces.settings.profileRenderers[slug][slot] (workspace overlay)
+ *
+ * Two paths are encoded by kind:
+ *   - config path → 'cell' | 'view'
+ *   - file path   → 'iframe-srcdoc' | 'external-app'
+ *   - 'url' is a passthrough used by some link-style surfaces
+ *
+ * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+ */
+const RendererRefSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("cell"),
+    cellKey: z.string(),
+    props: z.record(z.string(), z.unknown()),
+    title: z.string().optional(),
+    displayMode: z.string().optional(),
+    rendererHint: z.record(z.string(), z.unknown()).optional(),
+  }),
+  z.object({
+    kind: z.literal("view"),
+    viewId: z.string(),
+    title: z.string().optional(),
+    displayMode: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("iframe-srcdoc"),
+    appId: z.string(),
+    srcdoc: z.string(),
+    title: z.string().optional(),
+    props: z.record(z.string(), z.unknown()).optional(),
+  }),
+  z.object({
+    kind: z.literal("external-app"),
+    appId: z.string(),
+    url: z.string(),
+    title: z.string().optional(),
+    props: z.record(z.string(), z.unknown()).optional(),
+  }),
+  z.object({
+    kind: z.literal("url"),
+    url: z.string(),
+    external: z.boolean().optional(),
+    title: z.string().optional(),
+  }),
+]);
+
+const ProfileRendererSlotSchema = z.enum(["list", "detail"]);
 
 export const profilesRouter = router({
   /**
@@ -441,6 +496,14 @@ export const profilesRouter = router({
         allowedWorkspaceIds: z.array(z.string().uuid()).optional(),
         /** Whether entities of this type are pod-wide or workspace-scoped */
         entityScope: z.enum(["pod", "workspace"]).optional(),
+        /**
+         * System-default renderer for the LIST slot of this profile.
+         * Pass `null` to clear the default (so the resolver returns the
+         * hardcoded system fallback). See Profile Renderer North Star.
+         */
+        defaultListRenderer: RendererRefSchema.nullable().optional(),
+        /** System-default renderer for the DETAIL slot. */
+        defaultDetailRenderer: RendererRefSchema.nullable().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -514,6 +577,8 @@ export const profilesRouter = router({
         defaultValues: input.defaultValues,
         scope: input.scope as ProfileScope | undefined,
         entityScope: input.entityScope,
+        defaultListRenderer: input.defaultListRenderer,
+        defaultDetailRenderer: input.defaultDetailRenderer,
       });
 
       // Invalidate entityScope cache when changed
@@ -908,6 +973,129 @@ export const profilesRouter = router({
           userId: ctx.userId,
         },
         "Profile properties reordered"
+      );
+
+      return { success: true };
+    }),
+
+  /**
+   * Get the effective renderer for a profile in this workspace, by slot.
+   *
+   * Resolves via ProfileResolutionService.getEffectiveRenderer through the
+   * chain: workspace overlay → profile system default → hardcoded fallback.
+   *
+   * Omit `slot` to receive both slots in one round-trip — typical for
+   * `<EntityRenderer>` mounting.
+   *
+   * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+   */
+  getEffectiveRenderers: workspaceProcedure
+    .input(
+      z.object({
+        profileSlug: z.string(),
+        slot: ProfileRendererSlotSchema.optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const db = await getDb();
+      const resolutionService = new ProfileResolutionService(db);
+
+      if (input.slot) {
+        const target = await resolutionService.getEffectiveRenderer(
+          input.profileSlug,
+          ctx.workspaceId,
+          input.slot
+        );
+        return input.slot === "list"
+          ? { list: target, detail: null as RendererRef | null }
+          : { list: null as RendererRef | null, detail: target };
+      }
+
+      const [list, detail] = await Promise.all([
+        resolutionService.getEffectiveRenderer(
+          input.profileSlug,
+          ctx.workspaceId,
+          "list"
+        ),
+        resolutionService.getEffectiveRenderer(
+          input.profileSlug,
+          ctx.workspaceId,
+          "detail"
+        ),
+      ]);
+      return { list, detail };
+    }),
+
+  /**
+   * Set the per-workspace renderer override for a profile in this workspace.
+   *
+   * Edits `workspaces.settings.profileRenderers[slug][slot]`. Pass `ref: null`
+   * to clear the overlay (so the resolver falls back to the profile default).
+   *
+   * This is the workspace-level write path. To change the profile's own
+   * system default (visible to every workspace using it), use `update` with
+   * `defaultListRenderer` / `defaultDetailRenderer`.
+   */
+  setProfileRendererOverride: workspaceProcedure
+    .input(
+      z.object({
+        profileSlug: z.string(),
+        slot: ProfileRendererSlotSchema,
+        ref: RendererRefSchema.nullable(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const workspaceRepo = new WorkspaceRepository(db, eventRepo);
+
+      const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, ctx.workspaceId),
+      });
+      if (!workspace) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Workspace not found",
+        });
+      }
+
+      const settings = (workspace.settings ?? {}) as Record<string, unknown>;
+      const current = (settings.profileRenderers ?? {}) as Record<
+        string,
+        { list?: RendererRef; detail?: RendererRef }
+      >;
+      const profileEntry = { ...(current[input.profileSlug] ?? {}) };
+
+      if (input.ref === null) {
+        delete profileEntry[input.slot];
+      } else {
+        profileEntry[input.slot] = input.ref;
+      }
+
+      const nextProfileRenderers: Record<
+        string,
+        { list?: RendererRef; detail?: RendererRef }
+      > = { ...current, [input.profileSlug]: profileEntry };
+
+      // Drop empty per-profile entries to keep the settings JSONB tidy.
+      if (Object.keys(profileEntry).length === 0) {
+        delete nextProfileRenderers[input.profileSlug];
+      }
+
+      await workspaceRepo.mergeSettings(
+        ctx.workspaceId,
+        { profileRenderers: nextProfileRenderers },
+        ctx.userId
+      );
+
+      logger.info(
+        {
+          profileSlug: input.profileSlug,
+          slot: input.slot,
+          cleared: input.ref === null,
+          workspaceId: ctx.workspaceId,
+        },
+        "Profile renderer override updated"
       );
 
       return { success: true };

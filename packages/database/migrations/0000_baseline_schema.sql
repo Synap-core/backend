@@ -187,6 +187,8 @@ ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "is_active" boolean DEFAULT true
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "version" integer DEFAULT 1;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "default_list_renderer"   jsonb;
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "default_detail_renderer" jsonb;
 
 -- Self-reference FK for parent_profile_id
 DO $$ BEGIN

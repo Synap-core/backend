@@ -189,6 +189,16 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "default_values",
     addedBy: "0035_consolidate_data_model.sql",
   },
+  {
+    table: "profiles",
+    column: "default_list_renderer",
+    addedBy: "0024_profile_renderer_columns.sql",
+  },
+  {
+    table: "profiles",
+    column: "default_detail_renderer",
+    addedBy: "0024_profile_renderer_columns.sql",
+  },
 
   // api_keys
   {

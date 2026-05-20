@@ -4,9 +4,12 @@
  * Resolves profiles and their effective property sets (with inheritance).
  */
 
+import { eq } from "drizzle-orm";
+
 import { ProfileRepository } from "../repositories/profile-repository.js";
 import { ProfilePropertyRepository } from "../repositories/profile-property-repository.js";
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
+import { workspaces } from "../schema/workspaces.js";
 import type { Profile, PropertyDef } from "../schema/index.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
@@ -16,6 +19,59 @@ export interface EffectiveProperty extends PropertyDef {
   defaultValue: unknown;
   displayOrder: number;
 }
+
+/**
+ * RendererRef — what a profile or workspace stores as its renderer choice
+ * for a (slot, profile) pair.
+ *
+ * Structural mirror of `RendererTarget` from `@synap-core/renderer-runtime`.
+ * Kept as a structural type in the database layer (rather than importing the
+ * frontend package) so the schema package stays UI-free. The canonical type
+ * lives in `@synap-core/renderer-runtime` and is re-exported by
+ * `@synap-core/profile-renderer` as `RendererRef`.
+ *
+ * Stored as JSONB on `profiles.default_(list|detail)_renderer` and inside
+ * `workspaces.settings.profileRenderers[slug]`.
+ *
+ * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+ */
+export type RendererRef =
+  | {
+      kind: "cell";
+      cellKey: string;
+      props: Record<string, unknown>;
+      title?: string;
+      displayMode?: string;
+      rendererHint?: Record<string, unknown>;
+    }
+  | {
+      kind: "view";
+      viewId: string;
+      title?: string;
+      displayMode?: string;
+    }
+  | {
+      kind: "iframe-srcdoc";
+      appId: string;
+      srcdoc: string;
+      title?: string;
+      props?: Record<string, unknown>;
+    }
+  | {
+      kind: "external-app";
+      appId: string;
+      url: string;
+      title?: string;
+      props?: Record<string, unknown>;
+    }
+  | {
+      kind: "url";
+      url: string;
+      external?: boolean;
+      title?: string;
+    };
+
+export type ProfileRendererSlot = "list" | "detail";
 
 export class ProfileResolutionService {
   private _db: PostgresJsDatabase<typeof schema>;
@@ -301,5 +357,63 @@ export class ProfileResolutionService {
       workspaceId
     );
     return properties.find((p) => p.slug === propertySlug) || null;
+  }
+
+  /**
+   * Get the effective renderer for a profile in this workspace, by slot.
+   *
+   * Sister to `getEffectiveProperties` — the single rendering rule for
+   * choosing how a profile (list slot) or one of its entities (detail slot)
+   * should be displayed.
+   *
+   * Resolution chain:
+   *   1. Workspace overlay — `workspaces.settings.profileRenderers[slug][slot]`
+   *   2. Profile system default — `profiles.default_(list|detail)_renderer`
+   *   3. Hardcoded system fallback — keeps the pod bootable when nothing is
+   *      configured. List slot returns the 'list' cell, detail slot returns
+   *      the 'entity-detail' cell — both exist in the cell registry today.
+   *
+   * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+   */
+  async getEffectiveRenderer(
+    profileSlug: string,
+    workspaceId: string | null,
+    slot: ProfileRendererSlot
+  ): Promise<RendererRef> {
+    // 1. Workspace overlay
+    if (workspaceId) {
+      const workspace = await this._db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspaceId),
+        columns: { settings: true },
+      });
+      const settings = workspace?.settings as
+        | Record<string, unknown>
+        | null
+        | undefined;
+      const overlayRoot = settings?.profileRenderers as
+        | Record<string, { list?: RendererRef; detail?: RendererRef }>
+        | undefined;
+      const overlay = overlayRoot?.[profileSlug]?.[slot];
+      if (overlay) return overlay;
+    }
+
+    // 2. Profile system default
+    const profile = workspaceId
+      ? await this.profileRepo.getBySlugForWorkspace(profileSlug, workspaceId)
+      : await this.profileRepo.getBySlug(profileSlug);
+
+    if (profile) {
+      const defaultRef =
+        slot === "list"
+          ? profile.defaultListRenderer
+          : profile.defaultDetailRenderer;
+      if (defaultRef) return defaultRef as RendererRef;
+    }
+
+    // 3. Hardcoded system fallback — keeps the pod bootable when no profile
+    //    config exists. Both keys point at existing registered cells.
+    return slot === "list"
+      ? { kind: "cell", cellKey: "list", props: {} }
+      : { kind: "cell", cellKey: "entity-detail", props: {} };
   }
 }

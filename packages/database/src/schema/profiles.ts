@@ -86,6 +86,19 @@ export const profiles = pgTable(
       .notNull()
       .default("workspace"),
 
+    // ─── Profile Renderer North Star ─────────────────────────────────────────
+    // System-default renderer choice per slot.
+    // Shape: RendererTarget (from @synap-core/renderer-runtime).
+    //   { kind: 'cell',          cellKey, props }      — config path
+    //   { kind: 'view',          viewId }              — config path (saved view)
+    //   { kind: 'iframe-srcdoc', appId, srcdoc }       — file path (inline)
+    //   { kind: 'external-app',  appId, url }          — file path (pod-served URL)
+    // NULL means "fall back to system default" in getEffectiveRenderer().
+    // Workspace overrides live in workspaces.settings.profileRenderers[slug].
+    // Migration: 0024_profile_renderer_columns.sql
+    defaultListRenderer: jsonb("default_list_renderer"),
+    defaultDetailRenderer: jsonb("default_detail_renderer"),
+
     // Metadata
     isActive: boolean("is_active").default(true).notNull(),
     version: integer("version").default(1).notNull(),

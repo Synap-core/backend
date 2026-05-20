@@ -280,4 +280,78 @@ export function registerProfilesRoutes(app: HubHono): void {
       );
     }
   });
+
+  // ── /profiles/:slug/renderers — Profile Renderer North Star ────────────────
+  registerOpenApi(app, {
+    method: "get",
+    path: "/profiles/{slug}/renderers",
+    tags: ["Profiles"],
+    summary: "Get the effective renderer(s) for a profile",
+    description:
+      "Returns the RendererTarget resolved for the given profile in the given workspace. Resolution order: workspace overlay → profile system default → hardcoded fallback. Omit `slot` to receive both list and detail in one round trip. Spec: synap-team-docs/content/team/platform/profile-renderer.mdx",
+    request: {
+      query: z.object({
+        userId: z.string(),
+        workspaceId: z.string().uuid(),
+        slot: z.enum(["list", "detail"]).optional(),
+      }),
+    },
+    responses: {
+      200: {
+        description:
+          "Object with `list` and/or `detail` fields. Each is a RendererTarget (or null when a single slot was requested).",
+        schema: z.object({
+          list: z.record(z.string(), z.unknown()).nullable(),
+          detail: z.record(z.string(), z.unknown()).nullable(),
+        }),
+      },
+      400: { description: "Missing required query param", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  /**
+   * GET /profiles/:slug/renderers?userId=...&workspaceId=...&slot=...
+   */
+  app.get("/profiles/:slug/renderers", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const userId = c.req.query("userId");
+    const workspaceId = c.req.query("workspaceId");
+    const slotRaw = c.req.query("slot");
+    const profileSlug = c.req.param("slug");
+
+    if (!userId || !workspaceId) {
+      return c.json({ error: "userId and workspaceId are required" }, 400);
+    }
+    if (!profileSlug) {
+      return c.json({ error: "profile slug is required" }, 400);
+    }
+    if (slotRaw && slotRaw !== "list" && slotRaw !== "detail") {
+      return c.json({ error: "slot must be 'list' or 'detail'" }, 400);
+    }
+    const slot = slotRaw as "list" | "detail" | undefined;
+
+    try {
+      const caller = await getCaller(c, { userId, workspaceId });
+      const result = await caller.profiles.getEffectiveRenderers({
+        userId,
+        workspaceId,
+        profileSlug,
+        slot,
+      });
+      return c.json(result);
+    } catch (err) {
+      logger.error({ err }, "getEffectiveRenderers failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
 }

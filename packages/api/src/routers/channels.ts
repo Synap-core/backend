@@ -2296,12 +2296,9 @@ export const channelsRouter = router({
         workspaceId: z.string().uuid(),
       })
     )
-    .query(async ({ input, ctx }) => {
+    .query(async ({ input }) => {
       const allChannels = await db.query.channels.findMany({
-        where: and(
-          eq(channels.userId, ctx.userId),
-          eq(channels.workspaceId, input.workspaceId)
-        ),
+        where: and(eq(channels.workspaceId, input.workspaceId)),
         orderBy: [desc(channels.updatedAt)],
       });
 
@@ -2457,10 +2454,7 @@ export const channelsRouter = router({
     )
     .query(async ({ input, ctx }) => {
       const channel = await db.query.channels.findFirst({
-        where: and(
-          eq(channels.id, input.channelId),
-          eq(channels.userId, ctx.userId)
-        ),
+        where: eq(channels.id, input.channelId),
       });
 
       if (!channel) {
