@@ -6,7 +6,12 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure, protectedProcedure } from "../trpc.js";
+import {
+  router,
+  workspaceProcedure,
+  protectedProcedure,
+  podProcedure,
+} from "../trpc.js";
 import {
   getDb,
   ProfileRepository,
@@ -984,12 +989,17 @@ export const profilesRouter = router({
    * Resolves via ProfileResolutionService.getEffectiveRenderer through the
    * chain: workspace overlay → profile system default → hardcoded fallback.
    *
+   * Uses `podProcedure` so callers without an active workspace (Eve OS,
+   * cross-pod surfaces) can still resolve — they skip the workspace overlay
+   * and receive `profile default → fallback`. Studio/CRM pass their workspace
+   * header as usual and get the full three-layer resolution.
+   *
    * Omit `slot` to receive both slots in one round-trip — typical for
    * `<EntityRenderer>` mounting.
    *
    * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
    */
-  getEffectiveRenderers: workspaceProcedure
+  getEffectiveRenderers: podProcedure
     .input(
       z.object({
         profileSlug: z.string(),
