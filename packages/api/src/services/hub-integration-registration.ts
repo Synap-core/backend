@@ -28,6 +28,7 @@ export const SETUP_AGENT_HUB_SCOPES = [
   "mcp.read",
   "mcp.write",
   "realtime:observe",
+  "chat.stream",
 ] as const;
 
 /** Scopes granted per integration type (admin /connect UI).
