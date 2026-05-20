@@ -869,8 +869,9 @@ export class IntelligenceHubClient {
           }
         );
         if (!response.ok) {
+          const body = await response.text().catch(() => "<unreadable>");
           console.warn(
-            `[IntelligenceHubClient] analyzeBulkMapping failed: ${response.status} ${response.statusText} (baseUrl=${this.baseUrl}, hasApiKey=${!!this.apiKey})`
+            `[IntelligenceHubClient] analyzeBulkMapping failed: ${response.status} ${response.statusText} (baseUrl=${this.baseUrl}, hasApiKey=${!!this.apiKey}, body=${body.slice(0, 500)})`
           );
           return null;
         }

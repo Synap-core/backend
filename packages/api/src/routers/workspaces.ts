@@ -3618,4 +3618,40 @@ export const workspacesRouter = router({
         errors,
       };
     }),
+
+  // Delete all entities (and their relations via CASCADE) for a workspace.
+  // Workspace itself, its metadata, profiles, views, and property_defs are preserved.
+  resetEntities: protectedProcedure
+    .input(z.object({ workspaceId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const dbConn = await getDb();
+
+      // Verify caller is a member of this workspace
+      const membership = await dbConn
+        .select({ id: workspaceMembers.id })
+        .from(workspaceMembers)
+        .where(
+          and(
+            eq(workspaceMembers.workspaceId, input.workspaceId),
+            eq(workspaceMembers.userId, ctx.userId)
+          )
+        )
+        .limit(1);
+
+      if (!membership.length) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Not a member of this workspace",
+        });
+      }
+
+      // Hard-delete all entities for the workspace.
+      // relations rows cascade automatically (ON DELETE CASCADE on both FK columns).
+      const deleted = await dbConn
+        .delete(entities)
+        .where(eq(entities.workspaceId, input.workspaceId))
+        .returning({ id: entities.id });
+
+      return { deletedCount: deleted.length };
+    }),
 });

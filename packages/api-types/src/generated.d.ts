@@ -2050,7 +2050,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				availableRelations?: string[] | undefined;
 				contextHint?: string | undefined;
 			};
-			output: ImportAnalysisPlan | null;
+			output: ImportAnalysisPlan;
 			meta: object;
 		}>;
 		execute: import("@trpc/server").TRPCMutationProcedure<{
@@ -7580,6 +7580,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					error: string;
 					refKey?: string | undefined;
 				}[];
+			};
+			meta: object;
+		}>;
+		resetEntities: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			output: {
+				deletedCount: number;
 			};
 			meta: object;
 		}>;

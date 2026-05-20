@@ -8,6 +8,7 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import { requireUserId, requireWorkspaceId } from "../utils/user-scoped.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
@@ -423,9 +424,14 @@ export const captureRouter = router({
       if (!plan) {
         logger.warn(
           { userId, headerCount: input.headers.length },
-          "analyzeBulkMapping returned null — marking IS as credential_error"
+          "analyzeBulkMapping returned null — IS unreachable or errored (check IS logs for OPENROUTER_API_KEY / model availability)"
         );
         markServiceCredentialError();
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "AI analysis unavailable — intelligence service did not return a plan. Check IS logs.",
+        });
       }
 
       return plan;

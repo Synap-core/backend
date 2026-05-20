@@ -768,11 +768,11 @@ export function registerMessagingRoutes(app: HubHono): void {
         }
 
         // ── Browse mode: all conversations from current user's accounts ─────
+        // Don't filter by DB status — Unipile is the source of truth for live
+        // connection state. The /accounts endpoint merges live status before
+        // displaying, so DB rows often lag. Unipile returns [] for dead accounts.
         const connectedAccounts = await db.query.messagingAccounts.findMany({
-          where: and(
-            eq(messagingAccounts.userId, userId),
-            eq(messagingAccounts.status, "connected")
-          ),
+          where: eq(messagingAccounts.userId, userId),
         });
 
         const browse: Array<{
@@ -821,20 +821,30 @@ export function registerMessagingRoutes(app: HubHono): void {
   );
 
   // ── POST /messaging/channels/connect ─────────────────────────────────────
-  // Creates an EXTERNAL channel linking a conversation thread to a CRM entity.
+  // Creates or upgrades an EXTERNAL channel for an external conversation thread.
+  //
+  // entityId is OPTIONAL:
+  //   - Provided  → link the thread to that entity (upgrade existing if needed)
+  //   - Omitted   → "follow/track" mode: just ensure a Synap channel row exists
+  //                  so inbound webhooks are captured and automations can fire.
+  //
+  // Dedup key: (channelType=EXTERNAL, externalId=externalThreadId).
+  // If a row already exists (from a prior follow or webhook auto-create) it is
+  // reused — never duplicated. If entityId is supplied and the row has no entity
+  // yet, we upgrade it in-place rather than inserting a second row.
   app.openapi(
     createRoute({
       method: "post",
       path: "/messaging/channels/connect",
       tags: ["Messaging"],
-      summary: "Link an external conversation thread to a CRM entity",
+      summary: "Track or link an external conversation thread",
       request: {
         body: {
           content: {
             "application/json": {
               schema: z
                 .object({
-                  entityId: z.string(),
+                  entityId: z.string().optional(),
                   externalThreadId: z.string(),
                   accountId: z.string(),
                   provider: z.string(),
@@ -847,7 +857,7 @@ export function registerMessagingRoutes(app: HubHono): void {
       },
       responses: {
         200: {
-          description: "Channel created or already exists",
+          description: "Channel created, upgraded, or already exists",
           content: {
             "application/json": {
               schema: z
@@ -864,10 +874,6 @@ export function registerMessagingRoutes(app: HubHono): void {
           description: "Internal error",
           content: { "application/json": { schema: ErrorSchema } },
         },
-        503: {
-          description: "Connector not configured",
-          content: { "application/json": { schema: ErrorSchema } },
-        },
       },
     }),
     async (c) => {
@@ -881,7 +887,7 @@ export function registerMessagingRoutes(app: HubHono): void {
       } = c.req.valid("json");
 
       try {
-        // Verify the account belongs to the current user (by DB id or externalId)
+        // Verify the account belongs to the current user
         const account = await db.query.messagingAccounts.findFirst({
           where: and(
             eq(messagingAccounts.userId, userId),
@@ -895,32 +901,51 @@ export function registerMessagingRoutes(app: HubHono): void {
           );
         }
 
-        // Upsert the EXTERNAL channel — idempotent via externalId unique index
+        // Find any existing channel for this thread (regardless of entity link).
+        // Use externalId as the stable dedup key — set by both webhook handler
+        // and manual connect calls to the same value (the Unipile chat/thread ID).
         const [existing] = await db
-          .select({ id: channels.id })
+          .select({
+            id: channels.id,
+            contextObjectId: channels.contextObjectId,
+          })
           .from(channels)
           .where(
             and(
-              eq(channels.externalSource, provider),
-              eq(channels.externalId as any, externalThreadId),
-              eq(channels.contextObjectType, "entity"),
-              eq(channels.contextObjectId as any, entityId)
+              eq(channels.channelType, ChannelType.EXTERNAL),
+              eq(channels.externalId as any, externalThreadId)
             )
           )
           .limit(1);
 
         if (existing) {
+          // If caller is linking to an entity and the row isn't linked yet, upgrade.
+          if (entityId && !existing.contextObjectId) {
+            await db
+              .update(channels)
+              .set({
+                contextObjectType: "entity",
+                contextObjectId: entityId as any,
+                updatedAt: new Date(),
+              })
+              .where(eq(channels.id, existing.id));
+          }
           return c.json({ channelId: existing.id }, 200);
         }
 
+        // No existing row — insert fresh.
         const [inserted] = await db
           .insert(channels)
           .values({
             userId,
             channelType: ChannelType.EXTERNAL,
             scope: ChannelScope.WORKSPACE,
-            contextObjectType: "entity",
-            contextObjectId: entityId as any,
+            ...(entityId
+              ? {
+                  contextObjectType: "entity",
+                  contextObjectId: entityId as any,
+                }
+              : {}),
             externalSource: provider,
             externalChannelId: externalThreadId,
             externalId: externalThreadId,
