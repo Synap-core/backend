@@ -1305,9 +1305,10 @@ export const entitiesRouter = router({
         .where(eq(entities.id, input.id))
         .limit(1);
 
-      await entityRepo.delete(input.id, ctx.userId, {
-        deleteDocument: userPref,
-      });
+      // Permission is already verified above — delete by id only, no userId filter.
+      // entityRepo.delete() restricts to creator (user_id=$userId) which would
+      // silently no-op for workspace admins deleting others' entities.
+      await database.delete(entities).where(eq(entities.id, input.id));
 
       // 4. Emit .completed event + side-effects
       auditLog({
@@ -1762,6 +1763,67 @@ export const entitiesRouter = router({
         systemData: row.systemData ?? {},
         workspaceName: ws?.name ?? null,
       };
+    }),
+
+  /**
+   * Admin: hard-delete a single entity by id (no userId filter).
+   */
+  adminDelete: podAdminProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ input }) => {
+      const database = await getDb();
+      const [deleted] = await database
+        .delete(entities)
+        .where(eq(entities.id, input.id))
+        .returning({ id: entities.id, type: entities.type });
+      if (!deleted) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
+      }
+      console.log(
+        `[pod-admin] adminDelete: entity ${deleted.id} (type=${deleted.type}) permanently deleted`
+      );
+      return { deleted: true, id: deleted.id, type: deleted.type };
+    }),
+
+  /**
+   * Admin: hard-delete multiple entities by id list or by profileSlug/workspaceId filter.
+   * Requires at least one of: ids or profileSlug.
+   */
+  adminBatchDelete: podAdminProcedure
+    .input(
+      z
+        .object({
+          ids: z.array(z.string().uuid()).optional(),
+          profileSlug: z.string().optional(),
+          workspaceId: z.string().uuid().nullable().optional(),
+        })
+        .refine(
+          (v) => (v.ids?.length ?? 0) > 0 || v.profileSlug !== undefined,
+          "Provide ids or profileSlug"
+        )
+    )
+    .mutation(async ({ input }) => {
+      const database = await getDb();
+      const conditions: any[] = [];
+      if (input.ids?.length) {
+        conditions.push(inArray(entities.id, input.ids));
+      }
+      if (input.profileSlug) {
+        conditions.push(eq(entities.type, input.profileSlug));
+      }
+      if (input.workspaceId === null) {
+        conditions.push(isNull(entities.workspaceId));
+      } else if (input.workspaceId) {
+        conditions.push(eq(entities.workspaceId, input.workspaceId));
+      }
+      const deleted = await database
+        .delete(entities)
+        .where(and(...conditions))
+        .returning({ id: entities.id });
+      console.log(
+        `[pod-admin] adminBatchDelete: ${deleted.length} entities permanently deleted`
+      );
+      return { deletedCount: deleted.length };
     }),
 
   /**

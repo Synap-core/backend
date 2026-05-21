@@ -1395,6 +1395,12 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
         constraints: {},
         uiHints: { label: "Health URL", inputType: "url" },
       },
+      {
+        slug: "repoLocalPath",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Repo Local Path", inputType: "text" },
+      },
       // devplane_package
       {
         slug: "npmName",
