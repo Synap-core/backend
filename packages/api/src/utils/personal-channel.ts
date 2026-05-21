@@ -8,7 +8,7 @@
  */
 
 import { randomUUID, createHash } from "node:crypto";
-import { db, eq, and, or } from "@synap/database";
+import { db, eq, and } from "@synap/database";
 import {
   channels,
   messages,
@@ -85,12 +85,6 @@ async function seedWelcomeMessage(
  * Get or create a private thread between a user and a specific agent.
  * Pod-scoped: one channel per (userId, agentId), shared across all workspaces.
  * Seeds a welcome message on first creation (orchestrator agent only).
- *
- * V2 restore: writes `channelType: PERSONAL` for new rows. Reads accept BOTH
- * `personal` and the legacy `thread` shape — the legacy `thread` rows that
- * really were personal channels are reclassified by migration 0023, so any
- * remaining `thread` row attached to (userId, agentId, pod-scope) is also
- * treated as the user's personal channel during the transition.
  */
 export async function ensureAgentThread(
   userId: string,
@@ -101,32 +95,11 @@ export async function ensureAgentThread(
       eq(channels.userId, userId),
       eq(channels.assignedAgentId, agentId),
       eq(channels.status, ChannelStatus.ACTIVE),
-      or(
-        eq(channels.channelType, ChannelType.PERSONAL),
-        eq(channels.channelType, ChannelType.THREAD)
-      )
+      eq(channels.channelType, ChannelType.PERSONAL)
     ),
   });
 
-  if (existing) {
-    // Migrate legacy THREAD rows to PERSONAL + pod-wide on first access
-    if (
-      existing.channelType !== ChannelType.PERSONAL ||
-      existing.workspaceId !== null
-    ) {
-      const [migrated] = await db
-        .update(channels)
-        .set({
-          channelType: ChannelType.PERSONAL,
-          workspaceId: null,
-          scope: ChannelScope.POD,
-        })
-        .where(eq(channels.id, existing.id))
-        .returning();
-      return migrated ?? existing;
-    }
-    return existing;
-  }
+  if (existing) return existing;
 
   const [channel] = await db
     .insert(channels)

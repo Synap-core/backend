@@ -1982,13 +1982,10 @@ export const channelsRouter = router({
           message: "Access denied to this channel",
         });
       }
-      // Personal-style threads and feed channels are pod-wide.
-      // Also treat any channel with workspaceId=null as pod-wide (legacy THREAD rows
-      // that predate the PERSONAL type migration are covered by this path).
+      // PERSONAL and FEED channels are pod-wide — no workspace isolation applied.
       const isPodWideChannel =
         channel.channelType === ChannelType.FEED ||
-        channel.channelType === ChannelType.PERSONAL ||
-        channel.workspaceId === null;
+        channel.channelType === ChannelType.PERSONAL;
       if (
         !isPodWideChannel &&
         ctx.workspaceId &&
