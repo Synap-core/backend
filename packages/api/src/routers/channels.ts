@@ -1983,9 +1983,12 @@ export const channelsRouter = router({
         });
       }
       // Personal-style threads and feed channels are pod-wide.
+      // Also treat any channel with workspaceId=null as pod-wide (legacy THREAD rows
+      // that predate the PERSONAL type migration are covered by this path).
       const isPodWideChannel =
         channel.channelType === ChannelType.FEED ||
-        channel.channelType === ChannelType.PERSONAL;
+        channel.channelType === ChannelType.PERSONAL ||
+        channel.workspaceId === null;
       if (
         !isPodWideChannel &&
         ctx.workspaceId &&

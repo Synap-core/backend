@@ -108,7 +108,25 @@ export async function ensureAgentThread(
     ),
   });
 
-  if (existing) return existing;
+  if (existing) {
+    // Migrate legacy THREAD rows to PERSONAL + pod-wide on first access
+    if (
+      existing.channelType !== ChannelType.PERSONAL ||
+      existing.workspaceId !== null
+    ) {
+      const [migrated] = await db
+        .update(channels)
+        .set({
+          channelType: ChannelType.PERSONAL,
+          workspaceId: null,
+          scope: ChannelScope.POD,
+        })
+        .where(eq(channels.id, existing.id))
+        .returning();
+      return migrated ?? existing;
+    }
+    return existing;
+  }
 
   const [channel] = await db
     .insert(channels)

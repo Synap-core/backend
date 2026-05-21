@@ -1260,7 +1260,6 @@ export const entitiesRouter = router({
       // 3. Materialize — inline DB write (auto-approved)
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
-      const entityRepo = new EntityRepository(database, eventRepo);
       const docRepo = new DocumentRepository(database, eventRepo);
 
       const { getUserPreference } = await import("@synap/database");
