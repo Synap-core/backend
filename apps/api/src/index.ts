@@ -24,7 +24,7 @@ import { HTTPException } from "hono/http-exception";
 import { logger } from "hono/logger";
 import { secureHeaders } from "hono/secure-headers";
 import { getCookie } from "hono/cookie";
-import { trpcServer } from "@hono/trpc-server";
+import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import {
   createLogger,
   config,
@@ -999,53 +999,59 @@ app.use("/trpc/chat.sendMessage", aiRateLimitMiddleware);
 app.use("/trpc/channels.sendMessage", aiRateLimitMiddleware);
 
 // tRPC endpoint
-app.use(
-  "/trpc/*",
-  trpcServer({
-    router: appRouter,
-    // @hono/trpc-server passes Hono Context as second argument
-    // opts may also contain the context in some versions
-    createContext: async (
-      opts: { req?: Request; c?: HonoContext },
-      c?: HonoContext
-    ) => {
-      // Get Hono context (already has validated session from orySessionMiddleware)
-      const honoCtx: HonoContext | undefined = opts.c || c;
+// NOTE: Using fetchRequestHandler directly from @trpc/server instead of
+// @hono/trpc-server to avoid version mismatch (hono adapter resolves its own
+// @trpc/server@11.8.1, but the app uses @trpc/server@11.16.0).
+const bodyMethods = new Set([
+  "arrayBuffer",
+  "blob",
+  "formData",
+  "json",
+  "text",
+] as const);
+type BodyMethod = "json" | "text" | "arrayBuffer" | "blob" | "formData";
 
-      if (!honoCtx) {
-        apiLogger.error("Hono context not available in tRPC createContext");
-        throw new Error("Hono context not available");
-      }
+app.use("/trpc/*", async (c) => {
+  const endpoint = "/trpc";
 
-      // Extract Request object from Hono context
-      const req = honoCtx.req.raw || honoCtx.req;
+  const req =
+    c.req.method === "GET" || c.req.method === "HEAD"
+      ? c.req.raw
+      : new Proxy(c.req.raw, {
+          get(target, prop) {
+            if (bodyMethods.has(prop as BodyMethod)) {
+              const m = prop as BodyMethod;
+              return () => c.req[m]();
+            }
+            return Reflect.get(target, prop, target);
+          },
+        });
 
-      // Use centralized createContext from @synap/api
-      // Pass Hono context so it can use pre-validated session (no duplication)
-      const context = await createApiContext(req, honoCtx);
+  const context = await createApiContext(req, c);
 
-      // Log workspace ID extraction for debugging
-      apiLogger.info(
-        {
-          workspaceId: context.workspaceId,
-          userId: context.userId,
-          authenticated: context.authenticated,
-          hasSession: !!context.session,
-          hasUser: !!context.user,
-        },
-        "tRPC createContext - Using centralized context creation"
-      );
-
-      // @hono/trpc-server requires Record<string, unknown>, but our Context is more specific
-      // This assertion is safe because Context only contains serializable values
-      // and is compatible with Record<string, unknown> at runtime
-      return context as unknown as Record<string, unknown>;
+  apiLogger.info(
+    {
+      workspaceId: context.workspaceId,
+      userId: context.userId,
+      authenticated: context.authenticated,
+      hasSession: !!context.session,
+      hasUser: !!context.user,
     },
+    "tRPC createContext - Using centralized context creation"
+  );
+
+  const res = await fetchRequestHandler({
+    endpoint,
+    req,
+    router: appRouter,
+    createContext: async () => context as any,
     onError({ error, path }) {
       apiLogger.error({ err: error, path }, "tRPC error");
     },
-  })
-);
+  });
+
+  return c.newResponse(res.body, res);
+});
 
 // pg-boss is initialized in the server startup callback below
 

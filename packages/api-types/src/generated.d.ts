@@ -2587,6 +2587,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		adminDelete: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				deleted: boolean;
+				id: string;
+				type: string;
+			};
+			meta: object;
+		}>;
+		adminBatchDelete: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				ids?: string[] | undefined;
+				profileSlug?: string | undefined;
+				workspaceId?: string | null | undefined;
+			};
+			output: {
+				deletedCount: number;
+			};
+			meta: object;
+		}>;
 		adminListProfiles: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | null | undefined;
