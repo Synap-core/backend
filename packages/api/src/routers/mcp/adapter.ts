@@ -121,6 +121,9 @@ export async function executeMCPToolViaHubProtocol(
         userId,
         query: args.query as string,
         ...(slug ? { profileSlug: slug } : {}),
+        ...(args.workspaceId
+          ? { workspaceId: args.workspaceId as string }
+          : {}),
         limit: (args.limit as number) || 20,
       });
       return ok(result);
@@ -134,6 +137,9 @@ export async function executeMCPToolViaHubProtocol(
       const result = await caller.entities.getEntities({
         userId,
         profileSlug: profileSlug || undefined,
+        ...(args.workspaceId
+          ? { workspaceId: args.workspaceId as string }
+          : {}),
         limit: (args.limit as number) || 50,
       });
       return ok(result);

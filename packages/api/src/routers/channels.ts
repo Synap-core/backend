@@ -1255,6 +1255,7 @@ export const channelsRouter = router({
           : "group";
       const isAiChannel =
         channel.channelType === ChannelType.AGENT_COLLAB ||
+        (channel.channelType === ChannelType.PERSONAL && !!effectiveAgentRef) ||
         (channel.channelType === ChannelType.THREAD && !!effectiveAgentRef) ||
         (channel.channelType === ChannelType.EXTERNAL && !!effectiveAgentRef);
 

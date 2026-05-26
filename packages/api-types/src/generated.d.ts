@@ -2027,6 +2027,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					relationType: string;
 				}[];
 				followUp: string | null;
+				targetWorkspaceId: string | null;
 				dedupCandidates: Record<string, {
 					entityId: string;
 					title: string;

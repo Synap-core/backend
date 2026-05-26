@@ -64,6 +64,21 @@
         reverse_proxy kratos:4434
     }
 
+    # Realtime WebSocket (Socket.IO) — must be before the catch-all backend proxy
+    # so that WebSocket upgrades from the gateway reach the realtime server, not backend:4000.
+    handle /socket.io/* {
+        reverse_proxy realtime:4001
+    }
+
+    handle /realtime/* {
+        reverse_proxy realtime:4001
+    }
+
+    handle /realtime-health {
+        rewrite /realtime-health /bridge/health
+        reverse_proxy realtime:4001
+    }
+
     # Everything else goes to backend
     reverse_proxy backend:4000
 }
