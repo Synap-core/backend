@@ -216,7 +216,6 @@ export function ConnectionsTab({ workspaceId }: { workspaceId: string }) {
           onConfirm={async (name) => {
             await createMutation.mutateAsync({
               keyName: name,
-              keyType: "hub_inbound",
               workspaceId,
               scope: ["hub-protocol.read"],
             });
