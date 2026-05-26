@@ -4,12 +4,20 @@
  * Manages webhook subscriptions for n8n and other integrations.
  */
 
-import { router, protectedProcedure } from "../trpc.js";
+import {
+  router,
+  protectedProcedure,
+  workspaceProcedure,
+  podAdminProcedure,
+} from "../trpc.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { db } from "@synap/database";
-import { webhookSubscriptions } from "@synap/database/schema";
+import {
+  webhookSubscriptions,
+  webhookDeliveries,
+} from "@synap/database/schema";
 import { eq, and } from "@synap/database";
 import { randomBytes } from "crypto";
 
@@ -208,5 +216,130 @@ export const webhooksRouter = router({
           message: "Failed to delete webhook subscription",
         });
       }
+    }),
+
+  /**
+   * List workspace-scoped webhook subscriptions (workspace member)
+   */
+  listForWorkspace: workspaceProcedure.query(async ({ ctx }) => {
+    const workspaceId = ctx.workspaceId;
+    const subs = await db.query.webhookSubscriptions.findMany({
+      where: and(
+        eq(webhookSubscriptions.workspaceId, workspaceId),
+        eq(webhookSubscriptions.active, true)
+      ),
+      orderBy: (s, { desc }) => [desc(s.createdAt)],
+    });
+    return subs.map(
+      (s) =>
+        Object.fromEntries(
+          Object.entries(s).filter(([k]) => k !== "secret")
+        ) as typeof s
+    );
+  }),
+
+  /**
+   * Create workspace-scoped webhook subscription (workspace member)
+   */
+  createForWorkspace: workspaceProcedure
+    .input(
+      z.object({
+        name: z.string().min(1).max(100),
+        url: z.string().url(),
+        eventTypes: z.array(z.string()).min(1),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const workspaceId = ctx.workspaceId;
+      const secret = randomBytes(32).toString("hex");
+      const [subscription] = await db
+        .insert(webhookSubscriptions)
+        .values({
+          userId: ctx.userId,
+          workspaceId,
+          name: input.name,
+          url: input.url,
+          eventTypes: input.eventTypes,
+          secret,
+          active: true,
+        })
+        .returning();
+      return {
+        subscription: Object.fromEntries(
+          Object.entries(subscription).filter(([k]) => k !== "secret")
+        ) as typeof subscription,
+        secret,
+      };
+    }),
+
+  /**
+   * Delete workspace-scoped webhook subscription (workspace member, must own)
+   */
+  deleteForWorkspace: workspaceProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const workspaceId = ctx.workspaceId;
+      const result = await db
+        .delete(webhookSubscriptions)
+        .where(
+          and(
+            eq(webhookSubscriptions.id, input.id),
+            eq(webhookSubscriptions.workspaceId, workspaceId)
+          )
+        )
+        .returning();
+      if (result.length === 0)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Webhook not found",
+        });
+      return { success: true };
+    }),
+
+  /**
+   * Toggle active state (workspace member)
+   */
+  toggleForWorkspace: workspaceProcedure
+    .input(z.object({ id: z.string().uuid(), active: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const workspaceId = ctx.workspaceId;
+      const [updated] = await db
+        .update(webhookSubscriptions)
+        .set({ active: input.active })
+        .where(
+          and(
+            eq(webhookSubscriptions.id, input.id),
+            eq(webhookSubscriptions.workspaceId, workspaceId)
+          )
+        )
+        .returning();
+      if (!updated)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Webhook not found",
+        });
+      const { secret: _, ...safe } = updated as unknown as Record<
+        string,
+        unknown
+      > as typeof updated;
+      return safe;
+    }),
+
+  /**
+   * Get recent deliveries for a subscription (pod admin)
+   */
+  deliveriesForSubscription: podAdminProcedure
+    .input(
+      z.object({
+        subscriptionId: z.string().uuid(),
+        limit: z.number().int().min(1).max(50).default(20),
+      })
+    )
+    .query(async ({ input }) => {
+      return db.query.webhookDeliveries.findMany({
+        where: eq(webhookDeliveries.subscriptionId, input.subscriptionId),
+        orderBy: (d, { desc }) => [desc(d.createdAt)],
+        limit: input.limit,
+      });
     }),
 });

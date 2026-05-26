@@ -8,10 +8,14 @@ import {
   integer,
 } from "drizzle-orm/pg-core";
 import { events } from "./events.js";
+import { workspaces } from "./workspaces.js";
 
 export const webhookSubscriptions = pgTable("webhook_subscriptions", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: text("user_id").notNull(),
+  workspaceId: uuid("workspace_id").references(() => workspaces.id, {
+    onDelete: "cascade",
+  }),
   name: text("name").notNull(),
   url: text("url").notNull(),
   eventTypes: text("event_types").array().notNull(),

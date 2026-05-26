@@ -44,9 +44,9 @@ import {
   Plus,
   Settings2,
 } from "lucide-react";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { trpc } from "../../../lib/trpc";
-import { DetailDrawer } from "../components/detail-drawer";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -54,8 +54,7 @@ import {
   ResourceRowSkeleton,
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
-import { StatusPill, type StatusKind } from "../components/status-pill";
-import { useFocusRow } from "../components/use-focus-row";
+import { type StatusKind } from "../components/status-pill";
 import {
   formatRelative,
   studioDeepLinkForWorkspace,
@@ -156,9 +155,8 @@ function WorkspacesFallback() {
 }
 
 function WorkspacesInner() {
+  const router = useRouter();
   const createDisclosure = useDisclosure();
-  const drawerDisclosure = useDisclosure();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
 
   // adminListAll is `void` input — server returns ALL workspaces
@@ -168,16 +166,6 @@ function WorkspacesInner() {
   const query = trpc.workspaces.adminListAll.useQuery(undefined, {
     staleTime: 30_000,
   });
-
-  // ?focus=<workspaceId> from ⌘K: open the drawer for that workspace and
-  // (when the row is rendered) scroll-and-highlight it.
-  const focusId = useFocusRow({ ready: !query.isLoading });
-  useEffect(() => {
-    if (focusId && !drawerDisclosure.isOpen) {
-      setSelectedId(focusId);
-      drawerDisclosure.onOpen();
-    }
-  }, [focusId]);
 
   // The api-types snapshot types `settings` as the structured
   // WorkspaceSettings interface; we treat it as a loose record here so
@@ -204,11 +192,6 @@ function WorkspacesInner() {
     () => allWorkspaces.filter((ws) => isArchived(ws)).length,
     [allWorkspaces]
   );
-
-  const selected =
-    selectedId != null
-      ? (workspaces.find((ws) => ws.id === selectedId) ?? null)
-      : null;
 
   return (
     <div className="px-6 py-6 max-w-[1400px]">
@@ -247,7 +230,7 @@ function WorkspacesInner() {
 
       <SectionCard
         title="All workspaces"
-        hint="Click a row to see details · use Open in Studio to manage"
+        hint="Click a row to view details"
         actions={
           archivedCount > 0 ? (
             <label className="flex items-center gap-2 text-[11.5px] text-foreground/55">
@@ -278,10 +261,7 @@ function WorkspacesInner() {
               >
                 <WorkspaceRow
                   ws={ws}
-                  onSelect={() => {
-                    setSelectedId(ws.id);
-                    drawerDisclosure.onOpen();
-                  }}
+                  onSelect={() => router.push(`/workspaces/${ws.id}`)}
                 />
               </div>
             ))}
@@ -292,12 +272,6 @@ function WorkspacesInner() {
       <CreateWorkspaceModal
         isOpen={createDisclosure.isOpen}
         onClose={createDisclosure.onClose}
-      />
-
-      <WorkspaceDrawer
-        ws={selected}
-        isOpen={drawerDisclosure.isOpen}
-        onClose={drawerDisclosure.onClose}
       />
     </div>
   );
@@ -537,196 +511,6 @@ function ConfirmArchiveWorkspaceModal({
         </ModalFooter>
       </ModalContent>
     </Modal>
-  );
-}
-
-// ─── Drawer ─────────────────────────────────────────────────────────
-
-function WorkspaceDrawer({
-  ws,
-  isOpen,
-  onClose,
-}: {
-  ws: Workspace | null;
-  isOpen: boolean;
-  onClose: () => void;
-}) {
-  const membersQuery = trpc.workspaces.listMembers.useQuery(
-    { workspaceId: ws?.id ?? "" },
-    {
-      enabled: !!ws?.id && isOpen,
-      staleTime: 60_000,
-    }
-  );
-
-  const owner = useMemo(() => {
-    if (!membersQuery.data) return null;
-    return (
-      membersQuery.data.find(
-        (m) => m.role === "owner" && m.user?.userType === "human"
-      ) ?? null
-    );
-  }, [membersQuery.data]);
-
-  const status = ws ? deriveStatus(ws) : null;
-  const settingsPretty = ws ? JSON.stringify(ws.settings ?? {}, null, 2) : "{}";
-
-  return (
-    <DetailDrawer
-      isOpen={isOpen}
-      onClose={onClose}
-      title={ws?.name ?? "—"}
-      subtitle={ws ? <span className="font-mono">{ws.id}</span> : undefined}
-      headerAccessory={
-        <span
-          aria-hidden
-          className="glass-icon flex h-9 w-9 shrink-0 items-center justify-center text-[14px] font-semibold text-white"
-          style={{ background: ws ? colorForWorkspace(ws) : undefined }}
-        >
-          {ws ? workspaceInitial(ws) : "?"}
-        </span>
-      }
-      headerRight={
-        status ? <StatusPill kind={status.kind} label={status.label} /> : null
-      }
-      footer={
-        <>
-          <Button variant="flat" radius="md" size="sm" onPress={onClose}>
-            Close
-          </Button>
-          {ws ? (
-            <Button
-              as="a"
-              href={studioDeepLinkForWorkspace(ws.id)}
-              target="_blank"
-              rel="noopener noreferrer"
-              color="primary"
-              variant="solid"
-              radius="md"
-              size="sm"
-              endContent={<ExternalLink className="h-3.5 w-3.5" />}
-            >
-              Open in Studio
-            </Button>
-          ) : null}
-        </>
-      }
-    >
-      {ws ? (
-        <div className="flex flex-col gap-4">
-          {ws.description ? (
-            <p className="text-[12.5px] text-foreground/55">{ws.description}</p>
-          ) : null}
-          <DetailRow label="Type" value={ws.type} />
-          <DetailRow
-            label="Members"
-            value={`${ws.memberCount} ${
-              ws.memberCount === 1 ? "member" : "members"
-            }`}
-          />
-          <DetailRow
-            label="Created"
-            value={ws.createdAt ? new Date(ws.createdAt).toLocaleString() : "—"}
-          />
-          <DetailRow
-            label="Last update"
-            value={ws.updatedAt ? formatRelative(new Date(ws.updatedAt)) : "—"}
-          />
-          <DetailRow
-            label="Subscription"
-            value={
-              ws.subscriptionTier
-                ? `${ws.subscriptionTier}${
-                    ws.subscriptionStatus ? ` · ${ws.subscriptionStatus}` : ""
-                  }`
-                : "—"
-            }
-          />
-
-          <div>
-            <h4 className="mb-2 text-[11px] uppercase tracking-wider text-foreground/45">
-              Owner
-            </h4>
-            {membersQuery.isLoading ? (
-              <p className="text-[12px] text-foreground/55">Loading…</p>
-            ) : owner ? (
-              <div className="flex items-center justify-between gap-3 rounded-md border border-foreground/[0.06] bg-foreground/[0.02] px-3 py-2">
-                <div className="flex min-w-0 flex-col">
-                  <span className="truncate text-[12.5px] font-medium text-foreground">
-                    {owner.user.name ?? owner.user.email}
-                  </span>
-                  <span className="truncate font-mono text-[10.5px] text-foreground/40">
-                    {owner.user.email}
-                  </span>
-                </div>
-                <span className="shrink-0 text-[11px] text-foreground/55">
-                  owner
-                </span>
-              </div>
-            ) : (
-              <p className="text-[12px] text-foreground/55">
-                No human owner found.
-              </p>
-            )}
-          </div>
-
-          <div>
-            <h4 className="mb-2 text-[11px] uppercase tracking-wider text-foreground/45">
-              Members ({membersQuery.data?.length ?? 0})
-            </h4>
-            {membersQuery.isLoading ? (
-              <p className="text-[12px] text-foreground/55">Loading…</p>
-            ) : membersQuery.data && membersQuery.data.length > 0 ? (
-              <div className="flex flex-col gap-1">
-                {membersQuery.data.slice(0, 8).map((m) => (
-                  <div
-                    key={m.id}
-                    className="flex items-center justify-between gap-3 rounded-md px-3 py-1.5 hover:bg-content2/40"
-                  >
-                    <span className="truncate text-[12px] text-foreground">
-                      {m.user?.name ?? m.user?.email ?? m.userId}
-                    </span>
-                    <span className="shrink-0 text-[11px] text-foreground/55">
-                      {m.role}
-                    </span>
-                  </div>
-                ))}
-                {membersQuery.data.length > 8 ? (
-                  <p className="px-3 pt-1 text-[11px] text-foreground/45">
-                    +{membersQuery.data.length - 8} more — open in Studio to see
-                    all
-                  </p>
-                ) : null}
-              </div>
-            ) : (
-              <p className="text-[12px] text-foreground/55">No members.</p>
-            )}
-          </div>
-
-          <div>
-            <h4 className="mb-2 text-[11px] uppercase tracking-wider text-foreground/45">
-              Settings
-            </h4>
-            <pre className="max-h-[180px] overflow-auto rounded-md border border-foreground/[0.06] bg-foreground/[0.02] p-3 font-mono text-[10.5px] text-foreground/70">
-              {settingsPretty}
-            </pre>
-          </div>
-        </div>
-      ) : null}
-    </DetailDrawer>
-  );
-}
-
-function DetailRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3">
-      <span className="text-[11px] uppercase tracking-wider text-foreground/45">
-        {label}
-      </span>
-      <span className="truncate text-right text-[12.5px] text-foreground">
-        {value}
-      </span>
-    </div>
   );
 }
 

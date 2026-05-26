@@ -1,4 +1,4 @@
-import { createHash } from "crypto";
+import { createHash, createHmac, timingSafeEqual } from "crypto";
 import { Hono } from "hono";
 import { createLogger } from "@synap-core/core";
 import { sql as drizzleSql } from "drizzle-orm";
@@ -10,6 +10,7 @@ import {
   channels,
   messages,
   messagingAccounts,
+  webhookSubscriptions,
   ChannelType,
   ChannelScope,
   MessageRole,
@@ -23,6 +24,74 @@ import { MessagingAccountService } from "../services/messaging-account-service.j
 const logger = createLogger({ module: "webhooks-inbound" });
 
 export const webhooksInboundRouter = new Hono();
+
+// Generic inbound webhook — external backend → Synap
+// Static route must appear before /:id dynamic routes (Hono ordering rule)
+webhooksInboundRouter.post("/inbound/:subscriptionId", async (c) => {
+  const subscriptionId = c.req.param("subscriptionId");
+  const rawBody = await c.req.text();
+
+  const subscription = await db.query.webhookSubscriptions.findFirst({
+    where: and(
+      eq(webhookSubscriptions.id, subscriptionId),
+      eq(webhookSubscriptions.active, true)
+    ),
+  });
+
+  if (!subscription) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  // Verify HMAC-SHA256 signature — timingSafeEqual requires equal-length buffers
+  const signature = c.req.header("x-synap-signature") ?? "";
+  const expected = `sha256=${createHmac("sha256", subscription.secret).update(rawBody).digest("hex")}`;
+  const sigBuf = Buffer.from(signature);
+  const expBuf = Buffer.from(expected);
+  const sigValid =
+    sigBuf.length === expBuf.length && timingSafeEqual(sigBuf, expBuf);
+
+  if (!sigValid) {
+    logger.warn({ subscriptionId }, "Invalid signature on inbound webhook");
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    payload = rawBody;
+  }
+
+  // Update lastTriggeredAt
+  await db
+    .update(webhookSubscriptions)
+    .set({ lastTriggeredAt: new Date() })
+    .where(eq(webhookSubscriptions.id, subscriptionId));
+
+  logger.info(
+    { subscriptionId, workspaceId: subscription.workspaceId },
+    "Inbound webhook received"
+  );
+
+  // Emit automation event (fire-and-forget, mirrors messaging inbound pattern)
+  if (subscription.workspaceId) {
+    emitSideEffects({
+      subjectType: "external_webhook",
+      action: "received",
+      subjectId: subscriptionId,
+      userId: subscription.userId,
+      workspaceId: subscription.workspaceId,
+      data: { subscriptionId, payload },
+    }).catch((err) => {
+      logger.warn(
+        { err, subscriptionId },
+        "emitSideEffects failed (non-fatal)"
+      );
+    });
+  }
+
+  return c.json({ received: true }, 200);
+});
 
 webhooksInboundRouter.post("/messaging", async (c) => {
   const rawBody = await c.req.text();
