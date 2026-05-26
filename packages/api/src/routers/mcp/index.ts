@@ -55,16 +55,20 @@ export function createMCPServer(
   });
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-    // Stdio transport does not carry HTTP headers, so auth must come from env.
-    // In production this server should not run — use the HTTP MCP endpoint at
-    // POST /mcp which enforces full API-key auth via apiKeyService.validateApiKey().
-    if (process.env.NODE_ENV === "production" && !process.env.MCP_USER_ID) {
+    // HTTP transport: sessionUserId is injected by http-handler.ts (already auth-checked).
+    // Stdio transport in production: requires MCP_USER_ID env var.
+    if (
+      process.env.NODE_ENV === "production" &&
+      !sessionUserId &&
+      !process.env.MCP_USER_ID
+    ) {
       throw new Error(
         "MCP stdio server requires MCP_USER_ID in production. " +
           "Use the HTTP MCP endpoint (POST /mcp) with Authorization: Bearer <api-key> instead."
       );
     }
-    const userId = process.env.MCP_USER_ID ?? "dev-placeholder";
+    const userId =
+      sessionUserId ?? process.env.MCP_USER_ID ?? "dev-placeholder";
     const apiKeyScopes = process.env.MCP_SCOPES?.split(",") ?? ["mcp.read"];
 
     return await resources.read(request.params.uri, userId, apiKeyScopes);
@@ -78,16 +82,20 @@ export function createMCPServer(
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    // Stdio transport does not carry HTTP headers, so auth must come from env.
-    // In production this server should not run — use the HTTP MCP endpoint at
-    // POST /mcp which enforces full API-key auth via apiKeyService.validateApiKey().
-    if (process.env.NODE_ENV === "production" && !process.env.MCP_USER_ID) {
+    // HTTP transport: sessionUserId is injected by http-handler.ts (already auth-checked).
+    // Stdio transport in production: requires MCP_USER_ID env var.
+    if (
+      process.env.NODE_ENV === "production" &&
+      !sessionUserId &&
+      !process.env.MCP_USER_ID
+    ) {
       throw new Error(
         "MCP stdio server requires MCP_USER_ID in production. " +
           "Use the HTTP MCP endpoint (POST /mcp) with Authorization: Bearer <api-key> instead."
       );
     }
-    const userId = process.env.MCP_USER_ID ?? "dev-placeholder";
+    const userId =
+      sessionUserId ?? process.env.MCP_USER_ID ?? "dev-placeholder";
     const apiKeyScopes = process.env.MCP_SCOPES?.split(",") ?? [
       "mcp.read",
       "mcp.write",
