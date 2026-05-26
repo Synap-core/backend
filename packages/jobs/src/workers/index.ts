@@ -73,6 +73,10 @@ import {
 } from "./sync-push-supplementary.js";
 import { handleHydrationSummaryPost } from "./hydration-summary-post.js";
 import {
+  handleCapturePatternNudge,
+  CAPTURE_PATTERN_NUDGE_QUEUE,
+} from "./capture-pattern-nudge.js";
+import {
   handleCrmDailyDigest,
   CRM_DAILY_DIGEST_QUEUE,
 } from "./crm-daily-digest.js";
@@ -126,6 +130,7 @@ const ALL_QUEUES = [
   SYNC_PUSH_FILES_QUEUE,
   SYNC_PUSH_SUPPLEMENTARY_QUEUE,
   "hydration-summary-post",
+  CAPTURE_PATTERN_NUDGE_QUEUE,
   HERMES_TRIGGER_QUEUE,
   CRM_DAILY_DIGEST_QUEUE,
 ];
@@ -337,6 +342,11 @@ export async function registerAllWorkers(): Promise<void> {
     handleHydrationSummaryPost(job)
   );
   logger.info("Registered worker: hydration-summary-post");
+
+  await boss.work(CAPTURE_PATTERN_NUDGE_QUEUE, async ([job]: any[]) =>
+    handleCapturePatternNudge(job)
+  );
+  logger.info("Registered worker: capture-pattern-nudge");
 
   // Pod-to-pod sync (event log replication + supplementary rows + file payloads)
   await boss.work(SYNC_PUSH_QUEUE, async () => handleSyncPush());

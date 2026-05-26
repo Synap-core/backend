@@ -571,6 +571,11 @@ export class IntelligenceHubClient {
         description?: string;
         propertyHints?: string;
       }>;
+      availableWorkspaces?: Array<{
+        id: string;
+        name: string;
+        description?: string;
+      }>;
       previousEntities?: Array<{
         tempId: string;
         profileSlug: string;
@@ -594,6 +599,7 @@ export class IntelligenceHubClient {
       relationType: string;
     }>;
     followUp: string | null;
+    targetWorkspaceId?: string | null;
   } | null> {
     try {
       const controller = new AbortController();

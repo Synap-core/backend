@@ -15,6 +15,7 @@ import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import {
   sql,
+  eq,
   getDb,
   EventRepository,
   EntityRepository,
@@ -23,6 +24,8 @@ import {
   ProfileResolutionService,
   PropertyDefRepository,
   EntityUpsertService,
+  workspaces,
+  workspaceMembers,
   type PropertyValueType,
   type IdentitySignal,
 } from "@synap/database";
@@ -246,7 +249,27 @@ export const captureRouter = router({
               .join(", ") || undefined,
         }));
 
-      // 2. Call IS /api/structure
+      // 2. Fetch user's workspaces for routing hints (max 5, most recent)
+      const userWorkspaceRows = await database
+        .select({
+          id: workspaces.id,
+          name: workspaces.name,
+          description: workspaces.description,
+        })
+        .from(workspaces)
+        .innerJoin(
+          workspaceMembers,
+          eq(workspaceMembers.workspaceId, workspaces.id)
+        )
+        .where(eq(workspaceMembers.userId, userId))
+        .limit(5);
+      const availableWorkspaces = userWorkspaceRows.map((w) => ({
+        id: w.id,
+        name: w.name,
+        description: w.description ?? undefined,
+      }));
+
+      // 3. Call IS /api/structure
       const { client } = await resolveIntelligenceService({
         userId,
         workspaceId: workspaceId ?? undefined,
@@ -258,7 +281,11 @@ export const captureRouter = router({
         url: input.url,
         html: input.html,
         context: input.context,
-        hints: { availableProfiles, previousEntities: input.previousEntities },
+        hints: {
+          availableProfiles,
+          availableWorkspaces,
+          previousEntities: input.previousEntities,
+        },
       });
 
       if (!structureResult) {
@@ -287,6 +314,7 @@ export const captureRouter = router({
             relationType: string;
           }>,
           followUp: null as string | null,
+          targetWorkspaceId: null as string | null,
           dedupCandidates: {} as Record<
             string,
             Array<{
@@ -305,6 +333,7 @@ export const captureRouter = router({
           proposals: structureResult.entities,
           relations: structureResult.relations,
           followUp: structureResult.followUp,
+          targetWorkspaceId: structureResult.targetWorkspaceId ?? null,
           dedupCandidates: {} as Record<
             string,
             Array<{
@@ -375,6 +404,7 @@ export const captureRouter = router({
         proposals: structureResult.entities,
         relations: structureResult.relations,
         followUp: null as string | null,
+        targetWorkspaceId: structureResult.targetWorkspaceId ?? null,
         dedupCandidates,
       };
     }),

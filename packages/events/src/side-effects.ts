@@ -110,7 +110,22 @@ export async function emitSideEffects(
       });
     }
 
-    // 6. Hydration summary — proactive welcome message after import review.
+    // 6. Capture pattern nudge — post automation suggestion when a profile type
+    //    accumulates enough captures in the last 7 days.
+    if (
+      payload.subjectType === "capture" &&
+      payload.action === "complete" &&
+      Array.isArray(payload.data?.profileSlugs) &&
+      (payload.data.profileSlugs as string[]).length > 0
+    ) {
+      await boss.send("capture-pattern-nudge", {
+        userId: payload.userId,
+        workspaceId: payload.workspaceId ?? null,
+        profileSlugs: payload.data.profileSlugs as string[],
+      });
+    }
+
+    // 7. Hydration summary — proactive welcome message after import review.
     // Fired from capture.executeWithSchema once the import pipeline completes.
     // The worker resolves the personal channel + inserts a single AI greeting
     // summarizing what was just imported. Fire-and-forget, no retries.
