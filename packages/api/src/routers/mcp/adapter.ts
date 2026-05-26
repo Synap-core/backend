@@ -36,6 +36,19 @@ import type { Context } from "../../types/context.js";
 async function createHubProtocolCaller(userId: string, scopes: string[]) {
   await getDb();
 
+  // MCP keys use mcp.read / mcp.write scopes. Hub Protocol procedures require
+  // hub-protocol.read / hub-protocol.write. Translate at the boundary so callers
+  // only need to mint mcp.* keys — no hub-protocol.* knowledge required.
+  const hubScopes = Array.from(
+    new Set([
+      ...scopes,
+      ...(scopes.includes("mcp.read") ? ["hub-protocol.read"] : []),
+      ...(scopes.includes("mcp.write")
+        ? ["hub-protocol.read", "hub-protocol.write"]
+        : []),
+    ])
+  );
+
   const ctx: Context & {
     scopes?: string[];
     apiKeyId?: string;
@@ -44,7 +57,7 @@ async function createHubProtocolCaller(userId: string, scopes: string[]) {
     db,
     authenticated: true,
     userId,
-    scopes,
+    scopes: hubScopes,
     apiKeyId: "mcp",
     apiKeyName: "MCP Server",
     req: undefined,
