@@ -139,10 +139,17 @@ export const ADMIN_ACTIONS: readonly string[] = [
   "agent.create",
   "agent.delete",
   "agent.updateRole",
+  "agent.updateCapabilities",
+  "agent.update",
   "apiKey.create",
   "apiKey.revoke",
+  "apiKey.rotate",
   "intelligence.connect",
   "intelligence.disconnect",
+  "trustedIssuer.create",
+  "trustedIssuer.delete",
+  "connector.connect",
+  "connector.disconnect",
 ];
 
 /**

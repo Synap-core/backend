@@ -18,25 +18,35 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Mock every module that touches the DB or external services
 // ---------------------------------------------------------------------------
 
+// vi.hoisted ensures these refs exist before the vi.mock factory is hoisted
+// to the top of the file (vitest hoists vi.mock calls at transform time, which
+// runs before const declarations in module scope).
+const { mockVerifyPermission, mockDbSelect, mockDbInsert } = vi.hoisted(() => ({
+  mockVerifyPermission: vi.fn().mockResolvedValue({ allowed: true }),
+  mockDbSelect: vi.fn(),
+  mockDbInsert: vi.fn(),
+}));
+
 vi.mock("@synap/database", async () => {
-  const randomUUID = (await import("crypto")).randomUUID;
-  const mockInsert = vi.fn(() => ({
+  const { randomUUID } = await import("crypto");
+  mockDbInsert.mockImplementation(() => ({
     values: vi.fn().mockReturnThis(),
     returning: vi.fn().mockResolvedValue([{ id: randomUUID() }]),
     catch: vi.fn().mockReturnThis(),
   }));
-  const mockSelect = vi.fn(() => ({
+  mockDbSelect.mockImplementation(() => ({
     from: vi.fn().mockReturnThis(),
     where: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue([]),
   }));
   return {
-    db: { insert: mockInsert, select: mockSelect, transaction: vi.fn() },
+    db: { insert: mockDbInsert, select: mockDbSelect, transaction: vi.fn() },
     proposals: {},
     entities: {},
     users: { id: "id", userType: "userType", agentMetadata: "agentMetadata" },
     workspaces: { id: "id", settings: "settings" },
     eq: vi.fn((a, b) => ({ field: a, value: b })),
+    verifyPermission: mockVerifyPermission,
     ProposalStatus: { PENDING: "pending", AUTO_APPROVED: "auto_approved" },
   };
 });
@@ -89,20 +99,18 @@ import { checkPermissionOrPropose } from "./permission-check.js";
 // ---------------------------------------------------------------------------
 
 /**
- * Set up db.select mock to return a specific agent user row.
- * The function does TWO selects in sequence: first for agentUser, then for
- * workspace settings. This helper configures both.
+ * Configure mockDbSelect so the first call returns an agent user row and
+ * subsequent calls return a workspace-settings row. This matches the two
+ * sequential selects inside checkPermissionOrPropose when agentUserId is set.
  */
-async function mockAgentUserSelect(
+function setupAgentSelectSequence(
   agentMetadata: Record<string, unknown>,
   workspaceSettings: Record<string, unknown> = {}
 ) {
-  const { db } = await import("@synap/database");
   let callCount = 0;
-  vi.mocked(db.select).mockImplementation(() => {
+  mockDbSelect.mockImplementation(() => {
     callCount++;
     if (callCount === 1) {
-      // First select: agent user row
       return {
         from: vi.fn().mockReturnThis(),
         where: vi.fn().mockReturnThis(),
@@ -111,28 +119,11 @@ async function mockAgentUserSelect(
           .mockResolvedValue([{ userType: "agent", agentMetadata }]),
       } as any;
     }
-    // Subsequent selects: workspace settings
     return {
       from: vi.fn().mockReturnThis(),
       where: vi.fn().mockReturnThis(),
       limit: vi.fn().mockResolvedValue([{ settings: workspaceSettings }]),
     } as any;
-  });
-}
-
-async function mockVerifyPermissionAllowed() {
-  // verifyPermission is dynamically imported inside checkPermissionOrPropose.
-  // We intercept the dynamic import by mocking @synap/database to include it.
-  const { db } = await import("@synap/database");
-  // The function does: const { verifyPermission, eq } = await import("@synap/database")
-  // Since we already mocked the module we need to add verifyPermission to it.
-  // Re-set mock to include verifyPermission on the module level.
-  vi.doMock("@synap/database", async (importOriginal) => {
-    const original = (await importOriginal()) as Record<string, unknown>;
-    return {
-      ...original,
-      verifyPermission: vi.fn().mockResolvedValue({ allowed: true }),
-    };
   });
 }
 
@@ -348,60 +339,14 @@ describe("checkPermissionOrPropose — filesystem blocklist", () => {
 
 describe("checkPermissionOrPropose — CBAC (capability-based access control)", () => {
   beforeEach(() => {
-    vi.resetAllMocks();
-    // Reset db mock to clean state after each setup
-    vi.doMock("@synap/database", async () => {
-      const randomUUID = (await import("crypto")).randomUUID;
-      return {
-        db: {
-          insert: vi.fn(() => ({
-            values: vi.fn().mockReturnThis(),
-            returning: vi.fn().mockResolvedValue([{ id: randomUUID() }]),
-            catch: vi.fn().mockReturnThis(),
-          })),
-          select: vi.fn(),
-        },
-        proposals: {},
-        entities: {},
-        users: {
-          id: "id",
-          userType: "userType",
-          agentMetadata: "agentMetadata",
-        },
-        workspaces: { id: "id", settings: "settings" },
-        eq: vi.fn((a, b) => ({ field: a, value: b })),
-        verifyPermission: vi.fn().mockResolvedValue({ allowed: true }),
-        ProposalStatus: { PENDING: "pending", AUTO_APPROVED: "auto_approved" },
-      };
-    });
+    mockVerifyPermission.mockResolvedValue({ allowed: true });
   });
 
   it("denies when agent has capability list that excludes the requested action", async () => {
-    const { db } = await import("@synap/database");
-    let callCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([
-            {
-              userType: "agent",
-              agentMetadata: {
-                capabilities: ["entity.read"],
-                writesRequireProposal: false,
-              },
-            },
-          ]),
-        } as any;
-      }
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([{ settings: {} }]),
-      } as any;
-    });
+    setupAgentSelectSequence(
+      { capabilities: ["entity.read"], writesRequireProposal: false },
+      {}
+    );
 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
@@ -417,37 +362,13 @@ describe("checkPermissionOrPropose — CBAC (capability-based access control)", 
   });
 
   it("allows when agent has exact match capability for requested action", async () => {
-    const { db } = await import("@synap/database");
-    let callCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([
-            {
-              userType: "agent",
-              agentMetadata: {
-                capabilities: ["entity.read", "entity.create"],
-                writesRequireProposal: false,
-              },
-            },
-          ]),
-        } as any;
-      }
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi
-          .fn()
-          .mockResolvedValue([
-            {
-              settings: { aiGovernance: { autoApproveFor: ["entity.create"] } },
-            },
-          ]),
-      } as any;
-    });
+    setupAgentSelectSequence(
+      {
+        capabilities: ["entity.read", "entity.create"],
+        writesRequireProposal: false,
+      },
+      { aiGovernance: { autoApproveFor: ["entity.create"] } }
+    );
 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
@@ -456,42 +377,14 @@ describe("checkPermissionOrPropose — CBAC (capability-based access control)", 
       action: "create",
     });
 
-    // Should be granted (or proposed via whitelist path — not denied)
     expect("denied" in result).toBe(false);
   });
 
   it("allows when agent has wildcard capability entity.* for entity.create", async () => {
-    const { db } = await import("@synap/database");
-    let callCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([
-            {
-              userType: "agent",
-              agentMetadata: {
-                capabilities: ["entity.*"],
-                writesRequireProposal: false,
-              },
-            },
-          ]),
-        } as any;
-      }
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi
-          .fn()
-          .mockResolvedValue([
-            {
-              settings: { aiGovernance: { autoApproveFor: ["entity.create"] } },
-            },
-          ]),
-      } as any;
-    });
+    setupAgentSelectSequence(
+      { capabilities: ["entity.*"], writesRequireProposal: false },
+      { aiGovernance: { autoApproveFor: ["entity.create"] } }
+    );
 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
@@ -504,39 +397,10 @@ describe("checkPermissionOrPropose — CBAC (capability-based access control)", 
   });
 
   it("allows when agent has *.* global wildcard", async () => {
-    const { db } = await import("@synap/database");
-    let callCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([
-            {
-              userType: "agent",
-              agentMetadata: {
-                capabilities: ["*.*"],
-                writesRequireProposal: false,
-              },
-            },
-          ]),
-        } as any;
-      }
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi
-          .fn()
-          .mockResolvedValue([
-            {
-              settings: {
-                aiGovernance: { autoApproveFor: ["workspace.create"] },
-              },
-            },
-          ]),
-      } as any;
-    });
+    setupAgentSelectSequence(
+      { capabilities: ["*.*"], writesRequireProposal: false },
+      { aiGovernance: { autoApproveFor: ["workspace.create"] } }
+    );
 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
@@ -545,42 +409,15 @@ describe("checkPermissionOrPropose — CBAC (capability-based access control)", 
       action: "create",
     });
 
-    // *.*  passes CBAC, so the action proceeds to proposal/whitelist evaluation
+    // *.* passes CBAC, so the action proceeds to proposal/whitelist evaluation
     expect("denied" in result).toBe(false);
   });
 
   it("treats empty capabilities array as unrestricted (backwards compatibility)", async () => {
-    const { db } = await import("@synap/database");
-    let callCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([
-            {
-              userType: "agent",
-              agentMetadata: {
-                capabilities: [],
-                writesRequireProposal: false,
-              },
-            },
-          ]),
-        } as any;
-      }
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi
-          .fn()
-          .mockResolvedValue([
-            {
-              settings: { aiGovernance: { autoApproveFor: ["entity.create"] } },
-            },
-          ]),
-      } as any;
-    });
+    setupAgentSelectSequence(
+      { capabilities: [], writesRequireProposal: false },
+      { aiGovernance: { autoApproveFor: ["entity.create"] } }
+    );
 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
@@ -589,39 +426,14 @@ describe("checkPermissionOrPropose — CBAC (capability-based access control)", 
       action: "create",
     });
 
-    // Empty caps = no restriction; must not be denied
     expect("denied" in result).toBe(false);
   });
 
   it("treats absent capabilities field as unrestricted", async () => {
-    const { db } = await import("@synap/database");
-    let callCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([
-            {
-              userType: "agent",
-              agentMetadata: { writesRequireProposal: false },
-            },
-          ]),
-        } as any;
-      }
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi
-          .fn()
-          .mockResolvedValue([
-            {
-              settings: { aiGovernance: { autoApproveFor: ["entity.create"] } },
-            },
-          ]),
-      } as any;
-    });
+    setupAgentSelectSequence(
+      { writesRequireProposal: false },
+      { aiGovernance: { autoApproveFor: ["entity.create"] } }
+    );
 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
@@ -639,29 +451,12 @@ describe("checkPermissionOrPropose — CBAC (capability-based access control)", 
 // ---------------------------------------------------------------------------
 
 describe("checkPermissionOrPropose — writesRequireProposal", () => {
+  beforeEach(() => {
+    mockVerifyPermission.mockResolvedValue({ allowed: true });
+  });
+
   it("creates a proposal when assistant agent performs entity.create", async () => {
-    const { db } = await import("@synap/database");
-    let callCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([
-            {
-              userType: "agent",
-              agentMetadata: { writesRequireProposal: true },
-            },
-          ]),
-        } as any;
-      }
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([{ settings: {} }]),
-      } as any;
-    });
+    setupAgentSelectSequence({ writesRequireProposal: true }, {});
 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
@@ -675,28 +470,7 @@ describe("checkPermissionOrPropose — writesRequireProposal", () => {
   });
 
   it("creates a proposal when assistant agent performs document.update", async () => {
-    const { db } = await import("@synap/database");
-    let callCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([
-            {
-              userType: "agent",
-              agentMetadata: { writesRequireProposal: true },
-            },
-          ]),
-        } as any;
-      }
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([{ settings: {} }]),
-      } as any;
-    });
+    setupAgentSelectSequence({ writesRequireProposal: true }, {});
 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
@@ -709,32 +483,10 @@ describe("checkPermissionOrPropose — writesRequireProposal", () => {
   });
 
   it("allows entity.read without proposal even with writesRequireProposal=true", async () => {
-    const { db } = await import("@synap/database");
-    let callCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([
-            {
-              userType: "agent",
-              agentMetadata: { writesRequireProposal: true },
-            },
-          ]),
-        } as any;
-      }
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi
-          .fn()
-          .mockResolvedValue([
-            { settings: { aiGovernance: { autoApproveFor: ["entity.read"] } } },
-          ]),
-      } as any;
-    });
+    setupAgentSelectSequence(
+      { writesRequireProposal: true },
+      { aiGovernance: { autoApproveFor: ["entity.read"] } }
+    );
 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
@@ -743,7 +495,7 @@ describe("checkPermissionOrPropose — writesRequireProposal", () => {
       action: "read",
     });
 
-    // read is exempt from writesRequireProposal; must be granted (or auto-approved)
+    // read is exempt from writesRequireProposal
     expect("denied" in result).toBe(false);
     if ("granted" in result) {
       expect(result.granted).toBe(true);
@@ -751,32 +503,10 @@ describe("checkPermissionOrPropose — writesRequireProposal", () => {
   });
 
   it("allows search.* operations without proposal even with writesRequireProposal=true", async () => {
-    const { db } = await import("@synap/database");
-    let callCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([
-            {
-              userType: "agent",
-              agentMetadata: { writesRequireProposal: true },
-            },
-          ]),
-        } as any;
-      }
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi
-          .fn()
-          .mockResolvedValue([
-            { settings: { aiGovernance: { autoApproveFor: ["search.*"] } } },
-          ]),
-      } as any;
-    });
+    setupAgentSelectSequence(
+      { writesRequireProposal: true },
+      { aiGovernance: { autoApproveFor: ["search.*"] } }
+    );
 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
@@ -789,34 +519,10 @@ describe("checkPermissionOrPropose — writesRequireProposal", () => {
   });
 
   it("allows memory.recall without proposal even with writesRequireProposal=true", async () => {
-    const { db } = await import("@synap/database");
-    let callCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([
-            {
-              userType: "agent",
-              agentMetadata: { writesRequireProposal: true },
-            },
-          ]),
-        } as any;
-      }
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi
-          .fn()
-          .mockResolvedValue([
-            {
-              settings: { aiGovernance: { autoApproveFor: ["memory.recall"] } },
-            },
-          ]),
-      } as any;
-    });
+    setupAgentSelectSequence(
+      { writesRequireProposal: true },
+      { aiGovernance: { autoApproveFor: ["memory.recall"] } }
+    );
 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
@@ -834,33 +540,16 @@ describe("checkPermissionOrPropose — writesRequireProposal", () => {
 // ---------------------------------------------------------------------------
 
 describe("checkPermissionOrPropose — ADMIN_ACTIONS always propose", () => {
+  beforeEach(() => {
+    mockVerifyPermission.mockResolvedValue({ allowed: true });
+  });
+
   it("creates a proposal for workspace.update even when not an assistant agent", async () => {
-    const { db } = await import("@synap/database");
-    let callCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([
-            {
-              userType: "agent",
-              // twin: writesRequireProposal = false, no capability restriction
-              agentMetadata: {
-                writesRequireProposal: false,
-                agentTemplate: "twin",
-              },
-            },
-          ]),
-        } as any;
-      }
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([{ settings: {} }]),
-      } as any;
-    });
+    // twin: writesRequireProposal=false, no capability restriction
+    setupAgentSelectSequence(
+      { writesRequireProposal: false, agentTemplate: "twin" },
+      {}
+    );
 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
@@ -869,45 +558,18 @@ describe("checkPermissionOrPropose — ADMIN_ACTIONS always propose", () => {
       action: "update",
     });
 
-    // Must propose, not grant
     expect("granted" in result && result.granted === false).toBe(true);
     expect((result as { proposalId: string }).proposalId).toBeDefined();
   });
 
   it("creates a proposal for workspace.update even when workspace has broad auto-approve override", async () => {
-    const { db } = await import("@synap/database");
-    let callCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([
-            {
-              userType: "agent",
-              agentMetadata: { writesRequireProposal: false },
-            },
-          ]),
-        } as any;
+    // workspace overrides auto-approve to include workspace.update — should still propose
+    setupAgentSelectSequence(
+      { writesRequireProposal: false },
+      {
+        aiGovernance: { autoApproveFor: ["workspace.update", "entity.create"] },
       }
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        // workspace has overridden auto-approve to include workspace.update
-        limit: vi
-          .fn()
-          .mockResolvedValue([
-            {
-              settings: {
-                aiGovernance: {
-                  autoApproveFor: ["workspace.update", "entity.create"],
-                },
-              },
-            },
-          ]),
-      } as any;
-    });
+    );
 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
@@ -921,28 +583,7 @@ describe("checkPermissionOrPropose — ADMIN_ACTIONS always propose", () => {
   });
 
   it("creates a proposal for member.invite regardless of agent flags", async () => {
-    const { db } = await import("@synap/database");
-    let callCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([
-            {
-              userType: "agent",
-              agentMetadata: { writesRequireProposal: false },
-            },
-          ]),
-        } as any;
-      }
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([{ settings: {} }]),
-      } as any;
-    });
+    setupAgentSelectSequence({ writesRequireProposal: false }, {});
 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
@@ -955,32 +596,11 @@ describe("checkPermissionOrPropose — ADMIN_ACTIONS always propose", () => {
   });
 
   it("creates a proposal for agent.create for twin agents (ADMIN_ACTIONS override twin flag)", async () => {
-    const { db } = await import("@synap/database");
-    let callCount = 0;
-    vi.mocked(db.select).mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([
-            {
-              userType: "agent",
-              // twin has writesRequireProposal=false but admin actions still gate
-              agentMetadata: {
-                writesRequireProposal: false,
-                agentTemplate: "twin",
-              },
-            },
-          ]),
-        } as any;
-      }
-      return {
-        from: vi.fn().mockReturnThis(),
-        where: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockResolvedValue([{ settings: {} }]),
-      } as any;
-    });
+    // twin has writesRequireProposal=false but ADMIN_ACTIONS still gate
+    setupAgentSelectSequence(
+      { writesRequireProposal: false, agentTemplate: "twin" },
+      {}
+    );
 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,

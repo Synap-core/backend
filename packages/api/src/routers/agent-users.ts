@@ -13,6 +13,7 @@ import { users, workspaceMembers, apiKeys } from "@synap/database/schema";
 import { verifyPermission } from "@synap/database";
 import { randomUUID } from "crypto";
 import { auditLog } from "../utils/audit-log.js";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import type { AgentMetadata } from "@synap/database/schema";
 
 export const agentUsersRouter = router({
@@ -217,6 +218,33 @@ export const agentUsersRouter = router({
           code: "NOT_FOUND",
           message: "Agent user not found",
         });
+      }
+
+      // Capabilities are security-sensitive: changing them always goes through
+      // the proposal flow (agent.updateCapabilities is in ADMIN_ACTIONS).
+      if (input.capabilities !== undefined) {
+        const perm = await checkPermissionOrPropose({
+          userId: ctx.userId,
+          workspaceId: input.workspaceId,
+          subjectType: "agent",
+          action: "updateCapabilities",
+          data: {
+            agentUserId: input.agentUserId,
+            capabilities: input.capabilities,
+          },
+        });
+        if ("denied" in perm && perm.denied) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: perm.reason ?? "Denied",
+          });
+        }
+        if (!perm.granted) {
+          return {
+            status: "proposed" as const,
+            proposalId: (perm as { proposalId: string }).proposalId,
+          };
+        }
       }
 
       // Update user record

@@ -48,13 +48,19 @@ Synap is a typed knowledge graph. Six layers you need:
 | **Threads**   | Channel conversations, optional entity context | Posting to the user's personal AI channel                |
 | **Proposals** | Writes queued for human approval               | Governance for some mutations (not an error — see below) |
 
-## Orient first (always)
+## Synap-first operating mode
 
-Never assume workspace state. Profiles, scopes, and members vary per installation.
+> **MCP clients** (Claude Desktop, Raycast, OpenClaw with MCP): use `synap_*` tool names — they wrap auth and governance automatically. **REST / HTTP clients**: use the endpoints below.
 
-Run `scripts/orient.sh` (in this skill directory) or call these three endpoints:
+These five rules override default assistant behavior when connected to a Synap pod:
+
+**1. Orient before acting**  
+Run `scripts/orient.sh` or call these endpoints at the start of every session — before searching, before creating, before answering any question about the user's data:
 
 ```
+GET /api/hub/manifest
+  → static capability map: view types, bento block kinds, inline patterns, browser-native cells
+
 GET /api/hub/users/me
   → { id, email, name }                         ← your userId
 
@@ -62,12 +68,27 @@ GET /api/hub/workspaces
   → [{ id, name, role }]                        ← workspaces[0].id if only one
 
 GET /api/hub/profiles?userId={userId}&workspaceId={workspaceId}
-  → [{ slug, displayName, entityScope,
-       properties: [{ slug, valueType, targetProfileSlug? }] }]
+  → [{ slug, displayName, entityScope, properties }]
 ```
 
-`entityScope: "pod"` = visible across all workspaces (note, task, project, person, company, bookmark, event, contact, article, website).
+`entityScope: "pod"` = visible across all workspaces (note, task, project, person, company, bookmark, event, contact, article, website).  
 `entityScope: "workspace"` = scoped to one workspace (deal, file, capture, custom profiles).
+
+**2. Search before answering**  
+Before answering any question about the user's projects, tasks, contacts, decisions, or anything they might have captured — search Synap first. Do not answer from your training or context window when Synap may have the authoritative answer.
+
+**3. Save proactively — without waiting to be asked**  
+When the user shares a decision, task, meeting outcome, contact, or any durable information: save it. Don't ask "should I save this?" for obviously important information. Use:
+
+- entities for structured data (tasks, people, projects, decisions)
+- `remember_fact` / `POST /api/hub/memory` for preferences, context, loose facts
+- documents for long-form notes (meeting notes, research, writeups)
+
+**4. Link everything**  
+An isolated entity has no value in a knowledge graph. When creating entities, immediately link them to related entities. A task belongs to a project. A note belongs to a meeting or a person. A decision belongs to a project and may supersede another decision.
+
+**5. Persist facts, not just conversation**  
+Facts about the user — preferences, team, working style, recurring context — belong in Synap memory, not in your context window. Memory survives sessions and is accessible across all AI surfaces. Context does not.
 
 Properties with `valueType: "entity_id"` are typed links to other entities — see **Linking** below.
 
@@ -621,6 +642,30 @@ This model enables renewals (new deal linking to existing client), multi-stakeho
 6. **Not knowing your userId.** Use `{SYNAP_USER_ID}` from the env (set by `synap connect`). Or call `GET /api/hub/users/me` → `.id` once and cache it. Never hardcode or guess.
 7. **Skipping the search step.** Duplicates degrade the graph more than missing data.
 8. **Forgetting that `GET /channels/personal` needs `hub-protocol.write`** scope — it's get-or-create, not a pure read.
+
+## AI Inline Patterns — reference entities in your replies
+
+When the user is interacting with Synap's AI Companion (the in-browser chat panel), you can embed **inline chips** directly in your reply text. These render as clickable buttons the user can tap to open entities, views, or documents without leaving the conversation.
+
+### Syntax
+
+| Pattern                      | Renders as                  | Effect                            |
+| ---------------------------- | --------------------------- | --------------------------------- |
+| `[[entity:UUID\|Name]]`      | Purple entity chip          | Opens entity detail in side panel |
+| `[[view:UUID\|Name]]`        | Blue view chip              | Opens view                        |
+| `[[open:side\|view:UUID]]`   | Amber "Open in side" button | Opens view in side panel          |
+| `[[open:main\|view:UUID]]`   | Amber "Open" button         | Opens view in main panel          |
+| `[[open:side\|entity:UUID]]` | Amber "Open in side" button | Opens entity in side panel        |
+| `[[run:UUID\|Label]]`        | Green "Run" button          | Navigates to automation entity    |
+| `[[doc:UUID\|Name]]`         | Gray doc chip               | Opens document                    |
+
+### Rules
+
+- **Always use real IDs.** Never hallucinate UUIDs. Only emit patterns for entities/views you just created or retrieved via Hub Protocol.
+- **Emit after creation.** When you create a view or entity, immediately reference it: `"Created your pipeline → [[view:abc123|Active Tasks]]"`
+- **Prefer side panel.** Use `[[open:side|view:UUID]]` so the user keeps their current context.
+- **Only in Companion replies.** These patterns are silently ignored in non-companion channels, documents, and memory. Do not use them there.
+- **Combine with prose.** Don't lead with a chip — embed it naturally: `"Here are your open deals → [[view:xyz|Deals Pipeline]] · [[open:side|view:xyz]]"`
 
 ## When you need more
 

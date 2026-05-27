@@ -631,6 +631,16 @@ export function registerSetupRoutes(app: HubHono): void {
     if (!keyRecord || !keyRecord.isActive) {
       return c.json({ error: "Invalid or inactive API key" }, 401);
     }
+    // Prevent grandchild token minting: sub-tokens (depth≥1) cannot mint further sub-tokens.
+    if (keyRecord.parentKeyId !== null && keyRecord.parentKeyId !== undefined) {
+      return c.json(
+        {
+          error:
+            "Sub-tokens cannot mint child tokens. Use the root API key to provision external users.",
+        },
+        403
+      );
+    }
     const effectiveParentKeyId = keyRecord.id;
 
     const body = await c.req.json().catch(() => null);

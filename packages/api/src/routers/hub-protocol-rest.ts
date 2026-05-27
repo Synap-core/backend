@@ -63,6 +63,7 @@ import {
   registerWorkspacesRoutes,
   registerMessagingRoutes,
   registerWebhooksRoutes,
+  registerManifestRoutes,
 } from "./hub-protocol/rest/index.js";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
@@ -400,6 +401,7 @@ registerSetupRoutes(app); // /setup/agent (provisioning auth)
 registerAgentsRoutes(app); // /agents/sync
 registerMessagingRoutes(app); // /messaging/*
 registerWebhooksRoutes(app); // /webhooks
+registerManifestRoutes(app); // /manifest
 
 // ── OpenAPI stubs for routes not yet annotated inline ──────────────────────
 //

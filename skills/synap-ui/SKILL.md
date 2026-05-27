@@ -33,6 +33,10 @@ You build the surfaces the user sees: views over their data, bento dashboards, f
 Always inventory. Never hallucinate view types, widget kinds, or profiles.
 
 ```
+GET /api/hub/manifest
+  → static capability map: view types, bento block kinds, inline patterns, browser-native cells
+    (call once per session — no DB queries, safe to cache)
+
 GET /api/hub/profiles?userId={userId}&workspaceId={workspaceId}
   → what data exists
 
@@ -43,13 +47,29 @@ GET /api/hub/views?userId={userId}&workspaceId={workspaceId}
   → [{ id, name, type, profileSlug, config }]
 ```
 
-Widget definitions are the source of truth for which cells are installed and how to configure them. **Never guess cell kinds.** If a cell doesn't appear in the registry, don't reference it.
+Widget definitions are the source of truth for which cells are installed and how to configure them. **Never guess cell kinds.** If a cell doesn't appear in the registry, don't reference it (unless it's a browser-native cell from the manifest).
 
-## Three things you can build
+## Four things you can build
 
 1. **Views** — named queries + rendering config over entities of a given profile. Kanban of tasks, gallery of articles, calendar of events.
 2. **Bento dashboards** — 12-col grid compositions of cells (view-cards, entity-cards, widgets). The Home dashboard is a bento. Workspace landing pages are bentos.
 3. **Workspaces** — full lenses with profiles, views, a bento, and seed entities. The biggest building block.
+4. **New cell types** (Capability B) — AI can define entirely new rendering cells when no existing widget covers the need. Cells run in an iframe sandbox and are always proposal-gated — the user reviews before they appear in the registry.
+
+   ```json
+   POST /api/hub/cells/define
+   {
+     "userId":      "{userId}",
+     "workspaceId": "{workspaceId}",
+     "kind":        "burndown-chart",
+     "displayName": "Burndown Chart",
+     "description": "Sprint burndown over task completions",
+     "configSchema": { "sprintId": { "type": "string" } },
+     "sandboxCode": "<!-- self-contained HTML/JS -->"
+   }
+   ```
+
+   Always `GET /api/hub/widget-definitions` first — if a cell already covers the need, use it. New cell definitions are permanent; only create when genuinely novel.
 
 ## View types (16 total, 12 implemented)
 
@@ -237,6 +257,34 @@ POST /api/hub/views/{bentoViewId}/arrange
 6. **Ignoring color/icon.** Profiles and workspaces both take `uiHints.icon` and `uiHints.color` — set them. Untitled gray workspaces feel like a bug.
 7. **Hardcoding config for view types you haven't checked.** Each view type's `config` shape is different. Get an example from `/views` first.
 8. **Forgetting entityScope implications.** A view on a pod-scope profile (`note`) will show entities from every workspace the user can access — filter appropriately if you want workspace-local results.
+
+## AI Companion integration
+
+When you create views or entities for the user inside the AI Companion, **always emit inline pattern chips** at the end of your reply so the user can jump directly to what you built.
+
+```
+// After creating a kanban view with ID "abc123":
+"Created your tasks pipeline → [[view:abc123|Active Tasks]] · [[open:side|view:abc123]]"
+
+// After creating a workspace (home bento view ID "def456"):
+"Workspace ready — [[open:main|view:def456|Home Dashboard]]"
+
+// After creating an entity (e.g. a new project):
+"Project created → [[entity:proj_789|Q3 Launch]]"
+```
+
+### Special cell keys (browser-native)
+
+These cell keys are registered in the browser app but may not appear in `GET /api/hub/widget-definitions` (they are Electron-native, not server-seeded):
+
+| Cell key        | Where              | Notes                                                        |
+| --------------- | ------------------ | ------------------------------------------------------------ |
+| `ai-companion`  | Browser sidebar    | The Companion chat panel itself — don't embed in bentos      |
+| `iframe-widget` | Bento blocks       | Sandboxed iframe for custom embeds; requires `src` in config |
+| `entity-detail` | Side panel / modal | Generic entity detail renderer — always available            |
+| `entity-list`   | Bento / views      | List of entities for a given profile                         |
+
+**Rule:** If a cell key is not in `GET /api/hub/widget-definitions`, do NOT reference it in bento config unless it is one of the four browser-native keys above. Unknown keys will silently fail to render.
 
 ## When you need more
 
