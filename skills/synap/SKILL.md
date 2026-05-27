@@ -17,7 +17,7 @@ metadata:
     requires:
       env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
       optional_env:
-        [SYNAP_WORKSPACE_ID, SYNAP_AGENT_USER_ID, SYNAP_DEFAULT_CHANNEL_ID]
+        [SYNAP_WORKSPACE_ID, SYNAP_USER_ID, SYNAP_DEFAULT_CHANNEL_ID]
     primaryEnv: SYNAP_HUB_API_KEY
     homepage: https://synap.live
     capabilities: [memory, knowledge-graph, channels]
@@ -28,6 +28,10 @@ metadata:
 # Synap — core data operations
 
 You are connected to a **Synap Data Pod** at `{SYNAP_POD_URL}`. All requests use `Authorization: Bearer {SYNAP_HUB_API_KEY}`.
+
+**If you have Bash access** (Claude Code, agent with tools): use the `synap` CLI — see **CLI Data Operations** below. Auth is automatic, `--json` gives clean output, no manual header management.
+
+**If you only have HTTP access**: use the REST endpoints documented below. Your `userId` is in `{SYNAP_USER_ID}` (set by `synap connect`). If it's missing, call `GET /api/hub/users/me` → `.id` once.
 
 Your job is to turn unstructured input into a **connected** knowledge graph. Isolated entities are anti-value. Every entity you create should link to at least one other entity.
 
@@ -412,10 +416,10 @@ POST /api/hub/threads/{threadId}/messages
 Graph-based, not semantic. Type filter → relations → neighborhood.
 
 ```
-# Keyword search across everything
-GET /api/hub/search?q={query}&workspaceId={id}
+# Keyword search across everything (entities, documents, views, threads)
+GET /api/hub/search?query={query}&userId={SYNAP_USER_ID}&workspaceId={id}
 
-# Entities of a specific type
+# Entities of a specific type (q= is the param for entities endpoint)
 GET /api/hub/entities?q={query}&profileSlug={slug}&workspaceId={id}
 
 # Recent entities
@@ -614,7 +618,7 @@ This model enables renewals (new deal linking to existing client), multi-stakeho
 3. **Using the deprecated `type` field.** Always `profileSlug`.
 4. **Treating `"proposed"` as an error.** It's a governance queue.
 5. **Forcing `source` to bypass governance.** Governance is determined by the agent user + whitelist, not by `source`. Don't set it.
-6. **Using the API key owner as `userId`.** Always pass the real human userId — the API key is often owned by a system/agent user.
+6. **Not knowing your userId.** Use `{SYNAP_USER_ID}` from the env (set by `synap connect`). Or call `GET /api/hub/users/me` → `.id` once and cache it. Never hardcode or guess.
 7. **Skipping the search step.** Duplicates degrade the graph more than missing data.
 8. **Forgetting that `GET /channels/personal` needs `hub-protocol.write`** scope — it's get-or-create, not a pure read.
 

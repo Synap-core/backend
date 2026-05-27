@@ -492,11 +492,9 @@ export const apiKeysRouter = router({
       lastUsedAt: key.lastUsedAt,
       usageCount: key.usageCount,
       createdAt: key.createdAt,
-      user: {
-        id: key.user.id,
-        email: key.user.email,
-        name: key.user.name,
-      },
+      user: key.user
+        ? { id: key.user.id, email: key.user.email, name: key.user.name }
+        : null,
     }));
   }),
 

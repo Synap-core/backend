@@ -86,6 +86,12 @@ const RendererRefSchema = z.discriminatedUnion("kind", [
     external: z.boolean().optional(),
     title: z.string().optional(),
   }),
+  z.object({
+    kind: z.literal("view-adapter"),
+    adapterKey: z.string(),
+    props: z.record(z.string(), z.unknown()).optional(),
+    title: z.string().optional(),
+  }),
 ]);
 
 const ProfileRendererSlotSchema = z.enum(["list", "detail"]);
@@ -1010,9 +1016,17 @@ export const profilesRouter = router({
       const db = await getDb();
       const resolutionService = new ProfileResolutionService(db);
 
+      // Accept UUID or human-readable slug — resolve to canonical slug first.
+      const resolved = await resolutionService.resolveProfile(
+        input.profileSlug,
+        ctx.userId,
+        ctx.workspaceId
+      );
+      const profileSlug = resolved?.slug ?? input.profileSlug;
+
       if (input.slot) {
         const target = await resolutionService.getEffectiveRenderer(
-          input.profileSlug,
+          profileSlug,
           ctx.workspaceId,
           input.slot
         );
@@ -1023,12 +1037,12 @@ export const profilesRouter = router({
 
       const [list, detail] = await Promise.all([
         resolutionService.getEffectiveRenderer(
-          input.profileSlug,
+          profileSlug,
           ctx.workspaceId,
           "list"
         ),
         resolutionService.getEffectiveRenderer(
-          input.profileSlug,
+          profileSlug,
           ctx.workspaceId,
           "detail"
         ),
