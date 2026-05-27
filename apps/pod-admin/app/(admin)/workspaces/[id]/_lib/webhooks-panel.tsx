@@ -93,7 +93,7 @@ export function WebhooksPanel({ workspaceId }: { workspaceId: string }) {
       }),
   });
 
-  const subs = (query.data ?? []) as WebhookSub[];
+  const subs = (query.data ?? []) as unknown as WebhookSub[];
 
   return (
     <SectionCard
