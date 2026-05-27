@@ -1,5 +1,6 @@
 import { router, podAdminProcedure } from "../trpc.js";
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { TrustedIssuerService, db, eq, and } from "@synap/database";
 import { API_KEY_SCOPES } from "@synap/database/schema";
 import { apiKeys, trustedIssuers } from "@synap/database/schema";
@@ -65,5 +66,41 @@ export const trustedIssuersRouter = router({
             eq(apiKeys.isActive, true)
           )
         );
+    }),
+
+  adminRegister: podAdminProcedure
+    .input(
+      z.object({
+        issuerUrl: z.string().url(),
+        displayName: z.string().min(1).max(100),
+        allowedScopes: z
+          .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
+          .min(1),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const svc = new TrustedIssuerService();
+
+      // Check if already registered (any status)
+      const existing = await svc.getByUrl(input.issuerUrl);
+      if (existing) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `An issuer for ${input.issuerUrl} already exists (status: ${existing.status})`,
+        });
+      }
+
+      // Insert directly as approved — admin-initiated, no pending step needed
+      const pending = await svc.registerPending(
+        input.issuerUrl,
+        input.displayName,
+        null
+      );
+      const approved = await svc.approve(
+        pending.id,
+        ctx.userId,
+        input.allowedScopes
+      );
+      return approved;
     }),
 });

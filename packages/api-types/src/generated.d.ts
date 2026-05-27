@@ -11603,6 +11603,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: void;
 			meta: object;
 		}>;
+		adminRegister: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				issuerUrl: string;
+				displayName: string;
+				allowedScopes: string[];
+			};
+			output: {
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				status: "approved" | "revoked" | "pending" | "rejected";
+				description: string | null;
+				reviewedBy: string | null;
+				reviewedAt: Date | null;
+				rejectionReason: string | null;
+				displayName: string;
+				issuerUrl: string;
+				allowedScopes: string[];
+				isBuiltIn: boolean;
+				initialRequestData: unknown;
+			};
+			meta: object;
+		}>;
 	}>>;
 	sourceConfigs: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;

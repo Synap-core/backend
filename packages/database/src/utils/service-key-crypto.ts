@@ -36,7 +36,8 @@ function getEncryptionKey(): Buffer {
 
 interface EncryptedPayload {
   e: string; // base64 ciphertext
-  i: string; // base64 IV
+  i?: string; // base64 IV (current format)
+  iv?: string; // base64 IV (legacy format — stored before field was renamed)
   t: string; // base64 authTag
 }
 
@@ -64,10 +65,13 @@ export function encryptServiceKey(plaintext: string): string {
 export function decryptServiceKey(ciphertext: string): string {
   const key = getEncryptionKey();
   const payload = JSON.parse(ciphertext) as EncryptedPayload;
+  const ivBase64 = payload.i ?? payload.iv;
+  if (!ivBase64)
+    throw new Error("Encrypted payload missing IV field (i or iv)");
   const decipher = createDecipheriv(
     ALGORITHM,
     key,
-    Buffer.from(payload.i, "base64")
+    Buffer.from(ivBase64, "base64")
   );
   decipher.setAuthTag(Buffer.from(payload.t, "base64"));
   const decrypted = Buffer.concat([
@@ -87,7 +91,7 @@ export function isEncryptedServiceKey(value: string): boolean {
     const parsed = JSON.parse(value) as Partial<EncryptedPayload>;
     return (
       typeof parsed.e === "string" &&
-      typeof parsed.i === "string" &&
+      (typeof parsed.i === "string" || typeof parsed.iv === "string") &&
       typeof parsed.t === "string"
     );
   } catch {
