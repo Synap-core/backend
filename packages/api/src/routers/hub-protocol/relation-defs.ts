@@ -18,9 +18,10 @@ export const hubRelationDefsRouter = router({
         workspaceId: z.string().uuid(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
+        (ctx as any).scopes ?? ["hub-protocol.read"],
         input.workspaceId
       );
       const caller = relationDefsRouter.createCaller(callerContext as any);
@@ -39,9 +40,10 @@ export const hubRelationDefsRouter = router({
         uiHints: z.record(z.string(), z.unknown()).optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
+        (ctx as any).scopes ?? ["hub-protocol.write"],
         input.workspaceId
       );
       const caller = relationDefsRouter.createCaller(callerContext as any);
