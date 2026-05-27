@@ -4421,6 +4421,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		adminCreateServiceKey: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				keyName: string;
+				scope: string[];
+				workspaceId: string;
+				expiresInDays?: number | undefined;
+			};
+			output: {
+				id: any;
+				key: string;
+				keyPrefix: string;
+				status: "created";
+				message: string;
+			};
+			meta: object;
+		}>;
 		connectIntegration: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				integration: "custom" | "openclaw" | "cli" | "raycast";

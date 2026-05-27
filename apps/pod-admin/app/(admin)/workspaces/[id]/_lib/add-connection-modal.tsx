@@ -87,7 +87,7 @@ export function AddConnectionModal({
 
   const isGuide = step === "guide";
 
-  const createKeyMutation = trpc.apiKeys.create.useMutation({
+  const createKeyMutation = trpc.apiKeys.adminCreateServiceKey.useMutation({
     onError: (err) =>
       addToast({
         title: "Create failed",

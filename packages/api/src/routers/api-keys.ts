@@ -558,6 +558,76 @@ export const apiKeysRouter = router({
     }),
 
   /**
+   * Pod-admin: create a workspace-scoped service key (synap_hub_ prefix, keyType=hub_inbound).
+   * Use this when provisioning credentials for external services via the connections UI.
+   */
+  adminCreateServiceKey: podAdminProcedure
+    .input(
+      z.object({
+        keyName: z.string().min(1).max(100),
+        scope: z
+          .array(z.enum([...API_KEY_SCOPES] as [string, ...string[]]))
+          .min(1),
+        workspaceId: z.string().uuid(),
+        expiresInDays: z.number().int().min(1).max(365).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const keyPrefix =
+        process.env.NODE_ENV === "production"
+          ? "synap_hub_live_"
+          : "synap_hub_test_";
+      const key = generateApiKey(keyPrefix);
+      const expiresAt = input.expiresInDays
+        ? new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000)
+        : undefined;
+
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const apiKeyRepo = new ApiKeyRepository(database, eventRepo);
+
+      const apiKey = await apiKeyRepo.create(
+        {
+          keyName: input.keyName,
+          keyPrefix,
+          key,
+          scope: input.scope,
+          expiresAt,
+          userId: ctx.userId,
+          keyType: "hub_inbound",
+          workspaceId: input.workspaceId,
+        },
+        ctx.userId
+      );
+
+      auditLog({
+        subjectType: "apiKey",
+        action: "create",
+        phase: "completed",
+        subjectId: apiKey.id,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        data: { keyName: input.keyName, keyPrefix, keyType: "hub_inbound" },
+      });
+
+      emitSideEffects({
+        subjectType: "apiKey",
+        action: "create",
+        subjectId: apiKey.id,
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+      });
+
+      return {
+        id: apiKey.id,
+        key,
+        keyPrefix,
+        status: "created" as const,
+        message: "Save this key securely. It will not be displayed again.",
+      };
+    }),
+
+  /**
    * Connect an integration — create a scoped Hub Protocol API key in one call.
    *
    * Called from the admin UI /connect page after the user authenticates.
