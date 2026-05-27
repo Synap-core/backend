@@ -30,14 +30,8 @@ export function Step1Pattern({
   onPattern: (p: Pattern) => void;
   existingServiceNames: string[];
 }) {
-  const listId = "existing-service-names";
   return (
     <>
-      <datalist id={listId}>
-        {existingServiceNames.map((n) => (
-          <option key={n} value={n} />
-        ))}
-      </datalist>
       <Input
         label="Service name"
         placeholder="e.g. n8n integration"
@@ -45,8 +39,10 @@ export function Step1Pattern({
         onValueChange={onServiceName}
         size="sm"
         isRequired
-        inputProps={
-          { list: listId } as React.InputHTMLAttributes<HTMLInputElement>
+        description={
+          existingServiceNames.length > 0
+            ? `Existing: ${existingServiceNames.slice(0, 3).join(", ")}${existingServiceNames.length > 3 ? ` +${existingServiceNames.length - 3} more` : ""}`
+            : undefined
         }
       />
       <div className="flex flex-col gap-1.5">
