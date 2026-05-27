@@ -494,14 +494,14 @@ export const captureRouter = router({
             relationType: z.string(),
           })
         ),
+        /** User-selected workspace override — takes precedence over session default. */
+        targetWorkspaceId: z.string().uuid().nullish(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      // workspaceId is optional — EntityRepository will resolve `null` for
-      // pod-wide profiles (entityScope='pod') and throw for workspace-scoped
-      // profiles when the user has no workspace context.
-      const workspaceId = ctx.workspaceId;
+      // User-selected override wins over session workspace.
+      const workspaceId = input.targetWorkspaceId ?? ctx.workspaceId;
 
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
@@ -664,6 +664,21 @@ export const captureRouter = router({
           entityCount: created.filter((c) => !c.linked).length,
           linkedCount: created.filter((c) => c.linked).length,
         };
+
+        // Per-entity side-effects: search indexing, embeddings, webhooks.
+        // source='capture' in data so event consumers can distinguish provenance.
+        for (const c of created) {
+          if (!c.linked) {
+            emitSideEffects({
+              subjectType: "entity",
+              action: "create",
+              subjectId: c.entityId,
+              userId,
+              workspaceId: workspaceId ?? undefined,
+              data: { source: "capture", profileSlug: c.profileSlug },
+            }).catch(() => {});
+          }
+        }
 
         // pg-boss side-effects → automation-trigger-matcher receives capture.complete.completed
         emitSideEffects({
@@ -994,6 +1009,20 @@ export const captureRouter = router({
           entityCount: created.filter((c) => c.action !== "linked").length,
           linkedCount: created.filter((c) => c.action === "linked").length,
         };
+
+        // Per-entity side-effects: search indexing, embeddings, webhooks.
+        for (const c of created) {
+          if (c.action === "created") {
+            emitSideEffects({
+              subjectType: "entity",
+              action: "create",
+              subjectId: c.entityId,
+              userId,
+              workspaceId: workspaceId ?? undefined,
+              data: { source: "import", profileSlug: c.profileSlug },
+            }).catch(() => {});
+          }
+        }
 
         emitSideEffects({
           subjectType: "capture",

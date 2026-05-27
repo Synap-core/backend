@@ -103,12 +103,26 @@ export async function seedAdminUser(
         },
       });
 
-    // If the user already has a workspace membership, reuse it.
+    // If the user already has a user-visible workspace membership, reuse it.
+    // Internal/system memberships such as pod-admin are not enough for the
+    // Browser: it intentionally filters them out, so treating one as the
+    // default workspace leaves the user authenticated with an empty space list.
     const existingMembership = await tx.query.workspaceMembers.findFirst({
       where: eq(workspaceMembers.userId, identityId),
       columns: { workspaceId: true },
+      with: {
+        workspace: {
+          columns: { settings: true },
+        },
+      },
     });
-    if (existingMembership) {
+    const existingSystemSlug =
+      existingMembership?.workspace?.settings &&
+      typeof existingMembership.workspace.settings === "object"
+        ? (existingMembership.workspace.settings as Record<string, unknown>)
+            .systemSlug
+        : null;
+    if (existingMembership && existingSystemSlug !== "pod-admin") {
       return {
         workspaceId: existingMembership.workspaceId,
         alreadyExisted: !!existingUser,

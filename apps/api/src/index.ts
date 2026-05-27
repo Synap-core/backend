@@ -649,6 +649,44 @@ app.post("/api/handshake", async (c) => {
       identityId = newIdentity.id;
     }
 
+    // The handshake contract, used by both CP pre-provisioning and desktop
+    // connect, is stronger than "return a Kratos session": after a successful
+    // exchange the pod user must also have a Synap DB user row and at least one
+    // workspace membership. Otherwise the Browser authenticates successfully
+    // but `workspaces.list` returns [] forever. `seedAdminUser` is idempotent:
+    // it upserts the user and reuses an existing membership, or creates the
+    // default personal workspace when none exists.
+    try {
+      const { seedAdminUser } = await import("@synap/database");
+      const seedResult = await seedAdminUser({
+        kratosIdentityId: identityId,
+        email,
+        name: payload.name,
+        emailVerified: true,
+      });
+      apiLogger.info(
+        {
+          email,
+          identityId,
+          workspaceId: seedResult.workspaceId,
+          alreadyExisted: seedResult.alreadyExisted,
+        },
+        "Handshake ensured DB user and workspace membership"
+      );
+    } catch (err) {
+      apiLogger.error(
+        { err, email, identityId },
+        "Handshake failed to ensure DB user/workspace membership"
+      );
+      return c.json(
+        {
+          error: "Failed to provision pod workspace",
+          code: "DB_WORKSPACE_SEED_FAILED",
+        },
+        500
+      );
+    }
+
     // ──────────────────────────────────────────────────────────────────
     // 3. Create a Kratos session via ADMIN API — no password needed.
     //
