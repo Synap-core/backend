@@ -146,6 +146,14 @@ export function WebhooksPanel({ workspaceId }: { workspaceId: string }) {
 
 // ─── Row ──────────────────────────────────────────────────────────────────────
 
+type WebhookSub = {
+  id: string;
+  url: string;
+  active: boolean;
+  name?: string | null;
+  eventTypes?: string[] | null;
+};
+
 function WebhookRow({
   sub,
   onToggle,
