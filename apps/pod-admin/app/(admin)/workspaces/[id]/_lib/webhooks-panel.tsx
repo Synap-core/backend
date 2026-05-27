@@ -46,17 +46,6 @@ export const WEBHOOK_EVENTS = [
   "workspace.member.removed",
 ] as const;
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface WebhookSub {
-  id: string;
-  url: string;
-  name: string;
-  eventTypes: string[] | null;
-  active: boolean;
-  createdAt?: Date | string | null;
-}
-
 // ─── Panel ────────────────────────────────────────────────────────────────────
 
 export function WebhooksPanel({ workspaceId }: { workspaceId: string }) {
@@ -93,7 +82,7 @@ export function WebhooksPanel({ workspaceId }: { workspaceId: string }) {
       }),
   });
 
-  const subs = (query.data ?? []) as unknown as WebhookSub[];
+  const subs = query.data ?? [];
 
   return (
     <SectionCard

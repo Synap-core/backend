@@ -4761,12 +4761,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		adminListForWorkspace: import("@trpc/server").TRPCQueryProcedure<{
 			input: { workspaceId: string };
-			output: Array<{ id: string; url: string; events: string[]; active: boolean; description: string | null; workspaceId: string | null; createdAt: Date; }>;
+			output: Array<{ id: string; url: string; name: string; eventTypes: string[] | null; active: boolean; workspaceId: string | null; createdAt: Date; }>;
 			meta: object;
 		}>;
 		adminCreateForWorkspace: import("@trpc/server").TRPCMutationProcedure<{
 			input: { workspaceId: string; url: string; events: string[]; description?: string };
-			output: { id: string; url: string; events: string[]; active: boolean; workspaceId: string | null; createdAt: Date; };
+			output: { subscription: { id: string; url: string; name: string; eventTypes: string[] | null; active: boolean; workspaceId: string | null; createdAt: Date; }; secret: string; };
 			meta: object;
 		}>;
 		adminDeleteForWorkspace: import("@trpc/server").TRPCMutationProcedure<{
