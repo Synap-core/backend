@@ -4759,6 +4759,26 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 			meta: object;
 		}>;
+		adminListForWorkspace: import("@trpc/server").TRPCQueryProcedure<{
+			input: { workspaceId: string };
+			output: Array<{ id: string; url: string; events: string[]; active: boolean; description: string | null; workspaceId: string | null; createdAt: Date; }>;
+			meta: object;
+		}>;
+		adminCreateForWorkspace: import("@trpc/server").TRPCMutationProcedure<{
+			input: { workspaceId: string; url: string; events: string[]; description?: string };
+			output: { id: string; url: string; events: string[]; active: boolean; workspaceId: string | null; createdAt: Date; };
+			meta: object;
+		}>;
+		adminDeleteForWorkspace: import("@trpc/server").TRPCMutationProcedure<{
+			input: { id: string; workspaceId: string };
+			output: { success: boolean };
+			meta: object;
+		}>;
+		adminToggleForWorkspace: import("@trpc/server").TRPCMutationProcedure<{
+			input: { id: string; workspaceId: string; active: boolean };
+			output: { id: string; active: boolean };
+			meta: object;
+		}>;
 	}>>;
 	documents: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;

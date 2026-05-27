@@ -36,6 +36,7 @@ import {
   appRouter,
   createContext as createApiContext,
   hubProtocolRestApp,
+  integrationsCapabilitiesApp,
   mcpHttpApp,
   fileUploadApp,
   externalSkillsApp,
@@ -994,6 +995,9 @@ app.route("/api/sync", syncReceiveApp);
 app.route("/api/hub", hubProtocolRestApp);
 // Alias: some hub clients use /api/hub-protocol prefix
 app.route("/api/hub-protocol", hubProtocolRestApp);
+
+// Integrations capabilities discovery (public, no auth)
+app.route("/api/integrations/capabilities", integrationsCapabilitiesApp);
 
 // Channel Gateway REST adapter (for external channel bots; X-Channel-Key auth)
 import { channelGatewayApp } from "./routers/channel-gateway.js";

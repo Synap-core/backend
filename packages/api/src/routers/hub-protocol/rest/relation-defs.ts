@@ -17,7 +17,7 @@ export function registerRelationDefsRoutes(app: HubHono): void {
     if (!workspaceId) return c.json({ error: "workspaceId required" }, 400);
     try {
       const caller = await getCaller(c, { userId, workspaceId });
-      const result = await caller.relationDefs.list();
+      const result = await caller.relationDefs.list({ userId, workspaceId });
       return c.json(result);
     } catch (err) {
       logger.error({ err }, "relationDefs.list failed");
@@ -52,6 +52,8 @@ export function registerRelationDefsRoutes(app: HubHono): void {
     try {
       const caller = await getCaller(c, { userId, workspaceId });
       const result = await caller.relationDefs.create({
+        userId,
+        workspaceId,
         slug: body.slug as string,
         displayName: body.displayName as string,
         description: body.description as string | undefined,

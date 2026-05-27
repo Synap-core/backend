@@ -326,6 +326,115 @@ export const webhooksRouter = router({
     }),
 
   /**
+   * List workspace-scoped webhook subscriptions (pod admin)
+   */
+  adminListForWorkspace: podAdminProcedure
+    .input(z.object({ workspaceId: z.string().uuid() }))
+    .query(async ({ input }) => {
+      const subs = await db.query.webhookSubscriptions.findMany({
+        where: eq(webhookSubscriptions.workspaceId, input.workspaceId),
+        orderBy: (s, { desc }) => [desc(s.createdAt)],
+      });
+      return subs.map(
+        (s) =>
+          Object.fromEntries(
+            Object.entries(s).filter(([k]) => k !== "secret")
+          ) as typeof s
+      );
+    }),
+
+  /**
+   * Create workspace-scoped webhook subscription (pod admin)
+   */
+  adminCreateForWorkspace: podAdminProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid(),
+        url: z.string().url(),
+        events: z.array(z.string()).min(1),
+        description: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const secret = randomBytes(32).toString("hex");
+      const [subscription] = await db
+        .insert(webhookSubscriptions)
+        .values({
+          userId: "pod-admin",
+          workspaceId: input.workspaceId,
+          name: input.description ?? input.url,
+          url: input.url,
+          eventTypes: input.events,
+          secret,
+          active: true,
+        })
+        .returning();
+      return {
+        subscription: Object.fromEntries(
+          Object.entries(subscription).filter(([k]) => k !== "secret")
+        ) as typeof subscription,
+        secret,
+      };
+    }),
+
+  /**
+   * Delete workspace-scoped webhook subscription (pod admin)
+   */
+  adminDeleteForWorkspace: podAdminProcedure
+    .input(z.object({ id: z.string().uuid(), workspaceId: z.string().uuid() }))
+    .mutation(async ({ input }) => {
+      const result = await db
+        .delete(webhookSubscriptions)
+        .where(
+          and(
+            eq(webhookSubscriptions.id, input.id),
+            eq(webhookSubscriptions.workspaceId, input.workspaceId)
+          )
+        )
+        .returning();
+      if (result.length === 0)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Webhook not found",
+        });
+      return { success: true };
+    }),
+
+  /**
+   * Toggle active state (pod admin)
+   */
+  adminToggleForWorkspace: podAdminProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        workspaceId: z.string().uuid(),
+        active: z.boolean(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const [updated] = await db
+        .update(webhookSubscriptions)
+        .set({ active: input.active })
+        .where(
+          and(
+            eq(webhookSubscriptions.id, input.id),
+            eq(webhookSubscriptions.workspaceId, input.workspaceId)
+          )
+        )
+        .returning();
+      if (!updated)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Webhook not found",
+        });
+      const { secret: _, ...safe } = updated as unknown as Record<
+        string,
+        unknown
+      > as typeof updated;
+      return safe;
+    }),
+
+  /**
    * Get recent deliveries for a subscription (pod admin)
    */
   deliveriesForSubscription: podAdminProcedure

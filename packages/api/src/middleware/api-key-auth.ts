@@ -97,6 +97,22 @@ export const apiKeyMiddleware = t.middleware(async ({ ctx, next, path }) => {
     });
   }
 
+  // Workspace isolation: a key scoped to a specific workspace cannot be used
+  // with a different workspace's X-Workspace-Id header.
+  if (keyRecord.workspaceId !== null) {
+    const requestedWorkspaceId =
+      ctx.req?.headers?.get?.("x-workspace-id") ?? null;
+    if (
+      requestedWorkspaceId !== null &&
+      requestedWorkspaceId !== keyRecord.workspaceId
+    ) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "API key is not authorized for this workspace",
+      });
+    }
+  }
+
   // Check rate limiting
   const allowed = apiKeyService.checkRateLimit(keyRecord.id, "request");
   if (!allowed) {
