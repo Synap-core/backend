@@ -49,6 +49,7 @@ import {
   registerProfilesRoutes,
   registerProposalsRoutes,
   registerRelationsRoutes,
+  registerRelationDefsRoutes,
   registerSearchRoutes,
   registerSessionsRoutes,
   registerSetupRoutes,
@@ -383,6 +384,7 @@ registerAgentConfigsRoutes(app); // /agent-configs
 registerViewsRoutes(app); // /views*
 registerProfilesRoutes(app); // /profiles*, /property-defs*
 registerRelationsRoutes(app); // /relations*
+registerRelationDefsRoutes(app); // /relation-defs*
 registerSessionsRoutes(app); // /sessions*, /compacted-states*
 registerWidgetDefinitionsRoutes(app); // /widget-definitions
 registerMcpServersRoutes(app); // /mcp-servers

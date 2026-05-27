@@ -26,6 +26,7 @@ export { registerAgentConfigsRoutes } from "./agent-configs.js";
 export { registerViewsRoutes } from "./views.js";
 export { registerProfilesRoutes } from "./profiles.js";
 export { registerRelationsRoutes } from "./relations.js";
+export { registerRelationDefsRoutes } from "./relation-defs.js";
 export { registerSessionsRoutes } from "./sessions.js";
 export { registerWidgetDefinitionsRoutes } from "./widget-definitions.js";
 export { registerMcpServersRoutes } from "./mcp-servers.js";
