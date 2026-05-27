@@ -581,26 +581,20 @@ export function registerSetupRoutes(app: HubHono): void {
     }
   });
 
-  // ── POST /setup/external-user ──────────────────────────────────────────────
-  //
-  // Provision a per-external-user mapping for a parent agent key.
-  //
-  // Auth: requires the caller's bearer to be a Hub API key with
-  // `hub-protocol.write` scope (i.e. the parent agent key itself, or an
-  // operator-managed key). The middleware in hub-protocol-rest.ts has already
-  // authenticated the request and set c.userId / c.scopes by the time we
-  // reach this handler.
-  //
-  // Body:
-  //   externalUserId: string  (required)  — opaque ID from the upstream system
-  //   name?: string                       — optional human-friendly name
-  //   email?: string                      — optional email
-  //   mintSubToken?: boolean              — Mode 2 (returns 501 for now)
-  //
-  // Response (200):
-  //   { synapUserId, externalUserId, mapping: { id, parentKeyId, ... }, created }
-  //
-  // Mode 2 — returning 501 until the sub-token mint path is fully implemented.
+  /**
+   * Provision an external-service user identity against a parent Hub API key.
+   *
+   * Mode 1 (header-based): Just call this to pre-provision the mapping.
+   *   External service sends X-External-User-Id header on each request.
+   *
+   * Mode 2 (sub-token): Pass mintSubToken: true.
+   *   Returns a one-time plaintext token. Store it per external user.
+   *   Use that token directly for all subsequent API calls — no header needed.
+   *
+   * Idempotent: same (parentKeyId, externalUserId) always returns the same mapping.
+   * The token is only returned in plaintext on first mint; subsequent calls return
+   * the mapping ID only (retrieve the token from your own storage).
+   */
   app.post("/setup/external-user", async (c) => {
     if (!isSubTokenFeatureEnabled()) {
       return c.json(

@@ -89,6 +89,7 @@ export interface AgentMetadata {
 	parentAgentId?: string;
 	writesRequireProposal?: boolean;
 	activePersonality?: string;
+	agentTemplate?: "twin" | "assistant" | "custom";
 }
 declare const ChannelType: {
 	readonly THREAD: "thread";
@@ -10230,9 +10231,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				workspaceId: string;
-				agentType: string;
 				name: string;
-				role: "admin" | "editor" | "viewer";
+				template?: "twin" | "assistant" | "custom" | undefined;
+				agentType?: string | undefined;
+				role?: "admin" | "editor" | "viewer" | undefined;
 				description?: string | undefined;
 				capabilities?: string[] | undefined;
 			};
@@ -10242,6 +10244,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				agentType: string;
 				role: "admin" | "editor" | "viewer";
+				template?: "twin" | "assistant" | "custom" | undefined;
 			};
 			meta: object;
 		}>;

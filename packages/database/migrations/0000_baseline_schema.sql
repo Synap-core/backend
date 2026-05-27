@@ -1639,6 +1639,10 @@ CREATE INDEX IF NOT EXISTS "agent_configs_workspace_id_idx"
 CREATE INDEX IF NOT EXISTS "agent_configs_agent_type_idx"
   ON "agent_configs" ("agent_type");
 
+CREATE INDEX IF NOT EXISTS idx_users_agent_template
+  ON users ((agent_metadata->>'agentTemplate'))
+  WHERE user_type = 'agent';
+
 -- ─── 34. intelligence_services ───────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS "intelligence_services" (

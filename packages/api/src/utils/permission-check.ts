@@ -18,7 +18,7 @@ import type { RequestShapedProposalData } from "@synap-core/types";
 import { isLikelyUUID } from "@synap-core/types/proposals";
 import { broadcastNotification } from "@synap/jobs";
 import { emitSideEffects } from "@synap/events";
-import type { WorkspaceSettings } from "@synap/database/schema";
+import type { WorkspaceSettings, AgentMetadata } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
 
 const logger = createLogger({ module: "permission-check" });
@@ -126,6 +126,26 @@ export const DESTRUCTIVE_ACTIONS: readonly string[] = [
 ];
 
 /**
+ * Administrative actions that always require a proposal, regardless of
+ * workspace auto-approve overrides, writesRequireProposal flag, or whitelist.
+ * Even a twin agent (writesRequireProposal=false) must propose these.
+ */
+export const ADMIN_ACTIONS: readonly string[] = [
+  "workspace.update",
+  "workspace.delete",
+  "member.updateRole",
+  "member.remove",
+  "member.invite",
+  "agent.create",
+  "agent.delete",
+  "agent.updateRole",
+  "apiKey.create",
+  "apiKey.revoke",
+  "intelligence.connect",
+  "intelligence.disconnect",
+];
+
+/**
  * Resolve the effective governance policy for a workspace.
  *
  * Returns the actual whitelist that would be used at runtime, plus metadata
@@ -171,6 +191,10 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
       proposalApprovalPolicy,
       destructiveAlwaysPropose: governanceMode === "agent-owned",
       destructiveActions: DESTRUCTIVE_ACTIONS,
+      navigationPermissions: settings?.aiGovernance?.navigationPermissions ?? {
+        autoApprove: false,
+        allowedResourceTypes: ["entity", "view", "doc", "cell", "channel"],
+      },
     },
     source: override ? "workspace" : "default",
     defaults: {
@@ -308,7 +332,10 @@ export async function checkPermissionOrPropose(
     if (agentUserId) {
       // Confirm the user row is actually an agent (defence-in-depth)
       const [agentUser] = await db
-        .select({ userType: users.userType })
+        .select({
+          userType: users.userType,
+          agentMetadata: users.agentMetadata,
+        })
         .from(users)
         .where(eq(users.id, agentUserId))
         .limit(1);
@@ -324,6 +351,86 @@ export async function checkPermissionOrPropose(
           .limit(1);
 
         const settings = ws?.settings as WorkspaceSettings | undefined;
+
+        const eventKey = `${subjectType}.${action}`;
+
+        // CBAC: if this agent has an explicit capabilities allowlist, enforce it.
+        // Empty/absent capabilities = unrestricted (backwards compatibility).
+        // Supports exact match ("entity.create") and wildcard ("entity.*", "*.*").
+        const agentCapabilities = (
+          agentUser.agentMetadata as AgentMetadata | null
+        )?.capabilities;
+        if (agentCapabilities && agentCapabilities.length > 0) {
+          const hasCapability =
+            agentCapabilities.includes(eventKey) ||
+            agentCapabilities.includes(`${subjectType}.*`) ||
+            agentCapabilities.includes("*.*");
+
+          if (!hasCapability) {
+            return {
+              denied: true,
+              reason: `Agent capability check failed for "${eventKey}". Allowed: ${agentCapabilities.join(", ")}.`,
+            };
+          }
+        }
+
+        // ADMIN_ACTIONS: always propose, regardless of whitelist, workspace
+        // overrides, or writesRequireProposal. Even twin agents must propose.
+        if (ADMIN_ACTIONS.includes(eventKey)) {
+          return createProposal({
+            userId,
+            agentUserId,
+            workspaceId,
+            subjectType,
+            action,
+            source,
+            data,
+            correlationId,
+            requestedEventId,
+            reasoning:
+              opts.reasoning ??
+              "Administrative action requires human approval.",
+            threadId,
+            commandRunId,
+            sourceMessageId,
+          });
+        }
+
+        // writesRequireProposal: assistant-template agents always propose on
+        // writes. Pure reads (*.read, search.*, context.*, memory.*) are exempt.
+        const agentMetadata = agentUser.agentMetadata;
+        if (agentMetadata?.writesRequireProposal === true) {
+          const isPureRead =
+            action.endsWith(".read") ||
+            subjectType === "search" ||
+            subjectType === "context" ||
+            subjectType === "memory" ||
+            eventKey.endsWith(".read") ||
+            eventKey === "memory.recall" ||
+            /^search\./.test(eventKey) ||
+            /^context\./.test(eventKey) ||
+            /^memory\./.test(eventKey);
+
+          if (!isPureRead) {
+            return createProposal({
+              userId,
+              agentUserId,
+              workspaceId,
+              subjectType,
+              action,
+              source,
+              data,
+              correlationId,
+              requestedEventId,
+              reasoning:
+                opts.reasoning ??
+                "Agent requires proposal for all write operations.",
+              threadId,
+              commandRunId,
+              sourceMessageId,
+            });
+          }
+        }
 
         // In agent-owned workspaces, destructive actions always go through
         // proposals — even if the agent holds the owner role or the action
@@ -357,7 +464,6 @@ export async function checkPermissionOrPropose(
         const autoApproveFor =
           settings?.aiGovernance?.autoApproveFor ?? DEFAULT_AUTO_APPROVE;
 
-        const eventKey = `${subjectType}.${action}`;
         const isAutoApproved = autoApproveFor.some((pattern) =>
           pattern.endsWith(".*")
             ? eventKey.startsWith(pattern.slice(0, -2))

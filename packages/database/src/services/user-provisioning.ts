@@ -18,7 +18,8 @@
  *
  * Idempotent — safe to call multiple times with the same Kratos identity id.
  */
-import { eq } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
+import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 import { db } from "../client-pg.js";
 import { users } from "../schema/users.js";
@@ -153,6 +154,45 @@ export async function seedAdminUser(
       userId: identityId,
       role: "owner",
     });
+
+    // Idempotency guard: only create a twin if none exists for this user
+    const existingTwin = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(
+        and(
+          eq(users.userType, "agent"),
+          sql`${users.agentMetadata}->>'createdByUserId' = ${identityId}`,
+          sql`${users.agentMetadata}->>'agentTemplate' = 'twin'`
+        )
+      )
+      .limit(1);
+
+    if (existingTwin.length === 0) {
+      const twinId = randomUUID();
+      const twinShortId = twinId.slice(0, 8);
+      await tx.insert(users).values({
+        id: twinId,
+        email: `agent-twin-${twinShortId}@synap.agent`,
+        emailVerified: true,
+        userType: "agent",
+        agentMetadata: {
+          agentTemplate: "twin",
+          agentType: "twin",
+          createdByUserId: identityId,
+          writesRequireProposal: false,
+          isPersonalAgent: false,
+        },
+        timezone: "UTC",
+        locale: "en",
+      });
+
+      await tx.insert(workspaceMembers).values({
+        workspaceId: workspace.id,
+        userId: twinId,
+        role: "admin",
+      });
+    }
 
     return { workspaceId: workspace.id, alreadyExisted: !!existingUser };
   });

@@ -1,31 +1,17 @@
 "use client";
 
 /**
- * Connections tab — outbound webhooks + external connections.
- *
- * Section A — Outbound webhooks: manage webhook subscriptions directly.
- * Section B — External connections: hub_inbound API keys with pattern-based
- *             "Add connection" flow (REST API / Hub Protocol / Webhooks).
- * Section C — "How it works" collapsible reference panel.
+ * Connections tab — unified panel grouping all connections (API keys + webhooks)
+ * by service name, with collapsible ServiceGroupCards.
  */
 
+import { addToast, Button } from "@heroui/react";
 import {
-  addToast,
-  Button,
-  Modal,
-  ModalBody,
-  ModalContent,
-  ModalFooter,
-  ModalHeader,
-  useDisclosure,
-} from "@heroui/react";
-import {
-  Ban,
+  ArrowDownToLine,
   Bot,
   ChevronDown,
   ChevronRight,
   Database,
-  KeyRound,
   Plus,
   Webhook,
 } from "lucide-react";
@@ -37,19 +23,15 @@ import {
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../../../components/resource-row";
-import { WebhooksPanel } from "./webhooks-panel";
+import {
+  ServiceGroupCard,
+  type ServiceConnection,
+  type ServiceGroup,
+  type ConnectionType,
+} from "./service-group-card";
 import { AddConnectionModal } from "./add-connection-modal";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface ApiKey {
-  id: string;
-  keyName: string;
-  keyType?: string | null;
-  scope?: string[] | string | null;
-  isActive: boolean;
-  createdAt?: Date | string | null;
-}
+// ─── Helpers ───────────────────────────────────────────────────────────────────
 
 function normalizeScopes(s: string[] | string | null | undefined): string[] {
   if (!s) return [];
@@ -60,17 +42,74 @@ function normalizeScopes(s: string[] | string | null | undefined): string[] {
     .filter(Boolean);
 }
 
-function patternBadge(scopes: string[]): string {
-  if (scopes.some((s) => s.startsWith("hub-protocol"))) return "Hub Protocol";
-  if (scopes.some((s) => s.startsWith("data"))) return "REST API";
-  return "API Key";
+function inferType(scopes: string[]): ConnectionType {
+  if (scopes.some((s) => s.startsWith("hub-protocol"))) return "hub-protocol";
+  return "rest-api";
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
+type RawApiKey = {
+  id: string;
+  keyName: string;
+  keyType?: string | null;
+  scope?: string[] | string | null;
+  isActive: boolean;
+};
+
+type RawWebhookSub = {
+  id: string;
+  url: string;
+  active: boolean;
+  name?: string | null;
+  eventTypes?: string[] | null;
+};
+
+function buildGroups(keys: RawApiKey[], subs: RawWebhookSub[]): ServiceGroup[] {
+  const map = new Map<string, ServiceConnection[]>();
+
+  for (const k of keys) {
+    if (k.keyType !== "hub_inbound" && k.keyType !== "service") continue;
+    if (!k.isActive) continue;
+    const scopes = normalizeScopes(k.scope);
+    const conn: ServiceConnection = {
+      type: inferType(scopes),
+      id: k.id,
+      name: k.keyName,
+      active: true,
+      scopes,
+    };
+    const group = map.get(k.keyName) ?? [];
+    group.push(conn);
+    map.set(k.keyName, group);
+  }
+
+  for (const sub of subs) {
+    const groupName = sub.name ?? sub.url;
+    const conn: ServiceConnection = {
+      type: "webhook-outbound",
+      id: sub.id,
+      name: groupName,
+      active: sub.active,
+      url: sub.url,
+      events: sub.eventTypes ?? [],
+    };
+    const group = map.get(groupName) ?? [];
+    group.push(conn);
+    map.set(groupName, group);
+  }
+
+  return Array.from(map.entries()).map(([name, connections]) => ({
+    name,
+    connections,
+  }));
+}
+
+// ─── Main component ────────────────────────────────────────────────────────────
 
 export function ConnectionsTab({ workspaceId }: { workspaceId: string }) {
   const [addOpen, setAddOpen] = useState(false);
-  const [revokeTarget, setRevokeTarget] = useState<ApiKey | null>(null);
+  const [defaultServiceName, setDefaultServiceName] = useState<
+    string | undefined
+  >(undefined);
   const [howItWorksOpen, setHowItWorksOpen] = useState(false);
 
   const utils = trpc.useUtils();
@@ -78,20 +117,32 @@ export function ConnectionsTab({ workspaceId }: { workspaceId: string }) {
     { workspaceId },
     { staleTime: 30_000 }
   );
+  const subsQuery = trpc.integrations.adminListForWorkspace.useQuery(
+    { workspaceId },
+    { staleTime: 30_000 }
+  );
 
-  const inboundKeys = useMemo(
+  const isLoading = keysQuery.isLoading || subsQuery.isLoading;
+  const isError = keysQuery.isError || subsQuery.isError;
+
+  const groups = useMemo(
     () =>
-      ((keysQuery.data as ApiKey[] | undefined) ?? []).filter(
-        (k) => k.keyType === "hub_inbound" && k.isActive
+      buildGroups(
+        (keysQuery.data as RawApiKey[] | undefined) ?? [],
+        (subsQuery.data as RawWebhookSub[] | undefined) ?? []
       ),
-    [keysQuery.data]
+    [keysQuery.data, subsQuery.data]
+  );
+
+  const existingServiceNames = useMemo(
+    () => groups.map((g) => g.name),
+    [groups]
   );
 
   const revokeMutation = trpc.apiKeys.revoke.useMutation({
     onSuccess: () => {
       void utils.apiKeys.adminListAll.invalidate({ workspaceId });
       addToast({ title: "Connection revoked", color: "default" });
-      setRevokeTarget(null);
     },
     onError: (err) =>
       addToast({
@@ -101,15 +152,47 @@ export function ConnectionsTab({ workspaceId }: { workspaceId: string }) {
       }),
   });
 
+  const deleteMutation = trpc.integrations.adminDeleteForWorkspace.useMutation({
+    onSuccess: () => {
+      void utils.integrations.adminListForWorkspace.invalidate({ workspaceId });
+      addToast({ title: "Subscription deleted", color: "default" });
+    },
+    onError: (err) =>
+      addToast({
+        title: "Delete failed",
+        description: err.message,
+        color: "danger",
+      }),
+  });
+
+  const toggleMutation = trpc.integrations.adminToggleForWorkspace.useMutation({
+    onSuccess: () =>
+      void utils.integrations.adminListForWorkspace.invalidate({ workspaceId }),
+    onError: (err) =>
+      addToast({
+        title: "Toggle failed",
+        description: err.message,
+        color: "danger",
+      }),
+  });
+
+  function openAddForService(name: string) {
+    setDefaultServiceName(name);
+    setAddOpen(true);
+  }
+
+  function closeAdd() {
+    setAddOpen(false);
+    setDefaultServiceName(undefined);
+    void utils.apiKeys.adminListAll.invalidate({ workspaceId });
+    void utils.integrations.adminListForWorkspace.invalidate({ workspaceId });
+  }
+
   return (
     <div className="flex flex-col gap-6">
-      {/* Section A — Outbound webhooks */}
-      <WebhooksPanel workspaceId={workspaceId} />
-
-      {/* Section B — External connections */}
       <SectionCard
-        title="External connections"
-        hint="Services authorised to call this pod's API"
+        title="Connections"
+        hint="External services and webhooks connected to this pod"
         actions={
           <Button
             size="sm"
@@ -117,36 +200,55 @@ export function ConnectionsTab({ workspaceId }: { workspaceId: string }) {
             radius="md"
             color="primary"
             startContent={<Plus className="h-3.5 w-3.5" />}
-            onPress={() => setAddOpen(true)}
+            onPress={() => {
+              setDefaultServiceName(undefined);
+              setAddOpen(true);
+            }}
           >
             Add connection
           </Button>
         }
       >
-        {keysQuery.isLoading ? (
+        {isLoading ? (
           <ResourceRowSkeleton count={2} />
-        ) : keysQuery.isError ? (
+        ) : isError ? (
           <ResourceRowError
             message="Couldn't load connections."
-            onRetry={() => void keysQuery.refetch()}
+            onRetry={() => {
+              void keysQuery.refetch();
+              void subsQuery.refetch();
+            }}
           />
-        ) : inboundKeys.length === 0 ? (
-          <ResourceRowEmpty message="No external connections yet." />
+        ) : groups.length === 0 ? (
+          <ResourceRowEmpty message="No connections yet." />
         ) : (
-          <div className="flex flex-col divide-y divide-foreground/[0.05] pt-1">
-            {inboundKeys.map((k) => (
-              <ConnectionRow
-                key={k.id}
-                apiKey={k}
+          <div className="flex flex-col gap-2 pt-1">
+            {groups.map((group) => (
+              <ServiceGroupCard
+                key={group.name}
+                group={group}
                 podUrl={POD_URL}
-                onRevoke={() => setRevokeTarget(k)}
+                onAddToService={() => openAddForService(group.name)}
+                onRevoke={(id) =>
+                  void revokeMutation.mutate({
+                    keyId: id,
+                    reason: "Revoked by admin",
+                  })
+                }
+                onDelete={(id) =>
+                  void deleteMutation.mutate({ id, workspaceId })
+                }
+                onToggle={(id, active) =>
+                  void toggleMutation.mutate({ id, workspaceId, active })
+                }
+                isTogglingId={toggleMutation.isPending ? "any" : null}
               />
             ))}
           </div>
         )}
       </SectionCard>
 
-      {/* Section C — How it works */}
+      {/* How it works */}
       <div className="rounded-xl ring-1 ring-inset ring-foreground/[0.08] bg-foreground/[0.01] overflow-hidden">
         <button
           type="button"
@@ -164,26 +266,33 @@ export function ConnectionsTab({ workspaceId }: { workspaceId: string }) {
         </button>
         {howItWorksOpen && (
           <div className="border-t border-foreground/[0.06] px-5 py-4 flex flex-col gap-4">
-            <HowItWorksPattern
+            <HowItWorksRow
               icon={<Database className="h-4 w-4 text-foreground/50" />}
               title="REST API"
-              when="Backend services that need direct read/write access to entities and documents."
+              description="Your backend calls Synap's entity/document API."
               endpoint={`${POD_URL}/trpc/{router}.{procedure}`}
               auth="Bearer token (API key)"
             />
-            <HowItWorksPattern
+            <HowItWorksRow
               icon={<Bot className="h-4 w-4 text-foreground/50" />}
               title="Hub Protocol"
-              when="AI agents and services that use memory, proposals, and channel operations."
+              description="Your AI agent uses memory, proposals, and channel ops."
               endpoint={`${POD_URL}/api/hub/*`}
               auth="Bearer token (API key)"
             />
-            <HowItWorksPattern
+            <HowItWorksRow
               icon={<Webhook className="h-4 w-4 text-foreground/50" />}
-              title="Webhooks"
-              when="Services that need to react to events in real-time (entity changes, proposals, messages)."
-              endpoint="Your endpoint — Synap posts to it"
-              auth="HMAC-SHA256 signature in x-synap-signature header"
+              title="Webhook — Outbound"
+              description="Synap notifies your endpoint when things change."
+              endpoint="Your endpoint — Synap POSTs to it"
+              auth="HMAC-SHA256 in x-synap-signature header"
+            />
+            <HowItWorksRow
+              icon={<ArrowDownToLine className="h-4 w-4 text-foreground/50" />}
+              title="Webhook — Inbound"
+              description="Your service sends events into this pod."
+              endpoint={`${POD_URL}/api/hub/*`}
+              auth="Bearer token (API key)"
             />
             <p className="text-[11.5px] text-foreground/45">
               Machine-readable capabilities:{" "}
@@ -195,138 +304,30 @@ export function ConnectionsTab({ workspaceId }: { workspaceId: string }) {
         )}
       </div>
 
-      {/* Add connection modal */}
       {addOpen && (
         <AddConnectionModal
           workspaceId={workspaceId}
-          onClose={() => {
-            setAddOpen(false);
-            void utils.apiKeys.adminListAll.invalidate({ workspaceId });
-          }}
-        />
-      )}
-
-      {/* Revoke modal */}
-      {revokeTarget && (
-        <RevokeModal
-          apiKey={revokeTarget}
-          isPending={revokeMutation.isPending}
-          onClose={() => setRevokeTarget(null)}
-          onConfirm={async () => {
-            await revokeMutation.mutateAsync({
-              keyId: revokeTarget.id,
-              reason: "Revoked by admin",
-            });
-          }}
+          existingServiceNames={existingServiceNames}
+          defaultServiceName={defaultServiceName}
+          onClose={closeAdd}
         />
       )}
     </div>
   );
 }
 
-// ─── Connection row ───────────────────────────────────────────────────────────
+// ─── HowItWorksRow ─────────────────────────────────────────────────────────────
 
-function ConnectionRow({
-  apiKey,
-  podUrl,
-  onRevoke,
-}: {
-  apiKey: ApiKey;
-  podUrl: string;
-  onRevoke: () => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const scopes = normalizeScopes(apiKey.scope);
-  const badge = patternBadge(scopes);
-  const inboundUrl = `${podUrl}/api/webhooks/inbound/${apiKey.id}`;
-
-  return (
-    <div className="flex flex-col py-3 px-1">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 min-w-0">
-          <KeyRound
-            className="h-4 w-4 shrink-0 text-foreground/40"
-            aria-hidden
-          />
-          <div className="min-w-0 flex flex-col">
-            <span className="text-[13px] font-medium text-foreground truncate">
-              {apiKey.keyName}
-            </span>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="inline-flex items-center rounded-md bg-foreground/[0.06] px-2 py-0.5 text-[11px] text-foreground/55">
-            {badge}
-          </span>
-          <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[11px] text-success">
-            Active
-          </span>
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="text-[11px] text-foreground/40 hover:text-foreground transition-colors px-1"
-            aria-label={expanded ? "Collapse" : "Expand"}
-          >
-            {expanded ? (
-              <ChevronDown className="h-3.5 w-3.5" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5" />
-            )}
-          </button>
-          <Button
-            isIconOnly
-            size="sm"
-            variant="light"
-            radius="full"
-            aria-label="Revoke connection"
-            className="text-foreground/40 hover:text-danger"
-            onPress={onRevoke}
-          >
-            <Ban className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </div>
-
-      {expanded && (
-        <div className="mt-2 ml-6 flex flex-col gap-2">
-          <div className="flex flex-col gap-0.5">
-            <p className="text-[11px] text-foreground/40 uppercase tracking-wider">
-              Webhook inbound URL
-            </p>
-            <code className="font-mono text-[10.5px] bg-foreground/[0.02] border border-foreground/[0.06] rounded-md px-2 py-1 text-foreground/55 truncate block">
-              {inboundUrl}
-            </code>
-          </div>
-          {scopes.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {scopes.map((s) => (
-                <span
-                  key={s}
-                  className="rounded-full bg-foreground/[0.06] px-2 py-0.5 font-mono text-[10px] text-foreground/55"
-                >
-                  {s}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── How it works pattern row ─────────────────────────────────────────────────
-
-function HowItWorksPattern({
+function HowItWorksRow({
   icon,
   title,
-  when,
+  description,
   endpoint,
   auth,
 }: {
   icon: React.ReactNode;
   title: string;
-  when: string;
+  description: string;
   endpoint: string;
   auth: string;
 }) {
@@ -337,80 +338,12 @@ function HowItWorksPattern({
         <span className="text-[12.5px] font-medium text-foreground">
           {title}
         </span>
-        <span className="text-[11.5px] text-foreground/55">{when}</span>
+        <span className="text-[11.5px] text-foreground/55">{description}</span>
         <code className="font-mono text-[10.5px] text-foreground/40">
           {endpoint}
         </code>
         <span className="text-[11px] text-foreground/40">Auth: {auth}</span>
       </div>
     </div>
-  );
-}
-
-// ─── Revoke modal ─────────────────────────────────────────────────────────────
-
-function RevokeModal({
-  apiKey,
-  isPending,
-  onClose,
-  onConfirm,
-}: {
-  apiKey: ApiKey;
-  isPending: boolean;
-  onClose: () => void;
-  onConfirm: () => void | Promise<void>;
-}) {
-  const { isOpen, onOpenChange } = useDisclosure({
-    defaultOpen: true,
-    onClose,
-  });
-
-  return (
-    <Modal
-      isOpen={isOpen}
-      onOpenChange={onOpenChange}
-      size="sm"
-      placement="center"
-    >
-      <ModalContent>
-        <ModalHeader className="flex items-center gap-2 border-b border-foreground/[0.06] px-6 py-4">
-          <span
-            className="glass-icon flex h-7 w-7 items-center justify-center"
-            style={{ background: "rgba(248, 113, 113, 0.18)" }}
-          >
-            <Ban className="h-3.5 w-3.5 text-foreground/85" />
-          </span>
-          <span className="text-[15px] font-medium">
-            Revoke {apiKey.keyName}?
-          </span>
-        </ModalHeader>
-        <ModalBody className="px-6 py-4">
-          <p className="text-[12.5px] text-foreground/85">
-            This connection will stop accepting requests immediately. Your
-            backend will need a new connection to call this pod.
-          </p>
-        </ModalBody>
-        <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
-          <Button
-            variant="flat"
-            radius="md"
-            size="sm"
-            onPress={onClose}
-            isDisabled={isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            color="danger"
-            radius="md"
-            size="sm"
-            isLoading={isPending}
-            onPress={() => void onConfirm()}
-          >
-            Revoke
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
   );
 }

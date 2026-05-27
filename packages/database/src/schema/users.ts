@@ -16,6 +16,7 @@ import { userPreferences } from "./user-preferences.js";
 
 export interface AgentMetadata {
   agentType: string;
+  agentTemplate?: "twin" | "assistant" | "custom";
   description?: string;
   createdByUserId: string;
   capabilities?: string[];

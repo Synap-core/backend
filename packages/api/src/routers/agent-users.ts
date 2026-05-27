@@ -13,6 +13,7 @@ import { users, workspaceMembers, apiKeys } from "@synap/database/schema";
 import { verifyPermission } from "@synap/database";
 import { randomUUID } from "crypto";
 import { auditLog } from "../utils/audit-log.js";
+import type { AgentMetadata } from "@synap/database/schema";
 
 export const agentUsersRouter = router({
   /**
@@ -22,11 +23,12 @@ export const agentUsersRouter = router({
     .input(
       z.object({
         workspaceId: z.string().uuid(),
-        agentType: z.string().min(1).max(50),
+        agentType: z.string().min(1).max(50).optional(),
         name: z.string().min(1).max(100),
-        role: z.enum(["admin", "editor", "viewer"]),
+        role: z.enum(["admin", "editor", "viewer"]).optional(),
         description: z.string().optional(),
         capabilities: z.array(z.string()).optional(),
+        template: z.enum(["twin", "assistant", "custom"]).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -49,7 +51,52 @@ export const agentUsersRouter = router({
 
       const agentId = randomUUID();
       const shortId = agentId.slice(0, 8);
-      const email = `agent-${input.agentType}-${shortId}@synap.agent`;
+
+      // Build metadata and role based on template
+      let resolvedRole: "admin" | "editor" | "viewer" = input.role ?? "editor";
+      const agentMetadata: AgentMetadata = {
+        agentType: input.agentType ?? "custom",
+        description: input.description,
+        createdByUserId: ctx.userId,
+        capabilities: input.capabilities,
+      };
+
+      if (input.template === "twin") {
+        agentMetadata.agentTemplate = "twin";
+        agentMetadata.agentType = input.agentType ?? "twin";
+        agentMetadata.writesRequireProposal = false;
+        agentMetadata.isPersonalAgent = false;
+
+        // Inherit the creator's current role in this workspace
+        const [creatorMembership] = await db
+          .select({ role: workspaceMembers.role })
+          .from(workspaceMembers)
+          .where(
+            and(
+              eq(workspaceMembers.userId, ctx.userId),
+              eq(workspaceMembers.workspaceId, input.workspaceId)
+            )
+          )
+          .limit(1);
+
+        if (creatorMembership) {
+          resolvedRole = creatorMembership.role as
+            | "admin"
+            | "editor"
+            | "viewer";
+        }
+      } else if (input.template === "assistant") {
+        agentMetadata.agentTemplate = "assistant";
+        agentMetadata.agentType = input.agentType ?? "assistant";
+        agentMetadata.writesRequireProposal = true;
+        resolvedRole = "editor";
+      } else if (input.template === "custom") {
+        agentMetadata.agentTemplate = "custom";
+        agentMetadata.agentType = input.agentType ?? "custom";
+      }
+
+      const resolvedAgentType = agentMetadata.agentType;
+      const email = `agent-${resolvedAgentType}-${shortId}@synap.agent`;
 
       // Create user record
       await db.insert(users).values({
@@ -58,21 +105,16 @@ export const agentUsersRouter = router({
         name: input.name,
         emailVerified: true,
         userType: "agent",
-        agentMetadata: {
-          agentType: input.agentType,
-          description: input.description,
-          createdByUserId: ctx.userId,
-          capabilities: input.capabilities,
-        },
+        agentMetadata,
         timezone: "UTC",
         locale: "en",
       });
 
-      // Add to workspace with specified role
+      // Add to workspace with resolved role
       await db.insert(workspaceMembers).values({
         workspaceId: input.workspaceId,
         userId: agentId,
-        role: input.role,
+        role: resolvedRole,
         invitedBy: ctx.userId,
       });
 
@@ -84,9 +126,10 @@ export const agentUsersRouter = router({
         userId: ctx.userId,
         workspaceId: input.workspaceId,
         data: {
-          agentType: input.agentType,
+          agentType: resolvedAgentType,
           name: input.name,
-          role: input.role,
+          role: resolvedRole,
+          template: input.template,
         },
       });
 
@@ -94,8 +137,9 @@ export const agentUsersRouter = router({
         id: agentId,
         email,
         name: input.name,
-        agentType: input.agentType,
-        role: input.role,
+        agentType: resolvedAgentType,
+        role: resolvedRole,
+        template: input.template,
       };
     }),
 

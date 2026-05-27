@@ -499,6 +499,21 @@ export interface WorkspaceSettings {
     allowAgentCreation?: boolean; // Allow users to create custom agents
     /** Who can approve AI proposals. Default: "owner_and_admins" */
     proposalApprovalPolicy?: "owner_and_admins" | "any_editor" | "admins_only";
+    /**
+     * Controls whether AI navigation commands (e.g. [[open:side|view:UUID]])
+     * execute automatically or require user confirmation.
+     */
+    navigationPermissions?: {
+      /** When true, AI-suggested panel/surface opens happen immediately without confirmation. */
+      autoApprove: boolean;
+      /**
+       * Resource types the AI is allowed to suggest opening.
+       * All types are allowed by default when this field is absent.
+       */
+      allowedResourceTypes?: Array<
+        "entity" | "view" | "doc" | "cell" | "channel" | "automation"
+      >;
+    };
   };
 
   // ─── DevPlane settings ───────────────────────────────────────────────────────
