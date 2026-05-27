@@ -2069,6 +2069,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetTempId: string;
 					relationType: string;
 				}[];
+				targetWorkspaceId?: string | null | undefined;
 			};
 			output: {
 				created: {
@@ -3612,7 +3613,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		submit: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				targetType: "workspace" | "view" | "entity" | "document" | "relation" | "profile";
-				changeType: "update" | "delete" | "create";
+				changeType: "create" | "update" | "delete";
 				data: Record<string, any>;
 				targetId?: string | undefined;
 				reasoning?: string | undefined;
@@ -7673,7 +7674,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					layoutConfig?: Record<string, unknown> | undefined;
 					profileEntityBentoTemplates?: Record<string, unknown> | undefined;
 				};
-				mode?: "update" | "create" | undefined;
+				mode?: "create" | "update" | undefined;
 				workspaceId?: string | undefined;
 				proposalId?: string | undefined;
 				appId?: string | undefined;

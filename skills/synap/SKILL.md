@@ -67,6 +67,62 @@ GET /api/hub/profiles?userId={userId}&workspaceId={workspaceId}
 
 Properties with `valueType: "entity_id"` are typed links to other entities — see **Linking** below.
 
+## CLI Data Operations (Bash tool)
+
+When Claude Code (or any agent with Bash access) is using this skill, prefer the `synap` CLI over raw HTTP calls — auth is automatic, output is clean JSON, no spinners in `--json` mode.
+
+**Always orient first:**
+
+```bash
+synap orient --json
+# Returns: userId, podUrl, workspaces[{id, name, slug}]
+# Never hardcode workspace IDs — discover them here.
+```
+
+**Search (Typesense-powered, cross-collection):**
+
+```bash
+synap search "project ideas" --json
+synap search "Antoine" --type=entity --workspace=<id> --json
+synap search "meeting notes" --type=doc --limit=5 --json
+# Omit --workspace to search pod-wide. Include it to scope to one workspace.
+# Use search for name/keyword queries. For semantic/conceptual search, use Hub Protocol memory endpoints.
+```
+
+**Read entities:**
+
+```bash
+synap list workspaces --json
+synap list entities --workspace=<id> --json
+synap list entities --profile=task --workspace=<id> --json
+synap get entity <id> --json
+```
+
+**Memory:**
+
+```bash
+synap remember "Key decision: use Typesense for search" --json
+synap recall "Typesense" --limit=5 --json
+```
+
+**Write:**
+
+```bash
+synap create entity --profile=note --name="Meeting notes" --workspace=<id> --json
+synap set entity <id> --props='{"status":"done"}' --json
+```
+
+**Multi-agent:** If `SYNAP_AGENT` env var is set, the CLI uses that named identity's API key from `~/.synap/config.json` instead of the default pod credentials. Use `synap agents list` to see configured identities.
+
+**Rules:**
+
+- Always use `--json` when calling from code — clean stdout, no spinners, machine-parseable
+- Run `synap orient` first to discover workspace IDs — never hardcode them
+- Omit `--workspace` to operate pod-wide; include it to scope to a specific workspace
+- `synap search` is Typesense (fast keyword/name search). Semantic search → Hub Protocol `GET /api/hub/memory?query=…`
+
+---
+
 ## Scope — default pod-wide
 
 **Default: pod-wide.** 13 of 17 system profiles (`note`, `task`, `project`, `event`, `person`, `contact`, `company`, `bookmark`, `article`, `website`, `decision`, `question`, `research`) are pod-scoped — entities you create show up in _every_ workspace the user owns. The backend handles this automatically when the profile is pod-scoped: you don't need to pass `workspaceId`.

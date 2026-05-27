@@ -1419,7 +1419,7 @@ export const channelsRouter = router({
           contextObjectId: channel.contextObjectId ?? undefined,
           // Pod credentials — IS uses these to call back into this pod via Hub Protocol
           dataPodUrl: process.env.PUBLIC_URL || `https://${process.env.DOMAIN}`,
-          dataPodApiKey: process.env.HUB_PROTOCOL_API_KEY || "",
+          dataPodApiKey: resolvedService.serviceApiKey,
           // Billing channel: Browser chat is included in subscription
           // Channel kind: signals to IS whether this is a private or shared channel
           channelKind,
@@ -1630,7 +1630,7 @@ export const channelsRouter = router({
             mcpServers: mcpServersList,
             dataPodUrl:
               process.env.PUBLIC_URL || `https://${process.env.DOMAIN}`,
-            dataPodApiKey: process.env.HUB_PROTOCOL_API_KEY || "",
+            dataPodApiKey: resolvedService.serviceApiKey,
             channelKind,
           });
         } catch (fallbackError) {
