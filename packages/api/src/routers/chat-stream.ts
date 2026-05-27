@@ -236,6 +236,7 @@ chatStreamApp.post("/stream", async (c) => {
     workspaceId: resolvedWorkspaceId,
     agentType: input.agentType ?? channelAgentSlug ?? "meta",
     dataPodUrl: process.env.PUBLIC_URL ?? process.env.BACKEND_URL ?? "",
+    dataPodApiKey: isApiKey,
     stream: true,
   };
 

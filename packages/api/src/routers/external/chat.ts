@@ -227,6 +227,7 @@ externalChatApp.post(
       workspaceId: resolvedWorkspaceId,
       agentType: input.agentType ?? "meta",
       dataPodUrl: process.env.PUBLIC_URL ?? process.env.BACKEND_URL ?? "",
+      dataPodApiKey: isApiKey,
       stream: true,
     };
 

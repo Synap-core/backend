@@ -110,7 +110,7 @@ export const apiKeys = pgTable(
     ),
     keyPrefixCheck: check(
       "api_keys_key_prefix_check",
-      sql`${table.keyPrefix} IN ('synap_hub_live_', 'synap_hub_test_', 'synap_user_')`
+      sql`${table.keyType} = 'hub_inbound' OR ${table.keyPrefix} IN ('synap_hub_live_', 'synap_hub_test_', 'synap_user_')`
     ),
     keyHashUnique: unique("api_keys_key_hash_unique").on(table.keyHash),
   })

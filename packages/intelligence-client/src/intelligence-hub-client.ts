@@ -239,8 +239,7 @@ export class IntelligenceHubClient {
                 request.dataPodUrl ||
                 process.env.PUBLIC_URL ||
                 "http://localhost:3000",
-              dataPodApiKey:
-                request.dataPodApiKey || process.env.HUB_PROTOCOL_API_KEY || "",
+              dataPodApiKey: request.dataPodApiKey ?? "",
               mcpServers: request.mcpServers,
               workspaceSettings: request.workspaceSettings,
               channelKind: request.channelKind,
@@ -362,8 +361,7 @@ export class IntelligenceHubClient {
               request.dataPodUrl ||
               process.env.PUBLIC_URL ||
               "http://localhost:3000",
-            dataPodApiKey:
-              request.dataPodApiKey || process.env.HUB_PROTOCOL_API_KEY || "",
+            dataPodApiKey: request.dataPodApiKey ?? "",
             mcpServers: request.mcpServers,
             deepAnalysis: request.deepAnalysis,
             workspaceSettings: request.workspaceSettings,

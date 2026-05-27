@@ -509,6 +509,7 @@ openaiCompatApp.post(
       workspaceId: resolvedWorkspaceId,
       agentType: "meta",
       dataPodUrl: process.env.PUBLIC_URL ?? process.env.BACKEND_URL ?? "",
+      dataPodApiKey: isApiKey,
       stream: input.stream,
     };
 

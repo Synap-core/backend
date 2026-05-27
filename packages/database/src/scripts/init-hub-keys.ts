@@ -60,27 +60,21 @@ async function seedHubProtocolKeys() {
     let plainKey: string;
     try {
       plainKey = resolveServiceKey(row.api_key);
-    } catch {
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.warn(
-        `⚠️  Could not decrypt key for service ${row.service_id} — skipping`
+        `⚠️  Could not decrypt key for service ${row.service_id}: ${msg} — skipping`
       );
       continue;
     }
-
-    if (!plainKey) continue;
 
     const name = `IS Hub Key — ${row.name || row.service_id}`;
     try {
       const keyHash = await bcrypt.hash(plainKey, 12);
 
-      // Derive a best-effort key prefix for audit purposes.
-      // The prefix constraint is relaxed for hub_inbound type (migration 0028),
-      // so this value is informational only.
-      const parts = plainKey.split("_");
-      const keyPrefix =
-        parts.length >= 3
-          ? parts.slice(0, 3).join("_") + "_"
-          : plainKey.slice(0, 12) + "_";
+      // Short public prefix for audit display — NOT a key fragment.
+      // Constraint exempts hub_inbound type (migration 0028).
+      const keyPrefix = plainKey.slice(0, 12) + "...";
 
       const result = await sql`
         INSERT INTO api_keys (
