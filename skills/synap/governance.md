@@ -33,9 +33,9 @@ Two independent factors:
 
 ### 1. Agent identity
 
-If the Hub API key has an associated `agentUserId`, the backend treats the writer as an agent. Agent writes are checked against the workspace's auto-approve whitelist. Anything outside the whitelist is proposed.
+Agent identity is determined by the API key. An agent-owned Hub API key (created via `POST /api/hub/setup/agent`) automatically attributes all requests to the agent user — no `agentUserId` field is needed in request bodies. The middleware resolves the agent from the key and tags writes with `source: "agent"`.
 
-If there's no agentUserId (human user with a personal API key), writes go through unless the workspace has `aiGovernance.forceProposals = true`.
+If the key belongs to a human user (personal API key), writes go through unless the workspace has `aiGovernance.forceProposals = true`.
 
 ### 2. Action type
 
@@ -114,22 +114,21 @@ An agent user is a pod-wide user with `agentMetadata.writesRequireProposal` set.
 
 The `agentUserId` on a Hub API key binds all writes done with that key to the agent user. Multiple keys can share one agent user.
 
-## `userId` vs `agentUserId` in request bodies
+## `userId` in request bodies
 
-For every write that takes `userId`, pass the **human user's ID**, not the agent's. The agent user is derived from the API key. Both IDs are tracked — the human appears in `createdBy`, the agent appears in `performedBy`.
+For every write that takes `userId`, pass the **human user's ID**. The agent identity is derived automatically from the API key — do not pass `agentUserId` in the body. Both IDs are tracked internally: the human appears in `createdBy`, the agent appears in `performedBy`.
 
 ```json
 POST /api/hub/entities
 {
-  "userId":       "usr_antoine",    // the human
-  "workspaceId":  "ws_…",
-  "agentUserId":  "usr_claude_code", // optional, defaults from API key
-  "profileSlug":  "task",
+  "userId":      "usr_antoine",    // the human user (from SYNAP_USER_ID)
+  "workspaceId": "ws_…",
+  "profileSlug": "task",
   …
 }
 ```
 
-If you pass the API key owner (often a system account) as `userId`, the entity appears in no one's feed. Always pass the real user.
+If you pass the API key owner (often a system account) as `userId`, the entity appears in no one's feed. Always pass the real human user's ID.
 
 ## Handling proposed writes gracefully
 

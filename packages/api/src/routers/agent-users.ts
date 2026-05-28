@@ -9,7 +9,13 @@ import { z } from "zod";
 import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, inArray } from "@synap/database";
-import { users, workspaceMembers, apiKeys } from "@synap/database/schema";
+import {
+  users,
+  workspaceMembers,
+  apiKeys,
+  workspaces,
+} from "@synap/database/schema";
+import type { WorkspaceSettings } from "@synap/database/schema";
 import { verifyPermission } from "@synap/database";
 import { randomUUID } from "crypto";
 import { auditLog } from "../utils/audit-log.js";
@@ -33,21 +39,61 @@ export const agentUsersRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // Caller must be owner or admin
-      const perm = await verifyPermission({
-        db,
-        userId: ctx.userId,
-        workspace: { id: input.workspaceId },
-        requiredPermission: "manage",
-      });
-
-      if (!perm.allowed) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message:
-            perm.reason ||
-            "Only workspace owners and admins can manage agent users",
+      if (input.template === "twin") {
+        // Any workspace member can request their own twin.
+        // Admins: always allowed. Members: requires allowSelfServiceTwin governance setting.
+        const memberPerm = await verifyPermission({
+          db,
+          userId: ctx.userId,
+          workspace: { id: input.workspaceId },
+          requiredPermission: "member",
         });
+        if (!memberPerm.allowed) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "You must be a workspace member to create an agent.",
+          });
+        }
+
+        const adminPerm = await verifyPermission({
+          db,
+          userId: ctx.userId,
+          workspace: { id: input.workspaceId },
+          requiredPermission: "manage",
+        });
+
+        if (!adminPerm.allowed) {
+          const [ws] = await db
+            .select({ settings: workspaces.settings })
+            .from(workspaces)
+            .where(eq(workspaces.id, input.workspaceId))
+            .limit(1);
+          const governance = (ws?.settings as WorkspaceSettings | undefined)
+            ?.aiGovernance;
+          if (!governance?.allowSelfServiceTwin) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message:
+                "Self-service twin creation is disabled. Ask a workspace admin to enable it in workspace governance settings (aiGovernance.allowSelfServiceTwin).",
+            });
+          }
+        }
+      } else {
+        // assistant / custom: only admins
+        const perm = await verifyPermission({
+          db,
+          userId: ctx.userId,
+          workspace: { id: input.workspaceId },
+          requiredPermission: "manage",
+        });
+        if (!perm.allowed) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              perm.reason ||
+              "Only workspace owners and admins can manage agent users",
+          });
+        }
       }
 
       const agentId = randomUUID();

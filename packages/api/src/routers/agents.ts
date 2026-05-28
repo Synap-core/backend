@@ -12,7 +12,7 @@
 import { z } from "zod";
 import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, desc, or, and } from "@synap/database";
+import { db, eq, desc, or, and, verifyPermission } from "@synap/database";
 import { agents } from "@synap/database/schema";
 import { randomUUID } from "crypto";
 
@@ -108,7 +108,20 @@ export const agentsRouter = router({
         intelligenceServiceId: z.string().uuid().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      const perm = await verifyPermission({
+        db,
+        userId: ctx.userId,
+        workspace: { id: ctx.workspaceId },
+        requiredPermission: "manage",
+      });
+      if (!perm.allowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Workspace manager role required to create agents.",
+        });
+      }
+
       const existing = await db.query.agents.findFirst({
         where: and(
           eq(agents.slug, input.slug),
@@ -161,7 +174,20 @@ export const agentsRouter = router({
         active: z.boolean().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      const perm = await verifyPermission({
+        db,
+        userId: ctx.userId,
+        workspace: { id: ctx.workspaceId },
+        requiredPermission: "manage",
+      });
+      if (!perm.allowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Workspace manager role required to update agents.",
+        });
+      }
+
       const existing = await db.query.agents.findFirst({
         where: eq(agents.id, input.id),
       });
@@ -202,7 +228,20 @@ export const agentsRouter = router({
    */
   delete: workspaceProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      const perm = await verifyPermission({
+        db,
+        userId: ctx.userId,
+        workspace: { id: ctx.workspaceId },
+        requiredPermission: "manage",
+      });
+      if (!perm.allowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Workspace manager role required to delete agents.",
+        });
+      }
+
       const existing = await db.query.agents.findFirst({
         where: eq(agents.id, input.id),
       });
@@ -211,6 +250,13 @@ export const agentsRouter = router({
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Agent ${input.id} not found`,
+        });
+      }
+
+      if (existing.ownerType !== "user") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Cannot delete system or provider agents",
         });
       }
 

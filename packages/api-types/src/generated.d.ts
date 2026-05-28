@@ -573,6 +573,7 @@ export interface WorkspaceSettings {
 		autoApprove?: boolean;
 		maxAgentsPerUser?: number;
 		allowAgentCreation?: boolean;
+		allowSelfServiceTwin?: boolean;
 		/** Who can approve AI proposals. Default: "owner_and_admins" */
 		proposalApprovalPolicy?: "owner_and_admins" | "any_editor" | "admins_only";
 	};

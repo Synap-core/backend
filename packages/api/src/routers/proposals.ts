@@ -21,7 +21,9 @@ import {
   desc,
   inArray,
   isNull,
+  isNotNull,
   gt,
+  lt,
   entities,
   users,
   getWorkspaceMembership,
@@ -487,9 +489,17 @@ export const proposalsRouter = router({
         targetId: z.string().optional(),
         /** Filter to proposals originating from a specific chat thread */
         threadId: z.string().uuid().optional(),
+        /** Filter to proposals created by a specific agent */
+        agentUserId: z.string().optional(),
+        /** When true, only return proposals where agentUserId is not null */
+        agentOnly: z.boolean().optional(),
+        /** When true, include expired proposals (expiresAt in the past) */
+        includeExpired: z.boolean().optional(),
         status: z
           .enum(["pending", "validated", "rejected", "all"])
           .default("pending"),
+        /** Cursor-based pagination: ISO timestamp of the last item's createdAt */
+        cursor: z.string().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -512,6 +522,14 @@ export const proposalsRouter = router({
         conditions.push(eq(proposals.targetId, input.targetId));
       }
 
+      if (input.agentUserId) {
+        conditions.push(eq(proposals.agentUserId, input.agentUserId));
+      }
+
+      if (input.agentOnly) {
+        conditions.push(isNotNull(proposals.agentUserId));
+      }
+
       if (input.threadId) {
         conditions.push(eq(proposals.threadId, input.threadId));
       }
@@ -527,10 +545,12 @@ export const proposalsRouter = router({
         conditions.push(eq(proposals.status, statusEnum));
       }
 
-      // Exclude expired proposals (expiresAt is null = no expiry, or in the future)
-      conditions.push(
-        or(isNull(proposals.expiresAt), gt(proposals.expiresAt, new Date()))!
-      );
+      // Exclude expired proposals unless caller explicitly requests them
+      if (!input.includeExpired) {
+        conditions.push(
+          or(isNull(proposals.expiresAt), gt(proposals.expiresAt, new Date()))!
+        );
+      }
 
       // Verify user has editor+ access to the workspace
       if (input.workspaceId) {
@@ -552,11 +572,17 @@ export const proposalsRouter = router({
         }
       }
 
+      // Cursor-based pagination: when cursor is provided, add a createdAt < cursor
+      // condition and ignore offset.
+      if (input.cursor) {
+        conditions.push(lt(proposals.createdAt, new Date(input.cursor)));
+      }
+
       const rows = await db.query.proposals.findMany({
         where: conditions.length > 0 ? and(...conditions) : undefined,
-        orderBy: desc(proposals.createdAt),
+        orderBy: [desc(proposals.createdAt), desc(proposals.id)],
         limit: input.limit + 1,
-        offset: input.offset,
+        offset: input.cursor ? 0 : input.offset,
       });
 
       // Enrich each proposal with a pre-formed `request` object and resolved
@@ -566,9 +592,14 @@ export const proposalsRouter = router({
 
       const { items, pagination } = buildPaginatedResponse(enriched, input);
 
+      const nextCursor =
+        pagination.hasMore && items.length > 0
+          ? items[items.length - 1]!.createdAt.toISOString()
+          : undefined;
+
       return {
         items,
-        pagination,
+        pagination: { ...pagination, nextCursor },
         /** @deprecated Use `items` instead */
         proposals: items,
       };

@@ -497,6 +497,8 @@ export interface WorkspaceSettings {
     autoApprove?: boolean;
     maxAgentsPerUser?: number; // Limit AI agents per user
     allowAgentCreation?: boolean; // Allow users to create custom agents
+    /** When true, any workspace member can create their own twin agent without admin approval. Default: false */
+    allowSelfServiceTwin?: boolean;
     /** Who can approve AI proposals. Default: "owner_and_admins" */
     proposalApprovalPolicy?: "owner_and_admins" | "any_editor" | "admins_only";
     /**

@@ -56,6 +56,16 @@ import {
 import { kratosAdmin } from "@synap/auth";
 import { logger, type HubHono } from "./_shared.js";
 
+const SURFACE_AGENT_TYPES = [
+  "claude-code",
+  "claude-desktop",
+  "cursor",
+  "raycast",
+  "codex",
+  "openwebui",
+  "generic",
+] as const;
+
 /** Check Kratos admin API for any identities. */
 async function checkKratosIdentity(): Promise<boolean> {
   try {
@@ -164,8 +174,11 @@ export function registerSetupRoutes(app: HubHono): void {
     }
 
     let authenticated = false;
-    let authMethod: "jwt" | "provisioning_token" | "api_key" =
-      "provisioning_token";
+    let authMethod:
+      | "jwt"
+      | "provisioning_token"
+      | "api_key"
+      | "api_key_surface" = "provisioning_token";
     let jwtIssuerUrl: string | null = null;
 
     // Try 1: CP-signed JWT verified against Trusted Issuers registry
@@ -294,6 +307,20 @@ export function registerSetupRoutes(app: HubHono): void {
       }
     }
 
+    // Path 4: any hub-protocol.write key (human-owned) can self-provision a surface agent type
+    let surfaceAgentLinkedUserId: string | undefined;
+    if (!authenticated) {
+      const keyRecord = await apiKeyService.validateApiKey(token);
+      if (
+        keyRecord?.isActive &&
+        keyRecord.scope.includes("hub-protocol.write")
+      ) {
+        authenticated = true;
+        authMethod = "api_key_surface";
+        surfaceAgentLinkedUserId = keyRecord.userId;
+      }
+    }
+
     if (!authenticated) {
       return c.json(
         {
@@ -321,6 +348,17 @@ export function registerSetupRoutes(app: HubHono): void {
         ? body.linkedUserId.trim()
         : undefined;
 
+    if (authMethod === "api_key_surface") {
+      if (!(SURFACE_AGENT_TYPES as readonly string[]).includes(agentType)) {
+        return c.json(
+          {
+            error: "Surface key provisioning only supports surface agent types",
+          },
+          400
+        );
+      }
+    }
+
     const agentLabel = agentType.charAt(0).toUpperCase() + agentType.slice(1);
 
     try {
@@ -331,7 +369,9 @@ export function registerSetupRoutes(app: HubHono): void {
       // without the lifecycle needing to fetch the userId separately.
       // Explicit body.linkedUserId overrides this (passed as "" to opt out).
       let resolvedLinkedUserId: string | undefined = linkedUserId;
-      if (resolvedLinkedUserId === undefined) {
+      if (authMethod === "api_key_surface") {
+        resolvedLinkedUserId = surfaceAgentLinkedUserId;
+      } else if (resolvedLinkedUserId === undefined) {
         const humanUser = await db.query.users.findFirst({
           where: (u, { eq: eqFn }) => eqFn(u.userType, "human"),
           columns: { id: true },
