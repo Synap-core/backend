@@ -5,7 +5,7 @@
  * Uses a server-held key from the environment — suitable for system-level
  * credentials that the server manages transparently.
  *
- * Env var: SYNAP_SERVICE_ENCRYPTION_KEY (falls back to HUB_PROTOCOL_API_KEY)
+ * Env var: SYNAP_SERVICE_ENCRYPTION_KEY (required — generate with: openssl rand -hex 32)
  *
  * Shared between packages/api and packages/jobs — lives here in @synap/database
  * so both packages can import without a circular dependency.
@@ -106,6 +106,16 @@ export function isEncryptedServiceKey(value: string): boolean {
 export function resolveServiceKey(stored: string): string {
   if (isEncryptedServiceKey(stored)) {
     return decryptServiceKey(stored);
+  }
+  // Value starts with '{' but failed the encrypted-JSON check — this is a
+  // corrupted encrypted blob (e.g. stored without JSON.stringify), not a
+  // legacy plaintext key. Fail loudly so the error surfaces at routing time
+  // rather than sending garbage to the IS as an API key.
+  if (stored.trimStart().startsWith("{")) {
+    throw new Error(
+      `IS api_key is corrupted (starts with '{' but is not valid encrypted JSON). ` +
+        `Re-provision this intelligence service. Preview: ${stored.substring(0, 60)}`
+    );
   }
   return stored;
 }

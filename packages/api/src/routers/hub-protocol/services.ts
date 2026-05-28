@@ -27,7 +27,6 @@ import { db, eq } from "@synap/database";
 import { intelligenceServices } from "@synap/database/schema";
 import { validateExternalUrl } from "../../utils/validate-url.js";
 import { createLogger } from "@synap-core/core";
-import { encryptServiceKey } from "../../utils/service-key-crypto.js";
 
 const logger = createLogger({ module: "hub-protocol-services" });
 
@@ -115,7 +114,11 @@ export const servicesRouter = router({
         return { serviceId: input.serviceId, status: "updated" as const };
       }
 
-      // New registration — trusted Hub Protocol path auto-approves MCP
+      // New registration — trusted Hub Protocol path auto-approves MCP.
+      // status="pending-provision" keeps this IS invisible to routing until
+      // /api/provision/register-intelligence delivers the real apiKey and flips
+      // status to "active". resolveIntelligenceService only queries 'active'
+      // and 'credential_error', so pending services are never routed to.
       const id = generateId();
       await db.insert(intelligenceServices).values({
         id,
@@ -124,12 +127,10 @@ export const servicesRouter = router({
         description: input.description,
         webhookUrl: input.webhookUrl,
         mcpEndpoint: input.mcpEndpoint,
-        // Placeholder key — the service authenticates TO us via Hub Protocol key,
-        // the apiKey column here is for callbacks from Synap to the service.
-        apiKey: encryptServiceKey(ctx.apiKeyId ?? id),
+        apiKey: "pending-provision",
         capabilities: input.capabilities,
         pricing: "free",
-        status: "active",
+        status: "pending-provision",
         enabled: true,
         // Hub Protocol registration = trusted provisioning path → auto-approve MCP tools
         mcpApproved: true,

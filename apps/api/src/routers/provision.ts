@@ -506,14 +506,21 @@ provisionRouter.post("/register-intelligence", async (c) => {
   let encryptedKey: string;
   try {
     encryptedKey = encryptServiceKey(serviceApiKey);
+    // Round-trip validation: ensure the key can be decrypted before committing.
+    // Catches format regressions at provision time instead of at first user message.
+    if (resolveServiceKey(encryptedKey) !== serviceApiKey) {
+      throw new Error(
+        "Encryption round-trip mismatch — key cannot be recovered"
+      );
+    }
   } catch (err: any) {
     const msg = err?.message ?? String(err);
     logger.error({ err }, "register-intelligence: encryption step failed");
     return c.json(
       {
-        error: "Pod encryption key not configured",
+        error: "Pod encryption key not configured or encryption failed",
         detail: msg,
-        hint: "Set SYNAP_SERVICE_ENCRYPTION_KEY (or HUB_PROTOCOL_API_KEY as fallback) in the pod environment",
+        hint: "Set SYNAP_SERVICE_ENCRYPTION_KEY in the pod environment (openssl rand -hex 32)",
       },
       500
     );
