@@ -41,6 +41,25 @@ export const AttachmentSchema = z.object({
   url: z.string().url(),
 });
 
+/**
+ * Mirrors the AIStep interface from @synap-core/types (hub-protocol).
+ * Kept as a loose schema so it tolerates forward-compat additions from IS.
+ */
+export const AIStepSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  content: z.string(),
+  toolName: z.string().optional(),
+  toolInput: z.unknown().optional(),
+  toolOutput: z.unknown().optional(),
+  timestamp: z.string(),
+  duration: z.number().optional(),
+  error: z.string().optional(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  status: z.enum(["pending", "running", "complete", "error"]).optional(),
+});
+
 export const AgentStateSchema = z.object({
   intentAnalysis: AgentIntentAnalysisSchema.optional(),
   context: AgentContextSchema.optional(),
@@ -67,6 +86,10 @@ export const ConversationMessageMetadataSchema = z.object({
   intelligenceServiceId: z.string().optional(),
   /** UUID of the agent that produced this message. */
   agentId: z.string().optional(),
+  /** Tool calls and thinking steps captured during the IS turn. */
+  aiSteps: z.array(AIStepSchema).optional(),
+  /** Agent type that produced this message (e.g. "analyst", "meta"). */
+  agentType: z.string().optional(),
 });
 
 export type ConversationMessageMetadata = z.infer<

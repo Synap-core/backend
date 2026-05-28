@@ -21,6 +21,7 @@ import {
   db,
   eq,
   desc,
+  asc,
   and,
   or,
   lt,
@@ -49,6 +50,7 @@ import {
   mcpServers,
   sessions,
   SessionStatus,
+  compactedStates,
   agents,
   sourceConfigs,
   sourceSubscriptions,
@@ -1745,6 +1747,7 @@ export const channelsRouter = router({
         aiSteps,
         intelligenceServiceId: resolvedService.serviceId,
         agentId: resolvedAgentId,
+        agentType: effectiveAgentType,
       };
 
       await db.insert(messages).values({
@@ -2016,6 +2019,181 @@ export const channelsRouter = router({
         messages: hasMore ? msgs.slice(0, -1) : msgs,
         nextCursor,
         hasMore,
+      };
+    }),
+
+  /**
+   * Returns a paired turn-by-turn timeline for a channel.
+   * Each turn = one user message + the AI assistant reply that followed it.
+   * Compaction boundaries are detected via sessionId changes between turns.
+   */
+  getTimeline: protectedProcedure
+    .input(
+      z.object({
+        channelId: z.string().uuid(),
+        limit: z.number().int().min(1).max(200).default(100),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const channel = await db.query.channels.findFirst({
+        where: eq(channels.id, input.channelId),
+      });
+      if (!channel) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Channel not found",
+        });
+      }
+      if (channel.userId !== ctx.userId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Access denied to this channel",
+        });
+      }
+
+      // 1. Fetch all non-deleted messages, oldest-first, up to limit*2 to cover pairs
+      const allMessages = await db.query.messages.findMany({
+        where: and(
+          eq(messages.channelId, input.channelId),
+          isNull(messages.deletedAt)
+        ),
+        orderBy: [asc(messages.timestamp)],
+        limit: input.limit * 2,
+      });
+
+      // 2. Pair messages into turns: user → assistant
+      type RawMessage = (typeof allMessages)[number];
+      interface Turn {
+        userMessage: RawMessage;
+        assistantMessage?: RawMessage;
+      }
+      const turns: Turn[] = [];
+      let i = 0;
+      while (i < allMessages.length) {
+        const msg = allMessages[i];
+        if (msg.role === MessageRole.USER) {
+          const next = allMessages[i + 1];
+          const assistantMsg =
+            next?.role === MessageRole.ASSISTANT ? next : undefined;
+          turns.push({ userMessage: msg, assistantMessage: assistantMsg });
+          i += assistantMsg ? 2 : 1;
+        } else {
+          // Skip leading assistant messages (edge case)
+          i++;
+        }
+        if (turns.length >= input.limit) break;
+      }
+
+      // 3. Fetch sessions for compaction boundary detection
+      const channelSessions = await db.query.sessions.findMany({
+        where: eq(sessions.channelId, input.channelId),
+        orderBy: [asc(sessions.startedAt)],
+      });
+
+      // 4. Fetch compacted states to get continuityBlock per boundary
+      const compacted = await db.query.compactedStates.findMany({
+        where: eq(compactedStates.channelId, input.channelId),
+        orderBy: [desc(compactedStates.version)],
+      });
+      // Map sessionId → continuityBlock from the state that session produced
+      const continuityBySessionId = new Map<string, string>();
+      for (const state of compacted) {
+        if (state.sessionId) {
+          continuityBySessionId.set(state.sessionId, state.continuityBlock);
+        }
+      }
+
+      // 5. Fetch proposals linked to user messages in these turns
+      const userMessageIds = turns.map((t) => t.userMessage.id);
+      const turnProposals =
+        userMessageIds.length > 0
+          ? await db
+              .select({
+                id: proposals.id,
+                sourceMessageId: proposals.sourceMessageId,
+                proposalType: proposals.proposalType,
+                data: proposals.data,
+              })
+              .from(proposals)
+              .where(inArray(proposals.sourceMessageId, userMessageIds))
+          : [];
+
+      // Group by sourceMessageId for O(1) lookup per turn
+      const proposalsByMsgId = new Map<
+        string,
+        Array<{ proposalId: string; toolName: string; description: string }>
+      >();
+      for (const p of turnProposals) {
+        if (!p.sourceMessageId) continue;
+        const existing = proposalsByMsgId.get(p.sourceMessageId) ?? [];
+        const data = p.data as Record<string, unknown> | null;
+        const description =
+          (data?.title as string | undefined) ??
+          (data?.summary as string | undefined) ??
+          (data?.name as string | undefined) ??
+          p.proposalType;
+        existing.push({
+          proposalId: p.id,
+          toolName: p.proposalType,
+          description,
+        });
+        proposalsByMsgId.set(p.sourceMessageId, existing);
+      }
+
+      // 6. Build the output turns
+      const outputTurns = turns.map((turn, idx) => {
+        const meta = turn.assistantMessage?.metadata as
+          | {
+              aiSteps?: unknown[];
+              agentType?: string;
+              agentId?: string;
+            }
+          | null
+          | undefined;
+
+        // Compaction boundary: sessionId changed between this turn's assistant
+        // message and the next turn's user message
+        const nextTurn = turns[idx + 1];
+        const currentSessionId =
+          turn.assistantMessage?.sessionId ?? turn.userMessage.sessionId;
+        const nextSessionId = nextTurn?.userMessage.sessionId ?? null;
+        const isCompactionBoundary =
+          currentSessionId !== null &&
+          nextSessionId !== null &&
+          currentSessionId !== nextSessionId;
+
+        const compactionSummary =
+          isCompactionBoundary && currentSessionId
+            ? (continuityBySessionId.get(currentSessionId) ?? "")
+            : undefined;
+
+        return {
+          index: idx + 1,
+          userMessage: {
+            id: turn.userMessage.id,
+            content: turn.userMessage.content ?? "",
+            timestamp: turn.userMessage.timestamp,
+          },
+          assistantMessage: turn.assistantMessage
+            ? {
+                id: turn.assistantMessage.id,
+                content: turn.assistantMessage.content ?? "",
+                timestamp: turn.assistantMessage.timestamp,
+                agentType: meta?.agentType,
+                agentId: meta?.agentId,
+              }
+            : undefined,
+          steps: (meta?.aiSteps ?? []) as AIStep[],
+          isCompactionBoundary,
+          compactionSummary,
+          proposals: proposalsByMsgId.get(turn.userMessage.id) ?? [],
+        };
+      });
+
+      return {
+        turns: outputTurns,
+        totalTurns: outputTurns.length,
+        sessionCount: channelSessions.length,
       };
     }),
 

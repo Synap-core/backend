@@ -3010,6 +3010,39 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		getTimeline: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				channelId: string;
+				limit?: number | undefined;
+			};
+			output: {
+				turns: {
+					index: number;
+					userMessage: { id: string; content: string; timestamp: Date };
+					assistantMessage?: { id: string; content: string; timestamp: Date; agentType?: string | undefined; agentId?: string | undefined } | undefined;
+					steps: {
+						id: string;
+						type: string;
+						content: string;
+						timestamp: string;
+						toolName?: string | undefined;
+						toolInput?: unknown;
+						toolOutput?: unknown;
+						duration?: number | undefined;
+						error?: string | undefined;
+						title?: string | undefined;
+						description?: string | undefined;
+						status?: "pending" | "running" | "complete" | "error" | undefined;
+					}[];
+					isCompactionBoundary: boolean;
+					compactionSummary?: string | undefined;
+					proposals?: { proposalId: string; toolName: string; description?: string | undefined }[] | undefined;
+				}[];
+				totalTurns: number;
+				sessionCount: number;
+			};
+			meta: object;
+		}>;
 		getBranches: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				parentChannelId: string;
