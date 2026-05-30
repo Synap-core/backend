@@ -92,6 +92,13 @@ const WorkspaceFromDefinitionBodySchema = z
     workspaceType: z
       .enum(["personal", "agent", "project", "operational"])
       .optional(),
+    /**
+     * Provision on behalf of a beneficiary. A trusted agent/service key (e.g.
+     * the IS system key) sets this so the workspace is OWNED BY — and the
+     * membership row created for — the human user, not the calling service
+     * identity. Omit to own as the caller. Validated to be a real user.
+     */
+    ownerUserId: z.string().optional(),
     /** WorkspaceProposal fields — accepted with `passthrough()` for forward-compat. */
   })
   .passthrough();
@@ -341,10 +348,32 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       templateId,
       templateName,
       workspaceType,
+      ownerUserId,
       // The remaining fields are the WorkspaceProposal definition itself —
       // strip the wrapper meta fields above and pass the rest through.
       ...definition
     } = parsed.data;
+
+    // "Provision on behalf of": when a trusted service key supplies ownerUserId,
+    // the workspace is owned by — and the membership row created for — that human
+    // user instead of the calling service identity (c.get("userId")). Without
+    // this, the beneficiary gets no workspace_members row and their
+    // workspace-scoped reads/writes fail the membership check. Validate the
+    // target is a real user so a caller can't mint workspaces for arbitrary ids.
+    let ownerId = userId;
+    if (ownerUserId && ownerUserId !== userId) {
+      const target = await db.query.users.findFirst({
+        where: eq(users.id, ownerUserId),
+        columns: { id: true },
+      });
+      if (!target) {
+        return c.json(
+          { error: `ownerUserId not found on this pod: ${ownerUserId}` },
+          400
+        );
+      }
+      ownerId = ownerUserId;
+    }
 
     try {
       const result = await createWorkspaceFromDefinitionIdempotent({
@@ -354,7 +383,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         definition: definition as Parameters<
           typeof createWorkspaceFromDefinitionIdempotent
         >[0]["definition"],
-        userId,
+        userId: ownerId,
         proposalId,
         workspaceName,
         templateId,
