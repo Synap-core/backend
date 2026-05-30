@@ -161,8 +161,30 @@ export interface ProactiveAiPreferences {
   };
   /** Controls how many proactive nudges the AI sends. Default: "balanced" */
   nudgeDensity: ProactiveNudgeDensity;
+  /**
+   * Event-driven proactive triggers (Feature C). Each toggle opts the workspace
+   * into reacting to a class of user action. Time-based features above
+   * (morningBriefing/weeklyDigest/healthCheck) are independent of these.
+   * All default OFF — proactive event reactions are opt-in.
+   */
+  triggers?: ProactiveAiTriggers;
   /** ISO 8601 timestamp — snooze all proactive AI until this time */
   mutedUntil?: string;
+}
+
+/**
+ * Per-event opt-in toggles for event-driven proactive AI (Feature C).
+ * Keyed by the validated event that fires the proactive scan.
+ */
+export interface ProactiveAiTriggers {
+  /** N captures sharing a topic → propose a Question to track them. */
+  captureCluster?: boolean;
+  /** Task moved to done → connect it back to its decision/research. */
+  taskCompleted?: boolean;
+  /** New Question created → suggest research from existing captures. */
+  questionCreated?: boolean;
+  /** New Decision created → auto-link the research that informed it. */
+  decisionCreated?: boolean;
 }
 
 /** Default proactive AI preferences for new workspaces */
@@ -186,6 +208,12 @@ export function getDefaultProactiveAiPreferences(): ProactiveAiPreferences {
       frequencyDays: 7,
     },
     nudgeDensity: "balanced",
+    triggers: {
+      captureCluster: false,
+      taskCompleted: false,
+      questionCreated: false,
+      decisionCreated: false,
+    },
   };
 }
 
