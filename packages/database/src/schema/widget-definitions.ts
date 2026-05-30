@@ -22,7 +22,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { workspaces } from "./workspaces.js";
 
-export type WidgetRendererType = "builtin" | "iframe" | "native";
+export type WidgetRendererType = "builtin" | "iframe" | "native" | "frame";
 
 export const widgetDefinitions = pgTable(
   "widget_definitions",
@@ -104,6 +104,13 @@ export const widgetDefinitions = pgTable(
 
     /** Minimum grid size; optional. */
     minSize: jsonb("min_size").$type<{ w: number; h: number }>(),
+
+    /**
+     * npm package version pins for frame widgets.
+     * e.g. { 'recharts': '2.12.0' }
+     * NULL for non-frame widgets.
+     */
+    deps: jsonb("deps").$type<Record<string, string>>().default({}),
 
     // ── Lifecycle ────────────────────────────────────────────────────────
 

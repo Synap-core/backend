@@ -11,11 +11,15 @@ const { parseExpression } = cronParser;
  * Calculate next run time based on cron expression.
  * Uses cron-parser for reliable parsing.
  */
-export function calculateNextRun(cron: string, timezone: string): Date {
+export function calculateNextRun(
+  cron: string,
+  timezone: string,
+  currentDate: Date = new Date()
+): Date {
   try {
     const interval = parseExpression(cron, {
       tz: timezone,
-      currentDate: new Date(),
+      currentDate,
     });
     return interval.next().toDate();
   } catch {

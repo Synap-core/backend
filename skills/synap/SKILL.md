@@ -675,6 +675,168 @@ When the user is interacting with Synap's AI Companion (the in-browser chat pane
 - Extending the data model (new profiles, new properties) → install the **`synap-schema`** skill
 - Building views, dashboards, and bento layouts → install the **`synap-ui`** skill
 
+## ViewFrame Cells — Custom View Generation
+
+ViewFrame is the standard way to create custom data visualizations in Synap. Use it whenever an existing cell (table, kanban, list, chart) does not cover the needed chart type, 3D layout, map, or bespoke AI-generated UI.
+
+### When to Use ViewFrame
+
+| Situation                                                              | Action                        |
+| ---------------------------------------------------------------------- | ----------------------------- |
+| An existing cell or view type covers the need                          | Use the existing cell or view |
+| User asks for a specific chart type, map, 3D scene, or custom layout   | Generate a ViewFrame widget   |
+| User says "show X as a [funnel / heatmap / treemap / scatter / globe]" | Generate a ViewFrame widget   |
+
+### What ViewFrame Is
+
+- A sandboxed iframe that renders any ES module (React component or plain JS module)
+- Dependencies resolved at runtime via **esm.sh import maps** — no build step
+- The host injects a `SynapWidget` bridge for data access (same postMessage protocol as iframe widgets)
+- Security: `sandbox="allow-scripts allow-modals allow-popups"`, no `allow-same-origin`, no cookies, no pod token
+
+### Register a Widget via the Hub Protocol
+
+List installed widgets:
+
+```
+GET /api/hub/widget-definitions?workspaceId={workspaceId}
+Authorization: Bearer {SYNAP_HUB_API_KEY}
+```
+
+Install a new ViewFrame widget (creates a proposal for user review):
+
+```
+POST /api/hub/widget-definitions
+Authorization: Bearer {SYNAP_HUB_API_KEY}
+Content-Type: application/json
+
+{
+  "userId": "{SYNAP_USER_ID}",
+  "workspaceId": "{workspaceId}",
+  "typeKey": "deal-stage-funnel",
+  "name": "Deal Stage Funnel",
+  "description": "Funnel chart of deal pipeline stages",
+  "rendererType": "iframe",
+  "rendererSource": "<full HTML document — see template below>",
+  "defaultSize": { "w": 8, "h": 6 },
+  "category": "visualization"
+}
+```
+
+`typeKey` must be kebab-case matching `/^[a-z][a-z0-9-]+$/`. Use a descriptive name specific to the widget's content.
+
+The response carries `status: "ok"` (installed immediately) or `status: "proposed"` (queued for user review — surface `reviewUrl` to the user).
+
+### The SynapWidget Bridge (inside the iframe)
+
+`window.SynapWidget` is injected automatically — do NOT import or `<script>` it.
+
+```js
+SynapWidget.onInit(async ({ config, context }) => {
+  // context: { workspaceId, viewId?, entityId?, sdkVersion }
+  const items = await SynapWidget.query("list_entities", {
+    profileSlug: "deal", // or 'task', 'person', 'company', any custom slug
+    limit: 200,
+  });
+  render(items ?? []);
+  SynapWidget.resize(document.body.scrollHeight);
+});
+```
+
+All `query()` calls return a Promise. Entity shape: `{ id, title, profileSlug, properties, createdAt, … }`.
+
+Navigation and notifications:
+
+```js
+SynapWidget.navigate({ entityId: "entity-uuid" }); // opens entity detail
+SynapWidget.toast("Done!", "success"); // 'success' | 'error' | 'info'
+```
+
+### Common Dependency Patterns (esm.sh import map)
+
+```html
+<script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@19",
+      "react-dom/client": "https://esm.sh/react-dom@19/client",
+      "react/jsx-runtime": "https://esm.sh/react@19/jsx-runtime",
+      "recharts": "https://esm.sh/recharts@2.12.0"
+    }
+  }
+</script>
+```
+
+Common library choices:
+
+| Category | Packages                                                       |
+| -------- | -------------------------------------------------------------- |
+| Data viz | `recharts@2.12.0`, `d3@7`, `chart.js@4`, `observable-plot@0.6` |
+| Tables   | `@tanstack/react-table@8`                                      |
+| 3D       | `three@0.165.0`, `@react-three/fiber@8`, `@react-three/drei@9` |
+| Maps     | `leaflet@1.9.4`, `react-leaflet@4`                             |
+
+### Minimal Widget Template
+
+```html
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+      }
+      body {
+        font-family: -apple-system, sans-serif;
+        padding: 16px;
+        background: transparent;
+      }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "https://esm.sh/react@19",
+          "react-dom/client": "https://esm.sh/react-dom@19/client",
+          "react/jsx-runtime": "https://esm.sh/react@19/jsx-runtime"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import { createRoot } from "react-dom/client";
+
+      SynapWidget.onInit(async ({ context }) => {
+        const items = await SynapWidget.query("list_entities", {
+          profileSlug: "deal",
+          limit: 200,
+        }).catch(() => []);
+
+        // Build your UI here. Plain DOM or React both work.
+        document.getElementById("root").textContent =
+          `Loaded ${(items ?? []).length} deals`;
+
+        SynapWidget.resize(document.body.scrollHeight);
+      });
+    </script>
+  </body>
+</html>
+```
+
+### Rules
+
+- **Always call `SynapWidget.onInit()`** — the host will not send data until you register this handler.
+- **Call `SynapWidget.resize()`** after rendering to prevent clipping.
+- **Handle errors** — `query()` can fail; always `.catch()`.
+- **Transparent background** — `background: transparent` on `body` inherits the host surface color.
+- **No external fetch** — the sandbox has no cross-origin access; all data must go through `SynapWidget`.
+- **Inline all styles** — no external CSS imports; CDN JS via import map is fine.
+
+---
+
 ## Authentication
 
 ```

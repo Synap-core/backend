@@ -184,6 +184,7 @@ import { relationDefsRouter } from "./routers/relation-defs.js";
 import { profileRelationsRouter } from "./routers/profile-relations.js";
 import { agentUsersRouter } from "./routers/agent-users.js";
 import { widgetDefinitionsRouter } from "./routers/widget-definitions.js";
+import { cellsRouter } from "./routers/cells.js";
 import { channelGatewayRouter } from "./routers/channel-gateway.js";
 import { automationsRouter } from "./routers/automations.js";
 import { importRouter } from "./routers/import.js";
@@ -424,6 +425,12 @@ registerRouter("widgetDefinitions", widgetDefinitionsRouter, {
   description:
     "Dynamic widget registry — built-in + AI-generated bento widget types",
 });
+registerRouter("cells", cellsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description:
+    "ViewFrame cell marketplace lifecycle — install, uninstall, listInstalled",
+});
 registerRouter("channelGateway", channelGatewayRouter, {
   version: "1.0.0",
   source: "core",
@@ -521,6 +528,19 @@ import { coreRouter } from "./root.js";
 import type { AppRouter } from "./root.js";
 export type { AppRouter };
 export { coreRouter };
+
+// Reactions / Pulse projection types — the read-only "Reactions" UI model.
+export type {
+  Reaction,
+  ReactionKind,
+  ReactionLens,
+  ReactionEvent,
+  WebhookDeliveryItem,
+} from "./types/reactions.js";
+export {
+  INTERNAL_REACTION_KINDS,
+  EXTERNAL_REACTION_KINDS,
+} from "./types/reactions.js";
 
 // Export the dynamically built app router for the server
 export const appRouter: AppRouter = buildAppRouter();

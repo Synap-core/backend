@@ -2416,6 +2416,7 @@ ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "is_active" boolean DE
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "version" text DEFAULT '1.0.0';
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "deps" jsonb DEFAULT '{}';
 
 CREATE UNIQUE INDEX IF NOT EXISTS "widget_def_type_key_workspace_uniq"
   ON "widget_definitions" ("type_key", "workspace_id");

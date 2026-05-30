@@ -10,6 +10,7 @@ import {
   drizzleSql,
   eq,
   and,
+  or,
 } from "@synap/database";
 
 import { hasScope, logger, type HubHono } from "./_shared.js";
@@ -64,18 +65,29 @@ export function registerAgentsRoutes(app: HubHono): void {
 
     let resolvedServiceId: string | null = null;
 
-    // Try: serviceId is a UUID pointing to intelligence_services.id
+    // Resolve the service by EITHER its primary id OR its stable serviceId text
+    // key. The IS sends its serviceId (e.g. "synap-hub"), not the pod-assigned
+    // row id — matching only on id is why agent sync silently 404'd.
     try {
       const service = await db
-        .select()
+        .select({ id: intelligenceServices.id })
         .from(intelligenceServices)
-        .where(eq(intelligenceServices.id, serviceId))
+        .where(
+          or(
+            eq(intelligenceServices.id, serviceId),
+            eq(intelligenceServices.serviceId, serviceId)
+          )
+        )
         .limit(1);
-      if (service.length > 0) {
-        resolvedServiceId = service[0].id;
-      }
-    } catch {
-      // Not a valid intel service row
+      resolvedServiceId = service[0]?.id ?? null;
+    } catch (err) {
+      // A DB error here is infrastructure, not a lookup miss — surface it as 500
+      // rather than masquerading as "service not found".
+      logger.error(
+        { err, serviceId },
+        "Failed to resolve intelligence service"
+      );
+      return c.json({ error: "Failed to resolve intelligence service" }, 500);
     }
 
     if (!resolvedServiceId) {
@@ -108,7 +120,8 @@ export function registerAgentsRoutes(app: HubHono): void {
           .onConflictDoUpdate({
             target: [agents.intelligenceServiceId, agents.slug],
             set: {
-              id: agent.id,
+              // NOT id — the conflict target identifies the row; rewriting the
+              // PK to the incoming id can collide with another row's id.
               name: agent.name,
               description:
                 agent.description ?? drizzleSql`${agents.description}`,
@@ -129,20 +142,34 @@ export function registerAgentsRoutes(app: HubHono): void {
       }
 
       // ── 2. Deactivate agents that were not in the payload ─────────────────────
-      const deactivatedResult = await db
-        .update(agents)
-        .set({ active: false, updatedAt: new Date() })
-        .where(
-          and(
-            eq(agents.intelligenceServiceId, resolvedServiceId),
-            eq(agents.active, true),
-            drizzleSql`NOT EXISTS (
+      // An empty payload means "deactivate everything for this service" — the
+      // VALUES (...) subquery would be invalid SQL with zero rows, so branch.
+      const deactivatedResult =
+        agentsPayload.length === 0
+          ? await db
+              .update(agents)
+              .set({ active: false, updatedAt: new Date() })
+              .where(
+                and(
+                  eq(agents.intelligenceServiceId, resolvedServiceId),
+                  eq(agents.active, true)
+                )
+              )
+              .returning({ id: agents.id })
+          : await db
+              .update(agents)
+              .set({ active: false, updatedAt: new Date() })
+              .where(
+                and(
+                  eq(agents.intelligenceServiceId, resolvedServiceId),
+                  eq(agents.active, true),
+                  drizzleSql`NOT EXISTS (
             SELECT 1 FROM (VALUES ${agentsPayload.map((a) => drizzleSql`${a.slug}`)}) AS v(slug)
             WHERE v.slug = ${agents.slug}
           )`
-          )
-        )
-        .returning({ id: agents.id });
+                )
+              )
+              .returning({ id: agents.id });
 
       const deactivatedCount = deactivatedResult.length;
 

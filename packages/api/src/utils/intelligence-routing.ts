@@ -15,3 +15,10 @@ export type {
   ServiceResolutionContext,
   ResolvedService,
 } from "@synap/intelligence-client";
+
+export { resolveAgentForTask } from "@synap/intelligence-client";
+
+export type {
+  AgentResolutionContext,
+  ResolvedAgent,
+} from "@synap/intelligence-client";

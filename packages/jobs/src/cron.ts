@@ -65,6 +65,13 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("feed-scheduler", "* * * * *", {});
   logger.info("Registered cron: feed-scheduler (every 1min)");
 
+  // Proactive scheduler (hourly — enqueues due morning-briefing / weekly-digest feeds).
+  // These are daily/weekly cadences, so hourly polling is sufficient; the per-feed
+  // schedule (e.g. 08:00) decides the actual fire. Worst case a briefing fires within
+  // the hour of its scheduled time.
+  await boss.schedule("proactive-scheduler", "0 * * * *", {});
+  logger.info("Registered cron: proactive-scheduler (hourly)");
+
   // Pod-to-pod replication — event log (catch-up + cursor maintenance; realtime hook is primary path)
   await boss.schedule("sync-push", "* * * * *", {});
   logger.info("Registered cron: sync-push (every 1min)");

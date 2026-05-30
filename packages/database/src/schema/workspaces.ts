@@ -221,6 +221,45 @@ export interface DeliveryPreferences {
   ai_insight?: SignalDeliveryRule;
 }
 
+/**
+ * Match criteria for an agent-routing rule. Every DEFINED field must equal the
+ * dispatch context (undefined = wildcard). A trailing "*" on a value is a prefix
+ * match (e.g. eventPattern "entity.update.*"). First matching rule wins.
+ */
+export interface AgentRoutingMatch {
+  /** Entity/task type (e.g. "task", "devplane_feature") */
+  taskType?: string;
+  /** Profile slug of the subject entity */
+  profileSlug?: string;
+  /** Typed event name/pattern (e.g. "entity.update.completed") */
+  eventPattern?: string;
+  /** Channel type, when dispatch originates from a channel */
+  channelType?: string;
+  /** State transition guards (e.g. agent_status from/to) */
+  fromState?: string;
+  toState?: string;
+}
+
+export interface AgentRoutingRule {
+  match: AgentRoutingMatch;
+  /** Stable agent slug (portable across pods) the matched work dispatches to */
+  agentSlug: string;
+}
+
+/**
+ * Workspace-level agent routing: "this kind of task/event → this registered agent".
+ * The canonical replacement for runtime-specific hardwiring (e.g. Hermes-only
+ * dispatch). Resolution: first matching rule → defaultAgentSlug → plain IS fallback.
+ * Resolved by resolveAgentForTask() in @synap/intelligence-client. Any workspace
+ * can use this for automation, not just DevPlane.
+ */
+export interface AgentRoutingPolicy {
+  /** Agent slug used when no rule matches */
+  defaultAgentSlug?: string;
+  /** Ordered rules; first match wins */
+  rules?: AgentRoutingRule[];
+}
+
 export interface WorkspaceSettings {
   // ─── Entity & UI Settings ───────────────────────────────────────────────────
   defaultEntityTypes?: string[];
@@ -306,6 +345,13 @@ export interface WorkspaceSettings {
    * Kept separate from Synap internal intelligence service routing.
    */
   eveProviderRouting?: EveProviderRoutingPolicy;
+
+  /**
+   * Workspace-level agent routing: "this kind of task/event → this agent".
+   * Resolved by resolveAgentForTask() in @synap/intelligence-client. Decouples
+   * automation from any single runtime (Hermes becomes one registered target).
+   */
+  agentRouting?: AgentRoutingPolicy;
 
   // Validation Policy Overrides
   // Allows workspace owners to customize which operations require validation

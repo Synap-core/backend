@@ -26,7 +26,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { db, eq, and } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import { parseVaultReference, resolveVaultSecret } from "@synap/api";
-import { getKratosSession, getKratosSessionByToken } from "@synap/auth";
+import { resolveUserId } from "./ws-auth.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "recipe-runner" });
@@ -74,24 +74,7 @@ function sendJson(ws: WebSocket, payload: Record<string, unknown>): void {
   }
 }
 
-/**
- * Extract userId from the HTTP upgrade request (token param, header, or cookie).
- * Mirrors the same logic in ssh-proxy.ts.
- */
-async function resolveUserId(req: IncomingMessage): Promise<string | null> {
-  const url = new URL(req.url ?? "", "http://localhost");
-  const tokenParam = url.searchParams.get("token");
-  const cookieHeader = req.headers["cookie"] ?? "";
-  const headerToken = (req.headers["x-session-token"] as string) ?? "";
-
-  const session = tokenParam
-    ? await getKratosSessionByToken(tokenParam)
-    : headerToken
-      ? await getKratosSessionByToken(headerToken)
-      : await getKratosSession(cookieHeader);
-
-  return session?.identity?.id ?? null;
-}
+// Auth: resolveUserId (ticket → token, cookie-free) is imported from ws-auth.js.
 
 /**
  * Load a devplane_environment entity and resolve SSH credentials via Vault.

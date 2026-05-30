@@ -51,6 +51,7 @@ import {
   NOTIFICATION_CLEANUP_QUEUE,
 } from "./notification-cleanup.js";
 import { handleFeedScheduler } from "./feed-scheduler.js";
+import { handleProactiveScheduler } from "./proactive-scheduler.js";
 import { handleFeedProactiveExecute } from "./feed-proactive-executor.js";
 import {
   handleFeedSourceExecute,
@@ -117,6 +118,7 @@ const ALL_QUEUES = [
   "automation-pattern-detect",
   NOTIFICATION_CLEANUP_QUEUE,
   "feed-scheduler",
+  "proactive-scheduler",
   "feed-proactive-execute",
   FEED_SOURCE_EXECUTE_QUEUE,
   FEED_SOURCE_ITEMS_QUEUE,
@@ -302,6 +304,13 @@ export async function registerAllWorkers(): Promise<void> {
   // Feed scheduler (cron: every minute — schedules due source subscription fetches)
   await boss.work("feed-scheduler", async () => handleFeedScheduler());
   logger.info("Registered worker: feed-scheduler");
+
+  // Proactive scheduler (cron: every minute — enqueues due morning-briefing /
+  // weekly-digest proactive feeds onto feed-proactive-execute).
+  await boss.work("proactive-scheduler", async () =>
+    handleProactiveScheduler()
+  );
+  logger.info("Registered worker: proactive-scheduler");
 
   // Feed proactive executor (on-demand — executes proactive digest generation).
   // Scheduled by the proactive intelligence cron layer (morning briefing,

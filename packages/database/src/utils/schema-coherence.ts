@@ -279,6 +279,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "bundle_source",
     addedBy: "0056_widget_native_columns.sql",
   },
+  {
+    table: "widget_definitions",
+    column: "deps",
+    addedBy: "0030_widget_frame_renderer.sql",
+  },
 
   // channel_context_items
   {

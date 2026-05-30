@@ -20,6 +20,7 @@ import { broadcastNotification } from "@synap/jobs";
 import { emitSideEffects } from "@synap/events";
 import type { WorkspaceSettings, AgentMetadata } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
+import { deriveAuthorshipMode } from "../services/agent-identity-service.js";
 
 const logger = createLogger({ module: "permission-check" });
 
@@ -210,6 +211,36 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
   };
 }
 
+/** The kind of authenticated principal that issued a request. */
+export type IssuerKind =
+  | "operator"
+  | "agent"
+  | "connector"
+  | "view"
+  | "unknown";
+
+/**
+ * The authenticated principal that issued this request, established at the AUTH
+ * BOUNDARY (the credential the request arrived with, plus server-side trust
+ * records for views/connectors) — NEVER from the request body.
+ *
+ * Authorization rule: an issuer with `trusted: false` always routes to a
+ * proposal (after RBAC), regardless of `source`, even if it rides a permitted
+ * user's role. This is how a sandboxed/untrusted view or connector is governed
+ * without weakening RBAC. An absent `issuer` preserves legacy behavior, so
+ * existing call sites that do not yet declare an issuer are unchanged.
+ *
+ * `source` stays audit-only provenance and must not gate authorization.
+ */
+export interface IssuerTrust {
+  kind: IssuerKind;
+  /**
+   * True only when the issuer is provably trusted: a genuine operator session,
+   * or a server-verified trusted view/connector. Untrusted → propose.
+   */
+  trusted: boolean;
+}
+
 export interface PermissionCheckOpts {
   userId: string;
   agentUserId?: string;
@@ -218,6 +249,12 @@ export interface PermissionCheckOpts {
   subjectType: string;
   action: string;
   source?: string;
+  /**
+   * Authenticated issuer + its server-resolved trust. When `trusted: false`,
+   * the action is routed to a proposal after RBAC. Absent → legacy behavior.
+   * Set this from the auth boundary, never from request-body fields.
+   */
+  issuer?: IssuerTrust;
   data: Record<string, unknown>;
   /** Correlation ID linking this check to the .requested event */
   correlationId?: string;
@@ -242,6 +279,8 @@ export interface PermissionCheckOpts {
  * 3. Determine effective user: agentUserId (if provided) or userId
  * 4. Call verifyPermission() with effective user
  * 5. If denied → return { denied: true }
+ * 5b. Untrusted issuer (issuer.trusted === false) → proposal, after RBAC,
+ *     regardless of source. Absent issuer → legacy behavior.
  * 6. AI policy:
  *    a. Agent user → check autoApproveFor whitelist; DEFAULT is proposal unless event matches
  *       Default whitelist (when field absent): search.*, memory.recall, entity.read, document.read
@@ -330,6 +369,31 @@ export async function checkPermissionOrPropose(
         "Permission denied"
       );
       return { denied: true, reason: result.reason || "Permission denied" };
+    }
+
+    // 4b. Untrusted issuer → always propose (after RBAC, before any other policy).
+    //
+    // Trust is established at the auth boundary (the authenticated principal +
+    // server-side records), NOT from the request body. An untrusted issuer —
+    // e.g. a sandboxed marketplace or AI-generated view — can never write
+    // directly even when it rides a permitted user's RBAC; it routes to a
+    // reviewable proposal. Absent `issuer` preserves legacy behavior.
+    if (opts.issuer && opts.issuer.trusted === false) {
+      return createProposal({
+        userId,
+        agentUserId,
+        workspaceId,
+        subjectType,
+        action,
+        source,
+        data,
+        correlationId,
+        requestedEventId,
+        reasoning: opts.reasoning,
+        threadId,
+        commandRunId,
+        sourceMessageId,
+      });
     }
 
     // 5. AI policy check
@@ -479,6 +543,7 @@ export async function checkPermissionOrPropose(
 
         if (isAutoApproved) {
           // Audit trail: record auto-approved action (non-blocking, non-critical)
+          const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
           db.insert(proposals)
             .values({
               workspaceId,
@@ -488,6 +553,7 @@ export async function checkPermissionOrPropose(
               data: {
                 ...data,
                 agentUserId,
+                ...(authorshipMode ? { authorshipMode } : {}),
                 ...(correlationId ? { correlationId } : {}),
                 ...(requestedEventId ? { requestedEventId } : {}),
                 _autoApprove: {
@@ -502,6 +568,7 @@ export async function checkPermissionOrPropose(
               },
               status: ProposalStatus.AUTO_APPROVED,
               createdBy: agentUserId,
+              ...(agentUserId ? { agentUserId } : {}),
               threadId: threadId ?? undefined,
               commandRunId: commandRunId ?? undefined,
             })
@@ -810,13 +877,17 @@ async function createProposal(opts: {
     ...(requestedEventId ? { requestedEventId } : {}),
   };
 
+  const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
   const proposal = await createPendingProposal({
     userId,
     workspaceId,
     targetType: singularType,
     targetId,
     proposalType: action,
-    data: proposalData as unknown as Record<string, unknown>,
+    data: {
+      ...(proposalData as unknown as Record<string, unknown>),
+      ...(authorshipMode ? { authorshipMode } : {}),
+    },
     agentUserId: agentUserId ?? undefined,
     createdBy: userId,
     threadId: threadId ?? null,

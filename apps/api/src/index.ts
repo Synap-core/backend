@@ -957,6 +957,35 @@ app.use("/trpc/*", async (c, next) => {
   return authMiddleware(c, next);
 });
 
+// WebSocket ticket minting (see ws-auth.ts for the CSWSH rationale). The browser
+// exchanges its authenticated session for a short-lived, single-use ticket, then
+// opens terminal WebSockets with `?ticket=`.
+import { issueWsTicket } from "./ws-auth.js";
+
+// First-party origin check for this credentialed endpoint. When ALLOWED_ORIGINS
+// is configured, only those origins may mint tickets cross-origin; when unset,
+// all origins are allowed (preserves the existing reflect-all CORS posture).
+// This is defense-in-depth so a ticket can't be minted cross-origin even if the
+// Kratos cookie's SameSite is ever weakened to None — removing the reliance on
+// SameSite=Lax as the sole CSWSH guard.
+function isFirstPartyOrigin(origin: string): boolean {
+  const allowed = process.env.ALLOWED_ORIGINS?.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!allowed || allowed.length === 0) return true;
+  return allowed.includes(origin);
+}
+
+app.post("/api/ws-ticket", authMiddleware, async (c) => {
+  const origin = c.req.header("origin");
+  if (origin && !isFirstPartyOrigin(origin)) {
+    return c.json({ error: "Forbidden" }, 403);
+  }
+  const userId = c.get("userId");
+  if (!userId) return c.json({ error: "Unauthorized" }, 401);
+  return c.json(issueWsTicket(userId));
+});
+
 // Admin routes (public API for invitations)
 import { adminRouter } from "./routers/admin.js";
 app.route("/api/admin", adminRouter);

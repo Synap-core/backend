@@ -227,6 +227,40 @@ export class NangoConnector implements SyncConnector {
     }
   }
 
+  /**
+   * Trigger a Nango action (external write) on a connected integration.
+   * Posts to Nango's REST `/action/trigger` with the connection headers used
+   * elsewhere in this connector. Returns the raw action response.
+   */
+  async triggerAction(params: {
+    connectionId: string;
+    providerConfigKey: string;
+    actionName: string;
+    input: Record<string, unknown>;
+  }): Promise<unknown> {
+    const res = await fetch(`${this.host}/action/trigger`, {
+      method: "POST",
+      headers: {
+        ...this.authHeaders(),
+        "Connection-Id": params.connectionId,
+        "Provider-Config-Key": params.providerConfigKey,
+      },
+      body: JSON.stringify({
+        action_name: params.actionName,
+        input: params.input,
+      }),
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(
+        `Nango triggerAction failed: ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 300)}` : ""}`
+      );
+    }
+
+    return res.json();
+  }
+
   async fetchRecords(
     connectionId: string,
     model: string,
