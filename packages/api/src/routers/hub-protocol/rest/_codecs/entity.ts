@@ -71,7 +71,14 @@ export const CreateEntityRequestSchema = z
       .string()
       .optional()
       .describe(
-        "Profile slug. Either profileSlug or the deprecated `type` alias must be provided."
+        "Profile slug. Provide profileSlug, profileId, or the deprecated `type` alias."
+      ),
+    profileId: z
+      .string()
+      .uuid()
+      .optional()
+      .describe(
+        "Profile UUID. Resolved to the profile's slug server-side; takes precedence over profileSlug/type."
       ),
     type: z
       .string()

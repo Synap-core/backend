@@ -460,7 +460,26 @@ export function registerEntitiesRoutes(app: HubHono): void {
       return c.json({ error: "userId required" }, 400);
     }
 
-    const profileSlug = body.profileSlug ?? body.type ?? "bookmark";
+    // Resolve the profile. Precedence: explicit profileId (UUID) → profileSlug →
+    // deprecated `type` alias → "note" as a sane default. Previously this
+    // hardcoded "bookmark" and ignored profileId entirely, so an agent creating
+    // a task (by profileId) had it silently stored as a bookmark and never
+    // appeared in profile-scoped views (e.g. the Task Board kanban).
+    let profileSlug = body.profileSlug ?? body.type;
+    if (body.profileId) {
+      const byId = await db.query.profiles.findFirst({
+        where: eq(profiles.id, body.profileId),
+        columns: { slug: true },
+      });
+      if (!byId) {
+        return c.json(
+          { error: `profileId not found on this pod: ${body.profileId}` },
+          400
+        );
+      }
+      profileSlug = byId.slug;
+    }
+    if (!profileSlug) profileSlug = "note";
 
     let effectiveWorkspaceId: string | null;
 
