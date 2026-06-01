@@ -5,7 +5,11 @@ import {
   obsidianNoteToImportItem,
   adaptItems,
 } from "../import-adapters.js";
-import { buildImportProposal, toSlug } from "../import-items.js";
+import {
+  buildImportProposal,
+  importProposalToExecutePayload,
+  toSlug,
+} from "../import-items.js";
 import type { ImportItem } from "../import-items.js";
 
 // ── Adapter-level (Obsidian source) ────────────────────────────────────────────
@@ -132,6 +136,48 @@ describe("buildImportProposal (source-agnostic)", () => {
     const p = buildImportProposal(generic);
     expect(p.types.map((t) => t.slug).sort()).toEqual(["company", "person"]);
     expect(p.references[0].resolved).toBe(true); // Acme → Bob in-batch
+  });
+});
+
+describe("importProposalToExecutePayload (bridge to capture.execute)", () => {
+  const items = adaptItems("obsidian", OBSIDIAN_BATCH);
+  const proposal = buildImportProposal(items);
+  const { payload, droppedReferences } =
+    importProposalToExecutePayload(proposal);
+
+  it("maps typeSlug → profileSlug for every entity", () => {
+    expect(payload.entities).toHaveLength(proposal.items.length);
+    for (const e of payload.entities) {
+      expect(typeof e.profileSlug).toBe("string");
+      expect(e.profileSlug.length).toBeGreaterThan(0);
+      // no leaked typeSlug field
+      expect((e as Record<string, unknown>).typeSlug).toBeUndefined();
+    }
+    const launch = payload.entities.find((e) => e.title === "Launch Synap")!;
+    expect(launch.profileSlug).toBe("project");
+  });
+
+  it("keeps only resolved relations and reports dropped count", () => {
+    // every emitted relation has a targetTempId (execute requires it)
+    expect(payload.relations.every((r) => Boolean(r.targetTempId))).toBe(true);
+    // exactly the one unresolved [[Nonexistent]] link is dropped
+    expect(droppedReferences).toBe(1);
+    expect(payload.relations.length).toBe(
+      proposal.references.filter((r) => r.resolved).length
+    );
+  });
+
+  it("produces a payload shaped for capture.execute", () => {
+    // shape sanity: arrays of the exact fields execute validates
+    const e = payload.entities[0];
+    expect(Object.keys(e).sort()).toEqual(
+      ["profileSlug", "properties", "tempId", "title"].sort()
+    );
+    if (payload.relations.length) {
+      expect(Object.keys(payload.relations[0]).sort()).toEqual(
+        ["relationType", "sourceTempId", "targetTempId"].sort()
+      );
+    }
   });
 });
 

@@ -6,7 +6,10 @@ import { z } from "zod";
 
 import { captureRouter } from "../../capture.js";
 import { adaptItems, type ImportSource } from "../../../utils/import-adapters.js";
-import { buildImportProposal } from "../../../utils/import-items.js";
+import {
+  buildImportProposal,
+  importProposalToExecutePayload,
+} from "../../../utils/import-items.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -424,6 +427,10 @@ export function registerCaptureRoutes(app: HubHono): void {
     try {
       const items = adaptItems(body.source as ImportSource, body.items);
       const proposal = buildImportProposal(items, body.relationType);
+      // Also hand back a ready-to-run capture.execute payload so the client can
+      // materialize the approved proposal with a single forward call (no glue).
+      const { payload: executePayload, droppedReferences } =
+        importProposalToExecutePayload(proposal);
       logger.info(
         {
           userId: body.userId,
@@ -432,10 +439,17 @@ export function registerCaptureRoutes(app: HubHono): void {
           items: proposal.stats.itemCount,
           types: proposal.stats.typeCount,
           references: proposal.stats.referenceCount,
+          droppedReferences,
         },
         "POST /import/analyze"
       );
-      return c.json({ workspaceId, source: body.source, ...proposal });
+      return c.json({
+        workspaceId,
+        source: body.source,
+        ...proposal,
+        executePayload,
+        droppedReferences,
+      });
     } catch (err) {
       logger.error({ err, userId: body.userId }, "POST /import/analyze failed");
       return c.json(
