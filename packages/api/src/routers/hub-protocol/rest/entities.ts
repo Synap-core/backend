@@ -523,6 +523,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
         title: body.title,
         description: body.description,
         properties: body.properties,
+        // Long-form body → linked document (versioned). Must be forwarded here
+        // or it's silently dropped before the entity-create document flow.
+        ...(body.content ? { content: body.content } : {}),
         ...(body.reasoning ? { reasoning: body.reasoning } : {}),
         ...(body.source ? { source: body.source } : {}),
       });
