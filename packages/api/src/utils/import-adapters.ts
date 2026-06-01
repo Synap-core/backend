@@ -14,9 +14,32 @@ import type { ImportItem, ImportLink } from "./import-items.js";
 // ── Obsidian / wikilink-markdown adapter ───────────────────────────────────────
 
 /**
+ * Attachment/file extensions that appear in [[embeds]] but are NOT note links.
+ * `[[pasted image.png]]`, `[[clip.mp4]]`, `[[doc.pdf]]` are file embeds, not
+ * note-to-note references — excluding them keeps the relation graph clean and
+ * stops them inflating the "unresolved links" count.
+ */
+const ATTACHMENT_EXT =
+  /\.(png|jpe?g|gif|webp|svg|bmp|tiff?|mp4|mov|webm|avi|mkv|mp3|wav|m4a|ogg|flac|pdf|docx?|xlsx?|pptx?|zip|csv)$/i;
+
+/**
+ * Reduce a wikilink target to the NOTE NAME used for resolution.
+ * Obsidian links can be bare (`Page`), path-qualified (`folder/sub/Page`), or
+ * carry a heading (`Page#H`). Resolution matches on the basename (the note's
+ * filename without folders), so `5. Projects/.../Hashguard` resolves to the
+ * note `Hashguard`. Exported for reuse by the resolver + tests.
+ */
+export function wikilinkBasename(target: string): string {
+  const noHeading = target.split("#")[0].trim();
+  const segs = noHeading.split("/").filter(Boolean);
+  return (segs.pop() ?? noHeading).trim();
+}
+
+/**
  * Extract [[wikilinks]] from markdown body.
- * Handles [[Page]], [[Page|Alias]], [[Page#Heading]], [[Page#Heading|Alias]].
- * De-duplicated by target page name.
+ * Handles [[Page]], [[Page|Alias]], [[Page#Heading]], [[folder/Page]],
+ * [[Page#Heading|Alias]]. De-duplicated by resolved basename. Skips attachment
+ * embeds (images/pdfs/media) — those are files, not note relations.
  */
 export function extractWikilinks(body: string): ImportLink[] {
   if (typeof body !== "string" || body.length === 0) return [];
@@ -27,10 +50,13 @@ export function extractWikilinks(body: string): ImportLink[] {
     const raw = m[1].trim();
     if (!raw) continue;
     const [targetPart, alias] = raw.split("|").map((s) => s.trim());
-    const targetName = targetPart.split("#")[0].trim();
+    // Resolve to the note's basename so path-qualified links match.
+    const targetName = wikilinkBasename(targetPart);
     if (!targetName) continue;
-    if (!byName.has(targetName)) {
-      byName.set(targetName, {
+    if (ATTACHMENT_EXT.test(targetName)) continue; // file embed, not a note link
+    const key = targetName.toLowerCase();
+    if (!byName.has(key)) {
+      byName.set(key, {
         targetName,
         ...(alias ? { alias } : {}),
       });
