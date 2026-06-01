@@ -2,14 +2,17 @@
  * Hub Protocol REST — capture (AI-powered tab clustering, structure, execute)
  */
 
+import { randomUUID } from "crypto";
+
 import { z } from "zod";
 
 import { captureRouter } from "../../capture.js";
 import { adaptItems, type ImportSource } from "../../../utils/import-adapters.js";
 import {
   buildImportProposal,
-  importProposalToExecutePayload,
+  importProposalToComposite,
 } from "../../../utils/import-items.js";
+import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -429,13 +432,31 @@ export function registerCaptureRoutes(app: HubHono): void {
       const proposal = buildImportProposal(items, body.relationType);
       // Also hand back a ready-to-run capture.execute payload so the client can
       // materialize the approved proposal with a single forward call (no glue).
-      const { payload: executePayload, droppedReferences } =
-        importProposalToExecutePayload(proposal);
+      // Bridge to ONE governed graph composite proposal: N entities + M
+      // relations, approved atomically. Materialization is deferred to human
+      // approval (the generalized composite branch in proposals.ts resolves
+      // each tempId ref → real entity id and creates the whole graph in order).
+      const { operations, droppedReferences } =
+        importProposalToComposite(proposal);
+      const summary = `Import ${proposal.stats.itemCount} ${body.source} item(s) → ${proposal.stats.typeCount} type(s), ${operations.length - proposal.stats.itemCount} link(s)`;
+      const { proposal: created } = await createEventBackedProposal({
+        userId: body.userId,
+        workspaceId,
+        targetType: "entity",
+        targetId: randomUUID(),
+        proposalType: "import.graph",
+        action: "create",
+        source: "intelligence",
+        summary,
+        data: { operations, source: body.source },
+      });
+
       logger.info(
         {
           userId: body.userId,
           workspaceId,
           source: body.source,
+          proposalId: (created as { id?: string })?.id,
           items: proposal.stats.itemCount,
           types: proposal.stats.typeCount,
           references: proposal.stats.referenceCount,
@@ -446,8 +467,8 @@ export function registerCaptureRoutes(app: HubHono): void {
       return c.json({
         workspaceId,
         source: body.source,
+        proposalId: (created as { id?: string })?.id,
         ...proposal,
-        executePayload,
         droppedReferences,
       });
     } catch (err) {

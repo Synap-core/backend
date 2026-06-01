@@ -10,8 +10,8 @@ import {
   detectJsonChatShape,
 } from "../utils/import-parsers.js";
 import { sanitizeImportPath, mimeFromPath } from "../utils/import-path.js";
-import { entitiesRouter } from "../routers/entities.js";
 import { channelsRouter } from "../routers/channels.js";
+import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
 import { getBoss } from "@synap/jobs";
 import {
   LINKEDIN_BULK_IMPORT_QUEUE,
@@ -72,7 +72,11 @@ export class ImportOrchestrator {
     const batchId = randomUUID();
     const stats = {
       filesReceived: 0,
+      // Retained for caller compatibility. Import no longer DIRECT-WRITES
+      // entities — every parsed entity becomes a PENDING proposal instead, so
+      // this stays 0 and `proposalsCreated` reflects what was enqueued for review.
       entitiesCreated: 0,
+      proposalsCreated: 0,
       documentsCreated: 0,
       channelsCreated: 0,
       messagesCreated: 0,
@@ -114,7 +118,6 @@ export class ImportOrchestrator {
     }
 
     const callerCtx = { ...trpcCtx, workspaceId, userId };
-    const entitiesCaller = entitiesRouter.createCaller(callerCtx as never);
     const chatCaller = channelsRouter.createCaller(callerCtx as never);
 
     for (const { path, content, mimeType } of decoded) {
@@ -211,7 +214,7 @@ export class ImportOrchestrator {
             path.replace(/\.[^.]+$/, "").slice(0, 200) ||
             "Untitled";
           try {
-            const entityRes = await entitiesCaller.create({
+            await this.proposeEntity({
               profileSlug: "note",
               title,
               properties: {
@@ -220,14 +223,14 @@ export class ImportOrchestrator {
                   : {}),
                 ...(body ? { content: body } : {}),
               },
-              ...(body ? { content: body } : {}),
-              source: "user",
+              summary: `Import note: ${title}`,
             });
-            if (entityRes?.id) stats.entitiesCreated++;
+            stats.proposalsCreated++;
           } catch (e) {
             stats.errors.push({
               path,
-              message: e instanceof Error ? e.message : "Entity create failed",
+              message:
+                e instanceof Error ? e.message : "Proposal create failed",
             });
           }
           continue;
@@ -257,19 +260,20 @@ export class ImportOrchestrator {
                 properties[key] = row[h];
               }
             }
+            const rowTitle = String(title).slice(0, 500);
             try {
-              const entityRes = await entitiesCaller.create({
+              await this.proposeEntity({
                 profileSlug: "note",
-                title: String(title).slice(0, 500),
+                title: rowTitle,
                 properties,
-                source: "user",
+                summary: `Import row: ${rowTitle}`,
               });
-              if (entityRes?.id) stats.entitiesCreated++;
+              stats.proposalsCreated++;
             } catch (e) {
               stats.errors.push({
                 path: `${path} row`,
                 message:
-                  e instanceof Error ? e.message : "Entity create failed",
+                  e instanceof Error ? e.message : "Proposal create failed",
               });
             }
           }
@@ -283,22 +287,23 @@ export class ImportOrchestrator {
             continue;
           }
           for (const bookmark of bookmarks) {
+            const bookmarkTitle = bookmark.title.slice(0, 500);
             try {
-              const entityRes = await entitiesCaller.create({
+              await this.proposeEntity({
                 profileSlug: "bookmark",
-                title: bookmark.title.slice(0, 500),
+                title: bookmarkTitle,
                 properties: {
                   url: bookmark.url,
                   ...(bookmark.tags ? { tags: bookmark.tags } : {}),
                 },
-                source: "user",
+                summary: `Import bookmark: ${bookmarkTitle}`,
               });
-              if (entityRes?.id) stats.entitiesCreated++;
+              stats.proposalsCreated++;
             } catch (e) {
               stats.errors.push({
                 path: `${path} bookmark`,
                 message:
-                  e instanceof Error ? e.message : "Bookmark create failed",
+                  e instanceof Error ? e.message : "Proposal create failed",
               });
             }
           }
@@ -319,6 +324,54 @@ export class ImportOrchestrator {
       "Import batch completed"
     );
     return { batchId, ...stats };
+  }
+
+  /**
+   * Create a PENDING entity-create proposal for a parsed import row.
+   *
+   * Import is a governed AI/agent write: parsed entities are NOT created
+   * directly. Instead each becomes a pending proposal in the review inbox,
+   * materialized only when a human approves it. The data envelope mirrors the
+   * one `proposals.submit` / hub-protocol create produce, so the existing
+   * `proposals.approve` entity-create branch (targetType "entity",
+   * proposalType "create", reading `data.data.{profileSlug,title,properties}`)
+   * applies it through the canonical entity path on approval.
+   */
+  private async proposeEntity(input: {
+    profileSlug: string;
+    title: string;
+    properties: Record<string, unknown>;
+    description?: string;
+    summary: string;
+  }) {
+    const { workspaceId, userId } = this.ctx;
+    const targetId = randomUUID();
+    await createEventBackedProposal({
+      userId,
+      workspaceId,
+      targetType: "entity",
+      targetId,
+      proposalType: "create",
+      action: "create",
+      source: "user",
+      summary: input.summary,
+      createdBy: userId,
+      data: {
+        requestId: randomUUID(),
+        source: "user",
+        sourceId: userId,
+        workspaceId,
+        targetType: "entity",
+        targetId,
+        changeType: "create",
+        data: {
+          profileSlug: input.profileSlug,
+          title: input.title,
+          ...(input.description ? { description: input.description } : {}),
+          properties: input.properties,
+        },
+      },
+    });
   }
 
   async queueLinkedInContacts(contacts: LinkedInContactPayload[]) {
