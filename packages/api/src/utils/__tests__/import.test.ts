@@ -216,6 +216,17 @@ describe("importProposalToComposite (graph proposal — the governed unit)", () 
     expect(launch.profileSlug).toBe("project");
   });
 
+  it("routes body to op.content (linked document), NOT properties.content", () => {
+    const launch = operations.find(
+      (o) => o.op === "create_entity" && (o as { title?: string }).title === "Launch Synap"
+    ) as { content?: string; properties?: Record<string, unknown> };
+    // long-form body lives on the op's content → becomes a linked document
+    expect(launch.content).toContain("Owned by");
+    // and is NOT duplicated into properties (which keeps frontmatter/folder only)
+    expect(launch.properties?.content).toBeUndefined();
+    expect(launch.properties?.folder).toBe("Projects");
+  });
+
   it("emits relation ops referencing tempIds, drops unresolved", () => {
     const relOps = operations.filter((o) => o.op === "create_relation") as Array<{
       sourceRef: string;

@@ -211,6 +211,12 @@ export interface CompositeCreateEntityOp {
   description?: string;
   properties?: Record<string, unknown>;
   /**
+   * Long-form body. When set, the entity-create path materializes a LINKED
+   * DOCUMENT (versioned, MinIO-stored) instead of inlining into properties.
+   * Used by markdown/document import.
+   */
+  content?: string;
+  /**
    * Stable handle for THIS entity within the proposal, used by relation ops to
    * reference it (e.g. "t1"). Optional — the positional `$opN` ref always works.
    */

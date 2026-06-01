@@ -157,6 +157,8 @@ export interface CompositeEntityOp {
   profileSlug: string;
   title?: string;
   properties?: Record<string, unknown>;
+  /** Long-form body → materialized as a linked document on approval. */
+  content?: string;
   /** Stable in-proposal handle (we use the item's tempId). */
   ref?: string;
 }
@@ -182,13 +184,22 @@ export function importProposalToComposite(proposal: ImportProposal): {
   operations: CompositeOp[];
   droppedReferences: number;
 } {
-  const entityOps: CompositeEntityOp[] = proposal.items.map((it) => ({
-    op: "create_entity",
-    profileSlug: it.typeSlug,
-    title: it.title,
-    properties: it.properties,
-    ref: it.tempId,
-  }));
+  const entityOps: CompositeEntityOp[] = proposal.items.map((it) => {
+    // Pull the long-form body out of properties → the op's `content` field, so
+    // approval materializes a LINKED DOCUMENT (versioned) instead of inlining
+    // the whole note into a property. Remaining props (frontmatter, folder) stay.
+    const { content, ...restProps } = it.properties as {
+      content?: unknown;
+    } & Record<string, unknown>;
+    return {
+      op: "create_entity" as const,
+      profileSlug: it.typeSlug,
+      title: it.title,
+      properties: restProps,
+      ...(typeof content === "string" && content ? { content } : {}),
+      ref: it.tempId,
+    };
+  });
   const resolved = proposal.references.filter((r) => Boolean(r.targetTempId));
   const relationOps: CompositeRelationOp[] = resolved.map((r) => ({
     op: "create_relation",
