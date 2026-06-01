@@ -4,6 +4,7 @@ import {
   extractInlineTags,
   obsidianNoteToImportItem,
   adaptItems,
+  wikilinkBasename,
 } from "../import-adapters.js";
 import {
   buildImportProposal,
@@ -29,6 +30,29 @@ describe("obsidian adapter: extractWikilinks", () => {
   });
   it("returns [] for no-link text", () => {
     expect(extractWikilinks("nothing")).toEqual([]);
+  });
+  it("resolves path-qualified links to the note basename", () => {
+    const links = extractWikilinks(
+      "see [[5. Projects/Started/Hashguard]] and [[folder/sub/Note#Heading|alias]]"
+    );
+    expect(links.map((l) => l.targetName).sort()).toEqual([
+      "Hashguard",
+      "Note",
+    ]);
+  });
+  it("skips attachment embeds (images/pdf/media), not real note links", () => {
+    const links = extractWikilinks(
+      "[[Real Note]] [[pasted image 20230408.png]] [[clip.mp4]] [[doc.pdf]] [[notes/Other]]"
+    );
+    expect(links.map((l) => l.targetName).sort()).toEqual(["Other", "Real Note"]);
+  });
+});
+
+describe("wikilinkBasename", () => {
+  it("strips folders + heading to the note name", () => {
+    expect(wikilinkBasename("a/b/Page#Heading")).toBe("Page");
+    expect(wikilinkBasename("Page")).toBe("Page");
+    expect(wikilinkBasename("x/Y")).toBe("Y");
   });
 });
 

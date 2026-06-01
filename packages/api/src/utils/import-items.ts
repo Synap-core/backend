@@ -330,8 +330,16 @@ export function buildImportProposal(
       labels,
     });
 
-    const key = item.title.toLowerCase();
-    if (!tempIdByName.has(key)) tempIdByName.set(key, tempId);
+    // Index by the filename basename AND (if different) the frontmatter title,
+    // so links written either way resolve. extractWikilinks already reduces
+    // link targets to the basename.
+    const fileKey = item.title.toLowerCase();
+    if (!tempIdByName.has(fileKey)) tempIdByName.set(fileKey, tempId);
+    const fmTitle =
+      typeof metadata.title === "string" ? metadata.title.toLowerCase() : "";
+    if (fmTitle && fmTitle !== fileKey && !tempIdByName.has(fmTitle)) {
+      tempIdByName.set(fmTitle, tempId);
+    }
 
     const agg =
       typeAgg.get(slug) ??
