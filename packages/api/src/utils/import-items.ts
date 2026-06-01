@@ -90,6 +90,60 @@ export interface ImportProposal {
   };
 }
 
+// ── Bridge to the materializer (capture.execute) ──────────────────────────────
+
+/**
+ * Payload shape accepted by capture.execute (the existing governed materializer).
+ * Kept here so the import proposal maps to it losslessly and the frontend just
+ * forwards the result — no ad-hoc glue at the call site.
+ */
+export interface ExecutePayload {
+  entities: Array<{
+    tempId: string;
+    profileSlug: string;
+    title: string;
+    description?: string;
+    properties?: Record<string, unknown>;
+  }>;
+  relations: Array<{
+    sourceTempId: string;
+    targetTempId: string;
+    relationType: string;
+  }>;
+}
+
+/**
+ * Convert an ImportProposal into a capture.execute payload.
+ *
+ * - `typeSlug` → `profileSlug` (execute's field name).
+ * - Drops UNRESOLVED references: execute requires a `targetTempId`, and a link
+ *   to an item outside this batch can't be materialized as a relation here. The
+ *   count of dropped links is returned so the caller can surface it.
+ */
+export function importProposalToExecutePayload(proposal: ImportProposal): {
+  payload: ExecutePayload;
+  droppedReferences: number;
+} {
+  const entities = proposal.items.map((it) => ({
+    tempId: it.tempId,
+    profileSlug: it.typeSlug,
+    title: it.title,
+    properties: it.properties,
+  }));
+  const resolved = proposal.references.filter(
+    (r): r is typeof r & { targetTempId: string } => Boolean(r.targetTempId)
+  );
+  const relations = resolved.map((r) => ({
+    sourceTempId: r.sourceTempId,
+    targetTempId: r.targetTempId,
+    relationType: r.relationType,
+  }));
+  return {
+    payload: { entities, relations },
+    droppedReferences: proposal.references.length - resolved.length,
+  };
+}
+
 /** Normalize an arbitrary label into a type slug. */
 export function toSlug(input: string): string {
   return input
