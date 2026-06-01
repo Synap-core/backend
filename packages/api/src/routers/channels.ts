@@ -28,10 +28,14 @@ import {
   gte,
   inArray,
   isNull,
+  exists,
   drizzleSql,
 } from "@synap/database";
 import {
   channels,
+  channelMembers,
+  ChannelMemberKind,
+  ChannelMemberRole,
   messages,
   channelContextItems,
   entities as entitiesTable,
@@ -459,17 +463,34 @@ async function listChannelsWithFlags(params: {
     }
   >
 > {
-  const conditions: any[] = [eq(channels.userId, params.userId)];
+  // A channel is accessible when the caller owns it OR is a member of it
+  // (group channels record membership in channel_members; non-group channels
+  // have no member rows, so this leaves their behavior unchanged).
+  const accessPredicate = or(
+    eq(channels.userId, params.userId),
+    exists(
+      db
+        .select({ one: drizzleSql`1` })
+        .from(channelMembers)
+        .where(
+          and(
+            eq(channelMembers.channelId, channels.id),
+            eq(channelMembers.memberId, params.userId)
+          )
+        )
+    )
+  )!;
+  const conditions: any[] = [accessPredicate];
 
   if (params.workspaceId !== undefined) {
     // Include workspace channels + pod-wide channels (personal-style thread + feed)
     conditions.push(
       or(
         eq(channels.workspaceId, params.workspaceId),
-        and(
-          eq(channels.channelType, ChannelType.THREAD),
-          eq(channels.channelType, ChannelType.PERSONAL)
-        ),
+        inArray(channels.channelType, [
+          ChannelType.THREAD,
+          ChannelType.PERSONAL,
+        ]),
         eq(channels.channelType, ChannelType.FEED)
       )!
     );
@@ -800,6 +821,111 @@ export const channelsRouter = router({
     }),
 
   /**
+   * Create a GROUP channel: a multi-human + multi-AI conversation. Humans can
+   * write; AI agents respond when @mentioned. `participants` is a mixed list of
+   * human user IDs and AI agent user IDs. Any workspace member can create one.
+   */
+  createGroupChannel: workspaceProcedure
+    .input(
+      z.object({
+        name: z.string().min(1).max(255),
+        /** Human user IDs + AI agent user IDs that belong to this group. */
+        participants: z.array(z.string().uuid()).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const workspaceId = ctx.workspaceId;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Workspace context required",
+        });
+      }
+
+      // Validate each participant id belongs to this workspace, and resolve its
+      // kind (human vs ai_agent) from users.userType. A participant is valid iff
+      // it is a member of THIS workspace. The creator is added separately as
+      // owner, so dedupe it out of the participant list first.
+      const participantIds = Array.from(
+        new Set((input.participants ?? []).filter((id) => id !== ctx.userId))
+      );
+
+      const memberKindById = new Map<string, ChannelMemberKind>();
+      if (participantIds.length > 0) {
+        const validRows = await db
+          .select({ id: users.id, userType: users.userType })
+          .from(users)
+          .innerJoin(
+            workspaceMembers,
+            and(
+              eq(workspaceMembers.userId, users.id),
+              eq(workspaceMembers.workspaceId, workspaceId)
+            )
+          )
+          .where(inArray(users.id, participantIds));
+
+        for (const row of validRows) {
+          memberKindById.set(
+            row.id,
+            row.userType === "agent"
+              ? ChannelMemberKind.AI_AGENT
+              : ChannelMemberKind.HUMAN
+          );
+        }
+
+        const unknown = participantIds.filter((id) => !memberKindById.has(id));
+        if (unknown.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Participant(s) not in this workspace: ${unknown.join(", ")}`,
+          });
+        }
+      }
+
+      const channelId = randomUUID();
+      await db.insert(channels).values({
+        id: channelId,
+        userId: ctx.userId,
+        workspaceId,
+        channelType: ChannelType.GROUP,
+        status: ChannelStatus.ACTIVE,
+        title: input.name.slice(0, 255),
+      });
+
+      // channel_members is the source of truth for group membership. Creator is
+      // owner; validated participants are members.
+      await db.insert(channelMembers).values([
+        {
+          channelId,
+          memberId: ctx.userId,
+          memberKind: ChannelMemberKind.HUMAN,
+          role: ChannelMemberRole.OWNER,
+          addedBy: ctx.userId,
+        },
+        ...participantIds.map((id) => ({
+          channelId,
+          memberId: id,
+          memberKind: memberKindById.get(id)!,
+          role: ChannelMemberRole.MEMBER,
+          addedBy: ctx.userId,
+        })),
+      ]);
+
+      emitChatEvent({
+        event: "channel:created",
+        data: {
+          channelId,
+          userId: ctx.userId,
+          channelType: ChannelType.GROUP,
+        },
+        workspaceId,
+        userId: ctx.userId,
+      });
+
+      return { channelId, status: "created" as const };
+    }),
+
+  /**
    * Create a document comment: new channel with one user message linked to the
    * document at the given selection. No AI response.
    */
@@ -1093,7 +1219,8 @@ export const channelsRouter = router({
       let activeSessionId: string | undefined;
       if (
         channel.channelType === ChannelType.THREAD ||
-        channel.channelType === ChannelType.AGENT_COLLAB
+        channel.channelType === ChannelType.AGENT_COLLAB ||
+        channel.channelType === ChannelType.GROUP
       ) {
         try {
           const existingSession = await db.query.sessions.findFirst({
@@ -1259,7 +1386,9 @@ export const channelsRouter = router({
         channel.channelType === ChannelType.AGENT_COLLAB ||
         (channel.channelType === ChannelType.PERSONAL && !!effectiveAgentRef) ||
         (channel.channelType === ChannelType.THREAD && !!effectiveAgentRef) ||
-        (channel.channelType === ChannelType.EXTERNAL && !!effectiveAgentRef);
+        (channel.channelType === ChannelType.EXTERNAL && !!effectiveAgentRef) ||
+        // GROUP is mention-only: AI responds only when an @mention resolves.
+        (channel.channelType === ChannelType.GROUP && !!mentionedAgentType);
 
       // Automation side-effects: channel.message.created.completed for channel_message triggers
       emitSideEffects({

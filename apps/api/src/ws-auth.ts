@@ -9,11 +9,10 @@
  * /api/ws-ticket, then opens `wss://…?ticket=…`. The ticket is the WS credential.
  *
  * Cookie auth is intentionally absent here — it lives only on the HTTP endpoint
- * that mints tickets. A long-lived `?token=` (Kratos session token from app
- * storage, NOT a cookie) is accepted as a transitional path for clients that
- * have not migrated to tickets yet; it is not a CSWSH vector (same-origin app
- * storage is unreadable cross-origin) and can be removed once all clients use
- * tickets.
+ * that mints tickets. A transitional session token is accepted via the
+ * `x-session-token` HEADER only (never the query string, to keep long-lived
+ * tokens out of access logs); it is not a CSWSH vector (app storage, not a
+ * cookie) and can be removed once all clients use tickets.
  */
 
 import type { IncomingMessage } from "node:http";
@@ -59,8 +58,8 @@ function consumeWsTicket(ticket: string): string | null {
 
 /**
  * Resolve the user for a terminal WebSocket upgrade.
- * Priority: single-use ticket (CSWSH-safe) → Kratos session token (query/header,
- * transitional). Cookie auth is deliberately NOT accepted on WS.
+ * Priority: single-use ticket (CSWSH-safe) → Kratos session token (x-session-token
+ * header, transitional). Cookie auth is deliberately NOT accepted on WS.
  */
 export async function resolveUserId(
   req: IncomingMessage

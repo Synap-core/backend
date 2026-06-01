@@ -21,8 +21,29 @@ import { emitSideEffects } from "@synap/events";
 import type { WorkspaceSettings, AgentMetadata } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { deriveAuthorshipMode } from "../services/agent-identity-service.js";
+import { logEvent } from "../lib/event-helpers.js";
 
 const logger = createLogger({ module: "permission-check" });
+
+/**
+ * Map a proposal's (targetType, proposalType) to the canonical
+ * `{subject}.{action}.requested` event type on the spine.
+ *
+ * This reuses the EXISTING event-sourcing naming — it never invents a new
+ * event TYPE. `proposalType` is the action verb the gate received
+ * (create / update / delete / archive / …). `edit` is normalized to `update`
+ * to stay consistent with the `{subject}.update.requested` spine convention.
+ */
+export function requestedEventTypeFor(
+  targetType: string,
+  proposalType: string
+): string {
+  const subject = targetType.endsWith("s")
+    ? targetType.slice(0, -1)
+    : targetType;
+  const action = proposalType === "edit" ? "update" : proposalType;
+  return `${subject}.${action}.requested`;
+}
 
 /**
  * Filesystem paths that are ALWAYS blocked for external agent writes,
@@ -706,6 +727,8 @@ export interface CreatePendingProposalInput {
   threadId?: string | null;
   commandRunId?: string | null;
   sourceMessageId?: string | null;
+  correlationId?: string | null;
+  requestedEventId?: string | null;
   expiresAt?: Date | null;
   notificationDescription?: string;
 }
@@ -736,6 +759,10 @@ export async function createPendingProposal(input: CreatePendingProposalInput) {
       ...(input.commandRunId ? { commandRunId: input.commandRunId } : {}),
       ...(input.sourceMessageId
         ? { sourceMessageId: input.sourceMessageId }
+        : {}),
+      ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+      ...(input.requestedEventId
+        ? { requestedEventId: input.requestedEventId }
         : {}),
     })
     .returning();
@@ -861,6 +888,37 @@ async function createProposal(opts: {
     ...(targetName ? { targetName } : {}),
   });
 
+  // Event-spine linkage. The proposal must always be traceable to a
+  // `{subject}.{action}.requested` event:
+  //   - If the caller already appended one (e.g. the user path), reuse its id
+  //     and correlationId — DO NOT emit a second event (dedupe).
+  //   - Otherwise (agent / Feature-C / View-SDK paths), emit one here.
+  const resolvedCorrelationId = correlationId ?? randomUUID();
+  let resolvedRequestedEventId = requestedEventId;
+  if (!resolvedRequestedEventId) {
+    try {
+      resolvedRequestedEventId = await logEvent(
+        userId,
+        requestedEventTypeFor(singularType, action),
+        {
+          targetId,
+          ...(targetName ? { targetName } : {}),
+          summary,
+        },
+        {
+          subjectId: targetId,
+          subjectType: singularType,
+          source: source ?? "api",
+          metadata: { correlationId: resolvedCorrelationId },
+        }
+      );
+    } catch (err) {
+      // Spine append failure must not block the proposal — log and continue
+      // with correlationId only (requestedEventId stays undefined).
+      logger.warn({ err }, "Failed to append .requested event for proposal");
+    }
+  }
+
   const proposalData: RequestShapedProposalData = {
     requestId: randomUUID(),
     source: (source || "intelligence") as RequestShapedProposalData["source"],
@@ -873,8 +931,10 @@ async function createProposal(opts: {
     data,
     reasoning: reasoning || "AI proposal requires review",
     summary,
-    ...(correlationId ? { correlationId } : {}),
-    ...(requestedEventId ? { requestedEventId } : {}),
+    correlationId: resolvedCorrelationId,
+    ...(resolvedRequestedEventId
+      ? { requestedEventId: resolvedRequestedEventId }
+      : {}),
   };
 
   const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
@@ -893,6 +953,8 @@ async function createProposal(opts: {
     threadId: threadId ?? null,
     commandRunId: commandRunId ?? null,
     sourceMessageId: sourceMessageId ?? null,
+    correlationId: resolvedCorrelationId,
+    requestedEventId: resolvedRequestedEventId ?? null,
     notificationDescription: reasoning ?? `${action} ${singularType}`,
   });
 

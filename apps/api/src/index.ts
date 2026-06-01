@@ -127,44 +127,50 @@ try {
 // Initialize Hono app
 const app = new Hono();
 
-// CORS middleware — open by design.
+// CORS middleware — derived first-party allowlist (Pattern B), credentialed.
 //
-// The backend is the pod's single security boundary. Auth decisions are
-// enforced inside the request:
-//   - Ory Kratos session cookies (SameSite=Lax) + Kratos's own CSRF tokens
-//     on self-service flows
-//   - Bearer tokens (API keys) validated per request
-//   - tRPC / REST handlers run their own authorization
-//
-// An origin whitelist on top of that adds no real security against a
-// compromised caller, and creates ongoing drift every time a new first-party
-// surface ships (studio, app, landing, relay, …). We reflect whatever origin
-// calls us and include credentials, so cookies and sessions Just Work across
-// any Synap surface, and let the auth layer decide whether to return data.
+// Reflecting every origin together with Allow-Credentials is the textbook
+// CSWSH/credentialed-CORS vulnerability (an attacker page can read any
+// cookie-authed response cross-origin). Instead we echo the Origin back ONLY
+// when it is a trusted first party — the base domain or any of its subdomains
+// (SYNAP_BASE_DOMAIN), the explicit ALLOWED_ORIGINS list, or the pod's own
+// PUBLIC_URL. See cors-origin.ts. Cookies/sessions still Just Work across every
+// first-party Synap surface; unknown origins get no ACAO header and the browser
+// blocks the cross-origin read (fail closed).
 //
 // Must run first so error responses (429, 413) still carry CORS headers.
 // Electron desktop (no Origin header) passes through untouched.
+import { isAllowedOrigin, hasConfiguredOrigins } from "./cors-origin.js";
+
+if (!hasConfiguredOrigins() && process.env.NODE_ENV === "production") {
+  apiLogger.warn(
+    "[SECURITY] Neither SYNAP_BASE_DOMAIN nor ALLOWED_ORIGINS is set — all cross-origin browser requests will be denied. Set SYNAP_BASE_DOMAIN to your pod's base domain (e.g. example.com) so first-party surfaces (studio., app., …) can reach the pod."
+  );
+}
+
 app.use("*", async (c, next) => {
   const origin = c.req.header("origin");
-  if (!origin) return next();
+  if (origin && isAllowedOrigin(origin)) {
+    c.header("Access-Control-Allow-Origin", origin);
+    c.header("Access-Control-Allow-Credentials", "true");
+    c.header("Vary", "Origin");
+    c.header(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+    );
+    c.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, Cookie, X-Workspace-Id, X-Session-Token"
+    );
+    c.header(
+      "Access-Control-Expose-Headers",
+      "Content-Length, X-Request-Id, Set-Cookie"
+    );
+    c.header("Access-Control-Max-Age", "86400");
+  }
 
-  c.header("Access-Control-Allow-Origin", origin);
-  c.header("Access-Control-Allow-Credentials", "true");
-  c.header("Vary", "Origin");
-  c.header(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, DELETE, PATCH, OPTIONS"
-  );
-  c.header(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, Cookie, X-Workspace-Id, X-Session-Token"
-  );
-  c.header(
-    "Access-Control-Expose-Headers",
-    "Content-Length, X-Request-Id, Set-Cookie"
-  );
-  c.header("Access-Control-Max-Age", "86400");
-
+  // Preflight always gets a 204; a disallowed origin simply receives no ACAO
+  // header above, so the browser blocks the actual request.
   if (c.req.method === "OPTIONS") return c.body(null, 204);
   return next();
 });
@@ -924,18 +930,23 @@ app.get("/api/events/stream", (c) => {
     },
   });
 
-  // Reflect the caller's origin — CORS is not our security layer (auth is).
-  const allowOrigin = c.req.header("origin") || "*";
-
-  // Return SSE stream using Hono's newResponse
-  // c.newResponse(body, status, headers) signature
-  return c.newResponse(stream, 200, {
+  // Echo the caller's origin only when it's a trusted first party (same policy
+  // as the global CORS middleware) — never `*`-with-credentials.
+  const sseOrigin = c.req.header("origin");
+  const sseHeaders: Record<string, string> = {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
-    "Access-Control-Allow-Origin": allowOrigin,
-    "Access-Control-Allow-Credentials": "true",
-  });
+  };
+  if (sseOrigin && isAllowedOrigin(sseOrigin)) {
+    sseHeaders["Access-Control-Allow-Origin"] = sseOrigin;
+    sseHeaders["Access-Control-Allow-Credentials"] = "true";
+    sseHeaders["Vary"] = "Origin";
+  }
+
+  // Return SSE stream using Hono's newResponse
+  // c.newResponse(body, status, headers) signature
+  return c.newResponse(stream, 200, sseHeaders);
 });
 
 // tRPC routes — apply session auth for all routes except health.* and setup.*
@@ -962,23 +973,12 @@ app.use("/trpc/*", async (c, next) => {
 // opens terminal WebSockets with `?ticket=`.
 import { issueWsTicket } from "./ws-auth.js";
 
-// First-party origin check for this credentialed endpoint. When ALLOWED_ORIGINS
-// is configured, only those origins may mint tickets cross-origin; when unset,
-// all origins are allowed (preserves the existing reflect-all CORS posture).
-// This is defense-in-depth so a ticket can't be minted cross-origin even if the
-// Kratos cookie's SameSite is ever weakened to None — removing the reliance on
-// SameSite=Lax as the sole CSWSH guard.
-function isFirstPartyOrigin(origin: string): boolean {
-  const allowed = process.env.ALLOWED_ORIGINS?.split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (!allowed || allowed.length === 0) return true;
-  return allowed.includes(origin);
-}
-
+// The /api/ws-ticket mint endpoint reuses the global first-party origin policy
+// (cors-origin.ts): a cross-origin page cannot mint a ticket from an untrusted
+// origin, even though the request carries the session cookie.
 app.post("/api/ws-ticket", authMiddleware, async (c) => {
   const origin = c.req.header("origin");
-  if (origin && !isFirstPartyOrigin(origin)) {
+  if (origin && !isAllowedOrigin(origin)) {
     return c.json({ error: "Forbidden" }, 403);
   }
   const userId = c.get("userId");

@@ -10,7 +10,7 @@
  *   const server = serve({ fetch: app.fetch, port, hostname })
  *   server.on("upgrade", handleSshUpgrade)
  *
- * WebSocket URL: ws://host/api/devplane/ssh?envId=<entityId>&token=<kratosSessionToken>
+ * WebSocket URL: ws://host/api/devplane/ssh?envId=<entityId>&ticket=<wsTicket>
  *
  * Messages FROM browser:
  *   - Binary frames         → forwarded as-is to the SSH stream (terminal input)
@@ -54,8 +54,6 @@ interface SshSessionConfig {
   username: string;
   privateKey: string;
 }
-
-// Auth: resolveUserId (ticket → token, cookie-free) is imported from ws-auth.js.
 
 // ─── Credential resolver ──────────────────────────────────────────────────────
 

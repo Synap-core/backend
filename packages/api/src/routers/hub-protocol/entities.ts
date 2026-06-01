@@ -77,6 +77,12 @@ export const entitiesRouter = router({
         properties: z.record(z.string(), z.unknown()).optional(),
         agentUserId: z.string().uuid().optional(),
         /**
+         * The proposing agent's own rationale for this action. Surfaced in the
+         * proposal inbox so reviewers see *why* the agent acted, instead of the
+         * generic "AI proposal requires review" fallback.
+         */
+        reasoning: z.string().optional(),
+        /**
          * Provenance tag for AI-governance/auto-approve gating + downstream
          * audit trail. Defaults to `"agent"` when `agentUserId` is set,
          * otherwise `"intelligence"`. Connectors and integrations should
@@ -135,6 +141,9 @@ export const entitiesRouter = router({
         title: input.title,
         description: input.description,
         properties: input.properties,
+        // Agent's own rationale for the proposal inbox. Top-level `reasoning`
+        // wins; fall back to the legacy `aiMetadata.reasoning` alias.
+        reasoning: input.reasoning ?? input.aiMetadata?.reasoning,
         // Provenance: explicit `source` from caller wins; otherwise infer
         // "agent" when an agentUserId is present, else "intelligence".
         source: input.source ?? (input.agentUserId ? "agent" : "intelligence"),
@@ -170,6 +179,8 @@ export const entitiesRouter = router({
         metadata: z.record(z.string(), z.any()).optional(),
         // agentUserId: the per-human agent user acting on behalf of userId.
         agentUserId: z.string().uuid().optional(),
+        /** The proposing agent's own rationale, surfaced in the proposal inbox. */
+        reasoning: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -187,6 +198,7 @@ export const entitiesRouter = router({
         title: input.title,
         description: input.preview,
         properties: input.metadata,
+        reasoning: input.reasoning,
         source: input.agentUserId ? "agent" : "intelligence",
         agentUserId: input.agentUserId,
       });

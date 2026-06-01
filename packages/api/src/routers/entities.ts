@@ -43,6 +43,7 @@ import { type Entity, EntitySchema } from "@synap-core/types";
 import { entityToWire } from "./hub-protocol/rest/_codecs/entity.js";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { resolveViewTrust } from "../services/view-trust-service.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects, getBoss } from "@synap/events";
 import { randomUUID } from "crypto";
@@ -252,11 +253,37 @@ export const entitiesRouter = router({
         reasoning: z.string().optional(),
         /** Agent user ID when action is performed by an AI agent */
         agentUserId: z.string().uuid().optional(),
+        /**
+         * Host-stamped identity of a framed view originating this write.
+         *
+         * SECURITY: this is the view's IDENTITY, not a trust assertion. Trust is
+         * re-resolved server-side from `views.userId` / `widget_definitions.trust_level`
+         * via `resolveViewTrust()`. A view that cannot be positively proven trusted
+         * is routed to a proposal. Never accept a `trusted` boolean from the client.
+         * Set by the React host (BrowserViewFrameCell), NOT by the sandboxed iframe.
+         */
+        viewContext: z
+          .object({
+            viewId: z.string().uuid().optional(),
+            typeKey: z.string().optional(),
+          })
+          .optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const entityId = randomUUID();
       const correlationId = randomUUID();
+
+      // Resolve framed-view trust SERVER-SIDE (never from the request body).
+      // Absent viewContext → no issuer → legacy behavior (unchanged for all
+      // existing non-view callers).
+      const issuer = input.viewContext
+        ? await resolveViewTrust(
+            input.viewContext,
+            ctx.userId,
+            ctx.workspaceId ?? null
+          )
+        : undefined;
 
       // Resolve profile — capture full profile object so defaultValues are available at step 3
       let profileSlug: string | undefined;
@@ -314,6 +341,7 @@ export const entitiesRouter = router({
         subjectType: "entity",
         action: "create",
         source: input.source,
+        issuer,
         reasoning: input.reasoning,
         correlationId,
         requestedEventId: requestedEvent?.id,
@@ -1005,16 +1033,36 @@ export const entitiesRouter = router({
         /** Change entity's profile type by slug (e.g. 'person' → 'contact') */
         profileSlug: z.string().optional(),
         source: z
-          .enum(["user", "ai", "intelligence", "system", "agent"])
+          .enum(["user", "ai", "intelligence", "system", "agent", "extension"])
           .optional(),
         reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
         /** When true, removes workspace scoping — entity becomes pod-wide (visible in all workspaces). */
         global: z.boolean().optional(),
+        /**
+         * Host-stamped framed-view identity (NOT a trust assertion). Trust is
+         * re-resolved server-side via `resolveViewTrust()`. See `create`'s
+         * `viewContext` for the full security contract. Absent → legacy behavior.
+         */
+        viewContext: z
+          .object({
+            viewId: z.string().uuid().optional(),
+            typeKey: z.string().optional(),
+          })
+          .optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const correlationId = randomUUID();
+
+      // Resolve framed-view trust SERVER-SIDE (never from the request body).
+      const issuer = input.viewContext
+        ? await resolveViewTrust(
+            input.viewContext,
+            ctx.userId,
+            ctx.workspaceId ?? null
+          )
+        : undefined;
 
       // 1. Emit .requested event
       const requestedEvent = await auditLog({
@@ -1042,6 +1090,7 @@ export const entitiesRouter = router({
         subjectType: "entity",
         action: "update",
         source: input.source,
+        issuer,
         reasoning: input.reasoning,
         correlationId,
         requestedEventId: requestedEvent?.id,

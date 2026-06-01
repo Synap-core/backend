@@ -24,6 +24,23 @@ import { workspaces } from "./workspaces.js";
 
 export type WidgetRendererType = "builtin" | "iframe" | "native" | "frame";
 
+/**
+ * Trust level of a widget/cell definition — the server-side authority for
+ * whether a framed view's mutation may execute directly or must propose.
+ *
+ * Mirrors `AppTrustLevel` from `@synap-core/overlay-protocol`. Trust is
+ * assigned by a human-approved event (marketplace install) — NEVER self-claimed
+ * by the frame and NEVER taken from a request body.
+ *
+ *   - "trusted"   → first-party / user-authored: may act directly in-envelope.
+ *   - "installed" → human-approved marketplace install: proposes.
+ *   - "generated" → AI-generated, unreviewed: proposes (most conservative).
+ *
+ * Default is the most conservative ("generated") so an un-migrated or
+ * unspecified row can never write directly.
+ */
+export type WidgetTrustLevel = "trusted" | "installed" | "generated";
+
 export const widgetDefinitions = pgTable(
   "widget_definitions",
   {
@@ -116,6 +133,17 @@ export const widgetDefinitions = pgTable(
 
     isActive: boolean("is_active").notNull().default(true),
     version: text("version").default("1.0.0"),
+
+    /**
+     * Server-side trust authority for governing this definition's writes.
+     * Set by the human-approved install/publish path, never self-claimed.
+     * Conservative default: "generated" → a framed view always proposes
+     * unless an approval event has elevated it.
+     */
+    trustLevel: text("trust_level")
+      .notNull()
+      .default("generated")
+      .$type<WidgetTrustLevel>(),
 
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()

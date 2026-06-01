@@ -147,7 +147,7 @@ async function resolveByCapability(
     })
     .from(agents)
     .where(eq(agents.active, true))
-    .orderBy(agents.createdAt);
+    .orderBy(agents.createdAt, agents.id); // id breaks createdAt ties → total order
 
   // Prefer an agent advertising ALL of the task's dimensions; else ANY.
   const match =
@@ -179,6 +179,9 @@ async function resolveByCapability(
  * Resolve which agent should handle a unit of work for a workspace.
  * Always returns a ResolvedAgent — falls back to a plain IS resolution
  * (agentId: null) when no rule or default matches.
+ *
+ * @internal Staged ahead of the dispatch wiring (claim endpoint /
+ * dispatch_to_agent automation node). No runtime call site yet — wire it there.
  */
 export async function resolveAgentForTask(
   ctx: AgentResolutionContext

@@ -8,7 +8,7 @@
  * SECURITY: Enabled per-workspace via `workspace.settings.devplane.localTerminalEnabled`.
  * Only safe when the pod is running on a trusted local machine. Never expose on a cloud pod.
  *
- * WebSocket URL: ws://host/api/devplane/local-terminal?token=X&workspaceId=Y&cmd=Z
+ * WebSocket URL: ws://host/api/devplane/local-terminal?ticket=X&workspaceId=Y&cmd=Z
  *
  * Messages FROM browser:
  *   - Binary frames  → terminal input (written to PTY stdin as UTF-8)
@@ -29,9 +29,7 @@ import { db, eq, and } from "@synap/database";
 import { workspaces } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { resolveVaultSecret } from "@synap/api";
-// resolveUserId is the shared, cookie-free WS resolver (ticket → token).
-// Imported for this module's own use AND re-exported so claude-code.ts
-// (which imports it from here) stays unchanged.
+// Shared cookie-free WS resolver; re-exported for claude-code.ts.
 import { resolveUserId } from "./ws-auth.js";
 export { resolveUserId };
 

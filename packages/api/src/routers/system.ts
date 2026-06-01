@@ -335,9 +335,12 @@ export const systemRouter = router({
         correlationId: z.string().uuid(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
+      // User-scope the correlation lookup: correlation_id is not unique per
+      // user, so an unscoped query would leak other tenants' events.
       const events = await eventRepository.getCorrelatedEvents(
-        input.correlationId
+        input.correlationId,
+        ctx.userId
       );
 
       return {
@@ -377,8 +380,11 @@ export const systemRouter = router({
       // 2. Get related events if correlation ID exists
       let relatedEvents: (typeof event)[] = [];
       if (event.correlationId) {
+        // Scope correlated events to the source event's owner so the trace
+        // stays consistent and never leaks another tenant's events.
         relatedEvents = await eventRepository.getCorrelatedEvents(
-          event.correlationId
+          event.correlationId,
+          event.userId
         );
         // Exclude the main event from related list
         relatedEvents = relatedEvents.filter((e) => e.id !== event.id);

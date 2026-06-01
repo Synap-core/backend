@@ -65,6 +65,13 @@ export interface ReactionEvent {
   failed?: boolean;
   /** trigger flowing IN (cron.fired, feed.item.received) */
   inbound?: boolean;
+  /**
+   * A `.requested` event whose linked proposal is still awaiting a decision.
+   * This is the decision-inbox signal — the user must approve or reject.
+   */
+  pending?: boolean;
+  /** The proposal awaiting decision, when `pending` (for inline approve/reject). */
+  proposalId?: string;
   note?: string;
   /** the fan-out */
   reactions: Reaction[];
@@ -77,4 +84,6 @@ export interface WebhookDeliveryItem {
   responseStatus?: string;
   attempt: number;
   deliveredAt?: string;
+  /** Row creation time; the UI falls back to this when deliveredAt is null. */
+  createdAt?: string;
 }

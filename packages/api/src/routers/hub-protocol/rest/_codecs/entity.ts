@@ -80,6 +80,12 @@ export const CreateEntityRequestSchema = z
     title: z.string(),
     description: z.string().optional(),
     properties: z.record(z.string(), z.unknown()).optional(),
+    reasoning: z
+      .string()
+      .optional()
+      .describe(
+        "The proposing agent's rationale for this action, surfaced in the proposal inbox."
+      ),
     source: z
       .enum([
         "intelligence",
@@ -111,6 +117,12 @@ export const UpdateEntityRequestSchema = z
     title: z.string().optional(),
     preview: z.string().optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
+    reasoning: z
+      .string()
+      .optional()
+      .describe(
+        "The proposing agent's rationale for this update, surfaced in the proposal inbox."
+      ),
     sourceMessageId: z.string().optional(),
   })
   .openapi("UpdateEntityRequest");

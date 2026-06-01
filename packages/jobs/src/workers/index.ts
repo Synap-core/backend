@@ -82,6 +82,12 @@ import {
   handleHermesTrigger,
   HERMES_TRIGGER_QUEUE,
 } from "./hermes-trigger-worker.js";
+import {
+  handleProactiveEvaluate,
+  handleProactiveScan,
+  PROACTIVE_EVALUATE_QUEUE,
+  PROACTIVE_SCAN_QUEUE,
+} from "./proactive-intelligence.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -130,6 +136,8 @@ const ALL_QUEUES = [
   "hydration-summary-post",
   HERMES_TRIGGER_QUEUE,
   CRM_DAILY_DIGEST_QUEUE,
+  PROACTIVE_EVALUATE_QUEUE,
+  PROACTIVE_SCAN_QUEUE,
 ];
 
 /**
@@ -374,6 +382,17 @@ export async function registerAllWorkers(): Promise<void> {
     handleCrmDailyDigest(job)
   );
   logger.info("Registered worker: crm-daily-digest");
+
+  // Proactive intelligence (Feature C — event-driven proactive AI).
+  // proactive.evaluate: cheap per-event gate (loop guard + settings + trigger map).
+  // proactive.scan: debounced cluster assembly → intelligence-service brain.
+  await boss.work(PROACTIVE_EVALUATE_QUEUE, async ([job]: any[]) =>
+    handleProactiveEvaluate(job)
+  );
+  await boss.work(PROACTIVE_SCAN_QUEUE, async ([job]: any[]) =>
+    handleProactiveScan(job)
+  );
+  logger.info("Registered workers: proactive.evaluate, proactive.scan");
 
   logger.info("All workers registered");
 }

@@ -458,7 +458,7 @@ export const webhooksRouter = router({
    * Powers the Reactions Health tab + Replay. Verifies the subscription
    * belongs to the caller, then returns the delivery log mapped to the
    * `WebhookDeliveryItem` shape (id, status, responseStatus, attempt,
-   * deliveredAt).
+   * deliveredAt, createdAt).
    */
   deliveries: protectedProcedure
     .input(
@@ -497,6 +497,9 @@ export const webhooksRouter = router({
           d.responseStatus != null ? String(d.responseStatus) : undefined,
         attempt: d.attempt,
         deliveredAt: d.deliveredAt ? d.deliveredAt.toISOString() : undefined,
+        // createdAt is always set; the UI falls back to it (deliveredAt ??
+        // createdAt) so pending/failed rows still show a time.
+        createdAt: d.createdAt ? d.createdAt.toISOString() : undefined,
       }));
     }),
 });

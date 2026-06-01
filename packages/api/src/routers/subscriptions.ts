@@ -32,8 +32,9 @@ import {
   automationRuns,
   notifications,
   webhookDeliveries,
-  webhookSubscriptions,
   users,
+  proposals,
+  ProposalStatus,
   eq,
   and,
   gte,
@@ -291,11 +292,15 @@ function toReactionEventShell(
 async function buildFanout(source: EventRecord): Promise<Reaction[]> {
   const reactions: Reaction[] = [];
 
-  // 1. Correlated events (same correlationId).
+  // 1. Correlated events (same correlationId), user-scoped.
+  // SECURITY: correlation_id is NOT unique per user — scope to source.userId so
+  // another tenant's events (and their subjects/actors) never leak into this
+  // user's fan-out.
   let correlatedEvents: EventRecord[] = [];
   if (source.correlationId) {
     correlatedEvents = await eventRepository.getCorrelatedEvents(
-      source.correlationId
+      source.correlationId,
+      source.userId
     );
   }
   const relatedEventIds = new Set<string>([source.id]);
@@ -314,6 +319,11 @@ async function buildFanout(source: EventRecord): Promise<Reaction[]> {
   }
 
   // 2. Webhook deliveries for the source event + any correlated event.
+  // `relatedEventIds` is already user-safe: it only contains the source event
+  // (owned by source.userId) plus correlated events, which step 1 scoped to
+  // source.userId. webhook_deliveries has no userId column, but since every
+  // eventId here belongs to this user, the deliveries are transitively
+  // user-scoped — no foreign subscription's deliveries can appear.
   const deliveries = await db
     .select()
     .from(webhookDeliveries)
@@ -338,23 +348,48 @@ async function buildFanout(source: EventRecord): Promise<Reaction[]> {
       ? (source.data.workspaceId as string)
       : undefined;
 
-  const [runs, notifs] = await Promise.all([
-    db
-      .select({
-        id: automationRuns.id,
-        status: automationRuns.status,
-        outputSummary: automationRuns.outputSummary,
-        startedAt: automationRuns.startedAt,
-      })
-      .from(automationRuns)
-      .where(
-        and(
-          gte(automationRuns.startedAt, from),
-          lte(automationRuns.startedAt, to),
-          ...(workspaceId ? [eq(automationRuns.workspaceId, workspaceId)] : [])
+  // TODO(reactions-correlation): the canonical fix is to add a `correlation_id`
+  // column to `automation_runs` + `notifications` and thread it through the
+  // jobs/notification-service inserts, then correlate exactly like webhooks.
+  // Until then we fall back to an owner-scoped time-window for legacy/
+  // uncorrelated rows. The window is NEVER run unscoped by owner.
+  //
+  // SECURITY: `automation_runs` has no userId column — only nullable
+  // `workspaceId` + `triggeredBy` (text holding userId-or-"system"). Scope by
+  // `triggeredBy = source.userId` so we never return pod-wide runs across
+  // tenants. If we have neither a usable owner nor a provable workspaceId,
+  // return NO automation reactions rather than an unscoped window.
+  const runsPromise = source.userId
+    ? db
+        .select({
+          id: automationRuns.id,
+          status: automationRuns.status,
+          outputSummary: automationRuns.outputSummary,
+          startedAt: automationRuns.startedAt,
+        })
+        .from(automationRuns)
+        .where(
+          and(
+            eq(automationRuns.triggeredBy, source.userId),
+            gte(automationRuns.startedAt, from),
+            lte(automationRuns.startedAt, to),
+            ...(workspaceId
+              ? [eq(automationRuns.workspaceId, workspaceId)]
+              : [])
+          )
         )
-      )
-      .limit(20),
+        .limit(20)
+    : Promise.resolve(
+        [] as Array<{
+          id: string;
+          status: string;
+          outputSummary: unknown;
+          startedAt: Date | null;
+        }>
+      );
+
+  const [runs, notifs] = await Promise.all([
+    runsPromise,
     db
       .select({
         id: notifications.id,
@@ -369,7 +404,10 @@ async function buildFanout(source: EventRecord): Promise<Reaction[]> {
         and(
           eq(notifications.userId, source.userId),
           gte(notifications.createdAt, from),
-          lte(notifications.createdAt, to)
+          lte(notifications.createdAt, to),
+          // Tighten with the workspace constraint when the source event carries
+          // one (notifications.workspaceId is nullable for pod-wide notifs).
+          ...(workspaceId ? [eq(notifications.workspaceId, workspaceId)] : [])
         )
       )
       .limit(20),
@@ -417,12 +455,30 @@ function reactionKindForEventType(
   if (eventType.startsWith("message.") && eventType.includes("out")) {
     return "message_out";
   }
+  // Proactive AI nudge posted to a feed channel (see proactive REST handler).
+  if (eventType.startsWith("ai.nudge")) return "ai_feed";
   if (eventType.startsWith("proactive.") || eventType.includes("feed")) {
     return "ai_feed";
   }
   // AI-sourced downstream mutation → ai_react.
   if (deriveActorAI(event)) return "ai_react";
   return undefined;
+}
+
+/**
+ * Extract the lifecycle phase from a `{subject}.{action}.{phase}` event type.
+ * Proposals live as `.requested` events on the spine (see
+ * `checkPermissionOrPropose`); `.validated`/`.completed` = approved+executed,
+ * `.denied` = rejected. Returns null for non-phased event types.
+ */
+function phaseOf(
+  eventType: string
+): "requested" | "validated" | "completed" | "denied" | null {
+  if (eventType.endsWith(".requested")) return "requested";
+  if (eventType.endsWith(".validated")) return "validated";
+  if (eventType.endsWith(".completed")) return "completed";
+  if (eventType.endsWith(".denied")) return "denied";
+  return null;
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -454,6 +510,11 @@ export const subscriptionsRouter = router({
         kind: reactionKindSchema.optional(),
         eventType: z.string().optional(),
         lens: lensSchema.default("all"),
+        /**
+         * Decision-inbox filter: when true, return only `.requested` events
+         * whose linked proposal is still pending (awaiting approve/reject).
+         */
+        pending: z.boolean().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -488,31 +549,81 @@ export const subscriptionsRouter = router({
       });
       const actorNameById = await resolveActorNames(actorIds);
 
-      const items = filtered.map((e) => toReactionEventShell(e, actorNameById));
+      // Keep the REAL EventRecord paired with each shell so the kind facet can
+      // classify off the actual event (source + data), not a synthetic shell.
+      // A synthetic record with source:"" / data:{} blanks deriveActorAI and
+      // would make `ai_react` / AI kinds never match.
+      const mapped = filtered.map((e) => ({
+        event: e,
+        shell: toReactionEventShell(e, actorNameById),
+        kind: reactionKindForEventType(e.eventType, e),
+      }));
 
-      // Apply lens at the event level: internal/external lenses imply we only
-      // surface events whose own direction matches (failed/inbound events are
-      // always relevant). The reaction-level filter is applied on fan-out.
-      const lensed = items;
+      // ── Pending-proposal resolution (the decision-inbox signal) ───────────
+      // A `.requested` event is "pending" when its linked proposal is still
+      // PENDING and no later `.validated`/`.denied` for the same correlationId
+      // appears in this window. Resolved by joining `proposals` via the
+      // correlation_id Step 1 now persists.
+      const resolvedCorrelations = new Set<string>();
+      for (const e of filtered) {
+        const ph = phaseOf(e.eventType);
+        if (
+          (ph === "validated" || ph === "completed" || ph === "denied") &&
+          e.correlationId
+        ) {
+          resolvedCorrelations.add(e.correlationId);
+        }
+      }
+      const requestedCorrelationIds = filtered
+        .filter(
+          (e) =>
+            phaseOf(e.eventType) === "requested" &&
+            e.correlationId &&
+            !resolvedCorrelations.has(e.correlationId)
+        )
+        .map((e) => e.correlationId as string);
+
+      // correlationId → { proposalId, pending } for the open `.requested` events.
+      const proposalByCorrelation = new Map<
+        string,
+        { proposalId: string; pending: boolean }
+      >();
+      if (requestedCorrelationIds.length > 0) {
+        const rows = await db
+          .select({
+            id: proposals.id,
+            correlationId: proposals.correlationId,
+            status: proposals.status,
+          })
+          .from(proposals)
+          .where(inArray(proposals.correlationId, requestedCorrelationIds));
+        for (const r of rows) {
+          if (!r.correlationId) continue;
+          proposalByCorrelation.set(r.correlationId, {
+            proposalId: r.id,
+            pending: r.status === ProposalStatus.PENDING,
+          });
+        }
+      }
+
+      for (const m of mapped) {
+        if (phaseOf(m.event.eventType) !== "requested") continue;
+        const corr = m.event.correlationId;
+        if (!corr) continue;
+        const p = proposalByCorrelation.get(corr);
+        if (p?.pending) {
+          m.shell.pending = true;
+          m.shell.proposalId = p.proposalId;
+        }
+      }
 
       // If a `kind` filter is set, keep only events that map to that kind by
       // their own type (the dense fan-out filter happens in eventFanout).
-      const final = input.kind
-        ? lensed.filter((it) => {
-            const k = reactionKindForEventType(it.type, {
-              eventType: it.type,
-              source: "",
-              data: {},
-              userId,
-              id: it.id,
-              subjectId: it.subjectId ?? "",
-              subjectType: it.subjectType ?? "",
-              timestamp: new Date(it.timestamp),
-              version: 1,
-            } as EventRecord);
-            return k === input.kind;
-          })
-        : lensed;
+      // If `pending` is set, narrow to the decision inbox (open proposals).
+      const final = mapped
+        .filter((m) => (input.kind ? m.kind === input.kind : true))
+        .filter((m) => (input.pending ? m.shell.pending === true : true))
+        .map((m) => m.shell);
 
       return { items: final, lens: input.lens as ReactionLens };
     }),
@@ -534,15 +645,11 @@ export const subscriptionsRouter = router({
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
-      // Fetch the source event. searchEvents has no by-id lookup, so we scan a
-      // narrow window of the user's recent events. The event must belong to the
-      // requesting user (user-scope clamp).
-      const recent = await eventRepository.searchEvents({
-        userId,
-        limit: 500,
-      });
-      const source = recent.find((e) => e.id === input.eventId);
-      if (!source) {
+      // Fetch the source event by primary key (one indexed lookup) and assert
+      // ownership. Scanning the user's 500 most recent events would falsely
+      // 404 anything older than that window.
+      const source = await eventRepository.findById(input.eventId);
+      if (!source || source.userId !== userId) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Event not found or not visible to this user",

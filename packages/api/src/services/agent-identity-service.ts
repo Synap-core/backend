@@ -1,20 +1,13 @@
 /**
  * Agent Identity Service
  *
- * Single enforcement point for the contract between the two agent representations
- * (the canonical hybrid every mature platform — GitHub Apps, Slack, Salesforce
- * Agentforce, Entra Agent ID — converges on):
+ * Contracts the two agent representations: the `agents` REGISTRY row (capabilities,
+ * routing) and the optional `users` (userType='agent') row (authorship, permissions),
+ * linked 1:1 via `agents.userId`. The user row is optional — autonomous agents
+ * (e.g. cron workers) need only the registry row, so resolveAgentUser returns null
+ * gracefully when no user row is linked.
  *
- *   - `agents` REGISTRY row  → capabilities, routing, intelligenceServiceId
- *   - `users` (userType='agent') row → authorship, workspace membership, permissions
- *
- * The 1:1 link is `agents.userId`. The user row is OPTIONAL: fully autonomous
- * agents (e.g. cron workers) need only the registry row, so resolveAgentUser
- * returns null gracefully when no user row is linked.
- *
- * Authorship follows the emerging on-behalf-of model (RFC 8693): an action is
- * 'delegated' when a human triggered it (human is subject, agent is actor) and
- * 'autonomous' when the agent acted on its own.
+ * Authorship: 'delegated' when a human triggered the action, else 'autonomous'.
  */
 
 import { db, eq } from "@synap/database";
@@ -59,8 +52,8 @@ export async function hasUserIdentity(agentId: string): Promise<boolean> {
 }
 
 /**
- * Enforce the 1:1 registry↔user link by populating agents.userId.
- * Call this from agent/agent-user creation flows so the contract holds.
+ * Populate the 1:1 registry↔user link (agents.userId). Intended to be called
+ * from the agent / agent-user creation flows; not yet wired there.
  */
 export async function linkAgentToUser(
   agentId: string,

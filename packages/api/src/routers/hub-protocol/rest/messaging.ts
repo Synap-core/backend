@@ -1296,24 +1296,30 @@ export function registerMessagingRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
-      const connector = await getMessagingConnector();
-      if (!connector)
-        return c.json({ error: "Messaging connector not configured" }, 503);
       const userId = c.get("userId") as string;
       const { threadId } = c.req.valid("param");
       const { accountId, body } = c.req.valid("json");
+
+      // Resolve the EXTERNAL channel first so we can route to the connector for
+      // its provider (stalwart, gmail, …) rather than always the default.
+      const linkedChannel = await db.query.channels.findFirst({
+        where: and(
+          eq(channels.channelType, ChannelType.EXTERNAL),
+          eq(channels.externalId as any, threadId)
+        ),
+        columns: { id: true, externalSource: true },
+      });
+
+      const connector = await getMessagingConnector(
+        linkedChannel?.externalSource ?? undefined
+      );
+      if (!connector)
+        return c.json({ error: "Messaging connector not configured" }, 503);
       try {
         await connector.sendMessage(accountId, threadId, body);
 
         // Mirror the outbound message into the messages table so the DB inbox
         // shows a complete conversation history (inbound + outbound).
-        const linkedChannel = await db.query.channels.findFirst({
-          where: and(
-            eq(channels.channelType, ChannelType.EXTERNAL),
-            eq(channels.externalId as any, threadId)
-          ),
-          columns: { id: true },
-        });
         if (linkedChannel) {
           const msgHash = createHash("sha256")
             .update(`outbound:${threadId}:${Date.now()}:${body}`)

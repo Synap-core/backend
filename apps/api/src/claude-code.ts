@@ -13,7 +13,7 @@
  * SECURITY: Gated by the same `workspace.settings.devplane.localTerminalEnabled`
  * flag as local-terminal — only safe on a trusted local pod, never a cloud pod.
  *
- * WebSocket URL: ws://host/api/devplane/claude-code?taskId=X&token=Y
+ * WebSocket URL: ws://host/api/devplane/claude-code?taskId=X&ticket=Y
  * (workspaceId is derived from the task entity — the frontend sends only taskId.)
  *
  * Messages FROM browser:

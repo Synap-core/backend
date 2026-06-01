@@ -5,7 +5,7 @@
  * per-step output back to the browser in real time.
  *
  * WebSocket URL:
- *   ws://host:4000/api/devplane/recipe-run?recipeId=<entityId>&envId=<entityId>&token=<kratosToken>
+ *   ws://host:4000/api/devplane/recipe-run?recipeId=<entityId>&envId=<entityId>&ticket=<wsTicket>
  *
  * Messages TO browser (JSON strings):
  *   { type: "connected" }                                          — handshake complete
@@ -73,8 +73,6 @@ function sendJson(ws: WebSocket, payload: Record<string, unknown>): void {
     ws.send(JSON.stringify(payload));
   }
 }
-
-// Auth: resolveUserId (ticket → token, cookie-free) is imported from ws-auth.js.
 
 /**
  * Load a devplane_environment entity and resolve SSH credentials via Vault.

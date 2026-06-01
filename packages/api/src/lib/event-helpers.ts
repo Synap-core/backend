@@ -7,9 +7,15 @@
 
 import { db } from "@synap/database";
 import { events } from "@synap/database/schema";
+import { randomUUID } from "crypto";
 
 /**
- * Base event logging function
+ * Base event logging function.
+ *
+ * Returns the id of the inserted event so callers (e.g. the permission gate)
+ * can link the proposal back to the originating `.requested` event on the
+ * spine. The id is pre-generated rather than read back via `.returning()`
+ * because `events` has a composite PK (id, timestamp).
  */
 export async function logEvent(
   userId: string,
@@ -21,8 +27,10 @@ export async function logEvent(
     metadata?: Record<string, any>;
     source?: string;
   }
-): Promise<void> {
+): Promise<string> {
+  const eventId = randomUUID();
   await db.insert(events).values({
+    id: eventId,
     userId,
     type,
     data,
@@ -34,6 +42,8 @@ export async function logEvent(
   });
 
   console.log(`[Event] ${type}`, { userId, subjectId: options?.subjectId });
+
+  return eventId;
 }
 
 // ============================================================================

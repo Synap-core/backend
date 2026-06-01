@@ -453,16 +453,25 @@ export class EventRepository {
   }
 
   /**
-   * Get events by correlation ID (workflow tracking)
+   * Get events by correlation ID (workflow tracking).
+   *
+   * SECURITY: `correlation_id` is NOT unique per user — a single correlation id
+   * can appear across multiple tenants' events. Callers MUST pass `userId` to
+   * clamp the result to the owner's events; otherwise another user's events
+   * (and their subjects/actors) leak into the result. The param is required.
    */
-  async getCorrelatedEvents(correlationId: string): Promise<EventRecord[]> {
+  async getCorrelatedEvents(
+    correlationId: string,
+    userId: string
+  ): Promise<EventRecord[]> {
     const result = await this.query(
       `
       SELECT * FROM events
       WHERE correlation_id = $1
+      AND user_id = $2
       ORDER BY timestamp ASC
     `,
-      [correlationId]
+      [correlationId, userId]
     );
 
     return result.rows.map((row) => this.mapRow(row));

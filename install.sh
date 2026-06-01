@@ -199,6 +199,12 @@ success "Config files downloaded"
 # ─── Generate Kratos config ────────────────────────────────────────────────────
 heading "Generating Kratos config"
 
+# Validate DOMAIN before it is interpolated into shell, .env, and kratos.yml —
+# reject anything but a hostname so a malformed/hostile value can't inject config.
+if [[ -n "$DOMAIN" && ! "$DOMAIN" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+  error "Invalid domain '$DOMAIN' — only letters, digits, dots and hyphens are allowed."
+fi
+
 # Root domain (strip leading "pod." so the session cookie and Eve subdomain
 # entries are scoped to the shared parent, e.g. "team.example.com").
 ROOT_DOMAIN="${DOMAIN#pod.}"
@@ -223,6 +229,7 @@ serve:
       enabled: true
       allowed_origins:
         - https://$DOMAIN
+        - https://*.$ROOT_DOMAIN
         - https://eve.$ROOT_DOMAIN
       allowed_headers:
         - Authorization
@@ -317,6 +324,28 @@ secrets:
     - $KRATOS_SECRETS_CIPHER
 SECRETS_EOF
       info "Kratos secrets injected into kratos.yml (upgrade from older install)"
+    fi
+  fi
+
+  # Self-heal: backfill SYNAP_BASE_DOMAIN (added 2026-05 for the derived first-party
+  # CORS allowlist). .env files from before this change lack it; without it the
+  # backend denies cross-subdomain frontends (fail-closed). Derive from the pod
+  # domain so updates need NO manual edit.
+  if ! grep -q "^SYNAP_BASE_DOMAIN=" "$INSTALL_DIR/.env" 2>/dev/null; then
+    _base="$ROOT_DOMAIN"
+    if [[ -z "$_base" ]]; then
+      source "$INSTALL_DIR/.env" 2>/dev/null || true
+      _base="${DOMAIN#pod.}"
+    fi
+    if [[ -n "$_base" ]]; then
+      printf '\n# Parent domain for the derived first-party CORS allowlist (backfilled on update)\nSYNAP_BASE_DOMAIN=%s\n' "$_base" >> "$INSTALL_DIR/.env"
+      info "Backfilled SYNAP_BASE_DOMAIN=$_base into .env (CORS allowlist self-heal)"
+      # Force the env-consuming services to recreate this run so the new var is
+      # injected immediately (a plain `up -d` may skip recreation on an .env-only
+      # change, leaving CORS fail-closed until the next restart).
+      RECREATE_FOR_CORS=1
+    else
+      warn "Could not derive SYNAP_BASE_DOMAIN — set it in .env manually, or cross-subdomain frontends will be denied by CORS"
     fi
   fi
 else
@@ -466,6 +495,12 @@ SMTP_CONNECTION_URI=${SMTP_URI:-smtp://localhost:1025/}
 # Example real relay: SMTP_CONNECTION_URI=smtps://resend:RESEND_API_KEY@smtp.resend.com:465
 
 # ── Frontend / CORS ───────────────────────────────────────────────────────────
+# SYNAP_BASE_DOMAIN: the pod's parent domain. The backend + realtime derive their
+# credentialed CORS allowlist from this — every https://*.SYNAP_BASE_DOMAIN
+# first-party surface (studio., app., devplane., relay., eve.) is trusted;
+# unknown origins are denied (no reflect-all). Cross-TLD/iframe origins can be
+# added explicitly via ALLOWED_ORIGINS.
+SYNAP_BASE_DOMAIN=$ROOT_DOMAIN
 FRONTEND_URL=https://$DOMAIN
 CORS_ORIGIN=https://$DOMAIN
 ALLOWED_ORIGINS=https://$DOMAIN
@@ -501,7 +536,12 @@ sleep 5
 docker compose logs --tail=30 backend-migrate || true
 
 info "Starting application services (including pod-agent for Control Plane commands)..."
-docker compose up -d backend realtime caddy pod-agent
+# --remove-orphans frees ports held by orphaned containers from renamed/removed
+# services (a common "port is already allocated" cause on update). Volumes and
+# the network are untouched — non-destructive self-heal.
+# ${RECREATE_FOR_CORS:+--force-recreate} only expands when the SYNAP_BASE_DOMAIN
+# backfill ran this update, so the new env var actually reaches the containers.
+docker compose up -d --remove-orphans ${RECREATE_FOR_CORS:+--force-recreate} backend realtime caddy pod-agent
 
 success "All services started"
 

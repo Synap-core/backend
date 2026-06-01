@@ -34,6 +34,14 @@ export const workerRegistry: WorkerMetadata[] = [
     outputs: ["message.create.completed"],
     category: "ai",
   },
+  {
+    id: "proactive-intelligence",
+    name: "Proactive Intelligence (Feature C)",
+    description:
+      "Event-driven proactive AI gate. proactive.evaluate loads the entity, applies the AI-origin loop guard, checks the workspace's proactiveAi trigger toggles, and debounces a proactive.scan (15min window) which assembles a candidate cluster and hands it to the intelligence service, which runs the agent and emits a proposal or a proactive_post nudge.",
+    triggers: ["entity.create.validated", "entity.update.validated"],
+    category: "ai",
+  },
 
   // ============================================================================
   // Table Workers (handle CRUD for database tables)

@@ -38,6 +38,8 @@ x-backend-env: &backend-env
   SYNAP_SERVICE_ENCRYPTION_KEY: ${SYNAP_SERVICE_ENCRYPTION_KEY}
   VAULT_SERVER_KEY: ${VAULT_SERVER_KEY:-}
   PUBLIC_URL: ${PUBLIC_URL:-http://backend:4000}
+  # Parent domain for the derived first-party CORS allowlist (see install.sh .env)
+  SYNAP_BASE_DOMAIN: ${SYNAP_BASE_DOMAIN:-}
   CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -147,6 +149,10 @@ services:
       NODE_ENV: production
       REALTIME_PORT: 4001
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      # Parent domain for the Socket.IO first-party origin check (see cors-origin policy)
+      SYNAP_BASE_DOMAIN: ${SYNAP_BASE_DOMAIN:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      PUBLIC_URL: ${PUBLIC_URL:-}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
       STORAGE_PROVIDER: minio

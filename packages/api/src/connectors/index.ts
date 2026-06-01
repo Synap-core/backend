@@ -4,6 +4,7 @@ import { NangoConnector } from "./NangoConnector.js";
 import { ApifyProvider } from "./ApifyProvider.js";
 import { ApolloProvider } from "./ApolloProvider.js";
 import { UnipileConnector } from "./UnipileConnector.js";
+import { StalwartConnector } from "./StalwartConnector.js";
 import type { MessagingConnector } from "./MessagingConnector.js";
 import { db, getServiceSecret } from "@synap/database";
 
@@ -12,17 +13,38 @@ enrichmentProviderRegistry.register(new ApifyProvider());
 enrichmentProviderRegistry.register(new ApolloProvider());
 
 /**
- * Returns a configured MessagingConnector, reading credentials from:
- * 1. Vault (server-encrypted secret with serviceId='messaging-connector')
- * 2. workspace.settings.messaging (set via Settings UI)
- * 3. UNIPILE_* env vars (fallback for server-managed deployments)
+ * Returns a configured MessagingConnector.
+ *
+ * When `provider === "stalwart"`, resolves the self-hosted Stalwart/JMAP
+ * connector from the `stalwart-connector` vault secret ({ jmapUrl, bearerToken,
+ * accountEmail }). For every other provider (the default) it resolves the
+ * Unipile connector, reading credentials from:
+ *   1. Vault (server-encrypted secret with serviceId='messaging-connector')
+ *   2. workspace.settings.messaging (set via Settings UI)
+ *   3. UNIPILE_* env vars (server-managed deployments)
  * Returns null when no source is configured.
+ *
+ * The param is optional so existing no-arg callers keep Unipile behaviour
+ * unchanged; the send path passes the channel's provider to route correctly.
  */
-export async function getMessagingConnector(): Promise<MessagingConnector | null> {
+export async function getMessagingConnector(
+  provider?: string
+): Promise<MessagingConnector | null> {
   try {
     const ws = await db.query.workspaces.findFirst({
       columns: { settings: true, ownerId: true },
     });
+
+    if (provider === "stalwart") {
+      if (!ws?.ownerId) return null;
+      const cfg = await getServiceSecret("stalwart-connector", ws.ownerId);
+      if (!cfg?.jmapUrl || !cfg?.bearerToken) return null;
+      return new StalwartConnector({
+        jmapUrl: cfg.jmapUrl,
+        bearerToken: cfg.bearerToken,
+        accountEmail: cfg.accountEmail,
+      });
+    }
 
     if (ws?.ownerId) {
       const vaultCfg = await getServiceSecret(
@@ -81,3 +103,5 @@ export type {
   WebhookEvent,
 } from "./MessagingConnector.js";
 export { UnipileConnector } from "./UnipileConnector.js";
+export { StalwartConnector } from "./StalwartConnector.js";
+export type { StalwartConnectorConfig } from "./StalwartConnector.js";
