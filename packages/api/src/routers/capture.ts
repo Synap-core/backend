@@ -276,6 +276,28 @@ export const captureRouter = router({
         capability: "default",
       });
 
+      // Gather existing-entity names UP FRONT so the LLM can link/dedup instead
+      // of blindly creating duplicates. Search the input text against the
+      // entities collection; cap + best-effort (never fail the capture on this).
+      let existingEntityNames: string[] = [];
+      try {
+        const existing = await searchService.searchCollection(
+          "entities",
+          input.text.slice(0, 200),
+          { userId, workspaceId: workspaceId ?? undefined, limit: 30 }
+        );
+        existingEntityNames = Array.from(
+          new Set(
+            existing.results
+              .map((r) => r.document?.title as string | undefined)
+              .filter((t): t is string => Boolean(t && t.trim()))
+          )
+        );
+      } catch {
+        // Typesense unavailable — proceed without dedup hints.
+        existingEntityNames = [];
+      }
+
       const structureResult = await client.structure({
         text: input.text,
         url: input.url,
@@ -284,6 +306,7 @@ export const captureRouter = router({
         hints: {
           availableProfiles,
           availableWorkspaces,
+          existingEntityNames,
           previousEntities: input.previousEntities,
         },
       });
