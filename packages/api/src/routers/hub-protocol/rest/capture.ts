@@ -13,6 +13,11 @@ import {
   importProposalToComposite,
 } from "../../../utils/import-items.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
+import { materializeCompositeGraph } from "../../../utils/materialize-composite.js";
+import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
+import { relationsRouter } from "../../relations.js";
+import { db, getWorkspaceMembership } from "@synap/database";
+import type { Context } from "../../../types/context.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -473,6 +478,137 @@ export function registerCaptureRoutes(app: HubHono): void {
       });
     } catch (err) {
       logger.error({ err, userId: body.userId }, "POST /import/analyze failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /import/apply
+   *
+   * User-initiated DIRECT import: materialize the structured graph (N entities +
+   * linked documents + M relations) immediately — NO proposal. This is the
+   * user's own data (a deterministic faithful mirror), so per the permission
+   * model it follows the "human's own UI action = direct write (with a
+   * preview-before from /import/analyze)" rule, not the agent proposal gate.
+   *
+   * The frontend flow: POST /import/analyze (preview) → user confirms →
+   * POST /import/apply (same items) materializes. Reuses the EXACT composite
+   * materialization the approve loop uses, so behavior is identical.
+   */
+  app.post("/import/apply", async (c) => {
+    if (
+      !hasScope(c.get("scopes") as string[], "hub-protocol.write") &&
+      !hasScope(c.get("scopes") as string[], "mcp.write")
+    ) {
+      return c.json(
+        { error: "Missing scope: hub-protocol.write or mcp.write" },
+        403
+      );
+    }
+
+    let rawBody: unknown;
+    try {
+      rawBody = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const bodySchema = z.object({
+      userId: z.string().min(1),
+      workspaceId: z.string().uuid().optional(),
+      source: z.enum(["obsidian"]),
+      relationType: z.string().min(1).max(64).optional(),
+      items: z
+        .array(
+          z.object({
+            path: z.string().min(1).max(1024),
+            content: z.string().max(200_000),
+          })
+        )
+        .min(1)
+        .max(2000),
+    });
+
+    const parsed = bodySchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.issues },
+        400
+      );
+    }
+    const body = parsed.data;
+
+    // Resolve + verify workspace membership (this materializes directly, so the
+    // caller MUST be a member of the target workspace).
+    let workspaceId = body.workspaceId;
+    if (!workspaceId) {
+      const wsIds = await getUserAccessibleWorkspaceIds(body.userId);
+      workspaceId = wsIds[0];
+      if (!workspaceId) {
+        return c.json(
+          { error: "No accessible workspace found for this user" },
+          400
+        );
+      }
+    }
+    const membership = await getWorkspaceMembership(
+      db,
+      workspaceId,
+      body.userId
+    );
+    if (!membership) {
+      return c.json({ error: "Access denied to workspace" }, 403);
+    }
+
+    try {
+      const items = adaptItems(body.source as ImportSource, body.items);
+      const proposal = buildImportProposal(items, body.relationType);
+      const { operations } = importProposalToComposite(proposal);
+
+      // Workspace-scoped caller context — identical shape to the approve loop's
+      // compositeCtx, so materialization behaves the same (full side-effects,
+      // linked documents, relation FKs).
+      const ctx = {
+        db,
+        authenticated: true as const,
+        userId: body.userId,
+        workspaceId,
+        workspaceRole: membership.role,
+      } as unknown as Context;
+      const entityCaller = regularEntitiesRouter.createCaller(ctx);
+      const relationCaller = relationsRouter.createCaller(ctx);
+
+      const { created, linked } = await materializeCompositeGraph(
+        operations,
+        entityCaller,
+        relationCaller,
+        (err, type) =>
+          logger.warn({ err, type }, "import/apply: relation create failed")
+      );
+
+      logger.info(
+        {
+          userId: body.userId,
+          workspaceId,
+          source: body.source,
+          created,
+          linked,
+          droppedReferences: proposal.stats.unresolvedReferences,
+        },
+        "POST /import/apply materialized"
+      );
+      return c.json({
+        workspaceId,
+        source: body.source,
+        created,
+        linked,
+        stats: proposal.stats,
+      });
+    } catch (err) {
+      logger.error({ err, userId: body.userId }, "POST /import/apply failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500
