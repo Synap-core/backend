@@ -44,8 +44,6 @@ import {
   isDocumentContentProposalData,
   isRequestShapedProposalData,
   isCompositeProposalData,
-  registerEntityRef,
-  resolveCompositeRef,
   buildRequestFromProposal,
   buildFallbackTitle,
   isLikelyUUID,
@@ -55,6 +53,7 @@ import { storage } from "@synap/storage";
 import { requireUserId } from "../utils/user-scoped.js";
 import { auditLog } from "../utils/audit-log.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
+import { materializeCompositeGraph } from "../utils/materialize-composite.js";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 import { channelsRouter } from "./channels.js";
@@ -785,53 +784,23 @@ export const proposalsRouter = router({
         const entityCaller = regularEntitiesRouter.createCaller(
           compositeCtx as unknown as Context
         );
-
-        // Pass 1: create ALL create_entity ops, building a ref→realId map.
-        // Refs: the op's own `ref`, its positional `$opN`, and (for the first
-        // entity op) PRIMARY_REF for back-compat.
-        const refToRealId: Record<string, string> = {};
-        let primaryId = "";
-        let createdCount = 0;
-        for (let i = 0; i < payload.operations.length; i++) {
-          const op = payload.operations[i];
-          if (op.op !== "create_entity") continue;
-          const created = await entityCaller.create({
-            profileSlug: op.profileSlug,
-            title: op.title || "Untitled",
-            description: op.description,
-            properties: op.properties,
-            // Long-form body → linked document (versioned), not a property.
-            content: op.content,
-            source: "system",
-          });
-          const realId = (created as { id: string }).id;
-          registerEntityRef(refToRealId, i, op.ref, realId, !primaryId);
-          if (!primaryId) primaryId = realId;
-          createdCount++;
-        }
-
         const relationCaller = relationsRouter.createCaller(
           compositeCtx as unknown as Context
         );
-        let linked = 0;
-        for (const op of payload.operations) {
-          if (op.op !== "create_relation") continue;
-          const sourceEntityId = resolveCompositeRef(refToRealId, op.sourceRef);
-          const targetEntityId = resolveCompositeRef(refToRealId, op.targetRef);
-          try {
-            await relationCaller.create({
-              sourceEntityId,
-              targetEntityId,
-              type: op.type,
-            });
-            linked++;
-          } catch (err) {
-            logger.warn(
-              { err, primaryId, type: op.type },
-              "composite proposal: relation create failed (entities kept)"
-            );
-          }
-        }
+
+        // Shared materialization: N entities → ref map → M relations.
+        // Same logic the user-import (/import/apply) path uses.
+        const { created: createdCount, linked, primaryId } =
+          await materializeCompositeGraph(
+            payload.operations,
+            entityCaller,
+            relationCaller,
+            (err, type) =>
+              logger.warn(
+                { err, type },
+                "composite proposal: relation create failed (entities kept)"
+              )
+          );
 
         await db
           .update(proposals)
