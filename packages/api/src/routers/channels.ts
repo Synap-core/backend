@@ -65,6 +65,10 @@ import {
 } from "../utils/intelligence-routing.js";
 import { validateExternalUrl } from "../utils/validate-url.js";
 import { resolveOrCreateChannel } from "../utils/resolve-or-create-channel.js";
+import {
+  ensureAgentInstanceThread,
+  getAgentIdBySlug,
+} from "../utils/personal-channel.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { emitTyped } from "../utils/event-emit.js";
 import { makeExcerpt } from "../utils/excerpt.js";
@@ -453,6 +457,8 @@ async function listChannelsWithFlags(params: {
   contextObjectId?: string;
   contextObjectType?: (typeof CONTEXT_OBJECT_TYPE_VALUES)[number];
   assignedAgentId?: string;
+  /** Agent INSTANCE (users.id) — channels where this agent-user is an ai_agent member. */
+  agentMemberId?: string;
   limit: number;
   offset?: number;
 }): Promise<
@@ -514,6 +520,24 @@ async function listChannelsWithFlags(params: {
 
   if (params.assignedAgentId) {
     conditions.push(eq(channels.assignedAgentId, params.assignedAgentId));
+  }
+
+  // Per-instance link: channels where this agent-user is the ai_agent member.
+  if (params.agentMemberId) {
+    conditions.push(
+      exists(
+        db
+          .select({ one: drizzleSql`1` })
+          .from(channelMembers)
+          .where(
+            and(
+              eq(channelMembers.channelId, channels.id),
+              eq(channelMembers.memberId, params.agentMemberId),
+              eq(channelMembers.memberKind, ChannelMemberKind.AI_AGENT)
+            )
+          )
+      )!
+    );
   }
 
   const rows = await db.query.channels.findMany({
@@ -2338,6 +2362,8 @@ export const channelsRouter = router({
         contextObjectId: z.string().uuid().optional(),
         contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
         assignedAgentId: z.string().uuid().optional(),
+        /** Agent INSTANCE (agent-user) id — channels this agent participates in. */
+        agentUserId: z.string().uuid().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -2348,6 +2374,7 @@ export const channelsRouter = router({
         contextObjectId: input.contextObjectId,
         contextObjectType: input.contextObjectType,
         assignedAgentId: input.assignedAgentId,
+        agentMemberId: input.agentUserId,
         limit: input.limit,
       });
 
@@ -2499,6 +2526,31 @@ export const channelsRouter = router({
   getOrCreateAgentThread: workspaceProcedure
     .input(z.object({ agentId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      // `agentId` is the agent-USER instance id (a `users` row, userType=agent).
+      // assignedAgentId is a template-only FK, so we key the thread to the INSTANCE
+      // via channel_members and resolve the instance's agentType → template for the
+      // IS agent class. Falls back to the legacy template path for non-instance ids.
+      const instance = await db.query.users.findFirst({
+        where: and(eq(users.id, input.agentId), eq(users.userType, "agent")),
+        columns: { id: true, agentMetadata: true },
+      });
+
+      if (instance) {
+        const agentType =
+          (instance.agentMetadata as { agentType?: string } | null)
+            ?.agentType ?? "orchestrator";
+        const templateId =
+          (await getAgentIdBySlug(agentType)) ??
+          (await getAgentIdBySlug("orchestrator"));
+        const channel = await ensureAgentInstanceThread(
+          ctx.userId,
+          instance.id,
+          templateId
+        );
+        return { channel };
+      }
+
+      // Backward-compat: treat a non-instance id as a template/agents id.
       const channel = await resolveOrCreateChannel({
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
@@ -2826,6 +2878,10 @@ export const channelsRouter = router({
         assignedAgentId: z.string().uuid().nullable().optional(),
         agentConfig: z.record(z.string(), z.unknown()).optional(),
         mcpServerIds: z.array(z.string().uuid()).nullable().optional(),
+        /** Bind an agent INSTANCE (agent-user id) to this channel as an ai_agent member. */
+        addAgentMemberId: z.string().uuid().optional(),
+        /** Unbind an agent INSTANCE from this channel. */
+        removeAgentMemberId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -2855,6 +2911,37 @@ export const channelsRouter = router({
           updatedAt: new Date(),
         })
         .where(eq(channels.id, input.channelId));
+
+      // Per-instance agent binding lives in channel_members (assignedAgentId is
+      // a template-only FK and cannot reference an agent-user instance).
+      if (input.addAgentMemberId) {
+        const already = await db.query.channelMembers.findFirst({
+          where: and(
+            eq(channelMembers.channelId, input.channelId),
+            eq(channelMembers.memberId, input.addAgentMemberId)
+          ),
+          columns: { channelId: true },
+        });
+        if (!already) {
+          await db.insert(channelMembers).values({
+            channelId: input.channelId,
+            memberId: input.addAgentMemberId,
+            memberKind: ChannelMemberKind.AI_AGENT,
+            role: ChannelMemberRole.MEMBER,
+            addedBy: ctx.userId,
+          });
+        }
+      }
+      if (input.removeAgentMemberId) {
+        await db
+          .delete(channelMembers)
+          .where(
+            and(
+              eq(channelMembers.channelId, input.channelId),
+              eq(channelMembers.memberId, input.removeAgentMemberId)
+            )
+          );
+      }
 
       emitChatEvent({
         event: "channel:updated",

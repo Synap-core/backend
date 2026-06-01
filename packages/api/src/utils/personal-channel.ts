@@ -11,6 +11,9 @@ import { randomUUID, createHash } from "node:crypto";
 import { db, eq, and } from "@synap/database";
 import {
   channels,
+  channelMembers,
+  ChannelMemberKind,
+  ChannelMemberRole,
   messages,
   ChannelType,
   ChannelScope,
@@ -116,6 +119,86 @@ export async function ensureAgentThread(
   // Seed welcome message only for the orchestrator agent
   const orchestratorId = await getSyncAgentId("orchestrator");
   if (orchestratorId && agentId === orchestratorId) {
+    await seedWelcomeMessage(channel.id, userId);
+  }
+
+  return channel;
+}
+
+/**
+ * Get or create a private thread between a user and a specific agent INSTANCE.
+ *
+ * Per-instance linkage: `channels.assignedAgentId` is an FK to the `agents`
+ * (templates) table, so it cannot hold an instance id. The instance (a `users`
+ * row, userType=agent) is therefore attached via `channel_members` (kind=ai_agent),
+ * which is also the dedup key — one thread per (user × instance). `assignedAgentId`
+ * still carries the resolved TEMPLATE so the IS knows which agent class to run.
+ *
+ * @param userId           the human owner of the thread
+ * @param agentUserId      the agent instance (users.id, userType=agent)
+ * @param templateAgentId  the resolved template (agents.id) for IS routing, or null
+ */
+export async function ensureAgentInstanceThread(
+  userId: string,
+  agentUserId: string,
+  templateAgentId: string | null
+): Promise<Channel> {
+  // Dedup on the INSTANCE membership, not on assignedAgentId (which is per-type).
+  const [existing] = await db
+    .select({ channel: channels })
+    .from(channels)
+    .innerJoin(
+      channelMembers,
+      and(
+        eq(channelMembers.channelId, channels.id),
+        eq(channelMembers.memberId, agentUserId),
+        eq(channelMembers.memberKind, ChannelMemberKind.AI_AGENT)
+      )
+    )
+    .where(
+      and(
+        eq(channels.userId, userId),
+        eq(channels.channelType, ChannelType.PERSONAL),
+        eq(channels.status, ChannelStatus.ACTIVE)
+      )
+    )
+    .limit(1);
+
+  if (existing) return existing.channel;
+
+  const [channel] = await db
+    .insert(channels)
+    .values({
+      userId,
+      workspaceId: null, // pod-wide
+      channelType: ChannelType.PERSONAL,
+      scope: ChannelScope.POD,
+      status: ChannelStatus.ACTIVE,
+      assignedAgentId: templateAgentId, // template → IS agent class
+    })
+    .returning();
+
+  // The per-instance link lives in channel_members (assignedAgentId is template-only).
+  await db.insert(channelMembers).values([
+    {
+      channelId: channel.id,
+      memberId: userId,
+      memberKind: ChannelMemberKind.HUMAN,
+      role: ChannelMemberRole.OWNER,
+      addedBy: userId,
+    },
+    {
+      channelId: channel.id,
+      memberId: agentUserId,
+      memberKind: ChannelMemberKind.AI_AGENT,
+      role: ChannelMemberRole.MEMBER,
+      addedBy: userId,
+    },
+  ]);
+
+  // Welcome seed only when the resolved template is the orchestrator (mirrors ensureAgentThread).
+  const orchestratorId = await getSyncAgentId("orchestrator");
+  if (orchestratorId && templateAgentId === orchestratorId) {
     await seedWelcomeMessage(channel.id, userId);
   }
 

@@ -51,6 +51,11 @@ interface ManifestWidget {
 
 interface CapabilitiesManifest {
   version: string;
+  /**
+   * Structural CONTRACT version of the manifest shape. Optional here for
+   * backward-compat with an older capabilities.json that predates the field.
+   */
+  schemaVersion?: number;
   generatedAt: string;
   widgets: ManifestWidget[];
   views: unknown[];
@@ -204,6 +209,7 @@ export async function seedWidgetDefinitions(): Promise<void> {
       {
         seeded,
         manifestVersion: manifest.version,
+        manifestSchemaVersion: manifest.schemaVersion ?? null,
         generatedAt: manifest.generatedAt,
       },
       "Widget definitions synced from capabilities manifest"
