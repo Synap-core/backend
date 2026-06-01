@@ -82,13 +82,25 @@ describe("buildImportProposal (source-agnostic)", () => {
   const items = adaptItems("obsidian", OBSIDIAN_BATCH);
   const proposal = buildImportProposal(items);
 
-  it("infers types from type-hint, path, and default", () => {
+  it("types from KNOWN-profile type-hint only; folders are NOT types", () => {
     const bySlug = Object.fromEntries(proposal.types.map((t) => [t.slug, t]));
+    // project + person come from type-hint (both known system profiles)
     expect(bySlug.project.source).toBe("type-hint");
     expect(bySlug.project.itemCount).toBe(2);
     expect(bySlug.person.source).toBe("type-hint");
-    expect(bySlug.notes.source).toBe("path"); // "Notes/" folder
-    expect(bySlug.note.source).toBe("default"); // root-level Inbox
+    // "Notes/" and "Projects/" folders do NOT become types — folder is data,
+    // not a type. Notes/Idea (no type-hint) + Inbox default to "note".
+    expect(bySlug.notes).toBeUndefined();
+    expect(bySlug.note.source).toBe("default");
+    expect(bySlug.note.itemCount).toBe(2); // Notes/Idea + Inbox
+  });
+
+  it("preserves the folder as a property + label (not lost)", () => {
+    const idea = proposal.items.find((i) => i.title === "Idea")!;
+    expect(idea.typeSlug).toBe("note"); // folder "Notes" is NOT the type
+    expect(idea.properties.folder).toBe("Notes");
+    expect(idea.labels).toContain("Notes"); // folder added as a label
+    expect(idea.labels).toContain("idea"); // original #idea tag kept
   });
 
   it("aggregates metadata keys per type (excl. title/type)", () => {

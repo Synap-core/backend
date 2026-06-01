@@ -221,20 +221,50 @@ function titleCase(slug: string): string {
 }
 
 /**
- * Decide an item's type slug. Precedence:
- *   1. explicit typeHint (source knows the type)
- *   2. outermost path segment (folder-as-category convention)
- *   3. "note" default
+ * System profiles that always exist on a pod (entityScope pod/workspace).
+ * Only these are safe to assign as a type during a FAITHFUL import — assigning
+ * an arbitrary slug (e.g. a folder name like "5-projects") fails profile
+ * validation on create and the entity falls back to a bare note, DROPPING its
+ * properties (incl. content). So import only ever types as a KNOWN profile.
+ */
+const KNOWN_IMPORT_PROFILES = new Set<string>([
+  "note",
+  "task",
+  "project",
+  "event",
+  "person",
+  "contact",
+  "company",
+  "bookmark",
+  "article",
+  "website",
+  "decision",
+  "question",
+  "research",
+]);
+
+/**
+ * Decide an item's type slug for a FAITHFUL import.
+ *
+ * Deliberately conservative: a folder is NOT a type. Real-world vaults organize
+ * by PARA/numbered buckets ("1. Daily", "5. Projects"), which make terrible
+ * entity types and pollute the schema. So:
+ *   1. explicit typeHint, but ONLY if it maps to a known system profile
+ *   2. otherwise "note" (the honest default)
+ * The folder is preserved separately as a `folder` property + label (see
+ * buildImportProposal), so nothing is lost — and the AI restructure step
+ * (Structure Steward) can later promote folders/notes into real types via its
+ * own governed proposals. Import mirrors; it does not invent types.
  */
 function typeForItem(item: ImportItem): {
   slug: string;
   source: ProposedType["source"];
 } {
   if (item.typeHint && item.typeHint.trim()) {
-    return { slug: toSlug(item.typeHint), source: "type-hint" };
-  }
-  if (item.path.length > 0) {
-    return { slug: toSlug(item.path[0]), source: "path" };
+    const slug = toSlug(item.typeHint);
+    if (KNOWN_IMPORT_PROFILES.has(slug)) {
+      return { slug, source: "type-hint" };
+    }
   }
   return { slug: "note", source: "default" };
 }
@@ -267,10 +297,18 @@ export function buildImportProposal(
     const tempId = `t${i + 1}`;
     const metadata =
       item.metadata && typeof item.metadata === "object" ? item.metadata : {};
+    // The folder path is preserved as data (not as a type): a `folder` property
+    // for filtering + a label so the AI restructure step can use it as a signal.
+    const folder = item.path.join("/");
     const properties: Record<string, unknown> = {
       ...metadata,
+      ...(folder ? { folder } : {}),
       ...(item.body ? { content: item.body } : {}),
     };
+    const labels =
+      folder && !item.labels.includes(folder)
+        ? [...item.labels, folder]
+        : item.labels;
     proposedItems.push({
       tempId,
       typeSlug: slug,
@@ -278,7 +316,7 @@ export function buildImportProposal(
         (typeof metadata.title === "string" && metadata.title) || item.title,
       properties,
       sourceRef: [...item.path, item.title].join("/"),
-      labels: item.labels,
+      labels,
     });
 
     const key = item.title.toLowerCase();
