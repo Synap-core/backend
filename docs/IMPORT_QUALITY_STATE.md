@@ -110,3 +110,29 @@ Today CSV → `analyze-bulk-mapping` (LLM proposes column→property plan) + per
 ## 6. Immediate next step (proposed)
 
 **Run the AI path live on a real-vault slice** — feed ~10 messy notes through `capture.structure` and see what it actually produces (orphans? dupes? good types? relations?). That converts the §2 audit into measured reality and tells us which of P1-P5 matters most. Pair it with #1 (markdown→document) since that's the clearest correctness fix.
+
+---
+
+## 7. VERIFIED LIVE (2026-06-01) — full import pipeline materializes end-to-end
+
+`POST /api/hub/import/apply` (user-direct, no proposal) run against the real
+vault on the deployed pod:
+
+- **331 entities created in ~21s**, 1 clean `note` type (no folder-slug garbage).
+- **328 with a LINKED DOCUMENT** (`documentId` set) — body lives in a versioned,
+  MinIO-stored document, NOT in `properties.content`. Verified the document
+  holds the markdown body. (The few without are genuinely empty notes.)
+- **379 carry the `folder` property** (folder = data, not type).
+- **156 relations linked** (194 wikilink refs, 38 unresolved = ~80%, matching the
+  resolver improvement). Relations traverse correctly.
+- Same `materializeCompositeGraph` powers both `/import/apply` and
+  `proposals.approve` (composite), so AI-graph approval behaves identically.
+
+The deterministic import (markdown → entity + linked document + folder + graph
+relations) is **proven working at scale via API**. No human approval needed for
+user-initiated imports; AI/agent graph imports still route through the proposal
+gate.
+
+**Remaining:** composite-aware proposal UI (for AI graph proposals — the
+`[object Object]` inbox issue), frontend wiring of /import/analyze→/import/apply,
+and the AI-path quality measurement (search-before-create now deployed on IS).
