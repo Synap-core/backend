@@ -800,6 +800,8 @@ export const proposalsRouter = router({
             title: op.title || "Untitled",
             description: op.description,
             properties: op.properties,
+            // Long-form body → linked document (versioned), not a property.
+            content: op.content,
             source: "system",
           });
           const realId = (created as { id: string }).id;
@@ -1238,6 +1240,9 @@ export const proposalsRouter = router({
           properties: innerData.properties as
             | Record<string, unknown>
             | undefined,
+          // Long-form body (e.g. imported markdown) → materialized as a linked
+          // document with versioning, not stuffed into a content property.
+          content: innerData.content as string | undefined,
           source: "system",
         });
 

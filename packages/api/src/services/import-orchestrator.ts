@@ -214,15 +214,18 @@ export class ImportOrchestrator {
             path.replace(/\.[^.]+$/, "").slice(0, 200) ||
             "Untitled";
           try {
+            // Markdown body → a LINKED DOCUMENT (versioned, MinIO-stored), not a
+            // 100KB content property. `content` is passed top-level so the
+            // entity-create path materializes a document + links it via
+            // documentId. Frontmatter stays as entity properties.
             await this.proposeEntity({
               profileSlug: "note",
               title,
-              properties: {
-                ...(typeof frontmatter === "object" && frontmatter !== null
+              properties:
+                typeof frontmatter === "object" && frontmatter !== null
                   ? (frontmatter as Record<string, unknown>)
-                  : {}),
-                ...(body ? { content: body } : {}),
-              },
+                  : {},
+              ...(body ? { content: body } : {}),
               summary: `Import note: ${title}`,
             });
             stats.proposalsCreated++;
@@ -342,6 +345,8 @@ export class ImportOrchestrator {
     title: string;
     properties: Record<string, unknown>;
     description?: string;
+    /** Long-form body → materialized as a linked document on approval. */
+    content?: string;
     summary: string;
   }) {
     const { workspaceId, userId } = this.ctx;
@@ -368,6 +373,7 @@ export class ImportOrchestrator {
           profileSlug: input.profileSlug,
           title: input.title,
           ...(input.description ? { description: input.description } : {}),
+          ...(input.content ? { content: input.content } : {}),
           properties: input.properties,
         },
       },
