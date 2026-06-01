@@ -981,7 +981,10 @@ app.post("/api/ws-ticket", authMiddleware, async (c) => {
   if (origin && !isAllowedOrigin(origin)) {
     return c.json({ error: "Forbidden" }, 403);
   }
-  const userId = c.get("userId");
+  // `app` is an untyped Hono instance, so the context Variables map isn't known
+  // to TS — but authMiddleware (which runs before this handler) sets `userId` to
+  // the authenticated identity id (string). Read it with an explicit type.
+  const userId = c.get("userId" as never) as string | undefined;
   if (!userId) return c.json({ error: "Unauthorized" }, 401);
   return c.json(issueWsTicket(userId));
 });
