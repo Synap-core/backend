@@ -447,6 +447,71 @@ describe("checkPermissionOrPropose — CBAC (capability-based access control)", 
 });
 
 // ---------------------------------------------------------------------------
+// Tests: untrusted issuer (trust dimension)
+// ---------------------------------------------------------------------------
+
+describe("checkPermissionOrPropose — issuer trust", () => {
+  beforeEach(() => {
+    mockVerifyPermission.mockResolvedValue({ allowed: true });
+  });
+
+  it("proposes when issuer is untrusted, even though RBAC passes and there is no agent/AI source", async () => {
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      subjectType: "entity",
+      action: "create",
+      issuer: { kind: "view", trusted: false },
+    });
+    expect("granted" in result && result.granted === false).toBe(true);
+    expect((result as { proposalId: string }).proposalId).toBeDefined();
+  });
+
+  it("ignores a spoofed source on an untrusted issuer — still proposes", async () => {
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      subjectType: "entity",
+      action: "create",
+      source: "user", // body-declared source must not buy direct access
+      issuer: { kind: "view", trusted: false },
+    });
+    expect("granted" in result && result.granted === false).toBe(true);
+  });
+
+  it("grants directly when issuer is trusted (operator)", async () => {
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      subjectType: "entity",
+      action: "create",
+      issuer: { kind: "operator", trusted: true },
+    });
+    expect(result).toEqual({ granted: true });
+  });
+
+  it("preserves legacy behavior when no issuer is passed (grants)", async () => {
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      subjectType: "entity",
+      action: "create",
+    });
+    expect(result).toEqual({ granted: true });
+  });
+
+  it("still denies an untrusted issuer when RBAC fails (deny precedes propose)", async () => {
+    mockVerifyPermission.mockResolvedValue({
+      allowed: false,
+      reason: "no write role",
+    });
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      subjectType: "entity",
+      action: "create",
+      issuer: { kind: "view", trusted: false },
+    });
+    expect("denied" in result && result.denied === true).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests: writesRequireProposal (assistant template)
 // ---------------------------------------------------------------------------
 

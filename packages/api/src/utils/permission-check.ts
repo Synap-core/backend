@@ -20,8 +20,30 @@ import { broadcastNotification } from "@synap/jobs";
 import { emitSideEffects } from "@synap/events";
 import type { WorkspaceSettings, AgentMetadata } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
+import { deriveAuthorshipMode } from "../services/agent-identity-service.js";
+import { logEvent } from "../lib/event-helpers.js";
 
 const logger = createLogger({ module: "permission-check" });
+
+/**
+ * Map a proposal's (targetType, proposalType) to the canonical
+ * `{subject}.{action}.requested` event type on the spine.
+ *
+ * This reuses the EXISTING event-sourcing naming — it never invents a new
+ * event TYPE. `proposalType` is the action verb the gate received
+ * (create / update / delete / archive / …). `edit` is normalized to `update`
+ * to stay consistent with the `{subject}.update.requested` spine convention.
+ */
+export function requestedEventTypeFor(
+  targetType: string,
+  proposalType: string
+): string {
+  const subject = targetType.endsWith("s")
+    ? targetType.slice(0, -1)
+    : targetType;
+  const action = proposalType === "edit" ? "update" : proposalType;
+  return `${subject}.${action}.requested`;
+}
 
 /**
  * Filesystem paths that are ALWAYS blocked for external agent writes,
@@ -210,6 +232,36 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
   };
 }
 
+/** The kind of authenticated principal that issued a request. */
+export type IssuerKind =
+  | "operator"
+  | "agent"
+  | "connector"
+  | "view"
+  | "unknown";
+
+/**
+ * The authenticated principal that issued this request, established at the AUTH
+ * BOUNDARY (the credential the request arrived with, plus server-side trust
+ * records for views/connectors) — NEVER from the request body.
+ *
+ * Authorization rule: an issuer with `trusted: false` always routes to a
+ * proposal (after RBAC), regardless of `source`, even if it rides a permitted
+ * user's role. This is how a sandboxed/untrusted view or connector is governed
+ * without weakening RBAC. An absent `issuer` preserves legacy behavior, so
+ * existing call sites that do not yet declare an issuer are unchanged.
+ *
+ * `source` stays audit-only provenance and must not gate authorization.
+ */
+export interface IssuerTrust {
+  kind: IssuerKind;
+  /**
+   * True only when the issuer is provably trusted: a genuine operator session,
+   * or a server-verified trusted view/connector. Untrusted → propose.
+   */
+  trusted: boolean;
+}
+
 export interface PermissionCheckOpts {
   userId: string;
   agentUserId?: string;
@@ -218,6 +270,12 @@ export interface PermissionCheckOpts {
   subjectType: string;
   action: string;
   source?: string;
+  /**
+   * Authenticated issuer + its server-resolved trust. When `trusted: false`,
+   * the action is routed to a proposal after RBAC. Absent → legacy behavior.
+   * Set this from the auth boundary, never from request-body fields.
+   */
+  issuer?: IssuerTrust;
   data: Record<string, unknown>;
   /** Correlation ID linking this check to the .requested event */
   correlationId?: string;
@@ -242,6 +300,8 @@ export interface PermissionCheckOpts {
  * 3. Determine effective user: agentUserId (if provided) or userId
  * 4. Call verifyPermission() with effective user
  * 5. If denied → return { denied: true }
+ * 5b. Untrusted issuer (issuer.trusted === false) → proposal, after RBAC,
+ *     regardless of source. Absent issuer → legacy behavior.
  * 6. AI policy:
  *    a. Agent user → check autoApproveFor whitelist; DEFAULT is proposal unless event matches
  *       Default whitelist (when field absent): search.*, memory.recall, entity.read, document.read
@@ -330,6 +390,31 @@ export async function checkPermissionOrPropose(
         "Permission denied"
       );
       return { denied: true, reason: result.reason || "Permission denied" };
+    }
+
+    // 4b. Untrusted issuer → always propose (after RBAC, before any other policy).
+    //
+    // Trust is established at the auth boundary (the authenticated principal +
+    // server-side records), NOT from the request body. An untrusted issuer —
+    // e.g. a sandboxed marketplace or AI-generated view — can never write
+    // directly even when it rides a permitted user's RBAC; it routes to a
+    // reviewable proposal. Absent `issuer` preserves legacy behavior.
+    if (opts.issuer && opts.issuer.trusted === false) {
+      return createProposal({
+        userId,
+        agentUserId,
+        workspaceId,
+        subjectType,
+        action,
+        source,
+        data,
+        correlationId,
+        requestedEventId,
+        reasoning: opts.reasoning,
+        threadId,
+        commandRunId,
+        sourceMessageId,
+      });
     }
 
     // 5. AI policy check
@@ -479,6 +564,7 @@ export async function checkPermissionOrPropose(
 
         if (isAutoApproved) {
           // Audit trail: record auto-approved action (non-blocking, non-critical)
+          const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
           db.insert(proposals)
             .values({
               workspaceId,
@@ -488,6 +574,7 @@ export async function checkPermissionOrPropose(
               data: {
                 ...data,
                 agentUserId,
+                ...(authorshipMode ? { authorshipMode } : {}),
                 ...(correlationId ? { correlationId } : {}),
                 ...(requestedEventId ? { requestedEventId } : {}),
                 _autoApprove: {
@@ -502,6 +589,7 @@ export async function checkPermissionOrPropose(
               },
               status: ProposalStatus.AUTO_APPROVED,
               createdBy: agentUserId,
+              ...(agentUserId ? { agentUserId } : {}),
               threadId: threadId ?? undefined,
               commandRunId: commandRunId ?? undefined,
             })
@@ -639,6 +727,8 @@ export interface CreatePendingProposalInput {
   threadId?: string | null;
   commandRunId?: string | null;
   sourceMessageId?: string | null;
+  correlationId?: string | null;
+  requestedEventId?: string | null;
   expiresAt?: Date | null;
   notificationDescription?: string;
 }
@@ -669,6 +759,10 @@ export async function createPendingProposal(input: CreatePendingProposalInput) {
       ...(input.commandRunId ? { commandRunId: input.commandRunId } : {}),
       ...(input.sourceMessageId
         ? { sourceMessageId: input.sourceMessageId }
+        : {}),
+      ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+      ...(input.requestedEventId
+        ? { requestedEventId: input.requestedEventId }
         : {}),
     })
     .returning();
@@ -794,6 +888,37 @@ async function createProposal(opts: {
     ...(targetName ? { targetName } : {}),
   });
 
+  // Event-spine linkage. The proposal must always be traceable to a
+  // `{subject}.{action}.requested` event:
+  //   - If the caller already appended one (e.g. the user path), reuse its id
+  //     and correlationId — DO NOT emit a second event (dedupe).
+  //   - Otherwise (agent / Feature-C / View-SDK paths), emit one here.
+  const resolvedCorrelationId = correlationId ?? randomUUID();
+  let resolvedRequestedEventId = requestedEventId;
+  if (!resolvedRequestedEventId) {
+    try {
+      resolvedRequestedEventId = await logEvent(
+        userId,
+        requestedEventTypeFor(singularType, action),
+        {
+          targetId,
+          ...(targetName ? { targetName } : {}),
+          summary,
+        },
+        {
+          subjectId: targetId,
+          subjectType: singularType,
+          source: source ?? "api",
+          metadata: { correlationId: resolvedCorrelationId },
+        }
+      );
+    } catch (err) {
+      // Spine append failure must not block the proposal — log and continue
+      // with correlationId only (requestedEventId stays undefined).
+      logger.warn({ err }, "Failed to append .requested event for proposal");
+    }
+  }
+
   const proposalData: RequestShapedProposalData = {
     requestId: randomUUID(),
     source: (source || "intelligence") as RequestShapedProposalData["source"],
@@ -806,22 +931,30 @@ async function createProposal(opts: {
     data,
     reasoning: reasoning || "AI proposal requires review",
     summary,
-    ...(correlationId ? { correlationId } : {}),
-    ...(requestedEventId ? { requestedEventId } : {}),
+    correlationId: resolvedCorrelationId,
+    ...(resolvedRequestedEventId
+      ? { requestedEventId: resolvedRequestedEventId }
+      : {}),
   };
 
+  const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
   const proposal = await createPendingProposal({
     userId,
     workspaceId,
     targetType: singularType,
     targetId,
     proposalType: action,
-    data: proposalData as unknown as Record<string, unknown>,
+    data: {
+      ...(proposalData as unknown as Record<string, unknown>),
+      ...(authorshipMode ? { authorshipMode } : {}),
+    },
     agentUserId: agentUserId ?? undefined,
     createdBy: userId,
     threadId: threadId ?? null,
     commandRunId: commandRunId ?? null,
     sourceMessageId: sourceMessageId ?? null,
+    correlationId: resolvedCorrelationId,
+    requestedEventId: resolvedRequestedEventId ?? null,
     notificationDescription: reasoning ?? `${action} ${singularType}`,
   });
 

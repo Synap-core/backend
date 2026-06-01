@@ -167,6 +167,33 @@ export function registerProactiveRoutes(app: HubHono): void {
         },
       });
 
+      // Surface the nudge on the event spine so it appears in the Reactions
+      // Pulse as an AI reaction (subjectType "message" is already in the
+      // events enum — no schema change). Non-fatal: a logging miss must never
+      // fail the post.
+      if (result.delivered) {
+        try {
+          const { logEvent } = await import("../../../lib/event-helpers.js");
+          await logEvent(
+            body.userId,
+            "ai.nudge.posted",
+            {
+              channelId: channel.id,
+              proactiveType: body.proactiveType,
+              summary: body.content.slice(0, 200),
+              ...(body.workspaceId ? { workspaceId: body.workspaceId } : {}),
+            },
+            {
+              subjectId: channel.id,
+              subjectType: "message",
+              source: "intelligence",
+            }
+          );
+        } catch {
+          /* non-fatal */
+        }
+      }
+
       return c.json({ posted: result.delivered, ...result });
     } catch (err) {
       logger.error(

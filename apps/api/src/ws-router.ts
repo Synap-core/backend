@@ -11,6 +11,7 @@ import type { Duplex } from "node:stream";
 import { handleSshUpgrade } from "./ssh-proxy.js";
 import { handleRecipeRunUpgrade } from "./recipe-runner.js";
 import { handleLocalTerminalUpgrade } from "./local-terminal.js";
+import { handleClaudeCodeUpgrade } from "./claude-code.js";
 
 export function handleWebSocketUpgrade(
   req: IncomingMessage,
@@ -25,6 +26,8 @@ export function handleWebSocketUpgrade(
     handleRecipeRunUpgrade(req, socket, head);
   } else if (url.pathname === "/api/devplane/local-terminal") {
     handleLocalTerminalUpgrade(req, socket, head);
+  } else if (url.pathname === "/api/devplane/claude-code") {
+    handleClaudeCodeUpgrade(req, socket, head);
   } else {
     // Unknown upgrade target — destroy so it doesn't hang
     socket.destroy();

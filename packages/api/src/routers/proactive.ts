@@ -38,12 +38,20 @@ const healthCheckSchema = z.object({
   frequencyDays: z.number().int().min(1).max(90).optional(),
 });
 
+const triggersSchema = z.object({
+  captureCluster: z.boolean().optional(),
+  taskCompleted: z.boolean().optional(),
+  questionCreated: z.boolean().optional(),
+  decisionCreated: z.boolean().optional(),
+});
+
 const updateProactivePrefsSchema = z.object({
   enabled: z.boolean().optional(),
   morningBriefing: morningBriefingSchema.optional(),
   weeklyDigest: weeklyDigestSchema.optional(),
   healthCheck: healthCheckSchema.optional(),
   nudgeDensity: z.enum(["minimal", "balanced", "proactive"]).optional(),
+  triggers: triggersSchema.optional(),
   mutedUntil: z.string().datetime({ offset: true }).nullable().optional(),
 });
 
@@ -98,6 +106,10 @@ export const proactiveRouter = router({
           ...input.healthCheck,
         },
         nudgeDensity: input.nudgeDensity ?? current.nudgeDensity,
+        triggers: {
+          ...current.triggers,
+          ...input.triggers,
+        },
         // null explicitly clears mutedUntil; undefined keeps current value
         mutedUntil:
           input.mutedUntil === null

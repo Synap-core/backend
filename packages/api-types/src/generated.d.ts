@@ -10881,6 +10881,48 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 	}>>;
+	cells: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		install: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				packageSlug: string;
+				cellKey: string;
+				workspaceId?: string | undefined;
+			};
+			output: {
+				success: boolean;
+				typeKey: string;
+			};
+			meta: object;
+		}>;
+		uninstall: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				typeKey: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
+		listInstalled: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				typeKey: string;
+				name: string;
+				deps: Record<string, string>;
+				rendererSource: string;
+			}[];
+			meta: object;
+		}>;
+	}>>;
 	channelGateway: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;

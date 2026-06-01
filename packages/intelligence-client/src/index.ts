@@ -31,3 +31,7 @@ export type {
   ServiceResolutionContext,
   ResolvedService,
 } from "./intelligence-routing.js";
+
+export { resolveAgentForTask } from "./agent-routing.js";
+
+export type { AgentResolutionContext, ResolvedAgent } from "./agent-routing.js";

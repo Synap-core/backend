@@ -153,6 +153,11 @@ CREATE INDEX IF NOT EXISTS "idx_events_user_type"
 CREATE INDEX IF NOT EXISTS "idx_events_timestamp"
   ON "events" ("timestamp");
 
+-- Reactions projection: correlation-id fan-out lookup (migration 0033).
+CREATE INDEX IF NOT EXISTS "idx_events_correlation_id"
+  ON "events" ("correlation_id")
+  WHERE "correlation_id" IS NOT NULL;
+
 -- ─── 4. profiles + profile_workspace_access ──────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS "profiles" (
@@ -998,6 +1003,27 @@ CREATE INDEX IF NOT EXISTS "channel_context_workspace_idx"
 CREATE INDEX IF NOT EXISTS "channel_context_conflict_idx"
   ON "channel_context_items" ("conflict_status");
 
+-- ─── 20b. channel_members (0036) ─────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS "channel_members" (
+  "id"          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "channel_id"  uuid NOT NULL REFERENCES "channels"("id") ON DELETE CASCADE,
+  "member_id"   text NOT NULL,
+  "member_kind" text NOT NULL,
+  "role"        text NOT NULL DEFAULT 'member',
+  "added_by"    text,
+  "created_at"  timestamp with time zone NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS "channel_members_channel_id_idx"
+  ON "channel_members" ("channel_id");
+
+CREATE INDEX IF NOT EXISTS "channel_members_member_id_idx"
+  ON "channel_members" ("member_id");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "channel_members_channel_member_unique"
+  ON "channel_members" ("channel_id", "member_id");
+
 -- ─── 21. sessions ────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS "sessions" (
@@ -1416,6 +1442,8 @@ ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "thread_id" uuid REFERENCES "ch
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "command_run_id" uuid REFERENCES "command_runs"("id") ON DELETE SET NULL;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "source_message_id" uuid REFERENCES "messages"("id") ON DELETE SET NULL;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "agent_user_id" text REFERENCES "users"("id") ON DELETE SET NULL;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "correlation_id" uuid;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "requested_event_id" uuid;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_by" text;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_at" timestamp with time zone;
@@ -1447,6 +1475,9 @@ CREATE INDEX IF NOT EXISTS "idx_proposals_thread_status"
 
 CREATE INDEX IF NOT EXISTS "idx_proposals_agent_user_id"
   ON "proposals" ("agent_user_id");
+
+CREATE INDEX IF NOT EXISTS "proposals_correlation_id_idx"
+  ON "proposals" ("correlation_id");
 
 -- ─── 29. knowledge_facts ─────────────────────────────────────────────────────
 
@@ -2416,6 +2447,8 @@ ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "is_active" boolean DE
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "version" text DEFAULT '1.0.0';
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "deps" jsonb DEFAULT '{}';
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "trust_level" text NOT NULL DEFAULT 'generated';
 
 CREATE UNIQUE INDEX IF NOT EXISTS "widget_def_type_key_workspace_uniq"
   ON "widget_definitions" ("type_key", "workspace_id");
@@ -2818,6 +2851,10 @@ ALTER TABLE "webhook_deliveries" ADD COLUMN IF NOT EXISTS "attempt" integer DEFA
 ALTER TABLE "webhook_deliveries" ADD COLUMN IF NOT EXISTS "delivered_at" timestamp with time zone;
 ALTER TABLE "webhook_deliveries" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
+-- Reactions projection: webhook delivery fan-out lookup by event_id (migration 0033).
+CREATE INDEX IF NOT EXISTS "webhook_deliveries_event_id_idx"
+  ON "webhook_deliveries" ("event_id");
+
 -- ─── Additional performance indexes (migration 0055) ─────────────────────────
 
 CREATE INDEX IF NOT EXISTS "relations_source_workspace_idx"
@@ -3053,5 +3090,6 @@ INSERT INTO "_migrations" ("filename") VALUES
   ('0066_channel_system_v2.sql'),
   ('0099_schema_reconciliation.sql'),
   ('0101_sync_generation_split_brain.sql'),
-  ('0102_feed_channels_index.sql')
+  ('0102_feed_channels_index.sql'),
+  ('0036_channel_members.sql')
 ON CONFLICT ("filename") DO NOTHING;

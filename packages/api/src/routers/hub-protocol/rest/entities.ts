@@ -523,6 +523,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         title: body.title,
         description: body.description,
         properties: body.properties,
+        ...(body.reasoning ? { reasoning: body.reasoning } : {}),
         ...(body.source ? { source: body.source } : {}),
       });
       // Echo back the resolved workspace context so external callers can
@@ -603,6 +604,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         title: body.title,
         preview: body.preview,
         metadata: body.metadata,
+        ...(body.reasoning ? { reasoning: body.reasoning } : {}),
       });
       return c.json(result, 200);
     } catch (err) {

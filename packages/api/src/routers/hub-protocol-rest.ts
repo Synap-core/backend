@@ -60,9 +60,12 @@ import {
   registerVaultRoutes,
   registerViewsRoutes,
   registerWidgetDefinitionsRoutes,
+  registerCellsRoutes,
   registerWorkspacesRoutes,
   registerMessagingRoutes,
+  registerConnectorsRoutes,
   registerWebhooksRoutes,
+  registerSubscriptionsRoutes,
   registerManifestRoutes,
 } from "./hub-protocol/rest/index.js";
 
@@ -388,6 +391,7 @@ registerRelationsRoutes(app); // /relations*
 registerRelationDefsRoutes(app); // /relation-defs*
 registerSessionsRoutes(app); // /sessions*, /compacted-states*
 registerWidgetDefinitionsRoutes(app); // /widget-definitions
+registerCellsRoutes(app); // /cells, /cells/install, /cells/:typeKey
 registerMcpServersRoutes(app); // /mcp-servers
 registerAutomationsRoutes(app); // /automations*
 registerBackgroundTasksRoutes(app); // /background-tasks*
@@ -400,7 +404,9 @@ registerEntityShareRoutes(app); // /entity-share/deliver (CP JWT auth)
 registerSetupRoutes(app); // /setup/agent (provisioning auth)
 registerAgentsRoutes(app); // /agents/sync
 registerMessagingRoutes(app); // /messaging/*
+registerConnectorsRoutes(app); // /connectors/*
 registerWebhooksRoutes(app); // /webhooks
+registerSubscriptionsRoutes(app); // /subscriptions*, /webhooks/:id/deliveries
 registerManifestRoutes(app); // /manifest
 
 // ── OpenAPI stubs for routes not yet annotated inline ──────────────────────

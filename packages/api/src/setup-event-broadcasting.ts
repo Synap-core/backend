@@ -86,14 +86,45 @@ export function setupEventBroadcasting(): void {
   // sync-push worker (scheduled every minute) catches missed batches.
   // See: utils/sync-realtime-hook.ts
 
+  // Hook 5: Proactive intelligence (Feature C, Phase 2). On entity create/update
+  // .validated events ONLY, enqueue a cheap `proactive.evaluate` job. The worker
+  // (packages/jobs/.../proactive-intelligence.ts) loads the entity, applies the
+  // loop guard, checks workspace settings, maps to a trigger, and debounces a
+  // scan. We deliberately do NOT load entities or settings here — the hook stays
+  // minimal + fire-and-forget like the materialization hook.
+  const proactiveIntelligenceHook: EventHook = async (event) => {
+    if (
+      event.eventType === "entity.create.validated" ||
+      event.eventType === "entity.update.validated"
+    ) {
+      try {
+        // "entity.create.validated" → action = "create"
+        const action = event.eventType.split(".")[1];
+        await getBoss().send("proactive.evaluate", {
+          entityId: event.subjectId,
+          eventType: event.eventType,
+          action,
+          userId: event.userId,
+          correlationId: event.correlationId,
+        });
+      } catch (error) {
+        logger.warn(
+          { err: error, eventType: event.eventType },
+          "Failed to enqueue proactive.evaluate (non-fatal)"
+        );
+      }
+    }
+  };
+
   // Register all hooks
   eventRepository.addEventHook(broadcastHook);
   eventRepository.addEventHook(domainBridgeHook);
   eventRepository.addEventHook(materializationHook);
   eventRepository.addEventHook(syncRealtimeHook);
+  eventRepository.addEventHook(proactiveIntelligenceHook);
 
   logger.info(
-    "Event broadcasting + domain bridge + materialization + sync real-time hooks registered"
+    "Event broadcasting + domain bridge + materialization + sync real-time + proactive intelligence hooks registered"
   );
   isSetup = true;
 }

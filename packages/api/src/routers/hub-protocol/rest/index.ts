@@ -29,6 +29,7 @@ export { registerRelationsRoutes } from "./relations.js";
 export { registerRelationDefsRoutes } from "./relation-defs.js";
 export { registerSessionsRoutes } from "./sessions.js";
 export { registerWidgetDefinitionsRoutes } from "./widget-definitions.js";
+export { registerCellsRoutes } from "./cells.js";
 export { registerMcpServersRoutes } from "./mcp-servers.js";
 export { registerAutomationsRoutes } from "./automations.js";
 export { registerBackgroundTasksRoutes } from "./background-tasks.js";
@@ -41,7 +42,9 @@ export { registerEntityShareRoutes } from "./entity-share.js";
 export { registerSetupRoutes } from "./setup.js";
 export { registerAgentsRoutes } from "./agents.js";
 export { registerMessagingRoutes } from "./messaging.js";
+export { registerConnectorsRoutes } from "./connectors.js";
 export { registerWebhooksRoutes } from "./webhooks.js";
+export { registerSubscriptionsRoutes } from "./subscriptions.js";
 export { registerManifestRoutes } from "./manifest.js";
 
 export type { HubHono } from "./_shared.js";

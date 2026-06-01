@@ -51,6 +51,7 @@ import {
   NOTIFICATION_CLEANUP_QUEUE,
 } from "./notification-cleanup.js";
 import { handleFeedScheduler } from "./feed-scheduler.js";
+import { handleProactiveScheduler } from "./proactive-scheduler.js";
 import { handleFeedProactiveExecute } from "./feed-proactive-executor.js";
 import {
   handleFeedSourceExecute,
@@ -81,6 +82,12 @@ import {
   handleHermesTrigger,
   HERMES_TRIGGER_QUEUE,
 } from "./hermes-trigger-worker.js";
+import {
+  handleProactiveEvaluate,
+  handleProactiveScan,
+  PROACTIVE_EVALUATE_QUEUE,
+  PROACTIVE_SCAN_QUEUE,
+} from "./proactive-intelligence.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -117,6 +124,7 @@ const ALL_QUEUES = [
   "automation-pattern-detect",
   NOTIFICATION_CLEANUP_QUEUE,
   "feed-scheduler",
+  "proactive-scheduler",
   "feed-proactive-execute",
   FEED_SOURCE_EXECUTE_QUEUE,
   FEED_SOURCE_ITEMS_QUEUE,
@@ -128,6 +136,8 @@ const ALL_QUEUES = [
   "hydration-summary-post",
   HERMES_TRIGGER_QUEUE,
   CRM_DAILY_DIGEST_QUEUE,
+  PROACTIVE_EVALUATE_QUEUE,
+  PROACTIVE_SCAN_QUEUE,
 ];
 
 /**
@@ -303,6 +313,13 @@ export async function registerAllWorkers(): Promise<void> {
   await boss.work("feed-scheduler", async () => handleFeedScheduler());
   logger.info("Registered worker: feed-scheduler");
 
+  // Proactive scheduler (cron: every minute — enqueues due morning-briefing /
+  // weekly-digest proactive feeds onto feed-proactive-execute).
+  await boss.work("proactive-scheduler", async () =>
+    handleProactiveScheduler()
+  );
+  logger.info("Registered worker: proactive-scheduler");
+
   // Feed proactive executor (on-demand — executes proactive digest generation).
   // Scheduled by the proactive intelligence cron layer (morning briefing,
   // weekly digest), not by feed-scheduler.
@@ -365,6 +382,17 @@ export async function registerAllWorkers(): Promise<void> {
     handleCrmDailyDigest(job)
   );
   logger.info("Registered worker: crm-daily-digest");
+
+  // Proactive intelligence (Feature C — event-driven proactive AI).
+  // proactive.evaluate: cheap per-event gate (loop guard + settings + trigger map).
+  // proactive.scan: debounced cluster assembly → intelligence-service brain.
+  await boss.work(PROACTIVE_EVALUATE_QUEUE, async ([job]: any[]) =>
+    handleProactiveEvaluate(job)
+  );
+  await boss.work(PROACTIVE_SCAN_QUEUE, async ([job]: any[]) =>
+    handleProactiveScan(job)
+  );
+  logger.info("Registered workers: proactive.evaluate, proactive.scan");
 
   logger.info("All workers registered");
 }

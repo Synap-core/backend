@@ -48,6 +48,7 @@ export const ChannelType = {
   FEED: "feed",
   EXTERNAL: "external",
   AGENT_COLLAB: "agent_collab",
+  GROUP: "group", // multi-human + multi-AI channel (humans writable, AI on @mention)
 } as const;
 export type ChannelType = (typeof ChannelType)[keyof typeof ChannelType];
 
@@ -138,6 +139,7 @@ export const channels = pgTable(
         ChannelType.FEED,
         ChannelType.EXTERNAL,
         ChannelType.AGENT_COLLAB,
+        ChannelType.GROUP,
       ],
     })
       .notNull()
@@ -291,6 +293,69 @@ export type NewChannel = Partial<
 > & {
   userId: string;
 };
+
+/**
+ * Channel Member Kind — distinguishes a human user from an AI agent-user.
+ */
+export const ChannelMemberKind = {
+  HUMAN: "human",
+  AI_AGENT: "ai_agent",
+} as const;
+export type ChannelMemberKind =
+  (typeof ChannelMemberKind)[keyof typeof ChannelMemberKind];
+
+/**
+ * Channel Member Role — owner (the creator) or a regular member.
+ */
+export const ChannelMemberRole = {
+  OWNER: "owner",
+  MEMBER: "member",
+} as const;
+export type ChannelMemberRole =
+  (typeof ChannelMemberRole)[keyof typeof ChannelMemberRole];
+
+/**
+ * Channel Members — source of truth for GROUP channel membership.
+ *
+ * Replaces the legacy `metadata.participants` array. Each row links a channel
+ * to a human user or an AI agent-user, with a role. Visibility queries join
+ * against this table so group channels are visible to all their members, not
+ * just the creator.
+ */
+export const channelMembers = pgTable(
+  "channel_members",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    channelId: uuid("channel_id")
+      .notNull()
+      .references(() => channels.id, { onDelete: "cascade" }),
+    /** A user id OR an agent-user id (both live in the `users` table). */
+    memberId: text("member_id").notNull(),
+    memberKind: text("member_kind", {
+      enum: [ChannelMemberKind.HUMAN, ChannelMemberKind.AI_AGENT],
+    }).notNull(),
+    role: text("role", {
+      enum: [ChannelMemberRole.OWNER, ChannelMemberRole.MEMBER],
+    })
+      .notNull()
+      .default(ChannelMemberRole.MEMBER),
+    /** The user id that added this member (the group creator). */
+    addedBy: text("added_by"),
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    channelIdIdx: index("channel_members_channel_id_idx").on(table.channelId),
+    memberIdIdx: index("channel_members_member_id_idx").on(table.memberId),
+    channelMemberUnique: uniqueIndex(
+      "channel_members_channel_member_unique"
+    ).on(table.channelId, table.memberId),
+  })
+);
+
+export type ChannelMember = typeof channelMembers.$inferSelect;
+export type NewChannelMember = typeof channelMembers.$inferInsert;
 
 /**
  * @internal For monorepo usage - enables schema composition in API layer

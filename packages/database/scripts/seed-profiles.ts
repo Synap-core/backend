@@ -393,6 +393,41 @@ async function seedProfiles() {
           suffix: "px",
         },
       },
+      // North Star properties (workspace anchor goal)
+      {
+        slug: "statement",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 2000 },
+        uiHints: {
+          label: "Statement",
+          inputType: "textarea",
+          placeholder: "The one outcome everything should advance toward...",
+        },
+      },
+      {
+        slug: "timeHorizon",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 100 },
+        uiHints: {
+          label: "Time Horizon",
+          inputType: "text",
+          placeholder: "e.g., Q3 2026, 12 months",
+        },
+      },
+      {
+        slug: "successCriteria",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: { label: "Success Criteria", inputType: "tags" },
+      },
+      {
+        slug: "northStarStatus",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: ["active", "achieved", "paused", "abandoned"],
+        },
+        uiHints: { label: "Status", inputType: "select" },
+      },
     ];
 
     const createdPropertyDefs = new Map<string, string>();
@@ -498,6 +533,16 @@ async function seedProfiles() {
           icon: "pin",
           color: "#10B981",
           description: "Pinned conversation moment",
+        },
+      },
+      // North Star — the workspace's anchoring goal (top-down AI focus)
+      {
+        slug: "north_star",
+        displayName: "North Star",
+        uiHints: {
+          icon: "compass",
+          color: "#10B981",
+          description: "The workspace's anchoring goal",
         },
       },
     ];
@@ -989,6 +1034,42 @@ async function seedProfiles() {
             displayOrder: prop.displayOrder,
           });
           console.log(`  ✓ Linked '${prop.slug}' to 'anchor'`);
+        }
+      }
+    }
+
+    // North Star profile properties
+    const northStarProfileId = createdProfiles.get("north_star");
+    if (northStarProfileId) {
+      const northStarProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+        defaultValue?: any;
+      }> = [
+        { slug: "title", required: true, displayOrder: 0 },
+        { slug: "statement", required: true, displayOrder: 1 },
+        { slug: "timeHorizon", required: false, displayOrder: 2 },
+        { slug: "successCriteria", required: false, displayOrder: 3 },
+        {
+          slug: "northStarStatus",
+          required: false,
+          displayOrder: 4,
+          defaultValue: "active",
+        },
+      ];
+
+      for (const prop of northStarProperties) {
+        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        if (propertyDefId) {
+          await profilePropertyRepo.link({
+            profileId: northStarProfileId,
+            propertyDefId,
+            required: prop.required,
+            defaultValue: prop.defaultValue,
+            displayOrder: prop.displayOrder,
+          });
+          console.log(`  ✓ Linked '${prop.slug}' to 'north_star'`);
         }
       }
     }

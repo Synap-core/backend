@@ -10,7 +10,7 @@
  *   const server = serve({ fetch: app.fetch, port, hostname })
  *   server.on("upgrade", handleSshUpgrade)
  *
- * WebSocket URL: ws://host/api/devplane/ssh?envId=<entityId>&token=<kratosSessionToken>
+ * WebSocket URL: ws://host/api/devplane/ssh?envId=<entityId>&ticket=<wsTicket>
  *
  * Messages FROM browser:
  *   - Binary frames         → forwarded as-is to the SSH stream (terminal input)
@@ -30,7 +30,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { db, eq, and } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import { parseVaultReference, resolveVaultSecret } from "@synap/api";
-import { getKratosSession, getKratosSessionByToken } from "@synap/auth";
+import { resolveUserId } from "./ws-auth.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "ssh-proxy" });
@@ -53,32 +53,6 @@ interface SshSessionConfig {
   port: number;
   username: string;
   privateKey: string;
-}
-
-// ─── Auth helper ──────────────────────────────────────────────────────────────
-
-/**
- * Extract userId from the HTTP upgrade request.
- *
- * WebSocket upgrade requests carry the session cookie in the `Cookie` header
- * or an explicit `?token=<kratosSessionToken>` query-param (preferred for
- * Electron/desktop clients where cookies may not transfer automatically).
- */
-async function resolveUserId(req: IncomingMessage): Promise<string | null> {
-  const url = new URL(req.url ?? "", "http://localhost");
-  const tokenParam = url.searchParams.get("token");
-  const cookieHeader = req.headers["cookie"] ?? "";
-
-  // X-Session-Token header (some clients set it even on upgrade)
-  const headerToken = (req.headers["x-session-token"] as string) ?? "";
-
-  const session = tokenParam
-    ? await getKratosSessionByToken(tokenParam)
-    : headerToken
-      ? await getKratosSessionByToken(headerToken)
-      : await getKratosSession(cookieHeader);
-
-  return session?.identity?.id ?? null;
 }
 
 // ─── Credential resolver ──────────────────────────────────────────────────────

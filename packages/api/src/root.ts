@@ -40,6 +40,7 @@ import { agentUsersRouter } from "./routers/agent-users.js";
 import { mcpServersRouter } from "./routers/mcp-servers.js";
 import { agentConfigsRouter } from "./routers/agent-configs.js";
 import { widgetDefinitionsRouter } from "./routers/widget-definitions.js";
+import { cellsRouter } from "./routers/cells.js";
 import { channelGatewayRouter } from "./routers/channel-gateway.js";
 import { importRouter } from "./routers/import.js";
 import { connectorsRouter } from "./routers/connectors-trpc.js";
@@ -53,6 +54,8 @@ import { feedsRouter } from "./routers/feeds.js";
 import { agentsRouter } from "./routers/agents.js";
 import { devplaneRouter } from "./routers/devplane.js";
 import { auditRouter } from "./routers/audit.js";
+import { secretsVaultRouter } from "./routers/secrets-vault.js";
+import { subscriptionsRouter } from "./routers/subscriptions.js";
 
 /**
  * Core API Router
@@ -101,6 +104,7 @@ export const coreRouter = router({
   agentConfigs: agentConfigsRouter,
   agents: agentsRouter,
   widgetDefinitions: widgetDefinitionsRouter,
+  cells: cellsRouter,
   channelGateway: channelGatewayRouter,
   import: importRouter,
   connectors: connectorsRouter,
@@ -113,6 +117,8 @@ export const coreRouter = router({
   feeds: feedsRouter,
   devplane: devplaneRouter,
   audit: auditRouter,
+  secretsVault: secretsVaultRouter,
+  subscriptions: subscriptionsRouter,
 });
 
 export type AppRouter = typeof coreRouter;

@@ -143,8 +143,10 @@ async function runTests() {
 
     // Test 8: Get correlated events
     console.log("\nTest 8: Get correlated events (workflow tracking)");
-    const correlatedEvents =
-      await eventRepository.getCorrelatedEvents(correlationId);
+    const correlatedEvents = await eventRepository.getCorrelatedEvents(
+      correlationId,
+      testUserId
+    );
     console.log(`✅ Found ${correlatedEvents.length} correlated events`);
 
     // Test 9: Count events

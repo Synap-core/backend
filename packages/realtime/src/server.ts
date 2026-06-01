@@ -20,8 +20,52 @@ import { workspaceMembers } from "@synap/database/schema";
 
 const PORT = parseInt(process.env.REALTIME_PORT || "4001", 10);
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
-// CORS origin - allow frontend URL or use wildcard for same-domain setups (Caddy reverse proxy)
-const _CORS_ORIGIN = process.env.CORS_ORIGIN || FRONTEND_URL;
+
+/**
+ * First-party origin policy — mirrors apps/api/src/cors-origin.ts. This is a
+ * separate process/package so the small check is duplicated by design.
+ * The Socket.IO handshake is cookie-authed, so reflecting every origin is a
+ * CSWSH surface; derive from SYNAP_BASE_DOMAIN + the explicit allowlist instead.
+ */
+function isAllowedRealtimeOrigin(origin?: string): boolean {
+  if (!origin) return true; // native/same-origin — CORS does not apply
+  let u: URL;
+  try {
+    u = new URL(origin);
+  } catch {
+    return false; // malformed or the literal "null"
+  }
+  const host = u.hostname.toLowerCase();
+  const base = process.env.SYNAP_BASE_DOMAIN?.trim()
+    .replace(/^\.+/, "")
+    .toLowerCase();
+  // Derived subdomain trust requires https + the default port (dev allows http) —
+  // matches apps/api/src/cors-origin.ts.
+  const schemeOk =
+    u.protocol === "https:" || process.env.NODE_ENV !== "production";
+  if (
+    base &&
+    schemeOk &&
+    u.port === "" &&
+    (host === base || host.endsWith(`.${base}`))
+  ) {
+    return true;
+  }
+  // Explicit allowlist. FRONTEND_URL is included only when actually set — never
+  // its localhost default — so production can't silently trust localhost.
+  const explicit = [
+    ...(process.env.ALLOWED_ORIGINS ?? "").split(",").map((s) => s.trim()),
+    process.env.PUBLIC_URL ?? "",
+    ...(process.env.FRONTEND_URL ? [FRONTEND_URL] : []),
+  ].filter(Boolean);
+  return explicit.some((o) => {
+    try {
+      return new URL(o).origin === u.origin;
+    } catch {
+      return false;
+    }
+  });
+}
 
 // Create HTTP server
 const httpServer = createServer();
@@ -29,9 +73,7 @@ const httpServer = createServer();
 // Create Socket.IO server
 const io = new SocketIOServer(httpServer, {
   cors: {
-    // Allow all origins when behind reverse proxy (Caddy handles auth)
-    // In production, Caddy is the security boundary
-    origin: true, // Always allow all origins (Caddy is security boundary)
+    origin: (origin, cb) => cb(null, isAllowedRealtimeOrigin(origin)),
     credentials: true,
     methods: ["GET", "POST", "OPTIONS"], // Include OPTIONS for preflight
   },

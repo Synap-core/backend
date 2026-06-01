@@ -9,6 +9,7 @@ import { z } from "zod";
 import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, inArray } from "@synap/database";
+import { userVisibleWhere } from "../utils/user-visible-where.js";
 import {
   users,
   workspaceMembers,
@@ -195,7 +196,23 @@ export const agentUsersRouter = router({
    */
   list: protectedProcedure
     .input(z.object({ workspaceId: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      // Gate on workspace membership — otherwise any authenticated user could
+      // enumerate the agents of any workspace by guessing its id.
+      const perm = await verifyPermission({
+        db,
+        userId: ctx.userId,
+        workspace: { id: input.workspaceId },
+        requiredPermission: "read",
+      });
+      if (!perm.allowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            perm.reason ?? "You must be a workspace member to view its agents",
+        });
+      }
+
       const results = await db
         .select({
           id: users.id,
@@ -219,6 +236,36 @@ export const agentUsersRouter = router({
     }),
 
   /**
+   * List AI agent users across ALL workspaces the caller belongs to.
+   *
+   * Same output shape as `list` — consumers can swap variants freely.
+   * Returns every agent user that is a member of any workspace the caller
+   * is also a member of (pod-wide agents have no workspace membership row
+   * and are therefore not surfaced here by design — add to a workspace first).
+   */
+  listAll: protectedProcedure.query(async ({ ctx }) => {
+    const results = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        agentMetadata: users.agentMetadata,
+        role: workspaceMembers.role,
+        joinedAt: workspaceMembers.joinedAt,
+      })
+      .from(users)
+      .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
+      .where(
+        and(
+          eq(users.userType, "agent"),
+          userVisibleWhere(workspaceMembers.workspaceId, ctx.userId)
+        )
+      );
+
+    return results;
+  }),
+
+  /**
    * Update an AI agent user
    */
   update: protectedProcedure
@@ -230,6 +277,7 @@ export const agentUsersRouter = router({
         role: z.enum(["admin", "editor", "viewer"]).optional(),
         description: z.string().optional(),
         capabilities: z.array(z.string()).optional(),
+        writesRequireProposal: z.boolean().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -296,7 +344,11 @@ export const agentUsersRouter = router({
       // Update user record
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (input.name) updates.name = input.name;
-      if (input.description !== undefined || input.capabilities !== undefined) {
+      if (
+        input.description !== undefined ||
+        input.capabilities !== undefined ||
+        input.writesRequireProposal !== undefined
+      ) {
         const existing = (agent.agentMetadata || {}) as Record<string, unknown>;
         updates.agentMetadata = {
           ...existing,
@@ -305,6 +357,9 @@ export const agentUsersRouter = router({
             : {}),
           ...(input.capabilities !== undefined
             ? { capabilities: input.capabilities }
+            : {}),
+          ...(input.writesRequireProposal !== undefined
+            ? { writesRequireProposal: input.writesRequireProposal }
             : {}),
         };
       }
@@ -334,7 +389,11 @@ export const agentUsersRouter = router({
         subjectId: input.agentUserId,
         userId: ctx.userId,
         workspaceId: input.workspaceId,
-        data: { name: input.name, role: input.role },
+        data: {
+          name: input.name,
+          role: input.role,
+          writesRequireProposal: input.writesRequireProposal,
+        },
       });
 
       return { status: "updated" as const };

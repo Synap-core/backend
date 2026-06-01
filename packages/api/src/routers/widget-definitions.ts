@@ -41,10 +41,14 @@ const WidgetUpsertSchema = z.object({
   description: z.string().max(500).optional(),
   icon: z.string().max(64).optional(),
   category: z.string().max(64).optional(),
-  rendererType: z.enum(["builtin", "iframe", "native"]).default("iframe"),
+  rendererType: z
+    .enum(["builtin", "iframe", "native", "frame"])
+    .default("iframe"),
   rendererSource: z.string().optional(),
   /** Original JSX/TSX source for native widgets (compiled server-side) */
   source: z.string().optional(),
+  /** npm package version pins for frame widgets, e.g. { 'recharts': '2.12.0' } */
+  deps: z.record(z.string(), z.string()).optional(),
   configSchema: z.record(z.string(), z.unknown()).default({}),
   defaultConfig: z.record(z.string(), z.unknown()).optional(),
   defaultSize: z
@@ -128,7 +132,16 @@ export const widgetDefinitionsRouter = router({
         });
       }
 
-      // Compile native widget source to IIFE bundle
+      if (input.rendererType === "frame" && !input.rendererSource) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "rendererSource (raw ESM code) is required for frame widgets",
+        });
+      }
+
+      // Compile native widget source to IIFE bundle.
+      // Frame widgets store rendererSource as-is (raw ESM) — no compile step.
       let bundleSource: string | undefined;
       if (input.rendererType === "native" && input.source) {
         try {
@@ -155,6 +168,7 @@ export const widgetDefinitionsRouter = router({
           rendererSource: input.rendererSource,
           source: input.source,
           bundleSource,
+          deps: input.deps ?? {},
           configSchema: input.configSchema,
           defaultConfig: input.defaultConfig ?? {},
           defaultSize: input.defaultSize ?? { w: 6, h: 4 },
@@ -172,6 +186,7 @@ export const widgetDefinitionsRouter = router({
             rendererSource: input.rendererSource ?? null,
             source: input.source ?? null,
             bundleSource: bundleSource ?? null,
+            deps: input.deps ?? {},
             configSchema: input.configSchema,
             defaultConfig: input.defaultConfig ?? {},
             ...(input.defaultSize && { defaultSize: input.defaultSize }),

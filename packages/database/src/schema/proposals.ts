@@ -79,6 +79,13 @@ export const proposals = pgTable(
       onDelete: "set null",
     }),
 
+    // Event-sourcing linkage: ties this proposal back to the `.requested`
+    // event on the spine. correlationId groups the whole request chain;
+    // requestedEventId points at the concrete originating event row.
+    // Both nullable — pre-existing proposals have no linkage.
+    correlationId: uuid("correlation_id"),
+    requestedEventId: uuid("requested_event_id"),
+
     // Expiry: proposals older than this are treated as expired
     expiresAt: timestamp("expires_at", { withTimezone: true }),
 
@@ -125,6 +132,9 @@ export const proposals = pgTable(
       table.status
     ),
     agentUserIdIdx: index("idx_proposals_agent_user_id").on(table.agentUserId),
+    correlationIdIdx: index("proposals_correlation_id_idx").on(
+      table.correlationId
+    ),
   })
 );
 
@@ -142,6 +152,8 @@ export interface Proposal {
   commandRunId: string | null;
   sourceMessageId: string | null;
   agentUserId: string | null;
+  correlationId: string | null;
+  requestedEventId: string | null;
   expiresAt: Date | null;
   reviewedBy: string | null;
   reviewedAt: Date | null;

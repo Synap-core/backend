@@ -122,6 +122,13 @@ export const DEFAULT_RELATION_DEFS: DefaultRelationDef[] = [
     isDirectional: true,
     uiHints: { category: "workflow", inverseLabel: "Has Deal" },
   },
+  {
+    slug: "advances",
+    displayName: "Advances",
+    description: "Work item advances the workspace North Star goal",
+    isDirectional: true,
+    uiHints: { category: "workflow", inverseLabel: "Advanced by" },
+  },
   // Relay: relationship graph relation types
   {
     slug: "met_at",

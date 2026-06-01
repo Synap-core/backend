@@ -255,6 +255,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "thread_id",
     addedBy: "0037_proposals_thread_linkage.sql (custom)",
   },
+  {
+    table: "proposals",
+    column: "correlation_id",
+    addedBy: "0035_proposal_correlation.sql",
+  },
 
   // users
   {
@@ -278,6 +283,16 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "widget_definitions",
     column: "bundle_source",
     addedBy: "0056_widget_native_columns.sql",
+  },
+  {
+    table: "widget_definitions",
+    column: "deps",
+    addedBy: "0030_widget_frame_renderer.sql",
+  },
+  {
+    table: "widget_definitions",
+    column: "trust_level",
+    addedBy: "0034_widget_trust_level.sql",
   },
 
   // channel_context_items

@@ -451,4 +451,55 @@ export const webhooksRouter = router({
         limit: input.limit,
       });
     }),
+
+  /**
+   * List recent deliveries for a subscription owned by the current user.
+   *
+   * Powers the Reactions Health tab + Replay. Verifies the subscription
+   * belongs to the caller, then returns the delivery log mapped to the
+   * `WebhookDeliveryItem` shape (id, status, responseStatus, attempt,
+   * deliveredAt, createdAt).
+   */
+  deliveries: protectedProcedure
+    .input(
+      z.object({
+        subscriptionId: z.string().uuid(),
+        limit: z.number().int().min(1).max(100).default(50),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = ctx.userId;
+
+      const subscription = await db.query.webhookSubscriptions.findFirst({
+        where: and(
+          eq(webhookSubscriptions.id, input.subscriptionId),
+          eq(webhookSubscriptions.userId, userId)
+        ),
+        columns: { id: true },
+      });
+      if (!subscription) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Webhook subscription not found",
+        });
+      }
+
+      const rows = await db.query.webhookDeliveries.findMany({
+        where: eq(webhookDeliveries.subscriptionId, input.subscriptionId),
+        orderBy: (d, { desc }) => [desc(d.createdAt)],
+        limit: input.limit,
+      });
+
+      return rows.map((d) => ({
+        id: d.id,
+        status: d.status as "success" | "failed" | "pending",
+        responseStatus:
+          d.responseStatus != null ? String(d.responseStatus) : undefined,
+        attempt: d.attempt,
+        deliveredAt: d.deliveredAt ? d.deliveredAt.toISOString() : undefined,
+        // createdAt is always set; the UI falls back to it (deliveredAt ??
+        // createdAt) so pending/failed rows still show a time.
+        createdAt: d.createdAt ? d.createdAt.toISOString() : undefined,
+      }));
+    }),
 });

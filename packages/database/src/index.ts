@@ -185,6 +185,8 @@ export {
   lt,
   lte,
   ne,
+  // Subquery operators
+  exists,
   // Array operators
   inArray,
   notInArray,

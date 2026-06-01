@@ -8,7 +8,7 @@
  * SECURITY: Enabled per-workspace via `workspace.settings.devplane.localTerminalEnabled`.
  * Only safe when the pod is running on a trusted local machine. Never expose on a cloud pod.
  *
- * WebSocket URL: ws://host/api/devplane/local-terminal?token=X&workspaceId=Y&cmd=Z
+ * WebSocket URL: ws://host/api/devplane/local-terminal?ticket=X&workspaceId=Y&cmd=Z
  *
  * Messages FROM browser:
  *   - Binary frames  → terminal input (written to PTY stdin as UTF-8)
@@ -27,9 +27,11 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
 import { db, eq, and } from "@synap/database";
 import { workspaces } from "@synap/database/schema";
-import { getKratosSession, getKratosSessionByToken } from "@synap/auth";
 import { createLogger } from "@synap-core/core";
 import { resolveVaultSecret } from "@synap/api";
+// Shared cookie-free WS resolver; re-exported for claude-code.ts.
+import { resolveUserId } from "./ws-auth.js";
+export { resolveUserId };
 
 const logger = createLogger({ module: "local-terminal" });
 
@@ -46,22 +48,7 @@ function sendJson(ws: WebSocket, payload: object): void {
   }
 }
 
-async function resolveUserId(req: IncomingMessage): Promise<string | null> {
-  const url = new URL(req.url ?? "", "http://localhost");
-  const tokenParam = url.searchParams.get("token");
-  const headerToken = (req.headers["x-session-token"] as string) ?? "";
-  const cookieHeader = req.headers["cookie"] ?? "";
-
-  const session = tokenParam
-    ? await getKratosSessionByToken(tokenParam)
-    : headerToken
-      ? await getKratosSessionByToken(headerToken)
-      : await getKratosSession(cookieHeader);
-
-  return session?.identity?.id ?? null;
-}
-
-async function isLocalTerminalEnabled(
+export async function isLocalTerminalEnabled(
   workspaceId: string,
   userId: string
 ): Promise<boolean> {
@@ -79,7 +66,33 @@ const PROVIDER_ENV_VARS: Record<string, string> = {
   openai: "OPENAI_API_KEY",
 };
 
-async function resolveProviderEnv(
+/**
+ * Resolve the working directory for a terminal session from workspace settings.
+ * Uses `devplane.workspacePath` when configured (the local monorepo root the
+ * user set in /providers), falling back to $HOME. Shared by local-terminal and
+ * the claude-code coding-adjunct so both spawn in the right project directory.
+ */
+export async function resolveWorkspaceCwd(
+  workspaceId: string
+): Promise<string> {
+  try {
+    const workspace = await db.query.workspaces.findFirst({
+      where: eq(workspaces.id, workspaceId),
+      columns: { settings: true },
+    });
+    const settings = (workspace?.settings ?? {}) as Record<string, unknown>;
+    const devplane = (settings["devplane"] ?? {}) as Record<string, unknown>;
+    const workspacePath = devplane["workspacePath"];
+    if (typeof workspacePath === "string" && workspacePath.trim().length > 0) {
+      return workspacePath;
+    }
+  } catch (err) {
+    logger.warn({ err, workspaceId }, "Failed to resolve workspace cwd");
+  }
+  return process.env["HOME"] ?? "/";
+}
+
+export async function resolveProviderEnv(
   workspaceId: string,
   userId: string
 ): Promise<Record<string, string>> {
@@ -159,6 +172,9 @@ export function handleLocalTerminalUpgrade(
     // Resolve AI provider env vars from workspace settings (vault-backed API keys)
     const providerEnv = await resolveProviderEnv(workspaceId, userId);
 
+    // Resolve the working directory (configured monorepo root, fallback $HOME)
+    const cwd = await resolveWorkspaceCwd(workspaceId);
+
     // Lazy-import node-pty so the module only loads when needed
     let ptyModule: typeof import("node-pty");
     try {
@@ -181,7 +197,7 @@ export function handleLocalTerminalUpgrade(
         name: "xterm-256color",
         cols: 220,
         rows: 50,
-        cwd: process.env["HOME"] ?? "/",
+        cwd,
         env: { ...process.env, ...providerEnv } as Record<string, string>,
       });
     } catch (err: any) {

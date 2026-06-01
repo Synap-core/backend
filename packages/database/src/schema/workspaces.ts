@@ -161,8 +161,30 @@ export interface ProactiveAiPreferences {
   };
   /** Controls how many proactive nudges the AI sends. Default: "balanced" */
   nudgeDensity: ProactiveNudgeDensity;
+  /**
+   * Event-driven proactive triggers (Feature C). Each toggle opts the workspace
+   * into reacting to a class of user action. Time-based features above
+   * (morningBriefing/weeklyDigest/healthCheck) are independent of these.
+   * All default OFF — proactive event reactions are opt-in.
+   */
+  triggers?: ProactiveAiTriggers;
   /** ISO 8601 timestamp — snooze all proactive AI until this time */
   mutedUntil?: string;
+}
+
+/**
+ * Per-event opt-in toggles for event-driven proactive AI (Feature C).
+ * Keyed by the validated event that fires the proactive scan.
+ */
+export interface ProactiveAiTriggers {
+  /** N captures sharing a topic → propose a Question to track them. */
+  captureCluster?: boolean;
+  /** Task moved to done → connect it back to its decision/research. */
+  taskCompleted?: boolean;
+  /** New Question created → suggest research from existing captures. */
+  questionCreated?: boolean;
+  /** New Decision created → auto-link the research that informed it. */
+  decisionCreated?: boolean;
 }
 
 /** Default proactive AI preferences for new workspaces */
@@ -186,6 +208,12 @@ export function getDefaultProactiveAiPreferences(): ProactiveAiPreferences {
       frequencyDays: 7,
     },
     nudgeDensity: "balanced",
+    triggers: {
+      captureCluster: false,
+      taskCompleted: false,
+      questionCreated: false,
+      decisionCreated: false,
+    },
   };
 }
 
@@ -219,6 +247,45 @@ export interface DeliveryPreferences {
   connector?: SignalDeliveryRule;
   /** IS agent-generated insights (via /proactive/post) */
   ai_insight?: SignalDeliveryRule;
+}
+
+/**
+ * Match criteria for an agent-routing rule. Every DEFINED field must equal the
+ * dispatch context (undefined = wildcard). A trailing "*" on a value is a prefix
+ * match (e.g. eventPattern "entity.update.*"). First matching rule wins.
+ */
+export interface AgentRoutingMatch {
+  /** Entity/task type (e.g. "task", "devplane_feature") */
+  taskType?: string;
+  /** Profile slug of the subject entity */
+  profileSlug?: string;
+  /** Typed event name/pattern (e.g. "entity.update.completed") */
+  eventPattern?: string;
+  /** Channel type, when dispatch originates from a channel */
+  channelType?: string;
+  /** State transition guards (e.g. agent_status from/to) */
+  fromState?: string;
+  toState?: string;
+}
+
+export interface AgentRoutingRule {
+  match: AgentRoutingMatch;
+  /** Stable agent slug (portable across pods) the matched work dispatches to */
+  agentSlug: string;
+}
+
+/**
+ * Workspace-level agent routing: "this kind of task/event → this registered agent".
+ * The canonical replacement for runtime-specific hardwiring (e.g. Hermes-only
+ * dispatch). Resolution: first matching rule → defaultAgentSlug → plain IS fallback.
+ * Resolved by resolveAgentForTask() in @synap/intelligence-client. Any workspace
+ * can use this for automation, not just DevPlane.
+ */
+export interface AgentRoutingPolicy {
+  /** Agent slug used when no rule matches */
+  defaultAgentSlug?: string;
+  /** Ordered rules; first match wins */
+  rules?: AgentRoutingRule[];
 }
 
 export interface WorkspaceSettings {
@@ -306,6 +373,13 @@ export interface WorkspaceSettings {
    * Kept separate from Synap internal intelligence service routing.
    */
   eveProviderRouting?: EveProviderRoutingPolicy;
+
+  /**
+   * Workspace-level agent routing: "this kind of task/event → this agent".
+   * Resolved by resolveAgentForTask() in @synap/intelligence-client. Decouples
+   * automation from any single runtime (Hermes becomes one registered target).
+   */
+  agentRouting?: AgentRoutingPolicy;
 
   // Validation Policy Overrides
   // Allows workspace owners to customize which operations require validation

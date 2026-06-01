@@ -5,7 +5,7 @@
  * per-step output back to the browser in real time.
  *
  * WebSocket URL:
- *   ws://host:4000/api/devplane/recipe-run?recipeId=<entityId>&envId=<entityId>&token=<kratosToken>
+ *   ws://host:4000/api/devplane/recipe-run?recipeId=<entityId>&envId=<entityId>&ticket=<wsTicket>
  *
  * Messages TO browser (JSON strings):
  *   { type: "connected" }                                          — handshake complete
@@ -26,7 +26,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { db, eq, and } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import { parseVaultReference, resolveVaultSecret } from "@synap/api";
-import { getKratosSession, getKratosSessionByToken } from "@synap/auth";
+import { resolveUserId } from "./ws-auth.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "recipe-runner" });
@@ -72,25 +72,6 @@ function sendJson(ws: WebSocket, payload: Record<string, unknown>): void {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(payload));
   }
-}
-
-/**
- * Extract userId from the HTTP upgrade request (token param, header, or cookie).
- * Mirrors the same logic in ssh-proxy.ts.
- */
-async function resolveUserId(req: IncomingMessage): Promise<string | null> {
-  const url = new URL(req.url ?? "", "http://localhost");
-  const tokenParam = url.searchParams.get("token");
-  const cookieHeader = req.headers["cookie"] ?? "";
-  const headerToken = (req.headers["x-session-token"] as string) ?? "";
-
-  const session = tokenParam
-    ? await getKratosSessionByToken(tokenParam)
-    : headerToken
-      ? await getKratosSessionByToken(headerToken)
-      : await getKratosSession(cookieHeader);
-
-  return session?.identity?.id ?? null;
 }
 
 /**
