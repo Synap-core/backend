@@ -8,9 +8,14 @@ import {
 import {
   buildImportProposal,
   importProposalToExecutePayload,
+  importProposalToComposite,
   toSlug,
 } from "../import-items.js";
 import type { ImportItem } from "../import-items.js";
+import {
+  isCompositeProposalData,
+  type CompositeProposalData,
+} from "@synap-core/types/proposals";
 
 // ── Adapter-level (Obsidian source) ────────────────────────────────────────────
 
@@ -178,6 +183,52 @@ describe("importProposalToExecutePayload (bridge to capture.execute)", () => {
         ["relationType", "sourceTempId", "targetTempId"].sort()
       );
     }
+  });
+});
+
+describe("importProposalToComposite (graph proposal — the governed unit)", () => {
+  const items = adaptItems("obsidian", OBSIDIAN_BATCH);
+  const proposal = buildImportProposal(items);
+  const { operations, droppedReferences } =
+    importProposalToComposite(proposal);
+
+  it("emits N create_entity ops (one per item) tagged with tempId ref", () => {
+    const entityOps = operations.filter((o) => o.op === "create_entity");
+    expect(entityOps).toHaveLength(proposal.items.length);
+    // each entity op carries the item's tempId as its ref
+    const refs = entityOps.map((o) => (o as { ref?: string }).ref).sort();
+    expect(refs).toEqual(proposal.items.map((i) => i.tempId).sort());
+    const launch = entityOps.find(
+      (o) => (o as { title?: string }).title === "Launch Synap"
+    ) as { profileSlug?: string };
+    expect(launch.profileSlug).toBe("project");
+  });
+
+  it("emits relation ops referencing tempIds, drops unresolved", () => {
+    const relOps = operations.filter((o) => o.op === "create_relation") as Array<{
+      sourceRef: string;
+      targetRef: string;
+    }>;
+    expect(droppedReferences).toBe(1); // the one [[Nonexistent]] link
+    const entityRefs = new Set(
+      operations
+        .filter((o) => o.op === "create_entity")
+        .map((o) => (o as { ref?: string }).ref)
+    );
+    // every relation endpoint resolves to an in-proposal entity ref
+    for (const r of relOps) {
+      expect(entityRefs.has(r.sourceRef)).toBe(true);
+      expect(entityRefs.has(r.targetRef)).toBe(true);
+    }
+  });
+
+  it("produces a payload that satisfies the REAL CompositeProposalData guard", () => {
+    // This is the contract lock: the bridge output must be accepted by the
+    // same isCompositeProposalData() the approve flow uses to branch.
+    const data = { operations } as unknown as CompositeProposalData;
+    expect(isCompositeProposalData(data)).toBe(true);
+    // first op must be a create_entity (guard requirement)
+    expect(operations[0].op).toBe("create_entity");
   });
 });
 

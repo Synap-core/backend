@@ -173,12 +173,87 @@ export interface DocumentContentProposalData {
 }
 
 /**
+ * Composite (multi-op) proposal data — a GRAPH proposal.
+ *
+ * A SINGLE approvable proposal that, on approval, executes N operations
+ * atomically. It expresses a small GRAPH: one or more new entities plus the
+ * relations among them, validated by the user as ONE unit of work.
+ *
+ * References between operations use REFS, not pre-minted entity ids — entities
+ * have no id until approval (see the deliberate "no draft entity" invariant).
+ * A relation's `sourceRef`/`targetRef` is one of:
+ *   - an op ref: the `ref` of a `create_entity` op in THIS proposal (e.g. "t1"),
+ *   - the positional ref `$opN` (N = index of the create_entity op),
+ *   - `PRIMARY_REF` ("$primary") — the FIRST create_entity op (back-compat),
+ *   - a real, already-existing entity UUID (link new graph to existing data).
+ * At approval, all entity ops are created first, building a ref→realId map; then
+ * relations are created resolving each ref through that map (falling back to the
+ * literal value, treated as a real entity id).
+ *
+ * Back-compat: the original shape (op[0] = primary create_entity, rest =
+ * create_relation using $primary) is a strict subset and keeps working.
+ *
+ * Rides in proposals.data — no schema migration. Narrow with
+ * isCompositeProposalData() in the approve flow BEFORE the single-op branches.
+ */
+export const PRIMARY_REF = "$primary" as const;
+
+/** Positional ref for the Nth create_entity op (0-based), e.g. "$op0". */
+export function opRef(index: number): string {
+  return `$op${index}`;
+}
+
+export interface CompositeCreateEntityOp {
+  op: "create_entity";
+  /** Profile slug for the new entity (e.g. "question"). */
+  profileSlug: string;
+  title?: string;
+  description?: string;
+  properties?: Record<string, unknown>;
+  /**
+   * Stable handle for THIS entity within the proposal, used by relation ops to
+   * reference it (e.g. "t1"). Optional — the positional `$opN` ref always works.
+   */
+  ref?: string;
+}
+
+export interface CompositeCreateRelationOp {
+  op: "create_relation";
+  /** Relation type slug (system type or workspace relation_def). */
+  type: string;
+  /** Source: an op ref ("t1"/"$op0"/PRIMARY_REF) or a real entity UUID. */
+  sourceRef: string;
+  /** Target: an op ref ("t1"/"$op0"/PRIMARY_REF) or a real entity UUID. */
+  targetRef: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type CompositeProposalOperation =
+  | CompositeCreateEntityOp
+  | CompositeCreateRelationOp;
+
+export interface CompositeProposalData {
+  /**
+   * Ordered list of operations. The FIRST op MUST be a create_entity (the
+   * primary entity); remaining ops are create_relation that may reference the
+   * primary via PRIMARY_REF.
+   */
+  operations: CompositeProposalOperation[];
+  /** Optional provenance carried alongside the operations. */
+  source?: string;
+  sourceId?: string;
+  reasoning?: string;
+  summary?: string;
+}
+
+/**
  * Union of all shapes stored in proposals.data.
  * Use isRequestShapedProposalData() to narrow in approve flow.
  */
 export type StoredProposalData =
   | RequestShapedProposalData
-  | DocumentContentProposalData;
+  | DocumentContentProposalData
+  | CompositeProposalData;
 
 /**
  * Type guard: true when proposal.data is request-shaped (event flow).
@@ -206,6 +281,31 @@ export function isDocumentContentProposalData(
   if (data == null || typeof data !== "object") return false;
   return (
     typeof (data as DocumentContentProposalData).proposedContent === "string"
+  );
+}
+
+/**
+ * Type guard: true when proposal.data is a composite (multi-op) proposal.
+ * Use for the branch that executes N operations atomically on approval.
+ *
+ * Validates the minimal contract: a non-empty `operations` array whose first
+ * op is a `create_entity`. Intentionally strict so that a malformed payload
+ * falls through to the existing single-op paths rather than being mis-executed.
+ */
+export function isCompositeProposalData(
+  data: StoredProposalData | null | undefined
+): data is CompositeProposalData {
+  if (data == null || typeof data !== "object") return false;
+  const ops = (data as CompositeProposalData).operations;
+  if (!Array.isArray(ops) || ops.length === 0) return false;
+  const first = ops[0] as CompositeProposalOperation | undefined;
+  if (!first || first.op !== "create_entity") return false;
+  // Every op must carry a recognized discriminant.
+  return ops.every(
+    (o) =>
+      o != null &&
+      typeof o === "object" &&
+      (o.op === "create_entity" || o.op === "create_relation")
   );
 }
 

@@ -144,6 +144,64 @@ export function importProposalToExecutePayload(proposal: ImportProposal): {
   };
 }
 
+// ── Bridge to a graph composite proposal (the governed unit-of-work) ──────────
+
+/**
+ * Minimal shape of a composite (graph) proposal's operations, matching
+ * @synap-core/types CompositeProposalData. Re-declared here (not imported) to
+ * keep this util free of cross-package type coupling; the shape is asserted by
+ * a test against the real type.
+ */
+export interface CompositeEntityOp {
+  op: "create_entity";
+  profileSlug: string;
+  title?: string;
+  properties?: Record<string, unknown>;
+  /** Stable in-proposal handle (we use the item's tempId). */
+  ref?: string;
+}
+export interface CompositeRelationOp {
+  op: "create_relation";
+  type: string;
+  /** op ref (tempId) of source/target, resolved to a real id at approval. */
+  sourceRef: string;
+  targetRef: string;
+}
+export type CompositeOp = CompositeEntityOp | CompositeRelationOp;
+
+/**
+ * Convert an ImportProposal into a single GRAPH composite proposal: N
+ * create_entity ops (each tagged with its tempId as `ref`) + M create_relation
+ * ops referencing those tempIds. Approving this ONE proposal materializes the
+ * whole graph atomically (entities first, then relations via ref→realId).
+ *
+ * Unresolved references (targets outside the batch) are dropped — they have no
+ * op to reference and can't be materialized as relations. Count is returned.
+ */
+export function importProposalToComposite(proposal: ImportProposal): {
+  operations: CompositeOp[];
+  droppedReferences: number;
+} {
+  const entityOps: CompositeEntityOp[] = proposal.items.map((it) => ({
+    op: "create_entity",
+    profileSlug: it.typeSlug,
+    title: it.title,
+    properties: it.properties,
+    ref: it.tempId,
+  }));
+  const resolved = proposal.references.filter((r) => Boolean(r.targetTempId));
+  const relationOps: CompositeRelationOp[] = resolved.map((r) => ({
+    op: "create_relation",
+    type: r.relationType,
+    sourceRef: r.sourceTempId,
+    targetRef: r.targetTempId as string,
+  }));
+  return {
+    operations: [...entityOps, ...relationOps],
+    droppedReferences: proposal.references.length - resolved.length,
+  };
+}
+
 /** Normalize an arbitrary label into a type slug. */
 export function toSlug(input: string): string {
   return input

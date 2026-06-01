@@ -43,6 +43,8 @@ import type {
 import {
   isDocumentContentProposalData,
   isRequestShapedProposalData,
+  isCompositeProposalData,
+  PRIMARY_REF,
   buildRequestFromProposal,
   buildFallbackTitle,
   isLikelyUUID,
@@ -56,6 +58,7 @@ import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 import { channelsRouter } from "./channels.js";
 import { entitiesRouter as regularEntitiesRouter } from "./entities.js";
+import { relationsRouter } from "./relations.js";
 import { messages } from "@synap/database/schema";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { emitSideEffects } from "@synap/events";
@@ -184,7 +187,8 @@ type DisplayEnrichedProposal = ProposalRow & {
 };
 
 async function enrichProposalsForDisplay(
-  rows: ProposalRow[]
+  rows: ProposalRow[],
+  userId: string
 ): Promise<DisplayEnrichedProposal[]> {
   const requests = rows.map((row) => buildRequestFromProposal(row));
   const entityIds = uniqueStrings(
@@ -235,7 +239,7 @@ async function enrichProposalsForDisplay(
             async (correlationId) =>
               [
                 correlationId,
-                await eventRepo.getCorrelatedEvents(correlationId),
+                await eventRepo.getCorrelatedEvents(correlationId, userId),
               ] as const
           )
         )
@@ -588,7 +592,10 @@ export const proposalsRouter = router({
       // Enrich each proposal with a pre-formed `request` object and resolved
       // display metadata. Eve/Studio can render useful labels without leaking
       // raw UUIDs into the main review surface.
-      const enriched = await enrichProposalsForDisplay(rows);
+      const enriched = await enrichProposalsForDisplay(
+        rows,
+        requireUserId(ctx.userId)
+      );
 
       const { items, pagination } = buildPaginatedResponse(enriched, input);
 
@@ -658,7 +665,7 @@ export const proposalsRouter = router({
       }
 
       return {
-        ...(await enrichProposalsForDisplay([proposal]))[0],
+        ...(await enrichProposalsForDisplay([proposal], userId))[0],
       };
     }),
 
@@ -727,6 +734,128 @@ export const proposalsRouter = router({
       }
 
       const payload = proposal.data as StoredProposalData | null | undefined;
+
+      // B0: Composite (multi-op) GRAPH proposal — one approval creates N
+      // entities AND M relations among them, atomically validated as a unit
+      // (e.g. an imported note graph, or a Question + links to its captures).
+      // Checked BEFORE the single-op branches. Pass 1 creates every
+      // create_entity op via the canonical entity path (full side effects),
+      // building a ref→realId map; pass 2 creates relations resolving each
+      // sourceRef/targetRef ($opN / op `ref` / PRIMARY_REF / real UUID).
+      // Linking is best-effort — an individual relation failure is logged but
+      // never discards the (valid) created entities.
+      if (isCompositeProposalData(payload)) {
+        let compositeCtx: {
+          db: typeof db;
+          authenticated: true;
+          userId: string;
+          workspaceId: string | null;
+          workspaceRole: string;
+        };
+        if (proposal.workspaceId) {
+          const membership = await getWorkspaceMembership(
+            db,
+            proposal.workspaceId,
+            userId
+          );
+          if (!membership) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "No workspace access",
+            });
+          }
+          compositeCtx = {
+            db,
+            authenticated: true as const,
+            userId,
+            workspaceId: proposal.workspaceId,
+            workspaceRole: membership.role,
+          };
+        } else {
+          compositeCtx = {
+            db,
+            authenticated: true as const,
+            userId,
+            workspaceId: null,
+            workspaceRole: "owner",
+          };
+        }
+
+        const entityCaller = regularEntitiesRouter.createCaller(
+          compositeCtx as unknown as Context
+        );
+
+        // Pass 1: create ALL create_entity ops, building a ref→realId map.
+        // Refs: the op's own `ref`, its positional `$opN`, and (for the first
+        // entity op) PRIMARY_REF for back-compat.
+        const refToRealId: Record<string, string> = {};
+        let primaryId = "";
+        let createdCount = 0;
+        for (let i = 0; i < payload.operations.length; i++) {
+          const op = payload.operations[i];
+          if (op.op !== "create_entity") continue;
+          const created = await entityCaller.create({
+            profileSlug: op.profileSlug,
+            title: op.title || "Untitled",
+            description: op.description,
+            properties: op.properties,
+            source: "system",
+          });
+          const realId = (created as { id: string }).id;
+          refToRealId[`$op${i}`] = realId;
+          if (op.ref) refToRealId[op.ref] = realId;
+          if (!primaryId) {
+            primaryId = realId;
+            refToRealId[PRIMARY_REF] = realId;
+          }
+          createdCount++;
+        }
+
+        // Resolve a relation ref to a real entity id: op ref → mapped id;
+        // otherwise treat the literal as an existing entity UUID.
+        const resolveRef = (ref: string): string => refToRealId[ref] ?? ref;
+
+        const relationCaller = relationsRouter.createCaller(
+          compositeCtx as unknown as Context
+        );
+        let linked = 0;
+        for (const op of payload.operations) {
+          if (op.op !== "create_relation") continue;
+          const sourceEntityId = resolveRef(op.sourceRef);
+          const targetEntityId = resolveRef(op.targetRef);
+          try {
+            await relationCaller.create({
+              sourceEntityId,
+              targetEntityId,
+              type: op.type,
+            });
+            linked++;
+          } catch (err) {
+            logger.warn(
+              { err, primaryId, type: op.type },
+              "composite proposal: relation create failed (entities kept)"
+            );
+          }
+        }
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return { success: true, primaryId, created: createdCount, linked };
+      }
 
       // B3: Document content proposal (hub/chat/user_edit) – apply content directly
       if (
