@@ -43,6 +43,64 @@ const logger = createLogger({ module: "capture-router" });
 
 const FALLBACK_RELATION_TYPE = "relates_to";
 
+// ── Schema-complete profile hints for the structuring LLM ──────────────────
+// "Read before write": the one-shot /structure call has no tool loop, so the
+// caller pre-reads each profile's real property schema and hands it to the model.
+// Instead of a bare slug list ("status, dueDate, priority") we emit a TYPED hint
+// ("status:enum(todo|in-progress|done|cancelled), dueDate:date, priority:enum(...)")
+// so the model maps extracted values into the correct typed fields with valid
+// enum values and link targets — not invented keys.
+
+interface RawEffectiveProperty {
+  slug: string;
+  valueType?: string;
+  required?: boolean;
+  constraints?: { enum?: unknown[]; [k: string]: unknown } | null;
+  targetProfileId?: string | null;
+}
+
+interface AccessibleProfileLike {
+  id?: string;
+  slug: string;
+  displayName?: string | null;
+  uiHints?: Record<string, unknown> | null;
+  effectiveProperties?: RawEffectiveProperty[];
+}
+
+function typedPropertyHint(
+  prop: RawEffectiveProperty,
+  slugByProfileId: Map<string, string>
+): string {
+  let type = prop.valueType || "string";
+  const enumVals = prop.constraints?.enum;
+  if (Array.isArray(enumVals) && enumVals.length) {
+    type = `enum(${enumVals.join("|")})`;
+  } else if (prop.targetProfileId) {
+    const target = slugByProfileId.get(prop.targetProfileId);
+    type = target ? `link->${target}` : "link";
+  }
+  return `${prop.slug}:${type}${prop.required ? "*" : ""}`;
+}
+
+function buildAvailableProfiles(profiles: AccessibleProfileLike[]) {
+  const slugByProfileId = new Map<string, string>();
+  for (const p of profiles) if (p.id) slugByProfileId.set(p.id, p.slug);
+
+  return profiles
+    .filter((p) => !(p.uiHints as Record<string, unknown>)?.hideFromCreate)
+    .map((p) => ({
+      slug: p.slug,
+      displayName: p.displayName || p.slug,
+      description:
+        ((p.uiHints as Record<string, unknown>)?.description as string) ||
+        undefined,
+      propertyHints:
+        p.effectiveProperties
+          ?.map((prop) => typedPropertyHint(prop, slugByProfileId))
+          .join(", ") || undefined,
+    }));
+}
+
 export const captureRouter = router({
   // ── thought (legacy single-entity) ─────────────────────────────────────
 
@@ -84,23 +142,9 @@ export const captureRouter = router({
           userId,
           workspaceId
         );
-        const availableProfiles = accessibleProfiles
-          .filter(
-            (p) => !(p.uiHints as Record<string, unknown>)?.hideFromCreate
-          )
-          .map((p) => ({
-            slug: p.slug,
-            displayName: p.displayName || p.slug,
-            description:
-              ((p.uiHints as Record<string, unknown>)?.description as string) ||
-              undefined,
-            propertyHints:
-              (
-                p as { effectiveProperties?: Array<{ slug: string }> }
-              ).effectiveProperties
-                ?.map((prop) => prop.slug)
-                .join(", ") || undefined,
-          }));
+        const availableProfiles = buildAvailableProfiles(
+          accessibleProfiles as unknown as AccessibleProfileLike[]
+        );
 
         const { client } = await resolveIntelligenceService({
           userId,
@@ -233,21 +277,9 @@ export const captureRouter = router({
         userId,
         workspaceId ?? ""
       );
-      const availableProfiles = accessibleProfiles
-        .filter((p) => !(p.uiHints as Record<string, unknown>)?.hideFromCreate)
-        .map((p) => ({
-          slug: p.slug,
-          displayName: p.displayName || p.slug,
-          description:
-            ((p.uiHints as Record<string, unknown>)?.description as string) ||
-            undefined,
-          propertyHints:
-            (
-              p as { effectiveProperties?: Array<{ slug: string }> }
-            ).effectiveProperties
-              ?.map((prop) => prop.slug)
-              .join(", ") || undefined,
-        }));
+      const availableProfiles = buildAvailableProfiles(
+        accessibleProfiles as unknown as AccessibleProfileLike[]
+      );
 
       // 2. Fetch user's workspaces for routing hints (max 5, most recent)
       const userWorkspaceRows = await database
