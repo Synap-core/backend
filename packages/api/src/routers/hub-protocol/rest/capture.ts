@@ -5,6 +5,8 @@
 import { z } from "zod";
 
 import { captureRouter } from "../../capture.js";
+import { adaptItems, type ImportSource } from "../../../utils/import-adapters.js";
+import { buildImportProposal } from "../../../utils/import-items.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -339,6 +341,103 @@ export function registerCaptureRoutes(app: HubHono): void {
       return c.json(result);
     } catch (err) {
       logger.error({ err, userId }, "POST /capture/execute failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /import/analyze
+   *
+   * Source-agnostic import analysis. Takes raw `{ path, content }` records plus a
+   * `source` (e.g. "obsidian"), normalizes them to ImportItems via the matching
+   * adapter, and returns a GOVERNED structure proposal: which entity types to
+   * create, which items map to each, and which cross-references become relations.
+   *
+   * Review-only (no writes). Deterministic and cheap — safe to run on a whole
+   * corpus. The client reviews, then materializes via POST /capture/execute
+   * (which carries the proposal/approval gate). This is FAITHFUL ingestion of
+   * already-structured data; it is NOT the AI capture path (/capture/structure),
+   * which is for turning one unstructured blob into entities.
+   */
+  app.post("/import/analyze", async (c) => {
+    if (
+      !hasScope(c.get("scopes") as string[], "hub-protocol.read") &&
+      !hasScope(c.get("scopes") as string[], "mcp.read")
+    ) {
+      return c.json(
+        { error: "Missing scope: hub-protocol.read or mcp.read" },
+        403
+      );
+    }
+
+    let rawBody: unknown;
+    try {
+      rawBody = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const bodySchema = z.object({
+      userId: z.string().min(1),
+      workspaceId: z.string().uuid().optional(),
+      source: z.enum(["obsidian"]),
+      /** Relation type for cross-references (default "references"). */
+      relationType: z.string().min(1).max(64).optional(),
+      items: z
+        .array(
+          z.object({
+            /** Source-relative path, e.g. "Projects/Launch.md". */
+            path: z.string().min(1).max(1024),
+            content: z.string().max(200_000),
+          })
+        )
+        .min(1)
+        .max(2000),
+    });
+
+    const parsed = bodySchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.issues },
+        400
+      );
+    }
+
+    const body = parsed.data;
+
+    // Resolve workspace (membership-scoped) — consistent with /capture/*.
+    let workspaceId = body.workspaceId;
+    if (!workspaceId) {
+      const wsIds = await getUserAccessibleWorkspaceIds(body.userId);
+      workspaceId = wsIds[0];
+      if (!workspaceId) {
+        return c.json(
+          { error: "No accessible workspace found for this user" },
+          400
+        );
+      }
+    }
+
+    try {
+      const items = adaptItems(body.source as ImportSource, body.items);
+      const proposal = buildImportProposal(items, body.relationType);
+      logger.info(
+        {
+          userId: body.userId,
+          workspaceId,
+          source: body.source,
+          items: proposal.stats.itemCount,
+          types: proposal.stats.typeCount,
+          references: proposal.stats.referenceCount,
+        },
+        "POST /import/analyze"
+      );
+      return c.json({ workspaceId, source: body.source, ...proposal });
+    } catch (err) {
+      logger.error({ err, userId: body.userId }, "POST /import/analyze failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500
