@@ -44,7 +44,8 @@ import {
   isDocumentContentProposalData,
   isRequestShapedProposalData,
   isCompositeProposalData,
-  PRIMARY_REF,
+  registerEntityRef,
+  resolveCompositeRef,
   buildRequestFromProposal,
   buildFallbackTitle,
   isLikelyUUID,
@@ -802,18 +803,10 @@ export const proposalsRouter = router({
             source: "system",
           });
           const realId = (created as { id: string }).id;
-          refToRealId[`$op${i}`] = realId;
-          if (op.ref) refToRealId[op.ref] = realId;
-          if (!primaryId) {
-            primaryId = realId;
-            refToRealId[PRIMARY_REF] = realId;
-          }
+          registerEntityRef(refToRealId, i, op.ref, realId, !primaryId);
+          if (!primaryId) primaryId = realId;
           createdCount++;
         }
-
-        // Resolve a relation ref to a real entity id: op ref → mapped id;
-        // otherwise treat the literal as an existing entity UUID.
-        const resolveRef = (ref: string): string => refToRealId[ref] ?? ref;
 
         const relationCaller = relationsRouter.createCaller(
           compositeCtx as unknown as Context
@@ -821,8 +814,8 @@ export const proposalsRouter = router({
         let linked = 0;
         for (const op of payload.operations) {
           if (op.op !== "create_relation") continue;
-          const sourceEntityId = resolveRef(op.sourceRef);
-          const targetEntityId = resolveRef(op.targetRef);
+          const sourceEntityId = resolveCompositeRef(refToRealId, op.sourceRef);
+          const targetEntityId = resolveCompositeRef(refToRealId, op.targetRef);
           try {
             await relationCaller.create({
               sourceEntityId,
