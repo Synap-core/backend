@@ -310,6 +310,46 @@ export function isCompositeProposalData(
 }
 
 // ---------------------------------------------------------------------------
+// Composite (graph) approve helpers — pure ref-resolution, no DB
+// ---------------------------------------------------------------------------
+
+/**
+ * Register every reference handle that should point at a just-created entity.
+ *
+ * Given the index of a create_entity op (in operations[]), its optional `ref`,
+ * the real id it materialized to, and whether it is the FIRST entity created,
+ * mutate `map` with all the handles a relation op may use to reach it:
+ *   - positional `$opN` (always)
+ *   - the op's own `ref` (if set)
+ *   - `PRIMARY_REF` (only for the first entity, for back-compat)
+ *
+ * Pure and DB-free so the approve loop's resolution logic is unit-testable.
+ */
+export function registerEntityRef(
+  map: Record<string, string>,
+  opIndex: number,
+  ref: string | undefined,
+  realId: string,
+  isFirstEntity: boolean
+): void {
+  map[`$op${opIndex}`] = realId;
+  if (ref) map[ref] = realId;
+  if (isFirstEntity) map[PRIMARY_REF] = realId;
+}
+
+/**
+ * Resolve a relation op ref to a real entity id: an in-proposal ref ($opN /
+ * op `ref` / $primary) maps through `map`; any other literal is treated as an
+ * already-existing entity UUID and returned as-is.
+ */
+export function resolveCompositeRef(
+  map: Record<string, string>,
+  ref: string
+): string {
+  return map[ref] ?? ref;
+}
+
+// ---------------------------------------------------------------------------
 // Enriched proposal (returned by proposals.list with pre-formed request)
 // ---------------------------------------------------------------------------
 
