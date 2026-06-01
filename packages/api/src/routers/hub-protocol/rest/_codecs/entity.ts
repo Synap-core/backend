@@ -87,6 +87,12 @@ export const CreateEntityRequestSchema = z
     title: z.string(),
     description: z.string().optional(),
     properties: z.record(z.string(), z.unknown()).optional(),
+    content: z
+      .string()
+      .optional()
+      .describe(
+        "Long-form markdown body. When set, a linked, versioned document is created (MinIO-stored) instead of inlining into properties."
+      ),
     reasoning: z
       .string()
       .optional()
