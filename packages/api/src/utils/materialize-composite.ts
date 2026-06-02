@@ -37,11 +37,23 @@ export type EntityCreateCaller = { create: (input: any) => Promise<any> };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type RelationCreateCaller = { create: (input: any) => Promise<any> };
 
+export interface MaterializeOptions {
+  /**
+   * Pin every created entity to the caller's active workspace, OVERRIDING any
+   * profile pod-default `entityScope`. Imports set this so their data is
+   * isolated to the target workspace (and is later purgeable on workspace
+   * deletion). Interactive proposal approval leaves it false so pod-default
+   * profiles keep their global graph.
+   */
+  workspaceScoped?: boolean;
+}
+
 export async function materializeCompositeGraph(
   operations: CompositeProposalOperation[],
   entityCaller: EntityCreateCaller,
   relationCaller: RelationCreateCaller,
-  onRelationError?: (err: unknown, type: string) => void
+  onRelationError?: (err: unknown, type: string) => void,
+  options?: MaterializeOptions
 ): Promise<MaterializeResult> {
   // Pass 1 — entities → ref→realId map.
   const refToRealId: Record<string, string> = {};
@@ -57,6 +69,10 @@ export async function materializeCompositeGraph(
       properties: op.properties,
       content: op.content, // long-form body → linked document
       source: "system",
+      // Explicit workspace-scope request (imports): pin to the caller's
+      // workspace even for pod-default profiles. The create router reads the
+      // active workspace from ctx.workspaceId.
+      workspaceScoped: options?.workspaceScoped ?? false,
     });
     const realId = (result as { id: string }).id;
     registerEntityRef(refToRealId, i, op.ref, realId, !primaryId);
@@ -71,7 +87,11 @@ export async function materializeCompositeGraph(
     const sourceEntityId = resolveCompositeRef(refToRealId, op.sourceRef);
     const targetEntityId = resolveCompositeRef(refToRealId, op.targetRef);
     try {
-      await relationCaller.create({ sourceEntityId, targetEntityId, type: op.type });
+      await relationCaller.create({
+        sourceEntityId,
+        targetEntityId,
+        type: op.type,
+      });
       linked++;
     } catch (err) {
       onRelationError?.(err, op.type);

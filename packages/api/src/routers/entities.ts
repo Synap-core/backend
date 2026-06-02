@@ -227,6 +227,14 @@ export const entitiesRouter = router({
         /** Override the target workspace for this entity (defaults to current workspace). */
         targetWorkspaceId: z.string().uuid().optional(),
         /**
+         * Explicit workspace-scope request: pin this entity to the active
+         * workspace, OVERRIDING a profile's pod-default `entityScope`. Set by
+         * imports (and any caller that must isolate data to one workspace).
+         * Normal interactive creation leaves this false so pod-default profiles
+         * keep their global person/company graph un-fragmented.
+         */
+        workspaceScoped: z.boolean().optional().default(false),
+        /**
          * Source of action for AI governance + downstream audit/event tagging.
          * Hub Protocol callers may pass connector-specific values (e.g.
          * "openwebui-pipeline", "openclaw", "extension") so the proposal layer
@@ -394,13 +402,24 @@ export const entitiesRouter = router({
         });
       }
 
-      // Determine workspaceId: explicit global flag > profile entityScope > workspace-scoped
+      // Determine effective workspaceId. Precedence:
+      //   1. global flag           → null (visible everywhere)
+      //   2. explicit targetWorkspaceId → that workspace (wins for ALL profiles,
+      //      incl. pod-default ones)
+      //   3. workspaceScoped flag  → the active workspace (explicit isolation
+      //      request, e.g. imports — overrides a profile's pod-default)
+      //   4. otherwise             → profile pod-default (pod → null) else the
+      //      active workspace (today's interactive behavior, unchanged)
       const profileEntityScope = resolvedProfile.entityScope ?? "workspace";
+      const explicitWorkspaceScope = input.workspaceScoped === true;
       const entityWorkspaceId = input.global
         ? null
-        : profileEntityScope === "pod"
-          ? null
-          : (input.targetWorkspaceId ?? ctx.workspaceId);
+        : (input.targetWorkspaceId ??
+          (explicitWorkspaceScope
+            ? ctx.workspaceId
+            : profileEntityScope === "pod"
+              ? null
+              : ctx.workspaceId));
 
       // Merge profile.defaultValues into caller-supplied properties.
       const profileDefaults =
@@ -597,26 +616,21 @@ export const entitiesRouter = router({
           conditions.push(inArray(entities.type, profileSlugs));
         }
 
-        // Check if this profile type is pod-wide — if so, skip workspace filter
-        const entityScope = await profileService.getEntityScope(
-          input.profileSlug,
-          ctx.workspaceId
+        // Both pod-default and workspace-scoped profiles use the same read
+        // filter: rows pinned to this workspace OR genuinely-global rows
+        // (workspaceId IS NULL). A pod-default profile no longer skips the
+        // workspace filter — that previously leaked workspace-scoped imports
+        // (which now carry a real workspaceId) into every workspace. Truly
+        // pod-wide rows still have null workspaceId and remain visible
+        // everywhere.
+        conditions.push(
+          input.globalOnly || !ctx.workspaceId
+            ? isNull(entities.workspaceId)
+            : or(
+                eq(entities.workspaceId, ctx.workspaceId),
+                isNull(entities.workspaceId)
+              )
         );
-
-        if (entityScope === "pod") {
-          // Pod-wide: no workspace filter — visible to all workspace members.
-        } else {
-          // Workspace-scoped: this workspace + global entities.
-          // Workspace-less callers (hydration) see pod-wide only.
-          conditions.push(
-            input.globalOnly || !ctx.workspaceId
-              ? isNull(entities.workspaceId)
-              : or(
-                  eq(entities.workspaceId, ctx.workspaceId),
-                  isNull(entities.workspaceId)
-                )
-          );
-        }
       } else {
         // No profile filter — use standard workspace scoping.
         // Workspace-less callers (hydration) see pod-wide only.

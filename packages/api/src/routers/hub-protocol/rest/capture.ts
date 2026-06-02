@@ -640,7 +640,11 @@ export function registerCaptureRoutes(app: HubHono): void {
         entityCaller,
         relationCaller,
         (err, type) =>
-          logger.warn({ err, type }, "import/apply: relation create failed")
+          logger.warn({ err, type }, "import/apply: relation create failed"),
+        // Imports are workspace-scoped: pin entities to the target workspace
+        // (overrides pod-default profiles) so they isolate to this workspace
+        // and are purged when the workspace is deleted.
+        { workspaceScoped: true }
       );
 
       logger.info(

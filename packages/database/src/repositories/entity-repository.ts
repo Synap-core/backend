@@ -161,7 +161,6 @@ export class EntityRepository extends BaseRepository<
     // 1. Resolve profile (required)
     let profileId: string | null = null;
     let entityType: string;
-    let resolvedProfile: any = null;
 
     if (data.profileId) {
       profileId = data.profileId;
@@ -178,7 +177,6 @@ export class EntityRepository extends BaseRepository<
         );
       }
       entityType = profile.slug;
-      resolvedProfile = profile;
     } else if (data.profileSlug) {
       const profile = await this.profileResolution.resolveProfile(
         data.profileSlug,
@@ -194,16 +192,16 @@ export class EntityRepository extends BaseRepository<
       }
       profileId = profile.id;
       entityType = profile.slug;
-      resolvedProfile = profile;
     } else {
       throw new Error("Either profileId or profileSlug must be provided");
     }
 
-    // 1b. Determine effective workspaceId based on profile's entityScope
-    // Pod-wide profiles (entityScope === 'pod') create entities with null workspaceId
-    const resolvedEntityScope = resolvedProfile?.entityScope ?? "workspace";
-    const effectiveWorkspaceId =
-      resolvedEntityScope === "pod" ? null : (data.workspaceId ?? null);
+    // 1b. The router is the single source of truth for the effective
+    // workspaceId. It already resolves global / explicit-scope / profile
+    // pod-default into `data.workspaceId`, so the repo simply stores what it
+    // is given (null = pod-wide). Do NOT re-derive scope from the profile here
+    // — doing so would override an explicit workspace request (e.g. imports).
+    const effectiveWorkspaceId = data.workspaceId ?? null;
 
     // 2. Validate and normalize properties
     let validatedProperties: Record<string, unknown> = {};
