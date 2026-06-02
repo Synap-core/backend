@@ -454,11 +454,15 @@ export function registerSetupRoutes(app: HubHono): void {
       }
 
       // ── 1. Find or create the agent user (pod-wide singleton per agentType) ─
+      // Deterministic: if a provisioning race ever produced more than one row for
+      // this agentType, always reuse the OLDEST so the singleton is stable and the
+      // dedup never flip-flops between rows across calls.
       const existingAgent = await db.query.users.findFirst({
         where: and(
           eq(users.userType, "agent"),
           drizzleSql`${users.agentMetadata}->>'agentType' = ${agentType}`
         ),
+        orderBy: (u, { asc }) => [asc(u.createdAt)],
         columns: { id: true },
       });
 
