@@ -119,6 +119,28 @@ function configSchemaArrayToJsonSchema(
   const properties: Record<string, Record<string, unknown>> = {};
   const required: string[] = [];
 
+  // Rich field types from CellSettingsField (reference + value pickers) are all
+  // STRING-valued at the data layer — they carry an id/slug/key/hex/icon-name.
+  // Map them to JSONSchema "string" so the DB/AI contract stays valid while the
+  // frontend renders the smart editor. `number`/`boolean` pass through; the
+  // structural `object`/`array` map to their JSONSchema equivalents.
+  const STRING_VALUED_TYPES = new Set([
+    "string",
+    "select",
+    "profile",
+    "property",
+    "entity",
+    "relation-type",
+    "view",
+    "channel",
+    "automation",
+    "command",
+    "icon",
+    "color",
+    "date",
+    "variant",
+  ]);
+
   for (const field of fields) {
     const prop: Record<string, unknown> = {};
 
@@ -126,7 +148,7 @@ function configSchemaArrayToJsonSchema(
       prop.type = "string";
       prop.enum = field.options.map((o) => o.value);
     } else {
-      prop.type = field.type === "select" ? "string" : field.type;
+      prop.type = STRING_VALUED_TYPES.has(field.type) ? "string" : field.type;
     }
 
     if (field.description) prop.description = field.description;
