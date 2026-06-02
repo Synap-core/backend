@@ -1351,9 +1351,31 @@ export const channelsRouter = router({
         }
       }
 
-      // Auto-provision agent user for this human+workspace pair (idempotent)
+      // Resolve the ACTING agent instance for proposal attribution.
+      //
+      // Source of truth = the channel's bound agent instance (the ai_agent
+      // member). Per-instance threads bind the specific agent-user the human is
+      // chatting with, so its proposals are credited to THAT named instance —
+      // not the user's pod-wide default. This is what makes "this agent did X"
+      // true and the per-agent dashboard accurate.
+      //
+      // Fallback (legacy/unbound personal threads, group channels) → the user's
+      // pod-wide personal agent, preserving prior behaviour.
       let agentUserId: string | undefined;
-      if (workspaceId) {
+      if (channel.channelType === ChannelType.PERSONAL) {
+        const [boundAgent] = await db
+          .select({ memberId: channelMembers.memberId })
+          .from(channelMembers)
+          .where(
+            and(
+              eq(channelMembers.channelId, channelId),
+              eq(channelMembers.memberKind, ChannelMemberKind.AI_AGENT)
+            )
+          )
+          .limit(1);
+        agentUserId = boundAgent?.memberId;
+      }
+      if (!agentUserId && workspaceId) {
         try {
           agentUserId = await ensureAgentUser(userId, workspaceId);
         } catch (err) {

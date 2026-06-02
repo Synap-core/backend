@@ -8,7 +8,7 @@
 import { z } from "zod";
 import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, inArray } from "@synap/database";
+import { db, eq, and, inArray, drizzleSql } from "@synap/database";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import {
   users,
@@ -213,7 +213,8 @@ export const agentUsersRouter = router({
         });
       }
 
-      const results = await db
+      // Agents tied to THIS workspace.
+      const tied = await db
         .select({
           id: users.id,
           name: users.name,
@@ -232,7 +233,32 @@ export const agentUsersRouter = router({
         )
         .where(eq(users.userType, "agent"));
 
-      return results;
+      // Pod-wide agents — agent users with NO workspace membership anywhere.
+      // These shared helpers (e.g. a pod-level Twin) belong to the whole pod and
+      // should appear in every workspace; their role/joinedAt are null (no
+      // membership row). Agents tied to OTHER workspaces are excluded by design.
+      const podWideRows = await db
+        .select({
+          id: users.id,
+          name: users.name,
+          email: users.email,
+          agentMetadata: users.agentMetadata,
+        })
+        .from(users)
+        .where(
+          and(
+            eq(users.userType, "agent"),
+            drizzleSql`NOT EXISTS (SELECT 1 FROM ${workspaceMembers} WHERE ${workspaceMembers.userId} = ${users.id})`
+          )
+        );
+
+      const podWide = podWideRows.map((r) => ({
+        ...r,
+        role: null as string | null,
+        joinedAt: null as Date | null,
+      }));
+
+      return [...tied, ...podWide];
     }),
 
   /**
