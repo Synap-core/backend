@@ -47,8 +47,15 @@ import {
   buildRequestFromProposal,
   buildFallbackTitle,
   isLikelyUUID,
+  opRef,
 } from "@synap-core/types/proposals";
-import type { UpdateRequest } from "@synap-core/types/proposals";
+import type {
+  UpdateRequest,
+  ProposalReviewGraph,
+  CompositeProposalData,
+  CompositeCreateEntityOp,
+  CompositeCreateRelationOp,
+} from "@synap-core/types/proposals";
 import { storage } from "@synap/storage";
 import { requireUserId } from "../utils/user-scoped.js";
 import { auditLog } from "../utils/audit-log.js";
@@ -317,6 +324,12 @@ function buildProposalReviewModel(params: {
   const { row, request, authorName, targetName, events } = params;
   const requestData =
     request.data && typeof request.data === "object" ? request.data : {};
+  // Composite (graph) proposals store `{ operations: [...] }` in row.data, which
+  // the flat `changes` model can't express. Detect and build a `graph` instead.
+  const rawData = row.data as StoredProposalData | null | undefined;
+  const graph = isCompositeProposalData(rawData)
+    ? buildProposalGraph(rawData)
+    : undefined;
   const reviewEvents = events.map(toProposalReviewEvent);
   const requestedEvent =
     reviewEvents.find((event) => event.phase === "requested") ??
@@ -349,7 +362,67 @@ function buildProposalReviewModel(params: {
     validatedEventId: request.validatedEventId ?? validatedEvent?.eventId,
     completedEventId: request.completedEventId ?? completedEvent?.eventId,
     changes: buildProposalChanges(requestData, request.changeType),
+    ...(graph ? { graph } : {}),
     events: reviewEvents,
+  };
+}
+
+/**
+ * Build the reviewable graph for a composite proposal.
+ *
+ * Pass 1: walk the create_entity ops, assigning each a stable ref (its own `ref`
+ * or the positional `$opN`) and recording ref→title so relations can show human
+ * labels. Pass 2: map each create_relation's source/target refs to those titles;
+ * a ref that is a real UUID (a pre-existing entity, not created here) gets a
+ * short `entity <8hex>` label.
+ *
+ * Emits the PINNED ProposalReviewGraph contract — keep in sync with the frontend.
+ */
+function buildProposalGraph(data: CompositeProposalData): ProposalReviewGraph {
+  const refToTitle = new Map<string, string>();
+  const entities: ProposalReviewGraph["entities"] = [];
+
+  data.operations.forEach((op, index) => {
+    if (op.op !== "create_entity") return;
+    const entityOp = op as CompositeCreateEntityOp;
+    const ref = entityOp.ref ?? opRef(index);
+    const title = entityOp.title ?? "Untitled";
+    refToTitle.set(ref, title);
+    // Positional ref always resolves too (a relation may reference $opN even
+    // when the op carries its own ref).
+    refToTitle.set(opRef(index), title);
+    entities.push({
+      ref,
+      profileSlug: entityOp.profileSlug,
+      title,
+      propertyCount: Object.keys(entityOp.properties ?? {}).length,
+      hasContent: !!entityOp.content,
+    });
+  });
+
+  const labelForRef = (ref: string): string => {
+    const known = refToTitle.get(ref);
+    if (known) return known;
+    if (isLikelyUUID(ref)) return `entity ${ref.slice(0, 8)}`;
+    return ref;
+  };
+
+  const relations: ProposalReviewGraph["relations"] = [];
+  for (const op of data.operations) {
+    if (op.op !== "create_relation") continue;
+    const relOp = op as CompositeCreateRelationOp;
+    relations.push({
+      type: relOp.type,
+      sourceLabel: labelForRef(relOp.sourceRef),
+      targetLabel: labelForRef(relOp.targetRef),
+    });
+  }
+
+  return {
+    entities,
+    relations,
+    entityCount: entities.length,
+    relationCount: relations.length,
   };
 }
 
@@ -790,17 +863,20 @@ export const proposalsRouter = router({
 
         // Shared materialization: N entities → ref map → M relations.
         // Same logic the user-import (/import/apply) path uses.
-        const { created: createdCount, linked, primaryId } =
-          await materializeCompositeGraph(
-            payload.operations,
-            entityCaller,
-            relationCaller,
-            (err, type) =>
-              logger.warn(
-                { err, type },
-                "composite proposal: relation create failed (entities kept)"
-              )
-          );
+        const {
+          created: createdCount,
+          linked,
+          primaryId,
+        } = await materializeCompositeGraph(
+          payload.operations,
+          entityCaller,
+          relationCaller,
+          (err, type) =>
+            logger.warn(
+              { err, type },
+              "composite proposal: relation create failed (entities kept)"
+            )
+        );
 
         await db
           .update(proposals)

@@ -128,6 +128,33 @@ export interface ProposalReviewEvent {
   correlationId?: string;
 }
 
+/**
+ * Reviewable, frontend-facing summary of a COMPOSITE (graph) proposal.
+ *
+ * A composite proposal's `data` is `{ operations: [...] }`, which the flat
+ * `ProposalReviewChange[]` cannot express. This carries the graph so the review
+ * UI can render the entities and relations that approval would materialize.
+ *
+ * PINNED CONTRACT — the frontend mirrors this shape exactly; do not change field
+ * names/shapes without updating the frontend in lockstep.
+ */
+export interface ProposalReviewGraph {
+  entities: Array<{
+    ref: string;
+    profileSlug: string;
+    title: string;
+    propertyCount: number;
+    hasContent: boolean;
+  }>;
+  relations: Array<{
+    type: string;
+    sourceLabel: string;
+    targetLabel: string;
+  }>;
+  entityCount: number;
+  relationCount: number;
+}
+
 export interface ProposalReviewModel {
   summary: string;
   actorName?: string;
@@ -143,6 +170,11 @@ export interface ProposalReviewModel {
   validatedEventId?: string;
   completedEventId?: string;
   changes: ProposalReviewChange[];
+  /**
+   * Present ONLY for composite (graph) proposals. When set, `changes` may be
+   * empty and the graph carries the reviewable content.
+   */
+  graph?: ProposalReviewGraph;
   events: ProposalReviewEvent[];
 }
 
