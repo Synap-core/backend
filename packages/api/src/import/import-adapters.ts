@@ -8,7 +8,11 @@
  * Adding a new source = adding an adapter here; nothing else changes.
  */
 
-import { parseMarkdown } from "./import-parsers.js";
+import {
+  parseMarkdown,
+  parseCsv,
+  parseBookmarksHtml,
+} from "./import-parsers.js";
 import type { ImportItem, ImportLink } from "./import-items.js";
 
 // ── Obsidian / wikilink-markdown adapter ───────────────────────────────────────
@@ -108,13 +112,84 @@ export function obsidianNoteToImportItem(
   };
 }
 
+// ── Plain markdown adapter ─────────────────────────────────────────────────────
+
+/**
+ * Plain markdown file → ImportItem. Same as the obsidian adapter but used for
+ * generic `.md` imports where wikilinks are not expected; still extracts
+ * frontmatter + inline #tags. Wikilinks are extracted too (harmless when absent).
+ */
+export function markdownFileToImportItem(
+  path: string,
+  content: string
+): ImportItem {
+  return obsidianNoteToImportItem(path, content);
+}
+
+// ── CSV adapter ─────────────────────────────────────────────────────────────
+
+/**
+ * One CSV file → N ImportItems (one per row). Title comes from a name-ish column
+ * (first matching `title`/`name`, else the first column); every other non-empty
+ * cell becomes metadata. No body, links, or labels — a CSV row is flat data.
+ */
+export function csvFileToImportItems(content: string): ImportItem[] {
+  const { headers, rows } = parseCsv(content);
+  if (headers.length === 0 || rows.length === 0) return [];
+  const titleHeader =
+    headers.find((h) => /^(title|name)$/i.test(h)) ?? headers[0];
+  return rows.map((row) => {
+    const metadata: Record<string, unknown> = {};
+    for (const h of headers) {
+      if (h && h !== titleHeader && row[h] !== undefined && row[h] !== "") {
+        metadata[h] = row[h];
+      }
+    }
+    const title = String(row[titleHeader] ?? "Untitled").slice(0, 500);
+    return {
+      title,
+      path: [],
+      metadata,
+      body: "",
+      links: [],
+      labels: [],
+    };
+  });
+}
+
+// ── Bookmark (Netscape HTML) adapter ──────────────────────────────────────────
+
+/**
+ * One bookmarks HTML file → N ImportItems (one per link). Each becomes a
+ * `bookmark`-typed item with the url in metadata and any export tags as labels.
+ */
+export function bookmarksFileToImportItems(content: string): ImportItem[] {
+  return parseBookmarksHtml(content).map((b) => ({
+    title: b.title.slice(0, 500),
+    path: [],
+    metadata: { url: b.url },
+    body: "",
+    links: [],
+    labels: b.tags
+      ? b.tags
+          .split(/[,;]/)
+          .map((t) => t.trim())
+          .filter(Boolean)
+      : [],
+    typeHint: "bookmark",
+  }));
+}
+
 // ── Adapter registry ───────────────────────────────────────────────────────────
 
-export type ImportSource = "obsidian";
+export type ImportSource = "obsidian" | "markdown" | "csv" | "bookmark";
 
 /**
  * Resolve a batch of raw `{ path, content }` records to ImportItems for a given
  * source. New sources (apple-notes, notion, folder) plug in here.
+ *
+ * Note: file-shaped sources (csv, bookmark) expand a SINGLE file into many items
+ * (one per row/link), so this flat-maps rather than mapping 1:1.
  */
 export function adaptItems(
   source: ImportSource,
@@ -123,6 +198,12 @@ export function adaptItems(
   switch (source) {
     case "obsidian":
       return raw.map((r) => obsidianNoteToImportItem(r.path, r.content));
+    case "markdown":
+      return raw.map((r) => markdownFileToImportItem(r.path, r.content));
+    case "csv":
+      return raw.flatMap((r) => csvFileToImportItems(r.content));
+    case "bookmark":
+      return raw.flatMap((r) => bookmarksFileToImportItems(r.content));
     default:
       // Exhaustive: TS errors here if a new ImportSource is added without a case.
       return ((_: never) => [])(source);

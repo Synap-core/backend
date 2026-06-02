@@ -3,12 +3,22 @@ import { TRPCError } from "@trpc/server";
 import { storage } from "@synap/storage";
 import { db, messages, MessageRole, MessageAuthorType } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { detectJsonChatShape } from "../import/import-parsers.js";
 import {
-  parseMarkdown,
-  parseCsv,
-  parseBookmarksHtml,
-  detectJsonChatShape,
-} from "../import/import-parsers.js";
+  adaptItems,
+  type ImportSource as ImportAdapterSource,
+} from "../import/import-adapters.js";
+import {
+  buildImportProposal,
+  importProposalToComposite,
+} from "../import/import-items.js";
+import { aiEnrichImportItems } from "../import/import-ai.js";
+import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
+import {
+  buildAvailableProfiles,
+  type AccessibleProfileLike,
+} from "../routers/capture.js";
+import { getDb, ProfileResolutionService } from "@synap/database";
 import { sanitizeImportPath, mimeFromPath } from "../utils/import-path.js";
 import { channelsRouter } from "../routers/channels.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
@@ -203,112 +213,39 @@ export class ImportOrchestrator {
           continue;
         }
 
-        if (
-          mimeType === "text/markdown" ||
-          ext === "md" ||
-          ext === "markdown"
-        ) {
-          const { frontmatter, body } = parseMarkdown(content);
-          const title =
-            (frontmatter.title as string) ||
-            path.replace(/\.[^.]+$/, "").slice(0, 200) ||
-            "Untitled";
+        // Markdown / CSV / bookmark files route through the canonical import
+        // ENGINE: each file becomes ONE governed `import.graph` composite
+        // proposal (N entities + M relations, AI-structured + workspace-scoped
+        // on approve) instead of N per-row pending proposals. JSON-chat and
+        // LinkedIn are handled separately (they are channels/messages + a queue,
+        // not entity imports).
+        const engineSource: ImportAdapterSource | null =
+          mimeType === "text/markdown" || ext === "md" || ext === "markdown"
+            ? "markdown"
+            : mimeType === "text/csv" || ext === "csv"
+              ? "csv"
+              : mimeType === "text/html" || ext === "html" || ext === "htm"
+                ? "bookmark"
+                : null;
+
+        if (engineSource) {
           try {
-            // Markdown body → a LINKED DOCUMENT (versioned, MinIO-stored), not a
-            // 100KB content property. `content` is passed top-level so the
-            // entity-create path materializes a document + links it via
-            // documentId. Frontmatter stays as entity properties.
-            await this.proposeEntity({
-              profileSlug: "note",
-              title,
-              properties:
-                typeof frontmatter === "object" && frontmatter !== null
-                  ? (frontmatter as Record<string, unknown>)
-                  : {},
-              ...(body ? { content: body } : {}),
-              summary: `Import note: ${title}`,
-            });
-            stats.proposalsCreated++;
+            const { proposalId } = await this.proposeImportGraph(engineSource, [
+              { path, content },
+            ]);
+            if (proposalId) {
+              // ONE composite graph proposal per file (was N per-row proposals).
+              // entitiesCreated stays 0 — nothing materializes until approval.
+              stats.proposalsCreated++;
+            } else {
+              stats.filesStoredOnly++;
+            }
           } catch (e) {
             stats.errors.push({
               path,
               message:
                 e instanceof Error ? e.message : "Proposal create failed",
             });
-          }
-          continue;
-        }
-
-        if (mimeType === "text/csv" || ext === "csv") {
-          const { headers, rows } = parseCsv(content);
-          if (headers.length === 0 || rows.length === 0) {
-            stats.filesStoredOnly++;
-            continue;
-          }
-          for (const row of rows) {
-            const title =
-              row[headers[0]] ??
-              (row as Record<string, string>).title ??
-              (row as Record<string, string>).name ??
-              "Untitled";
-            const properties: Record<string, unknown> = {};
-            for (const h of headers) {
-              if (h && row[h] !== undefined && row[h] !== "") {
-                const key =
-                  h
-                    .replace(/\s+/g, "_")
-                    .toLowerCase()
-                    .replace(/[^a-z0-9_]/g, "")
-                    .slice(0, 100) || "value";
-                properties[key] = row[h];
-              }
-            }
-            const rowTitle = String(title).slice(0, 500);
-            try {
-              await this.proposeEntity({
-                profileSlug: "note",
-                title: rowTitle,
-                properties,
-                summary: `Import row: ${rowTitle}`,
-              });
-              stats.proposalsCreated++;
-            } catch (e) {
-              stats.errors.push({
-                path: `${path} row`,
-                message:
-                  e instanceof Error ? e.message : "Proposal create failed",
-              });
-            }
-          }
-          continue;
-        }
-
-        if (mimeType === "text/html" || ext === "html" || ext === "htm") {
-          const bookmarks = parseBookmarksHtml(content);
-          if (bookmarks.length === 0) {
-            stats.filesStoredOnly++;
-            continue;
-          }
-          for (const bookmark of bookmarks) {
-            const bookmarkTitle = bookmark.title.slice(0, 500);
-            try {
-              await this.proposeEntity({
-                profileSlug: "bookmark",
-                title: bookmarkTitle,
-                properties: {
-                  url: bookmark.url,
-                  ...(bookmark.tags ? { tags: bookmark.tags } : {}),
-                },
-                summary: `Import bookmark: ${bookmarkTitle}`,
-              });
-              stats.proposalsCreated++;
-            } catch (e) {
-              stats.errors.push({
-                path: `${path} bookmark`,
-                message:
-                  e instanceof Error ? e.message : "Proposal create failed",
-              });
-            }
           }
           continue;
         }
@@ -330,54 +267,99 @@ export class ImportOrchestrator {
   }
 
   /**
-   * Create a PENDING entity-create proposal for a parsed import row.
-   *
-   * Import is a governed AI/agent write: parsed entities are NOT created
-   * directly. Instead each becomes a pending proposal in the review inbox,
-   * materialized only when a human approves it. The data envelope mirrors the
-   * one `proposals.submit` / hub-protocol create produce, so the existing
-   * `proposals.approve` entity-create branch (targetType "entity",
-   * proposalType "create", reading `data.data.{profileSlug,title,properties}`)
-   * applies it through the canonical entity path on approval.
+   * Resolve the target workspace's REAL profiles → typed hints for the
+   * structuring model + the allow-list of slugs assignable as a type. Same
+   * resolution rest/capture.ts uses for /import/analyze + /import/apply.
+   * Cached per-batch so we resolve once across all file branches.
    */
-  private async proposeEntity(input: {
-    profileSlug: string;
-    title: string;
-    properties: Record<string, unknown>;
-    description?: string;
-    /** Long-form body → materialized as a linked document on approval. */
-    content?: string;
-    summary: string;
-  }) {
+  private profileHints?: {
+    availableProfiles: ReturnType<typeof buildAvailableProfiles>;
+    validSlugs: Set<string>;
+  };
+  private async resolveProfileHints() {
+    if (this.profileHints) return this.profileHints;
     const { workspaceId, userId } = this.ctx;
-    const targetId = randomUUID();
-    await createEventBackedProposal({
+    const db2 = await getDb();
+    const accessible = await new ProfileResolutionService(
+      db2
+    ).getAccessibleProfiles(userId, workspaceId);
+    const availableProfiles = buildAvailableProfiles(
+      accessible as unknown as AccessibleProfileLike[]
+    );
+    this.profileHints = {
+      availableProfiles,
+      validSlugs: new Set(availableProfiles.map((p) => p.slug)),
+    };
+    return this.profileHints;
+  }
+
+  /**
+   * Route a parsed source through the canonical import ENGINE: adapt raw records
+   * → ImportItems → (best-effort AI structuring) → buildImportProposal →
+   * importProposalToComposite → ONE governed `import.graph` composite proposal.
+   *
+   * This replaces the old per-row entity-proposal loop: a whole file (or batch
+   * of files) for a source becomes a SINGLE reviewable graph proposal that, on
+   * approval, materializes N entities + M relations atomically and (because the
+   * proposal is workspace-bound) workspace-scoped via proposals.approve.
+   *
+   * AI enrichment is on by default and best-effort: any IS failure falls back to
+   * the deterministic proposal (items unchanged). Returns the created proposal id
+   * or null when the source produced no items.
+   */
+  private async proposeImportGraph(
+    source: ImportAdapterSource,
+    raw: Array<{ path: string; content: string }>
+  ): Promise<{ proposalId: string | null; itemCount: number }> {
+    const { workspaceId, userId } = this.ctx;
+    const items = adaptItems(source, raw);
+    if (items.length === 0) return { proposalId: null, itemCount: 0 };
+
+    const { availableProfiles, validSlugs } = await this.resolveProfileHints();
+
+    // Best-effort AI structuring (typed profiles + extracted properties). On any
+    // IS failure, aiEnrichImportItems returns items unchanged and we proceed
+    // with the deterministic proposal — AI is an enhancement, not a dependency.
+    try {
+      const { client } = await resolveIntelligenceService({
+        userId,
+        workspaceId,
+        capability: "default",
+      });
+      await aiEnrichImportItems(
+        items,
+        client,
+        { availableProfiles },
+        { logger }
+      );
+    } catch (e) {
+      logger.warn(
+        { e, userId, source },
+        "import submitBatch AI enrich failed, using deterministic"
+      );
+    }
+
+    const proposal = buildImportProposal(items, "references", validSlugs);
+    const { operations } = importProposalToComposite(proposal);
+    const linkCount = operations.length - proposal.stats.itemCount;
+    const summary = `Import ${proposal.stats.itemCount} ${source} item(s) → ${proposal.stats.typeCount} type(s), ${linkCount} link(s)`;
+
+    const { proposal: created } = await createEventBackedProposal({
       userId,
       workspaceId,
       targetType: "entity",
-      targetId,
-      proposalType: "create",
+      targetId: randomUUID(),
+      proposalType: "import.graph",
       action: "create",
-      source: "user",
-      summary: input.summary,
-      createdBy: userId,
-      data: {
-        requestId: randomUUID(),
-        source: "user",
-        sourceId: userId,
-        workspaceId,
-        targetType: "entity",
-        targetId,
-        changeType: "create",
-        data: {
-          profileSlug: input.profileSlug,
-          title: input.title,
-          ...(input.description ? { description: input.description } : {}),
-          ...(input.content ? { content: input.content } : {}),
-          properties: input.properties,
-        },
-      },
+      source: "intelligence",
+      summary,
+      data: { operations, source },
     });
+
+    return {
+      proposalId: (created as { id?: string })?.id ?? null,
+      itemCount: proposal.stats.itemCount,
+    };
   }
 
   async queueLinkedInContacts(contacts: LinkedInContactPayload[]) {

@@ -875,7 +875,12 @@ export const proposalsRouter = router({
             logger.warn(
               { err, type },
               "composite proposal: relation create failed (entities kept)"
-            )
+            ),
+          // Workspace-scoped imports must pin their entities to the target
+          // workspace on approval (overriding pod-default profile entityScope),
+          // mirroring rest/capture.ts /import/apply. Only when the proposal is
+          // workspace-bound; interactive pod-default approvals stay global.
+          proposal.workspaceId ? { workspaceScoped: true } : undefined
         );
 
         await db
