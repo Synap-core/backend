@@ -263,7 +263,7 @@ async function lookupAgentUser(
         and(
           eq(users.userType, "agent"),
           eq(workspaceMembers.workspaceId, workspaceId),
-          drizzleSql`${users.agentMetadata}->>'createdByUserId' = ${userId}`
+          eq(users.createdByUserId, userId)
         )
       )
       .limit(1);

@@ -18,7 +18,7 @@
  *
  * Idempotent — safe to call multiple times with the same Kratos identity id.
  */
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 import { db } from "../client-pg.js";
@@ -162,8 +162,8 @@ export async function seedAdminUser(
       .where(
         and(
           eq(users.userType, "agent"),
-          sql`${users.agentMetadata}->>'createdByUserId' = ${identityId}`,
-          sql`${users.agentMetadata}->>'agentTemplate' = 'twin'`
+          eq(users.createdByUserId, identityId),
+          eq(users.agentTemplate, "twin")
         )
       )
       .limit(1);
@@ -176,6 +176,10 @@ export async function seedAdminUser(
         email: `agent-twin-${twinShortId}@synap.agent`,
         emailVerified: true,
         userType: "agent",
+        agentTemplate: "twin",
+        agentType: "twin",
+        createdByUserId: identityId,
+        isPersonalAgent: false,
         agentMetadata: {
           agentTemplate: "twin",
           agentType: "twin",

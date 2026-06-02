@@ -46,6 +46,19 @@ export const users = pgTable("users", {
   // Agent-specific metadata (null for human users)
   agentMetadata: jsonb("agent_metadata").$type<AgentMetadata | null>(),
 
+  // Agent identity — promoted out of agent_metadata to real, indexed, FK-backed
+  // columns (migration 0038). agent_metadata is still dual-written for
+  // back-compat during the transition; query predicates use these columns.
+  createdByUserId: text("created_by_user_id").references((): any => users.id, {
+    onDelete: "set null",
+  }),
+  isPersonalAgent: boolean("is_personal_agent").notNull().default(false),
+  agentTemplate: text("agent_template"),
+  agentType: text("agent_type"),
+  parentAgentId: text("parent_agent_id").references((): any => users.id, {
+    onDelete: "set null",
+  }),
+
   // Sync metadata (nullable — agents have no Kratos identity)
   kratosIdentityId: text("kratos_identity_id"),
   lastSyncedAt: timestamp("last_synced_at", {

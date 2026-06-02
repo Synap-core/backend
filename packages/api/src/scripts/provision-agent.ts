@@ -154,7 +154,7 @@ async function findAgent(
     .where(
       and(
         eq(users.userType, "agent"),
-        drizzleSql`${users.agentMetadata}->>'agentType' = ${serviceType}`
+        eq(users.agentType, serviceType!)
       )
     )
     .limit(1);
@@ -461,6 +461,8 @@ async function run() {
     name: `${e.displayName} Agent`,
     emailVerified: true,
     userType: "agent",
+    agentType: serviceType,
+    createdByUserId: null,
     agentMetadata: {
       agentType: serviceType,
       description: e.description,

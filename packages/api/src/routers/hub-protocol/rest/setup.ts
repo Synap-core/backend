@@ -460,7 +460,7 @@ export function registerSetupRoutes(app: HubHono): void {
       const existingAgent = await db.query.users.findFirst({
         where: and(
           eq(users.userType, "agent"),
-          drizzleSql`${users.agentMetadata}->>'agentType' = ${agentType}`
+          eq(users.agentType, agentType)
         ),
         orderBy: (u, { asc }) => [asc(u.createdAt)],
         columns: { id: true },
@@ -485,6 +485,9 @@ export function registerSetupRoutes(app: HubHono): void {
             emailVerified: true,
             userType: "agent",
             kratosIdentityId: null,
+            agentType,
+            isPersonalAgent: false,
+            createdByUserId: ownerUserId ?? null,
             agentMetadata: {
               agentType,
               description: `${agentLabel} — external agent (${authMethod === "jwt" ? "CP-managed" : "self-hosted"} setup)`,
@@ -507,7 +510,7 @@ export function registerSetupRoutes(app: HubHono): void {
           const raced = await db.query.users.findFirst({
             where: and(
               eq(users.userType, "agent"),
-              drizzleSql`${users.agentMetadata}->>'agentType' = ${agentType}`
+              eq(users.agentType, agentType)
             ),
             orderBy: (u, { asc }) => [asc(u.createdAt)],
             columns: { id: true },

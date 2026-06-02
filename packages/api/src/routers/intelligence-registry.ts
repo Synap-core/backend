@@ -628,6 +628,8 @@ export const intelligenceRegistryRouter = router({
         name: `${entry.displayName} Agent`,
         emailVerified: true,
         userType: "agent",
+        agentType: input.serviceType,
+        createdByUserId: ctx.userId ?? null,
         agentMetadata: {
           agentType: input.serviceType,
           description: entry.description,
@@ -1185,7 +1187,7 @@ export const intelligenceRegistryRouter = router({
       SELECT u.id, u.email
       FROM users u
       WHERE u.user_type = 'agent'
-        AND u.agent_metadata->>'agentType' = 'openclaw'
+        AND u.agent_type = 'openclaw'
       LIMIT 1
     `);
 
@@ -1292,7 +1294,7 @@ export const intelligenceRegistryRouter = router({
     const oldAgent = await db.execute(sqlDrizzle`
       SELECT u.id FROM users u
       WHERE u.user_type = 'agent'
-        AND u.agent_metadata->>'agentType' = 'openclaw'
+        AND u.agent_type = 'openclaw'
       LIMIT 1
     `);
 
@@ -1355,7 +1357,7 @@ export const intelligenceRegistryRouter = router({
       SELECT u.id, u.email, u.created_at
       FROM users u
       WHERE u.user_type = 'agent'
-        AND u.agent_metadata->>'agentType' = 'openclaw'
+        AND u.agent_type = 'openclaw'
       LIMIT 1
     `);
     const oldUser = oldAgent[0] as
@@ -1403,7 +1405,7 @@ export const intelligenceRegistryRouter = router({
     const oldAgent = await db.execute(sqlDrizzle`
       SELECT u.id FROM users u
       WHERE u.user_type = 'agent'
-        AND u.agent_metadata->>'agentType' = 'openclaw'
+        AND u.agent_type = 'openclaw'
       LIMIT 1
     `);
 
@@ -1460,7 +1462,7 @@ docker run -d \\
       SELECT u.id, u.email, u.created_at
       FROM users u
       WHERE u.user_type = 'agent'
-        AND u.agent_metadata->>'agentType' = 'openclaw'
+        AND u.agent_type = 'openclaw'
       LIMIT 1
     `);
     const agentUser = agentRows[0] as
@@ -1590,7 +1592,7 @@ async function findProvisionedAgent(
       .where(
         and(
           eq(users.userType, "agent"),
-          drizzleSql`${users.agentMetadata}->>'agentType' = ${serviceType}`
+          eq(users.agentType, serviceType)
         )
       )
       .limit(1);
@@ -1608,7 +1610,7 @@ async function findProvisionedAgent(
       .where(
         and(
           eq(users.userType, "agent"),
-          drizzleSql`${users.agentMetadata}->>'agentType' = ${serviceType}`
+          eq(users.agentType, serviceType)
         )
       )
       .limit(1);

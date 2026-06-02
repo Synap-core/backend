@@ -303,8 +303,8 @@ async function ensureAgentUser(
     .where(
       and(
         eq(users.userType, "agent"),
-        drizzleSql`${users.agentMetadata}->>'createdByUserId' = ${userId}`,
-        drizzleSql`${users.agentMetadata}->>'isPersonalAgent' = 'true'`
+        eq(users.createdByUserId, userId),
+        eq(users.isPersonalAgent, true)
       )
     )
     .limit(1);
@@ -323,6 +323,9 @@ async function ensureAgentUser(
           email: `agent-orchestrator-${shortId}@synap.agent`,
           userType: "agent",
           kratosIdentityId: null,
+          createdByUserId: userId,
+          agentType: "orchestrator",
+          isPersonalAgent: true,
           agentMetadata: {
             createdByUserId: userId,
             agentType: "orchestrator",
@@ -341,8 +344,8 @@ async function ensureAgentUser(
         .where(
           and(
             eq(users.userType, "agent"),
-            drizzleSql`${users.agentMetadata}->>'createdByUserId' = ${userId}`,
-            drizzleSql`${users.agentMetadata}->>'isPersonalAgent' = 'true'`
+            eq(users.createdByUserId, userId),
+            eq(users.isPersonalAgent, true)
           )
         )
         .limit(1);

@@ -3,7 +3,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { db, eq, and, inArray, drizzleSql } from "@synap/database";
+import { db, eq, and, inArray } from "@synap/database";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -90,7 +90,7 @@ export function registerAgentUsersRoutes(app: HubHono): void {
           .where(
             and(
               eq(users.userType, "agent"),
-              drizzleSql`${users.agentMetadata}->>'parentAgentId' = ${parentUserId}`
+              eq(users.parentAgentId, parentUserId)
             )
           );
         return c.json(

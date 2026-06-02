@@ -154,6 +154,11 @@ export const agentUsersRouter = router({
         emailVerified: true,
         userType: "agent",
         agentMetadata,
+        // Dual-write: mirror agent-identity fields to real columns
+        agentType: resolvedAgentType,
+        agentTemplate: agentMetadata.agentTemplate ?? null,
+        createdByUserId: ctx.userId,
+        isPersonalAgent: false,
         timezone: "UTC",
         locale: "en",
       });
@@ -521,22 +526,19 @@ export const agentUsersRouter = router({
         });
       }
 
-      // Find every agent user created by this userId. agentMetadata is a typed
-      // JSONB column — filter all `userType='agent'` rows then match in-memory
-      // (agent populations are tiny, so portability beats a raw JSON path).
-      const agentRows = await db
+      // Find every agent user created by this userId using the promoted column.
+      const owned = await db
         .select({
           id: users.id,
           agentMetadata: users.agentMetadata,
         })
         .from(users)
-        .where(eq(users.userType, "agent"));
-
-      const owned = agentRows.filter(
-        (row) =>
-          (row.agentMetadata as Record<string, unknown> | null)
-            ?.createdByUserId === input.userId
-      );
+        .where(
+          and(
+            eq(users.userType, "agent"),
+            eq(users.createdByUserId, input.userId)
+          )
+        );
 
       if (owned.length === 0) {
         return { removedCount: 0, revokedKeyCount: 0 };

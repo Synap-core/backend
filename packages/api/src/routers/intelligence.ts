@@ -1194,7 +1194,7 @@ export const intelligenceRouter = router({
         .where(
           and(
             eq(users.userType, "agent"),
-            drizzleSql`${users.agentMetadata}->>'agentType' = ${serviceType}`
+            eq(users.agentType, serviceType)
           )
         )
         .limit(1);
@@ -1268,6 +1268,8 @@ export const intelligenceRouter = router({
         name: `${entry.displayName} Agent`,
         emailVerified: true,
         userType: "agent",
+        agentType: serviceType,
+        createdByUserId: ctx.userId ?? null,
         agentMetadata: {
           agentType: serviceType,
           description: entry.description,

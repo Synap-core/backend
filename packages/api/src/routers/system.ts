@@ -1617,7 +1617,7 @@ export const systemRouter = router({
           .where(
             and(
               eq(users.userType, "agent"),
-              sqlDrizzle`${users.agentMetadata}->>'createdByUserId' = ${input.userId}`
+              eq(users.createdByUserId, input.userId)
             )
           );
         const childAgentIds = childAgents.map((row) => row.id);
