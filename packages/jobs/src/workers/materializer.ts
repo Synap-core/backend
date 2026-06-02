@@ -225,7 +225,11 @@ async function materializeEntity(
         userId
       );
 
-      const createdEntity = await entityRepo.create(
+      // The entity→document link is set here via documentId. The relationship
+      // is one-directional (documents has no entityId column); the previous
+      // back-link docRepo.update({ entityId }) wrote a non-existent column and
+      // is removed.
+      await entityRepo.create(
         {
           workspaceId: entityWorkspaceId!,
           userId,
@@ -235,12 +239,6 @@ async function materializeEntity(
           properties: (data.properties as Record<string, unknown>) || undefined,
           profileSlug,
         },
-        userId
-      );
-
-      await docRepo.update(
-        createdDocument.id,
-        { entityId: createdEntity.id },
         userId
       );
     } else {
