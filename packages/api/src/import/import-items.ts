@@ -17,6 +17,8 @@
  * AI-driven *restructuring* of an imported corpus is a separate later step.
  */
 
+import { shouldMaterializeAsDocument } from "./document-heuristic.js";
+
 export interface ImportLink {
   /** Target item name as referenced by the source (without #anchor or |alias). */
   targetName: string;
@@ -133,18 +135,28 @@ export function importProposalToComposite(proposal: ImportProposal): {
   droppedReferences: number;
 } {
   const entityOps: CompositeEntityOp[] = proposal.items.map((it) => {
-    // Pull the long-form body out of properties → the op's `content` field, so
-    // approval materializes a LINKED DOCUMENT (versioned) instead of inlining
-    // the whole note into a property. Remaining props (frontmatter, folder) stay.
+    // Pull the body out of properties. LONG-FORM bodies → the op's `content`
+    // field, so approval materializes a LINKED DOCUMENT (versioned) instead of
+    // inlining the note into a property. SHORT bodies stay in properties.content
+    // (no document overhead). Same heuristic the capture pipeline uses, so both
+    // surfaces agree on what becomes a document. Remaining props stay untouched.
     const { content, ...restProps } = it.properties as {
       content?: unknown;
     } & Record<string, unknown>;
+    const isLongForm =
+      typeof content === "string" &&
+      content.length > 0 &&
+      shouldMaterializeAsDocument(content);
+    const properties =
+      typeof content === "string" && content.length > 0 && !isLongForm
+        ? { ...restProps, content }
+        : restProps;
     return {
       op: "create_entity" as const,
       profileSlug: it.typeSlug,
       title: it.title,
-      properties: restProps,
-      ...(typeof content === "string" && content ? { content } : {}),
+      properties,
+      ...(isLongForm ? { content: content as string } : {}),
       ref: it.tempId,
     };
   });

@@ -51,6 +51,7 @@ import { syncPropertyToRelations } from "../utils/property-relation-sync.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { dispatchWebhooksForEvent } from "../utils/webhook-delivery.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { materializeContentDocument } from "../import/materialize-document.js";
 
 /**
  * Standard entity shape for API responses.
@@ -383,7 +384,6 @@ export const entitiesRouter = router({
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
       const entityRepo = new EntityRepository(database, eventRepo);
-      const docRepo = new DocumentRepository(database, eventRepo);
 
       // Resolve profile for defaultValues and entityScope
       let resolvedProfile: any = earlyResolvedProfile;
@@ -432,28 +432,16 @@ export const entitiesRouter = router({
       let createdEntity: any;
 
       if (input.content) {
-        // Atomic entity + document creation
-        const { storage } = await import("@synap/storage");
-
-        const content = input.content || "";
-        const key = storage.buildPath(ctx.userId, "entity", entityId, "md");
-        const metadata = await storage.upload(key, content, {
-          contentType: "text/markdown",
+        // Atomic entity + versioned-document creation. Shared materializer
+        // uploads content → documents row + document_versions v1 + Typesense.
+        const documentId = await materializeContentDocument({
+          content: input.content || "",
+          title: input.title || undefined,
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId,
+          db: database,
+          eventRepo,
         });
-
-        const createdDocument = await docRepo.create(
-          {
-            title: input.title || "Untitled",
-            type: "markdown",
-            storageUrl: metadata.url,
-            storageKey: metadata.path,
-            size: metadata.size,
-            mimeType: "text/markdown",
-            userId: ctx.userId,
-            workspaceId: ctx.workspaceId,
-          },
-          ctx.userId
-        );
 
         createdEntity = await entityRepo.create(
           {
@@ -461,7 +449,7 @@ export const entitiesRouter = router({
             userId: ctx.userId,
             title: input.title || undefined,
             preview: input.description || undefined,
-            documentId: createdDocument.id,
+            documentId,
             properties: effectiveProperties,
             profileSlug,
           },

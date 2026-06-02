@@ -5,10 +5,14 @@
  */
 
 import { eq, and } from "drizzle-orm";
-import { documents } from "../schema/documents.js";
+import { documents, documentVersions } from "../schema/documents.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
-import type { Document, NewDocument } from "../schema/documents.js";
+import type {
+  Document,
+  NewDocument,
+  NewDocumentVersion,
+} from "../schema/documents.js";
 
 export interface CreateDocumentInput {
   title: string;
@@ -22,6 +26,12 @@ export interface CreateDocumentInput {
   metadata?: Record<string, unknown>;
   userId: string;
   workspaceId?: string | null;
+  /**
+   * Full content at creation time. When provided, a v1 immutable snapshot is
+   * written to `document_versions` so the document has real version history
+   * from the start (the canonical current content still lives in storage).
+   */
+  content?: string;
 }
 
 export interface UpdateDocumentInput {
@@ -62,6 +72,19 @@ export class DocumentRepository extends BaseRepository<
         currentVersion: 1,
       } as NewDocument)
       .returning();
+
+    // Write the v1 immutable snapshot when content is supplied, so the document
+    // has real version history from creation (storage holds current content).
+    if (data.content !== undefined) {
+      await this.db.insert(documentVersions).values({
+        documentId: document.id,
+        version: 1,
+        content: data.content,
+        author: "user",
+        authorId: userId,
+        message: "Initial version",
+      } as NewDocumentVersion);
+    }
 
     // Emit completed event
     await this.emitCompleted("create", document, userId);

@@ -87,7 +87,10 @@ describe("obsidian adapter: obsidianNoteToImportItem → generic ImportItem", ()
 const OBSIDIAN_BATCH = [
   {
     path: "Projects/Launch Synap.md",
-    content: `---\ntitle: Launch Synap\ntype: project\nstatus: active\n---\nOwned by [[Antoine]]. Depends on [[Backend Rewrite]]. #priority`,
+    // Long-form body (markdown headings) so the heuristic routes it to a
+    // versioned document (op.content), not properties.content. Wikilinks +
+    // #priority are preserved so reference resolution still works.
+    content: `---\ntitle: Launch Synap\ntype: project\nstatus: active\n---\n# Overview\nOwned by [[Antoine]]. Depends on [[Backend Rewrite]]. #priority\n\n## Goals\nShip the v1 launch and validate the capture pipeline end to end.\n\n## Notes\nLots of moving pieces here — see the linked projects for details.`,
   },
   {
     path: "Projects/Backend Rewrite.md",
@@ -210,6 +213,16 @@ describe("importProposalToComposite (graph proposal — the governed unit)", () 
     // and is NOT duplicated into properties (which keeps frontmatter/folder only)
     expect(launch.properties?.content).toBeUndefined();
     expect(launch.properties?.folder).toBe("Projects");
+  });
+
+  it("keeps a SHORT body in properties.content, not op.content (no document)", () => {
+    const idea = operations.find(
+      (o) =>
+        o.op === "create_entity" && (o as { title?: string }).title === "Idea"
+    ) as { content?: string; properties?: Record<string, unknown> };
+    // short body → no linked document, stays inline as a property
+    expect(idea.content).toBeUndefined();
+    expect(idea.properties?.content).toContain("Loose idea");
   });
 
   it("emits relation ops referencing tempIds, drops unresolved", () => {

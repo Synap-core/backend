@@ -36,6 +36,8 @@ import { markServiceCredentialError } from "../utils/credential-auto-repair.js";
 import { emitSideEffects } from "@synap/events";
 import { eventRepository } from "@synap/database";
 import { randomUUID as _captureUUID } from "crypto";
+import { shouldMaterializeAsDocument } from "../import/document-heuristic.js";
+import { materializeContentDocument } from "../import/materialize-document.js";
 
 const logger = createLogger({ module: "capture-router" });
 
@@ -185,6 +187,29 @@ export const captureRouter = router({
       const eventRepo = new EventRepository(sql);
       const entityRepo = new EntityRepository(database, eventRepo);
 
+      // Long-form thought body → real versioned document (storage + v1 +
+      // Typesense), linked via documentId. Short thoughts stay as the entity's
+      // title/properties. Best-effort: a materialization failure must not block
+      // the capture, so we fall through to a plain entity.
+      let documentId: string | undefined;
+      if (shouldMaterializeAsDocument(input.content)) {
+        try {
+          documentId = await materializeContentDocument({
+            content: input.content,
+            title,
+            userId,
+            workspaceId,
+            db: database,
+            eventRepo,
+          });
+        } catch (err) {
+          logger.warn(
+            { err, userId },
+            "Thought document materialization failed, keeping content inline"
+          );
+        }
+      }
+
       let entity: Awaited<ReturnType<typeof entityRepo.create>>;
       try {
         entity = await entityRepo.create(
@@ -193,6 +218,7 @@ export const captureRouter = router({
             userId,
             title,
             properties,
+            documentId,
             profileSlug,
           },
           userId
@@ -209,6 +235,7 @@ export const captureRouter = router({
             userId,
             title,
             properties: input.url ? { url: input.url } : {},
+            documentId,
             profileSlug: "note",
           },
           userId
@@ -538,6 +565,13 @@ export const captureRouter = router({
             title: z.string(),
             description: z.string().optional(),
             properties: z.record(z.string(), z.unknown()).optional(),
+            /**
+             * Long-form body. When present AND long-form (per
+             * shouldMaterializeAsDocument), it is materialized as a versioned
+             * document linked via entity.documentId; short content stays in
+             * properties.content.
+             */
+            content: z.string().optional(),
             /** Link to existing entity instead of creating */
             existingEntityId: z.string().uuid().optional(),
           })
@@ -574,6 +608,38 @@ export const captureRouter = router({
               linked: true,
             };
           }
+
+          // Long-form content → real versioned document (storage + v1 +
+          // Typesense), linked via documentId. Short content folds into
+          // properties.content. Falls back to a property if materialization
+          // fails — never block entity creation on document materialization.
+          let documentId: string | undefined;
+          const properties: Record<string, unknown> = {
+            ...(entity.properties ?? {}),
+          };
+          if (entity.content) {
+            if (shouldMaterializeAsDocument(entity.content)) {
+              try {
+                documentId = await materializeContentDocument({
+                  content: entity.content,
+                  title: entity.title,
+                  userId,
+                  workspaceId,
+                  db: database,
+                  eventRepo,
+                });
+              } catch (err) {
+                logger.warn(
+                  { err, tempId: entity.tempId },
+                  "Document materialization failed, folding content into property"
+                );
+                properties.content = entity.content;
+              }
+            } else {
+              properties.content = entity.content;
+            }
+          }
+
           try {
             const newEntity = await entityRepo.create(
               {
@@ -581,7 +647,8 @@ export const captureRouter = router({
                 userId,
                 title: entity.title,
                 preview: entity.description,
-                properties: entity.properties ?? {},
+                properties,
+                documentId,
                 profileSlug: entity.profileSlug,
               },
               userId
