@@ -260,20 +260,33 @@ const KNOWN_IMPORT_PROFILES = new Set<string>([
  * Deliberately conservative: a folder is NOT a type. Real-world vaults organize
  * by PARA/numbered buckets ("1. Daily", "5. Projects"), which make terrible
  * entity types and pollute the schema. So:
- *   1. explicit typeHint, but ONLY if it maps to a known system profile
+ *   1. explicit typeHint, but ONLY if it maps to an allowed profile slug
  *   2. otherwise "note" (the honest default)
  * The folder is preserved separately as a `folder` property + label (see
  * buildImportProposal), so nothing is lost — and the AI restructure step
  * (Structure Steward) can later promote folders/notes into real types via its
  * own governed proposals. Import mirrors; it does not invent types.
+ *
+ * The allowed-slug set:
+ *   - When `validSlugs` is provided, the typeHint is gated against the REAL
+ *     workspace profile slugs. This is what the AI-structured import path uses:
+ *     the structuring endpoint already validates returned slugs against the
+ *     workspace's availableProfiles, so an AI-assigned slug present in validSlugs
+ *     is safe to trust as a real, creatable profile.
+ *   - When omitted, it falls back to the static KNOWN_IMPORT_PROFILES set
+ *     (the conservative deterministic-only behavior). Back-compat preserved.
  */
-function typeForItem(item: ImportItem): {
+function typeForItem(
+  item: ImportItem,
+  validSlugs?: Set<string>
+): {
   slug: string;
   source: ProposedType["source"];
 } {
   if (item.typeHint && item.typeHint.trim()) {
     const slug = toSlug(item.typeHint);
-    if (KNOWN_IMPORT_PROFILES.has(slug)) {
+    const allowed = validSlugs ?? KNOWN_IMPORT_PROFILES;
+    if (allowed.has(slug)) {
       return { slug, source: "type-hint" };
     }
   }
@@ -286,10 +299,14 @@ function typeForItem(item: ImportItem): {
  *
  * @param items Normalized import items (produced by a source adapter).
  * @param relationType Relation type for links (default "references").
+ * @param validSlugs Optional allow-list of REAL workspace profile slugs. When
+ *   provided, item typeHints are gated against it (so AI-assigned types stick);
+ *   when omitted, the conservative static KNOWN_IMPORT_PROFILES gate is used.
  */
 export function buildImportProposal(
   items: ImportItem[],
-  relationType = "references"
+  relationType = "references",
+  validSlugs?: Set<string>
 ): ImportProposal {
   const proposedItems: ProposedItem[] = [];
   const tempIdByName = new Map<string, string>(); // lowercased title → tempId
@@ -304,7 +321,7 @@ export function buildImportProposal(
   >();
 
   items.forEach((item, i) => {
-    const { slug, source } = typeForItem(item);
+    const { slug, source } = typeForItem(item, validSlugs);
     const tempId = `t${i + 1}`;
     const metadata =
       item.metadata && typeof item.metadata === "object" ? item.metadata : {};

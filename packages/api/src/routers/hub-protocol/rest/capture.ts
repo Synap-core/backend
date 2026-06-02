@@ -6,7 +6,11 @@ import { randomUUID } from "crypto";
 
 import { z } from "zod";
 
-import { captureRouter } from "../../capture.js";
+import {
+  captureRouter,
+  buildAvailableProfiles,
+  type AccessibleProfileLike,
+} from "../../capture.js";
 import {
   adaptItems,
   type ImportSource,
@@ -15,11 +19,13 @@ import {
   buildImportProposal,
   importProposalToComposite,
 } from "../../../utils/import-items.js";
+import { aiEnrichImportItems } from "../../../utils/import-ai.js";
+import { resolveIntelligenceService } from "../../../utils/intelligence-routing.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../../../utils/materialize-composite.js";
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
 import { relationsRouter } from "../../relations.js";
-import { db } from "@synap/database";
+import { db, getDb, ProfileResolutionService } from "@synap/database";
 import type { Context } from "../../../types/context.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -380,6 +386,12 @@ export function registerCaptureRoutes(app: HubHono): void {
       source: z.enum(["obsidian"]),
       /** Relation type for cross-references (default "references"). */
       relationType: z.string().min(1).max(64).optional(),
+      /**
+       * Route items through AI bulk-structuring to recover real typed profiles +
+       * extracted properties (best-effort; falls back to deterministic). Default
+       * on; set false for a pure deterministic faithful import.
+       */
+      aiStructure: z.boolean().optional().default(true),
       items: z
         .array(
           z.object({
@@ -406,8 +418,51 @@ export function registerCaptureRoutes(app: HubHono): void {
     const { userId, workspaceId } = acting;
 
     try {
+      // Resolve the workspace's REAL profiles → typed hints for the structuring
+      // model + the allow-list of slugs that may be assigned as a type.
+      const db2 = await getDb();
+      const accessible = await new ProfileResolutionService(
+        db2
+      ).getAccessibleProfiles(userId, workspaceId);
+      const availableProfiles = buildAvailableProfiles(
+        accessible as unknown as AccessibleProfileLike[]
+      );
+      const validSlugs = new Set(availableProfiles.map((p) => p.slug));
+
       const items = adaptItems(body.source as ImportSource, body.items);
-      const proposal = buildImportProposal(items, body.relationType);
+
+      // Optional AI pass: route items through bulk-structuring so each note gets
+      // a real typed profile + extracted properties. Best-effort: on any IS
+      // failure aiEnrichImportItems returns items unchanged and we proceed with
+      // the deterministic proposal.
+      let aiTyped = 0;
+      if (body.aiStructure !== false) {
+        try {
+          const { client } = await resolveIntelligenceService({
+            userId,
+            workspaceId,
+            capability: "default",
+          });
+          const enriched = await aiEnrichImportItems(
+            items,
+            client,
+            { availableProfiles },
+            { logger }
+          );
+          aiTyped = enriched.aiTyped;
+        } catch (e) {
+          logger.warn(
+            { e, userId },
+            "import/analyze AI enrich failed, using deterministic"
+          );
+        }
+      }
+
+      const proposal = buildImportProposal(
+        items,
+        body.relationType,
+        validSlugs
+      );
       // Also hand back a ready-to-run capture.execute payload so the client can
       // materialize the approved proposal with a single forward call (no glue).
       // Bridge to ONE governed graph composite proposal: N entities + M
@@ -439,6 +494,7 @@ export function registerCaptureRoutes(app: HubHono): void {
           types: proposal.stats.typeCount,
           references: proposal.stats.referenceCount,
           droppedReferences,
+          aiTyped,
         },
         "POST /import/analyze"
       );
@@ -448,6 +504,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         proposalId: (created as { id?: string })?.id,
         ...proposal,
         droppedReferences,
+        aiTyped,
       });
     } catch (err) {
       logger.error({ err, userId }, "POST /import/analyze failed");
@@ -494,6 +551,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       workspaceId: z.string().uuid().optional(),
       source: z.enum(["obsidian"]),
       relationType: z.string().min(1).max(64).optional(),
+      aiStructure: z.boolean().optional().default(true),
       items: z
         .array(
           z.object({
@@ -522,8 +580,46 @@ export function registerCaptureRoutes(app: HubHono): void {
     const { userId, workspaceId, role } = acting;
 
     try {
+      const db2 = await getDb();
+      const accessible = await new ProfileResolutionService(
+        db2
+      ).getAccessibleProfiles(userId, workspaceId);
+      const availableProfiles = buildAvailableProfiles(
+        accessible as unknown as AccessibleProfileLike[]
+      );
+      const validSlugs = new Set(availableProfiles.map((p) => p.slug));
+
       const items = adaptItems(body.source as ImportSource, body.items);
-      const proposal = buildImportProposal(items, body.relationType);
+
+      // Optional AI pass: typed profiles + extracted properties (best-effort).
+      let aiTyped = 0;
+      if (body.aiStructure !== false) {
+        try {
+          const { client } = await resolveIntelligenceService({
+            userId,
+            workspaceId,
+            capability: "default",
+          });
+          const enriched = await aiEnrichImportItems(
+            items,
+            client,
+            { availableProfiles },
+            { logger }
+          );
+          aiTyped = enriched.aiTyped;
+        } catch (e) {
+          logger.warn(
+            { e, userId },
+            "import/apply AI enrich failed, using deterministic"
+          );
+        }
+      }
+
+      const proposal = buildImportProposal(
+        items,
+        body.relationType,
+        validSlugs
+      );
       const { operations } = importProposalToComposite(proposal);
 
       // Workspace-scoped caller context — identical shape to the approve loop's
@@ -555,6 +651,7 @@ export function registerCaptureRoutes(app: HubHono): void {
           created,
           linked,
           droppedReferences: proposal.stats.unresolvedReferences,
+          aiTyped,
         },
         "POST /import/apply materialized"
       );
@@ -564,6 +661,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         created,
         linked,
         stats: proposal.stats,
+        aiTyped,
       });
     } catch (err) {
       logger.error({ err, userId }, "POST /import/apply failed");

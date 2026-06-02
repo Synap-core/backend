@@ -59,7 +59,7 @@ interface RawEffectiveProperty {
   targetProfileId?: string | null;
 }
 
-interface AccessibleProfileLike {
+export interface AccessibleProfileLike {
   id?: string;
   slug: string;
   displayName?: string | null;
@@ -82,7 +82,7 @@ function typedPropertyHint(
   return `${prop.slug}:${type}${prop.required ? "*" : ""}`;
 }
 
-function buildAvailableProfiles(profiles: AccessibleProfileLike[]) {
+export function buildAvailableProfiles(profiles: AccessibleProfileLike[]) {
   const slugByProfileId = new Map<string, string>();
   for (const p of profiles) if (p.id) slugByProfileId.set(p.id, p.slug);
 
