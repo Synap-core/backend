@@ -477,28 +477,48 @@ export function registerSetupRoutes(app: HubHono): void {
       } else {
         agentUserId = randomUUID();
         const shortId = agentUserId.slice(0, 8);
-        await db.insert(users).values({
-          id: agentUserId,
-          email: `agent-${agentType}-${shortId}@synap.agent`,
-          name: agentLabel,
-          emailVerified: true,
-          userType: "agent",
-          kratosIdentityId: null,
-          agentMetadata: {
-            agentType,
-            description: `${agentLabel} — external agent (${authMethod === "jwt" ? "CP-managed" : "self-hosted"} setup)`,
-            createdByUserId: ownerUserId ?? agentUserId,
-            isPersonalAgent: false,
-            writesRequireProposal: true,
-            capabilities: [],
-          },
-          timezone: "UTC",
-          locale: "en",
-        });
-        logger.info(
-          { agentUserId, agentType },
-          "setup/agent: created agent user"
-        );
+        try {
+          await db.insert(users).values({
+            id: agentUserId,
+            email: `agent-${agentType}-${shortId}@synap.agent`,
+            name: agentLabel,
+            emailVerified: true,
+            userType: "agent",
+            kratosIdentityId: null,
+            agentMetadata: {
+              agentType,
+              description: `${agentLabel} — external agent (${authMethod === "jwt" ? "CP-managed" : "self-hosted"} setup)`,
+              createdByUserId: ownerUserId ?? agentUserId,
+              isPersonalAgent: false,
+              writesRequireProposal: true,
+              capabilities: [],
+            },
+            timezone: "UTC",
+            locale: "en",
+          });
+          logger.info(
+            { agentUserId, agentType },
+            "setup/agent: created agent user"
+          );
+        } catch (err) {
+          // DB firewall: a partial unique index on (agentType) for service agents
+          // rejects a concurrent insert. Re-resolve the winning singleton and reuse
+          // it. If nothing matches, the error wasn't a dedup race — re-throw.
+          const raced = await db.query.users.findFirst({
+            where: and(
+              eq(users.userType, "agent"),
+              drizzleSql`${users.agentMetadata}->>'agentType' = ${agentType}`
+            ),
+            orderBy: (u, { asc }) => [asc(u.createdAt)],
+            columns: { id: true },
+          });
+          if (!raced) throw err;
+          agentUserId = raced.id;
+          logger.info(
+            { agentUserId, agentType },
+            "setup/agent: lost provision race — reusing existing agent user"
+          );
+        }
       }
 
       // ── 2. Grant workspace membership (opportunistic — skipped if no workspace) ─

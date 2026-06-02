@@ -315,21 +315,40 @@ async function ensureAgentUser(
     // 2a. Create the pod-wide personal agent user
     const newId = randomUUID();
     const shortId = newId.slice(0, 8);
-    const [agentUser] = await db
-      .insert(users)
-      .values({
-        id: newId,
-        email: `agent-orchestrator-${shortId}@synap.agent`,
-        userType: "agent",
-        kratosIdentityId: null,
-        agentMetadata: {
-          createdByUserId: userId,
-          agentType: "orchestrator",
-          isPersonalAgent: true,
-        },
-      })
-      .returning({ id: users.id });
-    resolvedAgentId = agentUser.id;
+    try {
+      const [agentUser] = await db
+        .insert(users)
+        .values({
+          id: newId,
+          email: `agent-orchestrator-${shortId}@synap.agent`,
+          userType: "agent",
+          kratosIdentityId: null,
+          agentMetadata: {
+            createdByUserId: userId,
+            agentType: "orchestrator",
+            isPersonalAgent: true,
+          },
+        })
+        .returning({ id: users.id });
+      resolvedAgentId = agentUser.id;
+    } catch (err) {
+      // DB firewall: a partial unique index on (createdByUserId, agentType) for
+      // personal agents rejects a concurrent insert. Reuse the winner; if nothing
+      // matches, the error wasn't a dedup race — re-throw.
+      const [raced] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(
+          and(
+            eq(users.userType, "agent"),
+            drizzleSql`${users.agentMetadata}->>'createdByUserId' = ${userId}`,
+            drizzleSql`${users.agentMetadata}->>'isPersonalAgent' = 'true'`
+          )
+        )
+        .limit(1);
+      if (!raced) throw err;
+      resolvedAgentId = raced.id;
+    }
   } else {
     resolvedAgentId = existing.id;
   }
