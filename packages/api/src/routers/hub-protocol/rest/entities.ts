@@ -32,6 +32,7 @@ import {
   getUserAccessibleWorkspaceIds,
   hasScope,
   logger,
+  resolveActingContext,
   resolveActorId,
   verifyWorkspaceAccess,
   type HubHono,
@@ -306,16 +307,20 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
     const { id: entityId } = c.req.valid("param");
     const query = c.req.valid("query");
-    const userId = query.userId || (c.get("userId") as string);
-    const workspaceId = query.workspaceId;
     const limitParam = query.limit;
     const limit = limitParam
       ? Math.min(200, Math.max(1, Number(limitParam)))
       : 50;
 
-    if (!userId) {
-      return c.json({ error: "userId is required" }, 400);
-    }
+    // Bind the acting identity to the authenticated principal — a session caller
+    // can't read another user's connections via ?userId=. Membership-checks the
+    // (resolved-or-default) workspace for the bound user.
+    const acting = await resolveActingContext(c, {
+      userId: query.userId,
+      workspaceId: query.workspaceId,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const { userId, workspaceId } = acting;
 
     try {
       const scopes = c.get("scopes") as string[];
@@ -379,7 +384,19 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
     const { id: entityId } = c.req.valid("param");
     const query = c.req.valid("query");
-    const userId = query.userId || (c.get("userId") as string);
+    // Bind the identity used for the access check to the authenticated principal.
+    // A session caller can't read an entity by claiming another user's ?userId=
+    // (the access check below verifies THIS user against the entity's workspace).
+    const authUserId = c.get("userId") as string | undefined;
+    if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
+    const isServiceKey = !!c.get("apiKeyId");
+    if (!isServiceKey && query.userId && query.userId !== authUserId) {
+      return c.json(
+        { error: "userId does not match the authenticated session" },
+        403
+      );
+    }
+    const userId = isServiceKey ? (query.userId ?? authUserId) : authUserId;
     try {
       const result = await db.query.entities.findFirst({
         where: and(eq(entities.id, entityId), isNull(entities.deletedAt)),
@@ -454,12 +471,6 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
     const body = c.req.valid("json");
 
-    const authUserId = c.get("userId") as string;
-    const userId = body.userId ?? authUserId;
-    if (!userId) {
-      return c.json({ error: "userId required" }, 400);
-    }
-
     // Resolve the profile. Precedence: explicit profileId (UUID) → profileSlug →
     // deprecated `type` alias → "note" as a sane default. Previously this
     // hardcoded "bookmark" and ignored profileId entirely, so an agent creating
@@ -481,28 +492,45 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
     if (!profileSlug) profileSlug = "note";
 
+    const profile = await db.query.profiles.findFirst({
+      where: eq(profiles.slug, profileSlug),
+      columns: { entityScope: true },
+    });
+    const isPodWide = !profile || profile.entityScope === "pod";
+
+    // Bind the acting identity to the authenticated principal (closes the IDOR:
+    // a session caller can't act as another user via body.userId). For
+    // workspace-scoped profiles, resolveActingContext also membership-checks the
+    // target workspace for the resolved user. Pod-wide profiles need no
+    // workspace, so we bind identity without forcing workspace resolution
+    // (preserving the previous "pod-wide profiles ignore workspaceId" behavior).
+    let userId: string;
     let effectiveWorkspaceId: string | null;
-
-    if (body.workspaceId) {
-      effectiveWorkspaceId = body.workspaceId;
-    } else {
-      const profile = await db.query.profiles.findFirst({
-        where: eq(profiles.slug, profileSlug),
-        columns: { entityScope: true },
-      });
-
-      if (!profile || profile.entityScope === "pod") {
-        effectiveWorkspaceId = null;
-      } else {
-        const wsIds = await getUserAccessibleWorkspaceIds(userId);
-        effectiveWorkspaceId = wsIds[0] ?? null;
-        if (!effectiveWorkspaceId) {
-          return c.json(
-            { error: "No accessible workspace found for this user" },
-            400
-          );
-        }
+    if (isPodWide && !body.workspaceId) {
+      const authUserId = c.get("userId") as string | undefined;
+      if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
+      const isServiceKey = !!c.get("apiKeyId");
+      if (!isServiceKey && body.userId && body.userId !== authUserId) {
+        return c.json(
+          { error: "userId does not match the authenticated session" },
+          403
+        );
       }
+      userId = isServiceKey ? (body.userId ?? authUserId) : authUserId;
+      effectiveWorkspaceId = null;
+    } else {
+      // Reached when an explicit body.workspaceId is present, or the profile is
+      // workspace-scoped. resolveActingContext binds the identity and verifies
+      // the resolved user's membership in the (explicit-or-default) workspace.
+      // Mirror the original: an explicit workspaceId is honored even for pod-wide
+      // profiles; a workspace-scoped profile with no body.workspaceId lands in
+      // the user's default (membership-checked) workspace.
+      const acting = await resolveActingContext(c, body);
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      userId = acting.userId;
+      // This branch is only reached with an explicit body.workspaceId or a
+      // workspace-scoped profile, so the membership-checked workspace applies.
+      effectiveWorkspaceId = acting.workspaceId;
     }
 
     try {
@@ -587,22 +615,48 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
     const { entityId } = c.req.valid("param");
     const body = c.req.valid("json");
+
+    // Bind the acting identity to the authenticated principal (closes the IDOR).
+    // When body.workspaceId is given, resolveActingContext also membership-checks
+    // it for the resolved user; when omitted, the update targets a pod-wide
+    // entity (workspace = null) — keep that behavior without forcing resolution.
+    let userId: string;
+    let effectiveWorkspaceId: string | null;
+    if (!body.workspaceId) {
+      const authUserId = c.get("userId") as string | undefined;
+      if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
+      const isServiceKey = !!c.get("apiKeyId");
+      if (!isServiceKey && body.userId && body.userId !== authUserId) {
+        return c.json(
+          { error: "userId does not match the authenticated session" },
+          403
+        );
+      }
+      userId = isServiceKey ? (body.userId ?? authUserId) : authUserId;
+      effectiveWorkspaceId = null;
+    } else {
+      const acting = await resolveActingContext(c, {
+        userId: body.userId,
+        workspaceId: body.workspaceId ?? undefined,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      userId = acting.userId;
+      effectiveWorkspaceId = acting.workspaceId;
+    }
+
     try {
-      const actorResolution = await resolveActorId(
-        body.agentUserId,
-        body.userId
-      );
+      const actorResolution = await resolveActorId(body.agentUserId, userId);
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       const actorId = actorResolution.actorId;
       const caller = await getCaller(c, {
-        workspaceId: body.workspaceId ?? null,
+        workspaceId: effectiveWorkspaceId,
         userId: actorId,
         sourceMessageId: body.sourceMessageId,
       });
       const result = await caller.entities.updateEntity({
         entityId,
-        userId: body.userId,
+        userId,
         ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
         title: body.title,
         preview: body.preview,

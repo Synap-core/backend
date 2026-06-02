@@ -5,6 +5,8 @@
  */
 
 import type { EventAction } from "../events/unified.js";
+import { isLikelyUUID } from "./proposal-utils.js";
+export { isLikelyUUID };
 
 // Re-export database types for proposals
 export type { Proposal, NewProposal } from "@synap/database";
@@ -347,12 +349,24 @@ export function registerEntityRef(
  * Resolve a relation op ref to a real entity id: an in-proposal ref ($opN /
  * op `ref` / $primary) maps through `map`; any other literal is treated as an
  * already-existing entity UUID and returned as-is.
+ *
+ * HARDENING: an unknown ref that is NOT a valid UUID is a programming/typo error
+ * (e.g. a relation pointing at "$op9" that never got created). Previously such a
+ * ref silently passed through as a literal entity id, producing a relation to a
+ * bogus UUID-shaped string (or a malformed id) instead of failing. We now throw
+ * so the mistake surfaces loudly. Real UUIDs still pass (treated as pre-existing
+ * entities — the relation create validates them against the workspace).
  */
 export function resolveCompositeRef(
   map: Record<string, string>,
   ref: string
 ): string {
-  return map[ref] ?? ref;
+  const mapped = map[ref];
+  if (mapped !== undefined) return mapped;
+  if (isLikelyUUID(ref)) return ref;
+  throw new Error(
+    `resolveCompositeRef: unknown reference "${ref}" — not an in-proposal op ref and not a valid entity UUID`
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -447,8 +461,8 @@ function normalizeProposalSource(source: unknown): UpdateRequest["source"] {
 }
 
 // Display utilities (pure, browser-safe)
+// (isLikelyUUID is re-exported above, next to its import for resolveCompositeRef.)
 export {
-  isLikelyUUID,
   resolveAuthorName,
   resolveTargetName,
   buildFallbackTitle,
