@@ -225,7 +225,7 @@ export async function handleHermesTrigger(): Promise<void> {
         repoUrl?: unknown;
         techStack?: unknown;
       } | null = null;
-      if (rel) {
+      if (rel?.targetEntityId) {
         const [app] = await db
           .select()
           .from(entities)
