@@ -224,6 +224,7 @@ async function enrichProposalsForDisplay(
             title: entities.title,
             preview: entities.preview,
             type: entities.type,
+            properties: entities.properties,
           })
           .from(entities)
           .where(inArray(entities.id, entityIds))
@@ -306,6 +307,7 @@ async function enrichProposalsForDisplay(
         },
         authorName,
         targetName,
+        current: entityMeta,
         events: request.correlationId
           ? (traceByCorrelationId.get(request.correlationId) ?? [])
           : [],
@@ -319,9 +321,16 @@ function buildProposalReviewModel(params: {
   request: UpdateRequest;
   authorName?: string;
   targetName?: string;
+  /** Current state of the target entity (for update before→after diffs). */
+  current?: {
+    title?: string | null;
+    preview?: string | null;
+    type?: string | null;
+    properties?: unknown;
+  };
   events: Awaited<ReturnType<EventRepository["getCorrelatedEvents"]>>;
 }): ProposalReviewModel {
-  const { row, request, authorName, targetName, events } = params;
+  const { row, request, authorName, targetName, current, events } = params;
   const requestData =
     request.data && typeof request.data === "object" ? request.data : {};
   // Composite (graph) proposals store `{ operations: [...] }` in row.data, which
@@ -361,7 +370,7 @@ function buildProposalReviewModel(params: {
     requestedEventId: request.requestedEventId ?? requestedEvent?.eventId,
     validatedEventId: request.validatedEventId ?? validatedEvent?.eventId,
     completedEventId: request.completedEventId ?? completedEvent?.eventId,
-    changes: buildProposalChanges(requestData, request.changeType),
+    changes: buildProposalChanges(requestData, request.changeType, current),
     ...(graph ? { graph } : {}),
     events: reviewEvents,
   };
@@ -453,7 +462,13 @@ function toProposalReviewEvent(event: {
 
 function buildProposalChanges(
   data: Record<string, unknown>,
-  changeType: string
+  changeType: string,
+  current?: {
+    title?: string | null;
+    preview?: string | null;
+    type?: string | null;
+    properties?: unknown;
+  }
 ): ProposalReviewChange[] {
   const changes: ProposalReviewChange[] = [];
   const operation =
@@ -463,12 +478,27 @@ function buildProposalChanges(
         ? "create"
         : "update";
 
+  // Current-state lookup so update diffs show before→after (not just after).
+  // Maps each proposed top-level field to the matching entity column.
+  const currentProps =
+    current?.properties && typeof current.properties === "object"
+      ? (current.properties as Record<string, unknown>)
+      : {};
+  const beforeFor = (key: string): unknown => {
+    if (operation !== "update" || !current) return undefined;
+    if (key === "title") return current.title ?? undefined;
+    if (key === "description") return current.preview ?? undefined;
+    if (key === "profileSlug") return current.type ?? undefined;
+    return undefined;
+  };
+
   for (const key of ["title", "description", "profileSlug", "documentId"]) {
     if (data[key] !== undefined) {
       changes.push({
         path: key,
         label: labelFromPath(key),
         operation,
+        before: beforeFor(key),
         after: data[key],
         valueType: valueTypeOf(data[key]),
       });
@@ -484,6 +514,7 @@ function buildProposalChanges(
       path: `properties.${key}`,
       label: labelFromPath(key),
       operation,
+      before: operation === "update" ? currentProps[key] : undefined,
       after: value,
       valueType: valueTypeOf(value),
     });
