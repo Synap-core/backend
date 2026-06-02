@@ -43,6 +43,7 @@ import {
   MoreHorizontal,
   Plus,
   Settings2,
+  Trash2,
 } from "lucide-react";
 import { Suspense, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -334,6 +335,30 @@ function WorkspaceRowActions({
 }) {
   const utils = trpc.useUtils();
   const [confirmArchive, setConfirmArchive] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const deleteMutation = trpc.workspaces.adminDelete.useMutation({
+    onSuccess: (data) => {
+      void utils.workspaces.list.invalidate();
+      void utils.workspaces.adminListAll.invalidate();
+      const p = (data as { purged?: Record<string, number> }).purged;
+      addToast({
+        title: "Workspace permanently deleted",
+        description: p
+          ? `${ws.name}: removed ${p.entities} entities, ${p.relations} relations, ${p.proposals} proposals, ${p.documents} documents.`
+          : `${ws.name} and its data were removed.`,
+        color: "default",
+      });
+      setConfirmDelete(false);
+    },
+    onError: (err) => {
+      addToast({
+        title: "Delete failed",
+        description: err.message,
+        color: "danger",
+      });
+    },
+  });
 
   const archiveMutation = trpc.workspaces.archive.useMutation({
     onSuccess: (_data, variables) => {
@@ -442,6 +467,18 @@ function WorkspaceRowActions({
                 Archive
               </Button>
             )}
+            {!isSystem ? (
+              <Button
+                variant="light"
+                size="sm"
+                radius="sm"
+                className="w-full justify-start text-[12.5px] text-danger"
+                startContent={<Trash2 className="h-3.5 w-3.5" />}
+                onPress={() => setConfirmDelete(true)}
+              >
+                Permanently delete
+              </Button>
+            ) : null}
           </div>
         </PopoverContent>
       </Popover>
@@ -452,6 +489,20 @@ function WorkspaceRowActions({
           isPending={archiveMutation.isPending}
           onCancel={() => setConfirmArchive(false)}
           onConfirm={() => archiveMutation.mutate({ workspaceId: ws.id })}
+        />
+      ) : null}
+
+      {confirmDelete ? (
+        <ConfirmDeleteWorkspaceModal
+          workspaceName={ws.name}
+          isPending={deleteMutation.isPending}
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() =>
+            deleteMutation.mutate({
+              workspaceId: ws.id,
+              confirmName: ws.name,
+            })
+          }
         />
       ) : null}
     </>
@@ -507,6 +558,83 @@ function ConfirmArchiveWorkspaceModal({
             onPress={onConfirm}
           >
             Archive workspace
+          </Button>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+  );
+}
+
+function ConfirmDeleteWorkspaceModal({
+  workspaceName,
+  isPending,
+  onCancel,
+  onConfirm,
+}: {
+  workspaceName: string;
+  isPending: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const { isOpen, onOpenChange } = useDisclosure({
+    defaultOpen: true,
+    onClose: onCancel,
+  });
+  const [typed, setTyped] = useState("");
+  const matches = typed.trim() === workspaceName;
+
+  return (
+    <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
+      <ModalContent>
+        <ModalHeader className="flex flex-col gap-1 border-b border-foreground/[0.06] px-6 py-4">
+          <h2 className="text-[15px] font-medium text-danger">
+            Permanently delete {workspaceName}?
+          </h2>
+        </ModalHeader>
+        <ModalBody className="gap-3 px-6 py-4">
+          <p className="text-[12.5px] text-foreground/85">
+            This <strong>cannot be undone</strong>. It removes the workspace and
+            all of its workspace-scoped data — entities, relations, proposals,
+            and documents (including stored files and search index). Pod-wide
+            data shared with other workspaces is not affected.
+          </p>
+          <p className="text-[12px] text-foreground/60">
+            Type{" "}
+            <span className="font-medium text-foreground/85">
+              {workspaceName}
+            </span>{" "}
+            to confirm.
+          </p>
+          <Input
+            size="sm"
+            radius="md"
+            value={typed}
+            onValueChange={setTyped}
+            placeholder={workspaceName}
+            aria-label="Type the workspace name to confirm deletion"
+            isDisabled={isPending}
+          />
+        </ModalBody>
+        <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
+          <Button
+            variant="flat"
+            radius="md"
+            size="sm"
+            onPress={onCancel}
+            isDisabled={isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            color="danger"
+            variant="solid"
+            radius="md"
+            size="sm"
+            isLoading={isPending}
+            isDisabled={!matches}
+            onPress={onConfirm}
+          >
+            Delete permanently
           </Button>
         </ModalFooter>
       </ModalContent>

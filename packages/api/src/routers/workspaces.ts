@@ -54,6 +54,7 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { assertPackageTierAccess } from "../utils/tier-check.js";
 import { emitSideEffects, getBoss } from "@synap/events";
+import { storage } from "@synap/storage";
 import { kratosAdmin } from "@synap/auth";
 import { config, createLogger } from "@synap-core/core";
 import {
@@ -896,7 +897,46 @@ export const workspacesRouter = router({
       const eventRepo = new EventRepository(sql);
       const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
 
+      // Purge workspace-scoped content (entities/relations/proposals/documents)
+      // BEFORE deleting the workspace row — those tables have no FK to
+      // workspaces, so cascade alone would orphan them. Pod-wide rows
+      // (workspaceId IS NULL) are intentionally left untouched.
+      const purged = await workspaceRepo.purgeWorkspaceData(input.workspaceId);
+
       await workspaceRepo.delete(input.workspaceId, ctx.userId);
+
+      // Post-commit cleanup of out-of-DB state (best-effort; never block delete).
+      let blobsDeleted = 0;
+      for (const key of purged.storageKeys) {
+        try {
+          await storage.delete(key);
+          blobsDeleted++;
+        } catch (err) {
+          logger.warn(
+            { err, key },
+            "Workspace purge: MinIO blob delete failed"
+          );
+        }
+      }
+      // De-index removed entities + documents from Typesense.
+      for (const id of purged.entityIds) {
+        void emitSideEffects({
+          subjectType: "entity",
+          action: "delete",
+          subjectId: id,
+          userId: ctx.userId,
+          workspaceId: input.workspaceId,
+        });
+      }
+      for (const id of purged.documentIds) {
+        void emitSideEffects({
+          subjectType: "document",
+          action: "delete",
+          subjectId: id,
+          userId: ctx.userId,
+          workspaceId: input.workspaceId,
+        });
+      }
 
       auditLog({
         subjectType: "workspaces",
@@ -909,15 +949,42 @@ export const workspacesRouter = router({
           id: input.workspaceId,
           name: workspace.name,
           adminForced: true,
+          purged: {
+            entities: purged.entityIds.length,
+            documents: purged.documentIds.length,
+            relations: purged.relationsDeleted,
+            proposals: purged.proposalsDeleted,
+            blobs: blobsDeleted,
+          },
         },
       });
 
       logger.warn(
-        { workspaceId: input.workspaceId, deletedBy: ctx.userId },
-        "Admin force-deleted workspace"
+        {
+          workspaceId: input.workspaceId,
+          deletedBy: ctx.userId,
+          purged: {
+            entities: purged.entityIds.length,
+            documents: purged.documentIds.length,
+            relations: purged.relationsDeleted,
+            proposals: purged.proposalsDeleted,
+            blobs: blobsDeleted,
+          },
+        },
+        "Admin force-deleted workspace + purged scoped content"
       );
 
-      return { status: "deleted" as const, message: "Workspace deleted." };
+      return {
+        status: "deleted" as const,
+        message: "Workspace deleted.",
+        purged: {
+          entities: purged.entityIds.length,
+          documents: purged.documentIds.length,
+          relations: purged.relationsDeleted,
+          proposals: purged.proposalsDeleted,
+          blobs: blobsDeleted,
+        },
+      };
     }),
 
   /**
