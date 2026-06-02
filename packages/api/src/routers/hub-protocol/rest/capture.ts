@@ -20,6 +20,7 @@ import {
   importProposalToComposite,
 } from "../../../import/import-items.js";
 import { aiEnrichImportItems } from "../../../import/import-ai.js";
+import { deepStructureImportItems } from "../../../import/import-deep.js";
 import { resolveIntelligenceService } from "../../../utils/intelligence-routing.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../../../utils/materialize-composite.js";
@@ -374,42 +375,82 @@ export function registerCaptureRoutes(app: HubHono): void {
       // failure aiEnrichImportItems returns items unchanged and we proceed with
       // the deterministic proposal.
       let aiTyped = 0;
-      if (body.aiStructure !== false) {
+      // Prose (markdown/obsidian) → DEEP extraction: decompose each note into a
+      // typed entity graph (the SAME engine as ImportOrchestrator.submitBatch —
+      // single source: import-deep). Structured rows stay on the shallow 1:1
+      // path. Deep is best-effort; on no yield we fall back to shallow.
+      const isProse = body.source === "obsidian" || body.source === "markdown";
+      let operations:
+        | ReturnType<typeof importProposalToComposite>["operations"]
+        | undefined;
+      let summary = "";
+      let droppedReferences = 0;
+      let stats: Record<string, unknown> = {};
+      let mode: "deep" | "shallow" = "shallow";
+
+      if (isProse && body.aiStructure !== false) {
         try {
           const { client } = await resolveIntelligenceService({
             userId,
             workspaceId,
             capability: "default",
           });
-          const enriched = await aiEnrichImportItems(
+          const deep = await deepStructureImportItems(
             items,
             client,
-            { availableProfiles },
+            { availableProfiles, validSlugs },
             { logger }
           );
-          aiTyped = enriched.aiTyped;
+          if (deep.stats.entityCount > 0) {
+            operations = deep.operations;
+            aiTyped = deep.stats.entityCount;
+            mode = "deep";
+            stats = { ...deep.stats };
+            const typeCount = Object.keys(deep.stats.byType).length;
+            summary = `Deep import ${deep.stats.itemsProcessed} ${body.source} note(s) → ${deep.stats.entityCount} entities (${typeCount} types), ${deep.stats.relationCount} relations`;
+          }
         } catch (e) {
           logger.warn(
             { e, userId },
-            "import/analyze AI enrich failed, using deterministic"
+            "import/analyze deep failed, falling back to shallow"
           );
         }
       }
 
-      const proposal = buildImportProposal(
-        items,
-        body.relationType,
-        validSlugs
-      );
-      // Also hand back a ready-to-run capture.execute payload so the client can
-      // materialize the approved proposal with a single forward call (no glue).
-      // Bridge to ONE governed graph composite proposal: N entities + M
-      // relations, approved atomically. Materialization is deferred to human
-      // approval (the generalized composite branch in proposals.ts resolves
-      // each tempId ref → real entity id and creates the whole graph in order).
-      const { operations, droppedReferences } =
-        importProposalToComposite(proposal);
-      const summary = `Import ${proposal.stats.itemCount} ${body.source} item(s) → ${proposal.stats.typeCount} type(s), ${operations.length - proposal.stats.itemCount} link(s)`;
+      if (mode === "shallow") {
+        if (body.aiStructure !== false) {
+          try {
+            const { client } = await resolveIntelligenceService({
+              userId,
+              workspaceId,
+              capability: "default",
+            });
+            const enriched = await aiEnrichImportItems(
+              items,
+              client,
+              { availableProfiles },
+              { logger }
+            );
+            aiTyped = enriched.aiTyped;
+          } catch (e) {
+            logger.warn(
+              { e, userId },
+              "import/analyze AI enrich failed, using deterministic"
+            );
+          }
+        }
+        const proposal = buildImportProposal(
+          items,
+          body.relationType,
+          validSlugs
+        );
+        const composite = importProposalToComposite(proposal);
+        operations = composite.operations;
+        droppedReferences = composite.droppedReferences;
+        stats = { ...proposal.stats };
+        summary = `Import ${proposal.stats.itemCount} ${body.source} item(s) → ${proposal.stats.typeCount} type(s), ${operations.length - proposal.stats.itemCount} link(s)`;
+      }
+
       const { proposal: created } = await createEventBackedProposal({
         userId,
         workspaceId,
@@ -419,7 +460,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         action: "create",
         source: "intelligence",
         summary,
-        data: { operations, source: body.source },
+        data: { operations: operations!, source: body.source },
       });
 
       logger.info(
@@ -427,20 +468,20 @@ export function registerCaptureRoutes(app: HubHono): void {
           userId,
           workspaceId,
           source: body.source,
+          mode,
           proposalId: (created as { id?: string })?.id,
-          items: proposal.stats.itemCount,
-          types: proposal.stats.typeCount,
-          references: proposal.stats.referenceCount,
           droppedReferences,
           aiTyped,
+          ...stats,
         },
         "POST /import/analyze"
       );
       return c.json({
         workspaceId,
         source: body.source,
+        mode,
         proposalId: (created as { id?: string })?.id,
-        ...proposal,
+        stats,
         droppedReferences,
         aiTyped,
       });

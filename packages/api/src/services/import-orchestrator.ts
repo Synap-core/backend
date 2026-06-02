@@ -13,7 +13,9 @@ import {
   importProposalToComposite,
 } from "../import/import-items.js";
 import { aiEnrichImportItems } from "../import/import-ai.js";
+import { deepStructureImportItems } from "../import/import-deep.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
+import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import {
   buildAvailableProfiles,
   type AccessibleProfileLike,
@@ -317,32 +319,79 @@ export class ImportOrchestrator {
 
     const { availableProfiles, validSlugs } = await this.resolveProfileHints();
 
-    // Best-effort AI structuring (typed profiles + extracted properties). On any
-    // IS failure, aiEnrichImportItems returns items unchanged and we proceed
-    // with the deterministic proposal — AI is an enhancement, not a dependency.
-    try {
-      const { client } = await resolveIntelligenceService({
-        userId,
-        workspaceId,
-        capability: "default",
-      });
-      await aiEnrichImportItems(
-        items,
-        client,
-        { availableProfiles },
-        { logger }
-      );
-    } catch (e) {
-      logger.warn(
-        { e, userId, source },
-        "import submitBatch AI enrich failed, using deterministic"
-      );
+    // Prose (markdown/obsidian) → DEEP extraction: decompose each note into
+    // multiple typed entities + relations, merged + deduplicated across notes.
+    // Structured rows (csv/bookmark) stay on the SHALLOW path (1 row = 1 entity,
+    // which is correct for them). Deep is best-effort: if it yields nothing
+    // (IS down, all timeouts), we fall back to shallow so an import never fails.
+    const isProse = source === "obsidian" || source === "markdown";
+    let operations: CompositeProposalOperation[] | undefined;
+    let summary: string | undefined;
+    let itemCount = items.length;
+
+    if (isProse) {
+      try {
+        const { client } = await resolveIntelligenceService({
+          userId,
+          workspaceId,
+          capability: "default",
+        });
+        const deep = await deepStructureImportItems(
+          items,
+          client,
+          { availableProfiles, validSlugs },
+          { logger }
+        );
+        if (deep.stats.entityCount > 0) {
+          operations = deep.operations;
+          itemCount = deep.stats.itemsProcessed;
+          const typeCount = Object.keys(deep.stats.byType).length;
+          summary = `Deep import ${deep.stats.itemsProcessed} ${source} note(s) → ${deep.stats.entityCount} entit${deep.stats.entityCount === 1 ? "y" : "ies"} (${typeCount} type${typeCount === 1 ? "" : "s"}), ${deep.stats.relationCount} relation(s)`;
+          logger.info(
+            { ...deep.stats, userId, source },
+            "deep import structured"
+          );
+        } else {
+          logger.warn(
+            { userId, source },
+            "deep import produced no entities — falling back to shallow"
+          );
+        }
+      } catch (e) {
+        logger.warn(
+          { e, userId, source },
+          "deep import failed — falling back to shallow"
+        );
+      }
     }
 
-    const proposal = buildImportProposal(items, "references", validSlugs);
-    const { operations } = importProposalToComposite(proposal);
-    const linkCount = operations.length - proposal.stats.itemCount;
-    const summary = `Import ${proposal.stats.itemCount} ${source} item(s) → ${proposal.stats.typeCount} type(s), ${linkCount} link(s)`;
+    if (!operations) {
+      // Shallow path: best-effort AI typing (1 item → 1 typed entity). Any IS
+      // failure leaves items unchanged and the deterministic proposal stands.
+      try {
+        const { client } = await resolveIntelligenceService({
+          userId,
+          workspaceId,
+          capability: "default",
+        });
+        await aiEnrichImportItems(
+          items,
+          client,
+          { availableProfiles },
+          { logger }
+        );
+      } catch (e) {
+        logger.warn(
+          { e, userId, source },
+          "import submitBatch AI enrich failed, using deterministic"
+        );
+      }
+      const proposal = buildImportProposal(items, "references", validSlugs);
+      operations = importProposalToComposite(proposal).operations;
+      itemCount = proposal.stats.itemCount;
+      const linkCount = operations.length - proposal.stats.itemCount;
+      summary = `Import ${proposal.stats.itemCount} ${source} item(s) → ${proposal.stats.typeCount} type(s), ${linkCount} link(s)`;
+    }
 
     const { proposal: created } = await createEventBackedProposal({
       userId,
@@ -358,7 +407,7 @@ export class ImportOrchestrator {
 
     return {
       proposalId: (created as { id?: string })?.id ?? null,
-      itemCount: proposal.stats.itemCount,
+      itemCount,
     };
   }
 
