@@ -8,7 +8,6 @@ import {
 } from "../import-adapters.js";
 import {
   buildImportProposal,
-  importProposalToExecutePayload,
   importProposalToComposite,
   toSlug,
 } from "../import-items.js";
@@ -44,7 +43,10 @@ describe("obsidian adapter: extractWikilinks", () => {
     const links = extractWikilinks(
       "[[Real Note]] [[pasted image 20230408.png]] [[clip.mp4]] [[doc.pdf]] [[notes/Other]]"
     );
-    expect(links.map((l) => l.targetName).sort()).toEqual(["Other", "Real Note"]);
+    expect(links.map((l) => l.targetName).sort()).toEqual([
+      "Other",
+      "Real Note",
+    ]);
   });
 });
 
@@ -180,53 +182,10 @@ describe("buildImportProposal (source-agnostic)", () => {
   });
 });
 
-describe("importProposalToExecutePayload (bridge to capture.execute)", () => {
-  const items = adaptItems("obsidian", OBSIDIAN_BATCH);
-  const proposal = buildImportProposal(items);
-  const { payload, droppedReferences } =
-    importProposalToExecutePayload(proposal);
-
-  it("maps typeSlug → profileSlug for every entity", () => {
-    expect(payload.entities).toHaveLength(proposal.items.length);
-    for (const e of payload.entities) {
-      expect(typeof e.profileSlug).toBe("string");
-      expect(e.profileSlug.length).toBeGreaterThan(0);
-      // no leaked typeSlug field
-      expect((e as Record<string, unknown>).typeSlug).toBeUndefined();
-    }
-    const launch = payload.entities.find((e) => e.title === "Launch Synap")!;
-    expect(launch.profileSlug).toBe("project");
-  });
-
-  it("keeps only resolved relations and reports dropped count", () => {
-    // every emitted relation has a targetTempId (execute requires it)
-    expect(payload.relations.every((r) => Boolean(r.targetTempId))).toBe(true);
-    // exactly the one unresolved [[Nonexistent]] link is dropped
-    expect(droppedReferences).toBe(1);
-    expect(payload.relations.length).toBe(
-      proposal.references.filter((r) => r.resolved).length
-    );
-  });
-
-  it("produces a payload shaped for capture.execute", () => {
-    // shape sanity: arrays of the exact fields execute validates
-    const e = payload.entities[0];
-    expect(Object.keys(e).sort()).toEqual(
-      ["profileSlug", "properties", "tempId", "title"].sort()
-    );
-    if (payload.relations.length) {
-      expect(Object.keys(payload.relations[0]).sort()).toEqual(
-        ["relationType", "sourceTempId", "targetTempId"].sort()
-      );
-    }
-  });
-});
-
 describe("importProposalToComposite (graph proposal — the governed unit)", () => {
   const items = adaptItems("obsidian", OBSIDIAN_BATCH);
   const proposal = buildImportProposal(items);
-  const { operations, droppedReferences } =
-    importProposalToComposite(proposal);
+  const { operations, droppedReferences } = importProposalToComposite(proposal);
 
   it("emits N create_entity ops (one per item) tagged with tempId ref", () => {
     const entityOps = operations.filter((o) => o.op === "create_entity");
@@ -242,7 +201,9 @@ describe("importProposalToComposite (graph proposal — the governed unit)", () 
 
   it("routes body to op.content (linked document), NOT properties.content", () => {
     const launch = operations.find(
-      (o) => o.op === "create_entity" && (o as { title?: string }).title === "Launch Synap"
+      (o) =>
+        o.op === "create_entity" &&
+        (o as { title?: string }).title === "Launch Synap"
     ) as { content?: string; properties?: Record<string, unknown> };
     // long-form body lives on the op's content → becomes a linked document
     expect(launch.content).toContain("Owned by");
@@ -252,7 +213,9 @@ describe("importProposalToComposite (graph proposal — the governed unit)", () 
   });
 
   it("emits relation ops referencing tempIds, drops unresolved", () => {
-    const relOps = operations.filter((o) => o.op === "create_relation") as Array<{
+    const relOps = operations.filter(
+      (o) => o.op === "create_relation"
+    ) as Array<{
       sourceRef: string;
       targetRef: string;
     }>;
