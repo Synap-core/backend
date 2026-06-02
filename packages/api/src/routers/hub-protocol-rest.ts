@@ -61,6 +61,7 @@ import {
   registerViewsRoutes,
   registerWidgetDefinitionsRoutes,
   registerCellsRoutes,
+  registerCellInstancesRoutes,
   registerWorkspacesRoutes,
   registerMessagingRoutes,
   registerConnectorsRoutes,
@@ -392,6 +393,7 @@ registerRelationDefsRoutes(app); // /relation-defs*
 registerSessionsRoutes(app); // /sessions*, /compacted-states*
 registerWidgetDefinitionsRoutes(app); // /widget-definitions
 registerCellsRoutes(app); // /cells, /cells/install, /cells/:typeKey
+registerCellInstancesRoutes(app); // /cell-instances, /cell-instances/html, /cell-instances/:id*
 registerMcpServersRoutes(app); // /mcp-servers
 registerAutomationsRoutes(app); // /automations*
 registerBackgroundTasksRoutes(app); // /background-tasks*

@@ -244,12 +244,16 @@ export const relationsRouter = router({
         });
       }
 
-      // Extract entity IDs (the "other" entity in each relation)
-      const relatedEntityIds = relationRecords.map((rel) => {
-        return rel.sourceEntityId === input.entityId
-          ? rel.targetEntityId
-          : rel.sourceEntityId;
-      });
+      // Extract entity IDs (the "other" entity in each relation).
+      // Polymorphic endpoints: a cell endpoint has a NULL entity id — skip it
+      // here (this is an entity-centric read).
+      const relatedEntityIds = relationRecords
+        .map((rel) =>
+          rel.sourceEntityId === input.entityId
+            ? rel.targetEntityId
+            : rel.sourceEntityId
+        )
+        .filter((id): id is string => id !== null);
 
       if (relatedEntityIds.length === 0) {
         return { entities: [] };
@@ -530,7 +534,8 @@ export const relationsRouter = router({
           rel.sourceEntityId === input.entityId
             ? rel.targetEntityId
             : rel.sourceEntityId;
-        entityIdsToFetch.add(otherId);
+        // Polymorphic endpoints: skip cell endpoints (NULL entity id).
+        if (otherId !== null) entityIdsToFetch.add(otherId);
       }
       for (const link of propertyLinks) {
         entityIdsToFetch.add(link.sourceEntityId);
@@ -573,6 +578,9 @@ export const relationsRouter = router({
       for (const rel of graphRelations) {
         const isOutgoing = rel.sourceEntityId === input.entityId;
         const otherId = isOutgoing ? rel.targetEntityId : rel.sourceEntityId;
+        // Polymorphic endpoints: skip cell endpoints (NULL entity id) in this
+        // entity-centric connections view.
+        if (otherId === null) continue;
         connections.push({
           entityId: otherId,
           entity: entityMap.get(otherId) ?? null,
@@ -782,8 +790,15 @@ export const relationsRouter = router({
 
       await relationRepo.delete(input.id, ctx.userId);
 
-      // 2b. Reverse-sync: if this relation type maps to a property, auto-clear it
-      if (relationToDelete && effectiveWorkspaceId) {
+      // 2b. Reverse-sync: if this relation type maps to a property, auto-clear it.
+      // Only entity↔entity relations map to entity_id properties — skip when an
+      // endpoint is a cell (NULL entity id).
+      if (
+        relationToDelete &&
+        effectiveWorkspaceId &&
+        relationToDelete.sourceEntityId !== null &&
+        relationToDelete.targetEntityId !== null
+      ) {
         syncRelationToPropertyOnDelete(
           relationToDelete.sourceEntityId,
           relationToDelete.targetEntityId,

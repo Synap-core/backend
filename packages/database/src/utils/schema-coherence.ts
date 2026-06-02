@@ -404,6 +404,50 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "user_id",
     addedBy: "0022_messaging_accounts.sql",
   },
+
+  // cell_instances — persisted universal cell rendering unit (0041)
+  {
+    table: "cell_instances",
+    column: "cell_type",
+    addedBy: "0041_cell_instances.sql",
+  },
+  {
+    table: "cell_instances",
+    column: "config",
+    addedBy: "0041_cell_instances.sql",
+  },
+  {
+    table: "cell_instances",
+    column: "source_document_id",
+    addedBy: "0041_cell_instances.sql",
+  },
+  {
+    table: "cell_instances",
+    column: "trust_level",
+    addedBy: "0041_cell_instances.sql",
+  },
+
+  // relations — polymorphic endpoints (0041)
+  {
+    table: "relations",
+    column: "source_kind",
+    addedBy: "0041_cell_instances.sql",
+  },
+  {
+    table: "relations",
+    column: "target_kind",
+    addedBy: "0041_cell_instances.sql",
+  },
+  {
+    table: "relations",
+    column: "source_cell_id",
+    addedBy: "0041_cell_instances.sql",
+  },
+  {
+    table: "relations",
+    column: "target_cell_id",
+    addedBy: "0041_cell_instances.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

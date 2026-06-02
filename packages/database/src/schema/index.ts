@@ -151,3 +151,6 @@ export * from "./feeds.js";
 
 // NEW: Messaging Accounts (provider-agnostic connected messaging accounts)
 export * from "./messaging-accounts.js";
+
+// NEW: Cell Instances (persisted instances of the universal cell rendering unit)
+export * from "./cell-instances.js";

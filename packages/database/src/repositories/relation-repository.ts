@@ -13,13 +13,23 @@ import { sql } from "../client-pg.js";
 
 export interface CreateRelationInput {
   id?: string;
-  sourceEntityId: string;
-  targetEntityId: string;
+  /** Entity endpoint when the source end is an entity (default kind). */
+  sourceEntityId?: string | null;
+  /** Entity endpoint when the target end is an entity (default kind). */
+  targetEntityId?: string | null;
   /** Relation type slug (from workspace relation_defs or system types) */
   type: string;
   workspaceId?: string | null;
   userId: string;
   metadata?: Record<string, unknown>;
+  /** Endpoint kind for the source end. Defaults to 'entity'. */
+  sourceKind?: "entity" | "cell";
+  /** Endpoint kind for the target end. Defaults to 'entity'. */
+  targetKind?: "entity" | "cell";
+  /** Cell-instance endpoint when sourceKind='cell'. */
+  sourceCellId?: string | null;
+  /** Cell-instance endpoint when targetKind='cell'. */
+  targetCellId?: string | null;
 }
 
 export interface UpdateRelationInput {
@@ -48,8 +58,14 @@ export class RelationRepository extends BaseRepository<
       .insert(relations)
       .values({
         id: data.id,
-        sourceEntityId: data.sourceEntityId,
-        targetEntityId: data.targetEntityId,
+        sourceEntityId: data.sourceEntityId ?? null,
+        targetEntityId: data.targetEntityId ?? null,
+        // Polymorphic endpoints — default to 'entity' so existing callers are
+        // unchanged (entity↔entity). Only set the cell columns when provided.
+        sourceKind: data.sourceKind ?? "entity",
+        targetKind: data.targetKind ?? "entity",
+        sourceCellId: data.sourceCellId ?? null,
+        targetCellId: data.targetCellId ?? null,
         type: data.type,
         workspaceId: data.workspaceId,
         userId: data.userId,

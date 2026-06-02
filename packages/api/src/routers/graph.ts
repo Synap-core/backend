@@ -78,11 +78,13 @@ export const graphRouter = router({
       // 3. Get related entity IDs
       const relatedEntityIds = new Set<string>();
       allRelations.forEach((rel) => {
-        if (rel.sourceEntityId === input.entityId) {
-          relatedEntityIds.add(rel.targetEntityId);
-        } else {
-          relatedEntityIds.add(rel.sourceEntityId);
-        }
+        // Polymorphic endpoints: a cell endpoint has a NULL entity id — skip it
+        // (this graph view traverses entity↔entity edges).
+        const otherId =
+          rel.sourceEntityId === input.entityId
+            ? rel.targetEntityId
+            : rel.sourceEntityId;
+        if (otherId !== null) relatedEntityIds.add(otherId);
       });
 
       // 4. Fetch related entity previews if requested

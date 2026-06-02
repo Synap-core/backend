@@ -15,6 +15,7 @@
  */
 
 import type { ConversationMessageMetadata } from "@synap-core/core";
+import { isNotNull } from "drizzle-orm";
 import {
   pgTable,
   uuid,
@@ -72,6 +73,25 @@ export const MessageCategory = {
 export type MessageCategory =
   (typeof MessageCategory)[keyof typeof MessageCategory];
 
+/**
+ * Routed Attribution Source — how an AI teammate came to author a message in a
+ * multiplayer room. Lets the UI show "orchestrator routed to X" vs a direct
+ * @mention vs a plain reply.
+ *
+ * orchestrator — the routing engine selected this teammate (auto-routed).
+ * mention      — a human @mentioned this teammate explicitly.
+ * direct       — the teammate replied in its own bound channel (no routing).
+ *
+ * Free at the DB level; the later routing pass sets it. Null = pre-routing /
+ * non-routed message (back-compat).
+ */
+export const RoutedSource = {
+  ORCHESTRATOR: "orchestrator",
+  MENTION: "mention",
+  DIRECT: "direct",
+} as const;
+export type RoutedSource = (typeof RoutedSource)[keyof typeof RoutedSource];
+
 export const messages = pgTable(
   "messages",
   {
@@ -125,6 +145,25 @@ export const messages = pgTable(
     // Metadata (AI suggestions, sources, tool results, etc.)
     metadata: jsonb("metadata").$type<ConversationMessageMetadata | null>(),
 
+    /**
+     * Routed-attribution: when an AI teammate authored this message because the
+     * orchestrator routed to it (or it was @mentioned), this FK records WHICH
+     * teammate (agent-user id) so the UI can render "orchestrator routed to X".
+     * Real FK column (not buried in JSONB) — mirrors the 0038/0039 pattern of
+     * promoting queryable identity out of the blob, and keeps it JOIN-able +
+     * referential-integrity-safe. Null = not a routed message.
+     */
+    routedTeammateId: text("routed_teammate_id"),
+
+    /** How this teammate came to author the message — see RoutedSource. */
+    routedSource: text("routed_source", {
+      enum: [
+        RoutedSource.ORCHESTRATOR,
+        RoutedSource.MENTION,
+        RoutedSource.DIRECT,
+      ],
+    }),
+
     // Ownership
     userId: text("user_id").notNull(),
 
@@ -157,6 +196,9 @@ export const messages = pgTable(
       table.channelId,
       table.timestamp
     ),
+    routedTeammateIdx: index("messages_routed_teammate_idx")
+      .on(table.routedTeammateId)
+      .where(isNotNull(table.routedTeammateId)),
   })
 );
 
@@ -173,6 +215,8 @@ export interface MessageRow {
   content: string;
   /** Typed as unknown to avoid pulling in @synap-core/core across package boundaries. */
   metadata: unknown;
+  routedTeammateId: string | null;
+  routedSource: RoutedSource | null;
   userId: string;
   timestamp: Date;
   previousHash: string | null;

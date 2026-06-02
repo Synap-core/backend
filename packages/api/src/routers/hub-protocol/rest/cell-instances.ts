@@ -1,0 +1,434 @@
+/**
+ * Hub Protocol REST — cell instances
+ *
+ * IS / agent surface for the persisted cell rendering unit. Agent-origin
+ * writes (create, updateConfig) are governed by `checkPermissionOrPropose()` —
+ * mirroring the relations/commands hub routes — so an agent's cell write either
+ * commits (auto-approve whitelist) or becomes a reviewable proposal.
+ *
+ * Endpoints:
+ *   GET    /cell-instances?workspaceId=&isTemplate=   — list
+ *   GET    /cell-instances/:id                        — get
+ *   POST   /cell-instances                            — create (governed)
+ *   POST   /cell-instances/html                       — createHtmlCell (governed)
+ *   PATCH  /cell-instances/:id/config                 — updateConfig (governed)
+ */
+
+import { z } from "zod";
+import {
+  db,
+  eq,
+  and,
+  desc,
+  documents,
+  cellInstances,
+  normalizeDocumentType,
+} from "@synap/database";
+import { storage } from "@synap/storage";
+import { randomUUID } from "crypto";
+import {
+  hasScope,
+  logger,
+  resolveActorId,
+  verifyWorkspaceAccess,
+  type HubHono,
+} from "./_shared.js";
+
+const CreateBodySchema = z.object({
+  workspaceId: z.string().uuid(),
+  cellType: z.string().min(1),
+  config: z.record(z.string(), z.unknown()).optional(),
+  name: z.string().optional(),
+  isTemplate: z.boolean().optional(),
+  sourceDocumentId: z.string().uuid().optional(),
+  userId: z.string().optional(),
+  agentUserId: z.string().optional(),
+  reasoning: z.string().optional(),
+  sourceMessageId: z.string().optional(),
+});
+
+const CreateHtmlBodySchema = z.object({
+  workspaceId: z.string().uuid(),
+  html: z.string(),
+  name: z.string().optional(),
+  userId: z.string().optional(),
+  agentUserId: z.string().optional(),
+  reasoning: z.string().optional(),
+  sourceMessageId: z.string().optional(),
+});
+
+const UpdateConfigBodySchema = z.object({
+  workspaceId: z.string().uuid(),
+  config: z.record(z.string(), z.unknown()),
+  userId: z.string().optional(),
+  agentUserId: z.string().optional(),
+  reasoning: z.string().optional(),
+  sourceMessageId: z.string().optional(),
+});
+
+function serialize(row: typeof cellInstances.$inferSelect) {
+  return {
+    id: row.id,
+    workspaceId: row.workspaceId,
+    userId: row.userId,
+    cellType: row.cellType,
+    config: (row.config ?? {}) as Record<string, unknown>,
+    name: row.name,
+    isTemplate: row.isTemplate,
+    sourceDocumentId: row.sourceDocumentId,
+    createdByKind: row.createdByKind,
+    trustLevel: row.trustLevel,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export function registerCellInstancesRoutes(app: HubHono): void {
+  /**
+   * GET /cell-instances?workspaceId=...&isTemplate=...
+   */
+  app.get("/cell-instances", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const workspaceId = c.req.query("workspaceId");
+    if (!workspaceId) {
+      return c.json({ error: "workspaceId query param is required" }, 400);
+    }
+    const userId = c.get("userId") as string;
+    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
+      return c.json({ error: "Access denied to workspace" }, 403);
+    }
+    const isTemplateRaw = c.req.query("isTemplate");
+    const isTemplate =
+      isTemplateRaw === undefined
+        ? undefined
+        : isTemplateRaw === "true"
+          ? true
+          : isTemplateRaw === "false"
+            ? false
+            : undefined;
+    try {
+      const where =
+        isTemplate === undefined
+          ? eq(cellInstances.workspaceId, workspaceId)
+          : and(
+              eq(cellInstances.workspaceId, workspaceId),
+              eq(cellInstances.isTemplate, isTemplate)
+            );
+      const rows = await db
+        .select()
+        .from(cellInstances)
+        .where(where)
+        .orderBy(desc(cellInstances.updatedAt));
+      return c.json(rows.map(serialize));
+    } catch (err) {
+      logger.error({ err }, "cellInstances.list failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * GET /cell-instances/:id
+   */
+  app.get("/cell-instances/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const id = c.req.param("id");
+    try {
+      const [row] = await db
+        .select()
+        .from(cellInstances)
+        .where(eq(cellInstances.id, id))
+        .limit(1);
+      if (!row) return c.json({ error: "Cell instance not found" }, 404);
+      const userId = c.get("userId") as string;
+      if (!(await verifyWorkspaceAccess(userId, row.workspaceId))) {
+        return c.json({ error: "Access denied to workspace" }, 403);
+      }
+      return c.json(serialize(row));
+    } catch (err) {
+      logger.error({ err }, "cellInstances.get failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /cell-instances — create (governed).
+   */
+  app.post("/cell-instances", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const raw = (await c.req.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (!raw) return c.json({ error: "Invalid JSON in request body" }, 400);
+    const parsed = CreateBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: parsed.error.issues.map((i) => i.message).join(", ") },
+        400
+      );
+    }
+    const body = parsed.data;
+
+    const userId = (body.userId ?? (c.get("userId") as string)) as string;
+    if (!(await verifyWorkspaceAccess(userId, body.workspaceId))) {
+      return c.json({ error: "Access denied to workspace" }, 403);
+    }
+    const actorResolution = await resolveActorId(body.agentUserId, userId);
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
+
+    try {
+      const { checkPermissionOrPropose } =
+        await import("../../../utils/permission-check.js");
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId: body.agentUserId,
+        workspaceId: body.workspaceId,
+        subjectType: "cell",
+        action: "create",
+        source: body.agentUserId ? "agent" : "intelligence",
+        data: { cellType: body.cellType, name: body.name },
+        reasoning: body.reasoning,
+        sourceMessageId: body.sourceMessageId,
+      });
+      if ("denied" in perm && perm.denied) {
+        return c.json({ status: "denied", message: perm.reason }, 403);
+      }
+      if ("proposalId" in perm) {
+        return c.json({
+          status: "proposed",
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+        });
+      }
+
+      const [row] = await db
+        .insert(cellInstances)
+        .values({
+          workspaceId: body.workspaceId,
+          userId,
+          cellType: body.cellType,
+          config: body.config ?? {},
+          name: body.name,
+          isTemplate: body.isTemplate ?? false,
+          sourceDocumentId: body.sourceDocumentId,
+          createdByKind: body.agentUserId ? "agent" : "user",
+          trustLevel: body.agentUserId ? "generated" : "trusted",
+        })
+        .returning();
+
+      return c.json(serialize(row));
+    } catch (err) {
+      logger.error({ err }, "cellInstances.create failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /cell-instances/html — createHtmlCell (governed).
+   * Reuses the existing MinIO document path (see routers/documents.ts).
+   */
+  app.post("/cell-instances/html", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const raw = (await c.req.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (!raw) return c.json({ error: "Invalid JSON in request body" }, 400);
+    const parsed = CreateHtmlBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: parsed.error.issues.map((i) => i.message).join(", ") },
+        400
+      );
+    }
+    const body = parsed.data;
+
+    const userId = (body.userId ?? (c.get("userId") as string)) as string;
+    if (!(await verifyWorkspaceAccess(userId, body.workspaceId))) {
+      return c.json({ error: "Access denied to workspace" }, 403);
+    }
+    const actorResolution = await resolveActorId(body.agentUserId, userId);
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
+
+    try {
+      const { checkPermissionOrPropose } =
+        await import("../../../utils/permission-check.js");
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId: body.agentUserId,
+        workspaceId: body.workspaceId,
+        subjectType: "cell",
+        action: "create",
+        source: body.agentUserId ? "agent" : "intelligence",
+        data: { cellType: "html-embed", name: body.name },
+        reasoning: body.reasoning,
+        sourceMessageId: body.sourceMessageId,
+      });
+      if ("denied" in perm && perm.denied) {
+        return c.json({ status: "denied", message: perm.reason }, 403);
+      }
+      if ("proposalId" in perm) {
+        return c.json({
+          status: "proposed",
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+        });
+      }
+
+      const title = body.name ?? "HTML Cell";
+      const documentId = randomUUID();
+      const docType = normalizeDocumentType("text", "text");
+      const storageKey = storage.buildPath(
+        userId,
+        "document",
+        documentId,
+        "html"
+      );
+      const metadata = await storage.upload(storageKey, body.html, {
+        contentType: "text/html",
+      });
+      const [document] = await db
+        .insert(documents)
+        .values({
+          id: documentId,
+          userId,
+          workspaceId: body.workspaceId,
+          title,
+          type: docType as "text" | "markdown" | "code" | "pdf" | "docx",
+          storageUrl: metadata.url,
+          storageKey: metadata.path,
+          size: metadata.size,
+          mimeType: "text/html",
+          currentVersion: 1,
+        })
+        .returning();
+
+      const [row] = await db
+        .insert(cellInstances)
+        .values({
+          workspaceId: body.workspaceId,
+          userId,
+          cellType: "html-embed",
+          config: {},
+          name: body.name,
+          isTemplate: false,
+          sourceDocumentId: document.id,
+          createdByKind: body.agentUserId ? "agent" : "user",
+          trustLevel: body.agentUserId ? "generated" : "trusted",
+        })
+        .returning();
+
+      return c.json(serialize(row));
+    } catch (err) {
+      logger.error({ err }, "cellInstances.createHtmlCell failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * PATCH /cell-instances/:id/config — updateConfig (governed).
+   */
+  app.patch("/cell-instances/:id/config", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = c.req.param("id");
+    const raw = (await c.req.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (!raw) return c.json({ error: "Invalid JSON in request body" }, 400);
+    const parsed = UpdateConfigBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: parsed.error.issues.map((i) => i.message).join(", ") },
+        400
+      );
+    }
+    const body = parsed.data;
+
+    const userId = (body.userId ?? (c.get("userId") as string)) as string;
+    if (!(await verifyWorkspaceAccess(userId, body.workspaceId))) {
+      return c.json({ error: "Access denied to workspace" }, 403);
+    }
+    const actorResolution = await resolveActorId(body.agentUserId, userId);
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
+
+    try {
+      const { checkPermissionOrPropose } =
+        await import("../../../utils/permission-check.js");
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId: body.agentUserId,
+        workspaceId: body.workspaceId,
+        subjectType: "cell",
+        action: "update",
+        source: body.agentUserId ? "agent" : "intelligence",
+        data: { id },
+        reasoning: body.reasoning,
+        sourceMessageId: body.sourceMessageId,
+      });
+      if ("denied" in perm && perm.denied) {
+        return c.json({ status: "denied", message: perm.reason }, 403);
+      }
+      if ("proposalId" in perm) {
+        return c.json({
+          status: "proposed",
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+        });
+      }
+
+      const [row] = await db
+        .update(cellInstances)
+        .set({ config: body.config, updatedAt: new Date() })
+        .where(
+          and(
+            eq(cellInstances.id, id),
+            eq(cellInstances.workspaceId, body.workspaceId)
+          )
+        )
+        .returning();
+      if (!row) return c.json({ error: "Cell instance not found" }, 404);
+      return c.json(serialize(row));
+    } catch (err) {
+      logger.error({ err }, "cellInstances.updateConfig failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+}

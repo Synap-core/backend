@@ -11,6 +11,7 @@ import {
   eq,
   and,
   or,
+  notInArray,
 } from "@synap/database";
 
 import { hasScope, logger, type HubHono } from "./_shared.js";
@@ -142,8 +143,15 @@ export function registerAgentsRoutes(app: HubHono): void {
       }
 
       // ── 2. Deactivate agents that were not in the payload ─────────────────────
-      // An empty payload means "deactivate everything for this service" — the
-      // VALUES (...) subquery would be invalid SQL with zero rows, so branch.
+      // An empty payload means "deactivate everything for this service".
+      // For a non-empty payload, deactivate only the agents whose slug is NOT in
+      // the payload. Earlier this used a hand-built `NOT EXISTS (VALUES ...)`
+      // subquery, but interpolating `agentsPayload.map(a => sql`${a.slug}`)`
+      // into a single `VALUES` clause produced malformed SQL (the chunks were
+      // concatenated without row separators), so it spuriously deactivated
+      // agents that WERE in the payload — collapsing the roster to a single
+      // agent on every sync. `notInArray` is the correct, safe primitive.
+      const payloadSlugs = agentsPayload.map((a) => a.slug);
       const deactivatedResult =
         agentsPayload.length === 0
           ? await db
@@ -163,10 +171,7 @@ export function registerAgentsRoutes(app: HubHono): void {
                 and(
                   eq(agents.intelligenceServiceId, resolvedServiceId),
                   eq(agents.active, true),
-                  drizzleSql`NOT EXISTS (
-            SELECT 1 FROM (VALUES ${agentsPayload.map((a) => drizzleSql`${a.slug}`)}) AS v(slug)
-            WHERE v.slug = ${agents.slug}
-          )`
+                  notInArray(agents.slug, payloadSlugs)
                 )
               )
               .returning({ id: agents.id });

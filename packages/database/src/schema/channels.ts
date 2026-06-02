@@ -15,6 +15,7 @@ import {
   text,
   timestamp,
   jsonb,
+  boolean,
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
@@ -120,6 +121,28 @@ export const ChannelAgentType = {
 export type ChannelAgentType =
   (typeof ChannelAgentType)[keyof typeof ChannelAgentType];
 
+/**
+ * AI Reaction Mode — per-channel "how do AI teammates react" control for
+ * multiplayer (GROUP / AGENT_COLLAB) channels.
+ *
+ * only_mentioned — AI teammates respond ONLY when explicitly @mentioned.
+ * when_confident — the routing engine may surface a teammate when it judges
+ *                  the message in-scope for it (the default; least surprising
+ *                  while still letting the room feel alive).
+ * off            — no AI reactions at all; humans-only conversation.
+ *
+ * This is a routing hint consumed by the LATER routing-engine pass — it does
+ * NOT gate writes (capabilities do that). Free at the DB level; the router
+ * falls back to `when_confident` for unknown values.
+ */
+export const AiReactionMode = {
+  ONLY_MENTIONED: "only_mentioned",
+  WHEN_CONFIDENT: "when_confident",
+  OFF: "off",
+} as const;
+export type AiReactionMode =
+  (typeof AiReactionMode)[keyof typeof AiReactionMode];
+
 export const channels = pgTable(
   "channels",
   {
@@ -184,6 +207,21 @@ export const channels = pgTable(
     })
       .notNull()
       .default(ChannelStatus.ACTIVE),
+
+    /**
+     * Per-channel "how AI teammates react" control for multiplayer rooms.
+     * Routing hint only — it never gates writes (capability flags do).
+     * Defaults to `when_confident`. Consumed by the later routing-engine pass.
+     */
+    aiReactionMode: text("ai_reaction_mode", {
+      enum: [
+        AiReactionMode.ONLY_MENTIONED,
+        AiReactionMode.WHEN_CONFIDENT,
+        AiReactionMode.OFF,
+      ],
+    })
+      .notNull()
+      .default(AiReactionMode.WHEN_CONFIDENT),
 
     /** User-configurable overrides (personality, modelTier). Never store systemPrompt or toolsConfig here. */
     agentConfig: jsonb("agent_config"),
@@ -274,6 +312,7 @@ export interface Channel {
   parentChannelId: string | null;
   branchedFromMessageId: string | null;
   branchPurpose: string | null;
+  aiReactionMode: AiReactionMode;
   assignedAgentId: string | null;
   senderAgentId: string | null;
   status: ChannelStatus;
@@ -339,6 +378,24 @@ export const channelMembers = pgTable(
     })
       .notNull()
       .default(ChannelMemberRole.MEMBER),
+
+    /**
+     * Per-teammate capability flags — the effective per-channel grant that
+     * feeds the governance gate (checkPermissionOrPropose) when an AI teammate
+     * writes in THIS channel. Conservative defaults:
+     *   canDraft   true  — may participate / produce draft content.
+     *   canPropose true  — writes become PENDING proposals (reviewable).
+     *   canAct     false — writes do NOT auto-commit unless explicitly granted.
+     *
+     * These are orthogonal to workspace RBAC: they can only RESTRICT a
+     * teammate (route a write to a proposal / block commit), never widen its
+     * RBAC. Absent/unknown flags resolve to the most restrictive interpretation
+     * (propose, not act) in the capability→governance mapping.
+     */
+    canDraft: boolean("can_draft").notNull().default(true),
+    canPropose: boolean("can_propose").notNull().default(true),
+    canAct: boolean("can_act").notNull().default(false),
+
     /** The user id that added this member (the group creator). */
     addedBy: text("added_by"),
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })

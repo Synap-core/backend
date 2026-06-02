@@ -30,6 +30,7 @@ export { registerRelationDefsRoutes } from "./relation-defs.js";
 export { registerSessionsRoutes } from "./sessions.js";
 export { registerWidgetDefinitionsRoutes } from "./widget-definitions.js";
 export { registerCellsRoutes } from "./cells.js";
+export { registerCellInstancesRoutes } from "./cell-instances.js";
 export { registerMcpServersRoutes } from "./mcp-servers.js";
 export { registerAutomationsRoutes } from "./automations.js";
 export { registerBackgroundTasksRoutes } from "./background-tasks.js";

@@ -36,6 +36,7 @@ import {
   channelMembers,
   ChannelMemberKind,
   ChannelMemberRole,
+  AiReactionMode,
   messages,
   channelContextItems,
   entities as entitiesTable,
@@ -58,11 +59,16 @@ import {
   agents,
   sourceConfigs,
   sourceSubscriptions,
+  RoutedSource,
 } from "@synap/database/schema";
 import {
   resolveIntelligenceService,
   resolveIntelligenceServiceByAgentId,
 } from "../utils/intelligence-routing.js";
+import {
+  makeRoutedTeammateContext,
+  type RoutedTeammateContext,
+} from "../utils/permission-check.js";
 import { validateExternalUrl } from "../utils/validate-url.js";
 import { resolveOrCreateChannel } from "../utils/resolve-or-create-channel.js";
 import {
@@ -1450,13 +1456,143 @@ export const channelsRouter = router({
         (channel.channelType === ChannelType.SUB_THREAD && !channel.workspaceId)
           ? "pm"
           : "group";
+      // ── Single-responder AI gate (THREAD / PERSONAL / EXTERNAL — unchanged) ─
+      // For these channel types the prior single-agent behaviour is preserved.
+      // GROUP and AGENT_COLLAB are handled by the routing engine below.
       const isAiChannel =
         channel.channelType === ChannelType.AGENT_COLLAB ||
         (channel.channelType === ChannelType.PERSONAL && !!effectiveAgentRef) ||
         (channel.channelType === ChannelType.THREAD && !!effectiveAgentRef) ||
         (channel.channelType === ChannelType.EXTERNAL && !!effectiveAgentRef) ||
-        // GROUP is mention-only: AI responds only when an @mention resolves.
+        // GROUP handled by the routing engine (routingDecision) below;
+        // keep the old mention-gate here so isAiChannel stays meaningful for
+        // the fallthrough path but routing engine overrides for GROUP.
         (channel.channelType === ChannelType.GROUP && !!mentionedAgentType);
+
+      // ── ROUTING ENGINE (GROUP / AGENT_COLLAB multiplayer rooms) ─────────────
+      //
+      // Restraint is the default: the correct, common outcome is SILENCE.
+      //
+      // Decision matrix:
+      //   aiReactionMode=off            → no AI, always.
+      //   explicit @mention of a channel AI_AGENT member → that teammate answers
+      //                                    (routedSource='mention').
+      //   aiReactionMode=only_mentioned → only @mention triggers; else silence.
+      //   aiReactionMode=when_confident → ask the IS cheap router; default null.
+      //
+      // For non-GROUP/AGENT_COLLAB channels: null (skip routing engine, use
+      // the single-responder isAiChannel gate above unchanged).
+
+      let routingDecision: RoutedTeammateContext | null = null;
+      const isMultiplayerRoom =
+        channel.channelType === ChannelType.GROUP ||
+        channel.channelType === ChannelType.AGENT_COLLAB;
+
+      if (isMultiplayerRoom) {
+        const reactionMode =
+          (channel.aiReactionMode as AiReactionMode) ??
+          AiReactionMode.WHEN_CONFIDENT;
+
+        // Hard off — never route to any teammate.
+        if (reactionMode !== AiReactionMode.OFF) {
+          // 1. Explicit @mention resolution — highest priority.
+          //    Validate the mentioned handle resolves to a real AI_AGENT channel member.
+          if (mentionedAgentType) {
+            const mentionedMember = await db
+              .select({
+                memberId: channelMembers.memberId,
+                memberKind: channelMembers.memberKind,
+              })
+              .from(channelMembers)
+              .innerJoin(users, eq(users.id, channelMembers.memberId))
+              .where(
+                and(
+                  eq(channelMembers.channelId, channelId),
+                  eq(channelMembers.memberKind, ChannelMemberKind.AI_AGENT),
+                  eq(users.agentType, mentionedAgentType)
+                )
+              )
+              .limit(1)
+              .then((rows) => rows[0] ?? null);
+
+            if (mentionedMember) {
+              routingDecision = makeRoutedTeammateContext(
+                mentionedMember.memberId,
+                "mention"
+              );
+            }
+            // If mention doesn't resolve to a channel member → silence (no fallthrough).
+          }
+
+          // 2. when_confident: ask the IS cheap router — only if no mention resolved.
+          if (
+            !routingDecision &&
+            reactionMode === AiReactionMode.WHEN_CONFIDENT
+          ) {
+            try {
+              // Fetch AI_AGENT members with their identity for the router payload.
+              const aiMembers = await db
+                .select({
+                  memberId: channelMembers.memberId,
+                  name: users.name,
+                  agentType: users.agentType,
+                })
+                .from(channelMembers)
+                .innerJoin(users, eq(users.id, channelMembers.memberId))
+                .where(
+                  and(
+                    eq(channelMembers.channelId, channelId),
+                    eq(channelMembers.memberKind, ChannelMemberKind.AI_AGENT)
+                  )
+                );
+
+              if (aiMembers.length > 0) {
+                // Fetch recent context (last 6 messages — cheap, bounded).
+                const recentMessages = await db
+                  .select({ role: messages.role, content: messages.content })
+                  .from(messages)
+                  .where(eq(messages.channelId, channelId))
+                  .orderBy(desc(messages.timestamp))
+                  .limit(6)
+                  .then((rows) => rows.reverse());
+
+                const routeResult = await resolvedService.client.routeTeammate({
+                  channelId,
+                  message: content,
+                  recentContext: recentMessages,
+                  members: aiMembers.map((m) => ({
+                    id: m.memberId,
+                    name: m.name ?? m.agentType ?? m.memberId,
+                    expertise: m.agentType ?? undefined,
+                  })),
+                });
+
+                if (routeResult?.teammateId) {
+                  // Validate the returned id is actually a channel AI_AGENT member
+                  // (the IS router must not be able to route to an arbitrary user id).
+                  const isValidMember = aiMembers.some(
+                    (m) => m.memberId === routeResult.teammateId
+                  );
+                  if (isValidMember) {
+                    routingDecision = makeRoutedTeammateContext(
+                      routeResult.teammateId,
+                      "orchestrator"
+                    );
+                  }
+                }
+                // routeResult.teammateId===null → silence (restraint default).
+              }
+            } catch (routeErr) {
+              // IS router failure → silence, never crash the message send.
+              logger.warn(
+                { err: routeErr, channelId },
+                "IS cheap router failed — defaulting to silence"
+              );
+            }
+          }
+          // only_mentioned + no mention match → routingDecision stays null → silence.
+        }
+      }
 
       // Automation side-effects: channel.message.created.completed for channel_message triggers
       emitSideEffects({
@@ -1471,7 +1607,14 @@ export const channelsRouter = router({
         },
       });
 
-      if (!isAiChannel) {
+      // For multiplayer rooms, the routing engine determines AI activity.
+      // For single-responder channels, fall through to the existing isAiChannel gate.
+      if (isMultiplayerRoom && !routingDecision) {
+        // Routing engine decided: silence.
+        return { messageId: userMessageId, channelId };
+      }
+
+      if (!isMultiplayerRoom && !isAiChannel) {
         return { messageId: userMessageId, channelId };
       }
 
@@ -1494,6 +1637,49 @@ export const channelsRouter = router({
         const agentRepo = new AgentRepository(db);
         const agent = await agentRepo.getById(effectiveAgentRef);
         effectiveAgentType = agent?.slug ?? "meta";
+      }
+
+      // ── Routing dispatch wiring ───────────────────────────────────────────────
+      // For multiplayer rooms with a routing decision:
+      //   1. Override agentUserId with the routed teammate (server-resolved —
+      //      never from request body). Hub-protocol tool call handlers will
+      //      call resolveChannelCapabilities(channelId, agentUserId) themselves
+      //      to apply the per-channel capability grant.
+      //   2. Resolve the teammate's agentType for IS dispatch.
+      //   3. Broadcast presence so the UI can show the typing indicator.
+      if (routingDecision) {
+        // Override agentUserId with the routed teammate (server-resolved — not
+        // from request body).
+        agentUserId = routingDecision.teammateId;
+
+        // Resolve the routed teammate's agentType for effectiveAgentType override.
+        try {
+          const [routedUser] = await db
+            .select({ agentType: users.agentType })
+            .from(users)
+            .where(eq(users.id, routingDecision.teammateId))
+            .limit(1);
+          if (routedUser?.agentType) {
+            effectiveAgentType = routedUser.agentType;
+          }
+        } catch {
+          // Non-critical — use existing effectiveAgentType
+        }
+
+        // Step 4 — Presence: broadcast "teammate X is answering" so the UI can
+        // show the typing indicator. Fire-and-forget; never blocks the response.
+        emitChatEvent({
+          event: "teammate:answering",
+          data: {
+            channelId,
+            teammateId: routingDecision.teammateId,
+            routedSource: routingDecision.source,
+            triggerMessageId: userMessageId,
+          },
+          workspaceId: workspaceId ?? channel.workspaceId ?? null,
+          userId,
+          channelId,
+        });
       }
 
       // Fetch workspace MCP server configs (cached 30s — avoids a DB hit on every message).
@@ -1958,6 +2144,19 @@ export const channelsRouter = router({
         hash: assistantMessageHash,
         metadata: messageMetadata as (typeof messages.$inferInsert)["metadata"],
         sessionId: activeSessionId ?? undefined,
+        // Routed attribution: stamp which teammate answered and how it was selected.
+        // Null for non-routed (single-responder) messages — back-compat.
+        ...(routingDecision
+          ? {
+              routedTeammateId: routingDecision.teammateId,
+              routedSource:
+                routingDecision.source === "mention"
+                  ? RoutedSource.MENTION
+                  : routingDecision.source === "orchestrator"
+                    ? RoutedSource.ORCHESTRATOR
+                    : RoutedSource.DIRECT,
+            }
+          : {}),
       });
 
       // Automation side-effects: channel.message.created.completed for assistant reply
@@ -2922,6 +3121,14 @@ export const channelsRouter = router({
         assignedAgentId: z.string().uuid().nullable().optional(),
         agentConfig: z.record(z.string(), z.unknown()).optional(),
         mcpServerIds: z.array(z.string().uuid()).nullable().optional(),
+        /** Per-channel "how AI teammates react" control for multiplayer rooms. */
+        aiReactionMode: z
+          .enum([
+            AiReactionMode.ONLY_MENTIONED,
+            AiReactionMode.WHEN_CONFIDENT,
+            AiReactionMode.OFF,
+          ])
+          .optional(),
         /** Bind an agent INSTANCE (agent-user id) to this channel as an ai_agent member. */
         addAgentMemberId: z.string().uuid().optional(),
         /** Unbind an agent INSTANCE from this channel. */
@@ -2952,13 +3159,53 @@ export const channelsRouter = router({
           ...(input.mcpServerIds !== undefined && {
             mcpServerIds: input.mcpServerIds,
           }),
+          ...(input.aiReactionMode !== undefined && {
+            aiReactionMode: input.aiReactionMode,
+          }),
           updatedAt: new Date(),
         })
         .where(eq(channels.id, input.channelId));
 
       // Per-instance agent binding lives in channel_members (assignedAgentId is
       // a template-only FK and cannot reference an agent-user instance).
+      //
+      // Security: apply the same validation as addTeammate — verify the id
+      // references an actual agent-user (userType='agent') and that it belongs
+      // to the channel's workspace. This prevents a foreign-workspace agent or
+      // a human user from being bound as AI_AGENT via this legacy side-effect.
       if (input.addAgentMemberId) {
+        const [agentUserCheck] = await db
+          .select({ id: users.id, userType: users.userType })
+          .from(users)
+          .where(
+            and(
+              eq(users.id, input.addAgentMemberId),
+              eq(users.userType, "agent")
+            )
+          )
+          .limit(1);
+        if (!agentUserCheck) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "addAgentMemberId does not reference an agent user",
+          });
+        }
+        if (channel.workspaceId) {
+          const wsMembership = await db.query.workspaceMembers.findFirst({
+            where: and(
+              eq(workspaceMembers.workspaceId, channel.workspaceId),
+              eq(workspaceMembers.userId, input.addAgentMemberId)
+            ),
+            columns: { id: true },
+          });
+          if (!wsMembership) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Teammate is not a member of this channel's workspace",
+            });
+          }
+        }
+
         const already = await db.query.channelMembers.findFirst({
           where: and(
             eq(channelMembers.channelId, input.channelId),
@@ -2977,12 +3224,15 @@ export const channelsRouter = router({
         }
       }
       if (input.removeAgentMemberId) {
+        // Only remove ai_agent members via this path — prevents accidental
+        // removal of human members through the legacy teammate-binding side-effect.
         await db
           .delete(channelMembers)
           .where(
             and(
               eq(channelMembers.channelId, input.channelId),
-              eq(channelMembers.memberId, input.removeAgentMemberId)
+              eq(channelMembers.memberId, input.removeAgentMemberId),
+              eq(channelMembers.memberKind, ChannelMemberKind.AI_AGENT)
             )
           );
       }
@@ -3811,7 +4061,276 @@ export const channelsRouter = router({
 
       return { channel, subscriptions: filtered };
     }),
+
+  // ── Multiplayer room membership (Wave 1 foundation) ───────────────────────
+  //
+  // Add / remove AI teammates and list room members (humans + teammates). The
+  // later routing-engine pass consumes channel_members + the per-teammate
+  // capability flags written here; it adds no new membership surface.
+
+  /**
+   * Add an AI teammate to a channel with per-channel capability flags.
+   *
+   * Auth: the caller must be the channel owner OR a channel member, AND (when
+   * the channel is workspace-scoped) a member of that workspace. The teammate
+   * being added must itself be a member of the channel's workspace — no
+   * cross-tenant grants. Idempotent on (channelId, agentUserId): re-adding an
+   * existing teammate updates its capability flags.
+   *
+   * Capability defaults mirror the schema floor: canDraft+canPropose, NOT
+   * canAct. can_act is opt-in only.
+   */
+  addTeammate: protectedProcedure
+    .input(
+      z.object({
+        channelId: z.string().uuid(),
+        /** Agent-user id (lives in `users`, userType='agent') to add. */
+        agentUserId: z.string().uuid(),
+        canDraft: z.boolean().default(true),
+        canPropose: z.boolean().default(true),
+        canAct: z.boolean().default(false),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const channel = await assertChannelMembershipAccess(
+        input.channelId,
+        ctx.userId
+      );
+
+      // The teammate must be an agent user that belongs to the channel's
+      // workspace — no cross-tenant teammate grants. Pod-wide channels
+      // (no workspaceId) skip the workspace check but still require an agent row.
+      const [agentUser] = await db
+        .select({ id: users.id, userType: users.userType })
+        .from(users)
+        .where(
+          and(eq(users.id, input.agentUserId), eq(users.userType, "agent"))
+        )
+        .limit(1);
+      if (!agentUser) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "agentUserId does not reference an agent user",
+        });
+      }
+      if (channel.workspaceId) {
+        const wsMembership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, channel.workspaceId),
+            eq(workspaceMembers.userId, input.agentUserId)
+          ),
+          columns: { id: true },
+        });
+        if (!wsMembership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Teammate is not a member of this channel's workspace",
+          });
+        }
+      }
+
+      const existing = await db.query.channelMembers.findFirst({
+        where: and(
+          eq(channelMembers.channelId, input.channelId),
+          eq(channelMembers.memberId, input.agentUserId)
+        ),
+        columns: { id: true },
+      });
+
+      if (existing) {
+        await db
+          .update(channelMembers)
+          .set({
+            memberKind: ChannelMemberKind.AI_AGENT,
+            canDraft: input.canDraft,
+            canPropose: input.canPropose,
+            canAct: input.canAct,
+          })
+          .where(eq(channelMembers.id, existing.id));
+      } else {
+        await db.insert(channelMembers).values({
+          channelId: input.channelId,
+          memberId: input.agentUserId,
+          memberKind: ChannelMemberKind.AI_AGENT,
+          role: ChannelMemberRole.MEMBER,
+          canDraft: input.canDraft,
+          canPropose: input.canPropose,
+          canAct: input.canAct,
+          addedBy: ctx.userId,
+        });
+      }
+
+      emitChatEvent({
+        event: "channel:updated",
+        data: { channelId: input.channelId, userId: ctx.userId },
+        workspaceId: channel.workspaceId ?? ctx.workspaceId ?? null,
+        userId: ctx.userId,
+      });
+
+      return { status: "added" as const, channelId: input.channelId };
+    }),
+
+  /**
+   * Remove an AI teammate from a channel. Same auth model as addTeammate.
+   * Only ai_agent members can be removed here — human membership is managed by
+   * the group-channel flows.
+   */
+  removeTeammate: protectedProcedure
+    .input(
+      z.object({
+        channelId: z.string().uuid(),
+        agentUserId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const channel = await assertChannelMembershipAccess(
+        input.channelId,
+        ctx.userId
+      );
+
+      await db
+        .delete(channelMembers)
+        .where(
+          and(
+            eq(channelMembers.channelId, input.channelId),
+            eq(channelMembers.memberId, input.agentUserId),
+            eq(channelMembers.memberKind, ChannelMemberKind.AI_AGENT)
+          )
+        );
+
+      emitChatEvent({
+        event: "channel:updated",
+        data: { channelId: input.channelId, userId: ctx.userId },
+        workspaceId: channel.workspaceId ?? ctx.workspaceId ?? null,
+        userId: ctx.userId,
+      });
+
+      return { status: "removed" as const, channelId: input.channelId };
+    }),
+
+  /**
+   * List the members of a room: humans + AI teammates, each with kind, role,
+   * capability flags, and — for teammates — the agent identity the UI needs
+   * (agentType, name, avatar). Read access requires channel access.
+   */
+  listRoomMembers: protectedProcedure
+    .input(z.object({ channelId: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      await assertChannelMembershipAccess(input.channelId, ctx.userId);
+
+      const memberRows = await db
+        .select({
+          memberId: channelMembers.memberId,
+          memberKind: channelMembers.memberKind,
+          role: channelMembers.role,
+          canDraft: channelMembers.canDraft,
+          canPropose: channelMembers.canPropose,
+          canAct: channelMembers.canAct,
+          addedBy: channelMembers.addedBy,
+          createdAt: channelMembers.createdAt,
+        })
+        .from(channelMembers)
+        .where(eq(channelMembers.channelId, input.channelId));
+
+      if (memberRows.length === 0) return { members: [] };
+
+      // Resolve identity for every member (human or agent) in one query.
+      const memberIds = memberRows.map((m) => m.memberId);
+      const identityRows = await db
+        .select({
+          id: users.id,
+          name: users.name,
+          email: users.email,
+          avatarUrl: users.avatarUrl,
+          userType: users.userType,
+          agentType: users.agentType,
+        })
+        .from(users)
+        .where(inArray(users.id, memberIds));
+      const identityById = new Map(identityRows.map((r) => [r.id, r]));
+
+      const members = memberRows.map((m) => {
+        const identity = identityById.get(m.memberId);
+        const isAgent = m.memberKind === ChannelMemberKind.AI_AGENT;
+        return {
+          memberId: m.memberId,
+          memberKind: m.memberKind,
+          role: m.role,
+          capabilities: {
+            canDraft: m.canDraft,
+            canPropose: m.canPropose,
+            canAct: m.canAct,
+          },
+          addedBy: m.addedBy,
+          createdAt: m.createdAt,
+          name: identity?.name ?? null,
+          email: identity?.email ?? null,
+          avatarUrl: identity?.avatarUrl ?? null,
+          // Agent identity the UI needs to render a teammate chip.
+          agent: isAgent ? { agentType: identity?.agentType ?? null } : null,
+        };
+      });
+
+      return { members };
+    }),
 });
+
+/**
+ * Authorize a channel-membership mutation/read.
+ *
+ * The caller must be the channel owner OR a recorded channel member; and when
+ * the channel is workspace-scoped, a member of that workspace (no cross-tenant
+ * access). Returns the channel row so callers reuse it. Throws TRPCError
+ * (NOT_FOUND / FORBIDDEN) otherwise. Mirrors the access predicate used by
+ * listChannelsWithFlags and the workspace membership checks in sendMessage.
+ */
+async function assertChannelMembershipAccess(
+  channelId: string,
+  userId: string
+): Promise<Channel> {
+  const channel = await db.query.channels.findFirst({
+    where: eq(channels.id, channelId),
+  });
+  if (!channel) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found" });
+  }
+
+  if (channel.userId === userId) return channel;
+
+  // Channel member?
+  const member = await db.query.channelMembers.findFirst({
+    where: and(
+      eq(channelMembers.channelId, channelId),
+      eq(channelMembers.memberId, userId)
+    ),
+    columns: { id: true },
+  });
+  if (member) {
+    // Workspace scoping: a channel member must still be in the channel's
+    // workspace (defence-in-depth against a stale cross-tenant member row).
+    if (channel.workspaceId) {
+      const wsMembership = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, channel.workspaceId),
+          eq(workspaceMembers.userId, userId)
+        ),
+        columns: { id: true },
+      });
+      if (!wsMembership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You do not have access to this channel",
+        });
+      }
+    }
+    return channel;
+  }
+
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message: "You do not have access to this channel",
+  });
+}
 
 /** Recursive node returned by getBranchTree — mirrors the frontend BranchNode shape */
 export type BranchTreeNode = {

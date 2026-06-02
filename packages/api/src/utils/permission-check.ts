@@ -10,8 +10,14 @@
  * Returns immediately — no async event pipeline.
  */
 
-import { db, proposals, eq, entities } from "@synap/database";
-import { users, workspaces, ProposalStatus } from "@synap/database/schema";
+import { db, proposals, eq, and, entities } from "@synap/database";
+import {
+  users,
+  workspaces,
+  channelMembers,
+  ChannelMemberKind,
+  ProposalStatus,
+} from "@synap/database/schema";
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 import type { RequestShapedProposalData } from "@synap-core/types";
@@ -262,6 +268,138 @@ export interface IssuerTrust {
   trusted: boolean;
 }
 
+/**
+ * Nominally-typed context carrying a routing-resolved teammate id.
+ *
+ * The brand (`_routedTeammateCtx`) makes this structurally distinct from a
+ * plain `{ teammateId: string }` so callers cannot accidentally pass a
+ * request-body field. Instances MUST only be produced by server-side routing
+ * logic (mention resolution or IS router response) — never from user input.
+ *
+ * Analogous to `IssuerTrust`: established at the routing boundary, not from
+ * the wire. `resolveChannelCapabilities` / the `channelCapabilities` path
+ * consume the teammate id ONLY from here.
+ */
+export interface RoutedTeammateContext {
+  readonly teammateId: string;
+  /** How this teammate was selected — used for attribution stamping. */
+  readonly source: "mention" | "orchestrator" | "direct";
+  /** @internal nominal brand — do not read or copy */
+  readonly _routedTeammateCtx: true;
+}
+
+/**
+ * Construct a `RoutedTeammateContext` from server-resolved routing data.
+ * The only factory; all call-sites must use this rather than casting.
+ */
+export function makeRoutedTeammateContext(
+  teammateId: string,
+  source: "mention" | "orchestrator" | "direct"
+): RoutedTeammateContext {
+  return {
+    teammateId,
+    source,
+    _routedTeammateCtx: true,
+  };
+}
+
+/**
+ * Per-channel capability grant for an AI teammate writing in a multiplayer room.
+ *
+ * These map onto the EXISTING governance model — they never reimplement or
+ * bypass it. They can only TIGHTEN a teammate's effective grant for this
+ * channel, never widen its workspace RBAC:
+ *
+ *   canAct=true             → the teammate's writes may auto-approve within pod
+ *                             scope (still subject to ADMIN/destructive guards).
+ *   canAct=false canPropose → writes become reviewable PENDING proposals.
+ *   canAct=false canPropose=false (canDraft only) → writes do NOT commit; the
+ *                             teammate may participate but its writes are blocked
+ *                             from the pod (draft / propose-only floor).
+ *
+ * Absent/unknown → the most restrictive interpretation (propose, never act),
+ * resolved by `resolveChannelCapabilityDecision`.
+ */
+export interface ChannelCapabilityGrant {
+  canDraft: boolean;
+  canPropose: boolean;
+  canAct: boolean;
+}
+
+/**
+ * The three outcomes a channel capability grant can force for a write.
+ *   "act"     — capabilities permit auto-approve to proceed (gate decides the rest).
+ *   "propose" — force a reviewable proposal regardless of auto-approve whitelist.
+ *   "block"   — the teammate may not commit at all (draft-only / propose denied).
+ */
+export type ChannelCapabilityDecision = "act" | "propose" | "block";
+
+/**
+ * Collapse a per-channel capability grant into a single governance decision.
+ *
+ * CONSERVATIVE BY DESIGN: an absent grant, or any grant whose flags are all
+ * false / unset, resolves to "propose" — never "act". `canAct` is the only way
+ * to reach "act", and only when the teammate is also allowed to propose
+ * (act implies the lesser grant). Draft-only (no propose, no act) → "block".
+ */
+export function resolveChannelCapabilityDecision(
+  grant: Partial<ChannelCapabilityGrant> | null | undefined
+): ChannelCapabilityDecision {
+  // Absent grant → most restrictive write outcome that still surfaces the work.
+  if (!grant) return "propose";
+  if (grant.canAct === true) return "act";
+  if (grant.canPropose === true) return "propose";
+  // canDraft-only (or nothing granted): participation allowed, writes do not commit.
+  return "block";
+}
+
+/**
+ * Resolve the effective per-channel capability grant for an AI teammate from
+ * its `channel_members` row.
+ *
+ * SEAM FOR THE ROUTING PASS: the later per-message routing / multi-responder
+ * dispatch resolves which teammate is acting via `RoutedTeammateContext`, then
+ * calls this with `ctx.teammateId` to obtain the grant it passes as
+ * `channelCapabilities` to `checkPermissionOrPropose`. It is deliberately a
+ * pure lookup with a CONSERVATIVE default — if the teammate has no membership
+ * row in the channel (unknown), it returns `null`, which the gate treats as
+ * "propose, never act".
+ *
+ * Trust note: pass `ctx.teammateId` from a `RoutedTeammateContext` produced by
+ * the routing boundary (`makeRoutedTeammateContext`), never from request-body
+ * fields. The `memberId` parameter accepts a plain string so internal callers
+ * (addTeammate, tests) can still use it directly.
+ */
+export async function resolveChannelCapabilities(
+  channelId: string,
+  memberId: string
+): Promise<ChannelCapabilityGrant | null> {
+  const [row] = await db
+    .select({
+      canDraft: channelMembers.canDraft,
+      canPropose: channelMembers.canPropose,
+      canAct: channelMembers.canAct,
+    })
+    .from(channelMembers)
+    .where(
+      and(
+        eq(channelMembers.channelId, channelId),
+        eq(channelMembers.memberId, memberId),
+        eq(channelMembers.memberKind, ChannelMemberKind.AI_AGENT)
+      )
+    )
+    .limit(1);
+
+  // Unknown teammate (no membership) → null → gate resolves to "propose".
+  if (!row) return null;
+
+  return {
+    canDraft: row.canDraft,
+    canPropose: row.canPropose,
+    canAct: row.canAct,
+  };
+}
+
 export interface PermissionCheckOpts {
   userId: string;
   agentUserId?: string;
@@ -270,6 +408,17 @@ export interface PermissionCheckOpts {
   subjectType: string;
   action: string;
   source?: string;
+  /**
+   * Effective per-channel capability grant for the acting AI teammate, when the
+   * write is evaluated in the context of a multiplayer channel. This is the
+   * per-channel layer of governance — it can only TIGHTEN the workspace policy
+   * (force a proposal, or block a commit), never bypass it. Absent → no
+   * per-channel tightening (legacy / non-room write paths unchanged).
+   *
+   * Resolve it from `channel_members` via `resolveChannelCapabilities` at the
+   * routing seam, never from request-body fields.
+   */
+  channelCapabilities?: ChannelCapabilityGrant | null;
   /**
    * Authenticated issuer + its server-resolved trust. When `trusted: false`,
    * the action is routed to a proposal after RBAC. Absent → legacy behavior.
@@ -324,6 +473,7 @@ export async function checkPermissionOrPropose(
     threadId,
     commandRunId,
     sourceMessageId,
+    channelCapabilities,
   } = opts;
 
   // 1. Personal resources (no workspace) - implicit ownership
@@ -549,6 +699,68 @@ export async function checkPermissionOrPropose(
             commandRunId,
             sourceMessageId,
           });
+        }
+
+        // Per-channel capability gate (multiplayer rooms).
+        //
+        // When this write is evaluated for a channel that carries a teammate
+        // capability grant, the per-channel flags are the effective grant. They
+        // can only TIGHTEN the workspace policy — never bypass it (ADMIN +
+        // destructive guards above already ran and are supreme). Reads are
+        // exempt; capabilities gate writes.
+        //
+        // Decision (resolveChannelCapabilityDecision, restrictive default):
+        //   "block"   → teammate may participate but not commit (draft-only).
+        //   "propose" → force a reviewable proposal (overrides auto-approve).
+        //   "act"     → fall through to the normal auto-approve whitelist; the
+        //               gate still decides act vs propose from workspace policy.
+        if (channelCapabilities !== undefined && channelCapabilities !== null) {
+          const isPureReadForCaps =
+            action.endsWith(".read") ||
+            subjectType === "search" ||
+            subjectType === "context" ||
+            subjectType === "memory" ||
+            eventKey.endsWith(".read") ||
+            eventKey === "memory.recall" ||
+            /^search\./.test(eventKey) ||
+            /^context\./.test(eventKey) ||
+            /^memory\./.test(eventKey);
+
+          if (!isPureReadForCaps) {
+            const decision =
+              resolveChannelCapabilityDecision(channelCapabilities);
+
+            if (decision === "block") {
+              return {
+                denied: true,
+                reason:
+                  "Teammate is draft-only in this channel and may not commit writes (can_act and can_propose are both off).",
+              };
+            }
+
+            if (decision === "propose") {
+              return createProposal({
+                userId,
+                agentUserId,
+                workspaceId,
+                subjectType,
+                action,
+                source,
+                data,
+                correlationId,
+                requestedEventId,
+                reasoning:
+                  opts.reasoning ??
+                  "Teammate may propose in this channel; write requires human approval.",
+                threadId,
+                commandRunId,
+                sourceMessageId,
+              });
+            }
+            // decision === "act": fall through to the workspace auto-approve
+            // policy below. Capabilities never widen RBAC or skip the whitelist;
+            // they only authorize the normal act path to be considered.
+          }
         }
 
         // Default whitelist: see DEFAULT_AUTO_APPROVE at module scope.

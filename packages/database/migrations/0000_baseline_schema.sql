@@ -740,6 +740,13 @@ ALTER TABLE "relations" ADD COLUMN IF NOT EXISTS "target_entity_id" uuid REFEREN
 ALTER TABLE "relations" ADD COLUMN IF NOT EXISTS "type" text;
 ALTER TABLE "relations" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
 ALTER TABLE "relations" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+-- Polymorphic endpoints (0041): entity columns become nullable; cell endpoints added.
+ALTER TABLE "relations" ALTER COLUMN "source_entity_id" DROP NOT NULL;
+ALTER TABLE "relations" ALTER COLUMN "target_entity_id" DROP NOT NULL;
+ALTER TABLE "relations" ADD COLUMN IF NOT EXISTS "source_kind" text NOT NULL DEFAULT 'entity';
+ALTER TABLE "relations" ADD COLUMN IF NOT EXISTS "target_kind" text NOT NULL DEFAULT 'entity';
+ALTER TABLE "relations" ADD COLUMN IF NOT EXISTS "source_cell_id" uuid;
+ALTER TABLE "relations" ADD COLUMN IF NOT EXISTS "target_cell_id" uuid;
 
 CREATE INDEX IF NOT EXISTS "relations_source_entity_id_idx"
   ON "relations" ("source_entity_id");
@@ -752,6 +759,41 @@ CREATE INDEX IF NOT EXISTS "relations_workspace_id_idx"
 
 CREATE INDEX IF NOT EXISTS "relations_type_idx"
   ON "relations" ("type");
+
+-- ─── 16b. cell_instances (0041) ──────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS "cell_instances" (
+  "id"                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "workspace_id"       uuid NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "user_id"            text NOT NULL,
+  "cell_type"          text NOT NULL,
+  "config"             jsonb NOT NULL DEFAULT '{}'::jsonb,
+  "name"               text,
+  "is_template"        boolean NOT NULL DEFAULT false,
+  "source_document_id" uuid REFERENCES "documents"("id") ON DELETE SET NULL,
+  "created_by_kind"    text NOT NULL DEFAULT 'user',
+  "trust_level"        text NOT NULL DEFAULT 'trusted',
+  "created_at"         timestamp with time zone NOT NULL DEFAULT now(),
+  "updated_at"         timestamp with time zone NOT NULL DEFAULT now()
+);
+ALTER TABLE "cell_instances" ADD COLUMN IF NOT EXISTS "workspace_id"       uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "cell_instances" ADD COLUMN IF NOT EXISTS "user_id"            text;
+ALTER TABLE "cell_instances" ADD COLUMN IF NOT EXISTS "cell_type"          text;
+ALTER TABLE "cell_instances" ADD COLUMN IF NOT EXISTS "config"             jsonb NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE "cell_instances" ADD COLUMN IF NOT EXISTS "name"               text;
+ALTER TABLE "cell_instances" ADD COLUMN IF NOT EXISTS "is_template"        boolean NOT NULL DEFAULT false;
+ALTER TABLE "cell_instances" ADD COLUMN IF NOT EXISTS "source_document_id" uuid REFERENCES "documents"("id") ON DELETE SET NULL;
+ALTER TABLE "cell_instances" ADD COLUMN IF NOT EXISTS "created_by_kind"    text NOT NULL DEFAULT 'user';
+ALTER TABLE "cell_instances" ADD COLUMN IF NOT EXISTS "trust_level"        text NOT NULL DEFAULT 'trusted';
+ALTER TABLE "cell_instances" ADD COLUMN IF NOT EXISTS "created_at"         timestamp with time zone NOT NULL DEFAULT now();
+ALTER TABLE "cell_instances" ADD COLUMN IF NOT EXISTS "updated_at"         timestamp with time zone NOT NULL DEFAULT now();
+
+CREATE INDEX IF NOT EXISTS "cell_instances_workspace_id_idx"
+  ON "cell_instances" ("workspace_id");
+CREATE INDEX IF NOT EXISTS "cell_instances_workspace_template_idx"
+  ON "cell_instances" ("workspace_id", "is_template");
+CREATE INDEX IF NOT EXISTS "cell_instances_cell_type_idx"
+  ON "cell_instances" ("cell_type");
 
 -- ─── 17. views ───────────────────────────────────────────────────────────────
 

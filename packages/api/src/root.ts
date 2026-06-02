@@ -41,6 +41,7 @@ import { mcpServersRouter } from "./routers/mcp-servers.js";
 import { agentConfigsRouter } from "./routers/agent-configs.js";
 import { widgetDefinitionsRouter } from "./routers/widget-definitions.js";
 import { cellsRouter } from "./routers/cells.js";
+import { cellInstancesRouter } from "./routers/cell-instances.js";
 import { channelGatewayRouter } from "./routers/channel-gateway.js";
 import { importRouter } from "./routers/import.js";
 import { connectorsRouter } from "./routers/connectors-trpc.js";
@@ -105,6 +106,7 @@ export const coreRouter = router({
   agents: agentsRouter,
   widgetDefinitions: widgetDefinitionsRouter,
   cells: cellsRouter,
+  cellInstances: cellInstancesRouter,
   channelGateway: channelGatewayRouter,
   import: importRouter,
   connectors: connectorsRouter,

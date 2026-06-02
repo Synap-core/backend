@@ -60,6 +60,7 @@ import {
   resolveVaultReferences,
   isVaultReference,
 } from "../utils/vault-resolver.js";
+import { checkAutomationWriteOrPropose } from "../utils/automation-governance.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "automation-executor" });
@@ -325,7 +326,11 @@ async function executeCommandStep(
         taskId: data.commandId ?? "automation-command",
         action: prompt,
         context: resolvedInputs,
-        userId: "system",
+        // Attribute the IS work to the automation's owning principal
+        // (automation.createdBy — the agent user id for AI-created automations)
+        // instead of the unattributed "system". Writes the IS performs back to
+        // the pod will then carry this identity through the governance gate.
+        userId: ownerId,
         workspaceId,
       }),
       signal: controller.signal,
@@ -373,6 +378,27 @@ async function executeOutputStep(
       const title = config.title as string;
       const properties = (config.properties ?? {}) as Record<string, unknown>;
 
+      // Governed by the same policy as chat-AI writes (see automation-governance.ts):
+      // auto-approve, or a PENDING proposal attributed to the owning agent.
+      const gate = await checkAutomationWriteOrPropose({
+        ownerId,
+        workspaceId,
+        subjectType: "entity",
+        action: "create",
+        data: { profileSlug, title, properties },
+        reasoning: "Automation proposed creating an entity.",
+        automationRunId: automationContext.automationRunId,
+        correlationId: automationContext.rootRunId,
+      });
+      if ("denied" in gate) {
+        throw new Error(`entity_create denied by governance: ${gate.reason}`);
+      }
+      if ("proposed" in gate) {
+        // SAFETY: a proposal was created — do NOT direct-write. The change
+        // awaits human review, attributed to the owning agent.
+        return { status: "proposed", proposalId: gate.proposalId };
+      }
+
       // EntityRepository handles: profile resolution, pod-wide scoping, property indexing, event emission
       const entityRepo = new EntityRepository(db, eventRepository);
       const entity = await entityRepo.create(
@@ -397,6 +423,26 @@ async function executeOutputStep(
       if (!entityId)
         throw new Error("entity_update requires entityId in config");
 
+      // Governed — same gate as entity_create above.
+      const gate = await checkAutomationWriteOrPropose({
+        ownerId,
+        workspaceId,
+        subjectType: "entity",
+        action: "update",
+        data: { entityId, properties },
+        reasoning: "Automation proposed updating an entity.",
+        automationRunId: automationContext.automationRunId,
+        correlationId: automationContext.rootRunId,
+      });
+      if ("denied" in gate) {
+        throw new Error(`entity_update denied by governance: ${gate.reason}`);
+      }
+      if ("proposed" in gate) {
+        // SAFETY: a proposal was created — do NOT direct-write. The change
+        // awaits human review, attributed to the owning agent.
+        return { status: "proposed", proposalId: gate.proposalId };
+      }
+
       // Route through EntityRepository so validation, entity_property_index
       // reindex, and the workspace-scoped property lens (Phase 2) all run.
       // `skipEvent: true` prevents double-emission — we emit our own
@@ -417,7 +463,7 @@ async function executeOutputStep(
         subjectType: "entity",
         action: "update",
         subjectId: entityId,
-        userId: "system",
+        userId: ownerId,
         workspaceId,
         data: { updatedProperties: Object.keys(properties) },
         automationContext,
