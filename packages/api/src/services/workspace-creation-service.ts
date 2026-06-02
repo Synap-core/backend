@@ -137,7 +137,7 @@ export async function createWorkspaceFromDefinitionIdempotent(
           drizzleSql`EXISTS (
           SELECT 1 FROM workspaces w
           WHERE w.id = ${workspaceMembers.workspaceId}
-            AND w.settings->>'proposalId' = ${proposalId}
+            AND w.provisioning_proposal_id = ${proposalId}
         )`
         ),
         with: { workspace: true },
@@ -188,6 +188,7 @@ export async function createWorkspaceFromDefinitionIdempotent(
         await db
           .update(workspaces)
           .set({
+            provisioningProposalId: proposalId,
             settings: {
               ...existingSettings,
               proposalId,

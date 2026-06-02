@@ -5,7 +5,7 @@
 
 import { kratosAdmin } from "@synap/auth";
 import { getDb } from "@synap/database";
-import { and, eq, sql as drizzleSql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { users, workspaces, workspaceMembers } from "@synap/database/schema";
 
 /**
@@ -20,7 +20,7 @@ async function ensurePodAdminWorkspace(
   db: Awaited<ReturnType<typeof getDb>>
 ): Promise<string> {
   const existing = await db.query.workspaces.findFirst({
-    where: drizzleSql`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
+    where: eq(workspaces.systemSlug, 'pod-admin'),
     columns: { id: true },
   });
 
@@ -34,6 +34,7 @@ async function ensurePodAdminWorkspace(
         ownerId: identityId,
         name: "Pod Admin",
         type: "personal",
+        systemSlug: "pod-admin",
         settings: { systemSlug: "pod-admin" },
       })
       .returning({ id: workspaces.id });

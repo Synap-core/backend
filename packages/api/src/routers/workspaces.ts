@@ -752,7 +752,7 @@ export const workspacesRouter = router({
       let isPodAdmin = false;
       if (!isOwner) {
         const podAdminWs = await db.query.workspaces.findFirst({
-          where: drizzleSql`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
+          where: eq(workspaces.systemSlug, 'pod-admin'),
           columns: { id: true },
         });
         if (podAdminWs) {
@@ -2261,7 +2261,7 @@ export const workspacesRouter = router({
                   drizzleSql`EXISTS (
               SELECT 1 FROM workspaces w
               WHERE w.id = ${workspaceMembers.workspaceId}
-                AND w.settings->>'proposalId' = ${input.proposalId}
+                AND w.provisioning_proposal_id = ${input.proposalId}
             )`
                 ),
                 with: { workspace: true },
@@ -2364,7 +2364,7 @@ export const workspacesRouter = router({
                   drizzleSql`EXISTS (
               SELECT 1 FROM workspaces w
               WHERE w.id = ${workspaceMembers.workspaceId}
-                AND w.settings->>'packageSlug' = ${input.packageSlug}
+                AND w.package_slug = ${input.packageSlug}
             )`
                 ),
                 with: { workspace: true },
@@ -2519,8 +2519,8 @@ export const workspacesRouter = router({
                       SELECT 1 FROM workspaces w
                       WHERE w.id = ${workspaceMembers.workspaceId}
                         AND w.name = ${input.workspaceName ?? ""}
-                        AND w.settings->>'provisioningStatus' = 'failed'
-                        AND (w.settings->>'proposalId' IS NULL OR w.settings->>'proposalId' = '')
+                        AND w.provisioning_status = 'failed'
+                        AND (w.provisioning_proposal_id IS NULL OR w.provisioning_proposal_id = '')
                     )`
                   ),
                   with: { workspace: true },
@@ -2536,6 +2536,7 @@ export const workspacesRouter = router({
                         proposalId: input.proposalId,
                         ...(input.appId ? { appId: input.appId } : {}),
                       } satisfies WorkspaceSettings,
+                      provisioningProposalId: input.proposalId,
                     })
                     .where(eq(workspaces.id, failedWs.workspace.id));
                 }
@@ -2573,6 +2574,9 @@ export const workspacesRouter = router({
                       : {}),
                     ...(input.appId ? { appId: input.appId } : {}),
                   } satisfies WorkspaceSettings,
+                  ...(input.proposalId
+                    ? { provisioningProposalId: input.proposalId }
+                    : {}),
                 })
                 .where(eq(workspaces.id, result.workspaceId));
             } catch (err) {
@@ -2727,7 +2731,7 @@ export const workspacesRouter = router({
         .from(workspaces)
         .where(
           and(
-            drizzleSql`${workspaces.settings}->>'packageSlug' = ${input.pluginId}`,
+            eq(workspaces.packageSlug, input.pluginId),
             drizzleSql`${workspaces.settings}->>'createdBy' = 'provisioning'`
           )
         )

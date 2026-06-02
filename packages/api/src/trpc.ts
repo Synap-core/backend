@@ -13,7 +13,7 @@ import { TRPCError } from "@trpc/server";
 import { t } from "./init-trpc.js";
 import { requireUserId } from "./utils/user-scoped.js";
 import { createLogger } from "@synap-core/core";
-import { db, eq, and, drizzleSql, inArray } from "@synap/database";
+import { db, eq, and, inArray } from "@synap/database";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 import "@synap/database"; // Fix TS2742: inferred type portability
 import {
@@ -249,7 +249,7 @@ export const podAdminProcedure = protectedProcedure.use(async (opts) => {
 
   // Find the pod-admin workspace
   const podAdminWorkspace = await db.query.workspaces.findFirst({
-    where: drizzleSql`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
+    where: eq(workspaces.systemSlug, 'pod-admin'),
     columns: { id: true },
   });
 

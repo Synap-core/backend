@@ -624,6 +624,14 @@ export const workspaces = pgTable("workspaces", {
   //   allowExternalSharing: false
   // }
 
+  // Hot settings keys promoted to real indexed columns (migration 0039) for fast
+  // lookups (pod-admin resolver) + provisioning idempotency. settings JSONB is
+  // still dual-written for back-compat; query predicates use these columns.
+  systemSlug: text("system_slug"),
+  packageSlug: text("package_slug"),
+  provisioningProposalId: text("provisioning_proposal_id"),
+  provisioningStatus: text("provisioning_status"),
+
   // Billing (optional - for managed hosting)
   subscriptionTier: text("subscription_tier"), // 'solo', 'pro', 'team', 'enterprise'
   subscriptionStatus: text("subscription_status"), // 'active', 'canceled', 'past_due', 'trialing'

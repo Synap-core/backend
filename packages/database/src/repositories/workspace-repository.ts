@@ -49,6 +49,7 @@ export class WorkspaceRepository extends BaseRepository<
    * Emits: workspaces.create.completed
    */
   async create(data: CreateWorkspaceInput, userId: string): Promise<Workspace> {
+    const s = (data.settings ?? {}) as WorkspaceSettings;
     const [workspace] = await this.db
       .insert(workspaces)
       .values({
@@ -56,6 +57,11 @@ export class WorkspaceRepository extends BaseRepository<
         name: data.name,
         ownerId: data.ownerId,
         settings: data.settings || {},
+        // Dual-write promoted columns (0039) from the settings blob.
+        systemSlug: s.systemSlug ?? null,
+        packageSlug: s.packageSlug ?? null,
+        provisioningProposalId: s.proposalId ?? null,
+        provisioningStatus: s.provisioningStatus ?? null,
       } as NewWorkspace)
       .returning();
 
@@ -74,11 +80,21 @@ export class WorkspaceRepository extends BaseRepository<
     data: UpdateWorkspaceInput,
     userId: string
   ): Promise<Workspace> {
+    const s = data.settings as WorkspaceSettings | undefined;
     const [workspace] = await this.db
       .update(workspaces)
       .set({
         name: data.name,
         settings: data.settings,
+        // When settings is fully replaced, keep the promoted columns (0039) in sync.
+        ...(s
+          ? {
+              systemSlug: s.systemSlug ?? null,
+              packageSlug: s.packageSlug ?? null,
+              provisioningProposalId: s.proposalId ?? null,
+              provisioningStatus: s.provisioningStatus ?? null,
+            }
+          : {}),
         updatedAt: new Date(),
       } as Partial<NewWorkspace>)
       .where(eq(workspaces.id, id))
@@ -113,8 +129,15 @@ export class WorkspaceRepository extends BaseRepository<
       .update(workspaces)
       .set({
         settings: sql`${workspaces.settings} || ${JSON.stringify(patch)}::jsonb`,
+        // Lift promoted keys (0039) into their real columns when the patch sets
+        // them — keeps columns in sync through the atomic JSONB merge path
+        // (the provisioning-status transitions flow only through here).
+        ...(patch.systemSlug !== undefined ? { systemSlug: patch.systemSlug } : {}),
+        ...(patch.packageSlug !== undefined ? { packageSlug: patch.packageSlug } : {}),
+        ...(patch.proposalId !== undefined ? { provisioningProposalId: patch.proposalId } : {}),
+        ...(patch.provisioningStatus !== undefined ? { provisioningStatus: patch.provisioningStatus } : {}),
         updatedAt: new Date(),
-      } satisfies Record<string, SQL | Date>)
+      } as Partial<NewWorkspace>)
       .where(eq(workspaces.id, id))
       .returning();
 

@@ -18,7 +18,6 @@ import {
   inArray,
   isNull,
   count,
-  drizzleSql,
   apiKeys,
   apiKeyExternalUsers,
   workspaces,
@@ -95,7 +94,7 @@ async function computePodAdminInvariant(): Promise<{
 }> {
   try {
     const podAdminWorkspace = await db.query.workspaces.findFirst({
-      where: drizzleSql`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
+      where: eq(workspaces.systemSlug, 'pod-admin'),
       columns: { id: true },
     });
 
@@ -201,7 +200,7 @@ export function registerSetupRoutes(app: HubHono): void {
             );
             try {
               const podAdminWorkspace = await db.query.workspaces.findFirst({
-                where: drizzleSql`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
+                where: eq(workspaces.systemSlug, 'pod-admin'),
                 columns: { id: true },
               });
               if (podAdminWorkspace) {
@@ -390,7 +389,7 @@ export function registerSetupRoutes(app: HubHono): void {
             where: (w, { eq }) => eq(w.id, requestedWorkspaceId),
           })
         : ((await db.query.workspaces.findFirst({
-            where: drizzleSql`${workspaces.settings}->>'packageSlug' = 'agent-os'`,
+            where: eq(workspaces.packageSlug, 'agent-os'),
             orderBy: (w) => asc(w.createdAt),
           })) ??
           (await db.query.workspaces.findFirst({

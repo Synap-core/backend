@@ -1565,7 +1565,7 @@ export const systemRouter = router({
       // currently a pod admin themselves — deleting a non-admin can never
       // affect the admin headcount.
       const podAdminWorkspace = await db.query.workspaces.findFirst({
-        where: sqlDrizzle`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
+        where: eq(workspaces.systemSlug, 'pod-admin'),
         columns: { id: true },
       });
 
