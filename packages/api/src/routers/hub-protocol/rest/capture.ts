@@ -14,12 +14,12 @@ import {
 import {
   adaptItems,
   type ImportSource,
-} from "../../../utils/import-adapters.js";
+} from "../../../import/import-adapters.js";
 import {
   buildImportProposal,
   importProposalToComposite,
-} from "../../../utils/import-items.js";
-import { aiEnrichImportItems } from "../../../utils/import-ai.js";
+} from "../../../import/import-items.js";
+import { aiEnrichImportItems } from "../../../import/import-ai.js";
 import { resolveIntelligenceService } from "../../../utils/intelligence-routing.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../../../utils/materialize-composite.js";

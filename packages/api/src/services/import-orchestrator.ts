@@ -8,7 +8,7 @@ import {
   parseCsv,
   parseBookmarksHtml,
   detectJsonChatShape,
-} from "../utils/import-parsers.js";
+} from "../import/import-parsers.js";
 import { sanitizeImportPath, mimeFromPath } from "../utils/import-path.js";
 import { channelsRouter } from "../routers/channels.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
