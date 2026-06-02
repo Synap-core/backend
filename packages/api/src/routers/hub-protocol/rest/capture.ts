@@ -286,32 +286,11 @@ export function registerCaptureRoutes(app: HubHono): void {
       return c.json({ error: "Invalid JSON body" }, 400);
     }
 
-    const bodySchema = z.object({
-      userId: z.string().min(1),
-      workspaceId: z.string().uuid().optional(),
-      entities: z.array(
-        z.object({
-          tempId: z.string(),
-          profileSlug: z.string(),
-          title: z.string(),
-          description: z.string().optional(),
-          properties: z.record(z.string(), z.unknown()).optional(),
-          /** Link to an existing entity instead of creating a new one */
-          existingEntityId: z.string().uuid().optional(),
-        })
-      ),
-      relations: z
-        .array(
-          z.object({
-            sourceTempId: z.string(),
-            targetTempId: z.string(),
-            relationType: z.string(),
-          })
-        )
-        .optional(),
-    });
-
-    const parsed = bodySchema.safeParse(rawBody);
+    // Single source of truth: validate with the same codec the OpenAPI spec
+    // publishes (CaptureExecuteRequestSchema). An inline duplicate here once
+    // silently dropped the entity `content` field (Zod strips unknown keys),
+    // which broke long-form document materialization end-to-end.
+    const parsed = CaptureExecuteRequestSchema.safeParse(rawBody);
     if (!parsed.success) {
       return c.json(
         { error: "Invalid request body", details: parsed.error.issues },

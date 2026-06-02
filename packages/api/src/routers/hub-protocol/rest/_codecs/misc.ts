@@ -197,6 +197,13 @@ export const CaptureExecuteRequestSchema = z
         title: z.string(),
         description: z.string().optional(),
         properties: z.record(z.string(), z.unknown()).optional(),
+        /**
+         * Long-form body. When the document heuristic fires it is materialized
+         * into a versioned document (MinIO + document_versions + Typesense) and
+         * linked via entity.documentId; otherwise it folds into
+         * properties.content.
+         */
+        content: z.string().optional(),
         existingEntityId: z.string().uuid().optional(),
       })
     ),
