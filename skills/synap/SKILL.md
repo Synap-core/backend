@@ -96,6 +96,16 @@ Properties with `valueType: "entity_id"` are typed links to other entities — s
 
 When Claude Code (or any agent with Bash access) is using this skill, prefer the `synap` CLI over raw HTTP calls — auth is automatic, output is clean JSON, no spinners in `--json` mode.
 
+**Session context — set once, never repeat:**
+
+The CLI reads the active pod and workspace from `~/.synap/config.json`. Set context once at the start of a session; all subsequent commands inherit it automatically. Do NOT pass `--pod-url`, `--api-key`, or `--workspace` on every command.
+
+```bash
+synap pods use <profile-name>          # switch active pod
+synap use <workspace-id>               # switch active workspace
+synap workspace provision-agent --json # provision your agent workspace + auto-sets it active
+```
+
 **Always orient first:**
 
 ```bash
@@ -123,12 +133,35 @@ synap list entities --profile=task --workspace=<id> --json
 synap get entity <id> --json
 ```
 
-**Memory:**
+**Episodic memory (session facts, loose context):**
 
 ```bash
 synap remember "Key decision: use Typesense for search" --json
 synap recall "Typesense" --limit=5 --json
 ```
+
+**Structured knowledge (durable, typed, searchable — preferred for engineering learnings):**
+
+```bash
+# Capture a gotcha, lesson, decision, or reference into your agent workspace
+synap capture --type gotcha --claim "Hono static routes must come before /:id" \
+  --why "First-match routing; dynamic routes eat static ones" \
+  --tags "repo:synap-backend,layer:routing" --json
+
+synap capture --type lesson --claim "code-read ≠ runtime-true for library APIs" \
+  --evidence "tldraw 2.4.6 binding API changed silently from props.start.boundShapeId"
+
+# Recall across your knowledge base with full-text search
+synap recall "hono routing" --structured --json
+synap recall "tldraw" --structured --type gotcha --json
+
+# Prerequisite (run once): provision your agent workspace and set it active
+synap workspace provision-agent --json
+```
+
+`synap capture` / `synap recall --structured` uses the `engineering_knowledge` entity profile.
+`synap remember` / `synap recall` (without `--structured`) uses the ephemeral `/memory` store.
+Use structured knowledge for anything worth remembering across sessions and projects.
 
 **Write:**
 

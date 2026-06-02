@@ -82,6 +82,10 @@ ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "subscription_status" text;
 ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "stripe_customer_id" text;
 ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+-- workspace_type column promotion (mirrors 0042_workspace_type_column.sql)
+ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "workspace_type" text NOT NULL DEFAULT 'personal';
+CREATE INDEX IF NOT EXISTS "idx_workspaces_workspace_type" ON "workspaces" ("workspace_type");
+CREATE INDEX IF NOT EXISTS "idx_workspaces_owner_workspace_type" ON "workspaces" ("owner_id", "workspace_type");
 -- Soft-archive support (mirrors 0020_workspaces_archived_at.sql)
 ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "archived_at" timestamp with time zone;
 CREATE INDEX IF NOT EXISTS "workspaces_active_idx"

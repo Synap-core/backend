@@ -631,6 +631,8 @@ export const workspaces = pgTable("workspaces", {
   packageSlug: text("package_slug"),
   provisioningProposalId: text("provisioning_proposal_id"),
   provisioningStatus: text("provisioning_status"),
+  // Promoted from settings JSONB (migration 0042) for indexed lookup of agent workspaces.
+  workspaceType: text("workspace_type").notNull().default("personal"),
 
   // Billing (optional - for managed hosting)
   subscriptionTier: text("subscription_tier"), // 'solo', 'pro', 'team', 'enterprise'

@@ -224,6 +224,77 @@ export function registerWorkspacesRoutes(app: HubHono): void {
 
   registerOpenApi(app, {
     method: "post",
+    path: "/workspaces/enroll-agent",
+    tags: ["Workspaces"],
+    summary: "Enroll an agent user into the caller's workspaces",
+    description:
+      "Adds the given agent user as a member to all workspaces the calling " +
+      "user belongs to (or just one, when workspaceId is supplied). " +
+      "Idempotent — safe to call on reconnect. Used by `synap connect` " +
+      "when 'All workspaces' is selected to give the agent key pod-wide access.",
+    request: {
+      body: zOpenapi.object({
+        agentUserId: zOpenapi.string().uuid(),
+        workspaceId: zOpenapi.string().uuid().optional(),
+        role: zOpenapi.enum(["viewer", "editor", "admin"]).optional(),
+      }),
+    },
+    responses: {
+      200: {
+        description: "List of workspace IDs the agent was enrolled into",
+        schema: zOpenapi.object({
+          enrolled: zOpenapi.array(zOpenapi.string()),
+          skipped: zOpenapi.array(zOpenapi.string()),
+        }),
+      },
+      400: {
+        description: "Invalid body or agentUserId not an agent user",
+        schema: ErrorSchema,
+      },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/workspaces/provision-agent",
+    tags: ["Workspaces"],
+    summary: "Provision an agent-owned workspace (idempotent)",
+    description:
+      "Idempotently provisions a workspace owned by an agent user. " +
+      "Sets wide autoApproveFor so the agent can write freely within it. " +
+      "The calling user is added as admin so they can see the agent's work. " +
+      "Requires hub-protocol.write scope.",
+    request: {
+      body: zOpenapi.object({
+        agentUserId: zOpenapi.string().uuid(),
+        workspaceName: zOpenapi.string().optional(),
+        idempotencyKey: zOpenapi.string().optional(),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Workspace id and creation outcome",
+        schema: zOpenapi.object({
+          workspaceId: zOpenapi.string(),
+          created: zOpenapi.boolean(),
+        }),
+      },
+      400: {
+        description: "Invalid body or agentUserId not an agent user",
+        schema: ErrorSchema,
+      },
+      403: {
+        description: "Forbidden — insufficient scope",
+        schema: ErrorSchema,
+      },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
     path: "/workspaces/from-definition",
     tags: ["Workspaces"],
     summary: "Create a workspace from a WorkspaceProposal definition",
@@ -278,6 +349,246 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     } catch (err) {
       logger.error({ err }, "GET /workspaces failed");
       return c.json({ error: "Failed to list workspaces" }, 500);
+    }
+  });
+
+  /**
+   * POST /workspaces/enroll-agent
+   *
+   * Adds an agent user as a member of all workspaces the calling user belongs
+   * to (or one specific workspace). Idempotent. Called by `synap connect` when
+   * the user picks "All workspaces" so the agent key sees every workspace.
+   *
+   * Registered BEFORE /:workspaceId dynamic routes.
+   */
+  app.post("/workspaces/enroll-agent", async (c) => {
+    const scopes = c.get("scopes") as string[];
+    if (!hasScope(scopes, "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const callerId = c.get("userId") as string;
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const parsed = z
+      .object({
+        agentUserId: z.string().uuid(),
+        workspaceId: z.string().uuid().optional(),
+        role: z.enum(["viewer", "editor", "admin"]).default("editor"),
+      })
+      .safeParse(body);
+
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid body", details: parsed.error.issues },
+        400
+      );
+    }
+
+    const { agentUserId, workspaceId, role } = parsed.data;
+
+    // Verify agentUserId is a real agent user
+    const agentRow = await db.query.users.findFirst({
+      where: eq(users.id, agentUserId),
+      columns: { id: true, userType: true },
+    });
+    if (!agentRow || agentRow.userType !== "agent") {
+      return c.json(
+        {
+          error: `agentUserId '${agentUserId}' is not an agent user on this pod`,
+        },
+        400
+      );
+    }
+
+    try {
+      // Resolve target workspaces: one specific workspace or all caller's workspaces
+      const targetIds = workspaceId
+        ? [workspaceId]
+        : await getUserAccessibleWorkspaceIds(callerId);
+
+      const enrolled: string[] = [];
+      const skipped: string[] = [];
+
+      for (const wsId of targetIds) {
+        // Verify caller is a member (skip workspaces they don't belong to)
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, wsId),
+            eq(workspaceMembers.userId, callerId)
+          ),
+          columns: { id: true },
+        });
+        if (!membership) {
+          skipped.push(wsId);
+          continue;
+        }
+
+        await db
+          .insert(workspaceMembers)
+          .values({ workspaceId: wsId, userId: agentUserId, role })
+          .onConflictDoNothing();
+        enrolled.push(wsId);
+      }
+
+      return c.json({ enrolled, skipped }, 200);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(
+        { err, callerId, agentUserId },
+        "POST /workspaces/enroll-agent failed"
+      );
+      return c.json({ error: `Enroll failed: ${message}` }, 500);
+    }
+  });
+
+  /**
+   * POST /workspaces/provision-agent
+   *
+   * Idempotently provisions an agent-owned workspace. The agent user owns it
+   * with a wide autoApproveFor list; the calling human is added as admin.
+   * Registered BEFORE /workspaces/from-definition and /:workspaceId routes.
+   */
+  app.post("/workspaces/provision-agent", async (c) => {
+    const scopes = c.get("scopes") as string[];
+    if (!hasScope(scopes, "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const callerId = c.get("userId") as string;
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const parsed = z
+      .object({
+        agentUserId: z.string().uuid("agentUserId must be a valid UUID"),
+        workspaceName: z.string().optional(),
+        idempotencyKey: z.string().optional(),
+      })
+      .safeParse(body);
+
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid body", details: parsed.error.issues },
+        400
+      );
+    }
+
+    const { agentUserId, workspaceName, idempotencyKey } = parsed.data;
+
+    // Verify target is a real agent user on this pod
+    const agentRow = await db.query.users.findFirst({
+      where: eq(users.id, agentUserId),
+      columns: { id: true, userType: true, agentMetadata: true },
+    });
+    if (!agentRow || agentRow.userType !== "agent") {
+      return c.json(
+        {
+          error: `agentUserId '${agentUserId}' is not an agent user on this pod`,
+        },
+        400
+      );
+    }
+
+    const metadata = agentRow.agentMetadata as AgentMetadata | null;
+    const agentType = metadata?.agentType ?? "agent";
+    const proposalId = idempotencyKey ?? `agent-workspace-${agentUserId}`;
+    const name = workspaceName ?? `${agentType} Knowledge Base`;
+
+    try {
+      const result = await createWorkspaceFromDefinitionIdempotent({
+        definition: {} as Parameters<
+          typeof createWorkspaceFromDefinitionIdempotent
+        >[0]["definition"],
+        userId: agentUserId,
+        proposalId,
+        workspaceName: name,
+        workspaceType: "agent",
+        createdBy: "provisioning",
+      });
+
+      if (result.created) {
+        // Set wide autoApproveFor for agent's own workspace and promote workspaceType column
+        await db
+          .update(workspaces)
+          .set({
+            workspaceType: "agent",
+            settings: {
+              workspaceType: "agent",
+              linkedAgentId: agentUserId,
+              governanceMode: "standard",
+              aiGovernance: {
+                autoApproveFor: [
+                  "search.*",
+                  "memory.recall",
+                  "entity.read",
+                  "entity.create",
+                  "entity.update",
+                  "entity.delete",
+                  "relation.create",
+                  "relation.update",
+                  "relation.delete",
+                  "document.create",
+                  "document.read",
+                  "document.update",
+                  "view.create",
+                  "view.update",
+                  "view.delete",
+                  "profile.create",
+                  "profile.update",
+                  "property_def.create",
+                  "property_def.update",
+                  "bento.arrange",
+                  "context.*",
+                  "channel.create",
+                  "terminal.read_logs",
+                ],
+              },
+            } as never,
+          })
+          .where(eq(workspaces.id, result.workspaceId));
+
+        // Add calling user as admin so they see the agent's work
+        if (callerId !== agentUserId) {
+          await db
+            .insert(workspaceMembers)
+            .values({
+              workspaceId: result.workspaceId,
+              userId: callerId,
+              role: "admin",
+            })
+            .onConflictDoNothing();
+        }
+      }
+
+      return c.json(
+        { workspaceId: result.workspaceId, created: result.created },
+        200
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(
+        { err, callerId, agentUserId, proposalId },
+        "POST /workspaces/provision-agent failed"
+      );
+      return c.json({ error: `Provision failed: ${message}` }, 500);
     }
   });
 

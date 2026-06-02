@@ -428,6 +428,54 @@ async function seedProfiles() {
         },
         uiHints: { label: "Status", inputType: "select" },
       },
+      // engineering_knowledge profile properties
+      {
+        slug: "ek_type",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["gotcha", "lesson", "decision", "reference"] },
+        uiHints: { label: "Type", inputType: "select", required: true },
+      },
+      {
+        slug: "ek_claim",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 1000 },
+        uiHints: {
+          label: "Claim",
+          inputType: "text",
+          required: true,
+          placeholder: "One-line assertion",
+        },
+      },
+      {
+        slug: "ek_why",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 5000 },
+        uiHints: {
+          label: "Why",
+          inputType: "textarea",
+          placeholder: "Reasoning or context",
+        },
+      },
+      {
+        slug: "ek_evidence",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 2000 },
+        uiHints: {
+          label: "Evidence",
+          inputType: "text",
+          placeholder: "File path, URL, or code snippet",
+        },
+      },
+      {
+        slug: "ek_tags",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: {
+          label: "Tags",
+          inputType: "tags",
+          placeholder: "e.g. repo:synap-backend, layer:migrations",
+        },
+      },
     ];
 
     const createdPropertyDefs = new Map<string, string>();
@@ -543,6 +591,17 @@ async function seedProfiles() {
           icon: "compass",
           color: "#10B981",
           description: "The workspace's anchoring goal",
+        },
+      },
+      {
+        slug: "engineering_knowledge",
+        displayName: "Knowledge",
+        entityScope: "workspace",
+        uiHints: {
+          icon: "brain",
+          color: "#6366F1",
+          description:
+            "Structured engineering knowledge: gotchas, lessons, decisions, references",
         },
       },
     ];
@@ -1070,6 +1129,35 @@ async function seedProfiles() {
             displayOrder: prop.displayOrder,
           });
           console.log(`  ✓ Linked '${prop.slug}' to 'north_star'`);
+        }
+      }
+    }
+
+    // engineering_knowledge profile properties
+    const ekProfileId = createdProfiles.get("engineering_knowledge");
+    if (ekProfileId) {
+      const ekProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+      }> = [
+        { slug: "ek_type", required: true, displayOrder: 0 },
+        { slug: "ek_claim", required: true, displayOrder: 1 },
+        { slug: "ek_why", required: false, displayOrder: 2 },
+        { slug: "ek_evidence", required: false, displayOrder: 3 },
+        { slug: "ek_tags", required: false, displayOrder: 4 },
+      ];
+
+      for (const prop of ekProperties) {
+        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        if (propertyDefId) {
+          await profilePropertyRepo.link({
+            profileId: ekProfileId,
+            propertyDefId,
+            required: prop.required,
+            displayOrder: prop.displayOrder,
+          });
+          console.log(`  ✓ Linked '${prop.slug}' to 'engineering_knowledge'`);
         }
       }
     }

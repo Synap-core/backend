@@ -416,6 +416,14 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "config",
     addedBy: "0041_cell_instances.sql",
   },
+
+  // workspaces — agent workspace type column promotion (0042)
+  {
+    table: "workspaces",
+    column: "workspace_type",
+    addedBy: "0042_workspace_type_column.sql",
+  },
+
   {
     table: "cell_instances",
     column: "source_document_id",
