@@ -39,7 +39,6 @@ export interface UpdateDocumentInput {
   currentVersion?: number;
   size?: number;
   metadata?: Record<string, unknown>;
-  entityId?: string;
 }
 
 export class DocumentRepository extends BaseRepository<
@@ -56,35 +55,44 @@ export class DocumentRepository extends BaseRepository<
    * Emits: documents.create.completed
    */
   async create(data: CreateDocumentInput, userId: string): Promise<Document> {
-    const [document] = await this.db
-      .insert(documents)
-      .values({
-        userId,
-        workspaceId: data.workspaceId,
-        title: data.title,
-        type: data.type,
-        language: data.language,
-        storageUrl: data.storageUrl,
-        storageKey: data.storageKey,
-        size: data.size,
-        mimeType: data.mimeType,
-        metadata: data.metadata,
-        currentVersion: 1,
-      } as NewDocument)
-      .returning();
+    // The documents row and its v1 snapshot must be written atomically — a row
+    // with currentVersion=1 but no matching version is a corrupt document. Wrap
+    // both inserts in one transaction. The completed event is emitted after the
+    // commit so consumers never observe a half-written document.
+    const document = await this.db.transaction(async (tx: any) => {
+      const [doc] = await tx
+        .insert(documents)
+        .values({
+          userId,
+          workspaceId: data.workspaceId,
+          title: data.title,
+          type: data.type,
+          language: data.language,
+          storageUrl: data.storageUrl,
+          storageKey: data.storageKey,
+          size: data.size,
+          mimeType: data.mimeType,
+          metadata: data.metadata,
+          currentVersion: 1,
+        } as NewDocument)
+        .returning();
 
-    // Write the v1 immutable snapshot when content is supplied, so the document
-    // has real version history from creation (storage holds current content).
-    if (data.content !== undefined) {
-      await this.db.insert(documentVersions).values({
-        documentId: document.id,
-        version: 1,
-        content: data.content,
-        author: "user",
-        authorId: userId,
-        message: "Initial version",
-      } as NewDocumentVersion);
-    }
+      // Write the v1 immutable snapshot when content is supplied, so the
+      // document has real version history from creation (storage holds current
+      // content).
+      if (data.content !== undefined) {
+        await tx.insert(documentVersions).values({
+          documentId: doc.id,
+          version: 1,
+          content: data.content,
+          author: "user",
+          authorId: userId,
+          message: "Initial version",
+        } as NewDocumentVersion);
+      }
+
+      return doc;
+    });
 
     // Emit completed event
     await this.emitCompleted("create", document, userId);
@@ -108,7 +116,6 @@ export class DocumentRepository extends BaseRepository<
         currentVersion: data.currentVersion,
         size: data.size,
         metadata: data.metadata,
-        entityId: data.entityId,
         updatedAt: new Date(),
       } as Partial<NewDocument>)
       .where(and(eq(documents.id, id), eq(documents.userId, userId)))

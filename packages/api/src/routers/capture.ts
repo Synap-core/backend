@@ -35,9 +35,7 @@ import { randomUUID } from "crypto";
 import { markServiceCredentialError } from "../utils/credential-auto-repair.js";
 import { emitSideEffects } from "@synap/events";
 import { eventRepository } from "@synap/database";
-import { randomUUID as _captureUUID } from "crypto";
-import { shouldMaterializeAsDocument } from "../import/document-heuristic.js";
-import { materializeContentDocument } from "../import/materialize-document.js";
+import { resolveContentTarget } from "../import/materialize-document.js";
 
 const logger = createLogger({ module: "capture-router" });
 
@@ -188,26 +186,20 @@ export const captureRouter = router({
       const entityRepo = new EntityRepository(database, eventRepo);
 
       // Long-form thought body → real versioned document (storage + v1 +
-      // Typesense), linked via documentId. Short thoughts stay as the entity's
-      // title/properties. Best-effort: a materialization failure must not block
-      // the capture, so we fall through to a plain entity.
-      let documentId: string | undefined;
-      if (shouldMaterializeAsDocument(input.content)) {
-        try {
-          documentId = await materializeContentDocument({
-            content: input.content,
-            title,
-            userId,
-            workspaceId,
-            db: database,
-            eventRepo,
-          });
-        } catch (err) {
-          logger.warn(
-            { err, userId },
-            "Thought document materialization failed, keeping content inline"
-          );
-        }
+      // Typesense), linked via documentId. Short content is kept inline as
+      // properties.content so the full body survives even when the 80-char
+      // title truncates it. Shared single decision point; never blocks capture.
+      const { documentId, inlineContent } = await resolveContentTarget({
+        content: input.content,
+        title,
+        userId,
+        workspaceId,
+        db: database,
+        eventRepo,
+        logContext: { userId },
+      });
+      if (inlineContent !== undefined) {
+        properties = { ...properties, content: inlineContent };
       }
 
       let entity: Awaited<ReturnType<typeof entityRepo.create>>;
@@ -229,12 +221,20 @@ export const captureRouter = router({
           { err, userId, profileSlug },
           "Entity creation failed, retrying as note"
         );
+        // Drop the typed AI properties (the likely cause of validation
+        // failure) but keep the generic content/url a note accepts — and the
+        // document link — so the user's body is never lost on fallback.
         entity = await entityRepo.create(
           {
             workspaceId: workspaceId,
             userId,
             title,
-            properties: input.url ? { url: input.url } : {},
+            properties: {
+              ...(input.url ? { url: input.url } : {}),
+              ...(inlineContent !== undefined
+                ? { content: inlineContent }
+                : {}),
+            },
             documentId,
             profileSlug: "note",
           },
@@ -610,35 +610,22 @@ export const captureRouter = router({
           }
 
           // Long-form content → real versioned document (storage + v1 +
-          // Typesense), linked via documentId. Short content folds into
-          // properties.content. Falls back to a property if materialization
-          // fails — never block entity creation on document materialization.
-          let documentId: string | undefined;
+          // Typesense), linked via documentId; short content folds into
+          // properties.content. Single shared decision point; never blocks
+          // entity creation on document materialization.
+          const { documentId, inlineContent } = await resolveContentTarget({
+            content: entity.content,
+            title: entity.title,
+            userId,
+            workspaceId,
+            db: database,
+            eventRepo,
+            logContext: { tempId: entity.tempId },
+          });
           const properties: Record<string, unknown> = {
             ...(entity.properties ?? {}),
+            ...(inlineContent !== undefined ? { content: inlineContent } : {}),
           };
-          if (entity.content) {
-            if (shouldMaterializeAsDocument(entity.content)) {
-              try {
-                documentId = await materializeContentDocument({
-                  content: entity.content,
-                  title: entity.title,
-                  userId,
-                  workspaceId,
-                  db: database,
-                  eventRepo,
-                });
-              } catch (err) {
-                logger.warn(
-                  { err, tempId: entity.tempId },
-                  "Document materialization failed, folding content into property"
-                );
-                properties.content = entity.content;
-              }
-            } else {
-              properties.content = entity.content;
-            }
-          }
 
           try {
             const newEntity = await entityRepo.create(
@@ -660,7 +647,9 @@ export const captureRouter = router({
               linked: false,
             };
           } catch (err) {
-            // Retry as note on profile validation failure
+            // Retry as note on profile validation failure. Preserve the merged
+            // properties (incl. inline content) and the document link so the
+            // user's body is never lost when only the typed profile is invalid.
             logger.warn(
               { err, tempId: entity.tempId, profileSlug: entity.profileSlug },
               "Entity creation failed, retrying as note"
@@ -671,7 +660,8 @@ export const captureRouter = router({
                 userId,
                 title: entity.title,
                 preview: entity.description,
-                properties: {},
+                properties,
+                documentId,
                 profileSlug: "note",
               },
               userId
@@ -776,7 +766,7 @@ export const captureRouter = router({
 
       // Emit capture.complete event — enables automation triggers + event log audit trail
       if (created.length > 0) {
-        const captureEventId = _captureUUID();
+        const captureEventId = randomUUID();
         const entityIds = created.map((c) => c.entityId);
         const profileSlugs = [...new Set(created.map((c) => c.profileSlug))];
         const eventData = {
@@ -1121,7 +1111,7 @@ export const captureRouter = router({
 
       // Emit capture.complete event (same contract as capture.execute)
       if (created.length > 0) {
-        const captureEventId = _captureUUID();
+        const captureEventId = randomUUID();
         const entityIds = created.map((c) => c.entityId);
         const profileSlugs = [...new Set(created.map((c) => c.profileSlug))];
         const eventData = {

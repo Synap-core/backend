@@ -51,7 +51,10 @@ import { syncPropertyToRelations } from "../utils/property-relation-sync.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { dispatchWebhooksForEvent } from "../utils/webhook-delivery.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
-import { materializeContentDocument } from "../import/materialize-document.js";
+import { resolveContentTarget } from "../import/materialize-document.js";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "entities-router" });
 
 /**
  * Standard entity shape for API responses.
@@ -431,18 +434,27 @@ export const entitiesRouter = router({
 
       let createdEntity: any;
 
-      if (input.content) {
-        // Atomic entity + versioned-document creation. Shared materializer
-        // uploads content → documents row + document_versions v1 + Typesense.
-        const documentId = await materializeContentDocument({
-          content: input.content || "",
+      // Resolve where content lives ONCE (heuristic-gated, shared with the
+      // capture paths): long-form → a versioned document linked via documentId,
+      // short → inline properties.content. The document is scoped to the SAME
+      // workspace as the entity so a workspace purge reclaims both.
+      const { documentId: contentDocumentId, inlineContent } =
+        await resolveContentTarget({
+          content: input.content || undefined,
           title: input.title || undefined,
           userId: ctx.userId,
-          workspaceId: ctx.workspaceId,
+          workspaceId: entityWorkspaceId ?? null,
           db: database,
           eventRepo,
+          logContext: { profileSlug, title: input.title },
         });
+      const documentId = contentDocumentId ?? input.documentId ?? undefined;
+      const propertiesWithContent: Record<string, unknown> =
+        inlineContent !== undefined
+          ? { ...effectiveProperties, content: inlineContent }
+          : effectiveProperties;
 
+      try {
         createdEntity = await entityRepo.create(
           {
             workspaceId: entityWorkspaceId ?? undefined,
@@ -450,39 +462,43 @@ export const entitiesRouter = router({
             title: input.title || undefined,
             preview: input.description || undefined,
             documentId,
-            properties: effectiveProperties,
+            properties: propertiesWithContent,
             profileSlug,
           },
           ctx.userId
         );
-      } else {
-        // Simple entity creation
-        try {
-          createdEntity = await entityRepo.create(
-            {
-              workspaceId: entityWorkspaceId ?? undefined,
-              userId: ctx.userId,
-              title: input.title || undefined,
-              preview: input.description || undefined,
-              documentId: input.documentId || undefined,
-              properties: effectiveProperties,
-              profileSlug,
-            },
-            ctx.userId
-          );
-        } catch (createErr) {
-          const msg =
-            createErr instanceof Error ? createErr.message : String(createErr);
-          console.error("[entities.create] Entity creation failed:", msg, {
+      } catch (createErr) {
+        // Compensate: if we materialized a document for this entity but the
+        // entity create then failed, delete the now-orphaned document (nothing
+        // points to it) so we don't leak storage + a stranded row.
+        if (contentDocumentId) {
+          try {
+            await new DocumentRepository(database, eventRepo).delete(
+              contentDocumentId,
+              ctx.userId
+            );
+          } catch (cleanupErr) {
+            logger.warn(
+              { cleanupErr, documentId: contentDocumentId },
+              "Failed to clean up orphaned document after entity create failure"
+            );
+          }
+        }
+        const msg =
+          createErr instanceof Error ? createErr.message : String(createErr);
+        logger.error(
+          {
+            err: createErr,
             profileSlug,
             title: input.title,
             workspaceId: entityWorkspaceId,
-          });
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: `Entity creation failed: ${msg}`,
-          });
-        }
+          },
+          "Entity creation failed"
+        );
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Entity creation failed: ${msg}`,
+        });
       }
 
       // 3b. Auto-sync entity_id properties → relations (non-blocking)
@@ -499,7 +515,10 @@ export const entitiesRouter = router({
           {}, // old properties = empty (new entity)
           effectiveProperties as Record<string, unknown>
         ).catch((err) => {
-          console.warn("[entities.create] Property→relation sync failed:", err);
+          logger.warn(
+            { err },
+            "[entities.create] Property→relation sync failed"
+          );
         });
       }
 
@@ -534,7 +553,7 @@ export const entitiesRouter = router({
           action: "create",
         });
       } catch (err) {
-        console.warn("[entities.create] Failed to queue embedding job:", err);
+        logger.warn({ err }, "[entities.create] Failed to queue embedding job");
       }
 
       // Dispatch AI classification for raw captures (non-blocking)
@@ -547,9 +566,9 @@ export const entitiesRouter = router({
             userId: ctx.userId,
           });
         } catch (err) {
-          console.warn(
-            "[entities.create] Failed to queue AI analysis job:",
-            err
+          logger.warn(
+            { err },
+            "[entities.create] Failed to queue AI analysis job"
           );
         }
       }
@@ -1168,7 +1187,10 @@ export const entitiesRouter = router({
           oldProps,
           newProps
         ).catch((err) => {
-          console.warn("[entities.update] Property→relation sync failed:", err);
+          logger.warn(
+            { err },
+            "[entities.update] Property→relation sync failed"
+          );
         });
       }
 
@@ -1247,7 +1269,10 @@ export const entitiesRouter = router({
             action: "update",
           });
         } catch (err) {
-          console.warn("[entities.update] Failed to queue embedding job:", err);
+          logger.warn(
+            { err },
+            "[entities.update] Failed to queue embedding job"
+          );
         }
       }
 

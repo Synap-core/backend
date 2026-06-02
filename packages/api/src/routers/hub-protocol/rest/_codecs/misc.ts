@@ -219,6 +219,38 @@ export const CaptureExecuteRequestSchema = z
   })
   .openapi("CaptureExecuteRequest");
 
+/**
+ * POST /import/analyze and /import/apply request body (shared — both endpoints
+ * take the same shape). `source` must stay in sync with the `ImportSource`
+ * union in import-adapters.ts; an out-of-date enum here silently 400s sources
+ * the engine actually supports.
+ */
+export const ImportRequestSchema = z
+  .object({
+    userId: z.string().min(1),
+    workspaceId: z.string().uuid().optional(),
+    source: z.enum(["obsidian", "markdown", "csv", "bookmark"]),
+    /** Relation type for cross-references (default "references"). */
+    relationType: z.string().min(1).max(64).optional(),
+    /**
+     * Route items through AI bulk-structuring to recover real typed profiles +
+     * extracted properties (best-effort; falls back to deterministic). Default
+     * on; set false for a pure deterministic faithful import.
+     */
+    aiStructure: z.boolean().optional().default(true),
+    items: z
+      .array(
+        z.object({
+          /** Source-relative path, e.g. "Projects/Launch.md". */
+          path: z.string().min(1).max(1024),
+          content: z.string().max(200_000),
+        })
+      )
+      .min(1)
+      .max(2000),
+  })
+  .openapi("ImportRequest");
+
 // ── Events ──────────────────────────────────────────────────────────────────
 
 /** Wire shape of an event-log row. */

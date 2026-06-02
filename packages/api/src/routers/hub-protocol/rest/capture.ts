@@ -34,6 +34,7 @@ import {
   CaptureStructureRequestSchema,
   ClusterTabsRequestSchema,
   ClusterTabsResponseSchema,
+  ImportRequestSchema,
 } from "./_codecs/misc.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -205,27 +206,9 @@ export function registerCaptureRoutes(app: HubHono): void {
       return c.json({ error: "Invalid JSON body" }, 400);
     }
 
-    const bodySchema = z.object({
-      userId: z.string().min(1),
-      text: z.string().min(1).max(8000),
-      url: z.string().url().optional(),
-      html: z.string().max(50_000).optional(),
-      context: z.string().optional(),
-      workspaceId: z.string().uuid().optional(),
-      previousEntities: z
-        .array(
-          z.object({
-            tempId: z.string(),
-            profileSlug: z.string(),
-            title: z.string(),
-            description: z.string().optional(),
-            properties: z.record(z.string(), z.unknown()).optional(),
-          })
-        )
-        .optional(),
-    });
-
-    const parsed = bodySchema.safeParse(rawBody);
+    // Single source of truth: validate with the same codec the OpenAPI spec
+    // publishes (avoids an inline shadow drifting from the published schema).
+    const parsed = CaptureStructureRequestSchema.safeParse(rawBody);
     if (!parsed.success) {
       return c.json(
         { error: "Invalid request body", details: parsed.error.issues },
@@ -359,31 +342,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       return c.json({ error: "Invalid JSON body" }, 400);
     }
 
-    const bodySchema = z.object({
-      userId: z.string().min(1),
-      workspaceId: z.string().uuid().optional(),
-      source: z.enum(["obsidian"]),
-      /** Relation type for cross-references (default "references"). */
-      relationType: z.string().min(1).max(64).optional(),
-      /**
-       * Route items through AI bulk-structuring to recover real typed profiles +
-       * extracted properties (best-effort; falls back to deterministic). Default
-       * on; set false for a pure deterministic faithful import.
-       */
-      aiStructure: z.boolean().optional().default(true),
-      items: z
-        .array(
-          z.object({
-            /** Source-relative path, e.g. "Projects/Launch.md". */
-            path: z.string().min(1).max(1024),
-            content: z.string().max(200_000),
-          })
-        )
-        .min(1)
-        .max(2000),
-    });
-
-    const parsed = bodySchema.safeParse(rawBody);
+    const parsed = ImportRequestSchema.safeParse(rawBody);
     if (!parsed.success) {
       return c.json(
         { error: "Invalid request body", details: parsed.error.issues },
@@ -525,24 +484,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       return c.json({ error: "Invalid JSON body" }, 400);
     }
 
-    const bodySchema = z.object({
-      userId: z.string().min(1),
-      workspaceId: z.string().uuid().optional(),
-      source: z.enum(["obsidian"]),
-      relationType: z.string().min(1).max(64).optional(),
-      aiStructure: z.boolean().optional().default(true),
-      items: z
-        .array(
-          z.object({
-            path: z.string().min(1).max(1024),
-            content: z.string().max(200_000),
-          })
-        )
-        .min(1)
-        .max(2000),
-    });
-
-    const parsed = bodySchema.safeParse(rawBody);
+    const parsed = ImportRequestSchema.safeParse(rawBody);
     if (!parsed.success) {
       return c.json(
         { error: "Invalid request body", details: parsed.error.issues },
