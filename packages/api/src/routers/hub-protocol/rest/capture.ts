@@ -7,7 +7,10 @@ import { randomUUID } from "crypto";
 import { z } from "zod";
 
 import { captureRouter } from "../../capture.js";
-import { adaptItems, type ImportSource } from "../../../utils/import-adapters.js";
+import {
+  adaptItems,
+  type ImportSource,
+} from "../../../utils/import-adapters.js";
 import {
   buildImportProposal,
   importProposalToComposite,
@@ -16,7 +19,7 @@ import { createEventBackedProposal } from "../../../utils/event-backed-proposal.
 import { materializeCompositeGraph } from "../../../utils/materialize-composite.js";
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
 import { relationsRouter } from "../../relations.js";
-import { db, getWorkspaceMembership } from "@synap/database";
+import { db } from "@synap/database";
 import type { Context } from "../../../types/context.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -28,7 +31,7 @@ import {
 } from "./_codecs/misc.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
-  getUserAccessibleWorkspaceIds,
+  resolveActingContext,
   hasScope,
   logger,
   type HubHono,
@@ -225,19 +228,9 @@ export function registerCaptureRoutes(app: HubHono): void {
     }
 
     const body = parsed.data;
-    const userId = body.userId;
-
-    let workspaceId = body.workspaceId;
-    if (!workspaceId) {
-      const wsIds = await getUserAccessibleWorkspaceIds(userId);
-      workspaceId = wsIds[0];
-      if (!workspaceId) {
-        return c.json(
-          { error: "No accessible workspace found for this user" },
-          400
-        );
-      }
-    }
+    const acting = await resolveActingContext(c, body);
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const { userId, workspaceId } = acting;
 
     try {
       const scopes = c.get("scopes") as string[];
@@ -321,19 +314,9 @@ export function registerCaptureRoutes(app: HubHono): void {
     }
 
     const body = parsed.data;
-    const userId = body.userId;
-
-    let workspaceId = body.workspaceId;
-    if (!workspaceId) {
-      const wsIds = await getUserAccessibleWorkspaceIds(userId);
-      workspaceId = wsIds[0];
-      if (!workspaceId) {
-        return c.json(
-          { error: "No accessible workspace found for this user" },
-          400
-        );
-      }
-    }
+    const acting = await resolveActingContext(c, body);
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const { userId, workspaceId } = acting;
 
     try {
       const scopes = c.get("scopes") as string[];
@@ -418,19 +401,9 @@ export function registerCaptureRoutes(app: HubHono): void {
     }
 
     const body = parsed.data;
-
-    // Resolve workspace (membership-scoped) — consistent with /capture/*.
-    let workspaceId = body.workspaceId;
-    if (!workspaceId) {
-      const wsIds = await getUserAccessibleWorkspaceIds(body.userId);
-      workspaceId = wsIds[0];
-      if (!workspaceId) {
-        return c.json(
-          { error: "No accessible workspace found for this user" },
-          400
-        );
-      }
-    }
+    const acting = await resolveActingContext(c, body);
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const { userId, workspaceId } = acting;
 
     try {
       const items = adaptItems(body.source as ImportSource, body.items);
@@ -445,7 +418,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         importProposalToComposite(proposal);
       const summary = `Import ${proposal.stats.itemCount} ${body.source} item(s) → ${proposal.stats.typeCount} type(s), ${operations.length - proposal.stats.itemCount} link(s)`;
       const { proposal: created } = await createEventBackedProposal({
-        userId: body.userId,
+        userId,
         workspaceId,
         targetType: "entity",
         targetId: randomUUID(),
@@ -458,7 +431,7 @@ export function registerCaptureRoutes(app: HubHono): void {
 
       logger.info(
         {
-          userId: body.userId,
+          userId,
           workspaceId,
           source: body.source,
           proposalId: (created as { id?: string })?.id,
@@ -477,7 +450,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         droppedReferences,
       });
     } catch (err) {
-      logger.error({ err, userId: body.userId }, "POST /import/analyze failed");
+      logger.error({ err, userId }, "POST /import/analyze failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500
@@ -541,27 +514,12 @@ export function registerCaptureRoutes(app: HubHono): void {
     }
     const body = parsed.data;
 
-    // Resolve + verify workspace membership (this materializes directly, so the
-    // caller MUST be a member of the target workspace).
-    let workspaceId = body.workspaceId;
-    if (!workspaceId) {
-      const wsIds = await getUserAccessibleWorkspaceIds(body.userId);
-      workspaceId = wsIds[0];
-      if (!workspaceId) {
-        return c.json(
-          { error: "No accessible workspace found for this user" },
-          400
-        );
-      }
-    }
-    const membership = await getWorkspaceMembership(
-      db,
-      workspaceId,
-      body.userId
-    );
-    if (!membership) {
-      return c.json({ error: "Access denied to workspace" }, 403);
-    }
+    // Bind the acting identity to the authenticated principal and verify the
+    // RESOLVED user is a member of the target workspace. This materializes
+    // directly (user-initiated, no proposal), so the caller MUST own the write.
+    const acting = await resolveActingContext(c, body);
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const { userId, workspaceId, role } = acting;
 
     try {
       const items = adaptItems(body.source as ImportSource, body.items);
@@ -574,9 +532,9 @@ export function registerCaptureRoutes(app: HubHono): void {
       const ctx = {
         db,
         authenticated: true as const,
-        userId: body.userId,
+        userId,
         workspaceId,
-        workspaceRole: membership.role,
+        workspaceRole: role,
       } as unknown as Context;
       const entityCaller = regularEntitiesRouter.createCaller(ctx);
       const relationCaller = relationsRouter.createCaller(ctx);
@@ -591,7 +549,7 @@ export function registerCaptureRoutes(app: HubHono): void {
 
       logger.info(
         {
-          userId: body.userId,
+          userId,
           workspaceId,
           source: body.source,
           created,
@@ -608,7 +566,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         stats: proposal.stats,
       });
     } catch (err) {
-      logger.error({ err, userId: body.userId }, "POST /import/apply failed");
+      logger.error({ err, userId }, "POST /import/apply failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

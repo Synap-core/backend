@@ -7,7 +7,14 @@
 
 import type { OpenAPIHono } from "@hono/zod-openapi";
 import { createLogger } from "@synap-core/core";
-import { db, users, workspaceMembers, eq, and } from "@synap/database";
+import {
+  db,
+  users,
+  workspaceMembers,
+  eq,
+  and,
+  getWorkspaceMembership,
+} from "@synap/database";
 
 import { hubProtocolRouter } from "../index.js";
 import { createHubProtocolCallerContext } from "../utils.js";
@@ -65,6 +72,69 @@ export type HubHono = OpenAPIHono<{ Variables: HubVariables }>;
  */
 export function hasScope(scopes: string[], required: string): boolean {
   return scopes.includes(required);
+}
+
+/**
+ * Resolve the TRUSTED acting identity + workspace for a hub-protocol REST request.
+ *
+ * SECURITY — closes a cross-tenant IDOR. The auth middleware already resolves the
+ * authoritative acting user into `c.get("userId")`: a Kratos session identity, or
+ * an API-key's delegated user (X-External-User-Id mapping / child key). Handlers
+ * MUST NOT let a body-supplied `userId` pick a different identity. Rules:
+ *   - Session-token (human) callers — `c.get("apiKeyId")` is undefined: a body
+ *     `userId`, if present, MUST equal the authenticated user, else 403. A human
+ *     can never act as someone else by editing the request body.
+ *   - API-key (service/infra) callers — `apiKeyId` set: may pass `body.userId`
+ *     for on-behalf-of (trusted infra; workspace-scoped keys are header-pinned).
+ * Then the workspace is bound to that identity: if `body.workspaceId` is given it
+ * is membership-checked for the RESOLVED user (no cross-workspace write); if
+ * omitted, the user's first accessible workspace is used.
+ *
+ * Returns the bound `{ userId, workspaceId, role }` or a `{ status, error }` to
+ * return directly. Use this instead of reading `body.userId` / `body.workspaceId`.
+ */
+export async function resolveActingContext(
+  c: { get: (k: string) => unknown },
+  body: { userId?: string; workspaceId?: string }
+): Promise<
+  | { ok: true; userId: string; workspaceId: string; role: string }
+  | { ok: false; status: 400 | 403; error: string }
+> {
+  const authUserId = c.get("userId") as string | undefined;
+  if (!authUserId) return { ok: false, status: 403, error: "Unauthenticated" };
+
+  const isServiceKey = !!c.get("apiKeyId");
+  let userId: string;
+  if (isServiceKey) {
+    userId = body.userId ?? authUserId;
+  } else {
+    if (body.userId && body.userId !== authUserId) {
+      return {
+        ok: false,
+        status: 403,
+        error: "userId does not match the authenticated session",
+      };
+    }
+    userId = authUserId;
+  }
+
+  let workspaceId = body.workspaceId;
+  if (!workspaceId) {
+    const wsIds = await getUserAccessibleWorkspaceIds(userId);
+    workspaceId = wsIds[0];
+    if (!workspaceId) {
+      return {
+        ok: false,
+        status: 400,
+        error: "No accessible workspace found for this user",
+      };
+    }
+  }
+  const membership = await getWorkspaceMembership(db, workspaceId, userId);
+  if (!membership) {
+    return { ok: false, status: 403, error: "Access denied to workspace" };
+  }
+  return { ok: true, userId, workspaceId, role: membership.role };
 }
 
 /**
