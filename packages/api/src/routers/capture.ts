@@ -36,6 +36,11 @@ import { markServiceCredentialError } from "../utils/credential-auto-repair.js";
 import { emitSideEffects } from "@synap/events";
 import { eventRepository } from "@synap/database";
 import { resolveContentTarget } from "../import/materialize-document.js";
+import {
+  materializeCompositeGraph,
+  createRelationsFromRefs,
+} from "../utils/materialize-composite.js";
+import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 
 const logger = createLogger({ module: "capture-router" });
 
@@ -597,110 +602,14 @@ export const captureRouter = router({
       const entityRepo = new EntityRepository(database, eventRepo);
       const relationRepo = new RelationRepository(database, eventRepo);
 
-      // 1. Create or link entities in parallel, building tempId → realId map
-      const createResults = await Promise.allSettled(
-        input.entities.map(async (entity) => {
-          if (entity.existingEntityId) {
-            return {
-              tempId: entity.tempId,
-              entityId: entity.existingEntityId,
-              profileSlug: entity.profileSlug,
-              linked: true,
-            };
-          }
+      // Capture is the post-approval DIRECT write (the user already reviewed the
+      // AI's structure output), so it materializes through the SHARED composite
+      // orchestrator with injected direct-write callers: the loop owns
+      // ref-resolution + relation creation; the callers own write policy
+      // (content→document routing, retry-as-note, relation-slug fallback).
 
-          // Long-form content → real versioned document (storage + v1 +
-          // Typesense), linked via documentId; short content folds into
-          // properties.content. Single shared decision point; never blocks
-          // entity creation on document materialization.
-          const { documentId, inlineContent } = await resolveContentTarget({
-            content: entity.content,
-            title: entity.title,
-            userId,
-            workspaceId,
-            db: database,
-            eventRepo,
-            logContext: { tempId: entity.tempId },
-          });
-          const properties: Record<string, unknown> = {
-            ...(entity.properties ?? {}),
-            ...(inlineContent !== undefined ? { content: inlineContent } : {}),
-          };
-
-          try {
-            const newEntity = await entityRepo.create(
-              {
-                workspaceId,
-                userId,
-                title: entity.title,
-                preview: entity.description,
-                properties,
-                documentId,
-                profileSlug: entity.profileSlug,
-              },
-              userId
-            );
-            return {
-              tempId: entity.tempId,
-              entityId: newEntity.id,
-              profileSlug: entity.profileSlug,
-              linked: false,
-            };
-          } catch (err) {
-            // Retry as note on profile validation failure. Preserve the merged
-            // properties (incl. inline content) and the document link so the
-            // user's body is never lost when only the typed profile is invalid.
-            logger.warn(
-              { err, tempId: entity.tempId, profileSlug: entity.profileSlug },
-              "Entity creation failed, retrying as note"
-            );
-            const fallback = await entityRepo.create(
-              {
-                workspaceId,
-                userId,
-                title: entity.title,
-                preview: entity.description,
-                properties,
-                documentId,
-                profileSlug: "note",
-              },
-              userId
-            );
-            return {
-              tempId: entity.tempId,
-              entityId: fallback.id,
-              profileSlug: "note",
-              linked: false,
-            };
-          }
-        })
-      );
-
-      // Build tempToReal map from settled results
-      const tempToReal: Record<string, string> = {};
-      const created: Array<{
-        tempId: string;
-        entityId: string;
-        profileSlug: string;
-        linked: boolean;
-      }> = [];
-      for (const result of createResults) {
-        if (result.status === "fulfilled") {
-          tempToReal[result.value.tempId] = result.value.entityId;
-          created.push(result.value);
-        }
-      }
-
-      // 2. Create relations using resolved IDs
-      const createdRelations: Array<{
-        sourceEntityId: string;
-        targetEntityId: string;
-        relationType: string;
-      }> = [];
-
-      // Prefetch all valid relation type slugs for this workspace (avoids N+1).
-      // Workspace-less callers (hydration) just get the fallback — custom
-      // relation types are a workspace-scoped concept.
+      // Prefetch valid relation slugs for this workspace (avoids N+1).
+      // Workspace-less callers (hydration) get the fallback only.
       const relDefRepo = new RelationDefRepository(database);
       let validRelationSlugs: Set<string>;
       if (workspaceId) {
@@ -714,45 +623,129 @@ export const captureRouter = router({
         validRelationSlugs = new Set([FALLBACK_RELATION_TYPE]);
       }
 
-      for (const rel of input.relations) {
-        const sourceId = tempToReal[rel.sourceTempId];
-        const targetId = tempToReal[rel.targetTempId];
-        if (!sourceId || !targetId || sourceId === targetId) continue;
+      // Adapt capture input → composite ops (ref = tempId so the response maps
+      // back). Entities first (op contract requires a create_entity first).
+      const operations: CompositeProposalOperation[] = [
+        ...input.entities.map((e) => ({
+          op: "create_entity" as const,
+          profileSlug: e.profileSlug,
+          title: e.title,
+          description: e.description,
+          properties: e.properties,
+          content: e.content,
+          existingEntityId: e.existingEntityId,
+          ref: e.tempId,
+        })),
+        ...input.relations.map((r) => ({
+          op: "create_relation" as const,
+          type: r.relationType,
+          sourceRef: r.sourceTempId,
+          targetRef: r.targetTempId,
+        })),
+      ];
 
-        // Validate relation type — fall back to generic "relates_to"
-        const relationType = validRelationSlugs.has(rel.relationType)
-          ? rel.relationType
-          : FALLBACK_RELATION_TYPE;
+      // Direct-write entity caller: shared content routing + retry-as-note,
+      // returning the ACTUAL profile created so the response reflects fallbacks.
+      const entityCaller = {
+        create: async (op: {
+          profileSlug: string;
+          title?: string;
+          description?: string;
+          properties?: Record<string, unknown>;
+          content?: string;
+        }) => {
+          const { documentId, inlineContent } = await resolveContentTarget({
+            content: op.content,
+            title: op.title,
+            userId,
+            workspaceId,
+            db: database,
+            eventRepo,
+            logContext: { profileSlug: op.profileSlug },
+          });
+          const properties: Record<string, unknown> = {
+            ...(op.properties ?? {}),
+            ...(inlineContent !== undefined ? { content: inlineContent } : {}),
+          };
+          try {
+            const e = await entityRepo.create(
+              {
+                workspaceId,
+                userId,
+                title: op.title,
+                preview: op.description,
+                properties,
+                documentId,
+                profileSlug: op.profileSlug,
+              },
+              userId
+            );
+            return { id: e.id, profileSlug: op.profileSlug };
+          } catch (err) {
+            logger.warn(
+              { err, profileSlug: op.profileSlug },
+              "Entity creation failed, retrying as note"
+            );
+            const f = await entityRepo.create(
+              {
+                workspaceId,
+                userId,
+                title: op.title,
+                preview: op.description,
+                properties,
+                documentId,
+                profileSlug: "note",
+              },
+              userId
+            );
+            return { id: f.id, profileSlug: "note" };
+          }
+        },
+      };
 
-        try {
-          await relationRepo.create(
+      const relationCaller = {
+        create: async (rel: {
+          sourceEntityId: string;
+          targetEntityId: string;
+          type: string;
+        }) =>
+          relationRepo.create(
             {
               id: randomUUID(),
-              sourceEntityId: sourceId,
-              targetEntityId: targetId,
-              type: relationType,
+              sourceEntityId: rel.sourceEntityId,
+              targetEntityId: rel.targetEntityId,
+              type: rel.type,
               workspaceId,
               userId,
             },
             userId
-          );
-          createdRelations.push({
-            sourceEntityId: sourceId,
-            targetEntityId: targetId,
-            relationType,
-          });
-        } catch (err) {
-          logger.warn(
-            {
-              err,
-              sourceId,
-              targetId,
-              relationType,
-            },
-            "Relation creation failed, skipping"
-          );
+          ),
+      };
+
+      const result = await materializeCompositeGraph(
+        operations,
+        entityCaller,
+        relationCaller,
+        (err, type) =>
+          logger.warn({ err, type }, "Relation creation failed, skipping"),
+        {
+          source: "capture",
+          resolveRelationType: (type) =>
+            validRelationSlugs.has(type) ? type : FALLBACK_RELATION_TYPE,
         }
-      }
+      );
+
+      const created = result.entities.map((e) => ({
+        tempId: e.ref ?? "",
+        entityId: e.entityId,
+        profileSlug: e.profileSlug,
+        linked: e.linked,
+      }));
+      const createdRelations = result.relations.map((r) => ({
+        sourceEntityId: r.sourceEntityId,
+        targetEntityId: r.targetEntityId,
+        relationType: r.type,
+      }));
 
       logger.info(
         {
@@ -1040,13 +1033,9 @@ export const captureRouter = router({
         }
       }
 
-      // ── Phase 3: relations (mirror capture.execute) ───────────────────────
-      const createdRelations: Array<{
-        sourceEntityId: string;
-        targetEntityId: string;
-        relationType: string;
-      }> = [];
-
+      // ── Phase 3: relations (shared loop — the SAME relation definition the
+      // composite orchestrator uses; only the entity phase above differs, via
+      // EntityUpsertService dedup). tempToReal IS a ref→realId map (ref=tempId).
       const relDefRepo = new RelationDefRepository(database);
       let validRelationSlugs: Set<string>;
       if (workspaceId) {
@@ -1060,39 +1049,44 @@ export const captureRouter = router({
         validRelationSlugs = new Set([FALLBACK_RELATION_TYPE]);
       }
 
-      for (const rel of input.relations) {
-        const sourceId = tempToReal[rel.sourceTempId];
-        const targetId = tempToReal[rel.targetTempId];
-        if (!sourceId || !targetId || sourceId === targetId) continue;
-
-        const relationType = validRelationSlugs.has(rel.relationType)
-          ? rel.relationType
-          : FALLBACK_RELATION_TYPE;
-
-        try {
-          await relationRepo.create(
-            {
-              id: randomUUID(),
-              sourceEntityId: sourceId,
-              targetEntityId: targetId,
-              type: relationType,
-              workspaceId,
-              userId,
-            },
-            userId
-          );
-          createdRelations.push({
-            sourceEntityId: sourceId,
-            targetEntityId: targetId,
-            relationType,
-          });
-        } catch (err) {
-          logger.warn(
-            { err, sourceId, targetId, relationType },
-            "Relation creation failed, skipping"
-          );
-        }
-      }
+      const createdRelations = (
+        await createRelationsFromRefs(
+          input.relations.map((r) => ({
+            sourceRef: r.sourceTempId,
+            targetRef: r.targetTempId,
+            type: r.relationType,
+          })),
+          tempToReal,
+          {
+            create: async (rel: {
+              sourceEntityId: string;
+              targetEntityId: string;
+              type: string;
+            }) =>
+              relationRepo.create(
+                {
+                  id: randomUUID(),
+                  sourceEntityId: rel.sourceEntityId,
+                  targetEntityId: rel.targetEntityId,
+                  type: rel.type,
+                  workspaceId,
+                  userId,
+                },
+                userId
+              ),
+          },
+          {
+            resolveRelationType: (t) =>
+              validRelationSlugs.has(t) ? t : FALLBACK_RELATION_TYPE,
+            onError: (err, type) =>
+              logger.warn({ err, type }, "Relation creation failed, skipping"),
+          }
+        )
+      ).map((r) => ({
+        sourceEntityId: r.sourceEntityId,
+        targetEntityId: r.targetEntityId,
+        relationType: r.type,
+      }));
 
       logger.info(
         {

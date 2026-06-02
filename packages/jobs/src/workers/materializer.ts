@@ -47,6 +47,7 @@ import {
 import type { SynapEvent } from "@synap-core/core";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
+import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 
 const logger = createLogger({ module: "materializer" });
 
@@ -202,15 +203,26 @@ async function materializeEntity(
 
     const entityWorkspaceId = data.global ? null : workspaceId;
     const profileSlug = data.profileSlug as string;
+    const rawContent = (data.content as string | undefined) || undefined;
+    const baseProperties =
+      (data.properties as Record<string, unknown>) || undefined;
 
-    if (data.content) {
+    // Content routing — same heuristic decision (shouldMaterializeAsDocument)
+    // every other writer uses: long-form → a versioned document (storage row +
+    // v1 snapshot, linked via documentId); short → inline properties.content.
+    // (This worker can't import @synap/api, so it materializes inline but shares
+    // the heuristic via @synap-core/types and passes `content` so the document
+    // repository writes the v1 snapshot.)
+    let documentId: string | undefined =
+      (data.documentId as string) || undefined;
+    let properties = baseProperties;
+
+    if (rawContent && shouldMaterializeAsDocument(rawContent)) {
       const { storage } = await import("@synap/storage");
-      const content = data.content as string;
       const key = storage.buildPath(userId, "entity", subjectId, "md");
-      const metadata = await storage.upload(key, content, {
+      const metadata = await storage.upload(key, rawContent, {
         contentType: "text/markdown",
       });
-
       const createdDocument = await docRepo.create(
         {
           title: (data.title as string) || "Untitled",
@@ -220,44 +232,34 @@ async function materializeEntity(
           size: metadata.size,
           mimeType: "text/markdown",
           userId,
-          workspaceId: workspaceId || "",
+          // Scope the document to the entity's workspace so a workspace purge
+          // reclaims both.
+          workspaceId: entityWorkspaceId ?? undefined,
+          content: rawContent, // → writes the document_versions v1 snapshot
         },
         userId
       );
-
-      // The entity→document link is set here via documentId. The relationship
-      // is one-directional (documents has no entityId column); the previous
-      // back-link docRepo.update({ entityId }) wrote a non-existent column and
-      // is removed.
-      await entityRepo.create(
-        {
-          workspaceId: entityWorkspaceId!,
-          userId,
-          title: (data.title as string) || undefined,
-          preview: (data.description as string) || undefined,
-          documentId: createdDocument.id,
-          properties: (data.properties as Record<string, unknown>) || undefined,
-          profileSlug,
-        },
-        userId
-      );
-    } else {
-      await entityRepo.create(
-        {
-          workspaceId: entityWorkspaceId!,
-          userId,
-          title: (data.title as string) || undefined,
-          preview:
-            (data.description as string) ||
-            (data.preview as string) ||
-            undefined,
-          documentId: (data.documentId as string) || undefined,
-          properties: (data.properties as Record<string, unknown>) || undefined,
-          profileSlug,
-        },
-        userId
-      );
+      documentId = createdDocument.id;
+    } else if (rawContent) {
+      // Short content stays inline on the entity.
+      properties = { ...(baseProperties ?? {}), content: rawContent };
     }
+
+    // The entity→document link is one-directional (entity.documentId →
+    // documents.id); documents has no entityId column.
+    await entityRepo.create(
+      {
+        workspaceId: entityWorkspaceId!,
+        userId,
+        title: (data.title as string) || undefined,
+        preview:
+          (data.description as string) || (data.preview as string) || undefined,
+        documentId,
+        properties,
+        profileSlug,
+      },
+      userId
+    );
   } else if (action === "update") {
     const entityId = (data.id as string) || subjectId;
     await entityRepo.update(

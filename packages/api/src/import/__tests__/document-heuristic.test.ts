@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shouldMaterializeAsDocument } from "../document-heuristic.js";
+import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 
 describe("shouldMaterializeAsDocument", () => {
   it("returns false for empty / whitespace-only content", () => {

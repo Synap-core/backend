@@ -17,7 +17,7 @@
  * AI-driven *restructuring* of an imported corpus is a separate later step.
  */
 
-import { shouldMaterializeAsDocument } from "./document-heuristic.js";
+import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 
 export interface ImportLink {
   /** Target item name as referenced by the source (without #anchor or |alias). */

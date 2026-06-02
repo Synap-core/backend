@@ -7,9 +7,10 @@
  * of being stuffed into a short `description` / `properties.content` field.
  *
  * Deliberately deterministic and pure: same input → same answer, no LLM, no DB.
- * Shared by the capture pipeline (capture.execute) and the deterministic import
- * pipeline (importProposalToComposite) so both surfaces make the SAME call —
- * there is exactly one definition of "this is a document".
+ * Lives in @synap-core/types so EVERY writer surface — the capture pipeline, the
+ * deterministic import pipeline, AND the proposal-materializer worker (in
+ * @synap/jobs, which cannot import @synap/api) — makes the SAME call. There is
+ * exactly one definition of "this is a document".
  */
 
 /** Matches a markdown ATX heading line (`# ` … `###### `). */

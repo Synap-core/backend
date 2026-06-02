@@ -17,7 +17,7 @@ import { DocumentRepository, type EventRepository } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
-import { shouldMaterializeAsDocument } from "./document-heuristic.js";
+import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 
 const logger = createLogger({ module: "materialize-document" });
 

@@ -3,6 +3,10 @@
  * Re-exports from database schema for frontend usage
  */
 
+// Pure long-form-content heuristic — the single definition of "this is a
+// document", shared by every writer surface (api capture/import + jobs worker).
+export { shouldMaterializeAsDocument } from "./document-heuristic.js";
+
 // Re-export types from database schema (single source of truth)
 export type {
   Document,

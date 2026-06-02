@@ -251,6 +251,13 @@ export interface CompositeCreateEntityOp {
    */
   content?: string;
   /**
+   * Link to an EXISTING entity instead of creating one. When set, the writer
+   * registers this op's ref → existingEntityId (so relations can target it) and
+   * skips creation. Lets a graph mix new and pre-existing entities (capture's
+   * "link don't create" path).
+   */
+  existingEntityId?: string;
+  /**
    * Stable handle for THIS entity within the proposal, used by relation ops to
    * reference it (e.g. "t1"). Optional — the positional `$opN` ref always works.
    */
