@@ -30,7 +30,14 @@ import { createEventBackedProposal } from "../../../utils/event-backed-proposal.
 import { materializeCompositeGraph } from "../../../utils/materialize-composite.js";
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
 import { relationsRouter } from "../../relations.js";
-import { db, getDb, ProfileResolutionService } from "@synap/database";
+import {
+  db,
+  getDb,
+  ProfileResolutionService,
+  eq,
+  workspaces,
+  workspaceMembers,
+} from "@synap/database";
 import type { Context } from "../../../types/context.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -371,6 +378,25 @@ export function registerCaptureRoutes(app: HubHono): void {
         accessible as unknown as AccessibleProfileLike[]
       );
       const validSlugs = new Set(availableProfiles.map((p) => p.slug));
+      // The user's workspaces — for the model's workspace-routing suggestion.
+      const wsRows = await db2
+        .select({
+          id: workspaces.id,
+          name: workspaces.name,
+          description: workspaces.description,
+        })
+        .from(workspaces)
+        .innerJoin(
+          workspaceMembers,
+          eq(workspaceMembers.workspaceId, workspaces.id)
+        )
+        .where(eq(workspaceMembers.userId, userId))
+        .limit(8);
+      const availableWorkspaces = wsRows.map((w) => ({
+        id: w.id,
+        name: w.name,
+        description: w.description ?? undefined,
+      }));
 
       const items = adaptItems(body.source as ImportSource, body.items);
 
@@ -405,6 +431,7 @@ export function registerCaptureRoutes(app: HubHono): void {
             {
               availableProfiles,
               validSlugs,
+              availableWorkspaces,
               resolveExisting: makeGraphResolver(searchService, {
                 userId,
                 workspaceId,

@@ -24,7 +24,13 @@ import {
   buildAvailableProfiles,
   type AccessibleProfileLike,
 } from "../routers/capture.js";
-import { getDb, ProfileResolutionService } from "@synap/database";
+import {
+  getDb,
+  ProfileResolutionService,
+  eq,
+  workspaces,
+  workspaceMembers,
+} from "@synap/database";
 import { sanitizeImportPath, mimeFromPath } from "../utils/import-path.js";
 import { channelsRouter } from "../routers/channels.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
@@ -281,6 +287,11 @@ export class ImportOrchestrator {
   private profileHints?: {
     availableProfiles: ReturnType<typeof buildAvailableProfiles>;
     validSlugs: Set<string>;
+    availableWorkspaces: Array<{
+      id: string;
+      name: string;
+      description?: string;
+    }>;
   };
   private async resolveProfileHints() {
     if (this.profileHints) return this.profileHints;
@@ -292,9 +303,28 @@ export class ImportOrchestrator {
     const availableProfiles = buildAvailableProfiles(
       accessible as unknown as AccessibleProfileLike[]
     );
+    // The user's workspaces — lets the structuring model suggest where notes belong.
+    const wsRows = await db2
+      .select({
+        id: workspaces.id,
+        name: workspaces.name,
+        description: workspaces.description,
+      })
+      .from(workspaces)
+      .innerJoin(
+        workspaceMembers,
+        eq(workspaceMembers.workspaceId, workspaces.id)
+      )
+      .where(eq(workspaceMembers.userId, userId))
+      .limit(8);
     this.profileHints = {
       availableProfiles,
       validSlugs: new Set(availableProfiles.map((p) => p.slug)),
+      availableWorkspaces: wsRows.map((w) => ({
+        id: w.id,
+        name: w.name,
+        description: w.description ?? undefined,
+      })),
     };
     return this.profileHints;
   }
@@ -321,7 +351,8 @@ export class ImportOrchestrator {
     const items = adaptItems(source, raw);
     if (items.length === 0) return { proposalId: null, itemCount: 0 };
 
-    const { availableProfiles, validSlugs } = await this.resolveProfileHints();
+    const { availableProfiles, validSlugs, availableWorkspaces } =
+      await this.resolveProfileHints();
 
     // Prose (markdown/obsidian) → DEEP extraction: decompose each note into
     // multiple typed entities + relations, merged + deduplicated across notes.
@@ -346,6 +377,7 @@ export class ImportOrchestrator {
           {
             availableProfiles,
             validSlugs,
+            availableWorkspaces,
             resolveExisting: makeGraphResolver(searchService, {
               userId,
               workspaceId,

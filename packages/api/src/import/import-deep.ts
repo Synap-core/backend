@@ -30,6 +30,11 @@ export interface StructureCapableClient {
         propertyHints?: string;
       }>;
       existingEntityNames?: string[];
+      availableWorkspaces?: Array<{
+        id: string;
+        name: string;
+        description?: string;
+      }>;
     };
     timeoutMs?: number;
   }): Promise<{
@@ -46,6 +51,7 @@ export interface StructureCapableClient {
       targetTempId: string;
       relationType: string;
     }>;
+    targetWorkspaceId?: string | null;
   } | null>;
 }
 
@@ -60,6 +66,8 @@ export interface DeepStructureStats {
   documentCount: number;
   /** Source-note provenance entities created (one per processed note). */
   sourceDocCount: number;
+  /** The workspace the model most often suggested these notes belong in. */
+  suggestedWorkspaceId?: string;
   byType: Record<string, number>;
 }
 
@@ -75,6 +83,12 @@ interface DeepStructureOptions {
     displayName: string;
     description?: string;
     propertyHints?: string;
+  }>;
+  /** The user's workspaces — lets the model suggest where entities belong. */
+  availableWorkspaces?: Array<{
+    id: string;
+    name: string;
+    description?: string;
   }>;
   /** Slugs the workspace actually has — anything else falls back to "note". */
   validSlugs: Set<string>;
@@ -183,6 +197,7 @@ export async function deepStructureImportItems(
     ReturnType<StructureCapableClient["structure"]>
   > | null> = new Array(items.length).fill(null);
   const seenTitles = new Set<string>();
+  const wsVotes = new Map<string, number>(); // targetWorkspaceId → count
   for (let start = 0; start < items.length; start += concurrency) {
     const waveHint = Array.from(seenTitles).slice(0, 120);
     const wave: number[] = [];
@@ -198,6 +213,7 @@ export async function deepStructureImportItems(
             hints: {
               availableProfiles: opts.availableProfiles,
               existingEntityNames: waveHint,
+              availableWorkspaces: opts.availableWorkspaces,
             },
             timeoutMs,
           });
@@ -214,12 +230,28 @@ export async function deepStructureImportItems(
         }
       })
     );
-    // Feed this wave's entity names forward to the next wave.
+    // Feed this wave's entity names forward + tally workspace suggestions.
     for (const i of wave) {
       const r = extracted[i];
-      if (r?.entities)
+      if (!r) continue;
+      if (r.entities)
         for (const e of r.entities)
           if (e.title) seenTitles.add(normTitle(e.title));
+      if (r.targetWorkspaceId)
+        wsVotes.set(
+          r.targetWorkspaceId,
+          (wsVotes.get(r.targetWorkspaceId) ?? 0) + 1
+        );
+    }
+  }
+
+  // Dominant workspace the model suggested these notes belong in (if any).
+  let suggestedWorkspaceId: string | undefined;
+  let topVotes = 0;
+  for (const [wid, votes] of wsVotes) {
+    if (votes > topVotes) {
+      topVotes = votes;
+      suggestedWorkspaceId = wid;
     }
   }
 
@@ -361,6 +393,7 @@ export async function deepStructureImportItems(
       linkedToExisting,
       documentCount,
       sourceDocCount,
+      suggestedWorkspaceId,
       byType,
     },
   };
