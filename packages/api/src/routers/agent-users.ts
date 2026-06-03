@@ -47,7 +47,7 @@ export const agentUsersRouter = router({
           db,
           userId: ctx.userId,
           workspace: { id: input.workspaceId },
-          requiredPermission: "member",
+          requiredPermission: "read",
         });
         if (!memberPerm.allowed) {
           throw new TRPCError({
@@ -358,7 +358,7 @@ export const agentUsersRouter = router({
             capabilities: input.capabilities,
           },
         });
-        if ("denied" in perm && perm.denied) {
+        if ("denied" in perm) {
           throw new TRPCError({
             code: "FORBIDDEN",
             message: perm.reason ?? "Denied",
@@ -367,7 +367,7 @@ export const agentUsersRouter = router({
         if (!perm.granted) {
           return {
             status: "proposed" as const,
-            proposalId: (perm as { proposalId: string }).proposalId,
+            proposalId: perm.proposalId,
           };
         }
       }

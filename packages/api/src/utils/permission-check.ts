@@ -196,6 +196,12 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
     proposalApprovalPolicy: "owner_and_admins" | "any_editor" | "admins_only";
     destructiveAlwaysPropose: boolean;
     destructiveActions: readonly string[];
+    navigationPermissions: {
+      autoApprove: boolean;
+      allowedResourceTypes?: Array<
+        "entity" | "view" | "doc" | "cell" | "channel" | "automation"
+      >;
+    };
   };
   source: "workspace" | "default";
   defaults: {

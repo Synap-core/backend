@@ -69,6 +69,12 @@ export type RendererRef =
       url: string;
       external?: boolean;
       title?: string;
+    }
+  | {
+      kind: "view-adapter";
+      adapterKey: string;
+      props?: Record<string, unknown>;
+      title?: string;
     };
 
 export type ProfileRendererSlot = "list" | "detail";
