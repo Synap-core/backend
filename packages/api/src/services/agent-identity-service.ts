@@ -10,8 +10,9 @@
  * Authorship: 'delegated' when a human triggered the action, else 'autonomous'.
  */
 
-import { db, eq } from "@synap/database";
-import { agents, users } from "@synap/database/schema";
+import { db, eq, and } from "@synap/database";
+import { agents, users, apiKeys } from "@synap/database/schema";
+import { randomUUID, randomBytes } from "crypto";
 
 type AgentRow = typeof agents.$inferSelect;
 type UserRow = typeof users.$inferSelect;
@@ -78,4 +79,91 @@ export function deriveAuthorshipMode(
   if (!agentUserId) return null;
   if (callingUserId && callingUserId !== agentUserId) return "delegated";
   return "autonomous";
+}
+
+export interface CreateNamedAgentResult {
+  agentUserId: string;
+  email: string;
+  /** Plaintext Hub Protocol API key — shown once, never retrievable. */
+  apiKey: string;
+}
+
+/**
+ * Creates a named agent user (userType="agent") and issues a Hub Protocol
+ * API key for it. Idempotent by (agentType + createdByUserId): if an agent
+ * of the same type already exists for this user, a fresh key is issued for
+ * the existing agent rather than creating a duplicate.
+ *
+ * The key's `linkedUserId` is set to `createdByUserId` so the Hub Protocol
+ * middleware can auto-inject `agentUserId` for proposal attribution.
+ */
+export async function createNamedAgent(opts: {
+  name: string;
+  agentType: string;
+  createdByUserId: string;
+}): Promise<CreateNamedAgentResult> {
+  // Idempotent lookup: reuse existing agent of same type for this user
+  const [existing] = await db
+    .select({ id: users.id, email: users.email })
+    .from(users)
+    .where(
+      and(
+        eq(users.createdByUserId, opts.createdByUserId),
+        eq(users.userType, "agent"),
+        eq(users.agentType, opts.agentType),
+        eq(users.isPersonalAgent, false)
+      )
+    )
+    .limit(1);
+
+  let agentUserId: string;
+  let email: string;
+
+  if (existing) {
+    agentUserId = existing.id;
+    email = existing.email;
+  } else {
+    agentUserId = randomUUID();
+    const shortId = agentUserId.slice(0, 8);
+    email = `agent-${opts.agentType}-${shortId}@synap.agent`;
+
+    await db.insert(users).values({
+      id: agentUserId,
+      email,
+      name: opts.name,
+      userType: "agent",
+      agentType: opts.agentType,
+      isPersonalAgent: false,
+      createdByUserId: opts.createdByUserId,
+      agentMetadata: {
+        agentType: opts.agentType,
+        createdByUserId: opts.createdByUserId,
+        isPersonalAgent: false,
+      },
+      kratosIdentityId: `agent:${agentUserId}`,
+    });
+  }
+
+  // Issue a fresh session API key for this agent
+  const plainKey = `synap_hub_live_${randomBytes(32).toString("hex")}`;
+  const keyId = randomUUID();
+
+  // Use bcrypt to hash — import dynamically to avoid circular deps
+  const bcrypt = await import("bcryptjs");
+  const keyHash = await bcrypt.hash(plainKey, 12);
+
+  await db.insert(apiKeys).values({
+    id: keyId,
+    userId: agentUserId,
+    keyName: opts.name,
+    keyPrefix: plainKey.slice(0, 16),
+    keyHash,
+    keyType: "hub_inbound",
+    scope: ["hub-protocol.read", "hub-protocol.write"],
+    isActive: true,
+    linkedUserId: opts.createdByUserId,
+    createdBy: opts.createdByUserId,
+  });
+
+  return { agentUserId, email, apiKey: plainKey };
 }

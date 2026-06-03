@@ -534,7 +534,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
 
     try {
-      const actorResolution = await resolveActorId(body.agentUserId, userId);
+      // body.agentUserId wins; fall back to the auto-injected context value so
+      // agents using their own API key get proposal attribution without passing it.
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
+
+      const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       const actorId = actorResolution.actorId;
@@ -546,7 +551,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       });
       const result = await caller.entities.createEntity({
         userId,
-        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         profileSlug,
         title: body.title,
         description: body.description,
@@ -645,7 +650,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
 
     try {
-      const actorResolution = await resolveActorId(body.agentUserId, userId);
+      // body.agentUserId wins; fall back to the auto-injected context value so
+      // agents using their own API key get proposal attribution without passing it.
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
+
+      const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       const actorId = actorResolution.actorId;
@@ -657,7 +667,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       const result = await caller.entities.updateEntity({
         entityId,
         userId,
-        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         title: body.title,
         preview: body.preview,
         metadata: body.metadata,

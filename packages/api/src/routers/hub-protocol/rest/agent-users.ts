@@ -4,6 +4,7 @@
 
 import { z } from "@hono/zod-openapi";
 import { db, eq, and, inArray } from "@synap/database";
+import { createNamedAgent } from "../../../services/agent-identity-service.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -19,6 +20,59 @@ import {
 } from "./_shared.js";
 
 export function registerAgentUsersRoutes(app: HubHono): void {
+  /**
+   * POST /agent-users
+   * Create a named agent user and issue a Hub Protocol API key for it.
+   * Idempotent by (agentType + caller): same agent type reuses the existing user.
+   * Returns { agentUserId, email, apiKey } — key is shown ONCE.
+   */
+  app.post("/agent-users", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const callerId = c.get("userId") as string;
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const parsed = z
+      .object({
+        name: z.string().min(1).max(120),
+        agentType: z.string().min(1).max(60).default("cli-agent"),
+      })
+      .safeParse(body);
+
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid body", details: parsed.error.issues },
+        400
+      );
+    }
+
+    try {
+      const result = await createNamedAgent({
+        name: parsed.data.name,
+        agentType: parsed.data.agentType,
+        createdByUserId: callerId,
+      });
+      return c.json(result, 201);
+    } catch (err) {
+      logger.error({ err }, "POST /agent-users failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
   registerOpenApi(app, {
     method: "get",

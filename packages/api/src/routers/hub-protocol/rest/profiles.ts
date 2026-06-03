@@ -157,8 +157,10 @@ export function registerProfilesRoutes(app: HubHono): void {
       sourceMessageId?: string;
     };
     try {
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
       const actorResolution = await resolveActorId(
-        body.agentUserId,
+        resolvedAgentUserId,
         body.userId
       );
       if ("error" in actorResolution)
@@ -179,7 +181,7 @@ export function registerProfilesRoutes(app: HubHono): void {
         parentProfileId: body.parentProfileId,
         uiHints: body.uiHints,
         reasoning: body.reasoning,
-        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
       });
       return c.json(result);
     } catch (err) {
@@ -247,8 +249,10 @@ export function registerProfilesRoutes(app: HubHono): void {
       overlay?: boolean;
     };
     try {
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
       const actorResolution = await resolveActorId(
-        body.agentUserId,
+        resolvedAgentUserId,
         body.userId
       );
       if ("error" in actorResolution)
@@ -266,7 +270,7 @@ export function registerProfilesRoutes(app: HubHono): void {
         valueType: body.valueType,
         constraints: body.constraints,
         uiHints: body.uiHints,
-        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         ...(body.overlay
           ? { overlay: true, workspaceId: body.workspaceId }
           : {}),

@@ -54,6 +54,13 @@ export type HubVariables = {
   externalUserId?: string;
   /** Human user the bearer key acts on behalf of (identity link). */
   linkedUserId?: string;
+  /**
+   * When the request uses an agent API key (key owner has userType='agent' and
+   * the key has a linkedUserId), this is set to the key owner's userId so route
+   * handlers can attribute proposals to the agent without the caller passing it
+   * explicitly in the request body.
+   */
+  agentUserId?: string;
 };
 
 /**

@@ -2,6 +2,9 @@
  * Hub Protocol REST — skills
  */
 
+import fs from "fs";
+import path from "path";
+
 import { createRoute, z } from "@hono/zod-openapi";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -16,7 +19,7 @@ import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
 
 // ── System skill packages (static documentation served to text agents) ────────
 
-const SKILL_PACKAGE_SYNAP = `# synap — Core Data, Memory & Governance
+const FALLBACK_SYNAP = `# synap — Core Data, Memory & Governance
 
 Auth header on every request: \`Authorization: Bearer $SYNAP_API_KEY\`
 Base URL: \`$HUB_BASE_URL/api/hub\`
@@ -304,7 +307,7 @@ Create a long-running task.
 Poll task status. \`status\` field: \`pending\` | \`running\` | \`done\` | \`failed\`.
 `;
 
-const SKILL_PACKAGE_SYNAP_SCHEMA = `# synap-schema — Profiles, Property Definitions & Workspaces
+const FALLBACK_SYNAP_SCHEMA = `# synap-schema — Profiles, Property Definitions & Workspaces
 
 Auth header on every request: \`Authorization: Bearer $SYNAP_API_KEY\`
 Base URL: \`$HUB_BASE_URL/api/hub\`
@@ -389,7 +392,7 @@ List AI agent users registered in this workspace.
 Read per-workspace agent configuration overrides (model, temperature, auto-approve list).
 `;
 
-const SKILL_PACKAGE_SYNAP_UI = `# synap-ui — Views, Dashboards & Widgets
+const FALLBACK_SYNAP_UI = `# synap-ui — Views, Dashboards & Widgets
 
 Auth header on every request: \`Authorization: Bearer $SYNAP_API_KEY\`
 Base URL: \`$HUB_BASE_URL/api/hub\`
@@ -477,22 +480,111 @@ A \`bento\` view's grid is 12 columns wide. Each block references a cell by \`ki
 \`\`\`
 
 Block \`kind\` values: \`view\` | \`entity\` | \`widget\`.
+
+---
+
+## Whiteboard Placement
+
+Whiteboards are spatial layouts over existing resources. Create or update the
+resource first, then propose board placement.
+
+### POST /whiteboards/:viewId/placements/propose
+Proposal-gated placement on a whiteboard view.
+
+\`\`\`json
+{
+  "workspaceId": "workspace_uuid",
+  "resources": [
+    { "kind": "entity", "entityId": "entity_uuid" },
+    { "kind": "view", "viewId": "view_uuid" },
+    { "kind": "automation", "automationId": "automation_uuid", "mode": "flow" }
+  ],
+  "options": { "layout": "grid" },
+  "reasoning": "Place the research materials together for review"
+}
+\`\`\`
+
+Resource \`kind\` values: \`entity\` | \`view\` | \`cellInstance\` |
+\`cellDefinition\` | \`html\` | \`automation\` | \`url\`.
 `;
 
-const SKILL_PACKAGES = [
+type SkillFile = { path: string; content: string };
+type SkillPackage = { slug: string; files: SkillFile[] };
+
+const FALLBACK_SKILL_PACKAGES: SkillPackage[] = [
   {
     slug: "synap",
-    files: [{ path: "SKILL.md", content: SKILL_PACKAGE_SYNAP }],
+    files: [{ path: "SKILL.md", content: FALLBACK_SYNAP }],
   },
   {
     slug: "synap-schema",
-    files: [{ path: "SKILL.md", content: SKILL_PACKAGE_SYNAP_SCHEMA }],
+    files: [{ path: "SKILL.md", content: FALLBACK_SYNAP_SCHEMA }],
   },
   {
     slug: "synap-ui",
-    files: [{ path: "SKILL.md", content: SKILL_PACKAGE_SYNAP_UI }],
+    files: [{ path: "SKILL.md", content: FALLBACK_SYNAP_UI }],
   },
-] as const;
+];
+
+function loadSkillPackagesFromDisk(): SkillPackage[] | null {
+  const candidates = [
+    path.join(process.cwd(), "skills"),
+    path.resolve(
+      path.dirname(new URL(import.meta.url).pathname),
+      "../../../../../../skills"
+    ),
+  ];
+  const skillsDir = candidates.find((d) => fs.existsSync(d));
+  if (!skillsDir) return null;
+
+  const SKILL_FILES: { slug: string; files: string[] }[] = [
+    {
+      slug: "synap",
+      files: ["SKILL.md", "capture.md", "linking.md", "governance.md"],
+    },
+    { slug: "synap-schema", files: ["SKILL.md"] },
+    {
+      slug: "synap-ui",
+      files: [
+        "SKILL.md",
+        "bento-recipes.md",
+        "widget-catalog.md",
+        "view-types.md",
+      ],
+    },
+  ];
+
+  const packages: SkillPackage[] = [];
+  for (const { slug, files } of SKILL_FILES) {
+    const loaded: SkillFile[] = [];
+    for (const file of files) {
+      const filePath = path.join(skillsDir, slug, file);
+      if (fs.existsSync(filePath)) {
+        try {
+          loaded.push({
+            path: file,
+            content: fs.readFileSync(filePath, "utf-8"),
+          });
+        } catch {
+          /* skip unreadable */
+        }
+      }
+    }
+    if (loaded.length) packages.push({ slug, files: loaded });
+  }
+  return packages.length ? packages : null;
+}
+
+// Loaded once at startup — synchronous read, cheap
+let _cachedSkillPackages: SkillPackage[] | null = null;
+
+function getSkillPackages(): SkillPackage[] {
+  if (_cachedSkillPackages === null) {
+    _cachedSkillPackages =
+      loadSkillPackagesFromDisk() ?? FALLBACK_SKILL_PACKAGES;
+  }
+  return _cachedSkillPackages;
+}
 
 const SystemSkillFileSchema = z
   .object({
@@ -545,13 +637,7 @@ export function registerSkillsRoutes(app: HubHono): void {
         403
       );
     }
-    return c.json(
-      SKILL_PACKAGES as unknown as Array<{
-        slug: string;
-        files: Array<{ path: string; content: string }>;
-      }>,
-      200
-    );
+    return c.json(getSkillPackages(), 200);
   });
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
   registerOpenApi(app, {

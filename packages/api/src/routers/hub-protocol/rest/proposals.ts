@@ -195,7 +195,9 @@ export function registerProposalsRoutes(app: HubHono): void {
       );
     }
     try {
-      const userId = body.agentUserId ?? (c.get("userId") as string);
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
+      const userId = resolvedAgentUserId ?? (c.get("userId") as string);
       const action = inferProposalAction(body.proposalType);
       const isRequestShaped =
         typeof body.data.requestId === "string" &&
@@ -210,8 +212,8 @@ export function registerProposalsRoutes(app: HubHono): void {
         action,
         source: "intelligence",
         summary: body.summary,
-        agentUserId: body.agentUserId ?? null,
-        createdBy: body.agentUserId ?? userId,
+        agentUserId: resolvedAgentUserId ?? null,
+        createdBy: resolvedAgentUserId ?? userId,
         threadId: body.channelId ?? null,
         sourceMessageId: body.sourceMessageId ?? null,
         data: isRequestShaped

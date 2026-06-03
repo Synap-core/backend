@@ -515,6 +515,7 @@ export async function checkPermissionOrPropose(
     action === "archive" ||
     action === "restore" ||
     action === "add" ||
+    action === "place" ||
     action === "remove" ||
     action === "updateRole"
   ) {

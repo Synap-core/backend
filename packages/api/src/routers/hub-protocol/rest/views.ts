@@ -153,8 +153,10 @@ export function registerViewsRoutes(app: HubHono): void {
       sourceMessageId?: string;
     };
     try {
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
       const actorResolution = await resolveActorId(
-        body.agentUserId,
+        resolvedAgentUserId,
         body.userId
       );
       if ("error" in actorResolution)
@@ -173,7 +175,7 @@ export function registerViewsRoutes(app: HubHono): void {
         profileId: body.profileId,
         config: body.config,
         metadata: body.metadata,
-        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         reasoning: body.reasoning,
       });
       return c.json(result);
@@ -205,8 +207,10 @@ export function registerViewsRoutes(app: HubHono): void {
       sourceMessageId?: string;
     };
     try {
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
       const actorResolution = await resolveActorId(
-        body.agentUserId,
+        resolvedAgentUserId,
         body.userId
       );
       if ("error" in actorResolution)
@@ -224,7 +228,7 @@ export function registerViewsRoutes(app: HubHono): void {
         name: body.name,
         config: body.config,
         metadata: body.metadata,
-        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         reasoning: body.reasoning,
       });
       return c.json(result);
@@ -261,12 +265,14 @@ export function registerViewsRoutes(app: HubHono): void {
         workspaceId: body.workspaceId,
         sourceMessageId: body.sourceMessageId,
       });
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
       const result = await caller.views.arrangeBento({
         userId: body.userId,
         workspaceId: body.workspaceId,
         viewId,
         widgets: body.widgets,
-        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         reasoning: body.reasoning,
       });
       return c.json(result);

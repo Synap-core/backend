@@ -1,0 +1,178 @@
+/**
+ * Hub Protocol REST — whiteboards
+ *
+ * Agent-facing spatial composition surface. V1 intentionally proposes
+ * placements instead of writing directly into the Yjs document: the whiteboard
+ * remains the canvas/layout plane while resources keep their own source of truth.
+ */
+
+import { z } from "zod";
+import {
+  hasScope,
+  logger,
+  resolveActorId,
+  verifyWorkspaceAccess,
+  type HubHono,
+} from "./_shared.js";
+
+const BoardPlacementOptionsSchema = z.object({
+  x: z.number().optional(),
+  y: z.number().optional(),
+  w: z.number().optional(),
+  h: z.number().optional(),
+  frameId: z.string().optional(),
+  layout: z.enum(["stack", "grid", "flow", "freeform"]).optional(),
+});
+
+const BoardResourceRefSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("entity"),
+    entityId: z.string().uuid(),
+    entityType: z.string().nullable().optional(),
+    profileId: z.string().uuid().nullable().optional(),
+    title: z.string().nullable().optional(),
+    properties: z.record(z.string(), z.unknown()).optional(),
+    status: z.string().optional(),
+    updatedAt: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("view"),
+    viewId: z.string().uuid(),
+    viewType: z.string().nullable().optional(),
+    title: z.string().nullable().optional(),
+  }),
+  z.object({
+    kind: z.literal("cellInstance"),
+    cellInstanceId: z.string().uuid(),
+    cellKey: z.string().optional(),
+    props: z.record(z.string(), z.unknown()).optional(),
+    title: z.string().nullable().optional(),
+    defaultSize: z.object({ w: z.number(), h: z.number() }).optional(),
+  }),
+  z.object({
+    kind: z.literal("cellDefinition"),
+    cellKey: z.string().min(1),
+    props: z.record(z.string(), z.unknown()).optional(),
+    name: z.string().optional(),
+    defaultSize: z.object({ w: z.number(), h: z.number() }).optional(),
+  }),
+  z.object({
+    kind: z.literal("html"),
+    name: z.string().min(1),
+    html: z.string(),
+  }),
+  z.object({
+    kind: z.literal("automation"),
+    automationId: z.string().uuid(),
+    mode: z.enum(["flow", "detail", "status", "trigger"]),
+    title: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("url"),
+    url: z.string().url(),
+    title: z.string().optional(),
+    embedMode: z.enum(["iframe", "link"]).optional(),
+  }),
+]);
+
+const ProposePlacementsBodySchema = z.object({
+  workspaceId: z.string().uuid(),
+  userId: z.string().uuid().optional(),
+  resources: z.array(BoardResourceRefSchema).min(1),
+  options: BoardPlacementOptionsSchema.optional(),
+  agentUserId: z.string().uuid().optional(),
+  reasoning: z.string().optional(),
+  sourceMessageId: z.string().optional(),
+});
+
+export function registerWhiteboardsRoutes(app: HubHono) {
+  /**
+   * POST /whiteboards/:viewId/placements/propose
+   *
+   * Creates a governed proposal for board placements. Applying the accepted
+   * proposal is handled by the proposal execution/Yjs applier path, not here.
+   */
+  app.post("/whiteboards/:viewId/placements/propose", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+
+    const viewId = c.req.param("viewId");
+    const raw = (await c.req.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (!raw) return c.json({ error: "Invalid JSON in request body" }, 400);
+
+    const parsed = ProposePlacementsBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: parsed.error.issues.map((i) => i.message).join(", ") },
+        400
+      );
+    }
+
+    const body = parsed.data;
+    const userId = (body.userId ?? (c.get("userId") as string)) as string;
+    if (!(await verifyWorkspaceAccess(userId, body.workspaceId))) {
+      return c.json({ error: "Access denied to workspace" }, 403);
+    }
+
+    const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+    const agentUserId = body.agentUserId ?? ctxAgentUserId;
+    const actorResolution = await resolveActorId(agentUserId, userId);
+    if ("error" in actorResolution) {
+      return c.json({ error: actorResolution.error }, 400);
+    }
+
+    try {
+      const { checkPermissionOrPropose } =
+        await import("../../../utils/permission-check.js");
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId,
+        workspaceId: body.workspaceId,
+        subjectType: "whiteboard",
+        action: "place",
+        source: agentUserId ? "agent" : "intelligence",
+        data: {
+          viewId,
+          resources: body.resources,
+          options: body.options,
+          resourceCount: body.resources.length,
+        },
+        reasoning: body.reasoning,
+        sourceMessageId: body.sourceMessageId,
+      });
+
+      if ("denied" in perm && perm.denied) {
+        return c.json({ status: "denied", message: perm.reason }, 403);
+      }
+
+      if ("proposalId" in perm) {
+        return c.json({
+          status: "proposed",
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+        });
+      }
+
+      return c.json({
+        status: "accepted",
+        message:
+          "Whiteboard placement was allowed by governance, but direct Yjs application is not enabled for Hub REST yet.",
+        viewId,
+        resourceCount: body.resources.length,
+      });
+    } catch (err) {
+      logger.error({ err, viewId }, "whiteboard placement proposal failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+}

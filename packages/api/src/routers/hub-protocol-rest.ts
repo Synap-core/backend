@@ -62,6 +62,7 @@ import {
   registerWidgetDefinitionsRoutes,
   registerCellsRoutes,
   registerCellInstancesRoutes,
+  registerWhiteboardsRoutes,
   registerWorkspacesRoutes,
   registerMessagingRoutes,
   registerConnectorsRoutes,
@@ -290,6 +291,12 @@ app.use("/*", async (c, next) => {
     // linked human user without an extra DB lookup per request.
     if (keyRecord.linkedUserId) {
       c.set("linkedUserId", keyRecord.linkedUserId);
+      // When the key belongs to an agent acting on behalf of a human
+      // (key owner ≠ resolved user), auto-inject agentUserId so Hub Protocol
+      // route handlers can attribute proposals without explicit body params.
+      if (keyRecord.userId !== resolvedUserId) {
+        c.set("agentUserId", keyRecord.userId);
+      }
     }
     return next();
   }
@@ -394,6 +401,7 @@ registerSessionsRoutes(app); // /sessions*, /compacted-states*
 registerWidgetDefinitionsRoutes(app); // /widget-definitions
 registerCellsRoutes(app); // /cells, /cells/install, /cells/:typeKey
 registerCellInstancesRoutes(app); // /cell-instances, /cell-instances/html, /cell-instances/:id*
+registerWhiteboardsRoutes(app); // /whiteboards/:viewId/placements/propose
 registerMcpServersRoutes(app); // /mcp-servers
 registerAutomationsRoutes(app); // /automations*
 registerBackgroundTasksRoutes(app); // /background-tasks*
