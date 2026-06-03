@@ -31,6 +31,7 @@ export interface StructureCapableClient {
       }>;
       existingEntityNames?: string[];
     };
+    timeoutMs?: number;
   }): Promise<{
     entities: Array<{
       tempId: string;
@@ -55,6 +56,8 @@ export interface DeepStructureStats {
   relationCount: number;
   duplicatesMerged: number;
   documentCount: number;
+  /** Source-note provenance entities created (one per processed note). */
+  sourceDocCount: number;
   byType: Record<string, number>;
 }
 
@@ -75,6 +78,10 @@ interface DeepStructureOptions {
   validSlugs: Set<string>;
   /** Max concurrent structure calls (IS is a single shared model — keep modest). */
   concurrency?: number;
+  /** Per-note structure timeout in ms (default 60000 — long notes are slow). */
+  timeoutMs?: number;
+  /** Preserve each note as a source document + link extracted entities (default true). */
+  includeProvenance?: boolean;
 }
 
 interface DeepStructureDeps {
@@ -100,6 +107,11 @@ export async function deepStructureImportItems(
   deps: DeepStructureDeps
 ): Promise<DeepStructureResult> {
   const concurrency = Math.max(1, opts.concurrency ?? 4);
+  // Long prose notes routinely exceed the 25s default — raise it for imports,
+  // and retry once (the IS returns null on timeout/transient failure) so a
+  // single slow note doesn't silently drop from the graph.
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const includeProvenance = opts.includeProvenance ?? true;
 
   // 1. Extract per-item (concurrency-limited).
   const extracted: Array<Awaited<
@@ -111,11 +123,16 @@ export async function deepStructureImportItems(
       const i = cursor++;
       const item = items[i];
       if (!item.body || !item.body.trim()) continue;
-      try {
-        extracted[i] = await client.structure({
+      const call = () =>
+        client.structure({
           text: item.body,
           hints: { availableProfiles: opts.availableProfiles },
+          timeoutMs,
         });
+      try {
+        let res = await call();
+        if (!res) res = await call(); // one retry on null (timeout/transient)
+        extracted[i] = res;
       } catch (err) {
         deps.logger.warn(
           { err, title: item.title },
@@ -136,6 +153,7 @@ export async function deepStructureImportItems(
   let refCounter = 0;
   let duplicatesMerged = 0;
   let documentCount = 0;
+  let sourceDocCount = 0;
   let itemsProcessed = 0;
   let itemsFailed = 0;
 
@@ -147,6 +165,21 @@ export async function deepStructureImportItems(
     }
     itemsProcessed++;
     const localToRef = new Map<string, string>(); // note-local tempId → graph ref
+
+    // Provenance: preserve the original note as a versioned-document entity that
+    // every entity extracted from it links back to (source of truth + traceable).
+    let srcRef: string | undefined;
+    if (includeProvenance && items[i].body?.trim()) {
+      srcRef = `src${i}`;
+      operations.push({
+        op: "create_entity",
+        ref: srcRef,
+        profileSlug: "note",
+        title: items[i].title || "Imported note",
+        content: items[i].body, // → versioned document on materialize
+      });
+      sourceDocCount++;
+    }
 
     for (const e of res.entities) {
       const rawTitle = String(e.title ?? items[i].title ?? "Untitled");
@@ -194,6 +227,19 @@ export async function deepStructureImportItems(
       byType[slug] = (byType[slug] ?? 0) + 1;
     }
 
+    // Provenance links: source note → each entity extracted from it. A
+    // cross-note duplicate therefore links back to EVERY note it appeared in.
+    if (srcRef) {
+      for (const entRef of new Set(localToRef.values())) {
+        operations.push({
+          op: "create_relation",
+          type: "references",
+          sourceRef: srcRef,
+          targetRef: entRef,
+        });
+      }
+    }
+
     for (const rel of res.relations ?? []) {
       const sourceRef = localToRef.get(rel.sourceTempId);
       const targetRef = localToRef.get(rel.targetTempId);
@@ -217,6 +263,7 @@ export async function deepStructureImportItems(
         .length,
       duplicatesMerged,
       documentCount,
+      sourceDocCount,
       byType,
     },
   };

@@ -627,6 +627,8 @@ export class IntelligenceHubClient {
         properties?: Record<string, unknown>;
       }>;
     };
+    /** Abort timeout in ms (default 25000). Imports raise this for long notes. */
+    timeoutMs?: number;
   }): Promise<{
     entities: Array<{
       tempId: string;
@@ -646,7 +648,10 @@ export class IntelligenceHubClient {
   } | null> {
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 25_000);
+      const timer = setTimeout(
+        () => controller.abort(),
+        input.timeoutMs ?? 25_000
+      );
       try {
         const response = await fetch(`${this.baseUrl}/api/structure`, {
           method: "POST",
