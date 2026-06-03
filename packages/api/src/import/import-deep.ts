@@ -55,6 +55,8 @@ export interface DeepStructureStats {
   entityCount: number;
   relationCount: number;
   duplicatesMerged: number;
+  /** Entities linked to a pre-existing graph entity instead of created. */
+  linkedToExisting: number;
   documentCount: number;
   /** Source-note provenance entities created (one per processed note). */
   sourceDocCount: number;
@@ -82,18 +84,77 @@ interface DeepStructureOptions {
   timeoutMs?: number;
   /** Preserve each note as a source document + link extracted entities (default true). */
   includeProvenance?: boolean;
+  /**
+   * Resolve an extracted entity against the LIVE graph. Return an existing
+   * entity id for a confident match (→ link instead of create), else null.
+   * Omitted → no merge (every entity is created).
+   */
+  resolveExisting?: (
+    profileSlug: string,
+    title: string
+  ) => Promise<string | null>;
 }
 
 interface DeepStructureDeps {
   logger: { warn: (obj: unknown, msg: string) => void };
 }
 
-const normTitle = (s: unknown): string =>
+/** Canonical title normalization — shared by within-batch dedup AND the
+ *  graph-merge resolver so "same entity" means the same thing in both. */
+export const normTitle = (s: unknown): string =>
   String(s ?? "")
     .toLowerCase()
     .trim()
     .replace(/\s+/g, " ")
     .slice(0, 120);
+
+/** Minimal search surface needed for graph-merge resolution. */
+export interface EntitySearch {
+  searchCollection(
+    collection: string,
+    query: string,
+    opts: { userId: string; workspaceId?: string; limit?: number }
+  ): Promise<{
+    results: Array<{
+      document?: { id?: string; title?: string; entityType?: string };
+    }>;
+  }>;
+}
+
+/**
+ * Build a `resolveExisting` that links an extracted entity to a LIVE workspace
+ * entity only on a CONFIDENT match (exact normalized title + same profileSlug).
+ * Conservative by design — a wrong merge is worse than a duplicate. Returns null
+ * on any search failure (no merge). Shared by submitBatch + /import/analyze.
+ */
+export function makeGraphResolver(
+  search: EntitySearch,
+  ctx: { userId: string; workspaceId?: string }
+): (profileSlug: string, title: string) => Promise<string | null> {
+  return async (profileSlug, title) => {
+    try {
+      const sr = await search.searchCollection("entities", title, {
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        limit: 3,
+      });
+      const want = normTitle(title);
+      for (const r of sr.results) {
+        const doc = r.document;
+        if (
+          doc?.id &&
+          normTitle(doc.title) === want &&
+          (doc.entityType ?? "note") === profileSlug
+        ) {
+          return doc.id;
+        }
+      }
+    } catch {
+      /* search unavailable → no merge */
+    }
+    return null;
+  };
+}
 
 /**
  * Run each prose item through multi-entity structure extraction and merge the
@@ -113,38 +174,54 @@ export async function deepStructureImportItems(
   const timeoutMs = opts.timeoutMs ?? 60_000;
   const includeProvenance = opts.includeProvenance ?? true;
 
-  // 1. Extract per-item (concurrency-limited).
+  // 1. Extract in WAVES, accumulating entity names as `existingEntityNames`
+  //    hints. This gives later notes awareness of entities already found, so the
+  //    SAME entity mentioned in different notes is unified (cross-note
+  //    connectivity) rather than fragmented — the graph connects across notes
+  //    via shared entities. Concurrent within a wave; waves run in order.
   const extracted: Array<Awaited<
     ReturnType<StructureCapableClient["structure"]>
   > | null> = new Array(items.length).fill(null);
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < items.length) {
-      const i = cursor++;
-      const item = items[i];
-      if (!item.body || !item.body.trim()) continue;
-      const call = () =>
-        client.structure({
-          text: item.body,
-          hints: { availableProfiles: opts.availableProfiles },
-          timeoutMs,
-        });
-      try {
-        let res = await call();
-        if (!res) res = await call(); // one retry on null (timeout/transient)
-        extracted[i] = res;
-      } catch (err) {
-        deps.logger.warn(
-          { err, title: item.title },
-          "deep import: structure extraction failed for item"
-        );
-        extracted[i] = null;
-      }
+  const seenTitles = new Set<string>();
+  for (let start = 0; start < items.length; start += concurrency) {
+    const waveHint = Array.from(seenTitles).slice(0, 120);
+    const wave: number[] = [];
+    for (let k = start; k < Math.min(start + concurrency, items.length); k++)
+      wave.push(k);
+    await Promise.all(
+      wave.map(async (i) => {
+        const item = items[i];
+        if (!item.body || !item.body.trim()) return;
+        const call = () =>
+          client.structure({
+            text: item.body,
+            hints: {
+              availableProfiles: opts.availableProfiles,
+              existingEntityNames: waveHint,
+            },
+            timeoutMs,
+          });
+        try {
+          let res = await call();
+          if (!res) res = await call(); // one retry on null (timeout/transient)
+          extracted[i] = res;
+        } catch (err) {
+          deps.logger.warn(
+            { err, title: item.title },
+            "deep import: structure extraction failed for item"
+          );
+          extracted[i] = null;
+        }
+      })
+    );
+    // Feed this wave's entity names forward to the next wave.
+    for (const i of wave) {
+      const r = extracted[i];
+      if (r?.entities)
+        for (const e of r.entities)
+          if (e.title) seenTitles.add(normTitle(e.title));
     }
-  };
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, items.length) }, worker)
-  );
+  }
 
   // 2. Merge + dedup across items into one graph.
   const refByKey = new Map<string, string>(); // profileSlug|normTitle → ref
@@ -152,6 +229,7 @@ export async function deepStructureImportItems(
   const byType: Record<string, number> = {};
   let refCounter = 0;
   let duplicatesMerged = 0;
+  let linkedToExisting = 0;
   let documentCount = 0;
   let sourceDocCount = 0;
   let itemsProcessed = 0;
@@ -201,6 +279,24 @@ export async function deepStructureImportItems(
       const ref = `e${refCounter++}`;
       refByKey.set(key, ref);
       localToRef.set(e.tempId, ref);
+
+      // Merge into the EXISTING graph: a confident title+type match against the
+      // live workspace links to that entity (existingEntityId) instead of
+      // creating a duplicate — the vault grows ONE graph, not islands.
+      const existingId = opts.resolveExisting
+        ? await opts.resolveExisting(slug, title)
+        : null;
+      if (existingId) {
+        operations.push({
+          op: "create_entity",
+          ref,
+          profileSlug: slug,
+          title,
+          existingEntityId: existingId,
+        });
+        linkedToExisting++;
+        continue;
+      }
 
       const op: Extract<CompositeProposalOperation, { op: "create_entity" }> = {
         op: "create_entity",
@@ -262,6 +358,7 @@ export async function deepStructureImportItems(
       relationCount: operations.filter((o) => o.op === "create_relation")
         .length,
       duplicatesMerged,
+      linkedToExisting,
       documentCount,
       sourceDocCount,
       byType,

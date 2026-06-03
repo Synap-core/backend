@@ -20,7 +20,11 @@ import {
   importProposalToComposite,
 } from "../../../import/import-items.js";
 import { aiEnrichImportItems } from "../../../import/import-ai.js";
-import { deepStructureImportItems } from "../../../import/import-deep.js";
+import {
+  deepStructureImportItems,
+  makeGraphResolver,
+} from "../../../import/import-deep.js";
+import { searchService } from "@synap/search";
 import { resolveIntelligenceService } from "../../../utils/intelligence-routing.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../../../utils/materialize-composite.js";
@@ -398,7 +402,14 @@ export function registerCaptureRoutes(app: HubHono): void {
           const deep = await deepStructureImportItems(
             items,
             client,
-            { availableProfiles, validSlugs },
+            {
+              availableProfiles,
+              validSlugs,
+              resolveExisting: makeGraphResolver(searchService, {
+                userId,
+                workspaceId,
+              }),
+            },
             { logger }
           );
           if (deep.stats.entityCount > 0) {

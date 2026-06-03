@@ -13,8 +13,12 @@ import {
   importProposalToComposite,
 } from "../import/import-items.js";
 import { aiEnrichImportItems } from "../import/import-ai.js";
-import { deepStructureImportItems } from "../import/import-deep.js";
+import {
+  deepStructureImportItems,
+  makeGraphResolver,
+} from "../import/import-deep.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
+import { searchService } from "@synap/search";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import {
   buildAvailableProfiles,
@@ -339,14 +343,24 @@ export class ImportOrchestrator {
         const deep = await deepStructureImportItems(
           items,
           client,
-          { availableProfiles, validSlugs },
+          {
+            availableProfiles,
+            validSlugs,
+            resolveExisting: makeGraphResolver(searchService, {
+              userId,
+              workspaceId,
+            }),
+          },
           { logger }
         );
         if (deep.stats.entityCount > 0) {
           operations = deep.operations;
           itemCount = deep.stats.itemsProcessed;
           const typeCount = Object.keys(deep.stats.byType).length;
-          summary = `Deep import ${deep.stats.itemsProcessed} ${source} note(s) → ${deep.stats.entityCount} entit${deep.stats.entityCount === 1 ? "y" : "ies"} (${typeCount} type${typeCount === 1 ? "" : "s"}), ${deep.stats.relationCount} relation(s)`;
+          const linkedNote = deep.stats.linkedToExisting
+            ? `, ${deep.stats.linkedToExisting} linked to existing`
+            : "";
+          summary = `Deep import ${deep.stats.itemsProcessed} ${source} note(s) → ${deep.stats.entityCount} entit${deep.stats.entityCount === 1 ? "y" : "ies"} (${typeCount} type${typeCount === 1 ? "" : "s"}), ${deep.stats.relationCount} relation(s)${linkedNote}`;
           logger.info(
             { ...deep.stats, userId, source },
             "deep import structured"
