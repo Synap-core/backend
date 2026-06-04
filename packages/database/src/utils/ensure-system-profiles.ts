@@ -752,18 +752,11 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           hideFromCreate: true, // created programmatically via file upload, not manually
         },
       },
-      // Quick capture — raw URL/text captured via browser extension or mobile
-      {
-        slug: "capture",
-        displayName: "Capture",
-        uiHints: {
-          icon: "camera",
-          color: "#84CC16",
-          description: "Quick capture from browser or mobile",
-          hideFromCreate: true, // created programmatically via browser/mobile capture
-        },
-        parentSlug: "bookmark",
-      },
+      // 'capture' profile removed — the AI capture pipeline is the only
+      // capture path and it stores into `bookmark`, `article`, `note`, etc.
+      // Existing `capture` entities in user pods are NOT auto-migrated; if
+      // a future migration is needed, run a one-time backfill: `capture`
+      // → `bookmark` (parent slug), copying `url`/`domain`/`source` props.
       // AI Anchor — pinned reference to a specific message in a conversation
       {
         slug: "anchor",
@@ -886,7 +879,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
     }
 
     // Third pass: backfill hideFromCreate flag on system-only profiles (idempotent)
-    const HIDE_FROM_CREATE_SLUGS = ["file", "capture", "anchor"];
+    const HIDE_FROM_CREATE_SLUGS = ["file", "anchor"];
     for (const slug of HIDE_FROM_CREATE_SLUGS) {
       const profileId = createdProfiles.get(slug);
       if (!profileId) continue;
@@ -1087,19 +1080,8 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           { slug: "tags", required: false, displayOrder: 4 },
         ],
       },
-      // Capture — raw capture from browser/mobile (inherits bookmark hierarchy)
-      {
-        profileSlug: "capture",
-        propertySlugs: [
-          { slug: "title", required: false, displayOrder: 0 },
-          { slug: "url", required: false, displayOrder: 1 },
-          { slug: "domain", required: false, displayOrder: 2 },
-          { slug: "source", required: false, displayOrder: 3 },
-          { slug: "content", required: false, displayOrder: 4 },
-          { slug: "tags", required: false, displayOrder: 5 },
-          { slug: "description", required: false, displayOrder: 6 },
-        ],
-      },
+      // 'capture' property assignment removed — the profile itself is gone.
+      // The AI capture pipeline writes to `bookmark`/`article`/`note`/etc.
       // Anchor — pinned conversation moment
       {
         profileSlug: "anchor",

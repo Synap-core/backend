@@ -41,7 +41,26 @@ import { emitSideEffects, getBoss } from "@synap/events";
 // SCHEMAS
 // ============================================================================
 
-const DocumentTypeSchema = z.enum(["text", "markdown", "code", "pdf", "docx"]);
+const DocumentTypeSchema = z.enum([
+  "text",
+  "markdown",
+  "code",
+  "html",
+  "pdf",
+  "docx",
+]);
+
+function mimeTypeForDocType(type: string): string {
+  const map: Record<string, string> = {
+    markdown: "text/markdown",
+    html: "text/html",
+    code: "text/plain",
+    text: "text/plain",
+    pdf: "application/pdf",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  };
+  return map[type] ?? "text/plain";
+}
 
 const UploadDocumentSchema = z.object({
   type: DocumentTypeSchema,
@@ -111,8 +130,9 @@ export const documentsRouter = router({
 
       // 1. Upload content to MinIO
       const content = input.content || "";
+      const resolvedMimeType = mimeTypeForDocType(docType);
       const metadata = await storage.upload(storageKey, content, {
-        contentType: "text/markdown",
+        contentType: resolvedMimeType,
       });
 
       // 2. Insert document into DB
@@ -123,11 +143,17 @@ export const documentsRouter = router({
           userId,
           workspaceId,
           title: input.title,
-          type: docType as "text" | "markdown" | "code" | "pdf" | "docx",
+          type: docType as
+            | "text"
+            | "markdown"
+            | "code"
+            | "html"
+            | "pdf"
+            | "docx",
           storageUrl: metadata.url,
           storageKey: metadata.path,
           size: metadata.size,
-          mimeType: "text/markdown",
+          mimeType: resolvedMimeType,
           currentVersion: 1,
         })
         .returning();

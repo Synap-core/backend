@@ -48,6 +48,61 @@ Synap is a typed knowledge graph. Six layers you need:
 | **Threads**   | Channel conversations, optional entity context | Posting to the user's personal AI channel                |
 | **Proposals** | Writes queued for human approval               | Governance for some mutations (not an error — see below) |
 
+## Quick reference — 90% of tasks in 30 lines
+
+```bash
+# CLI (preferred — auth automatic, --json = clean output)
+synap orient --json                                    # discover userId + workspaces
+synap use <workspace-name-or-id>                       # set active workspace
+synap create entity --profile=task --name="…" --props='{"status":"todo","priority":"high"}' --json
+synap set entity <id> --props='{"status":"done"}' --json  # merge-patch (only changed keys)
+synap search "query" --json
+synap remember "fact about the user" --json
+synap recall "query" --json
+```
+
+```bash
+# REST (when no Bash access)
+POST   /api/hub/entities          body: { userId, workspaceId?, profileSlug, title, properties }
+PATCH  /api/hub/entities/{id}     body: { userId, properties }   ← deep-merges, send only changed keys
+POST   /api/hub/documents         body: { userId, workspaceId?, title, content, entityId? }
+PATCH  /api/hub/documents/{id}    body: { userId, title?, content? }   ← full content replacement
+POST   /api/hub/relations         body: { userId, sourceEntityId, targetEntityId, type }
+GET    /api/hub/entities?q=…&profileSlug=task&workspaceId=…
+GET    /api/hub/entities/{id}/connections?userId=…
+POST   /api/hub/memory            body: { userId, fact }
+GET    /api/hub/memory?userId=…&query=…
+```
+
+**Common `properties` keys by profile** (stable — no round-trip needed for these):
+
+| Profile    | Key properties (slug: type)                                                                                                               |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `task`     | `status` (todo/in-progress/done/blocked), `priority` (low/medium/high), `dueDate` (date), `projectId` (entity_id), `assignee` (entity_id) |
+| `note`     | `tags` (string[]), `projectId` (entity_id)                                                                                                |
+| `project`  | `status` (active/paused/completed/cancelled), `startDate`, `endDate`, `description`                                                       |
+| `person`   | `email`, `role`, `companyId` (entity_id), `linkedinUrl`, `phone`                                                                          |
+| `event`    | `startDate`, `endDate`, `location`, `attendees` (entity_id[])                                                                             |
+| `decision` | `decisionStatus` (draft/accepted/superseded), `decidedAt`, `rationale`, `alternatives`, `projectId`                                       |
+| `research` | `researchStatus` (ongoing/concluded), `questionId` (entity_id), `conclusion`, `researchConfidence`                                        |
+| `question` | `questionStatus` (exploring/answered), `answeredByDecisionId` (entity_id), `projectId`                                                    |
+| `deal`     | `dealStage` (lead/contacted/qualifying/proposal/won/lost), `estimatedValue` (number)                                                      |
+| `document` | `contentType` (markdown/html), `summary`, `projectId` (entity_id)                                                                         |
+
+For custom profiles or constraint details: `GET /api/hub/profiles?userId={userId}&workspaceId={workspaceId}`.
+
+**Load more detail on demand** (`GET /api/hub/skills/system?sections=<id>`):
+
+| Section ID                | When to load                                           |
+| ------------------------- | ------------------------------------------------------ |
+| `synap:capture`           | User pastes multi-entity text (email, transcript, bio) |
+| `synap:governance`        | Write was proposed or denied; need to explain policy   |
+| `synap:linking`           | Custom relation types, auto-sync edge cases            |
+| `synap-ui:SKILL`          | Building views, bento dashboards, workspaces           |
+| `synap-ui:view-types`     | Specific view type config shapes                       |
+| `synap-ui:widget-catalog` | Available widget kinds and their configSchema          |
+| `synap-schema:SKILL`      | Creating custom profiles or property definitions       |
+
 ## Synap-first operating mode
 
 > **MCP clients** (Claude Desktop, Raycast, OpenClaw with MCP): use `synap_*` tool names — they wrap auth and governance automatically. **REST / HTTP clients**: use the endpoints below.
@@ -390,10 +445,12 @@ POST /api/hub/entities
 
 ```json
 PATCH /api/hub/entities/{entityId}
-{ "title": "…", "properties": { "status": "done" } }
+{ "userId": "{userId}", "title": "…", "properties": { "status": "done" } }
 ```
 
-### Create a document (markdown, attached to an entity)
+**Properties are deep-merged — send only the keys you want to change.** An update with `{ "status": "done" }` leaves all other properties untouched. You never need to re-send the full properties object.
+
+### Create a document (attach to an entity)
 
 ```json
 POST /api/hub/documents
@@ -402,9 +459,51 @@ POST /api/hub/documents
   "workspaceId": "{workspaceId}",
   "title": "Meeting notes — 2026-04-20",
   "content": "# Attendees\n- …\n\n# Decisions\n- …",
-  "entityId": "ent_event_..."    // attach to an entity for context
+  "type": "markdown",              // "markdown" | "html" | "text" | "code"
+  "entityId": "ent_event_..."      // attach to an entity for context
 }
 ```
+
+`type: "html"` stores self-contained HTML. The browser renders it via the `html-doc` cell in a sandboxed iframe. Use for AI-generated reports, rich visualisations, custom charts, or anything beyond markdown.
+
+**Full HTML cell workflow** (AI → visible custom UI in any bento):
+
+```json
+// 1. Create the HTML document
+POST /api/hub/documents
+{ "userId": "{userId}", "workspaceId": "{workspaceId}",
+  "title": "Q2 Revenue Report", "type": "html",
+  "content": "<!DOCTYPE html><html>…</html>",
+  "entityId": "ent_project_..." }
+// → { "document": { "id": "doc_abc" }, ... }
+
+// 2. Place the html-doc cell in any bento view
+POST /api/hub/views/{bentoViewId}/arrange
+{ "userId": "{userId}", "workspaceId": "{workspaceId}",
+  "widgets": [
+    { "id": "b1", "kind": "html-doc", "config": { "documentId": "doc_abc" },
+      "layout": { "x": 0, "y": 0, "w": 8, "h": 6 } }
+  ] }
+
+// 3. Update the HTML (cell auto-refreshes)
+PATCH /api/hub/documents/doc_abc
+{ "userId": "{userId}", "content": "<!DOCTYPE html>…updated…</html>" }
+```
+
+The iframe uses `sandbox="allow-scripts"` — scripts run but have no same-origin access to the parent app. The HTML is fully isolated.
+
+### Update a document (title and/or content)
+
+```json
+PATCH /api/hub/documents/{documentId}
+{
+  "userId": "{userId}",
+  "title": "Updated title",          // optional
+  "content": "# Full replacement\n…" // full string — not a diff
+}
+```
+
+Content is a **full replacement**, not a patch. Fetch the current content first if you want to append: `GET /api/hub/documents/{id}?userId={userId}` → `.content`, append, then PATCH.
 
 The reverse lookup is `entities WHERE documentId = ?`. Always attach the document to a meaningful entity (the meeting event, the project, the person) — a floating document is another orphan.
 

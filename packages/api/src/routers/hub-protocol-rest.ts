@@ -287,16 +287,17 @@ app.use("/*", async (c, next) => {
     // so /auth/status (and any future introspection routes) can look up
     // metadata about the calling key without re-running bcrypt.
     c.set("apiKeyId", keyRecord.id);
-    // Propagate identity link so memory routes can dual-write facts to the
-    // linked human user without an extra DB lookup per request.
+    // Agent key identity remap: when a key has linkedUserId (= the human who
+    // created the agent), remap the effective userId to the human so entity
+    // ownership is attributed correctly. The agent (key owner) is tracked as
+    // agentUserId for proposal attribution across all Hub Protocol write handlers.
+    // NOTE: resolvedUserId was initialized from keyRecord.userId (the agent),
+    // so the condition `keyRecord.userId !== resolvedUserId` is always false —
+    // we unconditionally remap here instead.
     if (keyRecord.linkedUserId) {
       c.set("linkedUserId", keyRecord.linkedUserId);
-      // When the key belongs to an agent acting on behalf of a human
-      // (key owner ≠ resolved user), auto-inject agentUserId so Hub Protocol
-      // route handlers can attribute proposals without explicit body params.
-      if (keyRecord.userId !== resolvedUserId) {
-        c.set("agentUserId", keyRecord.userId);
-      }
+      c.set("userId", keyRecord.linkedUserId); // human owns the entities
+      c.set("agentUserId", keyRecord.userId); // agent performed the action
     }
     return next();
   }

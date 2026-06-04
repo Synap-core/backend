@@ -637,7 +637,43 @@ export function registerSkillsRoutes(app: HubHono): void {
         403
       );
     }
-    return c.json(getSkillPackages(), 200);
+
+    // ?scope=core  → SKILL.md only per package (minimal, ~300 lines total)
+    // ?scope=full  → all files (default, backward compat)
+    // ?sections=synap:capture,synap-ui:view-types → specific files only
+    const scope = c.req.query("scope");
+    const sectionsParam = c.req.query("sections");
+    const allPackages = getSkillPackages();
+
+    if (sectionsParam) {
+      // Parse "pkg:file,pkg:file" → filter to requested files
+      const requested = sectionsParam.split(",").map((s) => s.trim());
+      const filtered = allPackages
+        .map((pkg) => ({
+          ...pkg,
+          files: pkg.files.filter(
+            (f) =>
+              requested.includes(
+                `${pkg.slug}:${f.path.replace(/\.md$/, "")}`
+              ) || requested.includes(`${pkg.slug}:${f.path}`)
+          ),
+        }))
+        .filter((pkg) => pkg.files.length > 0);
+      return c.json(filtered, 200);
+    }
+
+    if (scope === "core") {
+      // Return only SKILL.md from each package
+      const corePackages = allPackages
+        .map((pkg) => ({
+          ...pkg,
+          files: pkg.files.filter((f) => f.path === "SKILL.md"),
+        }))
+        .filter((pkg) => pkg.files.length > 0);
+      return c.json(corePackages, 200);
+    }
+
+    return c.json(allPackages, 200);
   });
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
   registerOpenApi(app, {
