@@ -203,7 +203,20 @@ function recordFailure(baseUrl: string): void {
 // ── Fetch helper ─────────────────────────────────────────────────────────────
 
 const FETCH_TIMEOUT_MS = 30_000;
-const STREAM_TIMEOUT_MS = 30_000;
+/**
+ * Chat-specific abort timeout (streaming + its non-streaming fallback).
+ *
+ * Chat runs a conversational LLM that can take far longer than the generic 30s
+ * (e.g. self-hosted Qwen3 with a reasoning trace measured at 35-48s). Streaming
+ * yields progressively, so a 30s TOTAL abort wrongly kills a stream that is
+ * actively producing tokens. We give chat a much longer ceiling (default 120s),
+ * overridable via CHAT_FETCH_TIMEOUT_MS. The short timeouts on
+ * embeddings/classify/route/extract/structure are intentionally left untouched
+ * — those must stay fast.
+ */
+const CHAT_FETCH_TIMEOUT_MS = Number(
+  process.env.CHAT_FETCH_TIMEOUT_MS ?? 120_000
+);
 const MAX_RETRIES = 2;
 const RETRY_DELAYS_MS = [500, 1_000];
 
@@ -289,7 +302,10 @@ export class IntelligenceHubClient {
               workspaceSettings: request.workspaceSettings,
               channelKind: request.channelKind,
             }),
-          }
+          },
+          // Chat (non-streaming fallback) can run a slow conversational LLM —
+          // use the longer chat timeout, not the generic 30s.
+          CHAT_FETCH_TIMEOUT_MS
         );
 
         if (!response.ok) {
@@ -413,7 +429,9 @@ export class IntelligenceHubClient {
             channelKind: request.channelKind,
           }),
         },
-        STREAM_TIMEOUT_MS
+        // Streaming yields progressively; a 30s TOTAL abort wrongly kills a
+        // stream that is still producing tokens. Use the longer chat timeout.
+        CHAT_FETCH_TIMEOUT_MS
       );
     } catch (error) {
       recordFailure(this.baseUrl);
