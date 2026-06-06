@@ -43,6 +43,8 @@ import {
   ViewRepository,
   WorkspaceRepository,
   ProfileRepository,
+  storedVersionValues,
+  uploadDocumentVersionSnapshot,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { ViewEvents } from "../lib/event-helpers.js";
@@ -232,6 +234,16 @@ export const viewsRouter = router({
         });
 
         docId = genId();
+        const versionId = randomUUID();
+        const snapshot = await uploadDocumentVersionSnapshot({
+          userId: ctx.userId,
+          documentId: docId,
+          versionId,
+          documentType: input.type,
+          mimeType: "application/json",
+          content: contentStr,
+        });
+
         const [doc] = await db
           .insert(documents)
           .values({
@@ -245,13 +257,15 @@ export const viewsRouter = router({
             size: uploadResult.size,
             mimeType: "application/json",
             currentVersion: 1,
+            lastSavedVersion: 1,
           })
           .returning();
 
         await db.insert(documentVersions).values({
+          id: versionId,
           documentId: doc.id,
           version: 1,
-          content: contentStr,
+          ...storedVersionValues(snapshot),
           author: "user",
           authorId: ctx.userId,
           message: "Initial version",
@@ -825,11 +839,21 @@ export const viewsRouter = router({
         }
 
         const newVersion = (doc?.currentVersion || 0) + 1;
+        const versionId = randomUUID();
+        const snapshot = await uploadDocumentVersionSnapshot({
+          userId: ctx.userId,
+          documentId: view.documentId,
+          versionId,
+          documentType: doc?.type ?? view.type,
+          mimeType: doc?.mimeType || "application/json",
+          content: contentStr,
+        });
 
         await db.insert(documentVersions).values({
+          id: versionId,
           documentId: view.documentId,
           version: newVersion,
-          content: contentStr,
+          ...storedVersionValues(snapshot),
           author: "user",
           authorId: ctx.userId,
           message: "Manual save",

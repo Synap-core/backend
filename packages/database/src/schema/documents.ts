@@ -73,7 +73,12 @@ export const documents = pgTable(
 
 /**
  * Document versions table
- * Stores each version of the document for history
+ * Stores each immutable version of the document for history.
+ *
+ * Canonical content for new versions lives in storageKey/storageUrl, mirroring
+ * documents.storageKey for the current version. `content` remains as a
+ * backwards-compatible legacy/preview field for rows created before stored
+ * version snapshots existed.
  */
 export const documentVersions = pgTable(
   "document_versions",
@@ -85,7 +90,14 @@ export const documentVersions = pgTable(
 
     // Version info
     version: integer("version").notNull(),
-    content: text("content").notNull(), // Full content at this version (snapshot)
+    content: text("content").notNull(), // Legacy/preview content; prefer storageKey when present.
+
+    // Immutable version storage
+    storageUrl: text("storage_url"),
+    storageKey: text("storage_key"),
+    size: integer("size").notNull().default(0),
+    mimeType: text("mime_type"),
+    checksum: text("checksum"),
 
     // Author tracking
     author: text("author").notNull(), // 'user' | 'system'
@@ -104,6 +116,9 @@ export const documentVersions = pgTable(
     versionIdx: index("document_versions_version_idx").on(
       table.documentId,
       table.version
+    ),
+    storageKeyIdx: index("document_versions_storage_key_idx").on(
+      table.storageKey
     ),
   })
 );

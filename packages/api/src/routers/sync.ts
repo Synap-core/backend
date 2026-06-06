@@ -33,6 +33,8 @@ import {
   drizzleSql,
   syncReceiveInputSchema,
   materializeBatch,
+  storedVersionValues,
+  uploadDocumentVersionSnapshot,
 } from "@synap/database";
 import { intelligenceServices } from "@synap/database/schema";
 import { verifyCpJwt } from "../utils/jwks-client.js";
@@ -771,6 +773,10 @@ const fileVersionPayloadSchema = z.object({
   documentId: z.string(),
   version: z.number().optional(),
   content: z.string().nullable().optional(),
+  contentBase64: z.string().optional(),
+  mimeType: z.string().nullable().optional(),
+  size: z.number().nullable().optional(),
+  checksum: z.string().nullable().optional(),
   author: z.string().nullable().optional(),
   authorId: z.string().nullable().optional(),
   message: z.string().nullable().optional(),
@@ -861,11 +867,26 @@ app.post("/receive-file-version", async (c) => {
   }
 
   try {
+    const existingDoc = await db.query.documents.findFirst({
+      where: eq(documents.id, body.documentId),
+    });
+    const contentBuffer = body.contentBase64
+      ? Buffer.from(body.contentBase64, "base64")
+      : Buffer.from(body.content ?? "", "utf-8");
+    const snapshot = await uploadDocumentVersionSnapshot({
+      userId: existingDoc?.userId ?? "sync",
+      documentId: body.documentId,
+      versionId: body.versionId,
+      documentType: existingDoc?.type,
+      mimeType:
+        body.mimeType ?? existingDoc?.mimeType ?? "application/octet-stream",
+      content: contentBuffer,
+    });
     const versionValues: typeof documentVersions.$inferInsert = {
       id: body.versionId,
       documentId: body.documentId,
       version: body.version ?? 1,
-      content: body.content ?? "",
+      ...storedVersionValues(snapshot),
       author: body.author ?? "sync",
       authorId: body.authorId ?? "sync",
       message: body.message,

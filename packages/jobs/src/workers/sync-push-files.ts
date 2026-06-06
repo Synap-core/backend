@@ -14,7 +14,7 @@
  *    d. Advance the files cursor on success
  *
  * 2. Also syncs document_versions created since the last cursor, sending the
- *    version content (text snapshots) so the peer has full version history.
+ *    stored version snapshot bytes so the peer has full version history.
  *
  * File content is base64-encoded in JSON for Phase 4 simplicity.
  * A future phase can switch to multipart/streaming for large files.
@@ -253,7 +253,7 @@ async function pushFilesToPeer(peer: {
   }
 
   // -------------------------------------------------------------------
-  // Phase B: Sync document versions (text snapshots for version history)
+  // Phase B: Sync document versions (stored snapshots for version history)
   // -------------------------------------------------------------------
 
   const versionsToSync = await db
@@ -262,6 +262,11 @@ async function pushFilesToPeer(peer: {
       documentId: documentVersions.documentId,
       version: documentVersions.version,
       content: documentVersions.content,
+      storageUrl: documentVersions.storageUrl,
+      storageKey: documentVersions.storageKey,
+      size: documentVersions.size,
+      mimeType: documentVersions.mimeType,
+      checksum: documentVersions.checksum,
       author: documentVersions.author,
       authorId: documentVersions.authorId,
       message: documentVersions.message,
@@ -274,11 +279,18 @@ async function pushFilesToPeer(peer: {
 
   for (const ver of versionsToSync) {
     try {
+      const versionBuffer = ver.storageKey
+        ? await storage.downloadBuffer(ver.storageKey)
+        : Buffer.from(ver.content ?? "", "utf-8");
       const payload = {
         versionId: ver.id,
         documentId: ver.documentId,
         version: ver.version,
         content: ver.content,
+        contentBase64: versionBuffer.toString("base64"),
+        mimeType: ver.mimeType,
+        size: ver.size,
+        checksum: ver.checksum,
         author: ver.author,
         authorId: ver.authorId,
         message: ver.message,

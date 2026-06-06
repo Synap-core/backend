@@ -30,6 +30,9 @@ import {
   documentVersions,
   documentSessions,
   normalizeDocumentType,
+  storedVersionValues,
+  uploadDocumentVersionSnapshot,
+  readDocumentVersionContent,
 } from "@synap/database";
 
 import { requireUserId } from "../utils/user-scoped.js";
@@ -134,29 +137,47 @@ export const documentsRouter = router({
       const metadata = await storage.upload(storageKey, content, {
         contentType: resolvedMimeType,
       });
+      const versionId = randomUUID();
+      const snapshot = await uploadDocumentVersionSnapshot({
+        userId,
+        documentId,
+        versionId,
+        documentType: docType,
+        mimeType: resolvedMimeType,
+        content,
+      });
 
-      // 2. Insert document into DB
-      const [document] = await db
-        .insert(documents)
-        .values({
-          id: documentId,
-          userId,
-          workspaceId,
-          title: input.title,
-          type: docType as
-            | "text"
-            | "markdown"
-            | "code"
-            | "html"
-            | "pdf"
-            | "docx",
-          storageUrl: metadata.url,
-          storageKey: metadata.path,
-          size: metadata.size,
-          mimeType: resolvedMimeType,
-          currentVersion: 1,
-        })
-        .returning();
+      // 2. Insert document + immutable v1 snapshot into DB
+      const [document] = await db.transaction(async (tx) => {
+        const [doc] = await tx
+          .insert(documents)
+          .values({
+            id: documentId,
+            userId,
+            workspaceId,
+            title: input.title,
+            type: docType,
+            storageUrl: metadata.url,
+            storageKey: metadata.path,
+            size: metadata.size,
+            mimeType: resolvedMimeType,
+            currentVersion: 1,
+            lastSavedVersion: 1,
+          })
+          .returning();
+
+        await tx.insert(documentVersions).values({
+          id: versionId,
+          documentId,
+          version: 1,
+          ...storedVersionValues(snapshot),
+          author: "user",
+          authorId: userId,
+          message: "Initial version",
+        });
+
+        return [doc];
+      });
 
       return {
         status: "created",
@@ -199,24 +220,48 @@ export const documentsRouter = router({
       const metadata = await storage.upload(storageKey, input.content, {
         contentType: mimeType,
       });
+      const versionId = randomUUID();
+      const snapshot = await uploadDocumentVersionSnapshot({
+        userId,
+        documentId,
+        versionId,
+        documentType: docType,
+        mimeType,
+        content: input.content,
+      });
 
-      // 2. Insert document into DB
-      const [document] = await db
-        .insert(documents)
-        .values({
-          id: documentId,
-          userId,
-          workspaceId,
-          title: input.title || "Untitled",
-          type: docType as "text" | "markdown" | "code" | "pdf" | "docx",
-          language: input.language || undefined,
-          storageUrl: metadata.url,
-          storageKey: metadata.path,
-          size: metadata.size,
-          mimeType,
-          currentVersion: 1,
-        })
-        .returning();
+      // 2. Insert document + immutable v1 snapshot into DB
+      const [document] = await db.transaction(async (tx) => {
+        const [doc] = await tx
+          .insert(documents)
+          .values({
+            id: documentId,
+            userId,
+            workspaceId,
+            title: input.title || "Untitled",
+            type: docType,
+            language: input.language || undefined,
+            storageUrl: metadata.url,
+            storageKey: metadata.path,
+            size: metadata.size,
+            mimeType,
+            currentVersion: 1,
+            lastSavedVersion: 1,
+          })
+          .returning();
+
+        await tx.insert(documentVersions).values({
+          id: versionId,
+          documentId,
+          version: 1,
+          ...storedVersionValues(snapshot),
+          author: "user",
+          authorId: userId,
+          message: "Initial version",
+        });
+
+        return [doc];
+      });
 
       return {
         status: "created",
@@ -371,11 +416,23 @@ export const documentsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: "Not authorized" });
       }
 
+      const versions = await db.query.documentVersions.findMany({
+        where: eq(documentVersions.documentId, input.documentId),
+      });
+
       // 1. Delete from DB
       await db.delete(documents).where(eq(documents.id, input.documentId));
 
       // 2. Delete from storage
-      await storage.delete(document.storageKey!);
+      if (document.storageKey) {
+        await storage.delete(document.storageKey);
+      }
+      await Promise.allSettled(
+        versions
+          .map((version) => version.storageKey)
+          .filter((key): key is string => !!key)
+          .map((key) => storage.delete(key))
+      );
 
       // 3. Audit log (fire-and-forget)
       auditLog({
@@ -462,6 +519,10 @@ export const documentsRouter = router({
           message: v.message,
           createdBy: v.authorId,
           createdAt: v.createdAt,
+          size: v.size,
+          mimeType: v.mimeType,
+          checksum: v.checksum,
+          hasStoredSnapshot: !!v.storageKey,
         })),
         latest: {
           currentVersion: document?.currentVersion || 1,
@@ -525,7 +586,12 @@ export const documentsRouter = router({
         throw new TRPCError({ code: "NOT_FOUND" });
       }
 
-      return version;
+      const content = await readDocumentVersionContent(version);
+
+      return {
+        ...version,
+        content,
+      };
     }),
 
   /**

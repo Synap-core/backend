@@ -1,0 +1,480 @@
+{
+  "_meta": {
+    "slug": "brand-library",
+    "icon": "palette",
+    "color": "#B67A38",
+    "tags": ["brand", "assets", "tokens", "templates", "artboards"],
+    "description": "A reusable brand source workspace for logos, assets, design tokens, templates, components, and generation rules.",
+    "isPublic": true
+  },
+  "workspaceName": "Brand Library",
+  "description": "Central source of truth for your brand. Store assets, tokens, components, templates, and rules once, then reuse them in artboards, documents, generated HTML, dashboards, and AI workflows.",
+  "proposalId": "brand-library-v1",
+  "workspacePurpose": "library",
+  "workspaceSubtype": "brand-library",
+  "workspaceVisibility": "pod_visible",
+  "workspaceCapabilities": [
+    "brand.library",
+    "brand.assets",
+    "brand.tokens",
+    "brand.templates",
+    "brand.components",
+    "brand.context"
+  ],
+  "sourceRoles": {
+    "brand": "provider"
+  },
+  "icon": "palette",
+  "color": "#B67A38",
+  "profiles": [
+    {
+      "slug": "brand-system",
+      "displayName": "Brand System",
+      "icon": "palette",
+      "color": "amber",
+      "description": "The root brand identity: positioning, voice, audiences, and generation context.",
+      "semanticSlug": "brand.system",
+      "properties": [
+        {
+          "slug": "brand-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["draft", "active", "archived"],
+          "constraints": { "defaultValue": "active" }
+        },
+        {
+          "slug": "brand-positioning",
+          "label": "Positioning",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "brand-audience",
+          "label": "Audience",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "brand-voice",
+          "label": "Voice",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "brand-website",
+          "label": "Website",
+          "valueType": "string",
+          "inputType": "url"
+        },
+        {
+          "slug": "brand-notes",
+          "label": "Notes",
+          "valueType": "string",
+          "inputType": "textarea"
+        }
+      ]
+    },
+    {
+      "slug": "brand-asset",
+      "displayName": "Brand Asset",
+      "icon": "image",
+      "color": "blue",
+      "description": "Reusable visual or media asset: logo, image, font, icon, video, reference, or document.",
+      "semanticSlug": "brand.asset",
+      "properties": [
+        {
+          "slug": "asset-kind",
+          "label": "Kind",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "logo",
+            "image",
+            "icon",
+            "font",
+            "video",
+            "document",
+            "reference",
+            "other"
+          ]
+        },
+        {
+          "slug": "asset-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["draft", "approved", "deprecated"],
+          "constraints": { "defaultValue": "approved" }
+        },
+        {
+          "slug": "asset-usage",
+          "label": "Usage",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "asset-tags",
+          "label": "Tags",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "asset-url",
+          "label": "URL",
+          "valueType": "string",
+          "inputType": "url"
+        },
+        {
+          "slug": "asset-file-id",
+          "label": "File ID",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "asset-document-id",
+          "label": "Document ID",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "asset-alt-text",
+          "label": "Alt text",
+          "valueType": "string",
+          "inputType": "textarea"
+        }
+      ]
+    },
+    {
+      "slug": "brand-token-set",
+      "displayName": "Token Set",
+      "icon": "swatch-book",
+      "color": "violet",
+      "description": "Design tokens for color, typography, spacing, radii, and exported CSS variables.",
+      "semanticSlug": "brand.tokens",
+      "properties": [
+        {
+          "slug": "token-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["draft", "active", "archived"],
+          "constraints": { "defaultValue": "active" }
+        },
+        {
+          "slug": "token-mode",
+          "label": "Mode",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["base", "light", "dark", "campaign", "experimental"],
+          "constraints": { "defaultValue": "base" }
+        },
+        {
+          "slug": "token-json",
+          "label": "Tokens JSON",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "token-css",
+          "label": "CSS variables",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "token-notes",
+          "label": "Notes",
+          "valueType": "string",
+          "inputType": "textarea"
+        }
+      ]
+    },
+    {
+      "slug": "brand-component",
+      "displayName": "Brand Component",
+      "icon": "component",
+      "color": "green",
+      "description": "Reusable branded UI or content component: hero, CTA, card, quote, banner, section, or HTML snippet.",
+      "semanticSlug": "brand.component",
+      "properties": [
+        {
+          "slug": "component-kind",
+          "label": "Kind",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "hero",
+            "card",
+            "cta",
+            "quote",
+            "banner",
+            "section",
+            "layout",
+            "html",
+            "other"
+          ]
+        },
+        {
+          "slug": "component-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["draft", "approved", "deprecated"],
+          "constraints": { "defaultValue": "approved" }
+        },
+        {
+          "slug": "component-html",
+          "label": "HTML",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "component-props",
+          "label": "Props JSON",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "component-usage",
+          "label": "Usage notes",
+          "valueType": "string",
+          "inputType": "textarea"
+        }
+      ]
+    },
+    {
+      "slug": "brand-template",
+      "displayName": "Brand Template",
+      "icon": "layout-template",
+      "color": "pink",
+      "description": "Reusable output template for artboards, decks, carousels, banners, documents, or generated HTML.",
+      "semanticSlug": "brand.template",
+      "properties": [
+        {
+          "slug": "template-kind",
+          "label": "Kind",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "artboard",
+            "deck",
+            "carousel",
+            "banner",
+            "document",
+            "html",
+            "social",
+            "other"
+          ]
+        },
+        {
+          "slug": "template-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["draft", "approved", "deprecated"],
+          "constraints": { "defaultValue": "approved" }
+        },
+        {
+          "slug": "template-format",
+          "label": "Format",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["tldraw", "html", "json", "markdown", "image", "mixed"]
+        },
+        {
+          "slug": "template-config",
+          "label": "Config JSON",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "template-usage",
+          "label": "Usage notes",
+          "valueType": "string",
+          "inputType": "textarea"
+        }
+      ]
+    },
+    {
+      "slug": "brand-rule",
+      "displayName": "Brand Rule",
+      "icon": "shield-check",
+      "color": "red",
+      "description": "Usage guidance, constraints, do/don't examples, tone rules, and legal/compliance notes.",
+      "semanticSlug": "brand.rule",
+      "properties": [
+        {
+          "slug": "rule-kind",
+          "label": "Kind",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "voice",
+            "visual",
+            "legal",
+            "accessibility",
+            "do",
+            "dont",
+            "generation",
+            "other"
+          ]
+        },
+        {
+          "slug": "rule-severity",
+          "label": "Severity",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["guideline", "important", "mandatory"],
+          "constraints": { "defaultValue": "important" }
+        },
+        {
+          "slug": "rule-content",
+          "label": "Rule",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "rule-example",
+          "label": "Example",
+          "valueType": "string",
+          "inputType": "textarea"
+        }
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "Brand Systems",
+      "slug": "brand-systems",
+      "type": "table",
+      "scopeProfileSlug": "brand-system",
+      "description": "Root brand context and active identities."
+    },
+    {
+      "name": "Assets",
+      "slug": "brand-assets",
+      "type": "grid",
+      "scopeProfileSlug": "brand-asset",
+      "description": "Approved logos, media, references, and files."
+    },
+    {
+      "name": "Token Sets",
+      "slug": "brand-token-sets",
+      "type": "table",
+      "scopeProfileSlug": "brand-token-set",
+      "description": "Design tokens and CSS variable exports."
+    },
+    {
+      "name": "Components",
+      "slug": "brand-components",
+      "type": "grid",
+      "scopeProfileSlug": "brand-component",
+      "description": "Reusable branded blocks and snippets."
+    },
+    {
+      "name": "Templates",
+      "slug": "brand-templates",
+      "type": "grid",
+      "scopeProfileSlug": "brand-template",
+      "description": "Artboard, carousel, banner, deck, and HTML templates."
+    },
+    {
+      "name": "Rules",
+      "slug": "brand-rules",
+      "type": "list",
+      "scopeProfileSlug": "brand-rule",
+      "description": "Brand usage and generation constraints."
+    }
+  ],
+  "bentoViewName": "Brand Command Center",
+  "bentoViewBlocks": [
+    {
+      "kind": "view",
+      "viewName": "Assets",
+      "pos": { "x": 0, "y": 0, "w": 6, "h": 5 }
+    },
+    {
+      "kind": "view",
+      "viewName": "Token Sets",
+      "pos": { "x": 6, "y": 0, "w": 6, "h": 5 }
+    },
+    {
+      "kind": "view",
+      "viewName": "Templates",
+      "pos": { "x": 0, "y": 5, "w": 6, "h": 5 }
+    },
+    {
+      "kind": "view",
+      "viewName": "Rules",
+      "pos": { "x": 6, "y": 5, "w": 6, "h": 5 }
+    }
+  ],
+  "layoutConfig": {
+    "pinnedApps": ["data", "whiteboard", "brandLibrary"],
+    "defaultView": "Brand Command Center",
+    "sidebarItems": [
+      {
+        "kind": "view",
+        "viewName": "Brand Command Center",
+        "label": "Command Center",
+        "icon": "layout-dashboard"
+      },
+      {
+        "kind": "view",
+        "viewName": "Assets",
+        "label": "Assets",
+        "icon": "image"
+      },
+      {
+        "kind": "view",
+        "viewName": "Token Sets",
+        "label": "Tokens",
+        "icon": "swatch-book"
+      },
+      {
+        "kind": "view",
+        "viewName": "Templates",
+        "label": "Templates",
+        "icon": "layout-template"
+      },
+      {
+        "kind": "view",
+        "viewName": "Rules",
+        "label": "Rules",
+        "icon": "shield-check"
+      }
+    ]
+  },
+  "seedEntities": [
+    {
+      "profileSlug": "brand-system",
+      "title": "Primary Brand",
+      "properties": {
+        "brand-status": "active",
+        "brand-positioning": "Describe the promise, category, and differentiation of this brand.",
+        "brand-audience": "Describe the primary audience and buying context.",
+        "brand-voice": "Confident, clear, precise, and useful."
+      }
+    },
+    {
+      "profileSlug": "brand-token-set",
+      "title": "Base Tokens",
+      "properties": {
+        "token-status": "active",
+        "token-mode": "base",
+        "token-json": "{\"colors\":{\"primary\":\"var(--synap-primary)\",\"background\":\"var(--synap-background)\",\"surface\":\"var(--synap-surface)\"},\"typography\":{\"heading\":\"system-ui\",\"body\":\"system-ui\"}}",
+        "token-css": ":root {\\n  --brand-primary: var(--synap-primary);\\n  --brand-background: var(--synap-background);\\n  --brand-surface: var(--synap-surface);\\n}"
+      }
+    },
+    {
+      "profileSlug": "brand-rule",
+      "title": "Default Generation Rule",
+      "properties": {
+        "rule-kind": "generation",
+        "rule-severity": "important",
+        "rule-content": "Use approved assets and token sets first. Create variants only when the user explicitly asks for exploration.",
+        "rule-example": "When generating an artboard, prefer the active token set and approved logo/image assets."
+      }
+    }
+  ]
+}

@@ -3165,8 +3165,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					content: string;
 					channelId: string;
 					parentId: string | null;
-					role: "user" | "assistant" | "system";
-					authorType: "external" | "human" | "ai_agent" | "bot";
+					role: "user" | "system" | "assistant";
+					authorType: "human" | "ai_agent" | "external" | "bot";
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
 					inboxItemId: string | null;
@@ -5287,7 +5287,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				title: string;
 				content?: string | undefined;
-				type?: "code" | "text" | "markdown" | "pdf" | "docx" | undefined;
+				type?: "code" | "text" | "markdown" | "pdf" | "docx" | "html" | undefined;
 				projectId?: string | undefined;
 				workspaceId?: string | undefined;
 			};
@@ -5303,7 +5303,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		upload: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				type: "code" | "text" | "markdown" | "pdf" | "docx";
+				type: "code" | "text" | "markdown" | "pdf" | "docx" | "html";
 				content: string;
 				title?: string | undefined;
 				language?: string | undefined;
@@ -5456,7 +5456,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				projectId?: string | undefined;
-				type?: "code" | "text" | "markdown" | "pdf" | "docx" | undefined;
+				type?: "code" | "text" | "markdown" | "pdf" | "docx" | "html" | undefined;
 				limit?: number | undefined;
 			};
 			output: {

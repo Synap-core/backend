@@ -288,12 +288,79 @@ export interface AgentRoutingPolicy {
   rules?: AgentRoutingRule[];
 }
 
+/**
+ * High-level purpose of a workspace inside a pod.
+ *
+ * `workspaceType` already exists as a promoted column for legacy operational
+ * filtering. `workspacePurpose` is the product-facing contract used by the
+ * browser and agents to understand how a workspace should be used.
+ */
+export type WorkspacePurpose =
+  | "personal"
+  | "project"
+  | "agent"
+  | "library"
+  | "operational";
+
+/**
+ * Discoverability/access mode for a workspace.
+ *
+ * Write access is still controlled by workspace_members + role permissions.
+ * `pod_visible` and `pod_joinable` only make the workspace discoverable/readable
+ * to authenticated users on the same data pod.
+ */
+export type WorkspaceVisibility =
+  | "private"
+  | "members"
+  | "pod_visible"
+  | "pod_joinable"
+  | "public_link";
+
+export type WorkspaceSourceRole = "provider" | "consumer" | "provider-consumer";
+
+export interface WorkspaceDefaultSource {
+  workspaceId: string;
+  capability?: string;
+  profileSlug?: string;
+  label?: string;
+}
+
 export interface WorkspaceSettings {
   // ─── Entity & UI Settings ───────────────────────────────────────────────────
   defaultEntityTypes?: string[];
   theme?: string;
   aiEnabled?: boolean;
   allowExternalSharing?: boolean;
+
+  // ─── Workspace Directory / Capability Source Contract ───────────────────────
+  /**
+   * Product-facing purpose used by browser/apps/agents to resolve cross-workspace
+   * sources (e.g. a brand-library workspace serving artboards in a project).
+   */
+  workspacePurpose?: WorkspacePurpose;
+  /**
+   * Free-form subtype within the purpose, e.g. "brand-library",
+   * "research-library", "agent-lab".
+   */
+  workspaceSubtype?: string;
+  /**
+   * Discovery/read visibility. Defaults to "members" when absent.
+   */
+  workspaceVisibility?: WorkspaceVisibility;
+  /**
+   * Capability ids this workspace provides or consumes, e.g.
+   * "brand.library", "brand.assets", "research.sources", "agent.staging".
+   */
+  workspaceCapabilities?: string[];
+  /**
+   * Domain → role map. Example: { brand: "provider", research: "consumer" }.
+   */
+  sourceRoles?: Record<string, WorkspaceSourceRole>;
+  /**
+   * Domain/capability → default source workspace. Stored on consumer
+   * workspaces so features can resolve defaults without copying data.
+   */
+  defaultSources?: Record<string, WorkspaceDefaultSource>;
 
   // ─── MCP Server integrations ─────────────────────────────────────────────────
   /** External MCP servers whose tools will be available to AI agents in this workspace */

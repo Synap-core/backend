@@ -12,7 +12,14 @@
 import * as Y from "yjs";
 import { YSocketIO } from "y-socket.io/dist/server";
 import type { Server as SocketIOServer } from "socket.io";
-import { db, eq, and } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  readDocumentVersionContent,
+  storedVersionValues,
+  uploadDocumentVersionSnapshot,
+} from "@synap/database";
 import {
   documents,
   documentVersions,
@@ -21,6 +28,7 @@ import {
 } from "@synap/database/schema";
 import { storage } from "@synap/storage";
 import { recordYjsPersist } from "./bridge.js";
+import { randomUUID } from "crypto";
 
 export interface YjsServerConfig {
   io: SocketIOServer;
@@ -129,8 +137,11 @@ class DatabasePersistence {
         ),
       });
 
-      if (workingVersion?.content.startsWith("yjs:")) {
-        const base64State = workingVersion.content.substring(4);
+      const workingContent = workingVersion
+        ? await readDocumentVersionContent(workingVersion)
+        : null;
+      if (workingContent?.startsWith("yjs:")) {
+        const base64State = workingContent.substring(4);
         const state = Buffer.from(base64State, "base64");
         Y.applyUpdate(ydoc, state);
         console.log(
@@ -267,9 +278,17 @@ class DatabasePersistence {
       });
 
       if (existingWorkingVersion) {
+        const snapshot = await uploadDocumentVersionSnapshot({
+          userId: doc.userId,
+          documentId,
+          versionId: existingWorkingVersion.id,
+          documentType: doc.type,
+          mimeType: doc.mimeType || "application/octet-stream",
+          content: yjsContent,
+        });
         await db
           .update(documentVersions)
-          .set({ content: yjsContent })
+          .set(storedVersionValues(snapshot))
           .where(
             and(
               eq(documentVersions.documentId, documentId),
@@ -277,10 +296,20 @@ class DatabasePersistence {
             )
           );
       } else {
+        const versionId = randomUUID();
+        const snapshot = await uploadDocumentVersionSnapshot({
+          userId: doc.userId,
+          documentId,
+          versionId,
+          documentType: doc.type,
+          mimeType: doc.mimeType || "application/octet-stream",
+          content: yjsContent,
+        });
         await db.insert(documentVersions).values({
+          id: versionId,
           documentId,
           version: workingVersion,
-          content: yjsContent,
+          ...storedVersionValues(snapshot),
           author: "system",
           authorId: "yjs-server",
           message: "Working version created (Yjs sync)",
@@ -342,11 +371,21 @@ class DatabasePersistence {
         if (state.byteLength <= 2) return;
 
         const newVersion = (doc.currentVersion || 0) + 1;
+        const versionId = randomUUID();
+        const snapshot = await uploadDocumentVersionSnapshot({
+          userId: doc.userId,
+          documentId,
+          versionId,
+          documentType: doc.type,
+          mimeType: doc.mimeType || "application/octet-stream",
+          content,
+        });
 
         await db.insert(documentVersions).values({
+          id: versionId,
           documentId,
           version: newVersion,
-          content,
+          ...storedVersionValues(snapshot),
           author: "system",
           authorId: "session-close",
           message: "Auto-saved on session close",

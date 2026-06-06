@@ -9,6 +9,7 @@ import {
   hasScope,
   logger,
   verifyWorkspaceAccess,
+  verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
 
@@ -39,7 +40,7 @@ export function registerCellsRoutes(app: HubHono): void {
       return c.json({ error: "workspaceId query param is required" }, 400);
     }
     const userId = c.get("userId");
-    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
+    if (!(await verifyWorkspaceReadAccess(userId, workspaceId))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
     try {

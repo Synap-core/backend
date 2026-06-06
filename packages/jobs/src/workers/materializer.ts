@@ -31,6 +31,8 @@ import {
   sql,
   db as sharedDb,
   eq,
+  storedVersionValues,
+  uploadDocumentVersionSnapshot,
 } from "@synap/database";
 import {
   entities,
@@ -387,6 +389,16 @@ async function materializeView(
         contentType: "application/json",
       });
 
+      const versionId = randomUUID();
+      const snapshot = await uploadDocumentVersionSnapshot({
+        userId,
+        documentId: docId,
+        versionId,
+        documentType: viewType,
+        mimeType: "application/json",
+        content: contentStr,
+      });
+
       await sharedDb.insert(documents).values({
         id: docId,
         userId,
@@ -398,12 +410,14 @@ async function materializeView(
         size: uploadResult.size,
         mimeType: "application/json",
         currentVersion: 1,
+        lastSavedVersion: 1,
       });
 
       await sharedDb.insert(documentVersions).values({
+        id: versionId,
         documentId: docId,
         version: 1,
-        content: contentStr,
+        ...storedVersionValues(snapshot),
         author: "user",
         authorId: userId,
         message: "Initial version",

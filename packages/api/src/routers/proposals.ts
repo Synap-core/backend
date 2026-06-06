@@ -15,6 +15,7 @@ import {
   EventRepository,
   proposals,
   documents,
+  documentVersions,
   eq,
   and,
   or,
@@ -28,6 +29,8 @@ import {
   users,
   getWorkspaceMembership,
   normalizeDocumentType,
+  storedVersionValues,
+  uploadDocumentVersionSnapshot,
   ProfileResolutionService,
   sql,
 } from "@synap/database";
@@ -961,11 +964,21 @@ export const proposalsRouter = router({
           Buffer.from(content, "utf-8"),
           { contentType: document.mimeType || "text/plain" }
         );
+        const versionId = randomUUID();
+        const snapshot = await uploadDocumentVersionSnapshot({
+          userId,
+          documentId: proposal.targetId,
+          versionId,
+          documentType: document.type,
+          mimeType: document.mimeType || "text/plain",
+          content,
+        });
 
         await db.insert(documentVersions).values({
+          id: versionId,
           documentId: proposal.targetId,
           version: newVersion,
-          content,
+          ...storedVersionValues(snapshot),
           author: "user",
           authorId: userId,
           message: "AI edit accepted",
@@ -1023,6 +1036,15 @@ export const proposalsRouter = router({
         const metadata = await storage.upload(storageKey, content, {
           contentType: "text/markdown",
         });
+        const versionId = randomUUID();
+        const snapshot = await uploadDocumentVersionSnapshot({
+          userId: docUserId,
+          documentId,
+          versionId,
+          documentType: docType,
+          mimeType: "text/markdown",
+          content,
+        });
 
         await db.insert(documents).values({
           id: documentId,
@@ -1036,6 +1058,16 @@ export const proposalsRouter = router({
           workspaceId: proposal.workspaceId,
           currentVersion: 1,
           lastSavedVersion: 1,
+        });
+
+        await db.insert(documentVersions).values({
+          id: versionId,
+          documentId,
+          version: 1,
+          ...storedVersionValues(snapshot),
+          author: "user",
+          authorId: userId,
+          message: "Initial version",
         });
 
         await db

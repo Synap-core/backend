@@ -21,8 +21,11 @@ import {
   and,
   desc,
   documents,
+  documentVersions,
   cellInstances,
   normalizeDocumentType,
+  storedVersionValues,
+  uploadDocumentVersionSnapshot,
 } from "@synap/database";
 import { storage } from "@synap/storage";
 import { randomUUID } from "crypto";
@@ -31,6 +34,7 @@ import {
   logger,
   resolveActorId,
   verifyWorkspaceAccess,
+  verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
 
@@ -96,7 +100,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
       return c.json({ error: "workspaceId query param is required" }, 400);
     }
     const userId = c.get("userId") as string;
-    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
+    if (!(await verifyWorkspaceReadAccess(userId, workspaceId))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
     const isTemplateRaw = c.req.query("isTemplate");
@@ -147,7 +151,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         .limit(1);
       if (!row) return c.json({ error: "Cell instance not found" }, 404);
       const userId = c.get("userId") as string;
-      if (!(await verifyWorkspaceAccess(userId, row.workspaceId))) {
+      if (!(await verifyWorkspaceReadAccess(userId, row.workspaceId))) {
         return c.json({ error: "Access denied to workspace" }, 403);
       }
       return c.json(serialize(row));
@@ -312,6 +316,15 @@ export function registerCellInstancesRoutes(app: HubHono): void {
       const metadata = await storage.upload(storageKey, body.html, {
         contentType: "text/html",
       });
+      const versionId = randomUUID();
+      const snapshot = await uploadDocumentVersionSnapshot({
+        userId,
+        documentId,
+        versionId,
+        documentType: "html",
+        mimeType: "text/html",
+        content: body.html,
+      });
       const [document] = await db
         .insert(documents)
         .values({
@@ -325,8 +338,19 @@ export function registerCellInstancesRoutes(app: HubHono): void {
           size: metadata.size,
           mimeType: "text/html",
           currentVersion: 1,
+          lastSavedVersion: 1,
         })
         .returning();
+
+      await db.insert(documentVersions).values({
+        id: versionId,
+        documentId,
+        version: 1,
+        ...storedVersionValues(snapshot),
+        author: "user",
+        authorId: userId,
+        message: "Initial version",
+      });
 
       const [row] = await db
         .insert(cellInstances)

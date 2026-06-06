@@ -10,9 +10,11 @@ import { createLogger } from "@synap-core/core";
 import {
   db,
   users,
+  workspaces,
   workspaceMembers,
   eq,
   and,
+  drizzleSql,
   getWorkspaceMembership,
 } from "@synap/database";
 
@@ -175,7 +177,8 @@ export async function resolveActorId(
 }
 
 /**
- * Get all workspace IDs a user is a member of.
+ * Get all workspace IDs the user can read: explicit memberships plus
+ * pod-visible/pod-joinable source workspaces.
  */
 export async function getUserAccessibleWorkspaceIds(
   userId: string
@@ -184,7 +187,17 @@ export async function getUserAccessibleWorkspaceIds(
     .select({ workspaceId: workspaceMembers.workspaceId })
     .from(workspaceMembers)
     .where(eq(workspaceMembers.userId, userId));
-  return rows.map((r) => r.workspaceId);
+  const ids = new Set(rows.map((r) => r.workspaceId));
+
+  const podReadable = await db
+    .select({ workspaceId: workspaces.id })
+    .from(workspaces)
+    .where(
+      drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`
+    );
+  for (const row of podReadable) ids.add(row.workspaceId);
+
+  return Array.from(ids);
 }
 
 /**
@@ -202,6 +215,30 @@ export async function verifyWorkspaceAccess(
     columns: { id: true },
   });
   return !!row;
+}
+
+/**
+ * Verify read access for a workspace.
+ *
+ * Membership always grants read access. Pod-visible/pod-joinable workspaces are
+ * also readable by authenticated users on the same data pod, but this does not
+ * grant mutation rights.
+ */
+export async function verifyWorkspaceReadAccess(
+  userId: string,
+  workspaceId: string
+): Promise<boolean> {
+  const hasMembership = await verifyWorkspaceAccess(userId, workspaceId);
+  if (hasMembership) return true;
+
+  const podReadable = await db.query.workspaces.findFirst({
+    where: and(
+      eq(workspaces.id, workspaceId),
+      drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`
+    ),
+    columns: { id: true },
+  });
+  return !!podReadable;
 }
 
 /**

@@ -34,7 +34,7 @@ import {
   logger,
   resolveActingContext,
   resolveActorId,
-  verifyWorkspaceAccess,
+  verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
 
@@ -184,7 +184,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       }
 
       if (workspaceIdParam) {
-        const ok = await verifyWorkspaceAccess(userId, workspaceIdParam);
+        const ok = await verifyWorkspaceReadAccess(userId, workspaceIdParam);
         if (!ok) {
           return c.json({ error: "Access denied to workspace" }, 403);
         }
@@ -403,7 +403,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       });
       if (!result) return c.body(null, 404);
       if (result.workspaceId) {
-        const hasAccess = await verifyWorkspaceAccess(
+        const hasAccess = await verifyWorkspaceReadAccess(
           userId,
           result.workspaceId
         );
