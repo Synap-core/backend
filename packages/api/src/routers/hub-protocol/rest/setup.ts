@@ -345,6 +345,10 @@ export function registerSetupRoutes(app: HubHono): void {
       typeof body.linkedUserId === "string" && body.linkedUserId.trim()
         ? body.linkedUserId.trim()
         : undefined;
+    // Surface installs can request a pending-approval flow: key is created inactive
+    // until the human owner approves it at the review URL.
+    const requireApproval: boolean =
+      authMethod === "api_key_surface" && body.requireApproval === true;
 
     if (authMethod === "api_key_surface") {
       if (!(SURFACE_AGENT_TYPES as readonly string[]).includes(agentType)) {
@@ -622,6 +626,26 @@ export function registerSetupRoutes(app: HubHono): void {
         },
         "setup/agent: Hub API key created"
       );
+
+      if (requireApproval) {
+        // Mark the key inactive until the human owner approves it at the review URL.
+        // CLI holds the plainKey in memory; writes it only after approval confirmed.
+        await db
+          .update(apiKeys)
+          .set({ isActive: false })
+          .where(eq(apiKeys.id, apiKey.id));
+        const origin = new URL(c.req.url).origin;
+        const reviewUrl = `${origin}/api/hub/setup/agent/pending/${apiKey.id}/review?agentType=${encodeURIComponent(agentType)}`;
+        return c.json({
+          agentUserId,
+          workspaceId: ws?.id ?? null,
+          hubApiKey: plainKey,
+          pendingToken: apiKey.id,
+          reviewUrl,
+          requiresApproval: true,
+          registration: registrationTrace,
+        });
+      }
 
       return c.json({
         agentUserId,
@@ -1272,5 +1296,139 @@ export function registerSetupRoutes(app: HubHono): void {
     );
 
     return c.json({ userId: identityId, success: true });
+  });
+
+  // ─── Pending-approval flow (requireApproval: true in POST /setup/agent) ──────
+  // CLI creates key as isActive=false, opens browser to /review, polls for status.
+
+  async function resolveKratosSession(c: {
+    req: { header(name: string): string | undefined };
+  }): Promise<boolean> {
+    try {
+      const { getSession } = await import("@synap/auth");
+      const headers = new Headers();
+      const cookie = c.req.header("cookie");
+      const sessionToken = c.req.header("x-session-token");
+      if (cookie) headers.set("cookie", cookie);
+      if (sessionToken) headers.set("x-session-token", sessionToken);
+      const session = await getSession(headers);
+      return !!session?.identity?.id;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Poll for approval status — authenticated with the human hub-protocol key. */
+  app.get("/setup/agent/pending/:keyId", async (c) => {
+    const keyId = c.req.param("keyId");
+    const authHeader = c.req.header("authorization") ?? "";
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7).trim()
+      : null;
+    if (!token) return c.json({ error: "Unauthorized" }, 401);
+    const keyRecord = await apiKeyService.validateApiKey(token);
+    if (!keyRecord) return c.json({ error: "Unauthorized" }, 401);
+
+    const key = await db.query.apiKeys.findFirst({
+      where: eq(apiKeys.id, keyId),
+      columns: { id: true, isActive: true, revokedAt: true },
+    });
+    if (!key) return c.json({ error: "Not found" }, 404);
+    if (key.revokedAt) return c.json({ status: "rejected" });
+    if (key.isActive) return c.json({ status: "active" });
+    return c.json({ status: "pending" });
+  });
+
+  /** HTML review page opened by the CLI in the user's browser. */
+  app.get("/setup/agent/pending/:keyId/review", async (c) => {
+    const keyId = c.req.param("keyId");
+    const agentType = c.req.query("agentType") ?? "agent";
+    const keyShort = keyId.slice(0, 8);
+
+    const html = `<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Approve Agent Access — Synap</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0a0a0a;color:#e2e2e2;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+.card{background:#111;border:1px solid #222;border-radius:14px;padding:36px;max-width:460px;width:100%}
+h1{font-size:18px;font-weight:600;margin-bottom:6px}
+.sub{color:#777;font-size:14px;line-height:1.5;margin-bottom:24px}
+.detail{background:#161616;border:1px solid #222;border-radius:8px;padding:16px;margin-bottom:24px}
+.row{display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:5px 0;border-bottom:1px solid #1c1c1c}
+.row:last-child{border:none}
+.label{color:#666}.value{color:#e2e2e2;font-family:ui-monospace,monospace;font-size:12px}
+.scopes{font-size:11px;color:#555;margin-top:10px;line-height:1.6}
+.actions{display:flex;gap:10px}
+button{flex:1;padding:11px;border-radius:8px;border:none;font-size:14px;font-weight:500;cursor:pointer;transition:opacity .15s}
+button:hover{opacity:.85}.approve{background:#059669;color:#fff}.reject{background:#1a1a1a;color:#e2e2e2;border:1px solid #2a2a2a}
+.msg{text-align:center;padding:14px 0;font-size:14px;display:none}
+.ok{color:#059669}.err{color:#dc2626}
+</style></head><body>
+<div class="card">
+  <h1>Approve Agent Access</h1>
+  <p class="sub">A <code>synap connect</code> session is requesting to register <strong>${agentType}</strong> as an agent on your pod.</p>
+  <div class="detail">
+    <div class="row"><span class="label">Surface</span><span class="value">${agentType}</span></div>
+    <div class="row"><span class="label">Key ID</span><span class="value">${keyShort}…</span></div>
+    <div class="scopes">Scopes: hub-protocol.read · hub-protocol.write · mcp.read · mcp.write</div>
+  </div>
+  <div class="actions" id="actions">
+    <button class="approve" onclick="act('approve')">Approve</button>
+    <button class="reject" onclick="act('reject')">Reject</button>
+  </div>
+  <div class="msg ok" id="ok">Approved — you can close this tab. The CLI will continue automatically.</div>
+  <div class="msg err" id="err"></div>
+</div>
+<script>
+async function act(action){
+  try{
+    const r=await fetch(location.pathname.replace('/review','/'+action),{method:'POST',headers:{'Content-Type':'application/json'}});
+    if(r.ok){document.getElementById('actions').style.display='none';document.getElementById('ok').style.display='block';}
+    else{const d=await r.json().catch(()=>({}));show('err',d.error||'Error ('+r.status+')');}
+  }catch(e){show('err',e.message);}
+}
+function show(id,msg){const el=document.getElementById(id);el.textContent=msg;el.style.display='block';}
+</script></body></html>`;
+    return c.html(html);
+  });
+
+  /** Approve a pending key — requires Kratos session (pod owner in browser). */
+  app.post("/setup/agent/pending/:keyId/approve", async (c) => {
+    const keyId = c.req.param("keyId");
+    if (!(await resolveKratosSession(c)))
+      return c.json({ error: "Sign in to your pod first" }, 401);
+
+    const key = await db.query.apiKeys.findFirst({
+      where: and(eq(apiKeys.id, keyId), eq(apiKeys.isActive, false)),
+      columns: { id: true, revokedAt: true },
+    });
+    if (!key || key.revokedAt)
+      return c.json(
+        { error: "Pending key not found or already processed" },
+        404
+      );
+
+    await db
+      .update(apiKeys)
+      .set({ isActive: true })
+      .where(eq(apiKeys.id, keyId));
+    logger.info({ keyId }, "setup/agent/pending: approved");
+    return c.json({ ok: true });
+  });
+
+  /** Reject a pending key — requires Kratos session. */
+  app.post("/setup/agent/pending/:keyId/reject", async (c) => {
+    const keyId = c.req.param("keyId");
+    if (!(await resolveKratosSession(c)))
+      return c.json({ error: "Sign in to your pod first" }, 401);
+
+    await db
+      .update(apiKeys)
+      .set({ isActive: false, revokedAt: new Date() })
+      .where(and(eq(apiKeys.id, keyId), eq(apiKeys.isActive, false)));
+    logger.info({ keyId }, "setup/agent/pending: rejected");
+    return c.json({ ok: true });
   });
 }

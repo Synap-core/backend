@@ -183,7 +183,10 @@ app.use("/*", async (c, next) => {
     // Invite acceptance — the invitee has no API key yet; token is the capability
     "/setup/accept-invite",
   ];
-  if (skipAuthPaths.some((p) => reqPath === p || reqPath.endsWith(p))) {
+  if (
+    skipAuthPaths.some((p) => reqPath === p || reqPath.endsWith(p)) ||
+    reqPath.startsWith("/setup/agent/pending/")
+  ) {
     return next();
   }
 

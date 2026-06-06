@@ -524,6 +524,13 @@ registerRouter("sourceSubscriptions", sourceSubscriptionsRouter, {
   description: "External data source subscriptions",
 });
 
+import { aiProvidersRouter } from "./routers/ai-providers.js";
+registerRouter("aiProviders", aiProvidersRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Pod-level AI provider registry",
+});
+
 import { coreRouter } from "./root.js";
 import type { AppRouter } from "./root.js";
 export type { AppRouter };

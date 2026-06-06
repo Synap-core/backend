@@ -398,6 +398,8 @@ export const channelMembers = pgTable(
 
     /** The user id that added this member (the group creator). */
     addedBy: text("added_by"),
+    /** When this member last read the channel — used to compute unread counts. */
+    lastReadAt: timestamp("last_read_at", { mode: "date", withTimezone: true }),
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()
       .notNull(),

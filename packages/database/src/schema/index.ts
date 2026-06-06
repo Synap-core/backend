@@ -19,6 +19,7 @@ export * from "./webhook_subscriptions.js";
 
 // Channels system (replaces chat-threads + thread-entities + thread-documents)
 export * from "./channels.js";
+export * from "./message-reactions.js";
 export * from "./channel-context-items.js";
 export * from "./channel-connections.js";
 export * from "./agents.js";

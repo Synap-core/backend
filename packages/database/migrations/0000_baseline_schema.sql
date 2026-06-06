@@ -1052,14 +1052,21 @@ CREATE INDEX IF NOT EXISTS "channel_context_conflict_idx"
 -- ─── 20b. channel_members (0036) ─────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS "channel_members" (
-  "id"          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  "channel_id"  uuid NOT NULL REFERENCES "channels"("id") ON DELETE CASCADE,
-  "member_id"   text NOT NULL,
-  "member_kind" text NOT NULL,
-  "role"        text NOT NULL DEFAULT 'member',
-  "added_by"    text,
-  "created_at"  timestamp with time zone NOT NULL DEFAULT now()
+  "id"           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "channel_id"   uuid NOT NULL REFERENCES "channels"("id") ON DELETE CASCADE,
+  "member_id"    text NOT NULL,
+  "member_kind"  text NOT NULL,
+  "role"         text NOT NULL DEFAULT 'member',
+  "can_draft"    boolean NOT NULL DEFAULT true,
+  "can_propose"  boolean NOT NULL DEFAULT true,
+  "can_act"      boolean NOT NULL DEFAULT false,
+  "added_by"     text,
+  "last_read_at" timestamp with time zone,
+  "created_at"   timestamp with time zone NOT NULL DEFAULT now()
 );
+
+-- 0104: last_read_at (if table already existed without it)
+ALTER TABLE "channel_members" ADD COLUMN IF NOT EXISTS "last_read_at" timestamp with time zone;
 
 CREATE INDEX IF NOT EXISTS "channel_members_channel_id_idx"
   ON "channel_members" ("channel_id");
@@ -1069,6 +1076,20 @@ CREATE INDEX IF NOT EXISTS "channel_members_member_id_idx"
 
 CREATE UNIQUE INDEX IF NOT EXISTS "channel_members_channel_member_unique"
   ON "channel_members" ("channel_id", "member_id");
+
+-- ─── 20c. message_reactions (0103) ──────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS "message_reactions" (
+  "id"          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "message_id"  uuid NOT NULL REFERENCES "messages"("id") ON DELETE CASCADE,
+  "user_id"     text NOT NULL,
+  "emoji"       text NOT NULL,
+  "created_at"  timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT "message_reactions_unique" UNIQUE ("message_id", "user_id", "emoji")
+);
+
+CREATE INDEX IF NOT EXISTS "message_reactions_message_id_idx"
+  ON "message_reactions" ("message_id");
 
 -- ─── 21. sessions ────────────────────────────────────────────────────────────
 
@@ -3137,5 +3158,7 @@ INSERT INTO "_migrations" ("filename") VALUES
   ('0099_schema_reconciliation.sql'),
   ('0101_sync_generation_split_brain.sql'),
   ('0102_feed_channels_index.sql'),
-  ('0036_channel_members.sql')
+  ('0036_channel_members.sql'),
+  ('0103_message_reactions.sql'),
+  ('0104_channel_member_last_read.sql')
 ON CONFLICT ("filename") DO NOTHING;

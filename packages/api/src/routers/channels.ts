@@ -60,6 +60,7 @@ import {
   sourceConfigs,
   sourceSubscriptions,
   RoutedSource,
+  messageReactions,
 } from "@synap/database/schema";
 import {
   resolveIntelligenceService,
@@ -494,6 +495,7 @@ async function listChannelsWithFlags(params: {
     Channel & {
       hasAssistantMessage: boolean;
       origin: string;
+      unreadCount: number;
     }
   >
 > {
@@ -593,9 +595,41 @@ async function listChannelsWithFlags(params: {
     rowsWithAssistant.map((r) => r.channelId)
   );
 
+  // Compute unread counts: messages newer than the caller's last_read_at per channel.
+  // Single LEFT JOIN query — non-members (owners with no channel_members row) get 0.
+  const unreadRows =
+    channelIds.length === 0
+      ? []
+      : await db
+          .select({
+            channelId: messages.channelId,
+            cnt: drizzleSql<number>`COUNT(*)::int`,
+          })
+          .from(messages)
+          .leftJoin(
+            channelMembers,
+            and(
+              eq(channelMembers.channelId, messages.channelId),
+              eq(channelMembers.memberId, params.userId)
+            )
+          )
+          .where(
+            and(
+              inArray(messages.channelId, channelIds),
+              isNull(messages.deletedAt),
+              // Unread = no read marker OR message is newer than the marker.
+              drizzleSql`(${channelMembers.lastReadAt} IS NULL OR ${messages.timestamp} > ${channelMembers.lastReadAt})`
+            )
+          )
+          .groupBy(messages.channelId);
+  const unreadByChannel = new Map(
+    unreadRows.map((r) => [r.channelId, r.cnt ?? 0])
+  );
+
   return rows.map((c) => ({
     ...c,
     hasAssistantMessage: channelIdsWithAssistant.has(c.id),
+    unreadCount: unreadByChannel.get(c.id) ?? 0,
     origin: (c.metadata as { origin?: string } | null)?.origin ?? "chat",
   }));
 }
@@ -4272,6 +4306,98 @@ export const channelsRouter = router({
       });
 
       return { members };
+    }),
+
+  // ── Reactions ──────────────────────────────────────────────────────────────
+
+  /**
+   * Toggle an emoji reaction on a message. Idempotent: reacting again removes
+   * the reaction. Returns the new state so optimistic UI can verify.
+   */
+  toggleReaction: protectedProcedure
+    .input(
+      z.object({
+        messageId: z.string().uuid(),
+        emoji: z.string().min(1).max(12),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const existing = await db.query.messageReactions.findFirst({
+        where: and(
+          eq(messageReactions.messageId, input.messageId),
+          eq(messageReactions.userId, ctx.userId),
+          eq(messageReactions.emoji, input.emoji)
+        ),
+      });
+      if (existing) {
+        await db
+          .delete(messageReactions)
+          .where(eq(messageReactions.id, existing.id));
+        return { action: "removed" as const };
+      }
+      await db.insert(messageReactions).values({
+        messageId: input.messageId,
+        userId: ctx.userId,
+        emoji: input.emoji,
+      });
+      return { action: "added" as const };
+    }),
+
+  /**
+   * Fetch aggregated reactions for a set of message IDs (max 100).
+   * Returns a map from messageId → [{ emoji, count, reactedByMe }].
+   */
+  getChannelReactions: protectedProcedure
+    .input(z.object({ messageIds: z.array(z.string().uuid()).max(100) }))
+    .query(async ({ input, ctx }) => {
+      if (input.messageIds.length === 0) return { reactions: {} };
+      const rows = await db
+        .select()
+        .from(messageReactions)
+        .where(inArray(messageReactions.messageId, input.messageIds));
+
+      // Aggregate: (messageId, emoji) → { count, reactedByMe }
+      const agg = new Map<string, { count: number; reactedByMe: boolean }>();
+      for (const r of rows) {
+        const key = `${r.messageId}::${r.emoji}`;
+        const e = agg.get(key) ?? { count: 0, reactedByMe: false };
+        e.count++;
+        if (r.userId === ctx.userId) e.reactedByMe = true;
+        agg.set(key, e);
+      }
+
+      const result: Record<
+        string,
+        Array<{ emoji: string; count: number; reactedByMe: boolean }>
+      > = {};
+      for (const [key, entry] of agg) {
+        const sep = key.indexOf("::");
+        const msgId = key.slice(0, sep);
+        const emoji = key.slice(sep + 2);
+        (result[msgId] ??= []).push({ emoji, ...entry });
+      }
+      return { reactions: result };
+    }),
+
+  // ── Read state ─────────────────────────────────────────────────────────────
+
+  /**
+   * Mark a channel as read (sets channel_members.last_read_at = NOW()).
+   * No-op when the caller is not a member (channel owner path).
+   */
+  markChannelRead: protectedProcedure
+    .input(z.object({ channelId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      await db
+        .update(channelMembers)
+        .set({ lastReadAt: new Date() })
+        .where(
+          and(
+            eq(channelMembers.channelId, input.channelId),
+            eq(channelMembers.memberId, ctx.userId)
+          )
+        );
+      return { ok: true };
     }),
 });
 
