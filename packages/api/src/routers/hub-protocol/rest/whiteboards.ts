@@ -7,6 +7,8 @@
  */
 
 import { z } from "zod";
+import { db, views, eq } from "@synap/database";
+import { emitChatEvent } from "../../../utils/chat-realtime-broadcast.js";
 import {
   hasScope,
   logger,
@@ -74,6 +76,13 @@ const BoardResourceRefSchema = z.discriminatedUnion("kind", [
     embedMode: z.enum(["iframe", "link"]).optional(),
   }),
 ]);
+
+const DirectPlacementBodySchema = z.object({
+  workspaceId: z.string().uuid(),
+  userId: z.string().uuid().optional(),
+  resources: z.array(BoardResourceRefSchema).min(1),
+  options: BoardPlacementOptionsSchema.optional(),
+});
 
 const ProposePlacementsBodySchema = z.object({
   workspaceId: z.string().uuid(),
@@ -169,6 +178,103 @@ export function registerWhiteboardsRoutes(app: HubHono) {
       });
     } catch (err) {
       logger.error({ err, viewId }, "whiteboard placement proposal failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /whiteboards/:viewId/place
+   *
+   * Direct placement — emits a board:place socket event to the board's room so
+   * connected whiteboard clients can place the resources immediately. No
+   * governance proposal is created.
+   */
+  app.post("/whiteboards/:viewId/place", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+
+    const viewId = c.req.param("viewId");
+    const raw = (await c.req.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (!raw) return c.json({ error: "Invalid JSON in request body" }, 400);
+
+    const parsed = DirectPlacementBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: parsed.error.issues.map((i) => i.message).join(", ") },
+        400
+      );
+    }
+
+    const body = parsed.data;
+    const userId = (body.userId ?? (c.get("userId") as string)) as string;
+    if (!(await verifyWorkspaceAccess(userId, body.workspaceId))) {
+      return c.json({ error: "Access denied to workspace" }, 403);
+    }
+
+    try {
+      await emitChatEvent({
+        event: "board:place",
+        data: {
+          viewId,
+          resources: body.resources,
+          options: body.options,
+        },
+        viewId,
+      });
+
+      return c.json({
+        status: "placed",
+        viewId,
+        resourceCount: body.resources.length,
+      });
+    } catch (err) {
+      logger.error({ err, viewId }, "whiteboard direct placement failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * GET /whiteboards/:viewId/state
+   *
+   * Returns semantic board state from what the backend knows (view metadata).
+   * Live shape state is maintained in the Yjs document accessed by connected
+   * clients and is not accessible server-side.
+   */
+  app.get("/whiteboards/:viewId/state", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+
+    const viewId = c.req.param("viewId");
+
+    try {
+      const view = await db.query.views.findFirst({
+        where: eq(views.id, viewId),
+      });
+
+      if (!view) {
+        return c.json({ error: "Whiteboard not found" }, 404);
+      }
+
+      return c.json({
+        viewId: view.id,
+        documentId: view.documentId ?? null,
+        title: view.name ?? null,
+        workspaceId: view.workspaceId ?? null,
+        note: "Live shape state is maintained in the Yjs document accessed by connected clients.",
+      });
+    } catch (err) {
+      logger.error({ err, viewId }, "whiteboard state fetch failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

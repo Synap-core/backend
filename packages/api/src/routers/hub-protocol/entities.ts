@@ -13,6 +13,7 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "./utils.js";
 import { db, workspaceMembers, eq } from "@synap/database";
+import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 
 export const entitiesRouter = router({
   /**
@@ -151,6 +152,19 @@ export const entitiesRouter = router({
         // owner ("system") which is not a valid UUID and would fail Zod validation.
         agentUserId: input.agentUserId,
       });
+      // Emit session event so whiteboards in ambient mode can mirror new entities.
+      if (result.status === "created" && result.id) {
+        emitChatEvent({
+          event: "ai:capture",
+          data: {
+            entityId: result.id,
+            title: input.title,
+            profileSlug: input.profileSlug ?? input.type ?? null,
+          },
+          userId: input.userId,
+        });
+      }
+
       return {
         status: result.status,
         message: result.message,
