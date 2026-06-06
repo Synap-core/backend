@@ -13431,6 +13431,121 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 	}>>;
+	aiProviders: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: Array<{
+				id: string;
+				providerId: string;
+				name: string;
+				baseUrl: string;
+				apiKeyEnvVar: string;
+				hasApiKey: boolean;
+				enabled: boolean;
+				priority: number;
+				tags: string[];
+				models: Array<{
+					id: string;
+					tier?: "free" | "balanced" | "advanced" | "complex" | undefined;
+					contextWindow?: number | undefined;
+					supportsTools?: boolean | undefined;
+					supportsJson?: boolean | undefined;
+					costPer1MInput?: number | undefined;
+					costPer1MOutput?: number | undefined;
+				}>;
+				rateLimit?: { rpm: number; rpd?: number } | undefined;
+				extraBody?: Record<string, unknown> | undefined;
+				systemPromptPrefix?: string | null | undefined;
+				metadata: Record<string, unknown>;
+				createdAt: Date;
+				updatedAt: Date;
+			}>;
+			meta: object;
+		}>;
+		upsert: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				providerId: string;
+				name: string;
+				baseUrl: string;
+				apiKeyEnvVar: string;
+				apiKey?: string | undefined;
+				enabled?: boolean | undefined;
+				priority?: number | undefined;
+				tags?: string[] | undefined;
+				models?: Array<{
+					id: string;
+					tier?: "free" | "balanced" | "advanced" | "complex" | undefined;
+					contextWindow?: number | undefined;
+					supportsTools?: boolean | undefined;
+					supportsJson?: boolean | undefined;
+					costPer1MInput?: number | undefined;
+					costPer1MOutput?: number | undefined;
+				}> | undefined;
+				rateLimit?: { rpm: number; rpd?: number } | undefined;
+				extraBody?: Record<string, unknown> | undefined;
+				systemPromptPrefix?: string | undefined;
+				metadata?: Record<string, unknown> | undefined;
+			};
+			output: {
+				id: string;
+				providerId: string;
+				name: string;
+				baseUrl: string;
+				apiKeyEnvVar: string;
+				hasApiKey: boolean;
+				enabled: boolean;
+				priority: number;
+				tags: string[];
+				models: Array<{ id: string; tier?: string | undefined }>;
+				rateLimit?: { rpm: number; rpd?: number } | undefined;
+				extraBody?: Record<string, unknown> | undefined;
+				systemPromptPrefix?: string | null | undefined;
+				metadata: Record<string, unknown>;
+				createdAt: Date;
+				updatedAt: Date;
+			};
+			meta: object;
+		}>;
+		enable: import("@trpc/server").TRPCMutationProcedure<{
+			input: { providerId: string };
+			output: { ok: boolean };
+			meta: object;
+		}>;
+		disable: import("@trpc/server").TRPCMutationProcedure<{
+			input: { providerId: string };
+			output: { ok: boolean };
+			meta: object;
+		}>;
+		remove: import("@trpc/server").TRPCMutationProcedure<{
+			input: { providerId: string };
+			output: { ok: boolean };
+			meta: object;
+		}>;
+		probe: import("@trpc/server").TRPCMutationProcedure<{
+			input: { providerId: string };
+			output: {
+				ok: boolean;
+				models: string[];
+				latencyMs: number;
+				error?: string | undefined;
+			};
+			meta: object;
+		}>;
+		sync: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			output: { ok: boolean; count: number };
+			meta: object;
+		}>;
+	}>>;
 	subscriptions: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;

@@ -271,14 +271,18 @@ export class HubRestClient {
     profileSlug?: string;
     workspaceId?: string;
     limit?: number;
+    /** "all" — omits workspaceId so results span all workspaces the user can access. */
+    scope?: "workspace" | "all";
   }): Promise<HubEntity[]> {
-    const wsId = options?.workspaceId ?? this.workspaceId;
     const params = new URLSearchParams({
       sort: "updatedAt:desc",
       limit: String(options?.limit ?? 20),
     });
     if (options?.profileSlug) params.set("profileSlug", options.profileSlug);
-    if (wsId) params.set("workspaceId", wsId);
+    if (options?.scope !== "all") {
+      const wsId = options?.workspaceId ?? this.workspaceId;
+      if (wsId) params.set("workspaceId", wsId);
+    }
 
     const result = await this.request<HubEntity[] | HubListResponse<HubEntity>>(
       "GET",
