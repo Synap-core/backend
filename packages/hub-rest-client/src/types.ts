@@ -317,6 +317,32 @@ export interface HubPropertyDef {
   options?: string[];
 }
 
+// ─── Discover ────────────────────────────────────────────────────────────────
+
+export interface HubDiscoverProperty {
+  slug: string;
+  displayName: string;
+  type: string;
+  options?: string[];
+  required?: boolean;
+}
+
+export interface HubDiscoverProfile {
+  slug: string;
+  displayName: string;
+  scope: "pod" | "workspace";
+  description?: string | null;
+  icon?: string | null;
+  properties: HubDiscoverProperty[];
+  createCommand: string;
+}
+
+export interface HubDiscoverResult {
+  profiles: HubDiscoverProfile[];
+  commands: Record<string, string>;
+  hint: string;
+}
+
 // ─── Threads & Channels ──────────────────────────────────────────────────────
 
 export interface HubThread {
@@ -500,4 +526,114 @@ export interface ExecuteCommandInput {
   workspaceId?: string;
   parameters?: Record<string, unknown>;
   userId?: string;
+}
+
+// ─── Automations ──────────────────────────────────────────────────────────────
+
+export type AutomationStatus = "draft" | "active" | "paused" | "error";
+export type AutomationTriggerType = "event" | "cron" | "webhook" | "manual";
+
+export interface HubAutomation {
+  id: string;
+  userId: string;
+  workspaceId?: string | null;
+  name: string;
+  description?: string | null;
+  triggerType: AutomationTriggerType;
+  triggerConfig?: Record<string, unknown>;
+  flowDefinition?: {
+    nodes: Record<string, unknown>[];
+    edges: Record<string, unknown>[];
+  };
+  status: AutomationStatus;
+  metadata?: Record<string, unknown>;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CreateAutomationInput {
+  name: string;
+  triggerType: AutomationTriggerType;
+  workspaceId?: string | null;
+  description?: string;
+  triggerConfig?: Record<string, unknown>;
+  flowDefinition?: {
+    nodes: Record<string, unknown>[];
+    edges: Record<string, unknown>[];
+  };
+  status?: AutomationStatus;
+  metadata?: Record<string, unknown>;
+  userId?: string;
+  agentUserId?: string;
+}
+
+export interface UpdateAutomationInput {
+  name?: string;
+  description?: string;
+  triggerType?: AutomationTriggerType;
+  triggerConfig?: Record<string, unknown>;
+  flowDefinition?: {
+    nodes: Record<string, unknown>[];
+    edges: Record<string, unknown>[];
+  };
+  status?: AutomationStatus;
+  metadata?: Record<string, unknown>;
+  workspaceId?: string;
+  userId?: string;
+}
+
+// ─── Subscriptions / Reactions (Pulse) ───────────────────────────────────────
+
+export type ReactionKind =
+  | "automation"
+  | "ai_feed"
+  | "ai_react"
+  | "notify"
+  | "webhook"
+  | "message_out";
+
+export type ReactionLens = "all" | "internal" | "external";
+
+/** Opaque reaction event from the Pulse feed — shape varies by kind. */
+export interface HubReactionEvent {
+  id: string;
+  eventType: string;
+  kind?: ReactionKind;
+  workspaceId?: string | null;
+  userId?: string;
+  createdAt: string;
+  reactions?: Record<string, unknown>[];
+  [key: string]: unknown;
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+export type NotificationSourceType =
+  | "proposal"
+  | "connector"
+  | "agent"
+  | "system"
+  | "inbox_item";
+
+export interface CreateNotificationInput {
+  userId: string;
+  workspaceId: string;
+  type: string;
+  sourceType?: NotificationSourceType;
+  sourceId?: string;
+  workspaceUrl?: string;
+  groupKey?: string;
+  data?: Record<string, unknown>;
+}
+
+// ─── Webhooks ─────────────────────────────────────────────────────────────────
+
+export interface HubWebhookDelivery {
+  id: string;
+  subscriptionId: string;
+  status: string;
+  responseStatus?: number;
+  attempt: number;
+  deliveredAt?: string;
+  createdAt: string;
 }

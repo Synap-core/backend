@@ -39,6 +39,7 @@ import type {
   HubConnectionsResult,
   HubProfile,
   HubPropertyDef,
+  HubDiscoverResult,
   HubThread,
   HubMessage,
   HubThreadContext,
@@ -54,6 +55,15 @@ import type {
   CreateViewInput,
   ExecuteCommandInput,
   CreateDocumentInput,
+  HubAutomation,
+  CreateAutomationInput,
+  UpdateAutomationInput,
+  AutomationStatus,
+  ReactionKind,
+  ReactionLens,
+  HubReactionEvent,
+  CreateNotificationInput,
+  HubWebhookDelivery,
 } from "./types.js";
 
 export interface HubRestClientConfig {
@@ -186,6 +196,17 @@ export class HubRestClient {
     return unwrapWorkspacesResponse(result);
   }
 
+  async provisionAgentWorkspace(input: {
+    agentUserId: string;
+    workspaceName?: string;
+  }): Promise<{ workspaceId: string; created: boolean }> {
+    return this.request<{ workspaceId: string; created: boolean }>(
+      "POST",
+      "/api/hub/workspaces/provision-agent",
+      input
+    );
+  }
+
   /**
    * Get full activity context for a user — recent entities, active threads, workspace summary.
    * Use at session start to orient the agent to the user's current state.
@@ -211,14 +232,22 @@ export class HubRestClient {
     options?: {
       profileSlug?: string;
       workspaceId?: string;
+      /**
+       * "workspace" (default) — applies the client workspaceId filter.
+       * "all" — omits workspaceId entirely so results span all workspaces.
+       */
+      scope?: "workspace" | "all";
       limit?: number;
     },
     signal?: AbortSignal
   ): Promise<HubEntity[]> {
-    const wsId = options?.workspaceId ?? this.workspaceId;
     const params = new URLSearchParams({ q: query });
     if (options?.profileSlug) params.set("profileSlug", options.profileSlug);
-    if (wsId) params.set("workspaceId", wsId);
+    // When scope === "all", intentionally omit workspaceId for cross-workspace search.
+    if (options?.scope !== "all") {
+      const wsId = options?.workspaceId ?? this.workspaceId;
+      if (wsId) params.set("workspaceId", wsId);
+    }
     if (options?.limit) params.set("limit", String(options.limit));
 
     const result = await this.request<HubEntity[] | HubListResponse<HubEntity>>(
@@ -242,14 +271,18 @@ export class HubRestClient {
     profileSlug?: string;
     workspaceId?: string;
     limit?: number;
+    /** "all" — omits workspaceId so results span all workspaces the user can access. */
+    scope?: "workspace" | "all";
   }): Promise<HubEntity[]> {
-    const wsId = options?.workspaceId ?? this.workspaceId;
     const params = new URLSearchParams({
       sort: "updatedAt:desc",
       limit: String(options?.limit ?? 20),
     });
     if (options?.profileSlug) params.set("profileSlug", options.profileSlug);
-    if (wsId) params.set("workspaceId", wsId);
+    if (options?.scope !== "all") {
+      const wsId = options?.workspaceId ?? this.workspaceId;
+      if (wsId) params.set("workspaceId", wsId);
+    }
 
     const result = await this.request<HubEntity[] | HubListResponse<HubEntity>>(
       "GET",
@@ -454,6 +487,23 @@ export class HubRestClient {
       HubPropertyDef[] | HubListResponse<HubPropertyDef>
     >("GET", `/api/hub/property-defs?${params}`);
     return unwrapList(result);
+  }
+
+  /**
+   * Runtime discovery — profiles with property schemas + command tree.
+   *
+   * Call once per session at session start. Returns ground-truth profile
+   * schemas (including custom workspace profiles) and the canonical CLI
+   * command map. Replaces static skill file profile descriptions.
+   */
+  async discover(workspaceId?: string): Promise<HubDiscoverResult> {
+    const userId = await this.resolveUserId();
+    const wsId = workspaceId ?? this.workspaceId ?? "";
+    const params = new URLSearchParams({ userId, workspaceId: wsId });
+    return this.request<HubDiscoverResult>(
+      "GET",
+      `/api/hub/discover?${params}`
+    );
   }
 
   // ─── Threads & Channels ───────────────────────────────────────────────────
@@ -885,5 +935,209 @@ export class HubRestClient {
         workspaceId: input.workspaceId ?? this.workspaceId,
       }
     );
+  }
+
+  // ─── Automations ───────────────────────────────────────────────────────────
+
+  /**
+   * List automations for the current user, optionally filtered by workspace and status.
+   */
+  async listAutomations(options?: {
+    workspaceId?: string;
+    status?: AutomationStatus;
+    limit?: number;
+  }): Promise<HubAutomation[]> {
+    const userId = await this.resolveUserId();
+    const wsId = options?.workspaceId ?? this.workspaceId;
+    const params = new URLSearchParams({ userId });
+    if (wsId) params.set("workspaceId", wsId);
+    if (options?.status) params.set("status", options.status);
+    if (options?.limit) params.set("limit", String(options.limit));
+    const result = await this.request<
+      HubAutomation[] | HubListResponse<HubAutomation>
+    >("GET", `/api/hub/automations?${params}`);
+    return unwrapList(result);
+  }
+
+  /**
+   * Get a single automation by ID.
+   */
+  async getAutomation(
+    automationId: string,
+    options?: { workspaceId?: string }
+  ): Promise<HubAutomation> {
+    const userId = await this.resolveUserId();
+    const wsId = options?.workspaceId ?? this.workspaceId;
+    const params = new URLSearchParams({ userId });
+    if (wsId) params.set("workspaceId", wsId);
+    return this.request<HubAutomation>(
+      "GET",
+      `/api/hub/automations/${automationId}?${params}`
+    );
+  }
+
+  /**
+   * Create an automation. Defaults to status=draft.
+   * Use activateAutomation() to enable it.
+   */
+  async createAutomation(input: CreateAutomationInput): Promise<HubAutomation> {
+    const userId = input.userId ?? (await this.resolveUserId());
+    const wsId = input.workspaceId ?? this.workspaceId;
+    return this.request<HubAutomation>("POST", "/api/hub/automations/create", {
+      ...input,
+      userId,
+      workspaceId: wsId ?? null,
+    });
+  }
+
+  /**
+   * Update an automation's definition or metadata.
+   */
+  async updateAutomation(
+    automationId: string,
+    input: UpdateAutomationInput
+  ): Promise<HubAutomation> {
+    const userId = input.userId ?? (await this.resolveUserId());
+    const wsId = input.workspaceId ?? this.workspaceId;
+    if (!wsId) throw new Error("workspaceId is required for updateAutomation");
+    return this.request<HubAutomation>(
+      "PATCH",
+      `/api/hub/automations/${automationId}`,
+      { ...input, userId, workspaceId: wsId }
+    );
+  }
+
+  /**
+   * Manually trigger an automation once with an optional payload.
+   * Bypasses the automation's normal trigger config.
+   */
+  async triggerAutomation(
+    automationId: string,
+    options?: {
+      payload?: Record<string, unknown>;
+      workspaceId?: string;
+    }
+  ): Promise<{ status: string; runId?: string; result?: unknown }> {
+    const userId = await this.resolveUserId();
+    const wsId = options?.workspaceId ?? this.workspaceId;
+    return this.request<{ status: string; runId?: string; result?: unknown }>(
+      "POST",
+      `/api/hub/automations/${automationId}/trigger`,
+      { userId, workspaceId: wsId ?? null, payload: options?.payload }
+    );
+  }
+
+  /**
+   * Activate a draft or paused automation (sets status=active).
+   */
+  async activateAutomation(
+    automationId: string,
+    options?: { workspaceId?: string }
+  ): Promise<HubAutomation> {
+    const userId = await this.resolveUserId();
+    const wsId = options?.workspaceId ?? this.workspaceId;
+    if (!wsId)
+      throw new Error("workspaceId is required for activateAutomation");
+    return this.request<HubAutomation>(
+      "POST",
+      `/api/hub/automations/${automationId}/activate`,
+      { userId, workspaceId: wsId }
+    );
+  }
+
+  /**
+   * Pause an active automation (sets status=paused).
+   */
+  async pauseAutomation(
+    automationId: string,
+    options?: { workspaceId?: string }
+  ): Promise<HubAutomation> {
+    const userId = await this.resolveUserId();
+    const wsId = options?.workspaceId ?? this.workspaceId;
+    if (!wsId) throw new Error("workspaceId is required for pauseAutomation");
+    return this.request<HubAutomation>(
+      "POST",
+      `/api/hub/automations/${automationId}/pause`,
+      { userId, workspaceId: wsId }
+    );
+  }
+
+  // ─── Subscriptions / Reactions (Pulse) ────────────────────────────────────
+
+  /**
+   * List the user-wide Pulse feed — the timestamp-sorted union of reactive events.
+   * Call getSubscriptionFanout() on an individual event for its dense reactions[].
+   */
+  async listSubscriptions(options?: {
+    workspaceId?: string;
+    kind?: ReactionKind;
+    eventType?: string;
+    lens?: ReactionLens;
+    limit?: number;
+  }): Promise<HubReactionEvent[]> {
+    const wsId = options?.workspaceId ?? this.workspaceId;
+    const params = new URLSearchParams();
+    if (wsId) params.set("workspaceId", wsId);
+    if (options?.kind) params.set("kind", options.kind);
+    if (options?.eventType) params.set("eventType", options.eventType);
+    if (options?.lens) params.set("lens", options.lens);
+    if (options?.limit) params.set("limit", String(options.limit));
+    const qs = params.toString() ? `?${params}` : "";
+    const result = await this.request<
+      HubReactionEvent[] | HubListResponse<HubReactionEvent>
+    >("GET", `/api/hub/subscriptions${qs}`);
+    return unwrapList(result);
+  }
+
+  /**
+   * Get the reaction fan-out for a single event — full reactions[] populated.
+   */
+  async getSubscriptionFanout(
+    eventId: string,
+    options?: { lens?: ReactionLens }
+  ): Promise<HubReactionEvent> {
+    const params = new URLSearchParams();
+    if (options?.lens) params.set("lens", options.lens);
+    const qs = params.toString() ? `?${params}` : "";
+    return this.request<HubReactionEvent>(
+      "GET",
+      `/api/hub/subscriptions/${eventId}/fanout${qs}`
+    );
+  }
+
+  // ─── Notifications ─────────────────────────────────────────────────────────
+
+  /**
+   * Persist a notification and emit notification:new to the frontend.
+   * Use for IS-originated events (skill.triggered, agent actions, etc.).
+   * Backend-originated notifications (vault, proposals) use NotificationService directly.
+   */
+  async createNotification(
+    input: CreateNotificationInput
+  ): Promise<{ id: string }> {
+    return this.request<{ id: string }>(
+      "POST",
+      "/api/hub/notifications",
+      input
+    );
+  }
+
+  // ─── Webhooks ──────────────────────────────────────────────────────────────
+
+  /**
+   * List delivery log for a webhook subscription.
+   * Powers the Reactions Health tab and replay flows.
+   */
+  async getWebhookDeliveries(
+    subscriptionId: string,
+    options?: { limit?: number }
+  ): Promise<HubWebhookDelivery[]> {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set("limit", String(options.limit));
+    const qs = params.toString() ? `?${params}` : "";
+    const result = await this.request<
+      HubWebhookDelivery[] | HubListResponse<HubWebhookDelivery>
+    >("GET", `/api/hub/webhooks/${subscriptionId}/deliveries${qs}`);
+    return unwrapList(result);
   }
 }

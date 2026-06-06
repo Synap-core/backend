@@ -5,6 +5,7 @@
  */
 
 import { eq, and } from "drizzle-orm";
+import { randomUUID } from "crypto";
 import { documents, documentVersions } from "../schema/documents.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
@@ -13,6 +14,10 @@ import type {
   NewDocument,
   NewDocumentVersion,
 } from "../schema/documents.js";
+import {
+  storedVersionValues,
+  uploadDocumentVersionSnapshot,
+} from "../utils/document-version-storage.js";
 
 export interface CreateDocumentInput {
   title: string;
@@ -74,6 +79,7 @@ export class DocumentRepository extends BaseRepository<
           mimeType: data.mimeType,
           metadata: data.metadata,
           currentVersion: 1,
+          lastSavedVersion: data.content !== undefined ? 1 : 0,
         } as NewDocument)
         .returning();
 
@@ -81,10 +87,20 @@ export class DocumentRepository extends BaseRepository<
       // document has real version history from creation (storage holds current
       // content).
       if (data.content !== undefined) {
+        const versionId = randomUUID();
+        const snapshot = await uploadDocumentVersionSnapshot({
+          userId,
+          documentId: doc.id,
+          versionId,
+          documentType: data.type,
+          mimeType: data.mimeType,
+          content: data.content,
+        });
         await tx.insert(documentVersions).values({
+          id: versionId,
           documentId: doc.id,
           version: 1,
-          content: data.content,
+          ...storedVersionValues(snapshot),
           author: "user",
           authorId: userId,
           message: "Initial version",

@@ -7,7 +7,7 @@
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
-import { db, eq, desc, and } from "@synap/database";
+import { db, eq, desc, and, readDocumentVersionContent } from "@synap/database";
 import { views, documents, documentVersions } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 
@@ -148,11 +148,13 @@ export const whiteboardsRouter = router({
       // Publish restore job via pg-boss
       const { getBoss } = await import("@synap/jobs");
 
+      const content = await readDocumentVersionContent(version);
+
       await getBoss().send("whiteboard-restore", {
         viewId: input.viewId,
         versionId: input.versionId,
         yjsRoomId,
-        content: version.content,
+        content,
         userId: ctx.userId,
       });
 
@@ -188,10 +190,11 @@ export const whiteboardsRouter = router({
       return {
         version,
         metadata: {
-          size: version.content.length,
+          size: version.size || version.content.length,
           message: version.message,
           author: version.author,
           createdAt: version.createdAt,
+          hasStoredSnapshot: !!version.storageKey,
         },
       };
     }),
@@ -231,9 +234,22 @@ export const whiteboardsRouter = router({
         });
       }
 
+      const version = remainingVersions.find((v) => v.id === input.versionId);
+      if (!version) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Version not found",
+        });
+      }
+
       await db
         .delete(documentVersions)
         .where(eq(documentVersions.id, input.versionId));
+
+      if (version.storageKey) {
+        const { storage } = await import("@synap/storage");
+        await storage.delete(version.storageKey).catch(() => undefined);
+      }
 
       return { success: true };
     }),

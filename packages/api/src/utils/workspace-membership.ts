@@ -5,8 +5,8 @@
  * belongs to, and silently filter a requested list to accessible IDs only.
  */
 
-import { eq, inArray } from "@synap/database";
-import { workspaceMembers } from "@synap/database/schema";
+import { eq, inArray, and, drizzleSql } from "@synap/database";
+import { workspaceMembers, workspaces } from "@synap/database/schema";
 import { db } from "@synap/database";
 
 /**
@@ -17,7 +17,15 @@ export async function getUserWorkspaceIds(userId: string): Promise<string[]> {
     where: eq(workspaceMembers.userId, userId),
     columns: { workspaceId: true },
   });
-  return rows.map((r) => r.workspaceId);
+  const ids = new Set(rows.map((r) => r.workspaceId));
+
+  const podReadable = await db.query.workspaces.findMany({
+    where: drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`,
+    columns: { id: true },
+  });
+  for (const workspace of podReadable) ids.add(workspace.id);
+
+  return Array.from(ids);
 }
 
 /**
@@ -39,5 +47,18 @@ export async function validateWorkspaceAccess(
     columns: { workspaceId: true, userId: true },
   });
 
-  return rows.filter((r) => r.userId === userId).map((r) => r.workspaceId);
+  const ids = new Set(
+    rows.filter((r) => r.userId === userId).map((r) => r.workspaceId)
+  );
+
+  const podReadable = await db.query.workspaces.findMany({
+    where: and(
+      inArray(workspaces.id, requested),
+      drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`
+    ),
+    columns: { id: true },
+  });
+  for (const workspace of podReadable) ids.add(workspace.id);
+
+  return Array.from(ids);
 }

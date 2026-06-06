@@ -48,5 +48,6 @@ export { registerConnectorsRoutes } from "./connectors.js";
 export { registerWebhooksRoutes } from "./webhooks.js";
 export { registerSubscriptionsRoutes } from "./subscriptions.js";
 export { registerManifestRoutes } from "./manifest.js";
+export { registerDiscoverRoutes } from "./discover.js";
 
 export type { HubHono } from "./_shared.js";

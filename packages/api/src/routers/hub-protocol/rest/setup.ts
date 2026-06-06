@@ -12,7 +12,6 @@ import jwt from "jsonwebtoken";
 import {
   db,
   sql,
-  asc,
   eq,
   and,
   inArray,
@@ -94,7 +93,7 @@ async function computePodAdminInvariant(): Promise<{
 }> {
   try {
     const podAdminWorkspace = await db.query.workspaces.findFirst({
-      where: eq(workspaces.systemSlug, 'pod-admin'),
+      where: eq(workspaces.systemSlug, "pod-admin"),
       columns: { id: true },
     });
 
@@ -200,7 +199,7 @@ export function registerSetupRoutes(app: HubHono): void {
             );
             try {
               const podAdminWorkspace = await db.query.workspaces.findFirst({
-                where: eq(workspaces.systemSlug, 'pod-admin'),
+                where: eq(workspaces.systemSlug, "pod-admin"),
                 columns: { id: true },
               });
               if (podAdminWorkspace) {
@@ -380,21 +379,14 @@ export function registerSetupRoutes(app: HubHono): void {
 
       // ── Find target workspace (optional — agent exists at pod level) ─────────
       // Workspace is NOT required for provisioning. The agent user and API key
-      // are pod-wide resources. Workspace membership is granted opportunistically
-      // when a workspace already exists; if none does, provisioning still succeeds.
-      //
-      // Priority: explicit id > agent-os package > any workspace on the pod.
+      // are pod-wide resources. Workspace membership is granted only when the
+      // caller explicitly requests a workspaceId — no silent fallback to
+      // agent-os or any-first-workspace, so the caller controls scope precisely.
       const ws = requestedWorkspaceId
         ? await db.query.workspaces.findFirst({
             where: (w, { eq }) => eq(w.id, requestedWorkspaceId),
           })
-        : ((await db.query.workspaces.findFirst({
-            where: eq(workspaces.packageSlug, 'agent-os'),
-            orderBy: (w) => asc(w.createdAt),
-          })) ??
-          (await db.query.workspaces.findFirst({
-            orderBy: (w) => asc(w.createdAt),
-          })));
+        : undefined;
 
       if (requestedWorkspaceId && !ws) {
         return c.json(
@@ -457,10 +449,7 @@ export function registerSetupRoutes(app: HubHono): void {
       // this agentType, always reuse the OLDEST so the singleton is stable and the
       // dedup never flip-flops between rows across calls.
       const existingAgent = await db.query.users.findFirst({
-        where: and(
-          eq(users.userType, "agent"),
-          eq(users.agentType, agentType)
-        ),
+        where: and(eq(users.userType, "agent"), eq(users.agentType, agentType)),
         orderBy: (u, { asc }) => [asc(u.createdAt)],
         columns: { id: true },
       });

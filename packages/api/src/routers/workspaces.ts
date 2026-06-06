@@ -68,6 +68,17 @@ import { withWorkspaceProposalIdLock } from "../services/workspace-creation-serv
 
 const logger = createLogger({ module: "workspaces" });
 
+function getWorkspaceVisibility(settings: unknown): string {
+  if (!settings || typeof settings !== "object") return "members";
+  const visibility = (settings as Record<string, unknown>).workspaceVisibility;
+  return typeof visibility === "string" ? visibility : "members";
+}
+
+function isPodReadableWorkspace(settings: unknown): boolean {
+  const visibility = getWorkspaceVisibility(settings);
+  return visibility === "pod_visible" || visibility === "pod_joinable";
+}
+
 async function notifyCpInviteSync(input: {
   type: "workspace" | "pod";
   inviteToken: string;
@@ -291,26 +302,53 @@ export const workspacesRouter = router({
 
       const includeArchived = input?.includeArchived === true;
       const appIdFilter = input?.appId;
+      type WorkspaceListItem = NonNullable<
+        (typeof memberships)[number]["workspace"]
+      > & {
+        role?: string;
+        joinedAt?: Date;
+        accessKind?: "member" | "pod_visible";
+      };
+      const byId = new Map<string, WorkspaceListItem>();
 
-      return memberships
-        .filter((m) => {
-          const workspace = m.workspace;
-          if (!workspace) return false;
-          if (!includeArchived && workspace.archivedAt != null) return false;
-          if (appIdFilter) {
-            const s = (workspace.settings ?? {}) as Record<string, unknown>;
-            if (s.appId !== appIdFilter) return false;
-          }
-          return true;
-        })
-        .map((m) => {
-          const workspace = m.workspace!;
-          return {
-            ...workspace,
-            role: m.role,
-            joinedAt: m.joinedAt,
-          };
+      for (const m of memberships) {
+        const workspace = m.workspace;
+        if (!workspace) continue;
+        if (!includeArchived && workspace.archivedAt != null) continue;
+        if (appIdFilter) {
+          const s = (workspace.settings ?? {}) as Record<string, unknown>;
+          if (s.appId !== appIdFilter) continue;
+        }
+        byId.set(workspace.id, {
+          ...workspace,
+          role: m.role,
+          joinedAt: m.joinedAt,
+          accessKind: "member",
         });
+      }
+
+      const podReadable = await db.query.workspaces.findMany({
+        where: drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible', 'pod_joinable')`,
+      });
+
+      for (const workspace of podReadable) {
+        if (byId.has(workspace.id)) continue;
+        if (!includeArchived && workspace.archivedAt != null) continue;
+        if (appIdFilter) {
+          const s = (workspace.settings ?? {}) as Record<string, unknown>;
+          if (s.appId !== appIdFilter) continue;
+        }
+        byId.set(workspace.id, {
+          ...workspace,
+          role: "viewer",
+          joinedAt: undefined,
+          accessKind: "pod_visible",
+        });
+      }
+
+      return Array.from(byId.values()).sort((a, b) =>
+        a.name.localeCompare(b.name)
+      );
     }),
 
   /**
@@ -338,7 +376,9 @@ export const workspacesRouter = router({
         ),
       });
 
-      if (!membership) {
+      const podReadable = isPodReadableWorkspace(workspace.settings);
+
+      if (!membership && !podReadable) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
       }
 
@@ -347,6 +387,13 @@ export const workspacesRouter = router({
           code: "FORBIDDEN",
           message: "This workspace has been archived.",
         });
+      }
+
+      if (!membership && podReadable) {
+        return { ...workspace, role: "viewer", accessKind: "pod_visible" };
+      }
+      if (!membership) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Access denied" });
       }
 
       // Ensure default workspace setup (for existing workspaces created before these features)
@@ -437,13 +484,17 @@ export const workspacesRouter = router({
             (updatedWorkspace.settings as Record<string, unknown> | null)
               ?.mainWhiteboardId
           );
-          return { ...updatedWorkspace, role: membership.role };
+          return {
+            ...updatedWorkspace,
+            role: membership.role,
+            accessKind: "member",
+          };
         }
       }
 
       // Return workspace (may or may not have mainWhiteboardId depending on whiteboard creation status)
       // Frontend should check for mainWhiteboardId and handle missing whiteboard case
-      return { ...workspace, role: membership.role };
+      return { ...workspace, role: membership.role, accessKind: "member" };
     }),
 
   /**
@@ -752,7 +803,7 @@ export const workspacesRouter = router({
       let isPodAdmin = false;
       if (!isOwner) {
         const podAdminWs = await db.query.workspaces.findFirst({
-          where: eq(workspaces.systemSlug, 'pod-admin'),
+          where: eq(workspaces.systemSlug, "pod-admin"),
           columns: { id: true },
         });
         if (podAdminWs) {
@@ -2190,6 +2241,37 @@ export const workspacesRouter = router({
               .record(
                 z.string(),
                 z.object({ blocks: z.array(z.record(z.string(), z.unknown())) })
+              )
+              .optional(),
+            workspacePurpose: z
+              .enum(["personal", "project", "agent", "library", "operational"])
+              .optional(),
+            workspaceSubtype: z.string().optional(),
+            workspaceVisibility: z
+              .enum([
+                "private",
+                "members",
+                "pod_visible",
+                "pod_joinable",
+                "public_link",
+              ])
+              .optional(),
+            workspaceCapabilities: z.array(z.string()).optional(),
+            sourceRoles: z
+              .record(
+                z.string(),
+                z.enum(["provider", "consumer", "provider-consumer"])
+              )
+              .optional(),
+            defaultSources: z
+              .record(
+                z.string(),
+                z.object({
+                  workspaceId: z.string().uuid(),
+                  capability: z.string().optional(),
+                  profileSlug: z.string().optional(),
+                  label: z.string().optional(),
+                })
               )
               .optional(),
             entityLinks: z

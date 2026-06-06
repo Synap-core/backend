@@ -13,12 +13,14 @@
  * - code: Code files (with language support)
  * - pdf: PDF documents
  * - docx: Microsoft Word documents
+ * - html: HTML documents/widgets
  * - whiteboard: Tldraw whiteboard documents (spatial canvas)
  */
 export type DocumentType =
   | "text"
   | "markdown"
   | "code"
+  | "html"
   | "pdf"
   | "docx"
   | "whiteboard";
@@ -52,7 +54,9 @@ export interface DocumentMetadata {
 export function isDocumentType(value: unknown): value is DocumentType {
   return (
     typeof value === "string" &&
-    ["text", "markdown", "code", "pdf", "docx", "whiteboard"].includes(value)
+    ["text", "markdown", "code", "html", "pdf", "docx", "whiteboard"].includes(
+      value
+    )
   );
 }
 

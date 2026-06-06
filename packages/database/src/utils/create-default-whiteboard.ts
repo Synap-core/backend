@@ -21,6 +21,10 @@ import type {
   DocumentType,
   DocumentMetadata,
 } from "../types/document-types.js";
+import {
+  storedVersionValues,
+  uploadDocumentVersionSnapshot,
+} from "./document-version-storage.js";
 
 export interface CreateDefaultWhiteboardResult {
   status: "created" | "skipped" | "error";
@@ -186,6 +190,7 @@ export async function ensureDefaultWhiteboard(
           size: uploadResult.size,
           mimeType: "application/json",
           currentVersion: 1,
+          lastSavedVersion: 1,
           metadata: documentMetadata,
         } as any)
         .returning();
@@ -209,10 +214,21 @@ export async function ensureDefaultWhiteboard(
 
     // 2. Create initial document version snapshot (from storage content)
     // Versions are snapshots of storage content for history/queryability
+    const versionId = randomUUID();
+    const snapshot = await uploadDocumentVersionSnapshot({
+      userId,
+      documentId: document.id,
+      versionId,
+      documentType,
+      mimeType: "application/json",
+      content: tldrawJson,
+    });
+
     await db.insert(documentVersions).values({
+      id: versionId,
       documentId: document.id,
       version: 1,
-      content: tldrawJson, // Snapshot of storage content
+      ...storedVersionValues(snapshot),
       author: "system",
       authorId: userId,
       message: "Initial whiteboard",

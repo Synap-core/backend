@@ -31,7 +31,10 @@ import {
   SYSTEM_RELATION_TYPES,
   sql,
   normalizeDocumentType,
+  storedVersionValues,
+  uploadDocumentVersionSnapshot,
   documents,
+  documentVersions,
   cellInstances,
 } from "@synap/database";
 import { storage } from "@synap/storage";
@@ -157,6 +160,15 @@ export const cellInstancesRouter = router({
       const metadata = await storage.upload(storageKey, input.html, {
         contentType: "text/html",
       });
+      const versionId = randomUUID();
+      const snapshot = await uploadDocumentVersionSnapshot({
+        userId,
+        documentId,
+        versionId,
+        documentType: "html",
+        mimeType: "text/html",
+        content: input.html,
+      });
       const [document] = await db
         .insert(documents)
         .values({
@@ -170,8 +182,19 @@ export const cellInstancesRouter = router({
           size: metadata.size,
           mimeType: "text/html",
           currentVersion: 1,
+          lastSavedVersion: 1,
         })
         .returning();
+
+      await db.insert(documentVersions).values({
+        id: versionId,
+        documentId,
+        version: 1,
+        ...storedVersionValues(snapshot),
+        author: "user",
+        authorId: userId,
+        message: "Initial version",
+      });
 
       // 2. Create the html-embed cell referencing the versioned document.
       const [row] = await db

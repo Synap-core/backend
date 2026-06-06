@@ -425,11 +425,62 @@ export interface AgentRoutingPolicy {
 	/** Ordered rules; first match wins */
 	rules?: AgentRoutingRule[];
 }
+/**
+ * High-level purpose of a workspace inside a pod.
+ *
+ * `workspaceType` already exists as a promoted column for legacy operational
+ * filtering. `workspacePurpose` is the product-facing contract used by the
+ * browser and agents to understand how a workspace should be used.
+ */
+export type WorkspacePurpose = "personal" | "project" | "agent" | "library" | "operational";
+/**
+ * Discoverability/access mode for a workspace.
+ *
+ * Write access is still controlled by workspace_members + role permissions.
+ * `pod_visible` and `pod_joinable` only make the workspace discoverable/readable
+ * to authenticated users on the same data pod.
+ */
+export type WorkspaceVisibility = "private" | "members" | "pod_visible" | "pod_joinable" | "public_link";
+export type WorkspaceSourceRole = "provider" | "consumer" | "provider-consumer";
+export interface WorkspaceDefaultSource {
+	workspaceId: string;
+	capability?: string;
+	profileSlug?: string;
+	label?: string;
+}
 export interface WorkspaceSettings {
 	defaultEntityTypes?: string[];
 	theme?: string;
 	aiEnabled?: boolean;
 	allowExternalSharing?: boolean;
+	/**
+	 * Product-facing purpose used by browser/apps/agents to resolve cross-workspace
+	 * sources (e.g. a brand-library workspace serving artboards in a project).
+	 */
+	workspacePurpose?: WorkspacePurpose;
+	/**
+	 * Free-form subtype within the purpose, e.g. "brand-library",
+	 * "research-library", "agent-lab".
+	 */
+	workspaceSubtype?: string;
+	/**
+	 * Discovery/read visibility. Defaults to "members" when absent.
+	 */
+	workspaceVisibility?: WorkspaceVisibility;
+	/**
+	 * Capability ids this workspace provides or consumes, e.g.
+	 * "brand.library", "brand.assets", "research.sources", "agent.staging".
+	 */
+	workspaceCapabilities?: string[];
+	/**
+	 * Domain → role map. Example: { brand: "provider", research: "consumer" }.
+	 */
+	sourceRoles?: Record<string, WorkspaceSourceRole>;
+	/**
+	 * Domain/capability → default source workspace. Stored on consumer
+	 * workspaces so features can resolve defaults without copying data.
+	 */
+	defaultSources?: Record<string, WorkspaceDefaultSource>;
 	/** External MCP servers whose tools will be available to AI agents in this workspace */
 	mcpServers?: McpServerConfig[];
 	layout?: WorkspaceLayoutConfig;
@@ -1237,6 +1288,24 @@ export type CellInstanceCreatedByKind = "user" | "agent" | "system";
  * through `checkPermissionOrPropose()`.
  */
 export type CellInstanceTrustLevel = "trusted" | "installed" | "generated";
+/**
+ * AI Providers Schema
+ *
+ * Pod-level registry of AI model providers. Source of truth for provider
+ * configuration — decoupled from any specific IntelligenceSystem or workspace.
+ * The backend syncs this to the active IS on every change.
+ *
+ * API keys are stored server-side encrypted via encryptServiceKey/decryptServiceKey.
+ */
+export interface AiProviderModelEntry {
+	id: string;
+	tier?: "free" | "balanced" | "advanced" | "complex";
+	contextWindow?: number;
+	supportsTools?: boolean;
+	supportsJson?: boolean;
+	costPer1MInput?: number;
+	costPer1MOutput?: number;
+}
 /**
  * EventRecord - Database representation of an event
  *
@@ -2729,6 +2798,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 				global?: boolean | undefined;
+				targetWorkspaceId?: string | undefined;
 				viewContext?: {
 					viewId?: string | undefined;
 					typeKey?: string | undefined;
@@ -3165,8 +3235,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					content: string;
 					channelId: string;
 					parentId: string | null;
-					role: "user" | "assistant" | "system";
-					authorType: "external" | "human" | "ai_agent" | "bot";
+					role: "user" | "system" | "assistant";
+					authorType: "human" | "ai_agent" | "external" | "bot";
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
 					inboxItemId: string | null;
@@ -5287,7 +5357,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				title: string;
 				content?: string | undefined;
-				type?: "code" | "text" | "markdown" | "pdf" | "docx" | undefined;
+				type?: "code" | "text" | "markdown" | "pdf" | "docx" | "html" | undefined;
 				projectId?: string | undefined;
 				workspaceId?: string | undefined;
 			};
@@ -5303,7 +5373,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		upload: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				type: "code" | "text" | "markdown" | "pdf" | "docx";
+				type: "code" | "text" | "markdown" | "pdf" | "docx" | "html";
 				content: string;
 				title?: string | undefined;
 				language?: string | undefined;
@@ -5395,6 +5465,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					message: string | null;
 					createdBy: string;
 					createdAt: Date;
+					size: number;
+					mimeType: string | null;
+					checksum: string | null;
+					hasStoredSnapshot: boolean;
 				}[];
 				latest: {
 					currentVersion: number;
@@ -5419,12 +5493,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				versionId: string;
 			};
 			output: {
+				content: string;
 				id: string;
 				message: string | null;
 				createdAt: Date;
 				documentId: string;
 				version: number;
-				content: string;
+				storageUrl: string | null;
+				storageKey: string | null;
+				size: number;
+				mimeType: string | null;
+				checksum: string | null;
 				author: string;
 				authorId: string;
 			};
@@ -5456,7 +5535,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				projectId?: string | undefined;
-				type?: "code" | "text" | "markdown" | "pdf" | "docx" | undefined;
+				type?: "code" | "text" | "markdown" | "pdf" | "docx" | "html" | undefined;
 				limit?: number | undefined;
 			};
 			output: {
@@ -7468,9 +7547,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				includeArchived?: boolean | undefined;
 				appId?: string | undefined;
 			} | undefined;
-			output: {
-				role: string;
-				joinedAt: Date;
+			output: ({
 				name: string;
 				id: string;
 				type: string;
@@ -7488,7 +7565,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				subscriptionStatus: string | null;
 				stripeCustomerId: string | null;
 				archivedAt: Date | null;
-			}[];
+			} & {
+				role?: string;
+				joinedAt?: Date;
+				accessKind?: "member" | "pod_visible";
+			})[];
 			meta: object;
 		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
@@ -7497,6 +7578,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				role: string;
+				accessKind: string;
 				name: string;
 				id: string;
 				type: string;
@@ -8009,6 +8091,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					profileEntityBentoTemplates?: Record<string, {
 						blocks: Record<string, unknown>[];
+					}> | undefined;
+					workspacePurpose?: "personal" | "agent" | "project" | "library" | "operational" | undefined;
+					workspaceSubtype?: string | undefined;
+					workspaceVisibility?: "members" | "private" | "pod_visible" | "pod_joinable" | "public_link" | undefined;
+					workspaceCapabilities?: string[] | undefined;
+					sourceRoles?: Record<string, "provider" | "consumer" | "provider-consumer"> | undefined;
+					defaultSources?: Record<string, {
+						workspaceId: string;
+						capability?: string | undefined;
+						profileSlug?: string | undefined;
+						label?: string | undefined;
 					}> | undefined;
 					entityLinks?: {
 						sourceProfileSlug: string;
@@ -9065,7 +9158,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				resourceType: "entity" | "document" | "view";
 				resourceId: string;
-				visibility?: "public" | "private" | undefined;
+				visibility?: "private" | "public" | undefined;
 				expiresAt?: Date | undefined;
 			};
 			output: {
@@ -9464,7 +9557,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					documentId: string;
 					version: number;
+					storageUrl: string | null;
+					storageKey: string | null;
+					size: number;
+					mimeType: string | null;
 					content: string;
+					checksum: string | null;
 					author: string;
 					authorId: string;
 				}[];
@@ -9497,7 +9595,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					documentId: string;
 					version: number;
+					storageUrl: string | null;
+					storageKey: string | null;
+					size: number;
+					mimeType: string | null;
 					content: string;
+					checksum: string | null;
 					author: string;
 					authorId: string;
 				};
@@ -9506,6 +9609,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					message: string | null;
 					author: string;
 					createdAt: Date;
+					hasStoredSnapshot: boolean;
 				};
 			};
 			meta: object;
@@ -13376,6 +13480,139 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				lens?: "external" | "all" | "internal" | undefined;
 			};
 			output: ReactionEvent;
+			meta: object;
+		}>;
+	}>>;
+	aiProviders: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				hasApiKey: boolean;
+				name: string;
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				metadata: Record<string, unknown>;
+				priority: number;
+				tags: string[];
+				enabled: boolean;
+				providerId: string;
+				baseUrl: string;
+				apiKeyEnvVar: string;
+				models: AiProviderModelEntry[];
+				rateLimit: {
+					rpm: number;
+					rpd?: number;
+				} | null;
+				extraBody: Record<string, unknown> | null;
+				systemPromptPrefix: string | null;
+			}[];
+			meta: object;
+		}>;
+		upsert: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				providerId: string;
+				name: string;
+				baseUrl: string;
+				apiKeyEnvVar: string;
+				apiKey?: string | undefined;
+				enabled?: boolean | undefined;
+				priority?: number | undefined;
+				tags?: string[] | undefined;
+				models?: {
+					id: string;
+					tier?: "free" | "balanced" | "advanced" | "complex" | undefined;
+					contextWindow?: number | undefined;
+					supportsTools?: boolean | undefined;
+					supportsJson?: boolean | undefined;
+					costPer1MInput?: number | undefined;
+					costPer1MOutput?: number | undefined;
+				}[] | undefined;
+				rateLimit?: {
+					rpm: number;
+					rpd?: number | undefined;
+				} | undefined;
+				extraBody?: Record<string, unknown> | undefined;
+				systemPromptPrefix?: string | undefined;
+				metadata?: Record<string, unknown> | undefined;
+			};
+			output: {
+				hasApiKey: boolean;
+				name: string;
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				metadata: Record<string, unknown>;
+				priority: number;
+				tags: string[];
+				enabled: boolean;
+				providerId: string;
+				baseUrl: string;
+				apiKeyEnvVar: string;
+				models: AiProviderModelEntry[];
+				rateLimit: {
+					rpm: number;
+					rpd?: number;
+				} | null;
+				extraBody: Record<string, unknown> | null;
+				systemPromptPrefix: string | null;
+			};
+			meta: object;
+		}>;
+		enable: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				providerId: string;
+			};
+			output: {
+				ok: boolean;
+			};
+			meta: object;
+		}>;
+		disable: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				providerId: string;
+			};
+			output: {
+				ok: boolean;
+			};
+			meta: object;
+		}>;
+		remove: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				providerId: string;
+			};
+			output: {
+				ok: boolean;
+			};
+			meta: object;
+		}>;
+		probe: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				providerId: string;
+			};
+			output: {
+				ok: boolean;
+				models: string[];
+				latencyMs: number;
+				error?: string;
+			};
+			meta: object;
+		}>;
+		sync: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			output: {
+				ok: boolean;
+				count: number;
+			};
 			meta: object;
 		}>;
 	}>>;

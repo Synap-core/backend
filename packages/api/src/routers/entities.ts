@@ -285,6 +285,22 @@ export const entitiesRouter = router({
     .mutation(async ({ input, ctx }) => {
       const entityId = randomUUID();
       const correlationId = randomUUID();
+      const governanceWorkspaceId =
+        input.targetWorkspaceId ?? ctx.workspaceId ?? null;
+
+      if (input.targetWorkspaceId) {
+        const { validateWorkspaceAccess } =
+          await import("../utils/workspace-membership.js");
+        const allowedWorkspaceIds = await validateWorkspaceAccess(ctx.userId, [
+          input.targetWorkspaceId,
+        ]);
+        if (!allowedWorkspaceIds.includes(input.targetWorkspaceId)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Access denied to target workspace",
+          });
+        }
+      }
 
       // Resolve framed-view trust SERVER-SIDE (never from the request body).
       // Absent viewContext → no issuer → legacy behavior (unchanged for all
@@ -293,7 +309,7 @@ export const entitiesRouter = router({
         ? await resolveViewTrust(
             input.viewContext,
             ctx.userId,
-            ctx.workspaceId ?? null
+            governanceWorkspaceId
           )
         : undefined;
 
@@ -308,7 +324,7 @@ export const entitiesRouter = router({
         const profile = await resolutionService.resolveProfile(
           input.profileId,
           ctx.userId,
-          ctx.workspaceId
+          governanceWorkspaceId
         );
         if (!profile) {
           throw new TRPCError({
@@ -332,7 +348,7 @@ export const entitiesRouter = router({
         phase: "requested",
         subjectId: entityId,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: governanceWorkspaceId,
         correlationId,
         data: {
           profileSlug,
@@ -349,7 +365,7 @@ export const entitiesRouter = router({
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: governanceWorkspaceId,
         subjectType: "entity",
         action: "create",
         source: input.source,
@@ -395,7 +411,7 @@ export const entitiesRouter = router({
         resolvedProfile = await resolutionService.resolveProfile(
           input.profileSlug,
           ctx.userId,
-          ctx.workspaceId
+          governanceWorkspaceId
         );
       }
       if (!resolvedProfile) {
@@ -419,10 +435,10 @@ export const entitiesRouter = router({
         ? null
         : (input.targetWorkspaceId ??
           (explicitWorkspaceScope
-            ? ctx.workspaceId
+            ? governanceWorkspaceId
             : profileEntityScope === "pod"
               ? null
-              : ctx.workspaceId));
+              : governanceWorkspaceId));
 
       // Merge profile.defaultValues into caller-supplied properties.
       const profileDefaults =
@@ -510,7 +526,7 @@ export const entitiesRouter = router({
         syncPropertyToRelations(
           createdEntity.id,
           createdEntity.profileId,
-          ctx.workspaceId,
+          governanceWorkspaceId,
           ctx.userId,
           {}, // old properties = empty (new entity)
           effectiveProperties as Record<string, unknown>
@@ -529,7 +545,7 @@ export const entitiesRouter = router({
         phase: "completed",
         subjectId: createdEntity.id,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: governanceWorkspaceId,
         correlationId,
         data: { profileSlug, title: input.title, global: input.global },
       });
@@ -539,7 +555,7 @@ export const entitiesRouter = router({
         action: "create",
         subjectId: createdEntity.id,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: governanceWorkspaceId,
         data: { profileSlug, title: input.title },
       });
 
@@ -1060,6 +1076,8 @@ export const entitiesRouter = router({
         agentUserId: z.string().uuid().optional(),
         /** When true, removes workspace scoping — entity becomes pod-wide (visible in all workspaces). */
         global: z.boolean().optional(),
+        /** Workspace used for permission, audit, overlays, and side effects. */
+        targetWorkspaceId: z.string().uuid().optional(),
         /**
          * Host-stamped framed-view identity (NOT a trust assertion). Trust is
          * re-resolved server-side via `resolveViewTrust()`. See `create`'s
@@ -1075,13 +1093,29 @@ export const entitiesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const correlationId = randomUUID();
+      const governanceWorkspaceId =
+        input.targetWorkspaceId ?? ctx.workspaceId ?? null;
+
+      if (input.targetWorkspaceId) {
+        const { validateWorkspaceAccess } =
+          await import("../utils/workspace-membership.js");
+        const allowedWorkspaceIds = await validateWorkspaceAccess(ctx.userId, [
+          input.targetWorkspaceId,
+        ]);
+        if (!allowedWorkspaceIds.includes(input.targetWorkspaceId)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Access denied to target workspace",
+          });
+        }
+      }
 
       // Resolve framed-view trust SERVER-SIDE (never from the request body).
       const issuer = input.viewContext
         ? await resolveViewTrust(
             input.viewContext,
             ctx.userId,
-            ctx.workspaceId ?? null
+            governanceWorkspaceId
           )
         : undefined;
 
@@ -1092,7 +1126,7 @@ export const entitiesRouter = router({
         phase: "requested",
         subjectId: input.id,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: governanceWorkspaceId,
         correlationId,
         data: {
           title: input.title,
@@ -1107,7 +1141,7 @@ export const entitiesRouter = router({
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: governanceWorkspaceId,
         subjectType: "entity",
         action: "update",
         source: input.source,
@@ -1161,7 +1195,7 @@ export const entitiesRouter = router({
           properties: input.properties || undefined,
           profileSlug: input.profileSlug || undefined,
           // Thread the workspace lens so overlay props validate/index correctly
-          workspaceId: ctx.workspaceId,
+          workspaceId: governanceWorkspaceId,
         },
         ctx.userId
       );
@@ -1182,7 +1216,7 @@ export const entitiesRouter = router({
         syncPropertyToRelations(
           input.id,
           oldEntity.profileId,
-          ctx.workspaceId,
+          governanceWorkspaceId,
           ctx.userId,
           oldProps,
           newProps
@@ -1201,7 +1235,7 @@ export const entitiesRouter = router({
         phase: "completed",
         subjectId: input.id,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: governanceWorkspaceId,
         correlationId,
       });
 
@@ -1228,7 +1262,7 @@ export const entitiesRouter = router({
         action: "update",
         subjectId: input.id,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: governanceWorkspaceId,
         data: {
           profileSlug: input.profileSlug ?? oldEntity?.type ?? undefined,
           ...(Object.keys(changedProperties).length > 0
@@ -1252,7 +1286,7 @@ export const entitiesRouter = router({
           dispatchWebhooksForEvent("entity.update.completed", {
             entityId: input.id,
             entityType: oldEntity.type,
-            workspaceId: ctx.workspaceId,
+            workspaceId: governanceWorkspaceId,
             changedProperties,
           });
         }

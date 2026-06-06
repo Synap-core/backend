@@ -13,7 +13,14 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { TRPCError } from "@trpc/server";
 import { documentsRouter as regularDocumentsRouter } from "../documents.js";
 import { createHubProtocolCallerContext } from "./utils.js";
-import { db, documents, normalizeDocumentType } from "@synap/database";
+import {
+  db,
+  documents,
+  documentVersions,
+  normalizeDocumentType,
+  storedVersionValues,
+  uploadDocumentVersionSnapshot,
+} from "@synap/database";
 import { auditLog } from "../../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
@@ -37,7 +44,7 @@ export const documentsRouter = router({
         title: z.string().min(1),
         content: z.string().default(""),
         type: z
-          .enum(["text", "markdown", "code", "pdf", "docx"])
+          .enum(["text", "markdown", "code", "html", "pdf", "docx"])
           .default("markdown"),
         reasoning: z.string().optional(),
         // agentUserId: the per-human agent user acting on behalf of userId.
@@ -124,6 +131,15 @@ export const documentsRouter = router({
       const metadata = await storage.upload(storageKey, content, {
         contentType: "text/markdown",
       });
+      const versionId = randomUUID();
+      const snapshot = await uploadDocumentVersionSnapshot({
+        userId: input.userId,
+        documentId,
+        versionId,
+        documentType: docType,
+        mimeType: "text/markdown",
+        content,
+      });
 
       const [created] = await db
         .insert(documents)
@@ -141,6 +157,16 @@ export const documentsRouter = router({
           lastSavedVersion: 1,
         })
         .returning();
+
+      await db.insert(documentVersions).values({
+        id: versionId,
+        documentId,
+        version: 1,
+        ...storedVersionValues(snapshot),
+        author: "user",
+        authorId: input.userId,
+        message: "Initial version",
+      });
 
       auditLog({
         subjectType: "document",

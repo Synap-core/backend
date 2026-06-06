@@ -154,3 +154,6 @@ export * from "./messaging-accounts.js";
 
 // NEW: Cell Instances (persisted instances of the universal cell rendering unit)
 export * from "./cell-instances.js";
+
+// NEW: AI Provider Registry (pod-level, synced to IS on change)
+export * from "./ai-providers.js";

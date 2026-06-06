@@ -74,22 +74,19 @@ POST   /api/hub/memory            body: { userId, fact }
 GET    /api/hub/memory?userId=…&query=…
 ```
 
-**Common `properties` keys by profile** (stable — no round-trip needed for these):
+**Profile schemas are runtime-discovered — never hardcoded:**
 
-| Profile    | Key properties (slug: type)                                                                                                               |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `task`     | `status` (todo/in-progress/done/blocked), `priority` (low/medium/high), `dueDate` (date), `projectId` (entity_id), `assignee` (entity_id) |
-| `note`     | `tags` (string[]), `projectId` (entity_id)                                                                                                |
-| `project`  | `status` (active/paused/completed/cancelled), `startDate`, `endDate`, `description`                                                       |
-| `person`   | `email`, `role`, `companyId` (entity_id), `linkedinUrl`, `phone`                                                                          |
-| `event`    | `startDate`, `endDate`, `location`, `attendees` (entity_id[])                                                                             |
-| `decision` | `decisionStatus` (draft/accepted/superseded), `decidedAt`, `rationale`, `alternatives`, `projectId`                                       |
-| `research` | `researchStatus` (ongoing/concluded), `questionId` (entity_id), `conclusion`, `researchConfidence`                                        |
-| `question` | `questionStatus` (exploring/answered), `answeredByDecisionId` (entity_id), `projectId`                                                    |
-| `deal`     | `dealStage` (lead/contacted/qualifying/proposal/won/lost), `estimatedValue` (number)                                                      |
-| `document` | `contentType` (markdown/html), `summary`, `projectId` (entity_id)                                                                         |
+```bash
+synap discover --json            # CLI: full profile tree with property schemas + command map
+synap discover --profiles --json # CLI: profiles only
+```
 
-For custom profiles or constraint details: `GET /api/hub/profiles?userId={userId}&workspaceId={workspaceId}`.
+```
+GET /api/hub/discover?userId={userId}&workspaceId={workspaceId}
+→ { profiles: [{ slug, displayName, scope, properties: [{ slug, type, options? }], createCommand }], commands: {...} }
+```
+
+Call this once at session start. The response includes every system profile and any custom workspace profiles the user has created, each with its full property schema. Use `createCommand` per profile as a copy-paste template. Do not rely on a static property list — it will drift.
 
 **Load more detail on demand** (`GET /api/hub/skills/system?sections=<id>`):
 
@@ -122,12 +119,14 @@ GET /api/hub/users/me
 GET /api/hub/workspaces
   → [{ id, name, role }]                        ← workspaces[0].id if only one
 
-GET /api/hub/profiles?userId={userId}&workspaceId={workspaceId}
-  → [{ slug, displayName, entityScope, properties }]
+GET /api/hub/discover?userId={userId}&workspaceId={workspaceId}
+  → { profiles: [{ slug, displayName, scope, properties, createCommand }], commands: {...} }
+  ← replaces /profiles — includes property schemas + custom workspace profiles
 ```
 
-`entityScope: "pod"` = visible across all workspaces (note, task, project, person, company, bookmark, event, contact, article, website).  
-`entityScope: "workspace"` = scoped to one workspace (deal, file, capture, custom profiles).
+`scope: "pod"` = visible across all workspaces (note, task, project, person, company, bookmark, event, contact, article, website).  
+`scope: "workspace"` = scoped to one workspace (deal, file, capture, custom profiles).  
+Each profile includes its full property schema. Use `createCommand` as a template.
 
 **2. Search before answering**  
 Before answering any question about the user's projects, tasks, contacts, decisions, or anything they might have captured — search Synap first. Do not answer from your training or context window when Synap may have the authoritative answer.

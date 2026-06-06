@@ -337,14 +337,54 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     }
     const userId = c.get("userId") as string;
     try {
+      const memberRows = await db.query.workspaceMembers.findMany({
+        where: eq(workspaceMembers.userId, userId),
+        columns: { workspaceId: true, role: true, joinedAt: true },
+      });
+      const membershipByWorkspace = new Map(
+        memberRows.map((row) => [row.workspaceId, row])
+      );
       const wsIds = await getUserAccessibleWorkspaceIds(userId);
-      const list =
+      const rows =
         wsIds.length > 0
           ? await db
-              .select({ id: workspaces.id, name: workspaces.name })
+              .select({
+                id: workspaces.id,
+                name: workspaces.name,
+                description: workspaces.description,
+                settings: workspaces.settings,
+                workspaceType: workspaces.workspaceType,
+                archivedAt: workspaces.archivedAt,
+              })
               .from(workspaces)
               .where(inArray(workspaces.id, wsIds))
           : [];
+      const list = rows
+        .filter((workspace) => workspace.archivedAt == null)
+        .map((workspace) => {
+          const settings = (workspace.settings ?? {}) as Record<
+            string,
+            unknown
+          >;
+          const membership = membershipByWorkspace.get(workspace.id);
+          return {
+            id: workspace.id,
+            name: workspace.name,
+            description: workspace.description,
+            role: membership?.role ?? "viewer",
+            accessKind: membership ? "member" : "pod_visible",
+            workspaceType: workspace.workspaceType,
+            workspacePurpose: settings.workspacePurpose ?? null,
+            workspaceSubtype: settings.workspaceSubtype ?? null,
+            workspaceVisibility: settings.workspaceVisibility ?? "members",
+            workspaceCapabilities: settings.workspaceCapabilities ?? [],
+            sourceRoles: settings.sourceRoles ?? {},
+            defaultSources: settings.defaultSources ?? {},
+            appId: settings.appId ?? null,
+            packageSlug: settings.packageSlug ?? null,
+            systemSlug: settings.systemSlug ?? null,
+          };
+        });
       return c.json({ workspaces: list });
     } catch (err) {
       logger.error({ err }, "GET /workspaces failed");

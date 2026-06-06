@@ -5,7 +5,7 @@
 import { z } from "@hono/zod-openapi";
 
 export const DocumentTypeSchema = z
-  .enum(["text", "markdown", "code", "pdf", "docx"])
+  .enum(["text", "markdown", "code", "html", "pdf", "docx"])
   .openapi("DocumentType");
 
 /** Wire shape of a document row. */

@@ -149,7 +149,7 @@ export async function createNamedAgent(opts: {
   const keyId = randomUUID();
 
   // Use bcrypt to hash — import dynamically to avoid circular deps
-  const bcrypt = await import("bcryptjs");
+  const bcrypt = await import("bcrypt");
   const keyHash = await bcrypt.hash(plainKey, 12);
 
   await db.insert(apiKeys).values({

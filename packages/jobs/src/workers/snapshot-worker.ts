@@ -7,7 +7,13 @@
  */
 
 import type PgBoss from "pg-boss";
-import { db, eq } from "@synap/database";
+import {
+  db,
+  eq,
+  readDocumentVersionBuffer,
+  storedVersionValues,
+  uploadDocumentVersionSnapshot,
+} from "@synap/database";
 import {
   documents,
   documentVersions,
@@ -17,6 +23,7 @@ import {
 import { storage } from "@synap/storage";
 import { broadcastSuccess } from "../utils/realtime-broadcast.js";
 import { createLogger } from "@synap-core/core";
+import { randomUUID } from "crypto";
 
 const logger = createLogger({ module: "snapshot-worker" });
 
@@ -42,13 +49,23 @@ export async function handleDocumentSnapshot(
   const content = buffer.toString("utf-8");
 
   const newVersion = (document.currentVersion || 0) + 1;
+  const versionId = randomUUID();
+  const snapshot = await uploadDocumentVersionSnapshot({
+    userId,
+    documentId,
+    versionId,
+    documentType: document.type,
+    mimeType: document.mimeType,
+    content,
+  });
 
   const [version] = await db
     .insert(documentVersions)
     .values({
+      id: versionId,
       documentId,
       version: newVersion,
-      content,
+      ...storedVersionValues(snapshot),
       message: message || `Version ${newVersion}`,
       author: "user",
       authorId: userId,
@@ -99,17 +116,23 @@ export async function handleDocumentRestore(
   });
   if (!document) throw new Error(`Document ${documentId} not found`);
 
-  await storage.upload(
-    document.storageKey!,
-    Buffer.from(version.content, "utf-8"),
-    { contentType: document.mimeType || "text/plain" }
-  );
+  const restoredBuffer = await readDocumentVersionBuffer(version);
+  const metadata = await storage.upload(document.storageKey!, restoredBuffer, {
+    contentType: version.mimeType || document.mimeType || "text/plain",
+  });
 
   const newVersion = (document.currentVersion || 0) + 1;
 
   await db
     .update(documents)
-    .set({ currentVersion: newVersion, updatedAt: new Date() })
+    .set({
+      currentVersion: newVersion,
+      storageUrl: metadata.url,
+      storageKey: metadata.path,
+      size: metadata.size,
+      mimeType: version.mimeType || document.mimeType,
+      updatedAt: new Date(),
+    })
     .where(eq(documents.id, documentId));
 
   await broadcastSuccess(userId, "document.restored", {
@@ -146,11 +169,21 @@ export async function handleDocumentAutoSave(): Promise<void> {
       const buffer = await storage.downloadBuffer(document.storageKey!);
       const content = buffer.toString("utf-8");
       const newVersion = (document.currentVersion || 0) + 1;
+      const versionId = randomUUID();
+      const snapshot = await uploadDocumentVersionSnapshot({
+        userId: document.userId,
+        documentId: session.documentId,
+        versionId,
+        documentType: document.type,
+        mimeType: document.mimeType,
+        content,
+      });
 
       await db.insert(documentVersions).values({
+        id: versionId,
         documentId: session.documentId,
         version: newVersion,
-        content,
+        ...storedVersionValues(snapshot),
         message: "Auto-save checkpoint",
         author: "system",
         authorId: "auto-save",
@@ -254,12 +287,23 @@ export async function handleWhiteboardSnapshot(
   const savedVersion = document.currentVersion;
   const newWorkingVersion = savedVersion + 1;
 
+  const versionId = randomUUID();
+  const snapshot = await uploadDocumentVersionSnapshot({
+    userId,
+    documentId,
+    versionId,
+    documentType: document.type,
+    mimeType: document.mimeType || "application/json",
+    content: base64State,
+  });
+
   const [version] = await db
     .insert(documentVersions)
     .values({
+      id: versionId,
       documentId,
       version: savedVersion,
-      content: base64State,
+      ...storedVersionValues(snapshot),
       message: message || "Snapshot",
       author: "user",
       authorId: userId,

@@ -34,7 +34,7 @@ import {
   logger,
   resolveActingContext,
   resolveActorId,
-  verifyWorkspaceAccess,
+  verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
 
@@ -132,6 +132,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
         workspaceId: z.string().optional(),
         limit: z.string().optional(),
         sort: z.string().optional().describe("e.g. `updatedAt:desc`."),
+        scope: z
+          .enum(["pod", "workspace", "all"])
+          .optional()
+          .describe(
+            "`pod` = pod-wide entities only (null workspaceId); " +
+              "`workspace` = single workspace (requires workspaceId); " +
+              "`all` = merge across all accessible workspaces."
+          ),
       }),
     },
     responses: {
@@ -174,6 +182,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       100
     );
     const sortParam = (query.sort ?? "").trim();
+    const scope = query.scope;
 
     try {
       const effectiveWsIds = workspaceIdParam
@@ -184,16 +193,16 @@ export function registerEntitiesRoutes(app: HubHono): void {
       }
 
       if (workspaceIdParam) {
-        const ok = await verifyWorkspaceAccess(userId, workspaceIdParam);
+        const ok = await verifyWorkspaceReadAccess(userId, workspaceIdParam);
         if (!ok) {
           return c.json({ error: "Access denied to workspace" }, 403);
         }
       }
 
-      const workspaceId = workspaceIdParam ?? effectiveWsIds[0];
+      const callerWorkspaceId = workspaceIdParam ?? effectiveWsIds[0];
 
       const caller = await getCaller(c, {
-        workspaceId,
+        workspaceId: callerWorkspaceId,
         userId,
       });
 
@@ -201,7 +210,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         const searchResp = await caller.search.search({
           userId,
           query: q,
-          workspaceId,
+          workspaceId: workspaceIdParam || undefined, // undefined = cross-workspace search
           collections: ["entities"],
           limit,
           page: 1,
@@ -223,6 +232,45 @@ export function registerEntitiesRoutes(app: HubHono): void {
           docs.map((d) => entityToWire(d)),
           200
         );
+      }
+
+      if (scope === "all" && effectiveWsIds.length > 0) {
+        const settled = await Promise.allSettled(
+          effectiveWsIds.map((wsId) =>
+            caller.entities.getEntities({
+              userId,
+              workspaceId: wsId,
+              profileSlug: profileSlug || undefined,
+              limit,
+            })
+          )
+        );
+        const fulfilled = settled.flatMap((r) =>
+          r.status === "fulfilled" ? (r.value as unknown[]) : []
+        );
+        let rows = (fulfilled as unknown[]).map((e) => entityToWire(e));
+        const seen = new Set<string>();
+        rows = rows.filter((r) => {
+          const id = (r as { id?: string }).id;
+          if (!id || seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        });
+        if (
+          sortParam.includes("updatedAt") &&
+          sortParam.toLowerCase().includes("desc")
+        ) {
+          rows = [...rows].sort((a, b) => {
+            const tb = new Date(
+              String((b as { updatedAt?: unknown }).updatedAt ?? 0)
+            ).getTime();
+            const ta = new Date(
+              String((a as { updatedAt?: unknown }).updatedAt ?? 0)
+            ).getTime();
+            return tb - ta;
+          });
+        }
+        return c.json(rows.slice(0, limit), 200);
       }
 
       const listed = await caller.entities.getEntities({
@@ -403,7 +451,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       });
       if (!result) return c.body(null, 404);
       if (result.workspaceId) {
-        const hasAccess = await verifyWorkspaceAccess(
+        const hasAccess = await verifyWorkspaceReadAccess(
           userId,
           result.workspaceId
         );

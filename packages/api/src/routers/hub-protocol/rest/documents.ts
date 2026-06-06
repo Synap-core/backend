@@ -18,7 +18,7 @@ import {
   hasScope,
   logger,
   resolveActorId,
-  verifyWorkspaceAccess,
+  verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
 
@@ -163,7 +163,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
       const docWsId = (result as Record<string, unknown> | null)
         ?.workspaceId as string | undefined;
       if (docWsId) {
-        const hasAccess = await verifyWorkspaceAccess(userId, docWsId);
+        const hasAccess = await verifyWorkspaceReadAccess(userId, docWsId);
         if (!hasAccess) {
           return c.json(
             { error: "Access denied to document's workspace" },
@@ -216,22 +216,15 @@ export function registerDocumentsRoutes(app: HubHono): void {
 
     try {
       const caller = await getCaller(c, { userId });
-      const result = (await caller.documents.get({ documentId })) as {
-        document: {
-          mimeType?: string | null;
-          title?: string | null;
-          type?: string | null;
-        };
-        content: string;
-      };
+      const result = await caller.documents.getDocument({ documentId, userId });
       if (!result) return c.json({ error: "Document not found" }, 404);
 
-      const mimeType = result.document?.mimeType ?? "text/plain";
+      const mimeType = "text/plain";
       const filename = (result.document?.title ?? documentId)
         .replace(/[^a-z0-9_\-. ]/gi, "_")
         .slice(0, 80);
 
-      return new Response(result.content, {
+      return new Response(result.document.content ?? "", {
         headers: {
           "Content-Type": mimeType,
           "Content-Disposition": `inline; filename="${filename}"`,
@@ -286,7 +279,6 @@ export function registerDocumentsRoutes(app: HubHono): void {
     }
     const {
       userId,
-      title,
       content,
       agentUserId: bodyAgentUserId,
       sourceMessageId,
@@ -300,11 +292,36 @@ export function registerDocumentsRoutes(app: HubHono): void {
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
 
+      if (content === undefined) {
+        return c.json(
+          {
+            error:
+              "Document title-only updates are not supported by this Hub route yet.",
+          },
+          400
+        );
+      }
+
       const caller = await getCaller(c, { userId, sourceMessageId });
-      const result = await caller.documents.update({
+      const current = await caller.documents.getDocument({
         documentId,
-        ...(title !== undefined ? { title } : {}),
-        ...(content !== undefined ? { delta: [{ content }] } : {}),
+        userId,
+      });
+      const result = await caller.documents.createDocumentProposal({
+        documentId,
+        userId,
+        agentUserId: resolvedAgentUserId,
+        sourceMessageId,
+        proposalType: "ai_edit",
+        changes: [
+          {
+            op: "replace",
+            range: [0, current.document.content?.length ?? 0],
+            text: content,
+          },
+        ],
+        originalContent: current.document.content,
+        proposedContent: content,
       });
       return c.json(result);
     } catch (err) {

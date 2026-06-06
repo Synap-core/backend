@@ -87,7 +87,6 @@ import {
   DEFAULT_AUTO_APPROVE,
   buildProposalSummary,
   buildProposalResponseFields,
-  STUDIO_APP_URL,
 } from "./permission-check.js";
 
 // We also need checkPermissionOrPropose for the integration-style unit tests.

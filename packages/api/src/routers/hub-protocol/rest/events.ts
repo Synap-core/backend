@@ -10,6 +10,7 @@ import { streamSSE } from "hono/streaming";
 import { eventRepository, type EventRecord } from "@synap/database";
 
 import { eventStreamManager } from "../../../event-stream-manager.js";
+import { emitChatEvent } from "../../../utils/chat-realtime-broadcast.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { ListEventsQuerySchema, WireEventSchema } from "./_codecs/misc.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -378,5 +379,35 @@ export function registerEventsRoutes(app: HubHono): void {
         cleanup();
       }
     });
+  });
+
+  /**
+   * POST /events/broadcast
+   * Emit an arbitrary socket event to the user's presence room.
+   * Used by IS tools (e.g. web_search) to signal session activity to
+   * ambient subscribers (e.g. whiteboard session stream).
+   */
+  app.post("/events/broadcast", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body.event !== "string") {
+      return c.json({ error: "event (string) is required" }, 400);
+    }
+    const { event, data, userId, workspaceId } = body as {
+      event: string;
+      data: Record<string, unknown>;
+      userId?: string;
+      workspaceId?: string;
+    };
+    if (!userId && !workspaceId) {
+      return c.json({ error: "userId or workspaceId is required" }, 400);
+    }
+    emitChatEvent({ event, data: data ?? {}, userId, workspaceId });
+    return c.json({ ok: true });
   });
 }

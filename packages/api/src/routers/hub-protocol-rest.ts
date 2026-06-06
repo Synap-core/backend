@@ -69,6 +69,7 @@ import {
   registerWebhooksRoutes,
   registerSubscriptionsRoutes,
   registerManifestRoutes,
+  registerDiscoverRoutes,
 } from "./hub-protocol/rest/index.js";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
@@ -419,6 +420,7 @@ registerConnectorsRoutes(app); // /connectors/*
 registerWebhooksRoutes(app); // /webhooks
 registerSubscriptionsRoutes(app); // /subscriptions*, /webhooks/:id/deliveries
 registerManifestRoutes(app); // /manifest
+registerDiscoverRoutes(app); // /discover
 
 // ── OpenAPI stubs for routes not yet annotated inline ──────────────────────
 //

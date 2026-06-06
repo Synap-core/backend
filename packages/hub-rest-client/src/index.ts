@@ -65,6 +65,9 @@ export type {
   // Profiles & Schema
   HubProfile,
   HubPropertyDef,
+  HubDiscoverResult,
+  HubDiscoverProfile,
+  HubDiscoverProperty,
   // Threads & Channels
   HubThread,
   HubMessage,

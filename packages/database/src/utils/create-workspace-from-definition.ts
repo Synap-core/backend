@@ -28,8 +28,12 @@ import { RelationDefRepository } from "../repositories/relation-def-repository.j
 import { ProfileRelationRepository } from "../repositories/profile-relation-repository.js";
 import { entityTemplates } from "../schema/entity-templates.js";
 import type {
+  WorkspaceDefaultSource,
   WorkspaceLayoutConfig,
+  WorkspacePurpose,
   WorkspaceSettings,
+  WorkspaceSourceRole,
+  WorkspaceVisibility,
 } from "../schema/workspaces.js";
 import { createLogger } from "@synap-core/core";
 
@@ -108,6 +112,18 @@ function buildDefaultProfileBentoBlocks(profile: {
 export interface WorkspaceDefinitionInput {
   workspaceName?: string;
   description?: string;
+  /** Product-facing workspace purpose, e.g. "library" for shared source workspaces. */
+  workspacePurpose?: WorkspacePurpose;
+  /** Purpose subtype, e.g. "brand-library", "research-library". */
+  workspaceSubtype?: string;
+  /** Discovery/read visibility. Write access remains role-based. */
+  workspaceVisibility?: WorkspaceVisibility;
+  /** Capability ids this workspace provides or consumes. */
+  workspaceCapabilities?: string[];
+  /** Domain → provider/consumer role map. */
+  sourceRoles?: Record<string, WorkspaceSourceRole>;
+  /** Domain/capability → default source workspace references. */
+  defaultSources?: Record<string, WorkspaceDefaultSource>;
   profiles?: Array<{
     slug: string;
     displayName: string;
@@ -321,6 +337,12 @@ const WorkspaceDefinitionSchema = z
     displayTemplates: z.array(z.record(z.string(), z.unknown())).optional(),
     profileEntityBentoTemplates: z.record(z.string(), z.unknown()).optional(),
     layoutConfig: z.record(z.string(), z.unknown()).optional(),
+    workspacePurpose: z.string().optional(),
+    workspaceSubtype: z.string().optional(),
+    workspaceVisibility: z.string().optional(),
+    workspaceCapabilities: z.array(z.string()).optional(),
+    sourceRoles: z.record(z.string(), z.unknown()).optional(),
+    defaultSources: z.record(z.string(), z.unknown()).optional(),
   })
   .catchall(z.unknown());
 
@@ -480,6 +502,24 @@ export async function createWorkspaceFromDefinition(
 
   if (definition.layoutConfig) {
     settings.layout = definition.layoutConfig;
+  }
+  if (definition.workspacePurpose) {
+    settings.workspacePurpose = definition.workspacePurpose;
+  }
+  if (definition.workspaceSubtype) {
+    settings.workspaceSubtype = definition.workspaceSubtype;
+  }
+  if (definition.workspaceVisibility) {
+    settings.workspaceVisibility = definition.workspaceVisibility;
+  }
+  if (definition.workspaceCapabilities) {
+    settings.workspaceCapabilities = definition.workspaceCapabilities;
+  }
+  if (definition.sourceRoles) {
+    settings.sourceRoles = definition.sourceRoles;
+  }
+  if (definition.defaultSources) {
+    settings.defaultSources = definition.defaultSources;
   }
 
   // Auto-generate sidebarItems from profiles when the template doesn't specify them.
