@@ -42,6 +42,10 @@ export interface CreateProfileInput {
    * System-default renderer for the DETAIL slot.
    */
   defaultDetailRenderer?: Record<string, unknown> | null;
+  /**
+   * System-default renderer for the DASHBOARD slot (per-profile bento).
+   */
+  defaultDashboardRenderer?: Record<string, unknown> | null;
 }
 
 export class ProfileRepository {
@@ -334,6 +338,8 @@ export class ProfileRepository {
       updateData.defaultListRenderer = input.defaultListRenderer;
     if (input.defaultDetailRenderer !== undefined)
       updateData.defaultDetailRenderer = input.defaultDetailRenderer;
+    if (input.defaultDashboardRenderer !== undefined)
+      updateData.defaultDashboardRenderer = input.defaultDashboardRenderer;
 
     // Increment version on update
     const current = await this.getById(id);

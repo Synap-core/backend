@@ -898,7 +898,8 @@ async function createProposal(opts: {
       ...(targetName ? { targetName } : {}),
       changeType: action as RequestShapedProposalData["changeType"],
       data,
-      reasoning: reasoning || "AI proposal requires review",
+      reasoning:
+        reasoning || `${action} ${singularType} requires your approval`,
       summary,
       correlationId: resolvedCorrelationId,
       ...(reqEventId ? { requestedEventId: reqEventId } : {}),

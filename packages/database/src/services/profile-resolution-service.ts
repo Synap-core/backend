@@ -77,7 +77,7 @@ export type RendererRef =
       title?: string;
     };
 
-export type ProfileRendererSlot = "list" | "detail";
+export type ProfileRendererSlot = "list" | "detail" | "dashboard";
 
 export class ProfileResolutionService {
   private _db: PostgresJsDatabase<typeof schema>;
@@ -397,7 +397,14 @@ export class ProfileResolutionService {
         | null
         | undefined;
       const overlayRoot = settings?.profileRenderers as
-        | Record<string, { list?: RendererRef; detail?: RendererRef }>
+        | Record<
+            string,
+            {
+              list?: RendererRef;
+              detail?: RendererRef;
+              dashboard?: RendererRef;
+            }
+          >
         | undefined;
       const overlay = overlayRoot?.[profileSlug]?.[slot];
       if (overlay) return overlay;
@@ -412,12 +419,17 @@ export class ProfileResolutionService {
       const defaultRef =
         slot === "list"
           ? profile.defaultListRenderer
-          : profile.defaultDetailRenderer;
+          : slot === "dashboard"
+            ? (profile as { defaultDashboardRenderer?: unknown })
+                .defaultDashboardRenderer
+            : profile.defaultDetailRenderer;
       if (defaultRef) return defaultRef as RendererRef;
     }
 
     // 3. Hardcoded system fallback — keeps the pod bootable when no profile
-    //    config exists. Both keys point at existing registered cells.
+    //    config exists. All keys point at existing registered cells.
+    if (slot === "dashboard")
+      return { kind: "cell", cellKey: "profile-dashboard", props: {} };
     return slot === "list"
       ? { kind: "cell", cellKey: "list", props: {} }
       : { kind: "cell", cellKey: "entity-detail", props: {} };

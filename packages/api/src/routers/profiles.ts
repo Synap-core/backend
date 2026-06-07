@@ -94,7 +94,7 @@ const RendererRefSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-const ProfileRendererSlotSchema = z.enum(["list", "detail"]);
+const ProfileRendererSlotSchema = z.enum(["list", "detail", "dashboard"]);
 
 export const profilesRouter = router({
   /**
@@ -515,6 +515,8 @@ export const profilesRouter = router({
         defaultListRenderer: RendererRefSchema.nullable().optional(),
         /** System-default renderer for the DETAIL slot. */
         defaultDetailRenderer: RendererRefSchema.nullable().optional(),
+        /** System-default renderer for the DASHBOARD slot (per-profile bento). */
+        defaultDashboardRenderer: RendererRefSchema.nullable().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -590,6 +592,7 @@ export const profilesRouter = router({
         entityScope: input.entityScope,
         defaultListRenderer: input.defaultListRenderer,
         defaultDetailRenderer: input.defaultDetailRenderer,
+        defaultDashboardRenderer: input.defaultDashboardRenderer,
       });
 
       // Invalidate entityScope cache when changed
@@ -1030,9 +1033,12 @@ export const profilesRouter = router({
           ctx.workspaceId,
           input.slot
         );
-        return input.slot === "list"
-          ? { list: target, detail: null as RendererRef | null }
-          : { list: null as RendererRef | null, detail: target };
+        const base = {
+          list: null as RendererRef | null,
+          detail: null as RendererRef | null,
+          dashboard: null as RendererRef | null,
+        };
+        return { ...base, [input.slot]: target };
       }
 
       const [list, detail] = await Promise.all([
@@ -1047,7 +1053,7 @@ export const profilesRouter = router({
           "detail"
         ),
       ]);
-      return { list, detail };
+      return { list, detail, dashboard: null as RendererRef | null };
     }),
 
   /**
@@ -1086,7 +1092,7 @@ export const profilesRouter = router({
       const settings = (workspace.settings ?? {}) as Record<string, unknown>;
       const current = (settings.profileRenderers ?? {}) as Record<
         string,
-        { list?: RendererRef; detail?: RendererRef }
+        { list?: RendererRef; detail?: RendererRef; dashboard?: RendererRef }
       >;
       const profileEntry = { ...(current[input.profileSlug] ?? {}) };
 
@@ -1098,7 +1104,7 @@ export const profilesRouter = router({
 
       const nextProfileRenderers: Record<
         string,
-        { list?: RendererRef; detail?: RendererRef }
+        { list?: RendererRef; detail?: RendererRef; dashboard?: RendererRef }
       > = { ...current, [input.profileSlug]: profileEntry };
 
       // Drop empty per-profile entries to keep the settings JSONB tidy.
@@ -1123,5 +1129,115 @@ export const profilesRouter = router({
       );
 
       return { success: true };
+    }),
+
+  /**
+   * Resolve (or create) a profile's dashboard — the ONE canonical path.
+   *
+   * Order: (1) the profile's `defaultDashboardRenderer` view ref (or workspace
+   * overlay); (2) adopt a legacy `workspace.settings.profileBentoViewIds[id]`
+   * view (and promote it to the renderer); (3) create a bento view scoped like
+   * the profile (pod-wide profile → workspace_id NULL → shared across all
+   * workspaces; workspace profile → this workspace). Always ends with
+   * `profile.defaultDashboardRenderer = { kind:'view', viewId }`. Returns the
+   * view id + config so the surface can render it and save through views.update.
+   */
+  resolveDashboard: workspaceProcedure
+    .input(z.object({ profileSlug: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const viewRepo = new ViewRepository(db, eventRepo);
+      const profileRepo = new ProfileRepository(db);
+      const resolutionService = new ProfileResolutionService(db);
+
+      const profile = await resolutionService.resolveProfile(
+        input.profileSlug,
+        ctx.userId,
+        ctx.workspaceId
+      );
+      if (!profile) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Profile '${input.profileSlug}' not found`,
+        });
+      }
+
+      const viewWorkspaceId =
+        profile.entityScope === "pod" ? null : ctx.workspaceId;
+      const loadView = (viewId: string) =>
+        db.query.views.findFirst({ where: (v, { eq }) => eq(v.id, viewId) });
+
+      const promote = async (viewId: string) => {
+        await profileRepo.update(profile.id, {
+          defaultDashboardRenderer: { kind: "view", viewId },
+        });
+      };
+
+      // 1. Canonical: the resolved dashboard renderer, when it's a view ref.
+      const eff = await resolutionService.getEffectiveRenderer(
+        input.profileSlug,
+        ctx.workspaceId,
+        "dashboard"
+      );
+      if (eff && (eff as RendererRef).kind === "view") {
+        const viewId = (eff as { viewId: string }).viewId;
+        const view = await loadView(viewId);
+        if (view) return { viewId, config: view.config };
+      }
+
+      // 2. Legacy adoption: workspace.settings.profileBentoViewIds[id].
+      const ws = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, ctx.workspaceId),
+        columns: { settings: true },
+      });
+      const legacyId = (
+        ws?.settings as
+          | { profileBentoViewIds?: Record<string, string> }
+          | null
+          | undefined
+      )?.profileBentoViewIds?.[profile.id];
+      if (legacyId) {
+        const view = await loadView(legacyId);
+        if (view) {
+          await promote(legacyId);
+          return { viewId: legacyId, config: view.config };
+        }
+      }
+
+      // 3. Create a profile-scoped bento view + point the profile default at it.
+      const name = profile.displayName ?? input.profileSlug;
+      const created = await viewRepo.create(
+        {
+          name,
+          type: "bento",
+          workspaceId: viewWorkspaceId,
+          userId: ctx.userId,
+          scopeProfileIds: [profile.id],
+          config: {
+            layout: "bento",
+            blocks: [
+              {
+                id: `${input.profileSlug}-header`,
+                kind: "widget",
+                widgetType: "section-header",
+                pos: { x: 0, y: 0, w: 12, h: 1 },
+                config: { title: name, profileSlug: input.profileSlug },
+              },
+              {
+                id: `${input.profileSlug}-entities`,
+                kind: "widget",
+                widgetType: "entity-list",
+                pos: { x: 0, y: 1, w: 12, h: 6 },
+                config: { profileSlug: input.profileSlug, limit: 50 },
+              },
+            ],
+          },
+          metadata: { isProfileBento: true, profileSlug: input.profileSlug },
+        },
+        ctx.userId
+      );
+      await promote(created.id);
+      return { viewId: created.id, config: created.config };
     }),
 });

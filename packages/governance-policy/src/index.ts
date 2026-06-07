@@ -20,11 +20,11 @@
  * Precedence ladder (applied only after RBAC passes and the actor is confirmed
  * to be an agent user):
  *   1. CBAC capability allowlist  → deny if the agent lacks the capability
- *   2. ADMIN_ACTIONS              → always propose
- *   3. writesRequireProposal      → propose on non-pure-read writes
- *   4. agent-owned + destructive  → propose
- *   5. per-channel capability gate → block / propose / (act → fall through)
- *   6. autoApproveFor whitelist   → execute
+ *   2. ADMIN_ACTIONS              → always propose (even if in autoApproveFor)
+ *   3. autoApproveFor whitelist   → execute (overrides writesRequireProposal)
+ *   4. writesRequireProposal      → propose on non-pure-read writes
+ *   5. agent-owned + destructive  → propose
+ *   6. per-channel capability gate → block / propose / (act → fall through)
  *   7. default                    → propose
  */
 
@@ -320,7 +320,19 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     return { verdict: "propose", reason: PROPOSE_REASON.ADMIN };
   }
 
-  // 3. writesRequireProposal → propose on non-pure-read writes.
+  // 3. Explicit workspace autoApproveFor → execute (overrides writesRequireProposal).
+  // Only fires when the workspace has set an explicit autoApproveFor list (not undefined).
+  // This lets an agent-owned memory workspace whitelist entity.create even when the
+  // agent was provisioned with writesRequireProposal=true.
+  // The DEFAULT_AUTO_APPROVE fallback is checked AFTER writesRequireProposal (step 6).
+  if (
+    input.autoApproveFor !== undefined &&
+    isAutoApproved(eventKey, input.autoApproveFor)
+  ) {
+    return { verdict: "execute" };
+  }
+
+  // 4. writesRequireProposal → propose on non-pure-read writes.
   if (
     input.writesRequireProposal === true &&
     !isPureReadAction(subjectType, action, eventKey)
@@ -331,7 +343,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     };
   }
 
-  // 4. agent-owned workspace + destructive → propose.
+  // 5. agent-owned workspace + destructive → propose.
   if (
     input.governanceMode === "agent-owned" &&
     DESTRUCTIVE_ACTIONS.includes(action)
@@ -342,7 +354,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     };
   }
 
-  // 5. Per-channel capability gate (writes only; reads exempt).
+  // 6. Per-channel capability gate (writes only; reads exempt).
   if (
     input.channelCapabilities !== undefined &&
     input.channelCapabilities !== null &&
@@ -357,14 +369,16 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     if (decision === "propose") {
       return { verdict: "propose", reason: PROPOSE_REASON.CHANNEL_PROPOSE };
     }
-    // decision === "act" → fall through to the auto-approve whitelist.
+    // decision === "act" → fall through to default autoApproveFor.
   }
 
-  // 6. autoApproveFor whitelist → execute.
+  // 7. Default autoApproveFor whitelist → execute.
+  // Uses DEFAULT_AUTO_APPROVE when input.autoApproveFor is undefined.
+  // This is the non-override path: explicit list was already checked at step 3.
   if (isAutoApproved(eventKey, input.autoApproveFor)) {
     return { verdict: "execute" };
   }
 
-  // 7. Default → propose (caller supplies its own reasoning).
+  // 8. Default → propose (caller supplies its own reasoning).
   return { verdict: "propose" };
 }

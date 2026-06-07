@@ -564,58 +564,57 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         createdBy: "provisioning",
       });
 
-      if (result.created) {
-        // Set wide autoApproveFor for agent's own workspace and promote workspaceType column
-        await db
-          .update(workspaces)
-          .set({
+      // Always apply settings (upsert): workspace may have been created before
+      // autoApproveFor was introduced, so re-provisioning must fix existing workspaces.
+      await db
+        .update(workspaces)
+        .set({
+          workspaceType: "agent",
+          settings: {
             workspaceType: "agent",
-            settings: {
-              workspaceType: "agent",
-              linkedAgentId: agentUserId,
-              governanceMode: "standard",
-              aiGovernance: {
-                autoApproveFor: [
-                  "search.*",
-                  "memory.recall",
-                  "entity.read",
-                  "entity.create",
-                  "entity.update",
-                  "entity.delete",
-                  "relation.create",
-                  "relation.update",
-                  "relation.delete",
-                  "document.create",
-                  "document.read",
-                  "document.update",
-                  "view.create",
-                  "view.update",
-                  "view.delete",
-                  "profile.create",
-                  "profile.update",
-                  "property_def.create",
-                  "property_def.update",
-                  "bento.arrange",
-                  "context.*",
-                  "channel.create",
-                  "terminal.read_logs",
-                ],
-              },
-            } as never,
-          })
-          .where(eq(workspaces.id, result.workspaceId));
+            linkedAgentId: agentUserId,
+            governanceMode: "standard",
+            aiGovernance: {
+              autoApproveFor: [
+                "search.*",
+                "memory.recall",
+                "entity.read",
+                "entity.create",
+                "entity.update",
+                "entity.delete",
+                "relation.create",
+                "relation.update",
+                "relation.delete",
+                "document.create",
+                "document.read",
+                "document.update",
+                "view.create",
+                "view.update",
+                "view.delete",
+                "profile.create",
+                "profile.update",
+                "property_def.create",
+                "property_def.update",
+                "bento.arrange",
+                "context.*",
+                "channel.create",
+                "terminal.read_logs",
+              ],
+            },
+          } as never,
+        })
+        .where(eq(workspaces.id, result.workspaceId));
 
-        // Add calling user as admin so they see the agent's work
-        if (callerId !== agentUserId) {
-          await db
-            .insert(workspaceMembers)
-            .values({
-              workspaceId: result.workspaceId,
-              userId: callerId,
-              role: "admin",
-            })
-            .onConflictDoNothing();
-        }
+      // Add calling user as admin so they see the agent's work (idempotent)
+      if (callerId !== agentUserId) {
+        await db
+          .insert(workspaceMembers)
+          .values({
+            workspaceId: result.workspaceId,
+            userId: callerId,
+            role: "admin",
+          })
+          .onConflictDoNothing();
       }
 
       return c.json(
