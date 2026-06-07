@@ -12,13 +12,12 @@ import {
   and,
   like,
   lte,
-  sql,
+  drizzleSql,
   entities,
   profiles,
   resolveDefaultIntelligenceEndpoint,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { randomUUID } from "crypto";
 
 const logger = createLogger({ module: "agent-scheduler" });
 
@@ -48,9 +47,9 @@ interface ScheduleProperties {
 
 interface ScheduleEntity {
   id: string;
-  name: string;
+  title: string | null;
   workspaceId: string | null;
-  userId: string | null;
+  userId: string;
   properties: Record<string, unknown>;
 }
 
@@ -102,15 +101,18 @@ async function callIntelligenceService(
 export async function handleAgentScheduler(): Promise<void> {
   const now = new Date();
 
-  // Query entities whose name starts with [agent-sched], are enabled, and are due
+  // Query entities whose title starts with [agent-sched], are enabled, and are due
   const due = (await db
     .select()
     .from(entities)
     .where(
       and(
-        like(entities.name, "[agent-sched]%"),
-        lte(sql`(${entities.properties}->>'nextRunAt')::timestamptz`, now),
-        sql`(${entities.properties}->>'enabled')::boolean = true`
+        like(entities.title, "[agent-sched]%"),
+        lte(
+          drizzleSql`(${entities.properties}->>'nextRunAt')::timestamptz`,
+          now
+        ),
+        drizzleSql`(${entities.properties}->>'enabled')::boolean = true`
       )
     )
     .limit(20)) as ScheduleEntity[];
@@ -157,18 +159,16 @@ export async function handleAgentScheduler(): Promise<void> {
 
         if (content && researchProfile) {
           await db.insert(entities).values({
-            id: randomUUID(),
             profileId: researchProfile.id,
-            name: `Agent run: ${goal.slice(0, 80)}`,
-            workspaceId: schedule.workspaceId ?? null,
-            userId: schedule.userId ?? null,
+            title: `Agent run: ${goal.slice(0, 80)}`,
+            workspaceId: schedule.workspaceId ?? undefined,
+            userId: schedule.userId,
+            type: "research",
             properties: {
               summary: content,
               tags: ["agent-run", persona ?? "assistant"],
               status: "concluded",
             },
-            createdAt: new Date(),
-            updatedAt: new Date(),
           });
         } else if (content) {
           logger.info(
@@ -188,11 +188,7 @@ export async function handleAgentScheduler(): Promise<void> {
 
         await db
           .update(entities)
-          .set({
-            properties:
-              newProps as unknown as (typeof entities.$inferInsert)["properties"],
-            updatedAt: new Date(),
-          })
+          .set({ properties: newProps, updatedAt: new Date() })
           .where(eq(entities.id, schedule.id));
 
         logger.info(
