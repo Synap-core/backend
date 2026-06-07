@@ -71,6 +71,7 @@ import {
   registerManifestRoutes,
   registerDiscoverRoutes,
   registerKeysRoutes,
+  registerAiProvidersRoutes,
 } from "./hub-protocol/rest/index.js";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
@@ -426,6 +427,7 @@ registerSubscriptionsRoutes(app); // /subscriptions*, /webhooks/:id/deliveries
 registerManifestRoutes(app); // /manifest
 registerDiscoverRoutes(app); // /discover
 registerKeysRoutes(app); // /keys/rotate-cli
+registerAiProvidersRoutes(app); // /ai-providers
 
 // ── OpenAPI stubs for routes not yet annotated inline ──────────────────────
 //
