@@ -64,6 +64,9 @@ x-backend-env: &backend-env
   # in /api/provision/status. Kratos reads this directly via its own service env
   # block below — the backend never sends mail itself; it just reports status.
   SMTP_CONNECTION_URI: ${SMTP_CONNECTION_URI:-}
+  NANGO_HOST: ${NANGO_HOST:-}
+  NANGO_SECRET_KEY: ${NANGO_SECRET_KEY:-}
+  NANGO_CONNECT_URL: ${NANGO_CONNECT_URL:-}
 
 services:
   # ============================================================================
