@@ -73,6 +73,21 @@ fileUploadApp.post("/upload", async (c) => {
     const file = body["file"];
     const workspaceId = body["workspaceId"] as string | undefined;
     const channelId = body["channelId"] as string | undefined;
+    // Optional: caller-specified profile slug (default "file") and which property key
+    // receives the storage path (default "storageKey"). Allows callers to create any
+    // entity type in one round-trip instead of upload + separate create.
+    const profileSlug = (body["profileSlug"] as string | undefined) || "file";
+    const storageKeyProperty =
+      (body["storageKeyProperty"] as string | undefined) || "storageKey";
+    let extraProperties: Record<string, unknown> = {};
+    const propertiesRaw = body["properties"] as string | undefined;
+    if (propertiesRaw) {
+      try {
+        extraProperties = JSON.parse(propertiesRaw) as Record<string, unknown>;
+      } catch {
+        return c.json({ error: "properties must be valid JSON" }, 400);
+      }
+    }
 
     // Validate required fields
     if (!workspaceId || typeof workspaceId !== "string") {
@@ -115,19 +130,22 @@ fileUploadApp.post("/upload", async (c) => {
 
     await storage.upload(storagePath, buffer, { contentType: mimeType });
 
-    // Create entity via EntityRepository — handles profile resolution, property indexing, event emission
+    // Create entity via EntityRepository — handles profile resolution, property indexing, event emission.
+    // Merge caller-provided properties; the storage path is written under storageKeyProperty so
+    // callers can map it directly to the profile field they care about (e.g. "asset-url" for brand-asset).
     const entityRepo = new EntityRepository(db, eventRepository);
     const createdEntity = await entityRepo.create(
       {
-        profileSlug: "file",
+        profileSlug,
         title: originalFileName,
         workspaceId,
         userId,
         properties: {
+          ...extraProperties,
           fileName: originalFileName,
           mimeType,
           fileSize: file.size,
-          storageKey: storagePath,
+          [storageKeyProperty]: storagePath,
         },
       },
       userId

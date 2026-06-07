@@ -103,6 +103,52 @@ export function registerProposalsRoutes(app: HubHono): void {
 
   registerOpenApi(app, {
     method: "post",
+    path: "/proposals/{id}/approve",
+    tags: ["Proposals"],
+    summary: "Approve a pending proposal",
+    description:
+      "Approves a pending proposal, executing its effect immediately. Delegates to the canonical `proposals.approve` tRPC mutation.",
+    request: {
+      params: z.object({ id: z.string() }),
+      body: z.object({ reason: z.string().optional() }),
+    },
+    responses: {
+      200: {
+        description: "Proposal approved",
+        schema: z.object({ success: z.boolean(), proposalId: z.string() }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Proposal not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/proposals/{id}/reject",
+    tags: ["Proposals"],
+    summary: "Reject a pending proposal",
+    description:
+      "Rejects a pending proposal. Delegates to the canonical `proposals.reject` tRPC mutation.",
+    request: {
+      params: z.object({ id: z.string() }),
+      body: z.object({ reason: z.string().optional() }),
+    },
+    responses: {
+      200: {
+        description: "Proposal rejected",
+        schema: z.object({ success: z.boolean(), proposalId: z.string() }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Proposal not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
     path: "/proposals",
     tags: ["Proposals"],
     summary: "Create a proposal",
@@ -239,6 +285,93 @@ export function registerProposalsRoutes(app: HubHono): void {
               : err instanceof TRPCError && err.code === "NOT_IMPLEMENTED"
                 ? 501
                 : 500;
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        code
+      );
+    }
+  });
+
+  /**
+   * POST /proposals/:id/approve
+   * Approve a pending proposal. Delegates to the canonical `proposals.approve`
+   * tRPC mutation so behavior is identical to the in-app approve flow.
+   */
+  app.post("/proposals/:id/approve", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const proposalId = c.req.param("id");
+    try {
+      const userId = c.get("userId") as string;
+      const scopes = c.get("scopes") as string[];
+      const ctx = await createHubProtocolCallerContext(userId, scopes);
+      const caller = mainProposalsRouter.createCaller(
+        ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
+      );
+      await caller.approve({ proposalId });
+      return c.json({ success: true, proposalId }, 200);
+    } catch (err) {
+      logger.error({ err, proposalId }, "approveProposal failed");
+      const code =
+        err instanceof TRPCError && err.code === "NOT_FOUND"
+          ? 404
+          : err instanceof TRPCError && err.code === "FORBIDDEN"
+            ? 403
+            : err instanceof TRPCError && err.code === "BAD_REQUEST"
+              ? 400
+              : 500;
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        code
+      );
+    }
+  });
+
+  /**
+   * POST /proposals/:id/reject
+   * Reject a pending proposal. Delegates to the canonical `proposals.reject`
+   * tRPC mutation so behavior is identical to the in-app reject flow.
+   */
+  app.post("/proposals/:id/reject", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const proposalId = c.req.param("id");
+    let reason: string | undefined;
+    try {
+      const body = (await c.req.json().catch(() => ({}))) as {
+        reason?: string;
+      };
+      reason = typeof body.reason === "string" ? body.reason : undefined;
+    } catch {
+      reason = undefined;
+    }
+    try {
+      const userId = c.get("userId") as string;
+      const scopes = c.get("scopes") as string[];
+      const ctx = await createHubProtocolCallerContext(userId, scopes);
+      const caller = mainProposalsRouter.createCaller(
+        ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
+      );
+      await caller.reject({ proposalId, reason });
+      return c.json({ success: true, proposalId }, 200);
+    } catch (err) {
+      logger.error({ err, proposalId }, "rejectProposal failed");
+      const code =
+        err instanceof TRPCError && err.code === "NOT_FOUND"
+          ? 404
+          : err instanceof TRPCError && err.code === "FORBIDDEN"
+            ? 403
+            : err instanceof TRPCError && err.code === "BAD_REQUEST"
+              ? 400
+              : 500;
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         code

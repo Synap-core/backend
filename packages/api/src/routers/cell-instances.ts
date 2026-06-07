@@ -18,6 +18,7 @@
 
 import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
+import { AccessContext, scopedDb } from "../access/index.js";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -248,14 +249,19 @@ export const cellInstancesRouter = router({
         isTemplate: z.boolean().optional(),
       })
     )
-    .query(async ({ input }) => {
-      const where =
+    .query(async ({ input, ctx }) => {
+      // Membership guard from the access layer — without it any caller could
+      // pass a foreign workspaceId and read its cell instances.
+      const visibility = scopedDb(AccessContext.from(ctx)).predicate(
+        cellInstances
+      );
+      const where = and(
+        visibility,
+        eq(cellInstances.workspaceId, input.workspaceId),
         input.isTemplate === undefined
-          ? eq(cellInstances.workspaceId, input.workspaceId)
-          : and(
-              eq(cellInstances.workspaceId, input.workspaceId),
-              eq(cellInstances.isTemplate, input.isTemplate)
-            );
+          ? undefined
+          : eq(cellInstances.isTemplate, input.isTemplate)
+      );
 
       const rows = await db
         .select()

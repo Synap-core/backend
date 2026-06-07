@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
+import { AccessContext, scopedDb } from "../access/index.js";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -35,18 +36,15 @@ export const rolesRouter = router({
         })
         .optional()
     )
-    .query(async ({ input }) => {
-      if (input?.workspaceId) {
-        // Workspace-scoped roles
-        return db.query.roles.findMany({
-          where: eq(roles.workspaceId, input.workspaceId),
-        });
-      } else {
-        // Global roles
-        return db.query.roles.findMany({
-          where: isNull(roles.workspaceId),
-        });
-      }
+    .query(async ({ input, ctx }) => {
+      // scopedDb auto-ANDs the membership predicate: workspace roles are only
+      // returned to members; the global branch (workspaceId IS NULL) is pod-wide.
+      const sdb = scopedDb(AccessContext.from(ctx));
+      return sdb.findMany<typeof roles.$inferSelect>(roles, {
+        where: input?.workspaceId
+          ? eq(roles.workspaceId, input.workspaceId)
+          : isNull(roles.workspaceId),
+      });
     }),
 
   /**

@@ -34,6 +34,7 @@
     "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/index.ts",
     "build": "rm -rf dist && tsc -p tsconfig.types.json && tsup && pnpm gen-types",
     "gen-types": "node scripts/gen-types.mjs",
+    "gen-types:check": "node scripts/gen-types.mjs && git diff --exit-code -- ../api-types/src/generated.d.ts",
     "gen-docs": "node scripts/gen-sdk-docs.mjs",
     "gen-api-docs": "node scripts/gen-api-docs.mjs",
     "typecheck": "tsc --noEmit",

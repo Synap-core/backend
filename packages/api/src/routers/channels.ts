@@ -11,6 +11,7 @@
 
 import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
+import { AccessContext, scopedDb } from "../access/index.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import {
   resolveAgentHandle,
@@ -2961,9 +2962,13 @@ export const channelsRouter = router({
         workspaceId: z.string().uuid(),
       })
     )
-    .query(async ({ input }) => {
-      const allChannels = await db.query.channels.findMany({
-        where: and(eq(channels.workspaceId, input.workspaceId)),
+    .query(async ({ input, ctx }) => {
+      // scopedDb auto-ANDs the membership predicate — a non-member passing a
+      // foreign workspaceId gets an empty tree instead of leaking its channels.
+      const allChannels = await scopedDb(AccessContext.from(ctx)).findMany<
+        typeof channels.$inferSelect
+      >(channels, {
+        where: eq(channels.workspaceId, input.workspaceId),
         orderBy: [desc(channels.updatedAt)],
       });
 

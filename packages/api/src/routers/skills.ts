@@ -17,6 +17,7 @@ import {
   type FlowDefinition,
 } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
+import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
@@ -57,7 +58,10 @@ export const skillsRouter = router({
             and(eq(skills.scope, "user"), eq(skills.userId, userId)),
             and(
               eq(skills.scope, "workspace"),
-              eq(skills.workspaceId, input.workspaceId)
+              eq(skills.workspaceId, input.workspaceId),
+              // Membership guard — without it, any caller could read another
+              // workspace's "workspace"-scoped skills (code/instructions) by id.
+              userVisibleWhere(skills.workspaceId, userId)
             )
           )!
         );

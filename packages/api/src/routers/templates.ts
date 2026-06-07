@@ -25,6 +25,7 @@ import {
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { auditLog } from "../utils/audit-log.js";
+import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { emitSideEffects } from "@synap/events";
 
 export const templatesRouter = router({
@@ -43,8 +44,13 @@ export const templatesRouter = router({
       // Build conditions for visibility (User's OR Workspace's OR Public)
       const visibilityConditions = [
         eq(entityTemplates.userId, ctx.userId),
+        // Membership-gate the workspace branch — without userVisibleWhere a
+        // caller could pass ANY workspaceId and read its private templates.
         input.workspaceId
-          ? eq(entityTemplates.workspaceId, input.workspaceId)
+          ? and(
+              eq(entityTemplates.workspaceId, input.workspaceId),
+              userVisibleWhere(entityTemplates.workspaceId, ctx.userId)
+            )
           : undefined,
         input.includePublic ? eq(entityTemplates.isPublic, true) : undefined,
       ].filter((c): c is NonNullable<typeof c> => c !== undefined);

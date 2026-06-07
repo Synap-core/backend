@@ -9,7 +9,13 @@
  */
 
 import { createRoute, z } from "@hono/zod-openapi";
-import { db, knowledgeFacts, knowledgeRepository, eq } from "@synap/database";
+import {
+  db,
+  knowledgeFacts,
+  knowledgeRepository,
+  eq,
+  and,
+} from "@synap/database";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -289,8 +295,17 @@ export function registerMemoryRoutes(app: HubHono): void {
       );
     }
     const { id } = c.req.valid("param");
+    // Scope the delete to the caller's OWN facts — without the userId guard any
+    // agent with hub-protocol.write could delete ANY fact by id (cross-user).
+    // Idempotent: a no-match delete still returns 200 (and doesn't reveal
+    // whether the id exists under another user).
+    const authUserId = c.get("userId") as string;
     try {
-      await db.delete(knowledgeFacts).where(eq(knowledgeFacts.id, id));
+      await db
+        .delete(knowledgeFacts)
+        .where(
+          and(eq(knowledgeFacts.id, id), eq(knowledgeFacts.userId, authUserId))
+        );
       return c.json({ success: true }, 200);
     } catch (err) {
       logger.error({ err, id }, "deleteFact failed");

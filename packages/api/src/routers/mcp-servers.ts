@@ -11,8 +11,9 @@
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
+import { AccessContext, scopedDb } from "../access/index.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, or, isNull } from "@synap/database";
+import { db, eq, and, or, isNull, asc } from "@synap/database";
 import { mcpServers } from "@synap/database/schema";
 import { workspaceMembers } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
@@ -69,14 +70,19 @@ export const mcpServersRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const workspaceId = input?.workspaceId ?? ctx.workspaceId ?? null;
-      const servers = await db.query.mcpServers.findMany({
+      // scopedDb auto-ANDs the membership predicate — a caller-supplied
+      // workspaceId they don't belong to yields nothing instead of leaking
+      // other workspaces' MCP server configs.
+      const servers = await scopedDb(AccessContext.from(ctx)).findMany<
+        typeof mcpServers.$inferSelect
+      >(mcpServers, {
         where: workspaceId
           ? or(
               eq(mcpServers.workspaceId, workspaceId),
               isNull(mcpServers.workspaceId)
             )
           : isNull(mcpServers.workspaceId),
-        orderBy: (t, { asc }) => [asc(t.name)],
+        orderBy: asc(mcpServers.name),
       });
       return { servers };
     }),

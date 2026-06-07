@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
+import { AccessContext, scopedDb } from "../access/index.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
 // validateEventPattern from the main index.js and events/index.js bundles.
 import { validateEventPattern } from "@synap-core/types/events/unified";
@@ -95,25 +96,28 @@ export const automationsRouter = router({
         })
         .optional()
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const database = await getDb();
-      const conditions = [
-        input?.workspaceId
-          ? eq(automations.workspaceId, input.workspaceId)
-          : isNull(automations.workspaceId),
-      ];
-
-      if (input?.status) {
-        conditions.push(eq(automations.status, input.status));
-      }
-      if (input?.triggerType) {
-        conditions.push(eq(automations.triggerType, input.triggerType));
-      }
-
+      // Membership guard from the centralized access layer — without it a
+      // caller-supplied workspaceId leaks every workspace's automations.
+      const visibility = scopedDb(AccessContext.from(ctx)).predicate(
+        automations
+      );
       const rows = await database
         .select()
         .from(automations)
-        .where(and(...conditions))
+        .where(
+          and(
+            visibility,
+            input?.workspaceId
+              ? eq(automations.workspaceId, input.workspaceId)
+              : isNull(automations.workspaceId),
+            input?.status ? eq(automations.status, input.status) : undefined,
+            input?.triggerType
+              ? eq(automations.triggerType, input.triggerType)
+              : undefined
+          )
+        )
         .orderBy(desc(automations.updatedAt))
         .limit(input?.limit ?? 50);
 
@@ -129,9 +133,12 @@ export const automationsRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
       })
     )
-    .query(async ({ input }) => {
-      const database = await getDb();
-      const row = await database.query.automations.findFirst({
+    .query(async ({ input, ctx }) => {
+      // scopedDb auto-ANDs the visibility predicate, so a foreign workspaceId
+      // simply finds nothing instead of leaking the row.
+      const row = await scopedDb(AccessContext.from(ctx)).findFirst<
+        typeof automations.$inferSelect
+      >(automations, {
         where: and(
           eq(automations.id, input.id),
           input.workspaceId
@@ -436,11 +443,14 @@ export const automationsRouter = router({
         limit: z.number().min(1).max(100).optional(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const database = await getDb();
 
-      // Verify automation belongs to workspace
-      const automation = await database.query.automations.findFirst({
+      // Verify the automation is visible to this caller (membership-gated via
+      // the access layer) BEFORE returning its run history.
+      const automation = await scopedDb(AccessContext.from(ctx)).findFirst<{
+        id: string;
+      }>(automations, {
         where: and(
           eq(automations.id, input.automationId),
           input.workspaceId
@@ -475,10 +485,12 @@ export const automationsRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const database = await getDb();
 
-      const run = await database.query.automationRuns.findFirst({
+      const run = await scopedDb(AccessContext.from(ctx)).findFirst<
+        typeof automationRuns.$inferSelect
+      >(automationRuns, {
         where: and(
           eq(automationRuns.id, input.runId),
           input.workspaceId
