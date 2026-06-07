@@ -23,6 +23,19 @@ export interface WorkerMetadata {
  */
 export const workerRegistry: WorkerMetadata[] = [
   // ============================================================================
+  // Agent Workers (scheduled autonomous agent runs)
+  // ============================================================================
+  {
+    id: "agent-scheduler",
+    name: "Agent Scheduler",
+    description:
+      "Polls every minute for [agent-sched] entities that are due (nextRunAt <= now, enabled=true). For each due schedule, calls the Intelligence Service /v1/chat/completions with the goal + persona system prompt, stores the result as a research entity, then updates nextRunAt and lastRunAt.",
+    triggers: ["cron:* * * * *"],
+    outputs: ["entity.create (research)"],
+    category: "ai",
+  },
+
+  // ============================================================================
   // Messaging Workers (external conversation routing)
   // ============================================================================
   {

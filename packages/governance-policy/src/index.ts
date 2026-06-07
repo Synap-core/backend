@@ -20,12 +20,14 @@
  * Precedence ladder (applied only after RBAC passes and the actor is confirmed
  * to be an agent user):
  *   1. CBAC capability allowlist  → deny if the agent lacks the capability
- *   2. ADMIN_ACTIONS              → always propose (even if in autoApproveFor)
- *   3. autoApproveFor whitelist   → execute (overrides writesRequireProposal)
- *   4. writesRequireProposal      → propose on non-pure-read writes
- *   5. agent-owned + destructive  → propose
- *   6. per-channel capability gate → block / propose / (act → fall through)
- *   7. default                    → propose
+ *   2. ADMIN_ACTIONS              → always propose (even for owned workspace)
+ *   3. isAgentOwnedWorkspace      → execute (non-destructive) / propose (destructive)
+ *   4. explicit autoApproveFor    → execute (overrides writesRequireProposal)
+ *   5. writesRequireProposal      → propose on non-pure-read writes
+ *   6. agent-owned mode + destructive → propose
+ *   7. per-channel capability gate → block / propose / (act → fall through)
+ *   8. DEFAULT_AUTO_APPROVE       → execute
+ *   9. default                    → propose
  */
 
 // ---------------------------------------------------------------------------
@@ -264,6 +266,14 @@ export interface AgentPolicyInput {
   /** Workspace override; defaults to DEFAULT_AUTO_APPROVE when undefined. */
   autoApproveFor?: readonly string[];
   /**
+   * True when the acting agent is the owner of the target workspace
+   * (workspace.linkedAgentId === agentUserId && workspaceType === "agent").
+   * Ownership bypasses writesRequireProposal for non-destructive writes.
+   * Destructive actions (delete/archive/purge) still propose even for the owner.
+   * ADMIN_ACTIONS always propose regardless of ownership.
+   */
+  isAgentOwnedWorkspace?: boolean;
+  /**
    * Effective per-channel capability grant when the write is evaluated inside a
    * multiplayer channel. Absent/undefined → no per-channel tightening.
    */
@@ -315,16 +325,27 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     };
   }
 
-  // 2. ADMIN_ACTIONS → always propose.
+  // 2. ADMIN_ACTIONS → always propose (even for owned workspace).
   if (ADMIN_ACTIONS.includes(eventKey)) {
     return { verdict: "propose", reason: PROPOSE_REASON.ADMIN };
   }
 
-  // 3. Explicit workspace autoApproveFor → execute (overrides writesRequireProposal).
-  // Only fires when the workspace has set an explicit autoApproveFor list (not undefined).
-  // This lets an agent-owned memory workspace whitelist entity.create even when the
-  // agent was provisioned with writesRequireProposal=true.
-  // The DEFAULT_AUTO_APPROVE fallback is checked AFTER writesRequireProposal (step 6).
+  // 3. Agent owns this workspace (linkedAgentId === agentUserId, workspaceType="agent").
+  // Ownership is the cleanest trust signal: the agent's memory workspace is its domain.
+  // Non-destructive writes execute directly; destructive still propose.
+  if (input.isAgentOwnedWorkspace === true) {
+    if (DESTRUCTIVE_ACTIONS.includes(action)) {
+      return {
+        verdict: "propose",
+        reason: PROPOSE_REASON.AGENT_OWNED_DESTRUCTIVE,
+      };
+    }
+    return { verdict: "execute" };
+  }
+
+  // 4. Explicit workspace autoApproveFor → execute (overrides writesRequireProposal).
+  // Only fires when the workspace has an explicit list (not undefined).
+  // DEFAULT_AUTO_APPROVE fallback is checked after writesRequireProposal (step 8).
   if (
     input.autoApproveFor !== undefined &&
     isAutoApproved(eventKey, input.autoApproveFor)
@@ -332,7 +353,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     return { verdict: "execute" };
   }
 
-  // 4. writesRequireProposal → propose on non-pure-read writes.
+  // 5. writesRequireProposal → propose on non-pure-read writes.
   if (
     input.writesRequireProposal === true &&
     !isPureReadAction(subjectType, action, eventKey)
@@ -343,7 +364,9 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     };
   }
 
-  // 5. agent-owned workspace + destructive → propose.
+  // 6. agent-owned workspace mode + destructive → propose.
+  // (Distinct from step 3: covers workspaces with governanceMode="agent-owned"
+  // where the acting agent is NOT necessarily the owner.)
   if (
     input.governanceMode === "agent-owned" &&
     DESTRUCTIVE_ACTIONS.includes(action)
@@ -354,7 +377,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     };
   }
 
-  // 6. Per-channel capability gate (writes only; reads exempt).
+  // 7. Per-channel capability gate (writes only; reads exempt).
   if (
     input.channelCapabilities !== undefined &&
     input.channelCapabilities !== null &&
@@ -372,13 +395,13 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     // decision === "act" → fall through to default autoApproveFor.
   }
 
-  // 7. Default autoApproveFor whitelist → execute.
+  // 8. DEFAULT_AUTO_APPROVE whitelist → execute.
   // Uses DEFAULT_AUTO_APPROVE when input.autoApproveFor is undefined.
-  // This is the non-override path: explicit list was already checked at step 3.
+  // Explicit list was already checked at step 4.
   if (isAutoApproved(eventKey, input.autoApproveFor)) {
     return { verdict: "execute" };
   }
 
-  // 8. Default → propose (caller supplies its own reasoning).
+  // 9. Default → propose (caller supplies its own reasoning).
   return { verdict: "propose" };
 }

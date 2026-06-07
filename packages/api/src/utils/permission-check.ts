@@ -456,12 +456,18 @@ export async function checkPermissionOrPropose(
         // DEFAULT: all agent actions require a proposal.
         // EXCEPTION: actions listed in autoApproveFor whitelist bypass proposal.
         const [ws] = await db
-          .select({ settings: workspaces.settings })
+          .select({
+            settings: workspaces.settings,
+            workspaceType: workspaces.workspaceType,
+          })
           .from(workspaces)
           .where(eq(workspaces.id, workspaceId))
           .limit(1);
 
         const settings = ws?.settings as WorkspaceSettings | undefined;
+        const isAgentOwnedWorkspace =
+          ws?.workspaceType === "agent" &&
+          settings?.linkedAgentId === agentUserId;
 
         const eventKey = `${subjectType}.${action}`;
         // Pass the raw workspace value (may be undefined) so decideAgentPolicy
@@ -472,9 +478,10 @@ export async function checkPermissionOrPropose(
 
         // Agent governance policy — SINGLE SOURCE OF TRUTH in
         // @synap/governance-policy. decideAgentPolicy applies the full ladder
-        // (CBAC → ADMIN_ACTIONS → explicit autoApproveFor → writesRequireProposal
-        // → agent-owned destructive → per-channel grant → default autoApproveFor
-        // → default) and returns the verdict. Side effects stay here.
+        // (CBAC → ADMIN_ACTIONS → isAgentOwnedWorkspace → explicit autoApproveFor
+        // → writesRequireProposal → agent-owned mode destructive → per-channel
+        // grant → default autoApproveFor → default) and returns the verdict.
+        // Side effects stay here.
         const agentMetadata = agentUser.agentMetadata as AgentMetadata | null;
         const decision = decideAgentPolicy({
           subjectType,
@@ -483,6 +490,7 @@ export async function checkPermissionOrPropose(
           writesRequireProposal: agentMetadata?.writesRequireProposal === true,
           governanceMode: settings?.governanceMode,
           autoApproveFor: explicitAutoApproveFor,
+          isAgentOwnedWorkspace,
           channelCapabilities,
         });
 
