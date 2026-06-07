@@ -41,6 +41,20 @@ export type WidgetRendererType = "builtin" | "iframe" | "native" | "frame";
  */
 export type WidgetTrustLevel = "trusted" | "installed" | "generated";
 
+/**
+ * Functional role of a widget/cell definition — what surface it targets.
+ *
+ *   - "widget"          → bento add-block picker item (the default)
+ *   - "view-renderer"   → renders a typed view (e.g. custom kanban board)
+ *   - "entity-renderer" → renders a profile's entity detail page
+ *   - "panel"           → side or floating panel surface
+ */
+export type WidgetRole =
+  | "widget"
+  | "view-renderer"
+  | "entity-renderer"
+  | "panel";
+
 export const widgetDefinitions = pgTable(
   "widget_definitions",
   {
@@ -144,6 +158,9 @@ export const widgetDefinitions = pgTable(
       .notNull()
       .default("generated")
       .$type<WidgetTrustLevel>(),
+
+    /** Functional role — determines which picker/registry surface claims this definition. */
+    role: text("role").notNull().default("widget").$type<WidgetRole>(),
 
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()

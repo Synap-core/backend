@@ -210,6 +210,7 @@ export async function seedWidgetDefinitions(): Promise<void> {
           defaultConfig: {},
           defaultSize: widget.defaultSize,
           isActive: true,
+          role: "widget",
         })
         .onConflictDoUpdate({
           target: [widgetDefinitions.typeKey, widgetDefinitions.workspaceId],
@@ -220,6 +221,7 @@ export async function seedWidgetDefinitions(): Promise<void> {
             category: widget.category,
             configSchema,
             defaultSize: widget.defaultSize,
+            role: "widget",
             updatedAt: new Date(),
           },
         });

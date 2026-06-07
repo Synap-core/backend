@@ -314,6 +314,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
   // widget_definitions
   {
     table: "widget_definitions",
+    column: "role",
+    addedBy: "0108_widget_definitions_role.sql",
+  },
+  {
+    table: "widget_definitions",
     column: "source",
     addedBy: "0056_widget_native_columns.sql",
   },
