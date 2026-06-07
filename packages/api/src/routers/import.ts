@@ -7,10 +7,11 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure } from "../trpc.js";
+import { router, workspaceProcedure, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { ImportOrchestrator } from "../services/import-orchestrator.js";
+import { EventNames } from "@synap-core/types/events";
 
 const logger = createLogger({ module: "import-router" });
 
@@ -119,4 +120,23 @@ export const importRouter = router({
       });
       return orchestrator.previewModeling(input.sampleRows, input.source);
     }),
+
+  /**
+   * Returns the Socket.IO event name and room descriptor for import batch
+   * progress events. No DB access — pure contract documentation for clients.
+   *
+   * Usage pattern:
+   *   1. Call `trpc.import.batchProgressRoom()` to get the event name + room.
+   *   2. Subscribe to `socket.on(event, handler)` filtered by your `batchId`.
+   *   3. Call `trpc.import.submitBatch({ items })` — the returned `batchId`
+   *      matches what arrives in each progress event payload.
+   *
+   * Events arrive in the caller's user room automatically; no extra join needed.
+   */
+  batchProgressRoom: protectedProcedure.query(({ ctx }) => ({
+    event: EventNames.IMPORT_FILE_PROGRESS,
+    room: `user:${ctx.userId}`,
+    description:
+      "Listen to this Socket.IO event on your user room. Filter by batchId from submitBatch.",
+  })),
 });

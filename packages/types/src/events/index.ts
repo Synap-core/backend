@@ -137,6 +137,15 @@ export interface HermesTaskFailedEvent {
   failedAt: string;
 }
 
+export interface ImportFileProgressEvent {
+  batchId: string;
+  path: string;
+  index: number;
+  total: number;
+  status: "processing" | "done" | "error";
+  error?: string;
+}
+
 // =============================================================================
 // AI Events
 // =============================================================================
@@ -218,6 +227,7 @@ export interface DomainServerToClientEvents {
   "hermes:task:started": (data: HermesTaskStartedEvent) => void;
   "hermes:task:completed": (data: HermesTaskCompletedEvent) => void;
   "hermes:task:failed": (data: HermesTaskFailedEvent) => void;
+  "import:file:progress": (data: ImportFileProgressEvent) => void;
 
   // System
   error: (data: { code: string; message: string }) => void;
@@ -313,6 +323,7 @@ export const EventNames = {
   HERMES_TASK_STARTED: "hermes:task:started",
   HERMES_TASK_COMPLETED: "hermes:task:completed",
   HERMES_TASK_FAILED: "hermes:task:failed",
+  IMPORT_FILE_PROGRESS: "import:file:progress",
 } as const;
 
 export type EventName = (typeof EventNames)[keyof typeof EventNames];

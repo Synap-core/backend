@@ -79,5 +79,11 @@ export {
   passthroughSchema,
 } from "./realtime-schemas.js";
 
+// ============================================================================
+// REALTIME EVENT PAYLOAD TYPES (convenience re-exports for consumers)
+// ============================================================================
+
+export type { ImportFileProgressEvent } from "@synap-core/types/events";
+
 // Note: SynapEvent schema and event metadata types are in @synap-core/core
 // to break the circular dependency between the database and events packages.

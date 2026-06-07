@@ -18,7 +18,11 @@
  */
 
 import { getSchemaForEvent } from "@synap/events";
-import type { EventName, EventPayloadFor } from "@synap-core/types/events";
+import type {
+  EventName,
+  EventPayloadFor,
+  ImportFileProgressEvent,
+} from "@synap-core/types/events";
 import { emitChatEvent } from "./chat-realtime-broadcast.js";
 
 /**
@@ -83,4 +87,20 @@ export async function emitTyped<E extends EventName>(
     channelId: target.channelId ?? null,
     viewId: target.viewId ?? null,
   });
+}
+
+/**
+ * Emit an `import:file:progress` event to the owning user's realtime room.
+ *
+ * @example
+ * await emitImportFileProgress(
+ *   { batchId, path, index: 0, total: 5, status: 'processing' },
+ *   userId,
+ * );
+ */
+export async function emitImportFileProgress(
+  data: ImportFileProgressEvent,
+  userId: string
+): Promise<void> {
+  return emitTyped("import:file:progress", data, { userId });
 }

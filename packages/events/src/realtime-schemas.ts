@@ -85,6 +85,15 @@ const hermesTaskFailedSchema = z.object({
   failedAt: z.string().min(1),
 });
 
+const importFileProgressSchema = z.object({
+  batchId: z.string().min(1),
+  path: z.string(),
+  index: z.number().int().nonnegative(),
+  total: z.number().int().positive(),
+  status: z.enum(["processing", "done", "error"]),
+  error: z.string().optional(),
+});
+
 // ============================================================================
 // Legacy schemas — added for the high-volume, well-typed emitters
 // ============================================================================
@@ -161,6 +170,7 @@ export const EventSchemas: Partial<Record<EventName, z.ZodType>> = {
   "hermes:task:started": hermesTaskStartedSchema,
   "hermes:task:completed": hermesTaskCompletedSchema,
   "hermes:task:failed": hermesTaskFailedSchema,
+  "import:file:progress": importFileProgressSchema,
 
   // Legacy (locked-down)
   "entity:created": entityCreatedSchema,

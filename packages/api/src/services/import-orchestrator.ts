@@ -44,6 +44,7 @@ import type {
   ImportRunResult,
   ImportSource,
 } from "@synap-core/types/imports";
+import { emitImportFileProgress } from "../utils/event-emit.js";
 
 const logger = createLogger({ module: "import-orchestrator" });
 
@@ -142,13 +143,27 @@ export class ImportOrchestrator {
     const callerCtx = { ...trpcCtx, workspaceId, userId };
     const chatCaller = channelsRouter.createCaller(callerCtx as never);
 
+    let _fileIndex = 0;
+    const _totalFiles = decoded.length;
     for (const { path, content, mimeType } of decoded) {
+      const _idx = _fileIndex++;
       stats.filesReceived++;
+      void emitImportFileProgress(
+        {
+          batchId,
+          path,
+          index: _idx,
+          total: _totalFiles,
+          status: "processing",
+        },
+        userId
+      ).catch(() => {});
       const ext = path.split(".").pop()?.toLowerCase() ?? "";
       const canTransform =
         (MIME_TRANSFORM as readonly string[]).includes(mimeType) ||
         EXT_TRANSFORM[ext];
 
+      let _fileFailed = false;
       try {
         const storageKey = `imports/${userId}/${batchId}/${path}`;
         await storage.upload(storageKey, Buffer.from(content, "utf-8"), {
@@ -264,10 +279,27 @@ export class ImportOrchestrator {
 
         stats.filesStoredOnly++;
       } catch (e) {
-        stats.errors.push({
-          path,
-          message: e instanceof Error ? e.message : "Import failed",
-        });
+        _fileFailed = true;
+        const message = e instanceof Error ? e.message : "Import failed";
+        stats.errors.push({ path, message });
+        void emitImportFileProgress(
+          {
+            batchId,
+            path,
+            index: _idx,
+            total: _totalFiles,
+            status: "error",
+            error: message,
+          },
+          userId
+        ).catch(() => {});
+      } finally {
+        if (!_fileFailed) {
+          void emitImportFileProgress(
+            { batchId, path, index: _idx, total: _totalFiles, status: "done" },
+            userId
+          ).catch(() => {});
+        }
       }
     }
 
