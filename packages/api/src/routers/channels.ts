@@ -12,6 +12,7 @@
 import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import {
   resolveAgentHandle,
@@ -2943,9 +2944,14 @@ export const channelsRouter = router({
         parentChannelId: z.string().uuid(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      // Owner pin (mirrors getBranchTree) — without it any user reads another
+      // user's branch/sub-thread structure under any parent channel id.
       const branches = await db.query.channels.findMany({
-        where: eq(channels.parentChannelId, input.parentChannelId),
+        where: and(
+          eq(channels.parentChannelId, input.parentChannelId),
+          eq(channels.userId, ctx.userId)
+        ),
         orderBy: [desc(channels.createdAt)],
       });
 
@@ -3085,6 +3091,13 @@ export const channelsRouter = router({
         });
       }
 
+      // Gate on the branch's workspace/owner — without it any user could merge
+      // another user's thread by id.
+      await assertWorkspaceWrite(db, ctx.userId, {
+        workspaceId: branch.workspaceId,
+        ownerId: branch.userId,
+      });
+
       await db
         .update(channels)
         .set({
@@ -3136,15 +3149,13 @@ export const channelsRouter = router({
       const isPodWideChannel =
         channel.channelType === ChannelType.FEED ||
         channel.channelType === ChannelType.PERSONAL;
-      if (
-        !isPodWideChannel &&
-        ctx.workspaceId &&
-        channel.workspaceId &&
-        channel.workspaceId !== ctx.workspaceId
-      ) {
+      // Owner check (mirrors getMessages/getTimeline/getBranchTree). The old
+      // guard keyed off ctx.workspaceId, which protectedProcedure does NOT
+      // guarantee — omitting the workspace header bypassed it entirely.
+      if (!isPodWideChannel && channel.userId !== ctx.userId) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "Channel is not in the current workspace",
+          message: "Not authorized to view this channel",
         });
       }
 
@@ -3620,6 +3631,12 @@ export const channelsRouter = router({
           message: "Channel not found",
         });
       }
+
+      // Gate on the channel's workspace/owner before injecting context into it.
+      await assertWorkspaceWrite(db, ctx.userId, {
+        workspaceId: channel.workspaceId,
+        ownerId: channel.userId,
+      });
 
       await db
         .insert(channelContextItems)

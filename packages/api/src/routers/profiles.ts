@@ -94,7 +94,19 @@ const RendererRefSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-const ProfileRendererSlotSchema = z.enum(["list", "detail", "dashboard"]);
+/**
+ * The ContentKinds a profile assigns a renderer to — the canonical taxonomy
+ * that replaced the old list/detail/dashboard "slots".
+ *   collection      ← old `list`
+ *   entity-detail   ← old `detail`
+ *   entity-profile  ← old `dashboard`
+ */
+const ProfileContentKindSchema = z.enum([
+  "entity-detail",
+  "entity-profile",
+  "collection",
+]);
+type ProfileContentKind = z.infer<typeof ProfileContentKindSchema>;
 
 export const profilesRouter = router({
   /**
@@ -1012,7 +1024,7 @@ export const profilesRouter = router({
     .input(
       z.object({
         profileSlug: z.string(),
-        slot: ProfileRendererSlotSchema.optional(),
+        contentKind: ProfileContentKindSchema.optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -1027,33 +1039,45 @@ export const profilesRouter = router({
       );
       const profileSlug = resolved?.slug ?? input.profileSlug;
 
-      if (input.slot) {
+      // Always return the full ContentKind-keyed map; when `contentKind` is
+      // given, only that one is resolved (the rest stay null).
+      const base: Record<ProfileContentKind, RendererRef | null> = {
+        "entity-detail": null,
+        "entity-profile": null,
+        collection: null,
+      };
+
+      if (input.contentKind) {
         const target = await resolutionService.getEffectiveRenderer(
           profileSlug,
           ctx.workspaceId,
-          input.slot
+          input.contentKind
         );
-        const base = {
-          list: null as RendererRef | null,
-          detail: null as RendererRef | null,
-          dashboard: null as RendererRef | null,
-        };
-        return { ...base, [input.slot]: target };
+        return { ...base, [input.contentKind]: target };
       }
 
-      const [list, detail] = await Promise.all([
+      const [entityDetail, entityProfile, collection] = await Promise.all([
         resolutionService.getEffectiveRenderer(
           profileSlug,
           ctx.workspaceId,
-          "list"
+          "entity-detail"
         ),
         resolutionService.getEffectiveRenderer(
           profileSlug,
           ctx.workspaceId,
-          "detail"
+          "entity-profile"
+        ),
+        resolutionService.getEffectiveRenderer(
+          profileSlug,
+          ctx.workspaceId,
+          "collection"
         ),
       ]);
-      return { list, detail, dashboard: null as RendererRef | null };
+      return {
+        "entity-detail": entityDetail,
+        "entity-profile": entityProfile,
+        collection,
+      };
     }),
 
   /**
@@ -1070,7 +1094,7 @@ export const profilesRouter = router({
     .input(
       z.object({
         profileSlug: z.string(),
-        slot: ProfileRendererSlotSchema,
+        contentKind: ProfileContentKindSchema,
         ref: RendererRefSchema.nullable(),
       })
     )
@@ -1092,19 +1116,19 @@ export const profilesRouter = router({
       const settings = (workspace.settings ?? {}) as Record<string, unknown>;
       const current = (settings.profileRenderers ?? {}) as Record<
         string,
-        { list?: RendererRef; detail?: RendererRef; dashboard?: RendererRef }
+        Record<string, RendererRef | undefined>
       >;
       const profileEntry = { ...(current[input.profileSlug] ?? {}) };
 
       if (input.ref === null) {
-        delete profileEntry[input.slot];
+        delete profileEntry[input.contentKind];
       } else {
-        profileEntry[input.slot] = input.ref;
+        profileEntry[input.contentKind] = input.ref;
       }
 
       const nextProfileRenderers: Record<
         string,
-        { list?: RendererRef; detail?: RendererRef; dashboard?: RendererRef }
+        Record<string, RendererRef | undefined>
       > = { ...current, [input.profileSlug]: profileEntry };
 
       // Drop empty per-profile entries to keep the settings JSONB tidy.
@@ -1121,7 +1145,7 @@ export const profilesRouter = router({
       logger.info(
         {
           profileSlug: input.profileSlug,
-          slot: input.slot,
+          contentKind: input.contentKind,
           cleared: input.ref === null,
           workspaceId: ctx.workspaceId,
         },
@@ -1169,16 +1193,29 @@ export const profilesRouter = router({
         db.query.views.findFirst({ where: (v, { eq }) => eq(v.id, viewId) });
 
       const promote = async (viewId: string) => {
+        const ref = { kind: "view" as const, viewId };
+        // `default_renderers['entity-profile']` is the source of truth; also
+        // write the deprecated `default_dashboard_renderer` column for
+        // back-compat during the ContentKind transition.
+        const existingRenderers = (
+          profile as {
+            defaultRenderers?: Record<string, unknown> | null;
+          }
+        ).defaultRenderers;
         await profileRepo.update(profile.id, {
-          defaultDashboardRenderer: { kind: "view", viewId },
+          defaultRenderers: {
+            ...(existingRenderers ?? {}),
+            "entity-profile": ref,
+          },
+          defaultDashboardRenderer: ref,
         });
       };
 
-      // 1. Canonical: the resolved dashboard renderer, when it's a view ref.
+      // 1. Canonical: the resolved entity-profile renderer, when it's a view ref.
       const eff = await resolutionService.getEffectiveRenderer(
         input.profileSlug,
         ctx.workspaceId,
-        "dashboard"
+        "entity-profile"
       );
       if (eff && (eff as RendererRef).kind === "view") {
         const viewId = (eff as { viewId: string }).viewId;

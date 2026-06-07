@@ -60,6 +60,7 @@ const SCOPING_HELPERS = [
   "getUserAccessibleWorkspaceIds",
   "getWorkspaceMembership",
   "assertWorkspaceMember",
+  "assertWorkspaceWrite",
   "checkPermissionOrPropose",
 ];
 
@@ -162,6 +163,36 @@ describe("read-scoping tripwire — no unguarded workspace-filtered reads", () =
       violations,
       `Unguarded workspace-filtered read(s) — route through the access layer ` +
         `(scopedDb/AccessContext) or userVisibleWhere:\n  ${violations.join("\n  ")}`
+    ).toEqual([]);
+  });
+
+  // The cross-workspace WRITE-leak class: a mutation that loads a row to mutate
+  // via `findFirst(and(eq(t.id, input.id), input.workspaceId ? eq(...) : ...))`.
+  // The `input.workspaceId` term reads like a scope guard but is attacker-
+  // supplied, so it gates nothing. The fix is to load by id ALONE and gate on
+  // the loaded row's workspace (assertWorkspaceWrite). This guards the exact
+  // pattern just removed from automations.* — it must not come back.
+  const ATTACKER_KEYED =
+    /input\??\.workspaceId\s*\?\s*eq\([^)]*\.workspaceId,\s*input\??\.workspaceId/;
+
+  it("no mutation uses the attacker-keyed workspace-filter anti-pattern", () => {
+    const violations: string[] = [];
+    for (const file of FILES) {
+      const src = readFileSync(file, "utf8");
+      for (const proc of extractProcedures(file, src)) {
+        if (!SELF_SCOPE_BUILDERS.includes(proc.builder)) continue;
+        if (!/\.mutation\(/.test(proc.body)) continue;
+        if (ATTACKER_KEYED.test(proc.body)) {
+          violations.push(`${file.split("/routers/")[1]}::${proc.name}`);
+        }
+      }
+    }
+    expect(
+      violations,
+      `Mutation(s) gating on a caller-supplied workspaceId (gates nothing) — ` +
+        `load by id alone and assertWorkspaceWrite on the row's workspace:\n  ${violations.join(
+          "\n  "
+        )}`
     ).toEqual([]);
   });
 });

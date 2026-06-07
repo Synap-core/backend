@@ -46,6 +46,12 @@ export interface CreateProfileInput {
    * System-default renderer for the DASHBOARD slot (per-profile bento).
    */
   defaultDashboardRenderer?: Record<string, unknown> | null;
+  /**
+   * The profile's renderers keyed by ContentKind (entity-detail /
+   * entity-profile / collection) — the canonical map that replaces the old
+   * list/detail/dashboard "slots". Source of truth for `getEffectiveRenderer`.
+   */
+  defaultRenderers?: Record<string, unknown>;
 }
 
 export class ProfileRepository {
@@ -340,6 +346,8 @@ export class ProfileRepository {
       updateData.defaultDetailRenderer = input.defaultDetailRenderer;
     if (input.defaultDashboardRenderer !== undefined)
       updateData.defaultDashboardRenderer = input.defaultDashboardRenderer;
+    if (input.defaultRenderers !== undefined)
+      updateData.defaultRenderers = input.defaultRenderers;
 
     // Increment version on update
     const current = await this.getById(id);

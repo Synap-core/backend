@@ -173,12 +173,26 @@ export const whiteboardsRouter = router({
         versionId: z.string().uuid(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const version = await db.query.documentVersions.findFirst({
         where: eq(documentVersions.id, input.versionId),
       });
 
       if (!version) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Version not found",
+        });
+      }
+
+      // Verify the parent document belongs to the caller (the version row has
+      // no user/workspace of its own).
+      const [doc] = await db
+        .select({ userId: documents.userId })
+        .from(documents)
+        .where(eq(documents.id, version.documentId))
+        .limit(1);
+      if (!doc || doc.userId !== ctx.userId) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Version not found",

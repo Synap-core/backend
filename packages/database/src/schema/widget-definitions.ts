@@ -55,6 +55,24 @@ export type WidgetRole =
   | "entity-renderer"
   | "panel";
 
+/**
+ * Content kind — the single de-conflated taxonomy for WHAT a cell renders. It
+ * REPLACES `role` (which conflated content with placement). DISTINCT from
+ * `rendererType` (the rendering MECHANISM: frame/builtin/iframe/native).
+ * Mirrors `ContentKind` in `@synap-core/capabilities` (canonical copy).
+ *
+ *   - "entity-detail"  → renders ONE entity (its full page)
+ *   - "entity-profile" → renders the WHOLE profile/type (its dashboard / home)
+ *   - "collection"     → renders a view of MANY entities
+ *   - "widget"         → generic, content-agnostic — the DEFAULT; never a
+ *                        profile assignment, only placeable
+ */
+export type ContentKind =
+  | "entity-detail"
+  | "entity-profile"
+  | "collection"
+  | "widget";
+
 export const widgetDefinitions = pgTable(
   "widget_definitions",
   {
@@ -159,8 +177,19 @@ export const widgetDefinitions = pgTable(
       .default("generated")
       .$type<WidgetTrustLevel>(),
 
-    /** Functional role — determines which picker/registry surface claims this definition. */
+    /** @deprecated Use `rendererType`. Kept during transition (migration 0111). */
     role: text("role").notNull().default("widget").$type<WidgetRole>(),
+
+    /**
+     * Content kind — the de-conflated taxonomy: WHAT this cell renders + which
+     * profile assignment it fills (distinct from `rendererType`, the rendering
+     * mechanism). The creator (AI generator / importer) selects it; defaults to
+     * the content-agnostic `widget`. See migration 0111.
+     */
+    contentKind: text("content_kind")
+      .notNull()
+      .default("widget")
+      .$type<ContentKind>(),
 
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()

@@ -40,12 +40,14 @@ export const searchRouter = router({
         page: z.number().min(1).default(1),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const { searchService } = await import("@synap/search");
 
       return await searchService.search({
         query: input.query,
-        userId: input.userId,
+        // SECURITY: search by the AUTHENTICATED owner, never the request's
+        // userId (that let any hub-read key read another user's whole index).
+        userId: ctx.userId as string,
         workspaceId: input.workspaceId,
         collections: input.collections,
         limit: input.limit,
@@ -75,14 +77,16 @@ export const searchRouter = router({
         page: z.number().min(1).default(1),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const { searchService } = await import("@synap/search");
 
       return await searchService.searchCollection(
         input.collection,
         input.query,
         {
-          userId: input.userId,
+          // SECURITY: search by the AUTHENTICATED owner, never the request's
+          // userId (that let any hub-read key read another user's whole index).
+          userId: ctx.userId as string,
           workspaceId: input.workspaceId,
           limit: input.limit,
           page: input.page,
@@ -121,7 +125,7 @@ export const searchRouter = router({
         workspaceId: z.string().uuid().optional(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       // Use Search Service for better relevance
       const { searchService } = await import("@synap/search");
 
@@ -129,7 +133,9 @@ export const searchRouter = router({
         "entities",
         input.query,
         {
-          userId: input.userId,
+          // SECURITY: search by the AUTHENTICATED owner, never the request's
+          // userId (that let any hub-read key read another user's whole index).
+          userId: ctx.userId as string,
           workspaceId: input.workspaceId,
           limit: input.limit,
         }
@@ -163,14 +169,16 @@ export const searchRouter = router({
         workspaceId: z.string().uuid().optional(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const { searchService } = await import("@synap/search");
 
       const searchResults = await searchService.searchCollection(
         "documents",
         input.query,
         {
-          userId: input.userId,
+          // SECURITY: search by the AUTHENTICATED owner, never the request's
+          // userId (that let any hub-read key read another user's whole index).
+          userId: ctx.userId as string,
           workspaceId: input.workspaceId,
           limit: input.limit,
         }
@@ -217,7 +225,7 @@ export const searchRouter = router({
         workspaceId: z.string().uuid().optional(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       // Skip vector search on shared pods (no workspace-level isolation in pgvector)
       if (!config.server.vectorSearchEnabled) {
         return { results: [], embeddingGenerated: false };
@@ -250,7 +258,7 @@ export const searchRouter = router({
         FROM entity_vectors ev
         JOIN entities e ON ev.entity_id = e.id
         WHERE
-          ev.user_id = ${input.userId}
+          ev.user_id = ${ctx.userId as string}
           AND e.deleted_at IS NULL
           ${input.types ? sql`AND e.type = ANY(${input.types})` : sql``}
           ${input.workspaceId ? sql`AND (e.workspace_id = ${input.workspaceId} OR e.workspace_id IS NULL)` : sql``}

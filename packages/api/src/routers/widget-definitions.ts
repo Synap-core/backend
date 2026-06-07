@@ -18,6 +18,46 @@ import { getDb, and, eq, or, isNull } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { compileWidgetSource } from "../utils/widget-compiler.js";
+import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
+import { randomUUID } from "crypto";
+
+/**
+ * Extract the first fenced code block from an LLM response. Falls back to the
+ * whole text when no fence is present (some models reply with bare code).
+ */
+function extractCodeBlock(text: string): string {
+  const fence = text.match(/```(?:[a-zA-Z]*)\n([\s\S]*?)```/);
+  if (fence && fence[1]) return fence[1].trim();
+  return text.trim();
+}
+
+/** Compact system brief telling the IS how to author a frame cell. */
+function buildCellCodegenPrompt(
+  description: string,
+  language: "react" | "module",
+  existingCode: string | undefined
+): string {
+  const reactRules = `Write a single self-contained ES module that \`export default\` a React function component.
+- Import React from 'react' (e.g. \`import React, { useState, useEffect } from 'react'\`).
+- Use inline styles or a <style> tag — there is no external CSS.
+- To read pod data call \`window.SynapWidget.query('entities.list', { profileSlug })\` (returns a Promise) inside an effect; the host injects window.SynapWidget.
+- Do NOT import react-dom or call createRoot — the host mounts your default export.`;
+  const moduleRules = `Write a single self-contained ES module that mounts itself into \`document.getElementById('root')\`.
+- Use \`window.SynapWidget.onInit((config, context) => { ... })\` to receive config, then render.
+- Use plain DOM APIs or a <style> tag.`;
+
+  return [
+    "You are a Synap Cell author. Generate ONLY the source code for a sandboxed frame cell.",
+    language === "react" ? reactRules : moduleRules,
+    "Return the code in a single fenced code block, no prose before or after.",
+    existingCode
+      ? `Modify the following existing cell per the request, returning the FULL updated source:\n\n${existingCode}`
+      : "",
+    `Request: ${description}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 function requireAdminRole(role: string | undefined | null) {
   if (!["owner", "admin"].includes(role ?? "")) {
@@ -44,6 +84,11 @@ const WidgetUpsertSchema = z.object({
   rendererType: z
     .enum(["builtin", "iframe", "native", "frame"])
     .default("iframe"),
+  /** What this cell renders — the de-conflated content taxonomy. Selected by the
+   *  author (Cell Studio) / AI generator; defaults to the content-agnostic `widget`. */
+  contentKind: z
+    .enum(["entity-detail", "entity-profile", "collection", "widget"])
+    .optional(),
   rendererSource: z.string().optional(),
   /** Original JSX/TSX source for native widgets (compiled server-side) */
   source: z.string().optional(),
@@ -108,6 +153,65 @@ export const widgetDefinitionsRouter = router({
     }),
 
   /**
+   * Generate (or modify) frame-cell source from a natural-language description.
+   *
+   * Proxies to the workspace's active Intelligence Service via a one-shot
+   * orchestrator message, then extracts the fenced code block. This is the
+   * canonical in-studio AI codegen path — Cell Studio writes the returned
+   * `source` straight into its editor. It does NOT persist anything; saving is
+   * still the explicit upsert below (and stays governed there).
+   */
+  generateSource: workspaceProcedure
+    .input(
+      z.object({
+        description: z.string().min(1).max(2000),
+        language: z.enum(["react", "module"]).default("react"),
+        existingCode: z.string().max(20000).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const { client } = await resolveIntelligenceService({
+        userId,
+        workspaceId: ctx.workspaceId,
+        capability: "chat",
+      });
+
+      const prompt = buildCellCodegenPrompt(
+        input.description,
+        input.language,
+        input.existingCode
+      );
+
+      try {
+        const res = await client.sendMessage({
+          query: prompt,
+          threadId: randomUUID(),
+          userId,
+          workspaceId: ctx.workspaceId,
+          agentId: "orchestrator",
+          billingChannel: "browser",
+        });
+        const source = extractCodeBlock(res.content ?? "");
+        if (!source) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "AI returned an empty response.",
+          });
+        }
+        return { source, language: input.language };
+      } catch (err) {
+        if (err instanceof TRPCError) throw err;
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Cell generation failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        });
+      }
+    }),
+
+  /**
    * Create or update a workspace-specific widget definition.
    * Requires owner or admin role.
    * Built-in widgets (workspaceId = null) cannot be managed here.
@@ -165,6 +269,7 @@ export const widgetDefinitionsRouter = router({
           icon: input.icon,
           category: input.category ?? "app-specific",
           rendererType: input.rendererType,
+          ...(input.contentKind && { contentKind: input.contentKind }),
           rendererSource: input.rendererSource,
           source: input.source,
           bundleSource,
@@ -183,6 +288,7 @@ export const widgetDefinitionsRouter = router({
             icon: input.icon ?? null,
             category: input.category ?? "app-specific",
             rendererType: input.rendererType,
+            ...(input.contentKind && { contentKind: input.contentKind }),
             rendererSource: input.rendererSource ?? null,
             source: input.source ?? null,
             bundleSource: bundleSource ?? null,

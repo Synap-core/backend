@@ -287,16 +287,15 @@ export function registerCommandsRoutes(app: HubHono): void {
     const workspaceId = c.req.query("workspaceId");
     const userId = c.get("userId") as string;
     try {
-      let whereClause;
-      if (workspaceId) {
-        whereClause = eq(intelligenceCommands.workspaceId, workspaceId);
-      } else {
-        const wsIds = await getUserAccessibleWorkspaceIds(userId);
-        if (wsIds.length === 0) {
-          return c.json([]);
-        }
-        whereClause = inArray(intelligenceCommands.workspaceId, wsIds);
+      // Always scope to the caller's accessible workspaces — a supplied
+      // workspaceId may only NARROW within them, never widen to a foreign one.
+      const wsIds = await getUserAccessibleWorkspaceIds(userId);
+      if (wsIds.length === 0 || (workspaceId && !wsIds.includes(workspaceId))) {
+        return c.json([]);
       }
+      const whereClause = workspaceId
+        ? eq(intelligenceCommands.workspaceId, workspaceId)
+        : inArray(intelligenceCommands.workspaceId, wsIds);
       const commands = await db.query.intelligenceCommands.findMany({
         where: whereClause,
         orderBy: [asc(intelligenceCommands.createdAt)],
@@ -322,11 +321,19 @@ export function registerCommandsRoutes(app: HubHono): void {
       );
     }
     const id = c.req.param("id");
+    const userId = c.get("userId") as string;
     try {
       const command = await db.query.intelligenceCommands.findFirst({
         where: eq(intelligenceCommands.id, id),
       });
       if (!command) return c.json({ error: "Not found" }, 404);
+      // Gate workspace-scoped commands by membership (pod-wide = null is global).
+      if (command.workspaceId) {
+        const wsIds = await getUserAccessibleWorkspaceIds(userId);
+        if (!wsIds.includes(command.workspaceId)) {
+          return c.json({ error: "Not found" }, 404);
+        }
+      }
       return c.json(command);
     } catch (err) {
       logger.error({ err, id }, "getCommand failed");

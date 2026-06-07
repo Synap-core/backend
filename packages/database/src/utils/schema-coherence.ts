@@ -237,6 +237,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "default_dashboard_renderer",
     addedBy: "0106_profile_dashboard_renderer.sql",
   },
+  {
+    table: "profiles",
+    column: "default_renderers",
+    addedBy: "0112_profiles_default_renderers.sql",
+  },
 
   // api_keys
   {
@@ -316,6 +321,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "widget_definitions",
     column: "role",
     addedBy: "0108_widget_definitions_role.sql",
+  },
+  {
+    table: "widget_definitions",
+    column: "content_kind",
+    addedBy: "0111_widget_definitions_renderer_type.sql",
   },
   {
     table: "widget_definitions",

@@ -147,7 +147,6 @@ export class NangoConnector implements SyncConnector {
       "data" in parsed.data ? parsed.data.data.token : parsed.data.token;
     return {
       sessionToken: token,
-      // Connect UI serves at root of connect.perso.thearchitech.xyz (no /connect path)
       redirectUrl: `${this.connectUrl}?token=${token}`,
     };
   }

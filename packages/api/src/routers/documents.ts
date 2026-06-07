@@ -473,6 +473,20 @@ export const documentsRouter = router({
     .mutation(async ({ input, ctx }) => {
       const userId = requireUserId(ctx.userId);
 
+      // Gate on document ownership BEFORE enqueuing — the worker trusts the
+      // payload userId, so the membership check must happen here.
+      const [doc] = await db
+        .select({ userId: documents.userId })
+        .from(documents)
+        .where(eq(documents.id, input.documentId))
+        .limit(1);
+      if (!doc || doc.userId !== userId) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Document not found",
+        });
+      }
+
       // Enqueue snapshot job via pg-boss
       await getBoss().send("document-snapshot", {
         documentId: input.documentId,
@@ -496,21 +510,30 @@ export const documentsRouter = router({
         limit: z.number().default(20),
       })
     )
-    .query(async ({ input }) => {
-      const versions = await db.query.documentVersions.findMany({
-        where: eq(documentVersions.documentId, input.documentId),
-        orderBy: desc(documentVersions.createdAt),
-        limit: input.limit,
-      });
-
+    .query(async ({ input, ctx }) => {
+      // Gate on the parent document's owner BEFORE listing versions —
+      // document_versions has no own user/workspace, so this is the only guard.
       const [document] = await db
         .select({
+          userId: documents.userId,
           currentVersion: documents.currentVersion,
           lastSavedVersion: documents.lastSavedVersion,
         })
         .from(documents)
         .where(eq(documents.id, input.documentId))
         .limit(1);
+      if (!document || document.userId !== ctx.userId) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Document not found",
+        });
+      }
+
+      const versions = await db.query.documentVersions.findMany({
+        where: eq(documentVersions.documentId, input.documentId),
+        orderBy: desc(documentVersions.createdAt),
+        limit: input.limit,
+      });
 
       return {
         versions: versions.map((v) => ({
@@ -555,6 +578,25 @@ export const documentsRouter = router({
         });
       }
 
+      // Gate on document ownership BEFORE enqueuing — the worker overwrites the
+      // document's content trusting the payload. Also confirm the version
+      // actually belongs to the target document.
+      const [doc] = await db
+        .select({ userId: documents.userId })
+        .from(documents)
+        .where(eq(documents.id, input.documentId))
+        .limit(1);
+      if (
+        !doc ||
+        doc.userId !== userId ||
+        version.documentId !== input.documentId
+      ) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Document not found",
+        });
+      }
+
       // Enqueue restore job via pg-boss
       await getBoss().send("document-restore", {
         documentId: input.documentId,
@@ -577,12 +619,23 @@ export const documentsRouter = router({
         versionId: z.string(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const version = await db.query.documentVersions.findFirst({
         where: eq(documentVersions.id, input.versionId),
       });
 
       if (!version) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+
+      // Verify the parent document belongs to the caller before returning
+      // content (the version row carries no user/workspace of its own).
+      const [doc] = await db
+        .select({ userId: documents.userId })
+        .from(documents)
+        .where(eq(documents.id, version.documentId))
+        .limit(1);
+      if (!doc || doc.userId !== ctx.userId) {
         throw new TRPCError({ code: "NOT_FOUND" });
       }
 

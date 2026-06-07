@@ -77,7 +77,9 @@ export function registerMemoryRoutes(app: HubHono): void {
       );
     }
     const body = c.req.valid("json");
-    const userId = body.userId ?? (c.get("userId") as string | undefined);
+    // Pin to the authenticated owner — never trust a body-supplied userId
+    // (it would let any agent key write to another user's memory).
+    const userId = c.get("userId") as string | undefined;
     if (!userId) {
       return c.json(
         {
@@ -175,9 +177,9 @@ export function registerMemoryRoutes(app: HubHono): void {
         403
       );
     }
-    const authUserId = c.get("userId") as string;
     const query = c.req.valid("query");
-    const userId = query.userId || authUserId;
+    // Pin to the authenticated owner — ignore any query-supplied userId.
+    const userId = c.get("userId") as string;
     if (!userId) {
       return c.json({ error: "userId is required" }, 400);
     }
@@ -239,9 +241,13 @@ export function registerMemoryRoutes(app: HubHono): void {
       );
     }
     const body = c.req.valid("json");
+    // Pin to the authenticated owner — ignore any body-supplied userId (this
+    // route previously took body.userId as its ONLY source → recall of any
+    // user's memory was one field away).
+    const userId = c.get("userId") as string;
     try {
       const facts = await knowledgeRepository.searchFactsSemantic({
-        userId: body.userId,
+        userId,
         embedding: body.embedding,
         limit: body.limit,
       });
@@ -358,7 +364,9 @@ export function registerMemoryRoutes(app: HubHono): void {
       );
     }
     const body = c.req.valid("json");
-    const userId = body.userId ?? (c.get("userId") as string | undefined);
+    // Pin to the authenticated owner — never trust a body-supplied userId
+    // (it would let any agent key write to another user's memory).
+    const userId = c.get("userId") as string | undefined;
     if (!userId) {
       return c.json({ error: "userId is required" }, 400);
     }
@@ -463,7 +471,9 @@ export function registerMemoryRoutes(app: HubHono): void {
       );
     }
     const body = c.req.valid("json");
-    const userId = body.userId ?? (c.get("userId") as string | undefined);
+    // Pin to the authenticated owner — never trust a body-supplied userId
+    // (it would let any agent key write to another user's memory).
+    const userId = c.get("userId") as string | undefined;
     if (!userId) {
       return c.json({ error: "userId is required" }, 400);
     }
@@ -530,7 +540,9 @@ export function registerMemoryRoutes(app: HubHono): void {
       );
     }
     const body = c.req.valid("json");
-    const userId = body.userId ?? (c.get("userId") as string | undefined);
+    // Pin to the authenticated owner — never trust a body-supplied userId
+    // (it would let any agent key write to another user's memory).
+    const userId = c.get("userId") as string | undefined;
     if (!userId) {
       return c.json({ error: "userId is required" }, 400);
     }

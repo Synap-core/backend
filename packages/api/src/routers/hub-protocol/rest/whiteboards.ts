@@ -122,7 +122,8 @@ export function registerWhiteboardsRoutes(app: HubHono) {
     }
 
     const body = parsed.data;
-    const userId = (body.userId ?? (c.get("userId") as string)) as string;
+    // Pin to the authenticated owner — never a body-supplied userId.
+    const userId = c.get("userId") as string;
     if (!(await verifyWorkspaceAccess(userId, body.workspaceId))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
@@ -213,7 +214,8 @@ export function registerWhiteboardsRoutes(app: HubHono) {
     }
 
     const body = parsed.data;
-    const userId = (body.userId ?? (c.get("userId") as string)) as string;
+    // Pin to the authenticated owner — never a body-supplied userId.
+    const userId = c.get("userId") as string;
     if (!(await verifyWorkspaceAccess(userId, body.workspaceId))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }

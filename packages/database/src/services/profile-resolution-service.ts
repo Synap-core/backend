@@ -77,7 +77,33 @@ export type RendererRef =
       title?: string;
     };
 
-export type ProfileRendererSlot = "list" | "detail" | "dashboard";
+/**
+ * The content kinds a profile assigns a renderer to. Canonical taxonomy that
+ * replaces the old list/detail/dashboard "slots":
+ *   collection      ← old `list`
+ *   entity-detail   ← old `detail`
+ *   entity-profile  ← old `dashboard`
+ *
+ * Structural mirror of `ProfileContentKind` from `@synap-core/capabilities`,
+ * kept inline so the database layer stays UI-free.
+ */
+export type ProfileRendererContentKind =
+  | "entity-detail"
+  | "entity-profile"
+  | "collection";
+
+/**
+ * Back-compat: map a ContentKind to the legacy slot key still written into old
+ * workspace overlays and the deprecated `default_*_renderer` columns.
+ */
+const LEGACY_SLOT_BY_CONTENT_KIND: Record<
+  ProfileRendererContentKind,
+  "list" | "detail" | "dashboard"
+> = {
+  collection: "list",
+  "entity-detail": "detail",
+  "entity-profile": "dashboard",
+};
 
 export class ProfileResolutionService {
   private _db: PostgresJsDatabase<typeof schema>;
@@ -366,27 +392,33 @@ export class ProfileResolutionService {
   }
 
   /**
-   * Get the effective renderer for a profile in this workspace, by slot.
+   * Get the effective renderer for a profile in this workspace, by ContentKind.
    *
-   * Sister to `getEffectiveProperties` — the single rendering rule for
-   * choosing how a profile (list slot) or one of its entities (detail slot)
-   * should be displayed.
+   * Sister to `getEffectiveProperties` — the single rendering rule for choosing
+   * how a profile's collection / one entity / the whole profile should display.
    *
-   * Resolution chain:
-   *   1. Workspace overlay — `workspaces.settings.profileRenderers[slug][slot]`
-   *   2. Profile system default — `profiles.default_(list|detail)_renderer`
+   * Resolution chain (each step has a back-compat fallback to the old "slot"
+   * keys so overlays + columns written before the ContentKind migration still
+   * resolve):
+   *   1. Workspace overlay — `settings.profileRenderers[slug][contentKind]`,
+   *      then the legacy slot key (collection→list, entity-detail→detail,
+   *      entity-profile→dashboard).
+   *   2. Profile default — `profile.defaultRenderers[contentKind]` (the new
+   *      map), then the deprecated `default_(list|detail|dashboard)_renderer`
+   *      column for un-migrated rows.
    *   3. Hardcoded system fallback — keeps the pod bootable when nothing is
-   *      configured. List slot returns the 'list' cell, detail slot returns
-   *      the 'entity-detail' cell — both exist in the cell registry today.
+   *      configured. All keys point at existing registered cells.
    *
    * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
    */
   async getEffectiveRenderer(
     profileSlug: string,
     workspaceId: string | null,
-    slot: ProfileRendererSlot
+    contentKind: ProfileRendererContentKind
   ): Promise<RendererRef> {
-    // 1. Workspace overlay
+    const legacySlot = LEGACY_SLOT_BY_CONTENT_KIND[contentKind];
+
+    // 1. Workspace overlay (new contentKind key → legacy slot key)
     if (workspaceId) {
       const workspace = await this._db.query.workspaces.findFirst({
         where: eq(workspaces.id, workspaceId),
@@ -397,40 +429,42 @@ export class ProfileResolutionService {
         | null
         | undefined;
       const overlayRoot = settings?.profileRenderers as
-        | Record<
-            string,
-            {
-              list?: RendererRef;
-              detail?: RendererRef;
-              dashboard?: RendererRef;
-            }
-          >
+        | Record<string, Record<string, RendererRef | undefined>>
         | undefined;
-      const overlay = overlayRoot?.[profileSlug]?.[slot];
+      const profileOverlay = overlayRoot?.[profileSlug];
+      const overlay =
+        profileOverlay?.[contentKind] ?? profileOverlay?.[legacySlot];
       if (overlay) return overlay;
     }
 
-    // 2. Profile system default
+    // 2. Profile default (new map → deprecated column)
     const profile = workspaceId
       ? await this.profileRepo.getBySlugForWorkspace(profileSlug, workspaceId)
       : await this.profileRepo.getBySlug(profileSlug);
 
     if (profile) {
-      const defaultRef =
-        slot === "list"
+      const defaultRenderers = (
+        profile as {
+          defaultRenderers?: Record<string, unknown> | null;
+        }
+      ).defaultRenderers;
+      const mapped = defaultRenderers?.[contentKind];
+      if (mapped) return mapped as RendererRef;
+
+      const legacyColumn =
+        contentKind === "collection"
           ? profile.defaultListRenderer
-          : slot === "dashboard"
+          : contentKind === "entity-profile"
             ? (profile as { defaultDashboardRenderer?: unknown })
                 .defaultDashboardRenderer
             : profile.defaultDetailRenderer;
-      if (defaultRef) return defaultRef as RendererRef;
+      if (legacyColumn) return legacyColumn as RendererRef;
     }
 
-    // 3. Hardcoded system fallback — keeps the pod bootable when no profile
-    //    config exists. All keys point at existing registered cells.
-    if (slot === "dashboard")
+    // 3. Hardcoded system fallback — all keys point at existing registered cells.
+    if (contentKind === "entity-profile")
       return { kind: "cell", cellKey: "profile-dashboard", props: {} };
-    return slot === "list"
+    return contentKind === "collection"
       ? { kind: "cell", cellKey: "list", props: {} }
       : { kind: "cell", cellKey: "entity-detail", props: {} };
   }

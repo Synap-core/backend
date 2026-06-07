@@ -11,7 +11,12 @@ import {
   WireMcpServerSchema,
 } from "./_codecs/misc.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  getUserAccessibleWorkspaceIds,
+  type HubHono,
+} from "./_shared.js";
 
 export function registerMcpServersRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -45,15 +50,23 @@ export function registerMcpServersRoutes(app: HubHono): void {
       );
     }
     const workspaceId = c.req.query("workspaceId");
+    const userId = c.get("userId") as string;
     try {
+      // Only widen to the requested workspace if the caller is a member —
+      // otherwise restrict to pod-wide servers (no cross-workspace leak).
+      let wsFilter = isNull(mcpServers.workspaceId);
+      if (workspaceId) {
+        const wsIds = await getUserAccessibleWorkspaceIds(userId);
+        if (wsIds.includes(workspaceId)) {
+          wsFilter = or(
+            eq(mcpServers.workspaceId, workspaceId),
+            isNull(mcpServers.workspaceId)
+          )!;
+        }
+      }
       const rows = await db.query.mcpServers.findMany({
         where: and(
-          workspaceId
-            ? or(
-                eq(mcpServers.workspaceId, workspaceId),
-                isNull(mcpServers.workspaceId)
-              )
-            : isNull(mcpServers.workspaceId),
+          wsFilter,
           eq(mcpServers.approved, true),
           eq(mcpServers.enabled, true)
         ),

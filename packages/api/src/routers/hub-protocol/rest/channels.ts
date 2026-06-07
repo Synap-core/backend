@@ -58,9 +58,10 @@ export function registerChannelsRoutes(app: HubHono): void {
         403
       );
     }
-    const authUserId = c.get("userId") as string;
     const q = c.req.query();
-    const userId = q.userId ?? authUserId;
+    // Pin to the authenticated owner — ignore any caller-supplied q.userId
+    // (it let an agent key list another user's channels).
+    const userId = c.get("userId") as string;
     if (!userId) {
       return c.json({ error: "userId is required" }, 400);
     }

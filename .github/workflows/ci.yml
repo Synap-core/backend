@@ -94,6 +94,12 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # Fail the PR if the generated API-types contract is stale (router changed
+      # but @synap-core/api-types/generated.d.ts wasn't regenerated). The
+      # frontends consume this artifact, so drift is a silent type-safety hole.
+      - name: Verify generated API types are up to date
+        run: pnpm --filter @synap/api gen-types:check
+
       - name: Start API server for smoke tests
         run: |
           # Start server in background with test config

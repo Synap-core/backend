@@ -159,9 +159,11 @@ export function registerAgentUsersRoutes(app: HubHono): void {
         );
       }
 
-      const accessibleWsIds = workspaceId
-        ? [workspaceId]
-        : await getUserAccessibleWorkspaceIds(userId);
+      // A supplied workspaceId may only NARROW within the caller's memberships,
+      // never widen to a foreign workspace.
+      const memberWsIds = await getUserAccessibleWorkspaceIds(userId);
+      if (workspaceId && !memberWsIds.includes(workspaceId)) return c.json([]);
+      const accessibleWsIds = workspaceId ? [workspaceId] : memberWsIds;
       if (accessibleWsIds.length === 0) return c.json([]);
       const results = await db
         .select({

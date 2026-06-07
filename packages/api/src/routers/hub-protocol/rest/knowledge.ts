@@ -506,10 +506,13 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       : undefined;
 
     try {
-      const accessibleWsIds = await getUserAccessibleWorkspaceIds(query.userId);
+      // Pin to the authenticated owner — never the query userId (it let an
+      // agent key traverse another user's entity graph).
+      const userId = c.get("userId") as string;
+      const accessibleWsIds = await getUserAccessibleWorkspaceIds(userId);
       if (accessibleWsIds.length === 0) return c.json([], 200);
       const results = await traverseEntityGraph({
-        userId: query.userId,
+        userId,
         startEntityId: query.startEntityId,
         maxDepth: Math.min(maxDepth, 3),
         relationshipTypes,

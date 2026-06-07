@@ -12,6 +12,7 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { TRPCError } from "@trpc/server";
 import { db, proposals, eq, and, desc } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
+import { userVisibleWhere } from "../../utils/user-visible-where.js";
 
 export const proposalsRouter = router({
   /**
@@ -32,8 +33,13 @@ export const proposalsRouter = router({
         limit: z.number().default(50),
       })
     )
-    .query(async ({ input }) => {
-      const conditions = [];
+    .query(async ({ input, ctx }) => {
+      // Scope to the caller's own workspaces (+ pod-wide) — without this the
+      // optional-workspaceId filter degrades to a null-where that returns EVERY
+      // proposal on the pod (all users, all workspaces).
+      const conditions = [
+        userVisibleWhere(proposals.workspaceId, ctx.userId as string),
+      ];
 
       if (input.workspaceId) {
         conditions.push(eq(proposals.workspaceId, input.workspaceId));

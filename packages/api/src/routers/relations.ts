@@ -60,6 +60,7 @@ import {
 } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
@@ -692,6 +693,22 @@ export const relationsRouter = router({
         relationId = existing.id;
       }
 
+      // Gate on the relation's REAL workspace — the perm check below keys off
+      // the request workspaceId, which doesn't pin the relation row.
+      const relRow = await database.query.relations.findFirst({
+        where: eq(relations.id, relationId),
+        columns: { workspaceId: true },
+      });
+      if (!relRow) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Relation not found",
+        });
+      }
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: relRow.workspaceId,
+      });
+
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
@@ -785,7 +802,22 @@ export const relationsRouter = router({
       // Snapshot relation data before deletion (for reverse sync)
       const relationToDelete = await database.query.relations.findFirst({
         where: eq(relations.id, input.id),
-        columns: { sourceEntityId: true, targetEntityId: true, type: true },
+        columns: {
+          sourceEntityId: true,
+          targetEntityId: true,
+          type: true,
+          workspaceId: true,
+        },
+      });
+      if (!relationToDelete) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Relation not found",
+        });
+      }
+      // Gate on the relation's REAL workspace (request workspaceId doesn't pin it).
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: relationToDelete.workspaceId,
       });
 
       await relationRepo.delete(input.id, ctx.userId);
@@ -849,6 +881,13 @@ export const relationsRouter = router({
   backfill: protectedProcedure
     .input(z.object({ workspaceId: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      // Gate membership of the target workspace before enqueuing a
+      // workspace-wide backfill job.
+      const database = await getDb();
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: input.workspaceId,
+      });
+
       const { getBoss } = await import("@synap/jobs");
 
       const boss = getBoss();
@@ -916,6 +955,11 @@ export const relationsRouter = router({
       }
 
       const database = await getDb();
+      // Gate membership of the target (header) workspace before writing
+      // relations + auto-creating relation defs into it.
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: effectiveWorkspaceId,
+      });
       const eventRepo = new EventRepository(sql);
       const relationRepo = new RelationRepository(database, eventRepo);
       const relDefRepo = new RelationDefRepository(database);

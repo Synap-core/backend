@@ -96,14 +96,22 @@ export const profiles = pgTable(
     // NULL means "fall back to system default" in getEffectiveRenderer().
     // Workspace overrides live in workspaces.settings.profileRenderers[slug].
     // Migration: 0024_profile_renderer_columns.sql
+    /** @deprecated Use `defaultRenderers['collection']`. Kept (migration 0112). */
     defaultListRenderer: jsonb("default_list_renderer"),
+    /** @deprecated Use `defaultRenderers['entity-detail']`. Kept (migration 0112). */
     defaultDetailRenderer: jsonb("default_detail_renderer"),
-    // Dashboard slot — a per-profile bento, stored as a RendererTarget (a
-    // `{ kind:'view', viewId }` ref to a bento view scoped like the profile:
-    // pod-wide profile → pod-wide view (workspace_id NULL); workspace profile →
-    // workspace-scoped view). Workspace overrides live in
-    // workspaces.settings.profileRenderers[slug].dashboard.
+    /** @deprecated Use `defaultRenderers['entity-profile']`. Kept (migration 0112). */
     defaultDashboardRenderer: jsonb("default_dashboard_renderer"),
+
+    // The profile's renderers, keyed by RendererType (the single taxonomy that
+    // replaces the old list/detail/dashboard "slots"). One RendererTarget per
+    // type — `{ entity-detail?, entity-profile?, collection? }`. A missing key
+    // means "fall back to system default" in getEffectiveRenderer(). Workspace
+    // overrides live in workspaces.settings.profileRenderers[slug]. See 0112.
+    defaultRenderers: jsonb("default_renderers")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
 
     // Metadata
     isActive: boolean("is_active").default(true).notNull(),

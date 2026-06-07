@@ -54,11 +54,15 @@ export const hubViewsRouter = router({
         type: z.string().optional(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = await getDb();
 
       const rows = await db.query.views.findMany({
         where: and(
+          // Scope to the caller's own views — mirrors the operator views.list
+          // (eq userId). Without it the optional filters degrade to a null-where
+          // returning every view on the pod.
+          eq(views.userId, ctx.userId as string),
           input.workspaceId
             ? eq(views.workspaceId, input.workspaceId)
             : undefined,

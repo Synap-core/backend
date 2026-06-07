@@ -18,6 +18,7 @@ import {
 import { entityPropertyIndex } from "@synap/database/schema";
 // PropertySlugConflictError not used, removed
 import { TRPCError } from "@trpc/server";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "property-defs-router" });
@@ -238,6 +239,12 @@ export const propertyDefsRouter = router({
         });
       }
 
+      // Gate against the ROW's workspace (never a request value). Global/base
+      // defs (workspaceId null) are system-managed → denied here.
+      await assertWorkspaceWrite(db, ctx.userId, {
+        workspaceId: existing.workspaceId,
+      });
+
       // Check for slug conflict if slug is being changed.
       // Look up an exact replacement — same profile_id + same workspace_id
       // scope as the row being updated. Finding a row in the same scope
@@ -292,6 +299,12 @@ export const propertyDefsRouter = router({
           message: `Property definition not found: ${input.id}`,
         });
       }
+
+      // Gate against the ROW's workspace (never a request value). Global/base
+      // defs (workspaceId null) are system-managed → denied here.
+      await assertWorkspaceWrite(db, ctx.userId, {
+        workspaceId: existing.workspaceId,
+      });
 
       // Prevent deletion if any entity is still using this property
       const usageResult = await db

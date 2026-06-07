@@ -156,9 +156,11 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_recall_facts": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
-      // Keyword-based fact search (no embedding needed)
+      // Keyword-based fact search (no embedding needed).
+      // SECURITY: pin to the authenticated `userId` — never `args.userId`
+      // (that let a caller recall another user's facts), matching synap_search.
       const facts = await knowledgeRepository.searchFacts({
-        userId: (args.userId as string) || userId,
+        userId,
         query: args.query as string,
         limit: (args.limit as number) || 10,
       });

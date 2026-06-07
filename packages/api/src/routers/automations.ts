@@ -8,6 +8,7 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
 // validateEventPattern from the main index.js and events/index.js bundles.
 import { validateEventPattern } from "@synap-core/types/events/unified";
@@ -248,18 +249,14 @@ export const automationsRouter = router({
         metadata: z.record(z.string(), z.unknown()).optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const database = await getDb();
 
-      // Verify ownership
+      // Load by id ALONE, then gate on the row's real workspace — never the
+      // request-supplied workspaceId (that gates nothing).
       const existing = await database.query.automations.findFirst({
-        where: and(
-          eq(automations.id, input.id),
-          input.workspaceId
-            ? eq(automations.workspaceId, input.workspaceId)
-            : isNull(automations.workspaceId)
-        ),
-        columns: { id: true },
+        where: eq(automations.id, input.id),
+        columns: { id: true, workspaceId: true, createdBy: true },
       });
       if (!existing) {
         throw new TRPCError({
@@ -267,6 +264,10 @@ export const automationsRouter = router({
           message: "Automation not found",
         });
       }
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: existing.workspaceId,
+        ownerId: existing.createdBy,
+      });
 
       // Validate event pattern on update too
       if (
@@ -322,17 +323,12 @@ export const automationsRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const database = await getDb();
 
       const existing = await database.query.automations.findFirst({
-        where: and(
-          eq(automations.id, input.id),
-          input.workspaceId
-            ? eq(automations.workspaceId, input.workspaceId)
-            : isNull(automations.workspaceId)
-        ),
-        columns: { id: true },
+        where: eq(automations.id, input.id),
+        columns: { id: true, workspaceId: true, createdBy: true },
       });
       if (!existing) {
         throw new TRPCError({
@@ -340,6 +336,10 @@ export const automationsRouter = router({
           message: "Automation not found",
         });
       }
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: existing.workspaceId,
+        ownerId: existing.createdBy,
+      });
 
       await database.delete(automations).where(eq(automations.id, input.id));
 
@@ -355,16 +355,11 @@ export const automationsRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const database = await getDb();
 
       const existing = await database.query.automations.findFirst({
-        where: and(
-          eq(automations.id, input.id),
-          input.workspaceId
-            ? eq(automations.workspaceId, input.workspaceId)
-            : isNull(automations.workspaceId)
-        ),
+        where: eq(automations.id, input.id),
       });
       if (!existing) {
         throw new TRPCError({
@@ -372,6 +367,10 @@ export const automationsRouter = router({
           message: "Automation not found",
         });
       }
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: existing.workspaceId,
+        ownerId: existing.createdBy,
+      });
       if (existing.status === "active") {
         return { status: "already_active" };
       }
@@ -406,17 +405,17 @@ export const automationsRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const database = await getDb();
 
       const existing = await database.query.automations.findFirst({
-        where: and(
-          eq(automations.id, input.id),
-          input.workspaceId
-            ? eq(automations.workspaceId, input.workspaceId)
-            : isNull(automations.workspaceId)
-        ),
-        columns: { id: true, status: true },
+        where: eq(automations.id, input.id),
+        columns: {
+          id: true,
+          status: true,
+          workspaceId: true,
+          createdBy: true,
+        },
       });
       if (!existing) {
         throw new TRPCError({
@@ -424,6 +423,10 @@ export const automationsRouter = router({
           message: "Automation not found",
         });
       }
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: existing.workspaceId,
+        ownerId: existing.createdBy,
+      });
 
       await database
         .update(automations)
@@ -625,12 +628,7 @@ export const automationsRouter = router({
       const { getBoss } = await import("@synap/jobs");
 
       const existing = await database.query.automations.findFirst({
-        where: and(
-          eq(automations.id, input.id),
-          input.workspaceId
-            ? eq(automations.workspaceId, input.workspaceId)
-            : isNull(automations.workspaceId)
-        ),
+        where: eq(automations.id, input.id),
       });
       if (!existing) {
         throw new TRPCError({
@@ -638,6 +636,12 @@ export const automationsRouter = router({
           message: "Automation not found",
         });
       }
+      // Gate on the row's real workspace — triggering is cross-workspace
+      // CODE EXECUTION, so this guard is critical.
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: existing.workspaceId,
+        ownerId: existing.createdBy,
+      });
       if (existing.status !== "active" && existing.triggerType !== "manual") {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -649,7 +653,7 @@ export const automationsRouter = router({
         .insert(automationRuns)
         .values({
           automationId: existing.id,
-          workspaceId: input.workspaceId ?? null,
+          workspaceId: existing.workspaceId,
           triggeredBy: ctx.userId!,
           triggerPayload: {
             type: "manual",

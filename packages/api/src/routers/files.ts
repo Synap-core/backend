@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, podAdminProcedure } from "../trpc.js";
 import {
   S3Client,
   ListObjectsV2Command,
@@ -36,7 +36,7 @@ export const filesRouter = router({
   /**
    * List buckets
    */
-  listBuckets: protectedProcedure.query(async () => {
+  listBuckets: podAdminProcedure.query(async () => {
     try {
       const client = getS3Client();
       const response = await client.send(new ListBucketsCommand({}));
@@ -56,7 +56,7 @@ export const filesRouter = router({
   /**
    * List files in a bucket with optional prefix
    */
-  listFiles: protectedProcedure
+  listFiles: podAdminProcedure
     .input(
       z.object({
         bucket: z.string().default(defaultBucket),
@@ -121,7 +121,7 @@ export const filesRouter = router({
   /**
    * Get file metadata
    */
-  getFileMetadata: protectedProcedure
+  getFileMetadata: podAdminProcedure
     .input(
       z.object({
         path: z.string(),
@@ -149,7 +149,7 @@ export const filesRouter = router({
   /**
    * Get signed download URL
    */
-  getDownloadUrl: protectedProcedure
+  getDownloadUrl: podAdminProcedure
     .input(
       z.object({
         path: z.string(),
@@ -175,7 +175,7 @@ export const filesRouter = router({
   /**
    * Check if file exists
    */
-  exists: protectedProcedure
+  exists: podAdminProcedure
     .input(
       z.object({
         path: z.string(),
@@ -189,7 +189,7 @@ export const filesRouter = router({
   /**
    * Delete a file
    */
-  deleteFile: protectedProcedure
+  deleteFile: podAdminProcedure
     .input(
       z.object({
         path: z.string(),

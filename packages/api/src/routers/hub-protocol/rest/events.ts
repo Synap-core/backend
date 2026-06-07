@@ -56,7 +56,9 @@ export function registerEventsRoutes(app: HubHono): void {
         403
       );
     }
-    const userId = c.req.query("userId");
+    // Pin to the authenticated owner — never the caller-supplied query userId
+    // (it let an agent key read another user's event log).
+    const userId = c.get("userId") as string;
     const type = c.req.query("type");
     const subjectType = c.req.query("subjectType");
     const subjectId = c.req.query("subjectId");

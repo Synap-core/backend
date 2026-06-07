@@ -16,7 +16,64 @@ import { setupBridge } from "./bridge.js";
 import { validateRealtimeApiKey } from "./api-key-auth.js";
 import { getKratosSessionByToken } from "@synap/auth";
 import { db, and, eq } from "@synap/database";
-import { workspaceMembers } from "@synap/database/schema";
+import { workspaceMembers, channels, views } from "@synap/database/schema";
+
+/** Is `userId` a member of `workspaceId`? */
+async function isWorkspaceMember(
+  workspaceId: string,
+  userId: string
+): Promise<boolean> {
+  const m = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, workspaceId),
+      eq(workspaceMembers.userId, userId)
+    ),
+  });
+  return !!m;
+}
+
+/**
+ * Authorize a USER principal joining a realtime room. Rooms are
+ * `<prefix>:<id>` — the dynamic `join-room` path must check membership/ownership
+ * per prefix, NOT trust the caller (otherwise any socket reads any channel's
+ * stream by id). Service-account observers (realtime:observe) bypass this.
+ */
+async function canUserJoinRoom(
+  roomId: string,
+  userId: string
+): Promise<boolean> {
+  const idx = roomId.indexOf(":");
+  if (idx <= 0) return false;
+  const prefix = roomId.slice(0, idx);
+  const id = roomId.slice(idx + 1);
+  if (!id) return false;
+  switch (prefix) {
+    case "user":
+      return id === userId;
+    case "workspace":
+      return isWorkspaceMember(id, userId);
+    case "channel": {
+      const ch = await db.query.channels.findFirst({
+        where: eq(channels.id, id),
+        columns: { userId: true, workspaceId: true },
+      });
+      if (!ch) return false;
+      if (ch.userId === userId) return true;
+      return ch.workspaceId ? isWorkspaceMember(ch.workspaceId, userId) : false;
+    }
+    case "view": {
+      const v = await db.query.views.findFirst({
+        where: eq(views.id, id),
+        columns: { userId: true, workspaceId: true },
+      });
+      if (!v) return false;
+      if (v.userId === userId) return true;
+      return v.workspaceId ? isWorkspaceMember(v.workspaceId, userId) : false;
+    }
+    default:
+      return false; // unknown prefix → deny
+  }
+}
 
 const PORT = parseInt(process.env.REALTIME_PORT || "4001", 10);
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
@@ -377,9 +434,15 @@ presenceNamespace.on("connection", (socket) => {
   });
 
   // Event: Dynamic room join/leave (so clients can subscribe to extra rooms after connection)
-  socket.on("join-room", (roomId: string) => {
-    if (typeof roomId === "string" && roomId.length > 0) {
+  socket.on("join-room", async (roomId: string) => {
+    if (typeof roomId !== "string" || roomId.length === 0) return;
+    // Service-account observers (realtime:observe) keep their documented broad
+    // allowance; user principals must be authorized for the room — otherwise
+    // any socket could join channel:<id>/workspace:<id> and read its stream.
+    if (isServiceAccount || (await canUserJoinRoom(roomId, userId))) {
       socket.join(roomId);
+    } else {
+      console.error(`[Presence] join-room denied: ${userId} → ${roomId}`);
     }
   });
   socket.on("leave-room", (roomId: string) => {

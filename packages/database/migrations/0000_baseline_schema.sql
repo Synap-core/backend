@@ -199,6 +199,7 @@ ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "default_list_renderer"   jsonb;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "default_detail_renderer" jsonb;
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "default_renderers" jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 -- Self-reference FK for parent_profile_id
 DO $$ BEGIN
@@ -2518,6 +2519,7 @@ ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "updated_at" timestamp
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "deps" jsonb DEFAULT '{}';
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "trust_level" text NOT NULL DEFAULT 'generated';
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "role" text NOT NULL DEFAULT 'widget';
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "content_kind" text NOT NULL DEFAULT 'widget';
 
 CREATE UNIQUE INDEX IF NOT EXISTS "widget_def_type_key_workspace_uniq"
   ON "widget_definitions" ("type_key", "workspace_id");

@@ -1242,6 +1242,19 @@ export type WidgetTrustLevel = "trusted" | "installed" | "generated";
  *   - "panel"           → side or floating panel surface
  */
 export type WidgetRole = "widget" | "view-renderer" | "entity-renderer" | "panel";
+/**
+ * Content kind — the single de-conflated taxonomy for WHAT a cell renders. It
+ * REPLACES `role` (which conflated content with placement). DISTINCT from
+ * `rendererType` (the rendering MECHANISM: frame/builtin/iframe/native).
+ * Mirrors `ContentKind` in `@synap-core/capabilities` (canonical copy).
+ *
+ *   - "entity-detail"  → renders ONE entity (its full page)
+ *   - "entity-profile" → renders the WHOLE profile/type (its dashboard / home)
+ *   - "collection"     → renders a view of MANY entities
+ *   - "widget"         → generic, content-agnostic — the DEFAULT; never a
+ *                        profile assignment, only placeable
+ */
+export type ContentKind = "entity-detail" | "entity-profile" | "collection" | "widget";
 export interface PodIntelligenceDefaults {
 	chatModelId: string | null;
 	reasoningModelId: string | null;
@@ -10297,6 +10310,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
+					defaultRenderers: Record<string, unknown>;
 				}[];
 			};
 			meta: object;
@@ -10325,6 +10339,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
+					defaultRenderers: Record<string, unknown>;
 				};
 				effectiveProperties: EffectiveProperty[];
 			};
@@ -10364,6 +10379,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
+					defaultRenderers: Record<string, unknown>;
 				};
 				existing: boolean;
 				status?: undefined;
@@ -10395,6 +10411,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
+					defaultRenderers: Record<string, unknown>;
 				};
 				existing?: undefined;
 				status?: undefined;
@@ -10539,6 +10556,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
+					defaultRenderers: Record<string, unknown>;
 				};
 			};
 			meta: object;
@@ -10585,6 +10603,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
+					defaultRenderers: Record<string, unknown>;
 				}[];
 			};
 			meta: object;
@@ -10623,6 +10642,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
+					defaultRenderers: Record<string, unknown>;
 				}[];
 			};
 			meta: object;
@@ -10652,6 +10672,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
+					defaultRenderers: Record<string, unknown>;
 				}[];
 			};
 			meta: object;
@@ -10679,19 +10700,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		getEffectiveRenderers: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				profileSlug: string;
-				slot?: "list" | "detail" | "dashboard" | undefined;
+				contentKind?: "entity-detail" | "entity-profile" | "collection" | undefined;
 			};
 			output: {
-				list: RendererRef | null;
-				detail: RendererRef | null;
-				dashboard: RendererRef | null;
+				"entity-detail": RendererRef | null;
+				"entity-profile": RendererRef | null;
+				collection: RendererRef | null;
 			};
 			meta: object;
 		}>;
 		setProfileRendererOverride: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				profileSlug: string;
-				slot: "list" | "detail" | "dashboard";
+				contentKind: "entity-detail" | "entity-profile" | "collection";
 				ref: {
 					kind: "cell";
 					cellKey: string;
@@ -11652,6 +11673,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | null;
 				deps: Record<string, string> | null;
 				trustLevel: WidgetTrustLevel;
+				contentKind: ContentKind;
 			}[];
 			meta: object;
 		}>;
@@ -11688,7 +11710,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | null;
 				deps: Record<string, string> | null;
 				trustLevel: WidgetTrustLevel;
+				contentKind: ContentKind;
 			} | null;
+			meta: object;
+		}>;
+		generateSource: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				description: string;
+				language?: "module" | "react" | undefined;
+				existingCode?: string | undefined;
+			};
+			output: {
+				source: string;
+				language: "module" | "react";
+			};
 			meta: object;
 		}>;
 		upsert: import("@trpc/server").TRPCMutationProcedure<{
@@ -11699,6 +11734,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				icon?: string | undefined;
 				category?: string | undefined;
 				rendererType?: "builtin" | "iframe" | "native" | "frame" | undefined;
+				contentKind?: "widget" | "entity-detail" | "entity-profile" | "collection" | undefined;
 				rendererSource?: string | undefined;
 				source?: string | undefined;
 				deps?: Record<string, string> | undefined;
@@ -11742,6 +11778,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | null;
 				deps: Record<string, string> | null;
 				trustLevel: WidgetTrustLevel;
+				contentKind: ContentKind;
 			};
 			meta: object;
 		}>;
@@ -12059,6 +12096,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				source: "json" | "markdown" | "csv" | "bookmarks_html" | "contacts_device" | "telegram_archive" | "linkedin_archive" | "connector_sync" | "local_migration";
 				analyzedRows: number;
 				suggestions: ImportModelingSuggestion[];
+			};
+			meta: object;
+		}>;
+		batchProgressRoom: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				event: "import:file:progress";
+				room: string;
+				description: string;
 			};
 			meta: object;
 		}>;

@@ -10,7 +10,6 @@ import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { TRPCError } from "@trpc/server";
 import {
-  db,
   eq,
   isNull,
   getDb,
@@ -20,6 +19,7 @@ import {
 } from "@synap/database";
 import { roles } from "@synap/database/schema";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
@@ -52,10 +52,12 @@ export const rolesRouter = router({
    */
   get: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input }) => {
-      const role = await db.query.roles.findFirst({
-        where: eq(roles.id, input.id),
-      });
+    .query(async ({ input, ctx }) => {
+      // scopedDb auto-ANDs the membership predicate — a non-member can't read
+      // another workspace's role (incl. its RBAC permission/filter config).
+      const role = await scopedDb(AccessContext.from(ctx)).findFirst<
+        typeof roles.$inferSelect
+      >(roles, { where: eq(roles.id, input.id) });
 
       if (!role) {
         throw new TRPCError({
@@ -178,6 +180,20 @@ export const rolesRouter = router({
       const eventRepo = new EventRepository(sql);
       const roleRepo = new RoleRepository(database, eventRepo);
 
+      // Gate on the ROLE's real workspace — the permission check above keys off
+      // the request workspaceId, which does NOT pin the role row to a workspace
+      // the caller belongs to.
+      const roleRow = await database.query.roles.findFirst({
+        where: eq(roles.id, input.id),
+        columns: { workspaceId: true },
+      });
+      if (!roleRow) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Role not found" });
+      }
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: roleRow.workspaceId,
+      });
+
       await roleRepo.update(
         input.id,
         {
@@ -245,6 +261,19 @@ export const rolesRouter = router({
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
       const roleRepo = new RoleRepository(database, eventRepo);
+
+      // Gate on the ROLE's real workspace (see update — request workspaceId
+      // doesn't pin the row).
+      const roleRow = await database.query.roles.findFirst({
+        where: eq(roles.id, input.id),
+        columns: { workspaceId: true },
+      });
+      if (!roleRow) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Role not found" });
+      }
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: roleRow.workspaceId,
+      });
 
       await roleRepo.delete(input.id, ctx.userId);
 
