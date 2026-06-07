@@ -126,6 +126,16 @@ export const GraphViewConfigSchema = BaseViewConfigSchema.extend({
  * Bento grid view config
  * Standalone schema (not extending base - composite view type)
  */
+/**
+ * Per-block surface treatment ("chrome"). `auto` defers to the widget's default
+ * (resolveDefaultBentoWidgetChrome on the frontend). MUST be persisted, so it is
+ * part of every block schema below — otherwise Zod strips it on save and the
+ * user's surface-style choice is lost on reload.
+ */
+export const BentoBlockChromeSchema = z
+  .enum(["auto", "none", "soft", "card", "inset", "hero"])
+  .optional();
+
 export const BentoViewConfigSchema = z.object({
   layout: z.enum(["bento", "grid", "flow"]).default("bento"),
   breakpoints: z
@@ -167,6 +177,7 @@ export const BentoViewConfigSchema = z.object({
           h: z.number().int().positive(),
         }),
         overrides: z.record(z.string(), z.unknown()).optional(),
+        chrome: BentoBlockChromeSchema,
       }),
       // Entity block
       z.object({
@@ -180,6 +191,7 @@ export const BentoViewConfigSchema = z.object({
           h: z.number().int().positive(),
         }),
         variant: z.enum(["compact", "detailed"]).optional(),
+        chrome: BentoBlockChromeSchema,
       }),
       // Widget block (widgetType = opaque string; frontend registry decides renderer)
       z.object({
@@ -200,6 +212,7 @@ export const BentoViewConfigSchema = z.object({
           h: z.number().int().positive(),
         }),
         config: z.record(z.string(), z.unknown()).optional(),
+        chrome: BentoBlockChromeSchema,
       }),
     ])
   ),

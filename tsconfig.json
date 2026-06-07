@@ -59,6 +59,9 @@
       "path": "./packages/feed-service"
     },
     {
+      "path": "./packages/governance-policy"
+    },
+    {
       "path": "./packages/hub-protocol"
     },
     {

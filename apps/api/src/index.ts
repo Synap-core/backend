@@ -989,6 +989,10 @@ app.post("/api/ws-ticket", authMiddleware, async (c) => {
   return c.json(issueWsTicket(userId));
 });
 
+// AI Providers — public model discovery for the synap CLI (keys never returned)
+import { providersRouter } from "./routers/providers.js";
+app.route("/api/hub/providers", providersRouter);
+
 // Admin routes (public API for invitations)
 import { adminRouter } from "./routers/admin.js";
 app.route("/api/admin", adminRouter);

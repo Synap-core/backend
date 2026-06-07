@@ -2968,7 +2968,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		resolveOrCreateChannel: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab";
+				channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab";
 				workspaceId?: string | undefined;
 				contextObjectType?: "user" | "entity" | "external" | "workspace" | "document" | "view" | "task" | "project" | undefined;
 				contextObjectId?: string | undefined;
@@ -3009,7 +3009,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
 					scope: "user" | "pod" | "workspace";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -3096,7 +3096,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				parentChannelId?: string | undefined;
 				attachmentEntityIds?: string[] | undefined;
 				deepAnalysis?: boolean | undefined;
-				channelType?: "personal" | "thread" | "sub_thread" | "agent_collab" | undefined;
+				channelType?: "thread" | "personal" | "sub_thread" | "agent_collab" | undefined;
 				contextObjectId?: string | undefined;
 				contextObjectType?: "entity" | "document" | "view" | undefined;
 				branchPurpose?: string | undefined;
@@ -3130,7 +3130,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
 					scope: "user" | "pod" | "workspace";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -3236,7 +3236,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelId: string;
 					parentId: string | null;
 					role: "user" | "system" | "assistant";
-					authorType: "human" | "ai_agent" | "external" | "bot";
+					authorType: "external" | "human" | "ai_agent" | "bot";
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
 					inboxItemId: string | null;
@@ -3288,7 +3288,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		listChannels: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | undefined;
-				channelType?: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | undefined;
+				channelType?: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | undefined;
 				limit?: number | undefined;
 				contextObjectId?: string | undefined;
 				contextObjectType?: "entity" | "document" | "view" | undefined;
@@ -3299,6 +3299,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				channels: (Channel & {
 					hasAssistantMessage: boolean;
 					origin: string;
+					unreadCount: number;
 				})[];
 			};
 			meta: object;
@@ -3315,6 +3316,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				items: (Channel & {
 					hasAssistantMessage: boolean;
 					origin: string;
+					unreadCount: number;
 				})[];
 				pagination: {
 					hasMore: boolean;
@@ -3335,6 +3337,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				items: (Channel & {
 					hasAssistantMessage: boolean;
 					origin: string;
+					unreadCount: number;
 				})[];
 				pagination: {
 					hasMore: boolean;
@@ -3354,6 +3357,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				items: (Channel & {
 					hasAssistantMessage: boolean;
 					origin: string;
+					unreadCount: number;
 				})[];
 				pagination: {
 					hasMore: boolean;
@@ -3373,6 +3377,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				items: (Channel & {
 					hasAssistantMessage: boolean;
 					origin: string;
+					unreadCount: number;
 				})[];
 				pagination: {
 					hasMore: boolean;
@@ -3423,7 +3428,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
 					scope: "user" | "pod" | "workspace";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -3489,7 +3494,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
 					scope: "user" | "pod" | "workspace";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -3518,7 +3523,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "pending" | "none" | "resolved";
+					conflictStatus: "none" | "pending" | "resolved";
 					relevanceScore: number | null;
 				}[] | undefined;
 				branchTree: any;
@@ -3598,7 +3603,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
 					scope: "user" | "pod" | "workspace";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -3628,7 +3633,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
 					scope: "user" | "pod" | "workspace";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -3658,7 +3663,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
 					scope: "user" | "pod" | "workspace";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -3697,7 +3702,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "pending" | "none" | "resolved";
+					conflictStatus: "none" | "pending" | "resolved";
 					relevanceScore: number | null;
 				}[];
 				entities: {
@@ -3710,7 +3715,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "pending" | "none" | "resolved";
+					conflictStatus: "none" | "pending" | "resolved";
 					relevanceScore: number | null;
 				}[];
 				documents: {
@@ -3723,7 +3728,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
-					conflictStatus: "pending" | "none" | "resolved";
+					conflictStatus: "none" | "pending" | "resolved";
 					relevanceScore: number | null;
 				}[];
 			};
@@ -3823,7 +3828,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
 					scope: "user" | "pod" | "workspace";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					channelType: "external" | "thread" | "personal" | "sub_thread" | "feed" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -3908,6 +3913,40 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						agentType: string | null;
 					} | null;
 				}[];
+			};
+			meta: object;
+		}>;
+		toggleReaction: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				messageId: string;
+				emoji: string;
+			};
+			output: {
+				action: "removed";
+			} | {
+				action: "added";
+			};
+			meta: object;
+		}>;
+		getChannelReactions: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				messageIds: string[];
+			};
+			output: {
+				reactions: Record<string, {
+					emoji: string;
+					count: number;
+					reactedByMe: boolean;
+				}[]>;
+			};
+			meta: object;
+		}>;
+		markChannelRead: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				channelId: string;
+			};
+			output: {
+				ok: boolean;
 			};
 			meta: object;
 		}>;
@@ -9981,10 +10020,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				createdAt: Date;
 				metadata: unknown;
+				messageId: string;
 				relationshipType: string;
 				targetType: string;
 				targetId: string;
-				messageId: string;
 				position: unknown;
 			};
 			meta: object;
@@ -10008,10 +10047,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				createdAt: Date;
 				metadata: unknown;
+				messageId: string;
 				relationshipType: string;
 				targetType: string;
 				targetId: string;
-				messageId: string;
 				position: unknown;
 			}[];
 			meta: object;
@@ -10027,10 +10066,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				createdAt: Date;
 				metadata: unknown;
+				messageId: string;
 				relationshipType: string;
 				targetType: string;
 				targetId: string;
-				messageId: string;
 				position: unknown;
 			}[];
 			meta: object;
@@ -10045,10 +10084,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				createdAt: Date;
 				metadata: unknown;
+				messageId: string;
 				relationshipType: string;
 				targetType: string;
 				targetId: string;
-				messageId: string;
 				position: unknown;
 			}[];
 			meta: object;
@@ -10066,10 +10105,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				createdAt: Date;
 				metadata: unknown;
+				messageId: string;
 				relationshipType: string;
 				targetType: string;
 				targetId: string;
-				messageId: string;
 				position: unknown;
 			}[];
 			meta: object;

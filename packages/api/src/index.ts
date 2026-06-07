@@ -531,6 +531,13 @@ registerRouter("aiProviders", aiProvidersRouter, {
   description: "Pod-level AI provider registry",
 });
 
+import { aiProviderCredentialsRouter } from "./routers/ai-provider-credentials.js";
+registerRouter("aiProviderCredentials", aiProviderCredentialsRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Per-workspace and per-user AI provider key overrides",
+});
+
 import { coreRouter } from "./root.js";
 import type { AppRouter } from "./root.js";
 export type { AppRouter };

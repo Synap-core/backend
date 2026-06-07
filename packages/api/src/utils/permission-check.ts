@@ -28,6 +28,26 @@ import type { WorkspaceSettings, AgentMetadata } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { deriveAuthorshipMode } from "../services/agent-identity-service.js";
 import { logEvent } from "../lib/event-helpers.js";
+import {
+  decideAgentPolicy,
+  requiredPermissionFor,
+  isBlockedFilesystemPath,
+  DEFAULT_AUTO_APPROVE,
+  DESTRUCTIVE_ACTIONS,
+  PROPOSAL_TTL_DAYS,
+  type ChannelCapabilityGrant,
+} from "@synap/governance-policy";
+
+// Back-compat: these governance-policy symbols historically lived in this
+// module. Their canonical home is now @synap/governance-policy; re-export so
+// existing importers (tests, routers) keep resolving them from here.
+export { DEFAULT_AUTO_APPROVE, DESTRUCTIVE_ACTIONS };
+export {
+  ADMIN_ACTIONS,
+  resolveChannelCapabilityDecision,
+} from "@synap/governance-policy";
+export type { ChannelCapabilityGrant };
+export type { ChannelCapabilityDecision } from "@synap/governance-policy";
 
 const logger = createLogger({ module: "permission-check" });
 
@@ -51,42 +71,8 @@ export function requestedEventTypeFor(
   return `${subject}.${action}.requested`;
 }
 
-/**
- * Filesystem paths that are ALWAYS blocked for external agent writes,
- * regardless of user approval or workspace settings.
- *
- * This is the backend enforcement layer. The synap-os skill also enforces these
- * rules on the OpenClaw side (first line of defence).
- *
- * Pattern semantics:
- *   - /i flag: case-insensitive matching
- *   - Anchored at start where relevant to avoid partial matches
- */
-const BLOCKED_FILESYSTEM_PATHS: RegExp[] = [
-  // Synap internal directories
-  /synap[-_]backend/i,
-  /synap[-_]intelligence/i,
-  /synap[-_]realtime/i,
-  // Container / deployment config
-  /docker-compose/i,
-  /\.env(?:\.|$)/,
-  /\.env\.local/,
-  /\.env\.production/,
-  // System directories
-  /^\/etc\//,
-  /^\/usr\//,
-  /^\/bin\//,
-  /^\/sbin\//,
-  /^\/root\//,
-  /^\/sys\//,
-  /^\/proc\//,
-  /^\/dev\//,
-  // Key files
-  /private\.key/i,
-  /\.pem$/i,
-  /id_rsa/i,
-  /authorized_keys/i,
-];
+// BLOCKED_FILESYSTEM_PATHS + isBlockedFilesystemPath() moved to
+// @synap/governance-policy (single source of truth).
 
 export type PermissionResult =
   | { granted: true }
@@ -112,73 +98,8 @@ export type PermissionResult =
 export const STUDIO_APP_URL =
   process.env.SYNAP_APP_URL?.replace(/\/$/, "") ?? "https://studio.synap.live";
 
-/**
- * Default whitelist: agent actions that bypass proposal review.
- *
- * Workspaces can override via `settings.aiGovernance.autoApproveFor`.
- * When `settings.governanceMode === "agent-owned"`, destructive actions
- * (delete/archive/purge) always propose regardless of this list.
- *
- * Format: "<subjectType>.<action>" or "<subjectType>.*" glob.
- */
-export const DEFAULT_AUTO_APPROVE: readonly string[] = [
-  "search.*",
-  "memory.recall",
-  "entity.read",
-  "bento.arrange",
-  "document.read",
-  "context.*",
-  "filesystem.read",
-  "filesystem.write_workspace",
-  "view.create",
-  "profile.create",
-  "profile.update",
-  "property_def.create",
-  "property_def.update",
-  "entity.create",
-  "entity.update",
-  "document.create",
-  "relation.create",
-  "channel.create",
-  "terminal.read_logs",
-];
-
-/**
- * Actions that always require a proposal in agent-owned workspaces,
- * regardless of whitelist configuration.
- */
-export const DESTRUCTIVE_ACTIONS: readonly string[] = [
-  "delete",
-  "archive",
-  "purge",
-];
-
-/**
- * Administrative actions that always require a proposal, regardless of
- * workspace auto-approve overrides, writesRequireProposal flag, or whitelist.
- * Even a twin agent (writesRequireProposal=false) must propose these.
- */
-export const ADMIN_ACTIONS: readonly string[] = [
-  "workspace.update",
-  "workspace.delete",
-  "member.updateRole",
-  "member.remove",
-  "member.invite",
-  "agent.create",
-  "agent.delete",
-  "agent.updateRole",
-  "agent.updateCapabilities",
-  "agent.update",
-  "apiKey.create",
-  "apiKey.revoke",
-  "apiKey.rotate",
-  "intelligence.connect",
-  "intelligence.disconnect",
-  "trustedIssuer.create",
-  "trustedIssuer.delete",
-  "connector.connect",
-  "connector.disconnect",
-];
+// DEFAULT_AUTO_APPROVE, DESTRUCTIVE_ACTIONS, and ADMIN_ACTIONS moved to
+// @synap/governance-policy (imported + re-exported above for back-compat).
 
 /**
  * Resolve the effective governance policy for a workspace.
@@ -309,55 +230,10 @@ export function makeRoutedTeammateContext(
   };
 }
 
-/**
- * Per-channel capability grant for an AI teammate writing in a multiplayer room.
- *
- * These map onto the EXISTING governance model — they never reimplement or
- * bypass it. They can only TIGHTEN a teammate's effective grant for this
- * channel, never widen its workspace RBAC:
- *
- *   canAct=true             → the teammate's writes may auto-approve within pod
- *                             scope (still subject to ADMIN/destructive guards).
- *   canAct=false canPropose → writes become reviewable PENDING proposals.
- *   canAct=false canPropose=false (canDraft only) → writes do NOT commit; the
- *                             teammate may participate but its writes are blocked
- *                             from the pod (draft / propose-only floor).
- *
- * Absent/unknown → the most restrictive interpretation (propose, never act),
- * resolved by `resolveChannelCapabilityDecision`.
- */
-export interface ChannelCapabilityGrant {
-  canDraft: boolean;
-  canPropose: boolean;
-  canAct: boolean;
-}
-
-/**
- * The three outcomes a channel capability grant can force for a write.
- *   "act"     — capabilities permit auto-approve to proceed (gate decides the rest).
- *   "propose" — force a reviewable proposal regardless of auto-approve whitelist.
- *   "block"   — the teammate may not commit at all (draft-only / propose denied).
- */
-export type ChannelCapabilityDecision = "act" | "propose" | "block";
-
-/**
- * Collapse a per-channel capability grant into a single governance decision.
- *
- * CONSERVATIVE BY DESIGN: an absent grant, or any grant whose flags are all
- * false / unset, resolves to "propose" — never "act". `canAct` is the only way
- * to reach "act", and only when the teammate is also allowed to propose
- * (act implies the lesser grant). Draft-only (no propose, no act) → "block".
- */
-export function resolveChannelCapabilityDecision(
-  grant: Partial<ChannelCapabilityGrant> | null | undefined
-): ChannelCapabilityDecision {
-  // Absent grant → most restrictive write outcome that still surfaces the work.
-  if (!grant) return "propose";
-  if (grant.canAct === true) return "act";
-  if (grant.canPropose === true) return "propose";
-  // canDraft-only (or nothing granted): participation allowed, writes do not commit.
-  return "block";
-}
+// ChannelCapabilityGrant, ChannelCapabilityDecision, and
+// resolveChannelCapabilityDecision moved to @synap/governance-policy
+// (imported + re-exported above). The DB lookup resolveChannelCapabilities
+// (which reads channel_members) stays here — it needs the database.
 
 /**
  * Resolve the effective per-channel capability grant for an AI teammate from
@@ -492,7 +368,7 @@ export async function checkPermissionOrPropose(
   // This is a defence-in-depth layer: the synap-os skill also enforces these rules.
   if (subjectType === "filesystem" && data?.path) {
     const path = String(data.path);
-    const isBlocked = BLOCKED_FILESYSTEM_PATHS.some((re) => re.test(path));
+    const isBlocked = isBlockedFilesystemPath(path);
     if (isBlocked) {
       logger.warn(
         { path, userId, workspaceId },
@@ -505,22 +381,8 @@ export async function checkPermissionOrPropose(
     }
   }
 
-  // 2. Determine required permission
-  let requiredPermission: "read" | "write" | "delete" | "manage" = "read";
-  if (action === "delete") {
-    requiredPermission = "delete";
-  } else if (
-    action === "create" ||
-    action === "update" ||
-    action === "archive" ||
-    action === "restore" ||
-    action === "add" ||
-    action === "place" ||
-    action === "remove" ||
-    action === "updateRole"
-  ) {
-    requiredPermission = "write";
-  }
+  // 2. Determine required permission (canonical map in @synap/governance-policy)
+  const requiredPermission = requiredPermissionFor(action);
 
   // 3. Determine effective user for permission check
   const effectiveUserId = agentUserId || userId;
@@ -602,237 +464,84 @@ export async function checkPermissionOrPropose(
         const settings = ws?.settings as WorkspaceSettings | undefined;
 
         const eventKey = `${subjectType}.${action}`;
-
-        // CBAC: if this agent has an explicit capabilities allowlist, enforce it.
-        // Empty/absent capabilities = unrestricted (backwards compatibility).
-        // Supports exact match ("entity.create") and wildcard ("entity.*", "*.*").
-        const agentCapabilities = (
-          agentUser.agentMetadata as AgentMetadata | null
-        )?.capabilities;
-        if (agentCapabilities && agentCapabilities.length > 0) {
-          const hasCapability =
-            agentCapabilities.includes(eventKey) ||
-            agentCapabilities.includes(`${subjectType}.*`) ||
-            agentCapabilities.includes("*.*");
-
-          if (!hasCapability) {
-            return {
-              denied: true,
-              reason: `Agent capability check failed for "${eventKey}". Allowed: ${agentCapabilities.join(", ")}.`,
-            };
-          }
-        }
-
-        // ADMIN_ACTIONS: always propose, regardless of whitelist, workspace
-        // overrides, or writesRequireProposal. Even twin agents must propose.
-        if (ADMIN_ACTIONS.includes(eventKey)) {
-          return createProposal({
-            userId,
-            agentUserId,
-            workspaceId,
-            subjectType,
-            action,
-            source,
-            data,
-            correlationId,
-            requestedEventId,
-            reasoning:
-              opts.reasoning ??
-              "Administrative action requires human approval.",
-            threadId,
-            commandRunId,
-            sourceMessageId,
-          });
-        }
-
-        // writesRequireProposal: assistant-template agents always propose on
-        // writes. Pure reads (*.read, search.*, context.*, memory.*) are exempt.
-        const agentMetadata = agentUser.agentMetadata;
-        if (agentMetadata?.writesRequireProposal === true) {
-          const isPureRead =
-            action.endsWith(".read") ||
-            subjectType === "search" ||
-            subjectType === "context" ||
-            subjectType === "memory" ||
-            eventKey.endsWith(".read") ||
-            eventKey === "memory.recall" ||
-            /^search\./.test(eventKey) ||
-            /^context\./.test(eventKey) ||
-            /^memory\./.test(eventKey);
-
-          if (!isPureRead) {
-            return createProposal({
-              userId,
-              agentUserId,
-              workspaceId,
-              subjectType,
-              action,
-              source,
-              data,
-              correlationId,
-              requestedEventId,
-              reasoning:
-                opts.reasoning ??
-                "Agent requires proposal for all write operations.",
-              threadId,
-              commandRunId,
-              sourceMessageId,
-            });
-          }
-        }
-
-        // In agent-owned workspaces, destructive actions always go through
-        // proposals — even if the agent holds the owner role or the action
-        // appears in the auto-approve whitelist. The human admin is the sole
-        // authority for irreversible operations.
-        if (
-          settings?.governanceMode === "agent-owned" &&
-          (action === "delete" || action === "archive" || action === "purge")
-        ) {
-          return createProposal({
-            userId,
-            agentUserId,
-            workspaceId,
-            subjectType,
-            action,
-            source,
-            data,
-            correlationId,
-            requestedEventId,
-            reasoning:
-              opts.reasoning ??
-              "Destructive action in agent-owned workspace requires human approval.",
-            threadId,
-            commandRunId,
-            sourceMessageId,
-          });
-        }
-
-        // Per-channel capability gate (multiplayer rooms).
-        //
-        // When this write is evaluated for a channel that carries a teammate
-        // capability grant, the per-channel flags are the effective grant. They
-        // can only TIGHTEN the workspace policy — never bypass it (ADMIN +
-        // destructive guards above already ran and are supreme). Reads are
-        // exempt; capabilities gate writes.
-        //
-        // Decision (resolveChannelCapabilityDecision, restrictive default):
-        //   "block"   → teammate may participate but not commit (draft-only).
-        //   "propose" → force a reviewable proposal (overrides auto-approve).
-        //   "act"     → fall through to the normal auto-approve whitelist; the
-        //               gate still decides act vs propose from workspace policy.
-        if (channelCapabilities !== undefined && channelCapabilities !== null) {
-          const isPureReadForCaps =
-            action.endsWith(".read") ||
-            subjectType === "search" ||
-            subjectType === "context" ||
-            subjectType === "memory" ||
-            eventKey.endsWith(".read") ||
-            eventKey === "memory.recall" ||
-            /^search\./.test(eventKey) ||
-            /^context\./.test(eventKey) ||
-            /^memory\./.test(eventKey);
-
-          if (!isPureReadForCaps) {
-            const decision =
-              resolveChannelCapabilityDecision(channelCapabilities);
-
-            if (decision === "block") {
-              return {
-                denied: true,
-                reason:
-                  "Teammate is draft-only in this channel and may not commit writes (can_act and can_propose are both off).",
-              };
-            }
-
-            if (decision === "propose") {
-              return createProposal({
-                userId,
-                agentUserId,
-                workspaceId,
-                subjectType,
-                action,
-                source,
-                data,
-                correlationId,
-                requestedEventId,
-                reasoning:
-                  opts.reasoning ??
-                  "Teammate may propose in this channel; write requires human approval.",
-                threadId,
-                commandRunId,
-                sourceMessageId,
-              });
-            }
-            // decision === "act": fall through to the workspace auto-approve
-            // policy below. Capabilities never widen RBAC or skip the whitelist;
-            // they only authorize the normal act path to be considered.
-          }
-        }
-
-        // Default whitelist: see DEFAULT_AUTO_APPROVE at module scope.
-        // Workspace override via settings.aiGovernance.autoApproveFor.
         const autoApproveFor =
           settings?.aiGovernance?.autoApproveFor ?? DEFAULT_AUTO_APPROVE;
 
-        const isAutoApproved = autoApproveFor.some((pattern) =>
-          pattern.endsWith(".*")
-            ? eventKey.startsWith(pattern.slice(0, -2))
-            : eventKey === pattern
-        );
-
-        if (isAutoApproved) {
-          // Audit trail: record auto-approved action (non-blocking, non-critical)
-          const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
-          db.insert(proposals)
-            .values({
-              workspaceId,
-              targetType: subjectType,
-              targetId: String(data?.id ?? randomUUID()),
-              proposalType: `${subjectType}.${action}`,
-              data: {
-                ...data,
-                agentUserId,
-                ...(authorshipMode ? { authorshipMode } : {}),
-                ...(correlationId ? { correlationId } : {}),
-                ...(requestedEventId ? { requestedEventId } : {}),
-                _autoApprove: {
-                  matchedPattern: autoApproveFor.find((p) =>
-                    p.endsWith(".*")
-                      ? eventKey.startsWith(p.slice(0, -2))
-                      : eventKey === p
-                  ),
-                  approvedAt: new Date().toISOString(),
-                  approvedBy: "system:auto_approve",
-                },
-              },
-              status: ProposalStatus.AUTO_APPROVED,
-              createdBy: agentUserId,
-              ...(agentUserId ? { agentUserId } : {}),
-              threadId: threadId ?? undefined,
-              commandRunId: commandRunId ?? undefined,
-            })
-            .catch(() => {}); // non-critical — never block the operation
-
-          return { granted: true };
-        }
-
-        // Default: agent action requires a proposal
-        return createProposal({
-          userId,
-          agentUserId,
-          workspaceId,
+        // Agent governance policy — SINGLE SOURCE OF TRUTH in
+        // @synap/governance-policy. decideAgentPolicy applies the full ladder
+        // (CBAC → ADMIN_ACTIONS → writesRequireProposal → agent-owned
+        // destructive → per-channel grant → autoApprove → default) and returns
+        // the verdict. Side effects (proposal creation, audit insert) stay here.
+        const agentMetadata = agentUser.agentMetadata as AgentMetadata | null;
+        const decision = decideAgentPolicy({
           subjectType,
           action,
-          source,
-          data,
-          correlationId,
-          requestedEventId,
-          reasoning: opts.reasoning,
-          threadId,
-          commandRunId,
-          sourceMessageId,
+          agentCapabilities: agentMetadata?.capabilities,
+          writesRequireProposal: agentMetadata?.writesRequireProposal === true,
+          governanceMode: settings?.governanceMode,
+          autoApproveFor,
+          channelCapabilities,
         });
+
+        if (decision.verdict === "deny") {
+          return { denied: true, reason: decision.reason };
+        }
+
+        if (decision.verdict === "propose") {
+          return createProposal({
+            userId,
+            agentUserId,
+            workspaceId,
+            subjectType,
+            action,
+            source,
+            data,
+            correlationId,
+            requestedEventId,
+            // decision.reason carries the per-branch default reasoning; it is
+            // undefined for the plain default-propose case, preserving the prior
+            // behavior of passing the caller's reasoning through unchanged.
+            reasoning: opts.reasoning ?? decision.reason,
+            threadId,
+            commandRunId,
+            sourceMessageId,
+          });
+        }
+
+        // verdict === "execute": auto-approved. Record an audit-trail row
+        // (non-blocking, non-critical) and grant.
+        const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
+        db.insert(proposals)
+          .values({
+            workspaceId,
+            targetType: subjectType,
+            targetId: String(data?.id ?? randomUUID()),
+            proposalType: `${subjectType}.${action}`,
+            data: {
+              ...data,
+              agentUserId,
+              ...(authorshipMode ? { authorshipMode } : {}),
+              ...(correlationId ? { correlationId } : {}),
+              ...(requestedEventId ? { requestedEventId } : {}),
+              _autoApprove: {
+                matchedPattern: autoApproveFor.find((p) =>
+                  p.endsWith(".*")
+                    ? eventKey.startsWith(p.slice(0, -2))
+                    : eventKey === p
+                ),
+                approvedAt: new Date().toISOString(),
+                approvedBy: "system:auto_approve",
+              },
+            },
+            status: ProposalStatus.AUTO_APPROVED,
+            createdBy: agentUserId,
+            ...(agentUserId ? { agentUserId } : {}),
+            threadId: threadId ?? undefined,
+            commandRunId: commandRunId ?? undefined,
+          })
+          .catch(() => {}); // non-critical — never block the operation
+
+        return { granted: true };
       }
     }
 
@@ -878,8 +587,7 @@ export async function checkPermissionOrPropose(
   return { granted: true };
 }
 
-/** Proposals auto-expire after this many days if not reviewed. */
-const PROPOSAL_TTL_DAYS = 30;
+// PROPOSAL_TTL_DAYS imported from @synap/governance-policy.
 
 /**
  * Build a short human-readable summary of what's being proposed.

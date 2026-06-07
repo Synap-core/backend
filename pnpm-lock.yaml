@@ -355,6 +355,9 @@ importers:
       '@synap/feed-service':
         specifier: workspace:*
         version: link:../feed-service
+      '@synap/governance-policy':
+        specifier: workspace:*
+        version: link:../governance-policy
       '@synap/intelligence-client':
         specifier: workspace:*
         version: link:../intelligence-client
@@ -674,6 +677,8 @@ importers:
         specifier: ^5.3.3
         version: 5.9.3
 
+  packages/governance-policy: {}
+
   packages/hub-protocol:
     dependencies:
       '@synap-core/types':
@@ -759,6 +764,9 @@ importers:
       '@synap/feed-service':
         specifier: workspace:*
         version: link:../feed-service
+      '@synap/governance-policy':
+        specifier: workspace:*
+        version: link:../governance-policy
       '@synap/intelligence-client':
         specifier: workspace:*
         version: link:../intelligence-client

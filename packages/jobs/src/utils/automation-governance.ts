@@ -55,57 +55,18 @@ import { randomUUID } from "crypto";
 import { emitSideEffects } from "@synap/events";
 import { broadcastNotification } from "./realtime-broadcast.js";
 import { createLogger } from "@synap-core/core";
+import {
+  decideAgentPolicy,
+  requiredPermissionFor,
+  PROPOSAL_TTL_DAYS,
+} from "@synap/governance-policy";
 
 const logger = createLogger({ module: "automation-governance" });
 
-/** Proposals auto-expire after this many days if not reviewed. */
-const PROPOSAL_TTL_DAYS = 30;
-
-/** KEEP IN SYNC WITH permission-check.ts ADMIN_ACTIONS — always require a proposal. */
-const ADMIN_ACTIONS: readonly string[] = [
-  "workspace.update",
-  "workspace.delete",
-  "member.updateRole",
-  "member.remove",
-  "member.invite",
-  "agent.create",
-  "agent.delete",
-  "agent.updateRole",
-  "agent.updateCapabilities",
-  "agent.update",
-  "apiKey.create",
-  "apiKey.revoke",
-  "apiKey.rotate",
-  "intelligence.connect",
-  "intelligence.disconnect",
-  "trustedIssuer.create",
-  "trustedIssuer.delete",
-  "connector.connect",
-  "connector.disconnect",
-];
-
-/** KEEP IN SYNC WITH permission-check.ts DEFAULT_AUTO_APPROVE — auto-approved unless a workspace overrides via settings.aiGovernance.autoApproveFor. */
-const DEFAULT_AUTO_APPROVE: readonly string[] = [
-  "search.*",
-  "memory.recall",
-  "entity.read",
-  "bento.arrange",
-  "document.read",
-  "context.*",
-  "filesystem.read",
-  "filesystem.write_workspace",
-  "view.create",
-  "profile.create",
-  "profile.update",
-  "property_def.create",
-  "property_def.update",
-  "entity.create",
-  "entity.update",
-  "document.create",
-  "relation.create",
-  "channel.create",
-  "terminal.read_logs",
-];
+// Governance POLICY (the constants + the agent precedence ladder + PROPOSAL_TTL_DAYS)
+// now lives in @synap/governance-policy — the SINGLE SOURCE OF TRUTH shared with
+// checkPermissionOrPropose(). The forked mirror that used to live here is gone;
+// this module keeps only the jobs-side side effects (proposeAutomationWrite).
 
 export type AutomationGovernanceResult =
   | { granted: true }
@@ -154,19 +115,8 @@ export async function checkAutomationWriteOrPropose(
     correlationId,
   } = opts;
 
-  // Map action → required RBAC permission (mirrors permission-check.ts).
-  const requiredPermission: "read" | "write" | "delete" | "manage" =
-    action === "delete"
-      ? "delete"
-      : action === "create" ||
-          action === "update" ||
-          action === "archive" ||
-          action === "restore" ||
-          action === "add" ||
-          action === "remove" ||
-          action === "updateRole"
-        ? "write"
-        : "read";
+  // Map action → required RBAC permission (canonical map in @synap/governance-policy).
+  const requiredPermission = requiredPermissionFor(action);
 
   // 1. RBAC: the OWNING principal's workspace role gates the action. If the
   //    owner is an agent user, this is the agent's own role (per the platform
@@ -222,112 +172,44 @@ export async function checkAutomationWriteOrPropose(
     .limit(1);
   const settings = ws?.settings as WorkspaceSettings | undefined;
 
-  const eventKey = `${subjectType}.${action}`;
+  const agentMeta = ownerUser?.agentMetadata as AgentMetadata | null;
 
-  // 2a. CBAC: explicit capabilities allowlist (empty/absent = unrestricted).
-  const agentCapabilities = (ownerUser?.agentMetadata as AgentMetadata | null)
-    ?.capabilities;
-  if (agentCapabilities && agentCapabilities.length > 0) {
-    const hasCapability =
-      agentCapabilities.includes(eventKey) ||
-      agentCapabilities.includes(`${subjectType}.*`) ||
-      agentCapabilities.includes("*.*");
-    if (!hasCapability) {
-      return {
-        denied: true,
-        reason: `Agent capability check failed for "${eventKey}". Allowed: ${agentCapabilities.join(", ")}.`,
-      };
-    }
-  }
-
-  // 2b. ADMIN_ACTIONS: always propose.
-  if (ADMIN_ACTIONS.includes(eventKey)) {
-    return proposeAutomationWrite({
-      agentUserId,
-      workspaceId,
-      subjectType,
-      action,
-      data,
-      reasoning: reasoning ?? "Administrative action requires human approval.",
-      automationRunId,
-      correlationId,
-    });
-  }
-
-  // 2c. writesRequireProposal: assistant-template agents always propose on
-  //     writes. Pure reads are exempt (no read output types here, but kept
-  //     faithful to the canonical gate).
-  if (
-    (ownerUser?.agentMetadata as AgentMetadata | null)
-      ?.writesRequireProposal === true
-  ) {
-    const isPureRead =
-      action.endsWith(".read") ||
-      subjectType === "search" ||
-      subjectType === "context" ||
-      subjectType === "memory" ||
-      eventKey.endsWith(".read") ||
-      eventKey === "memory.recall" ||
-      /^search\./.test(eventKey) ||
-      /^context\./.test(eventKey) ||
-      /^memory\./.test(eventKey);
-    if (!isPureRead) {
-      return proposeAutomationWrite({
-        agentUserId,
-        workspaceId,
-        subjectType,
-        action,
-        data,
-        reasoning:
-          reasoning ?? "Agent requires proposal for all write operations.",
-        automationRunId,
-        correlationId,
-      });
-    }
-  }
-
-  // 2d. agent-owned workspace + destructive → always propose.
-  if (
-    settings?.governanceMode === "agent-owned" &&
-    (action === "delete" || action === "archive" || action === "purge")
-  ) {
-    return proposeAutomationWrite({
-      agentUserId,
-      workspaceId,
-      subjectType,
-      action,
-      data,
-      reasoning:
-        reasoning ??
-        "Destructive action in agent-owned workspace requires human approval.",
-      automationRunId,
-      correlationId,
-    });
-  }
-
-  // 2e. autoApproveFor whitelist → auto-approve.
-  const autoApproveFor =
-    settings?.aiGovernance?.autoApproveFor ?? DEFAULT_AUTO_APPROVE;
-  const isAutoApproved = autoApproveFor.some((pattern) =>
-    pattern.endsWith(".*")
-      ? eventKey.startsWith(pattern.slice(0, -2))
-      : eventKey === pattern
-  );
-  if (isAutoApproved) {
-    return { granted: true };
-  }
-
-  // 2f. Default: agent write requires a proposal.
-  return proposeAutomationWrite({
-    agentUserId,
-    workspaceId,
+  // Agent governance policy — SINGLE SOURCE OF TRUTH in @synap/governance-policy.
+  // Automation writes are never channel writes, so there is no per-channel grant.
+  const decision = decideAgentPolicy({
     subjectType,
     action,
-    data,
-    reasoning,
-    automationRunId,
-    correlationId,
+    agentCapabilities: agentMeta?.capabilities,
+    writesRequireProposal: agentMeta?.writesRequireProposal === true,
+    governanceMode: settings?.governanceMode,
+    autoApproveFor: settings?.aiGovernance?.autoApproveFor,
   });
+
+  if (decision.verdict === "deny") {
+    logger.warn(
+      { ownerId, workspaceId, eventKey: `${subjectType}.${action}` },
+      "Automation write denied by agent governance policy"
+    );
+    return { denied: true, reason: decision.reason };
+  }
+
+  if (decision.verdict === "propose") {
+    return proposeAutomationWrite({
+      agentUserId,
+      workspaceId,
+      subjectType,
+      action,
+      data,
+      // decision.reason carries the per-branch default; undefined for the plain
+      // default-propose case, where proposeAutomationWrite supplies its own.
+      reasoning: reasoning ?? decision.reason,
+      automationRunId,
+      correlationId,
+    });
+  }
+
+  // verdict === "execute": auto-approved → the caller may write directly.
+  return { granted: true };
 }
 
 /**

@@ -158,3 +158,6 @@ export * from "./cell-instances.js";
 
 // NEW: AI Provider Registry (pod-level, synced to IS on change)
 export * from "./ai-providers.js";
+
+// NEW: AI Provider Credentials (per-workspace and per-user key overrides)
+export * from "./ai-provider-credentials.js";

@@ -58,6 +58,7 @@ import { auditRouter } from "./routers/audit.js";
 import { secretsVaultRouter } from "./routers/secrets-vault.js";
 import { subscriptionsRouter } from "./routers/subscriptions.js";
 import { aiProvidersRouter } from "./routers/ai-providers.js";
+import { aiProviderCredentialsRouter } from "./routers/ai-provider-credentials.js";
 
 /**
  * Core API Router
@@ -123,6 +124,7 @@ export const coreRouter = router({
   secretsVault: secretsVaultRouter,
   subscriptions: subscriptionsRouter,
   aiProviders: aiProvidersRouter,
+  aiProviderCredentials: aiProviderCredentialsRouter,
 });
 
 export type AppRouter = typeof coreRouter;
