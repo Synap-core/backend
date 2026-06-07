@@ -88,6 +88,10 @@ import {
   PROACTIVE_EVALUATE_QUEUE,
   PROACTIVE_SCAN_QUEUE,
 } from "./proactive-intelligence.js";
+import {
+  handleAgentScheduler,
+  AGENT_SCHEDULER_QUEUE,
+} from "./agent-scheduler.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -138,6 +142,7 @@ const ALL_QUEUES = [
   CRM_DAILY_DIGEST_QUEUE,
   PROACTIVE_EVALUATE_QUEUE,
   PROACTIVE_SCAN_QUEUE,
+  AGENT_SCHEDULER_QUEUE,
 ];
 
 /**
@@ -393,6 +398,10 @@ export async function registerAllWorkers(): Promise<void> {
     handleProactiveScan(job)
   );
   logger.info("Registered workers: proactive.evaluate, proactive.scan");
+
+  // Agent scheduler (cron: every 1 minute — executes due [agent-sched] entities via IS)
+  await boss.work(AGENT_SCHEDULER_QUEUE, async () => handleAgentScheduler());
+  logger.info("Registered worker: agent-scheduler");
 
   logger.info("All workers registered");
 }

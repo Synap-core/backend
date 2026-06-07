@@ -43,21 +43,14 @@ export const SETUP_AGENT_HUB_SCOPES = [
  * with the same capability surface, differing only in audit tagging.
  */
 export const INTEGRATION_HUB_SCOPES: Record<string, string[]> = {
+  // cli gets everything SETUP_AGENT_HUB_SCOPES grants, plus data access
+  cli: [...SETUP_AGENT_HUB_SCOPES, "data.read", "data.write"],
   raycast: [
     "hub-protocol.read",
     "hub-protocol.write",
     "mcp.read",
     "mcp.write",
     "data.read",
-  ],
-  cli: [
-    "hub-protocol.read",
-    "hub-protocol.write",
-    "mcp.read",
-    "mcp.write",
-    "data.read",
-    "data.write",
-    "chat.stream",
   ],
   openclaw: [
     "hub-protocol.read",

@@ -101,14 +101,32 @@ const CATEGORY_LABEL: Record<KeyCategory, string> = {
   operator: "Operator",
 };
 
-const COMMON_SCOPES = [
-  "data.read",
-  "data.write",
-  "hub-protocol.read",
-  "setup.agent",
-  "chat.stream",
-  "realtime:observe",
-];
+/**
+ * Single source of truth for valid scopes per key type.
+ * Backend validator is in `packages/api/src/routers/api-keys.ts`. Keep in sync.
+ */
+const KEY_TYPE_SCOPES = {
+  personal: [
+    "data.read",
+    "data.write",
+    "hub-protocol.read",
+    "setup.agent",
+    "chat.stream",
+    "realtime:observe",
+  ],
+  system: [
+    "data.read",
+    "data.write",
+    "hub-protocol.read",
+    "hub-protocol.write",
+    "sync",
+    "setup.agent",
+    "chat.stream",
+    "realtime:observe",
+    "mcp.read",
+    "mcp.write",
+  ],
+} as const;
 
 export function ApiKeysSection() {
   const operatorKeys = trpc.apiKeys.adminListAll.useQuery(undefined, {
@@ -565,15 +583,6 @@ type CreateKeyInput = {
   expiresInDays?: number;
 };
 
-const SYSTEM_SCOPES = [
-  "hub-protocol.read",
-  "hub-protocol.write",
-  "data.read",
-  "data.write",
-  "setup.agent",
-  "sync",
-];
-
 function CreateKeyModal({
   isPending,
   onClose,
@@ -598,7 +607,8 @@ function CreateKeyModal({
     );
   }
 
-  const availableScopes = kind === "system" ? SYSTEM_SCOPES : COMMON_SCOPES;
+  const availableScopes =
+    kind === "system" ? KEY_TYPE_SCOPES.system : KEY_TYPE_SCOPES.personal;
 
   return (
     <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">

@@ -96,5 +96,9 @@ export async function registerCronSchedules(): Promise<void> {
     logger.info("Registered cron: hermes-trigger (every 1min)");
   }
 
+  // Agent scheduler (every 1 minute — executes due [agent-sched] entities via IS)
+  await boss.schedule("agent-scheduler", "* * * * *", {});
+  logger.info("Registered cron: agent-scheduler (every 1min)");
+
   logger.info("All cron schedules registered");
 }
