@@ -174,6 +174,23 @@ export function matchesActionPattern(
   );
 }
 
+/**
+ * Which whitelist pattern matched this event key (for audit attribution), or
+ * undefined if none. Same glob rule as {@link matchesActionPattern} — this is
+ * the "which one" companion to that function's "any". Use it instead of
+ * re-deriving the glob inline so the matcher lives in exactly one place.
+ */
+export function findMatchingPattern(
+  eventKey: string,
+  patterns: readonly string[]
+): string | undefined {
+  return patterns.find((pattern) =>
+    pattern.endsWith(".*")
+      ? eventKey.startsWith(pattern.slice(0, -2))
+      : eventKey === pattern
+  );
+}
+
 /** True if the event key is auto-approved by the (possibly overridden) whitelist. */
 export function isAutoApproved(
   eventKey: string,

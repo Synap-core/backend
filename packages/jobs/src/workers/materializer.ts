@@ -269,6 +269,11 @@ async function materializeEntity(
     // documents.id); documents has no entityId column.
     await entityRepo.create(
       {
+        // Pin the row id to the event subject so (a) revert can delete it by
+        // proposal.targetId and (b) the idempotency guard above (findFirst by
+        // subjectId) matches on a pg-boss retry. Without this the DB mints a
+        // fresh uuid and both break — orphan-on-revert + duplicate-on-retry.
+        id: subjectId,
         workspaceId: entityWorkspaceId!,
         userId,
         title: (data.title as string) || undefined,

@@ -23,6 +23,15 @@ import {
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
 export interface CreateEntityInput {
+  /**
+   * Pin the new row's id instead of letting the DB mint one. Used by the
+   * proposal materializer so the created entity's id equals the event
+   * `subjectId` — this is what makes proposal revert (delete-by-targetId) and
+   * the create-idempotency guard (lookup-by-subjectId) actually hit the row.
+   * Omit for normal creates (DB `defaultRandom()` applies).
+   */
+  id?: string;
+
   // Profile-based (required)
   profileId?: string;
   profileSlug?: string; // Alternative to profileId
@@ -253,6 +262,9 @@ export class EntityRepository extends BaseRepository<
     const [entity] = await this.db
       .insert(entities)
       .values({
+        // Pin id only when the caller supplied one (materializer); otherwise
+        // undefined → Drizzle omits it → DB defaultRandom() mints a fresh uuid.
+        ...(data.id ? { id: data.id } : {}),
         userId,
         workspaceId: effectiveWorkspaceId,
         profileId,

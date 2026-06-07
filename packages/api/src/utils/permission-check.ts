@@ -30,6 +30,7 @@ import { deriveAuthorshipMode } from "../services/agent-identity-service.js";
 import { logEvent } from "../lib/event-helpers.js";
 import {
   decideAgentPolicy,
+  findMatchingPattern,
   requiredPermissionFor,
   isBlockedFilesystemPath,
   DEFAULT_AUTO_APPROVE,
@@ -539,12 +540,9 @@ export async function checkPermissionOrPropose(
               ...(correlationId ? { correlationId } : {}),
               ...(requestedEventId ? { requestedEventId } : {}),
               _autoApprove: {
-                matchedPattern: (
+                matchedPattern: findMatchingPattern(
+                  eventKey,
                   explicitAutoApproveFor ?? DEFAULT_AUTO_APPROVE
-                ).find((p) =>
-                  p.endsWith(".*")
-                    ? eventKey.startsWith(p.slice(0, -2))
-                    : eventKey === p
                 ),
                 approvedAt: new Date().toISOString(),
                 approvedBy: "system:auto_approve",

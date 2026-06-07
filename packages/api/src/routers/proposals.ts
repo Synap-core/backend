@@ -62,6 +62,7 @@ import type {
 } from "@synap-core/types/proposals";
 import { storage } from "@synap/storage";
 import { requireUserId } from "../utils/user-scoped.js";
+import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { auditLog } from "../utils/audit-log.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../utils/materialize-composite.js";
@@ -197,6 +198,29 @@ type DisplayEnrichedProposal = ProposalRow & {
   targetName?: string;
   review: ProposalReviewModel;
 };
+
+type ProposalApprovalPolicy = "admins_only" | "any_editor" | "owner_and_admins";
+
+/**
+ * Single source of truth for "may this member review (approve / reject / revert)
+ * this workspace-scoped proposal?" — the SAME ladder that `approve`,
+ * `batchApprove`, `revert`, and the list's `viewerCanReview` flag all read, so
+ * the button shows iff the mutation would succeed. Pod-wide proposals (no
+ * workspace) skip this entirely and are decided by the caller.
+ */
+function canReviewProposal(args: {
+  policy: ProposalApprovalPolicy;
+  memberRole: string | undefined;
+  isOwner: boolean;
+}): boolean {
+  const isAdmin = args.memberRole === "admin";
+  const isEditor = args.memberRole === "editor" || isAdmin;
+  return args.policy === "admins_only"
+    ? isAdmin
+    : args.policy === "any_editor"
+      ? isEditor
+      : /* owner_and_admins */ args.isOwner || isAdmin;
+}
 
 async function enrichProposalsForDisplay(
   rows: ProposalRow[],
@@ -768,6 +792,13 @@ export const proposalsRouter = router({
         conditions.push(isNull(proposals.workspaceId));
       } else if (typeof input.workspaceId === "string") {
         conditions.push(eq(proposals.workspaceId, input.workspaceId));
+      } else {
+        // undefined = user-wide queue. Scope to workspaces the caller belongs
+        // to (+ pod-wide globals) — WITHOUT this, list leaks every workspace's
+        // proposals (and their data payloads) to any authenticated user.
+        conditions.push(
+          userVisibleWhere(proposals.workspaceId, requireUserId(ctx.userId))
+        );
       }
 
       if (input.targetType) {
@@ -790,15 +821,21 @@ export const proposalsRouter = router({
         conditions.push(eq(proposals.threadId, input.threadId));
       }
 
-      if (input.status !== "all") {
-        // Map string to enum
-        const statusEnum =
-          input.status === "pending"
-            ? ProposalStatus.PENDING
-            : input.status === "validated"
-              ? ProposalStatus.APPROVED // Note: "validated" maps to APPROVED
-              : ProposalStatus.REJECTED;
-        conditions.push(eq(proposals.status, statusEnum));
+      if (input.status === "pending") {
+        conditions.push(eq(proposals.status, ProposalStatus.PENDING));
+      } else if (input.status === "validated") {
+        // "Approved" tab = applied proposals: BOTH human-approved AND
+        // auto-approved (both are revertable, and the board's count folds
+        // them together). Auto-approved AI mutations are the primary revert
+        // target, so they must surface here, not only under "All".
+        conditions.push(
+          inArray(proposals.status, [
+            ProposalStatus.APPROVED,
+            ProposalStatus.AUTO_APPROVED,
+          ])
+        );
+      } else if (input.status === "rejected") {
+        conditions.push(eq(proposals.status, ProposalStatus.REJECTED));
       }
 
       // Exclude expired proposals unless caller explicitly requests them
@@ -844,23 +881,79 @@ export const proposalsRouter = router({
       // Enrich each proposal with a pre-formed `request` object and resolved
       // display metadata. Eve/Studio can render useful labels without leaking
       // raw UUIDs into the main review surface.
-      const enriched = await enrichProposalsForDisplay(
-        rows,
-        requireUserId(ctx.userId)
-      );
+      const reviewerId = requireUserId(ctx.userId);
+      const enriched = await enrichProposalsForDisplay(rows, reviewerId);
 
       const { items, pagination } = buildPaginatedResponse(enriched, input);
 
+      // viewerCanReview — per proposal, "can this user approve / reject / revert
+      // it?" computed from the SAME ladder the mutations enforce, so the UI shows
+      // review actions (Approve, Revert) iff the call would succeed. Batched:
+      // one workspace-settings query + one membership query across all distinct
+      // workspaces in the page. Pod-wide proposals (no workspace) are reviewable.
+      const wsIds = [
+        ...new Set(
+          rows.map((r) => r.workspaceId).filter((w): w is string => Boolean(w))
+        ),
+      ];
+      const policyByWs = new Map<string, ProposalApprovalPolicy>();
+      const roleByWs = new Map<string, string>();
+      if (wsIds.length > 0) {
+        const { workspaceMembers } = await import("@synap/database/schema");
+        const wsRows = await db
+          .select({ id: workspaces.id, settings: workspaces.settings })
+          .from(workspaces)
+          .where(inArray(workspaces.id, wsIds));
+        for (const w of wsRows) {
+          const s = w.settings as WorkspaceSettings | undefined;
+          policyByWs.set(
+            w.id,
+            (s?.aiGovernance?.proposalApprovalPolicy ??
+              "owner_and_admins") as ProposalApprovalPolicy
+          );
+        }
+        const memberRows = await db.query.workspaceMembers.findMany({
+          where: and(
+            eq(workspaceMembers.userId, reviewerId),
+            inArray(workspaceMembers.workspaceId, wsIds)
+          ),
+        });
+        for (const m of memberRows) roleByWs.set(m.workspaceId, m.role);
+      }
+      // Compute over the typed `rows` (not the casted enriched items) so the
+      // workspaceId/data reads are compiler-checked and can't silently break if
+      // enrichment ever reshapes the display payload.
+      const viewerCanReviewById = new Map<string, boolean>();
+      for (const r of rows) {
+        const data = r.data as Record<string, unknown> | null;
+        viewerCanReviewById.set(
+          r.id,
+          !r.workspaceId
+            ? true
+            : canReviewProposal({
+                policy: policyByWs.get(r.workspaceId) ?? "owner_and_admins",
+                memberRole: roleByWs.get(r.workspaceId),
+                isOwner: data?.sourceId === reviewerId,
+              })
+        );
+      }
+      const itemsWithPermission = items.map((it) => {
+        const viewerCanReview = viewerCanReviewById.get(it.id) ?? false;
+        return { ...it, viewerCanReview };
+      });
+
       const nextCursor =
-        pagination.hasMore && items.length > 0
-          ? items[items.length - 1]!.createdAt.toISOString()
+        pagination.hasMore && itemsWithPermission.length > 0
+          ? itemsWithPermission[
+              itemsWithPermission.length - 1
+            ]!.createdAt.toISOString()
           : undefined;
 
       return {
-        items,
+        items: itemsWithPermission,
         pagination: { ...pagination, nextCursor },
         /** @deprecated Use `items` instead */
-        proposals: items,
+        proposals: itemsWithPermission,
       };
     }),
 
@@ -964,18 +1057,13 @@ export const proposalsRouter = router({
           proposal.workspaceId,
           userId
         );
-        const memberRole = membership?.role;
-        const isAdmin = memberRole === "admin";
-        const isEditor = memberRole === "editor" || isAdmin;
         const proposalData = proposal.data as Record<string, unknown> | null;
-        const isOwner = proposalData?.sourceId === userId;
 
-        const canApprove =
-          policy === "admins_only"
-            ? isAdmin
-            : policy === "any_editor"
-              ? isEditor
-              : /* owner_and_admins */ isOwner || isAdmin;
+        const canApprove = canReviewProposal({
+          policy: policy as ProposalApprovalPolicy,
+          memberRole: membership?.role,
+          isOwner: proposalData?.sourceId === userId,
+        });
 
         if (!canApprove) {
           throw new TRPCError({
@@ -1824,18 +1912,13 @@ export const proposalsRouter = router({
           proposal.workspaceId,
           userId
         );
-        const memberRole = membership?.role;
-        const isAdmin = memberRole === "admin";
-        const isEditor = memberRole === "editor" || isAdmin;
         const proposalData = proposal.data as Record<string, unknown> | null;
-        const isOwner = proposalData?.sourceId === userId;
 
-        const canRevert =
-          policy === "admins_only"
-            ? isAdmin
-            : policy === "any_editor"
-              ? isEditor
-              : /* owner_and_admins */ isOwner || isAdmin;
+        const canRevert = canReviewProposal({
+          policy: policy as ProposalApprovalPolicy,
+          memberRole: membership?.role,
+          isOwner: proposalData?.sourceId === userId,
+        });
 
         if (!canRevert) {
           throw new TRPCError({
@@ -1979,18 +2062,35 @@ export const proposalsRouter = router({
         revertReason: input.reason,
       };
 
-      // status is a plain `text` column (no DB CHECK constraint) — "reverted" is
-      // a valid value without a migration. Cast past the drizzle enum union.
-      await db
+      // Flip to reverted, but only from an applied state — guards the
+      // double-revert race: two concurrent calls both pass the precheck, but
+      // the loser's UPDATE matches 0 rows (status is already `reverted`) and we
+      // treat that as "already reverted" rather than reverting twice.
+      const flipped = await db
         .update(proposals)
         .set({
-          status: "reverted" as typeof ProposalStatus.APPROVED,
+          status: ProposalStatus.REVERTED,
           data: revertedPayload,
           reviewedBy: userId,
           reviewedAt: revertedAt,
           updatedAt: revertedAt,
         })
-        .where(eq(proposals.id, input.proposalId));
+        .where(
+          and(
+            eq(proposals.id, input.proposalId),
+            inArray(proposals.status, [
+              ProposalStatus.APPROVED,
+              ProposalStatus.AUTO_APPROVED,
+            ])
+          )
+        )
+        .returning({ id: proposals.id });
+
+      if (flipped.length === 0) {
+        // A concurrent revert won; the rows are already undone. Report success
+        // without double-auditing.
+        return { success: true, reverted: deleted, alreadyReverted: true };
+      }
 
       // Audit the undo: a record that this proposal was reverted, plus a
       // best-effort delete.completed for the target subject for attribution.
@@ -2077,21 +2177,16 @@ export const proposalsRouter = router({
               proposal.workspaceId,
               userId
             );
-            const memberRole = membership?.role;
-            const isAdmin = memberRole === "admin";
-            const isEditor = memberRole === "editor" || isAdmin;
             const proposalData = proposal.data as Record<
               string,
               unknown
             > | null;
-            const isOwner = proposalData?.sourceId === userId;
 
-            const canApprove =
-              policy === "admins_only"
-                ? isAdmin
-                : policy === "any_editor"
-                  ? isEditor
-                  : isOwner || isAdmin;
+            const canApprove = canReviewProposal({
+              policy: policy as ProposalApprovalPolicy,
+              memberRole: membership?.role,
+              isOwner: proposalData?.sourceId === userId,
+            });
 
             if (!canApprove) {
               results.push({

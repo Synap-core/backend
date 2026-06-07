@@ -3,6 +3,7 @@ import {
   decideAgentPolicy,
   requiredPermissionFor,
   isAutoApproved,
+  findMatchingPattern,
   isPureReadAction,
   agentHasCapability,
   isBlockedFilesystemPath,
@@ -53,6 +54,32 @@ describe("isAutoApproved", () => {
   it("honors a workspace override list", () => {
     expect(isAutoApproved("entity.create", ["entity.read"])).toBe(false);
     expect(isAutoApproved("entity.read", ["entity.read"])).toBe(true);
+  });
+});
+
+describe("findMatchingPattern (audit attribution)", () => {
+  it("returns the exact pattern that matched", () => {
+    expect(findMatchingPattern("entity.create", ["entity.create"])).toBe(
+      "entity.create"
+    );
+  });
+  it("returns the glob pattern (not the event key) when a glob matches", () => {
+    expect(findMatchingPattern("search.semantic", ["search.*"])).toBe(
+      "search.*"
+    );
+  });
+  it("returns undefined when nothing matches", () => {
+    expect(findMatchingPattern("entity.delete", ["entity.create"])).toBe(
+      undefined
+    );
+  });
+  it("agrees with isAutoApproved on the default whitelist", () => {
+    expect(
+      findMatchingPattern("entity.create", DEFAULT_AUTO_APPROVE)
+    ).toBeDefined();
+    expect(
+      findMatchingPattern("entity.delete", DEFAULT_AUTO_APPROVE)
+    ).toBeUndefined();
   });
 });
 

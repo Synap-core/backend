@@ -4014,7 +4014,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				cursor?: string | undefined;
 			};
 			output: {
-				items: ({
+				items: {
+					viewerCanReview: boolean;
 					workspaceId: string | null;
 					sourceMessageId: string | null;
 					id: string;
@@ -4023,7 +4024,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					correlationId: string | null;
 					agentUserId: string | null;
-					status: "approved" | "pending" | "rejected" | "auto_approved";
+					status: "approved" | "pending" | "rejected" | "auto_approved" | "reverted";
 					expiresAt: Date | null;
 					createdBy: string | null;
 					threadId: string | null;
@@ -4036,12 +4037,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reviewedAt: Date | null;
 					rejectionReason: string | null;
 					comments: unknown;
-				} & {
 					request: UpdateRequest;
 					authorName?: string;
 					targetName?: string;
 					review: ProposalReviewModel;
-				})[];
+				}[];
 				pagination: {
 					nextCursor: string | undefined;
 					hasMore: boolean;
@@ -4049,7 +4049,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					limit: number;
 					offset: number;
 				};
-				proposals: ({
+				proposals: {
+					viewerCanReview: boolean;
 					workspaceId: string | null;
 					sourceMessageId: string | null;
 					id: string;
@@ -4058,7 +4059,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					correlationId: string | null;
 					agentUserId: string | null;
-					status: "approved" | "pending" | "rejected" | "auto_approved";
+					status: "approved" | "pending" | "rejected" | "auto_approved" | "reverted";
 					expiresAt: Date | null;
 					createdBy: string | null;
 					threadId: string | null;
@@ -4071,12 +4072,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reviewedAt: Date | null;
 					rejectionReason: string | null;
 					comments: unknown;
-				} & {
 					request: UpdateRequest;
 					authorName?: string;
 					targetName?: string;
 					review: ProposalReviewModel;
-				})[];
+				}[];
 			};
 			meta: object;
 		}>;
@@ -4093,7 +4093,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				correlationId: string | null;
 				agentUserId: string | null;
-				status: "approved" | "pending" | "rejected" | "auto_approved";
+				status: "approved" | "pending" | "rejected" | "auto_approved" | "reverted";
 				expiresAt: Date | null;
 				createdBy: string | null;
 				threadId: string | null;
@@ -4147,9 +4147,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reason?: string | undefined;
 			};
 			output: {
+				success: boolean;
+				reverted: ProposalMaterializedRecord;
+				alreadyReverted: boolean;
+			} | {
 				partialFailures?: string[] | undefined;
 				success: boolean;
 				reverted: ProposalMaterializedRecord;
+				alreadyReverted?: undefined;
 			};
 			meta: object;
 		}>;

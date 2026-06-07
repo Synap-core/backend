@@ -37,16 +37,37 @@ Your job is to turn unstructured input into a **connected** knowledge graph. Iso
 
 ## Mental model
 
-Synap is a typed knowledge graph. Six layers you need:
+Synap is a typed knowledge graph with four distinct memory stores. Understanding the separation is critical — writing to the wrong store degrades the graph.
+
+### Memory stores — pick the right one
+
+| Store                 | Endpoint / Profile                | Scope                | Structure                          | When to use                                                               |
+| --------------------- | --------------------------------- | -------------------- | ---------------------------------- | ------------------------------------------------------------------------- |
+| **Episodic memory**   | `POST /api/hub/memory`            | userId (pod-wide)    | Unstructured string + vector       | Fast facts, chat turns, session context — IS auto-writes                  |
+| **User observations** | `user_observation` profile        | pod (all workspaces) | Typed entity (category/confidence) | Durable AI-inferred model of the user: habits, style, preferences         |
+| **Agent knowledge**   | `knowledge` profile               | agent workspace      | Typed entity (type/claim/why)      | Validated learnings: gotchas, lessons, decisions — agent self-improvement |
+| **Procedural docs**   | `GET/PUT /api/hub/knowledge/:key` | pod or namespace     | Key-value markdown                 | Runbooks, how-tos addressed by key string (e.g. "deploy:backend")         |
+
+### Data layers — the graph itself
 
 | Layer         | What it is                                     | When to use                                              |
 | ------------- | ---------------------------------------------- | -------------------------------------------------------- |
 | **Entities**  | Typed structured nodes (task, person, …)       | Anything worth filtering, sorting, or linking            |
 | **Relations** | Typed edges between entities                   | Making the graph traversable                             |
 | **Documents** | Long-form markdown attached to an entity       | Meeting notes, research writeups, articles               |
-| **Memory**    | Atomic facts, no structure                     | Preferences, context, ephemeral notes                    |
 | **Threads**   | Channel conversations, optional entity context | Posting to the user's personal AI channel                |
 | **Proposals** | Writes queued for human approval               | Governance for some mutations (not an error — see below) |
+
+### Key profiles for AI use
+
+| Profile slug       | Scope     | Who writes | Purpose                                                       |
+| ------------------ | --------- | ---------- | ------------------------------------------------------------- |
+| `note`             | workspace | human + AI | Quick captures, scratchpad                                    |
+| `knowledge`        | workspace | agent      | Validated gotchas/lessons/decisions (use in agent workspace)  |
+| `user_observation` | pod       | AI only    | Durable user model — habits, communication style, preferences |
+| `decision`         | pod       | human + AI | Architectural decisions with rationale                        |
+| `research`         | pod       | AI         | Investigation with sources + conclusion                       |
+| `question`         | pod       | human + AI | Open inquiry, closed when a decision answers it               |
 
 ## Quick reference — 90% of tasks in 30 lines
 
@@ -416,6 +437,47 @@ Every write returns a `status` field:
 1. Tell the user exactly what was queued — use the `summary` field **verbatim**. Don't paraphrase.
 2. Give them the link to review — `reviewUrl` opens the proposal in Synap Studio. Show the link as-is.
 3. Move on with the conversation. Don't wait or poll.
+
+### The `reasoning` field — required, structured, contextual
+
+Every write call (create, update, delete) must include a `reasoning` field. This is what the governance reviewer reads to understand your decision. It is **not optional**.
+
+Use this exact structure:
+
+```
+Context: [what the user said or what event triggered this write — one sentence]
+Intent:  [what this entity or change accomplishes — one sentence]
+Links:   [actual entity IDs or slugs this relates to, e.g. "ent_abc, ent_xyz"]
+```
+
+For updates, add:
+
+```
+Changed: [field] [old value] → [new value]
+```
+
+**Example (create):**
+
+```
+Context: User asked to track the Acme deal they mentioned in today's call.
+Intent:  Creates a deal entity for Acme at lead stage linked to Alice Johnson.
+Links:   ent_person_alice_johnson, ent_company_acme
+```
+
+**Example (update):**
+
+```
+Context: User confirmed the Acme deal moved to proposal stage.
+Intent:  Advances the deal through the pipeline so it appears in the proposal view.
+Links:   ent_deal_acme, ent_person_alice_johnson
+Changed: dealStage lead → proposal
+```
+
+Rules:
+
+- One sentence per field. No padding.
+- `Links` must reference real entity IDs or slugs visible in the current context — not descriptions like "the related project".
+- **"Agent requires proposal for all write operations."** is never acceptable as a `reasoning` value. That is an internal governance message, not agent reasoning. Write it and the proposal is meaningless to the reviewer.
 
 Example response to the user:
 

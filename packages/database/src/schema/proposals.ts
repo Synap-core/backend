@@ -21,6 +21,8 @@ export const ProposalStatus = {
   REJECTED: "rejected",
   /** Action was on the autoApproveFor whitelist — executed immediately, audited here for traceability. */
   AUTO_APPROVED: "auto_approved",
+  /** An applied (approved/auto-approved) proposal whose materialized rows were undone via `proposals.revert`. */
+  REVERTED: "reverted",
 } as const;
 export type ProposalStatus =
   (typeof ProposalStatus)[keyof typeof ProposalStatus];
@@ -54,6 +56,7 @@ export const proposals = pgTable(
         ProposalStatus.APPROVED,
         ProposalStatus.REJECTED,
         ProposalStatus.AUTO_APPROVED,
+        ProposalStatus.REVERTED,
       ],
     })
       .notNull()

@@ -428,7 +428,7 @@ async function seedProfiles() {
         },
         uiHints: { label: "Status", inputType: "select" },
       },
-      // engineering_knowledge profile properties
+      // knowledge profile properties (shared by both `knowledge` and legacy `engineering_knowledge`)
       {
         slug: "ek_type",
         valueType: PropertyValueType.STRING,
@@ -475,6 +475,49 @@ async function seedProfiles() {
           inputType: "tags",
           placeholder: "e.g. repo:synap-backend, layer:migrations",
         },
+      },
+      // user_observation profile properties
+      {
+        slug: "uo_observation",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 1000 },
+        uiHints: {
+          label: "Observation",
+          inputType: "textarea",
+          required: true,
+          placeholder: "What the AI observed about the user",
+        },
+      },
+      {
+        slug: "uo_category",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: [
+            "working_style",
+            "communication",
+            "focus",
+            "preferences",
+            "habits",
+            "technical",
+          ],
+        },
+        uiHints: { label: "Category", inputType: "select", required: true },
+      },
+      {
+        slug: "uo_confidence",
+        valueType: PropertyValueType.NUMBER,
+        constraints: { min: 0, max: 1 },
+        uiHints: {
+          label: "Confidence",
+          inputType: "number",
+          placeholder: "0.0 – 1.0",
+        },
+      },
+      {
+        slug: "uo_validated",
+        valueType: PropertyValueType.BOOLEAN,
+        constraints: {},
+        uiHints: { label: "User confirmed", inputType: "checkbox" },
       },
     ];
 
@@ -602,6 +645,30 @@ async function seedProfiles() {
           color: "#6366F1",
           description:
             "Structured engineering knowledge: gotchas, lessons, decisions, references",
+        },
+      },
+      // `knowledge` — canonical slug going forward (engineering_knowledge kept for backward compat)
+      {
+        slug: "knowledge",
+        displayName: "Knowledge",
+        entityScope: "workspace",
+        uiHints: {
+          icon: "brain",
+          color: "#6366F1",
+          description:
+            "Validated knowledge: gotchas, lessons, decisions, references",
+        },
+      },
+      // `user_observation` — pod-scoped AI-maintained model of the user
+      {
+        slug: "user_observation",
+        displayName: "User Observation",
+        entityScope: "pod",
+        uiHints: {
+          icon: "user-search",
+          color: "#8B5CF6",
+          description:
+            "AI-inferred observations about the user: preferences, habits, working style",
         },
       },
     ];
@@ -1133,31 +1200,60 @@ async function seedProfiles() {
       }
     }
 
-    // engineering_knowledge profile properties
-    const ekProfileId = createdProfiles.get("engineering_knowledge");
-    if (ekProfileId) {
-      const ekProperties: Array<{
+    // knowledge properties (link to both `engineering_knowledge` and `knowledge`)
+    const ekProps: Array<{
+      slug: string;
+      required: boolean;
+      displayOrder: number;
+    }> = [
+      { slug: "ek_type", required: true, displayOrder: 0 },
+      { slug: "ek_claim", required: true, displayOrder: 1 },
+      { slug: "ek_why", required: false, displayOrder: 2 },
+      { slug: "ek_evidence", required: false, displayOrder: 3 },
+      { slug: "ek_tags", required: false, displayOrder: 4 },
+    ];
+
+    for (const profileSlug of ["engineering_knowledge", "knowledge"]) {
+      const profileId = createdProfiles.get(profileSlug);
+      if (profileId) {
+        for (const prop of ekProps) {
+          const propertyDefId = createdPropertyDefs.get(prop.slug);
+          if (propertyDefId) {
+            await profilePropertyRepo.link({
+              profileId,
+              propertyDefId,
+              required: prop.required,
+              displayOrder: prop.displayOrder,
+            });
+            console.log(`  ✓ Linked '${prop.slug}' to '${profileSlug}'`);
+          }
+        }
+      }
+    }
+
+    // user_observation profile properties
+    const uoProfileId = createdProfiles.get("user_observation");
+    if (uoProfileId) {
+      const uoProperties: Array<{
         slug: string;
         required: boolean;
         displayOrder: number;
       }> = [
-        { slug: "ek_type", required: true, displayOrder: 0 },
-        { slug: "ek_claim", required: true, displayOrder: 1 },
-        { slug: "ek_why", required: false, displayOrder: 2 },
-        { slug: "ek_evidence", required: false, displayOrder: 3 },
-        { slug: "ek_tags", required: false, displayOrder: 4 },
+        { slug: "uo_observation", required: true, displayOrder: 0 },
+        { slug: "uo_category", required: true, displayOrder: 1 },
+        { slug: "uo_confidence", required: false, displayOrder: 2 },
+        { slug: "uo_validated", required: false, displayOrder: 3 },
       ];
-
-      for (const prop of ekProperties) {
+      for (const prop of uoProperties) {
         const propertyDefId = createdPropertyDefs.get(prop.slug);
         if (propertyDefId) {
           await profilePropertyRepo.link({
-            profileId: ekProfileId,
+            profileId: uoProfileId,
             propertyDefId,
             required: prop.required,
             displayOrder: prop.displayOrder,
           });
-          console.log(`  ✓ Linked '${prop.slug}' to 'engineering_knowledge'`);
+          console.log(`  ✓ Linked '${prop.slug}' to 'user_observation'`);
         }
       }
     }

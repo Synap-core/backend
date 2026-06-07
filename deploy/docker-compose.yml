@@ -101,6 +101,7 @@ services:
       start_period: 60s
     networks:
       - synap-net
+      - eve-network
 
   # ============================================================================
   # BACKEND CANARY (update validation — profile-gated, never in production)
@@ -835,3 +836,5 @@ volumes:
 networks:
   synap-net:
     driver: bridge
+  eve-network:
+    external: true
