@@ -161,3 +161,7 @@ export * from "./ai-providers.js";
 
 // NEW: AI Provider Credentials (per-workspace and per-user key overrides)
 export * from "./ai-provider-credentials.js";
+
+// Provenance vocabulary (createdByKind column type — must be public so tsc
+// can name router return types without referencing internal dist paths)
+export type { ProvenanceKind } from "./provenance.js";
