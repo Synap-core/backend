@@ -19,7 +19,7 @@
 import { Hono, Context } from "hono";
 import { z } from "zod";
 import { db, eq, and } from "@synap/database";
-import { workspaceMembers } from "@synap/database/schema";
+import { workspaceMembers, aiProviders } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
 import {
   ensureAgentThread,
@@ -869,6 +869,34 @@ openaiCompatApp.get("/models", externalApiKeyAuth("chat.stream"), async (c) => {
         });
       }
     }
+  }
+
+  // DB-backed providers: expose each enabled provider's models as "{providerId}/{modelId}".
+  // The IS's buildModelById strips the prefix and routes to the named provider.
+  try {
+    const dbProviders = await db.query.aiProviders.findMany({
+      where: (t, { eq: eqFn }) => eqFn(t.enabled, true),
+      orderBy: (t, { asc }) => [asc(t.priority)],
+    });
+    for (const p of dbProviders) {
+      const models = Array.isArray(p.models)
+        ? (p.models as Array<{ id: string }>)
+        : [];
+      for (const m of models) {
+        const fullId = `${p.providerId}/${m.id}`;
+        if (!seen.has(fullId)) {
+          seen.add(fullId);
+          extra.push({
+            id: fullId,
+            object: "model",
+            created: 1700000000,
+            owned_by: p.providerId,
+          });
+        }
+      }
+    }
+  } catch {
+    // DB unavailable — skip; tier models still returned
   }
 
   // Custom providers: list their default model + try to fetch from their /api/tags endpoint.
