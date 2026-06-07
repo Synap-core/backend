@@ -5,7 +5,7 @@
  * Replaces emitRequestEvent for audit-only logging.
  */
 
-import { EventRepository, sql } from "@synap/database";
+import { EventRepository, eventRepository, sql } from "@synap/database";
 import type { EventRecord } from "@synap/database";
 import { createUnifiedEvent } from "@synap/jobs";
 import type { SubjectType, EventAction, EventPhase } from "@synap/jobs";
@@ -21,6 +21,13 @@ export interface AuditLogOpts {
   data?: Record<string, unknown>;
   source?: string;
   correlationId?: string;
+  /**
+   * When true, a failed append RE-THROWS instead of being swallowed. Use ONLY
+   * for governance-critical appends whose success gates downstream state — i.e.
+   * the proposal-approval `.validated` event (a swallowed failure there would
+   * leave a proposal APPROVED but never materialized). Default false = best-effort.
+   */
+  throwOnError?: boolean;
 }
 
 /**
@@ -31,7 +38,16 @@ export async function auditLog(
   opts: AuditLogOpts
 ): Promise<EventRecord | null> {
   try {
-    const eventRepo = new EventRepository(sql);
+    // `.validated` appends MUST go through the singleton `eventRepository`, which
+    // carries the registered hooks — crucially the materialization hook that
+    // enqueues the DB write when a `.validated` event lands. A fresh
+    // `new EventRepository(sql)` has an EMPTY hook list, so appending `.validated`
+    // through it silently fails to enqueue materialization (the proposal flips to
+    // APPROVED but is never written). Other phases keep the fresh instance to
+    // avoid double-firing the broadcast/sync hooks (those are driven separately
+    // via emitSideEffects / the repositories).
+    const eventRepo =
+      opts.phase === "validated" ? eventRepository : new EventRepository(sql);
 
     const event = createUnifiedEvent({
       subjectType: opts.subjectType as SubjectType,
@@ -77,7 +93,12 @@ export async function auditLog(
       correlationId: event.correlationId,
     });
   } catch (error) {
-    // Audit logging is non-critical — log and continue
+    // Governance-critical callers (the `.validated` approval event) opt into
+    // throwOnError so a failed append surfaces instead of silently leaving a
+    // proposal APPROVED-but-unmaterialized. All other callers stay best-effort.
+    if (opts.throwOnError) {
+      throw error;
+    }
     console.warn("[audit-log] Failed to append audit event:", error);
     return null;
   }

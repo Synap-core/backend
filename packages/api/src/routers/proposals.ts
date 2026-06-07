@@ -1478,6 +1478,10 @@ export const proposalsRouter = router({
           subjectType: targetType,
           action: changeType,
           phase: "validated",
+          // Governance-critical: a failed `.validated` append must NOT leave the
+          // proposal flipped to APPROVED-but-unmaterialized — surface it so the
+          // status flip below is skipped and the approval can be retried.
+          throwOnError: true,
           subjectId,
           userId,
           workspaceId: proposal.workspaceId ?? undefined,
@@ -1714,6 +1718,10 @@ export const proposalsRouter = router({
               subjectType: targetType,
               action: changeType,
               phase: "validated",
+              // Governance-critical (batch): failed `.validated` append → throw,
+              // caught per-item below so this proposal is reported failed and NOT
+              // flipped to APPROVED-but-unmaterialized.
+              throwOnError: true,
               subjectId,
               userId,
               workspaceId: proposal.workspaceId ?? undefined,
