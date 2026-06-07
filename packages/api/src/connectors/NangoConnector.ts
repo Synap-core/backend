@@ -33,9 +33,10 @@ const NangoConnectionsResponseSchema = z.object({
   connections: z.array(NangoConnectionSchema),
 });
 
-const NangoSessionResponseSchema = z.object({
-  token: z.string(),
-});
+const NangoSessionResponseSchema = z.union([
+  z.object({ token: z.string() }),
+  z.object({ data: z.object({ token: z.string() }) }),
+]);
 
 const NangoIntegrationSchema = z.object({
   unique_key: z.string(),
@@ -141,10 +142,12 @@ export class NangoConnector implements SyncConnector {
     if (!parsed.success)
       throw new Error("Nango createSession: unexpected response shape");
 
+    const token =
+      "data" in parsed.data ? parsed.data.data.token : parsed.data.token;
     return {
-      sessionToken: parsed.data.token,
+      sessionToken: token,
       // Use public connectUrl for browser redirects (may differ from internal API host)
-      redirectUrl: `${this.connectUrl}/connect?token=${parsed.data.token}`,
+      redirectUrl: `${this.connectUrl}/connect?token=${token}`,
     };
   }
 

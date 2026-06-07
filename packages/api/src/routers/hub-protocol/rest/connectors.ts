@@ -132,26 +132,55 @@ export function registerConnectorsRoutes(app: HubHono): void {
       }
       const userId = c.get("userId") as string;
       const { providerId, workspaceId } = c.req.valid("json");
+      const effectiveProvider = providerId ?? "*";
+      let session;
       try {
-        const session = await connector.createSession(
+        session = await connector.createSession(
           userId,
-          providerId ?? "*",
+          effectiveProvider,
           workspaceId ?? ""
         );
-        return c.json(
-          {
-            redirectUrl: session.redirectUrl,
-            sessionToken: session.sessionToken,
-          },
-          200
-        );
       } catch (err) {
-        logger.error({ err, providerId }, "POST /connectors/session failed");
-        return c.json(
-          { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
+        const msg = err instanceof Error ? err.message : String(err);
+        // Fall back to the generic picker when the requested integration
+        // doesn't exist in Nango yet (not yet configured or wrong key).
+        if (
+          effectiveProvider !== "*" &&
+          msg.toLowerCase().includes("integration does not exist")
+        ) {
+          try {
+            session = await connector.createSession(
+              userId,
+              "*",
+              workspaceId ?? ""
+            );
+          } catch (retryErr) {
+            logger.error(
+              { err: retryErr, providerId },
+              "POST /connectors/session fallback failed"
+            );
+            return c.json(
+              {
+                error:
+                  retryErr instanceof Error
+                    ? retryErr.message
+                    : "Unknown error",
+              },
+              500
+            );
+          }
+        } else {
+          logger.error({ err, providerId }, "POST /connectors/session failed");
+          return c.json({ error: msg }, 500);
+        }
       }
+      return c.json(
+        {
+          redirectUrl: session.redirectUrl,
+          sessionToken: session.sessionToken,
+        },
+        200
+      );
     }
   );
 
