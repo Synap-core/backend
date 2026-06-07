@@ -464,14 +464,17 @@ export async function checkPermissionOrPropose(
         const settings = ws?.settings as WorkspaceSettings | undefined;
 
         const eventKey = `${subjectType}.${action}`;
-        const autoApproveFor =
-          settings?.aiGovernance?.autoApproveFor ?? DEFAULT_AUTO_APPROVE;
+        // Pass the raw workspace value (may be undefined) so decideAgentPolicy
+        // can distinguish "workspace explicitly set a list" from "no override".
+        // Explicit list is checked before writesRequireProposal (overrides it);
+        // DEFAULT_AUTO_APPROVE is checked after as the last resort.
+        const explicitAutoApproveFor = settings?.aiGovernance?.autoApproveFor;
 
         // Agent governance policy — SINGLE SOURCE OF TRUTH in
         // @synap/governance-policy. decideAgentPolicy applies the full ladder
-        // (CBAC → ADMIN_ACTIONS → writesRequireProposal → agent-owned
-        // destructive → per-channel grant → autoApprove → default) and returns
-        // the verdict. Side effects (proposal creation, audit insert) stay here.
+        // (CBAC → ADMIN_ACTIONS → explicit autoApproveFor → writesRequireProposal
+        // → agent-owned destructive → per-channel grant → default autoApproveFor
+        // → default) and returns the verdict. Side effects stay here.
         const agentMetadata = agentUser.agentMetadata as AgentMetadata | null;
         const decision = decideAgentPolicy({
           subjectType,
@@ -479,7 +482,7 @@ export async function checkPermissionOrPropose(
           agentCapabilities: agentMetadata?.capabilities,
           writesRequireProposal: agentMetadata?.writesRequireProposal === true,
           governanceMode: settings?.governanceMode,
-          autoApproveFor,
+          autoApproveFor: explicitAutoApproveFor,
           channelCapabilities,
         });
 
@@ -528,7 +531,9 @@ export async function checkPermissionOrPropose(
               ...(correlationId ? { correlationId } : {}),
               ...(requestedEventId ? { requestedEventId } : {}),
               _autoApprove: {
-                matchedPattern: autoApproveFor.find((p) =>
+                matchedPattern: (
+                  explicitAutoApproveFor ?? DEFAULT_AUTO_APPROVE
+                ).find((p) =>
                   p.endsWith(".*")
                     ? eventKey.startsWith(p.slice(0, -2))
                     : eventKey === p
@@ -676,33 +681,18 @@ export interface CreatePendingProposalInput {
  * notifications, proposal_event automation hooks, provenance, and expiry stay
  * consistent.
  */
-export async function createPendingProposal(input: CreatePendingProposalInput) {
-  const [proposal] = await db
-    .insert(proposals)
-    .values({
-      workspaceId: input.workspaceId,
-      targetType: input.targetType,
-      targetId: input.targetId,
-      proposalType: input.proposalType,
-      data: input.data,
-      status: ProposalStatus.PENDING,
-      createdBy: input.createdBy ?? input.agentUserId ?? input.userId,
-      expiresAt:
-        input.expiresAt ??
-        new Date(Date.now() + PROPOSAL_TTL_DAYS * 24 * 60 * 60 * 1000),
-      ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
-      ...(input.threadId ? { threadId: input.threadId } : {}),
-      ...(input.commandRunId ? { commandRunId: input.commandRunId } : {}),
-      ...(input.sourceMessageId
-        ? { sourceMessageId: input.sourceMessageId }
-        : {}),
-      ...(input.correlationId ? { correlationId: input.correlationId } : {}),
-      ...(input.requestedEventId
-        ? { requestedEventId: input.requestedEventId }
-        : {}),
-    })
-    .returning();
+/** Drizzle transaction handle — same surface as `db` for our inserts. */
+type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+/**
+ * Post-commit notifications for a freshly-created pending proposal. Kept SEPARATE
+ * from the INSERT so it can run AFTER the transaction commits — we never hold a
+ * tx open across this notification network/queue work (would pin a pool conn).
+ */
+async function notifyProposalCreated(
+  proposal: typeof proposals.$inferSelect,
+  input: CreatePendingProposalInput
+): Promise<void> {
   try {
     const requestId =
       typeof input.data.requestId === "string"
@@ -761,6 +751,49 @@ export async function createPendingProposal(input: CreatePendingProposalInput) {
         `${input.proposalType} ${input.targetType}`,
       agentUserId: input.agentUserId ?? undefined,
     }).catch(() => {});
+  }
+}
+
+export async function createPendingProposal(
+  input: CreatePendingProposalInput,
+  /**
+   * Optional transaction handle. When provided, the proposal INSERT runs inside
+   * the caller's transaction and notifications are SKIPPED here — the caller must
+   * invoke notifyProposalCreated() AFTER the tx commits (see createProposal).
+   */
+  tx?: DbTx
+) {
+  const executor = tx ?? db;
+  const [proposal] = await executor
+    .insert(proposals)
+    .values({
+      workspaceId: input.workspaceId,
+      targetType: input.targetType,
+      targetId: input.targetId,
+      proposalType: input.proposalType,
+      data: input.data,
+      status: ProposalStatus.PENDING,
+      createdBy: input.createdBy ?? input.agentUserId ?? input.userId,
+      expiresAt:
+        input.expiresAt ??
+        new Date(Date.now() + PROPOSAL_TTL_DAYS * 24 * 60 * 60 * 1000),
+      ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
+      ...(input.threadId ? { threadId: input.threadId } : {}),
+      ...(input.commandRunId ? { commandRunId: input.commandRunId } : {}),
+      ...(input.sourceMessageId
+        ? { sourceMessageId: input.sourceMessageId }
+        : {}),
+      ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+      ...(input.requestedEventId
+        ? { requestedEventId: input.requestedEventId }
+        : {}),
+    })
+    .returning();
+
+  // Standalone callers get notifications inline; transaction callers run
+  // notifyProposalCreated() themselves after commit.
+  if (!tx) {
+    await notifyProposalCreated(proposal, input);
   }
 
   return proposal;
@@ -830,69 +863,73 @@ async function createProposal(opts: {
   //     and correlationId — DO NOT emit a second event (dedupe).
   //   - Otherwise (agent / Feature-C / View-SDK paths), emit one here.
   const resolvedCorrelationId = correlationId ?? randomUUID();
-  let resolvedRequestedEventId = requestedEventId;
-  if (!resolvedRequestedEventId) {
-    try {
-      resolvedRequestedEventId = await logEvent(
+  const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
+
+  // TX-1: append the `.requested` event AND insert the proposal atomically, so a
+  // proposal can never exist without its originating spine event (and the
+  // correlation linkage is always consistent). BEHAVIOR CHANGE (intentional): a
+  // `.requested` append failure now ROLLS BACK the proposal instead of being
+  // swallowed — an un-traceable proposal is worse than a surfaced error.
+  // Notifications run AFTER commit (never hold the tx across network/queue work).
+  const { proposal, pendingInput } = await db.transaction(async (tx) => {
+    let reqEventId = requestedEventId;
+    if (!reqEventId) {
+      reqEventId = await logEvent(
         userId,
         requestedEventTypeFor(singularType, action),
-        {
-          targetId,
-          ...(targetName ? { targetName } : {}),
-          summary,
-        },
+        { targetId, ...(targetName ? { targetName } : {}), summary },
         {
           subjectId: targetId,
           subjectType: singularType,
           source: source ?? "api",
           metadata: { correlationId: resolvedCorrelationId },
-        }
+        },
+        tx
       );
-    } catch (err) {
-      // Spine append failure must not block the proposal — log and continue
-      // with correlationId only (requestedEventId stays undefined).
-      logger.warn({ err }, "Failed to append .requested event for proposal");
     }
-  }
 
-  const proposalData: RequestShapedProposalData = {
-    requestId: randomUUID(),
-    source: (source || "intelligence") as RequestShapedProposalData["source"],
-    sourceId: userId,
-    workspaceId,
-    targetType: singularType as RequestShapedProposalData["targetType"],
-    targetId,
-    ...(targetName ? { targetName } : {}),
-    changeType: action as RequestShapedProposalData["changeType"],
-    data,
-    reasoning: reasoning || "AI proposal requires review",
-    summary,
-    correlationId: resolvedCorrelationId,
-    ...(resolvedRequestedEventId
-      ? { requestedEventId: resolvedRequestedEventId }
-      : {}),
-  };
+    const proposalData: RequestShapedProposalData = {
+      requestId: randomUUID(),
+      source: (source || "intelligence") as RequestShapedProposalData["source"],
+      sourceId: userId,
+      workspaceId,
+      targetType: singularType as RequestShapedProposalData["targetType"],
+      targetId,
+      ...(targetName ? { targetName } : {}),
+      changeType: action as RequestShapedProposalData["changeType"],
+      data,
+      reasoning: reasoning || "AI proposal requires review",
+      summary,
+      correlationId: resolvedCorrelationId,
+      ...(reqEventId ? { requestedEventId: reqEventId } : {}),
+    };
 
-  const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
-  const proposal = await createPendingProposal({
-    userId,
-    workspaceId,
-    targetType: singularType,
-    targetId,
-    proposalType: action,
-    data: {
-      ...(proposalData as unknown as Record<string, unknown>),
-      ...(authorshipMode ? { authorshipMode } : {}),
-    },
-    agentUserId: agentUserId ?? undefined,
-    createdBy: userId,
-    threadId: threadId ?? null,
-    commandRunId: commandRunId ?? null,
-    sourceMessageId: sourceMessageId ?? null,
-    correlationId: resolvedCorrelationId,
-    requestedEventId: resolvedRequestedEventId ?? null,
-    notificationDescription: reasoning ?? `${action} ${singularType}`,
+    const pendingInput: CreatePendingProposalInput = {
+      userId,
+      workspaceId,
+      targetType: singularType,
+      targetId,
+      proposalType: action,
+      data: {
+        ...(proposalData as unknown as Record<string, unknown>),
+        ...(authorshipMode ? { authorshipMode } : {}),
+      },
+      agentUserId: agentUserId ?? undefined,
+      createdBy: userId,
+      threadId: threadId ?? null,
+      commandRunId: commandRunId ?? null,
+      sourceMessageId: sourceMessageId ?? null,
+      correlationId: resolvedCorrelationId,
+      requestedEventId: reqEventId ?? null,
+      notificationDescription: reasoning ?? `${action} ${singularType}`,
+    };
+
+    const created = await createPendingProposal(pendingInput, tx);
+    return { proposal: created, pendingInput };
   });
+
+  // Post-commit notifications (broadcast / side-effects / notification center).
+  await notifyProposalCreated(proposal, pendingInput);
 
   const reviewPath = `/proposals/${proposal.id}`;
   return {

@@ -26,10 +26,16 @@ export async function logEvent(
     subjectType?: string;
     metadata?: Record<string, any>;
     source?: string;
-  }
+  },
+  /**
+   * Optional executor — pass a Drizzle transaction handle to append the event
+   * inside an open transaction (so the `.requested` append and the proposal
+   * INSERT commit atomically). Defaults to the module-level `db`.
+   */
+  executor: Pick<typeof db, "insert"> = db
 ): Promise<string> {
   const eventId = randomUUID();
-  await db.insert(events).values({
+  await executor.insert(events).values({
     id: eventId,
     userId,
     type,

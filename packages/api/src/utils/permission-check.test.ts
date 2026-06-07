@@ -40,7 +40,13 @@ vi.mock("@synap/database", async () => {
     limit: vi.fn().mockResolvedValue([]),
   }));
   return {
-    db: { insert: mockDbInsert, select: mockDbSelect, transaction: vi.fn() },
+    db: {
+      insert: mockDbInsert,
+      select: mockDbSelect,
+      // Run the callback with a tx that proxies insert (mirrors TX-1's atomic
+      // proposal+.requested path); return whatever the callback returns.
+      transaction: vi.fn(async (cb) => cb({ insert: mockDbInsert })),
+    },
     proposals: {},
     entities: {},
     users: { id: "id", userType: "userType", agentMetadata: "agentMetadata" },
