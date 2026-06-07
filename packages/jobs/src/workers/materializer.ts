@@ -124,8 +124,21 @@ export async function handleMaterialize(
         );
         return;
     }
+  } catch (error) {
+    logger.error(
+      { err: error, eventType, subjectId },
+      "Materialization failed"
+    );
+    throw error; // Let pg-boss retry the WRITE (idempotency-guarded above)
+  }
 
-    // Emit .completed event
+  // Post-write (the DB write already committed above). Emit the `.completed`
+  // event + side-effects as a BEST-EFFORT block: their failure must NOT replay
+  // the write, because some writes are not safely re-runnable on a pg-boss retry
+  // (notably command execution). The repositories also emit their own
+  // `.completed` during the write, so a miss here is recoverable. Logged, never
+  // rethrown.
+  try {
     const eventRepo = new EventRepository(sql);
     const completedEvent = createUnifiedEvent({
       subjectType,
@@ -165,12 +178,11 @@ export async function handleMaterialize(
       { eventType, subjectId, correlationId },
       "Materialization completed"
     );
-  } catch (error) {
+  } catch (postErr) {
     logger.error(
-      { err: error, eventType, subjectId },
-      "Materialization failed"
+      { err: postErr, eventType, subjectId, correlationId },
+      "Post-materialize .completed/side-effects failed (write already applied; NOT retrying the write)"
     );
-    throw error; // Let pg-boss retry
   }
 }
 
@@ -378,18 +390,28 @@ async function materializeView(
     let documentId = data.documentId as string | undefined;
     if (!documentId && data.initialContent) {
       const { storage } = await import("@synap/storage");
-      const { randomUUID } = await import("crypto");
+      const { createHash } = await import("crypto");
+      // IDEMPOTENCY: derive DETERMINISTIC doc + version ids from the view id so a
+      // retry (e.g. crash after the doc insert but before the view insert) reuses
+      // the same ids — onConflictDoNothing then no-ops instead of orphaning a
+      // second document + storage object. (documents.id is a uuid column; Postgres
+      // accepts any 32-hex value, so a hash-derived id is valid even if not RFC v4.)
+      const deterministicId = (seed: string) => {
+        const h = createHash("sha256").update(seed).digest("hex");
+        return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+      };
 
-      const docId = randomUUID();
+      const docId = deterministicId(`view-doc:${subjectId}`);
       const contentStr = JSON.stringify(data.initialContent);
       const contentBuffer = Buffer.from(contentStr, "utf-8");
       const ext = viewType === "whiteboard" ? "json" : "json";
       const storageKey = storage.buildPath(userId, viewType, docId, ext);
+      // Re-uploading the same deterministic key on retry overwrites in place.
       const uploadResult = await storage.upload(storageKey, contentBuffer, {
         contentType: "application/json",
       });
 
-      const versionId = randomUUID();
+      const versionId = deterministicId(`view-docver:${subjectId}`);
       const snapshot = await uploadDocumentVersionSnapshot({
         userId,
         documentId: docId,
@@ -399,29 +421,35 @@ async function materializeView(
         content: contentStr,
       });
 
-      await sharedDb.insert(documents).values({
-        id: docId,
-        userId,
-        workspaceId: workspaceId ?? "",
-        type: viewType,
-        title: (data.name as string) || "Untitled",
-        storageUrl: uploadResult.url,
-        storageKey: uploadResult.path,
-        size: uploadResult.size,
-        mimeType: "application/json",
-        currentVersion: 1,
-        lastSavedVersion: 1,
-      });
+      await sharedDb
+        .insert(documents)
+        .values({
+          id: docId,
+          userId,
+          workspaceId: workspaceId ?? "",
+          type: viewType,
+          title: (data.name as string) || "Untitled",
+          storageUrl: uploadResult.url,
+          storageKey: uploadResult.path,
+          size: uploadResult.size,
+          mimeType: "application/json",
+          currentVersion: 1,
+          lastSavedVersion: 1,
+        })
+        .onConflictDoNothing();
 
-      await sharedDb.insert(documentVersions).values({
-        id: versionId,
-        documentId: docId,
-        version: 1,
-        ...storedVersionValues(snapshot),
-        author: "user",
-        authorId: userId,
-        message: "Initial version",
-      });
+      await sharedDb
+        .insert(documentVersions)
+        .values({
+          id: versionId,
+          documentId: docId,
+          version: 1,
+          ...storedVersionValues(snapshot),
+          author: "user",
+          authorId: userId,
+          message: "Initial version",
+        })
+        .onConflictDoNothing();
 
       documentId = docId;
     }
@@ -592,22 +620,34 @@ async function materializeCommand(
     "Approved command executed"
   );
 
-  // Emit side effects so automations can fire
+  // Emit side effects so automations can fire. BEST-EFFORT: the command has
+  // ALREADY executed, so a side-effect failure must NOT throw — that would make
+  // pg-boss retry the whole job and DOUBLE-EXECUTE the shell command. (The exec
+  // error itself is caught above; with this also non-throwing, materializeCommand
+  // does not trigger a retry → effectively once-only. A persisted run-marker for
+  // strict once-only is a future hardening.)
   if (workspaceId) {
-    await emitSideEffects({
-      subjectType: "command",
-      action: "execute",
-      subjectId,
-      userId,
-      workspaceId,
-      data: {
-        command,
-        workingDir,
-        exitCode,
-        reason: data.reason as string | undefined,
-        stdoutPreview: stdout.slice(0, 500),
-        approvedExecution: true,
-      },
-    });
+    try {
+      await emitSideEffects({
+        subjectType: "command",
+        action: "execute",
+        subjectId,
+        userId,
+        workspaceId,
+        data: {
+          command,
+          workingDir,
+          exitCode,
+          reason: data.reason as string | undefined,
+          stdoutPreview: stdout.slice(0, 500),
+          approvedExecution: true,
+        },
+      });
+    } catch (sideErr) {
+      logger.error(
+        { err: sideErr, subjectId, correlationId },
+        "Command side-effects failed (command already executed; not retrying)"
+      );
+    }
   }
 }
