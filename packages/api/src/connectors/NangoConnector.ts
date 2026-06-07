@@ -44,9 +44,10 @@ const NangoIntegrationSchema = z.object({
   display_name: z.string().optional(),
 });
 
-const NangoIntegrationsResponseSchema = z.object({
-  configs: z.array(NangoIntegrationSchema),
-});
+const NangoIntegrationsResponseSchema = z.union([
+  z.object({ configs: z.array(NangoIntegrationSchema) }),
+  z.object({ data: z.array(NangoIntegrationSchema) }),
+]);
 
 export class NangoConnector implements SyncConnector {
   readonly name = "nango";
@@ -180,16 +181,20 @@ export class NangoConnector implements SyncConnector {
   async listIntegrations(): Promise<
     Array<{ uniqueKey: string; provider: string; displayName: string }>
   > {
-    const res = await fetch(`${this.host}/config`, {
+    const res = await fetch(`${this.host}/integrations`, {
       headers: this.authHeaders(),
     });
 
     if (!res.ok) return [];
 
-    const parsed = NangoIntegrationsResponseSchema.safeParse(await res.json());
+    const parsed = NangoIntegrationsResponseSchema.safeParse(
+      await res.json().catch(() => null)
+    );
     if (!parsed.success) return [];
 
-    return parsed.data.configs.map((c) => ({
+    const items =
+      "data" in parsed.data ? parsed.data.data : parsed.data.configs;
+    return items.map((c) => ({
       uniqueKey: c.unique_key,
       provider: c.provider,
       displayName: c.display_name ?? c.provider,
@@ -202,7 +207,7 @@ export class NangoConnector implements SyncConnector {
     error: string | null;
   }> {
     try {
-      const res = await fetch(`${this.host}/config`, {
+      const res = await fetch(`${this.host}/integrations`, {
         headers: this.authHeaders(),
         signal: AbortSignal.timeout(5000),
       });
