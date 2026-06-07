@@ -997,6 +997,10 @@ app.route("/api/hub/providers", providersRouter);
 import { automationsSchemaRouter } from "./routers/automations-schema.js";
 app.route("/api/hub/automations/schema", automationsSchemaRouter);
 
+// Connectors schema — static reference document for connector providers, CLI commands, REST endpoints
+import { connectorsSchemaRouter } from "./routers/connectors-schema.js";
+app.route("/api/hub/connectors/schema", connectorsSchemaRouter);
+
 // Admin routes (public API for invitations)
 import { adminRouter } from "./routers/admin.js";
 app.route("/api/admin", adminRouter);

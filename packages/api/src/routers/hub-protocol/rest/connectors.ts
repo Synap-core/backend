@@ -14,6 +14,202 @@ import { ErrorSchema } from "./_codecs/_openapi.js";
 import { logger, type HubHono } from "./_shared.js";
 
 export function registerConnectorsRoutes(app: HubHono): void {
+  // ── GET /connectors/providers ─────────────────────────────────────────────
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/connectors/providers",
+      tags: ["Connectors"],
+      summary: "List available connector providers and connection status",
+      responses: {
+        200: {
+          description: "Provider list",
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  providers: z.array(
+                    z.object({
+                      id: z.string(),
+                      provider: z.string(),
+                      displayName: z.string().optional(),
+                      connected: z.boolean(),
+                      connectionId: z.string().optional(),
+                    })
+                  ),
+                })
+                .openapi("ConnectorProviderList"),
+            },
+          },
+        },
+        503: {
+          description: "Not configured",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+      },
+    }),
+    async (c) => {
+      const connector = syncConnectorRegistry.get("nango") as
+        | NangoConnector
+        | undefined;
+      if (!connector || !connector.isConfigured()) {
+        return c.json({ error: "Nango not configured" }, 503);
+      }
+      const userId = c.get("userId") as string;
+      const [integrations, connections] = await Promise.all([
+        connector.listIntegrations(),
+        connector.listConnections(userId),
+      ]);
+      const connMap = new Map(
+        connections.map((conn) => [conn.provider, conn.connectionId])
+      );
+      return c.json(
+        {
+          providers: integrations.map((i) => ({
+            id: i.uniqueKey,
+            provider: i.provider,
+            displayName: i.displayName,
+            connected: connMap.has(i.uniqueKey),
+            connectionId: connMap.get(i.uniqueKey),
+          })),
+        },
+        200
+      );
+    }
+  );
+
+  // ── POST /connectors/session ──────────────────────────────────────────────
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/connectors/session",
+      tags: ["Connectors"],
+      summary: "Get an OAuth session URL for a specific provider",
+      request: {
+        body: {
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  providerId: z.string().optional(),
+                  workspaceId: z.string().optional(),
+                })
+                .openapi("ConnectorSessionRequest"),
+            },
+          },
+        },
+      },
+      responses: {
+        200: {
+          description: "Session URL",
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  redirectUrl: z.string(),
+                  sessionToken: z.string(),
+                })
+                .openapi("ConnectorSessionResult"),
+            },
+          },
+        },
+        500: {
+          description: "Internal error",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+        503: {
+          description: "Not configured",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+      },
+    }),
+    async (c) => {
+      const connector = syncConnectorRegistry.get("nango") as
+        | NangoConnector
+        | undefined;
+      if (!connector || !connector.isConfigured()) {
+        return c.json({ error: "Nango not configured" }, 503);
+      }
+      const userId = c.get("userId") as string;
+      const { providerId, workspaceId } = c.req.valid("json");
+      try {
+        const session = await connector.createSession(
+          userId,
+          providerId ?? "*",
+          workspaceId ?? ""
+        );
+        return c.json(
+          {
+            redirectUrl: session.redirectUrl,
+            sessionToken: session.sessionToken,
+          },
+          200
+        );
+      } catch (err) {
+        logger.error({ err, providerId }, "POST /connectors/session failed");
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          500
+        );
+      }
+    }
+  );
+
+  // ── DELETE /connectors/connections/:connectionId ──────────────────────────
+  app.openapi(
+    createRoute({
+      method: "delete",
+      path: "/connectors/connections/{connectionId}",
+      tags: ["Connectors"],
+      summary: "Disconnect a specific connection",
+      request: {
+        params: z.object({ connectionId: z.string() }),
+      },
+      responses: {
+        200: {
+          description: "Connection revoked",
+          content: {
+            "application/json": {
+              schema: z
+                .object({ success: z.boolean() })
+                .openapi("RevokeConnectionResult"),
+            },
+          },
+        },
+        500: {
+          description: "Internal error",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+        503: {
+          description: "Not configured",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+      },
+    }),
+    async (c) => {
+      const connector = syncConnectorRegistry.get("nango") as
+        | NangoConnector
+        | undefined;
+      if (!connector || !connector.isConfigured()) {
+        return c.json({ error: "Nango not configured" }, 503);
+      }
+      const { connectionId } = c.req.valid("param");
+      try {
+        await connector.revokeConnection(connectionId);
+        return c.json({ success: true }, 200);
+      } catch (err) {
+        logger.error(
+          { err, connectionId },
+          "DELETE /connectors/connections failed"
+        );
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          500
+        );
+      }
+    }
+  );
+
   // ── POST /connectors/actions ──────────────────────────────────────────────
   app.openapi(
     createRoute({

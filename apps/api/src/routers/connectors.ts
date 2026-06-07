@@ -153,6 +153,89 @@ function mapNangoRecord(
         },
       };
     }
+    case "notion": {
+      return {
+        profileSlug: "document",
+        title:
+          (record.title as string) ||
+          (record.Name as string) ||
+          "Untitled Page",
+        externalId: record.id,
+        properties: {
+          content: (record.content as string) || null,
+          url: (record.url as string) || null,
+          lastEditedTime: record.last_edited_time || null,
+          tags: Array.isArray(record.tags) ? record.tags : [],
+          source: "notion",
+        },
+      };
+    }
+    case "linear": {
+      return {
+        profileSlug: "task",
+        title: (record.title as string) || "Untitled Issue",
+        externalId: record.id,
+        properties: {
+          description: (record.description as string) || null,
+          status: (record.state as string) || "todo",
+          priority: (record.priority as string) || null,
+          url: (record.url as string) || null,
+          assignee: (record.assignee as string) || null,
+          labels: Array.isArray(record.labels) ? record.labels : [],
+          dueDate: (record.dueDate as string) || null,
+          source: "linear",
+        },
+      };
+    }
+    case "slack": {
+      return {
+        profileSlug: "note",
+        title: `Slack: ${((record.text as string) || "").slice(0, 60)}`,
+        externalId: record.id,
+        properties: {
+          content: (record.text as string) || null,
+          channel: (record.channel as string) || null,
+          author:
+            (record.username as string) || (record.user as string) || null,
+          timestamp: (record.ts as string) || null,
+          threadTs: (record.thread_ts as string) || null,
+          source: "slack",
+          tags: ["slack"],
+        },
+      };
+    }
+    case "hubspot": {
+      if (model === "Contact") {
+        const firstName = (record.firstname as string) || "";
+        const lastName = (record.lastname as string) || "";
+        return {
+          profileSlug: "contact",
+          title: `${firstName} ${lastName}`.trim() || "Unnamed Contact",
+          externalId: record.id,
+          properties: {
+            email: (record.email as string) || null,
+            phone: (record.phone as string) || null,
+            company: (record.company as string) || null,
+            jobTitle: (record.jobtitle as string) || null,
+            source: "hubspot",
+          },
+        };
+      }
+      if (model === "Deal") {
+        return {
+          profileSlug: "task",
+          title: (record.dealname as string) || "Unnamed Deal",
+          externalId: record.id,
+          properties: {
+            amount: (record.amount as number) || null,
+            stage: (record.dealstage as string) || null,
+            closeDate: (record.closedate as string) || null,
+            source: "hubspot",
+          },
+        };
+      }
+      return null;
+    }
     default:
       return null;
   }
