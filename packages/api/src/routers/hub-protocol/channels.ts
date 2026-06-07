@@ -24,13 +24,16 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
-import { db, eq, and, gt } from "@synap/database";
+import { db, eq, and, gt, inArray } from "@synap/database";
 import {
   agents,
   channels,
+  channelMembers,
   messages,
   workspaceMembers,
   ChannelType,
+  ChannelMemberKind,
+  ChannelMemberRole,
   MessageRole,
   MessageAuthorType,
 } from "@synap/database/schema";
@@ -106,6 +109,21 @@ async function assertAgentInWorkspace(
     });
   }
   return agentUserId;
+}
+
+/**
+ * Read the member ids of an A2AI (agent_collab) channel from the typed
+ * `channel_members` table — the single source of truth that also carries the
+ * per-member capability flags the governance gate reads. Replaces the legacy
+ * `metadata.participants: string[]` array so A2AI membership is governed the
+ * same way as every other channel type.
+ */
+async function getA2AIMemberIds(channelId: string): Promise<string[]> {
+  const rows = await db
+    .select({ memberId: channelMembers.memberId })
+    .from(channelMembers)
+    .where(eq(channelMembers.channelId, channelId));
+  return rows.map((r) => r.memberId);
 }
 
 export const channelsRouter = router({
@@ -435,12 +453,13 @@ export const channelsRouter = router({
 
       const channelMeta = (channel.metadata ?? {}) as {
         visibility?: "open" | "closed";
-        participants?: string[];
         topic?: string;
       };
 
       const visibility = channelMeta.visibility ?? "closed";
-      const participants: string[] = channelMeta.participants ?? [];
+      // Membership is read from channel_members (source of truth) so the
+      // per-member capability flags govern A2AI writes like every other channel.
+      const participants: string[] = await getA2AIMemberIds(input.channelId);
       const isKnownParticipant = participants.includes(input.agentUserId);
 
       // Enforce closed channel access
@@ -486,14 +505,23 @@ export const channelsRouter = router({
           return { status: "denied" as const, reason: perm.reason };
         }
 
-        // Auto-approved: add to participants
-        const updatedParticipants = [...participants, input.agentUserId];
+        // Auto-approved: add to channel_members (source of truth). Default
+        // capability flags apply (canDraft/canPropose true, canAct false).
+        await db
+          .insert(channelMembers)
+          .values({
+            channelId: input.channelId,
+            memberId: input.agentUserId,
+            memberKind: ChannelMemberKind.AI_AGENT,
+            role: ChannelMemberRole.MEMBER,
+            addedBy: channel.userId,
+          })
+          .onConflictDoNothing({
+            target: [channelMembers.channelId, channelMembers.memberId],
+          });
         await db
           .update(channels)
-          .set({
-            metadata: { ...channelMeta, participants: updatedParticipants },
-            updatedAt: new Date(),
-          })
+          .set({ updatedAt: new Date() })
           .where(eq(channels.id, input.channelId));
       }
 
@@ -550,8 +578,28 @@ export const channelsRouter = router({
         userId: channel.userId,
       });
 
-      // Queue Synap IS response via pg-boss (retryLimit:3, replaces fire-and-forget)
-      if (channel.workspaceId) {
+      // Queue Synap IS response via pg-boss (retryLimit:3, replaces fire-and-forget).
+      // The post itself ALWAYS succeeds (message is persisted above); the reply
+      // trigger is best-effort. Previously, a null workspaceId or an IS-resolution
+      // failure silently dropped the trigger — the post looked fine but no agent
+      // ever responded, with zero surfaced signal. We now make every drop OBSERVABLE
+      // (log.error with channelId + reason) and report it back to the caller via
+      // `triggerQueued` so the failure is never invisible.
+      let triggerQueued = false;
+      let triggerSkipReason: string | undefined;
+
+      if (!channel.workspaceId) {
+        triggerSkipReason = "channel_has_no_workspace";
+        console.error(
+          "[hub-protocol] A2AI reply trigger skipped — channel has no workspaceId; no agent will respond.",
+          {
+            channelId: input.channelId,
+            messageId,
+            sourceAgentUserId: input.agentUserId,
+            reason: triggerSkipReason,
+          }
+        );
+      } else {
         try {
           const resolvedService = await resolveIntelligenceService({
             userId: channel.userId,
@@ -578,10 +626,19 @@ export const channelsRouter = router({
             jobData,
             A2AI_TRIGGER_JOB_OPTIONS
           );
+          triggerQueued = true;
         } catch (err) {
+          triggerSkipReason = "intelligence_service_unresolved_or_queue_failed";
           console.error(
-            "[hub-protocol] Failed to queue A2AI response trigger:",
-            err
+            "[hub-protocol] A2AI reply trigger failed — could not resolve IS or enqueue job; no agent will respond.",
+            {
+              channelId: input.channelId,
+              messageId,
+              workspaceId: channel.workspaceId,
+              sourceAgentUserId: input.agentUserId,
+              reason: triggerSkipReason,
+              error: err instanceof Error ? err.message : String(err),
+            }
           );
         }
       }
@@ -589,6 +646,10 @@ export const channelsRouter = router({
       return {
         status: "sent" as const,
         messageId,
+        /** Whether a Synap IS reply was successfully queued for this post. */
+        triggerQueued,
+        /** Present only when no reply was queued — explains why no agent will respond. */
+        ...(triggerQueued ? {} : { triggerSkipReason }),
       };
     }),
 
@@ -629,10 +690,10 @@ export const channelsRouter = router({
       // For open channels, a prior post from the caller also grants read access.
       const channelMeta = (channel.metadata ?? {}) as {
         visibility?: "open" | "closed";
-        participants?: string[];
       };
       const isOwner = channel.userId === ctx.userId;
-      const participants: string[] = channelMeta.participants ?? [];
+      // Membership read from channel_members (source of truth).
+      const participants: string[] = await getA2AIMemberIds(input.channelId);
       const isParticipant = ctx.userId
         ? participants.includes(ctx.userId)
         : false;
@@ -859,18 +920,41 @@ export const channelsRouter = router({
         limit: input.limit,
       });
 
+      // Membership comes from channel_members (source of truth) — batch-load
+      // members for all returned channels in a single query.
+      const memberRows =
+        rows.length > 0
+          ? await db
+              .select({
+                channelId: channelMembers.channelId,
+                memberId: channelMembers.memberId,
+              })
+              .from(channelMembers)
+              .where(
+                inArray(
+                  channelMembers.channelId,
+                  rows.map((ch) => ch.id)
+                )
+              )
+          : [];
+      const participantsByChannel = new Map<string, string[]>();
+      for (const m of memberRows) {
+        const list = participantsByChannel.get(m.channelId) ?? [];
+        list.push(m.memberId);
+        participantsByChannel.set(m.channelId, list);
+      }
+
       // If agentUserId filter specified, include channels where:
       //   - visibility is "open" (discoverable), or
-      //   - agentUserId is in metadata.participants
+      //   - agentUserId is a member (channel_members)
       const filtered = input.agentUserId
         ? rows.filter((ch) => {
-            const meta = (ch.metadata ?? {}) as {
-              visibility?: string;
-              participants?: string[];
-            };
+            const meta = (ch.metadata ?? {}) as { visibility?: string };
             return (
               meta.visibility === "open" ||
-              (meta.participants ?? []).includes(input.agentUserId!)
+              (participantsByChannel.get(ch.id) ?? []).includes(
+                input.agentUserId!
+              )
             );
           })
         : rows;
@@ -880,7 +964,6 @@ export const channelsRouter = router({
           const meta = (ch.metadata ?? {}) as {
             topic?: string;
             visibility?: string;
-            participants?: string[];
             a2aiStatus?: string;
           };
           return {
@@ -888,7 +971,7 @@ export const channelsRouter = router({
             title: ch.title,
             topic: meta.topic,
             visibility: meta.visibility ?? "closed",
-            participants: meta.participants ?? [],
+            participants: participantsByChannel.get(ch.id) ?? [],
             status: meta.a2aiStatus ?? "active",
             updatedAt: ch.updatedAt.toISOString(),
           };

@@ -42,6 +42,7 @@ import type {
   ProposalReviewEvent,
   ProposalReviewModel,
   StoredProposalData,
+  ProposalMaterializedRecord,
 } from "@synap-core/types";
 import {
   isDocumentContentProposalData,
@@ -69,6 +70,7 @@ import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 import { channelsRouter } from "./channels.js";
 import { entitiesRouter as regularEntitiesRouter } from "./entities.js";
 import { relationsRouter } from "./relations.js";
+import { documentsRouter } from "./documents.js";
 import { messages } from "@synap/database/schema";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { emitSideEffects } from "@synap/events";
@@ -577,6 +579,149 @@ function valueTypeOf(value: unknown): string {
   return typeof value;
 }
 
+// ---------------------------------------------------------------------------
+// Revert planning (pure — no DB, fully unit-testable)
+// ---------------------------------------------------------------------------
+
+/**
+ * The concrete inverse a `revert` must apply. Either a list of soft-deletes /
+ * deletes of the rows the proposal created, or `unsupported` with a loud reason.
+ *
+ * Effect verbs:
+ *   - "delete-creations" → the proposal CREATED rows; the inverse is to delete
+ *     them (entities/relations/documents the approval produced).
+ *
+ * Update/edit proposals carry no recoverable before-snapshot, so reverting them
+ * is `unsupported` and the mutation FAILS LOUD rather than fabricating a state.
+ */
+export type ProposalRevertPlan =
+  | {
+      kind: "delete-creations";
+      entityIds: string[];
+      relationIds: string[];
+      documentIds: string[];
+    }
+  | { kind: "unsupported"; reason: string };
+
+/**
+ * Minimal projection of a proposal row the planner needs. Keeps the planner
+ * decoupled from drizzle's `$inferSelect` so it can be unit-tested with a
+ * plain object.
+ */
+export interface RevertPlannerInput {
+  status: string;
+  targetType: string;
+  targetId: string;
+  proposalType: string;
+  data: unknown;
+}
+
+/**
+ * Decide the inverse of an approved proposal, reading ONLY the proposal's own
+ * stored data — no schema change. The created ids come from:
+ *   - `data.materialized.{entityIds,relationIds,documentIds}` — the canonical
+ *     record the approve flow stamps (REQUIRED for inline-create + composite,
+ *     whose ids are minted fresh and are otherwise unrecoverable);
+ *   - falling back to `targetId` for the branches whose materialized id is the
+ *     proposal target itself (generic `.validated` create where subjectId is the
+ *     target; document create where documentId === targetId).
+ *
+ * Returns `unsupported` (→ fail loud) for update/edit proposals (no before-state)
+ * and for anything we cannot positively map to created rows.
+ */
+export function planProposalRevert(
+  proposal: RevertPlannerInput
+): ProposalRevertPlan {
+  const data =
+    proposal.data && typeof proposal.data === "object"
+      ? (proposal.data as StoredProposalData)
+      : undefined;
+  const materialized = data?.materialized;
+
+  // Normalize the change kind. proposalType is a free string ("create",
+  // "update", "edit", "delete", "create_branch", …) and request-shaped data
+  // carries a `changeType`. Prefer changeType, fall back to proposalType.
+  const changeType =
+    (data && isRequestShapedProposalData(data) ? data.changeType : undefined) ??
+    proposal.proposalType;
+  const isCreate =
+    proposal.proposalType === "create" ||
+    changeType === "create" ||
+    isCompositeProposalData(data ?? null);
+  const isUpdate =
+    !isCreate &&
+    (proposal.proposalType === "update" ||
+      proposal.proposalType === "edit" ||
+      proposal.proposalType === "user_edit" ||
+      changeType === "update");
+  const isDelete =
+    !isCreate &&
+    !isUpdate &&
+    (proposal.proposalType === "delete" || changeType === "delete");
+
+  // Update/edit: reverting needs the BEFORE-state, which is NOT persisted
+  // anywhere on the row (the review enrich computes a before→after diff at read
+  // time from the live entity, but the pre-approval snapshot is gone). Fail loud
+  // rather than fabricate.
+  if (isUpdate) {
+    return {
+      kind: "unsupported",
+      reason:
+        "Revert of an update/edit proposal is not supported without a before-snapshot (none is persisted on the proposal).",
+    };
+  }
+
+  // Delete/archive: undoing a delete means RESTORING the target. Entity deletes
+  // in this codebase are HARD deletes (no soft-delete row survives), so there is
+  // nothing to restore — fail loud rather than silently no-op.
+  if (isDelete) {
+    return {
+      kind: "unsupported",
+      reason:
+        "Revert of a delete proposal is not supported: deletes are hard-deletes with no recoverable before-snapshot to restore.",
+    };
+  }
+
+  if (isCreate) {
+    const entityIds = [...(materialized?.entityIds ?? [])];
+    const relationIds = [...(materialized?.relationIds ?? [])];
+    const documentIds = [...(materialized?.documentIds ?? [])];
+
+    // Fallback for branches whose created id IS the proposal target and which
+    // therefore may not have stamped `materialized` (generic `.validated` entity
+    // create; document create where documentId === targetId).
+    if (
+      entityIds.length === 0 &&
+      relationIds.length === 0 &&
+      documentIds.length === 0
+    ) {
+      if (proposal.targetType === "entity" && proposal.targetId) {
+        entityIds.push(proposal.targetId);
+      } else if (proposal.targetType === "document" && proposal.targetId) {
+        documentIds.push(proposal.targetId);
+      }
+    }
+
+    if (
+      entityIds.length === 0 &&
+      relationIds.length === 0 &&
+      documentIds.length === 0
+    ) {
+      return {
+        kind: "unsupported",
+        reason: `Revert of a '${proposal.targetType}' create proposal is not supported: no materialized record of created rows.`,
+      };
+    }
+
+    return { kind: "delete-creations", entityIds, relationIds, documentIds };
+  }
+
+  return {
+    kind: "unsupported",
+    reason: `Revert of proposal type '${proposal.targetType}/${proposal.proposalType}' is not supported.`,
+  };
+}
+
 export const proposalsRouter = router({
   /**
    * List proposals (Inbox)
@@ -901,6 +1046,7 @@ export const proposalsRouter = router({
           created: createdCount,
           linked,
           primaryId,
+          entities: createdEntities,
         } = await materializeCompositeGraph(
           payload.operations,
           entityCaller,
@@ -917,10 +1063,26 @@ export const proposalsRouter = router({
           proposal.workspaceId ? { workspaceScoped: true } : undefined
         );
 
+        // Record what we materialized so `revert` can compute the inverse.
+        // Only entities CREATED here (not pre-existing linked ones) are ours to
+        // undo. Relation ids aren't returned by the materializer, so revert of a
+        // composite undoes the created entities (the cascade removes the
+        // relations touching them).
+        const compositeMaterialized: ProposalMaterializedRecord = {
+          entityIds: createdEntities
+            .filter((entity) => !entity.linked)
+            .map((entity) => entity.entityId),
+        };
+        const compositePayload: StoredProposalData = {
+          ...payload,
+          materialized: compositeMaterialized,
+        };
+
         await db
           .update(proposals)
           .set({
             status: ProposalStatus.APPROVED,
+            data: compositePayload,
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
@@ -1346,7 +1508,7 @@ export const proposalsRouter = router({
         const entityCaller = regularEntitiesRouter.createCaller(
           entityCallerCtx as unknown as Context
         );
-        await entityCaller.create({
+        const createdEntity = (await entityCaller.create({
           profileSlug,
           title: (innerData.title as string) || "Untitled",
           description: innerData.description as string | undefined,
@@ -1357,12 +1519,23 @@ export const proposalsRouter = router({
           // document with versioning, not stuffed into a content property.
           content: innerData.content as string | undefined,
           source: "system",
-        });
+        })) as { id?: string };
+
+        // entities.create mints a FRESH id (≠ proposal.targetId), so record it
+        // so `revert` can delete exactly the entity this approval created.
+        const createMaterialized: ProposalMaterializedRecord = createdEntity?.id
+          ? { entityIds: [createdEntity.id] }
+          : {};
+        const createPayload: StoredProposalData = {
+          ...(payload as StoredProposalData),
+          materialized: createMaterialized,
+        };
 
         await db
           .update(proposals)
           .set({
             status: ProposalStatus.APPROVED,
+            data: createPayload,
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
@@ -1492,6 +1665,7 @@ export const proposalsRouter = router({
             approvedBy: userId,
             approvedAt: new Date().toISOString(),
             approvalComment: input.comment,
+            sourceProposalId: input.proposalId,
           },
           source: "api",
         });
@@ -1590,6 +1764,259 @@ export const proposalsRouter = router({
       }
 
       return { success: true };
+    }),
+
+  /**
+   * Revert an APPROVED / AUTO-APPROVED proposal — the undo half of
+   * "reviewable AND reversible". Reads the proposal's own stored data to compute
+   * the inverse (no schema change): a create proposal's materialized entity /
+   * relation / document ids are deleted; update and delete proposals fail loud
+   * (no recoverable before-snapshot). Authority mirrors `approve`.
+   */
+  revert: protectedProcedure
+    .input(
+      z.object({
+        proposalId: z.string(),
+        reason: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      const proposal = await db.query.proposals.findFirst({
+        where: eq(proposals.id, input.proposalId),
+      });
+
+      if (!proposal) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
+      }
+
+      // Only an applied proposal can be reverted.
+      if (
+        proposal.status !== ProposalStatus.APPROVED &&
+        proposal.status !== ProposalStatus.AUTO_APPROVED
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Only approved or auto-approved proposals can be reverted (status: ${proposal.status}).`,
+        });
+      }
+
+      // Authority — SAME policy as approve (owner_and_admins | admins_only |
+      // any_editor). Pod-wide proposals (no workspace) skip the workspace check,
+      // mirroring approve.
+      if (proposal.workspaceId) {
+        const [ws] = await db
+          .select({ settings: workspaces.settings })
+          .from(workspaces)
+          .where(eq(workspaces.id, proposal.workspaceId))
+          .limit(1);
+
+        const settings = ws?.settings as WorkspaceSettings | undefined;
+        const policy =
+          settings?.aiGovernance?.proposalApprovalPolicy ?? "owner_and_admins";
+
+        const membership = await getWorkspaceMembership(
+          db,
+          proposal.workspaceId,
+          userId
+        );
+        const memberRole = membership?.role;
+        const isAdmin = memberRole === "admin";
+        const isEditor = memberRole === "editor" || isAdmin;
+        const proposalData = proposal.data as Record<string, unknown> | null;
+        const isOwner = proposalData?.sourceId === userId;
+
+        const canRevert =
+          policy === "admins_only"
+            ? isAdmin
+            : policy === "any_editor"
+              ? isEditor
+              : /* owner_and_admins */ isOwner || isAdmin;
+
+        if (!canRevert) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Not authorized to revert this proposal",
+          });
+        }
+      }
+
+      // Compute the inverse from the proposal's own data. Fail loud on anything
+      // we can't safely undo (update/delete, or a create with no recorded ids).
+      const plan = planProposalRevert({
+        status: proposal.status,
+        targetType: proposal.targetType,
+        targetId: proposal.targetId,
+        proposalType: proposal.proposalType,
+        data: proposal.data,
+      });
+
+      if (plan.kind === "unsupported") {
+        throw new TRPCError({
+          code: "NOT_IMPLEMENTED",
+          message: plan.reason,
+        });
+      }
+
+      // Build a caller ctx mirroring approve's composite branch. Pod-wide
+      // proposals run as owner with no workspace (entities.delete is a
+      // podProcedure that reads ctx.workspaceId).
+      let revertCtx: {
+        db: typeof db;
+        authenticated: true;
+        userId: string;
+        workspaceId: string | null;
+        workspaceRole: string;
+      };
+      if (proposal.workspaceId) {
+        const membership = await getWorkspaceMembership(
+          db,
+          proposal.workspaceId,
+          userId
+        );
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        revertCtx = {
+          db,
+          authenticated: true as const,
+          userId,
+          workspaceId: proposal.workspaceId,
+          workspaceRole: membership.role,
+        };
+      } else {
+        revertCtx = {
+          db,
+          authenticated: true as const,
+          userId,
+          workspaceId: null,
+          workspaceRole: "owner",
+        };
+      }
+
+      const entityCaller = regularEntitiesRouter.createCaller(
+        revertCtx as unknown as Context
+      );
+      const relationCaller = relationsRouter.createCaller(
+        revertCtx as unknown as Context
+      );
+      const documentCaller = documentsRouter.createCaller(
+        revertCtx as unknown as Context
+      );
+
+      // Apply the inverse through the SAME canonical routers approve uses, so the
+      // undo is governed and emits its own delete events. Each delete is
+      // idempotent (entities.delete soft/hard-deletes by id; relations/documents
+      // delete by id) so a partial earlier revert can be retried safely.
+      const deleted: ProposalMaterializedRecord = {
+        entityIds: [],
+        relationIds: [],
+        documentIds: [],
+      };
+      const failures: string[] = [];
+
+      for (const relationId of plan.relationIds) {
+        try {
+          await relationCaller.delete({ id: relationId });
+          deleted.relationIds!.push(relationId);
+        } catch (err) {
+          logger.warn({ err, relationId }, "revert: relation delete failed");
+          failures.push(`relation ${relationId}`);
+        }
+      }
+      for (const entityId of plan.entityIds) {
+        try {
+          await entityCaller.delete({ id: entityId });
+          deleted.entityIds!.push(entityId);
+        } catch (err) {
+          logger.warn({ err, entityId }, "revert: entity delete failed");
+          failures.push(`entity ${entityId}`);
+        }
+      }
+      for (const documentId of plan.documentIds) {
+        try {
+          await documentCaller.delete({ documentId });
+          deleted.documentIds!.push(documentId);
+        } catch (err) {
+          logger.warn({ err, documentId }, "revert: document delete failed");
+          failures.push(`document ${documentId}`);
+        }
+      }
+
+      // If we mapped rows to undo but EVERY delete failed, treat the revert as
+      // failed rather than flipping the proposal to reverted with no effect.
+      const attempted =
+        plan.entityIds.length +
+        plan.relationIds.length +
+        plan.documentIds.length;
+      const succeeded =
+        deleted.entityIds!.length +
+        deleted.relationIds!.length +
+        deleted.documentIds!.length;
+      if (attempted > 0 && succeeded === 0) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Revert failed — could not undo: ${failures.join(", ")}`,
+        });
+      }
+
+      const revertedAt = new Date();
+      const existingData =
+        proposal.data && typeof proposal.data === "object"
+          ? (proposal.data as StoredProposalData)
+          : ({} as StoredProposalData);
+      const revertedPayload: StoredProposalData = {
+        ...existingData,
+        revertedBy: userId,
+        revertedAt: revertedAt.toISOString(),
+        revertReason: input.reason,
+      };
+
+      // status is a plain `text` column (no DB CHECK constraint) — "reverted" is
+      // a valid value without a migration. Cast past the drizzle enum union.
+      await db
+        .update(proposals)
+        .set({
+          status: "reverted" as typeof ProposalStatus.APPROVED,
+          data: revertedPayload,
+          reviewedBy: userId,
+          reviewedAt: revertedAt,
+          updatedAt: revertedAt,
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // Audit the undo: a record that this proposal was reverted, plus a
+      // best-effort delete.completed for the target subject for attribution.
+      await auditLog({
+        subjectType: "proposal",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.proposalId,
+        userId,
+        workspaceId: proposal.workspaceId ?? undefined,
+        data: {
+          reverted: true,
+          sourceProposalId: input.proposalId,
+          revertReason: input.reason,
+          deletedEntityIds: deleted.entityIds,
+          deletedRelationIds: deleted.relationIds,
+          deletedDocumentIds: deleted.documentIds,
+        },
+        source: "api",
+      });
+
+      return {
+        success: true,
+        reverted: deleted,
+        ...(failures.length > 0 ? { partialFailures: failures } : {}),
+      };
     }),
 
   /**
@@ -1732,6 +2159,7 @@ export const proposalsRouter = router({
                 approvedBy: userId,
                 approvedAt: new Date().toISOString(),
                 approvalComment: input.comment,
+                sourceProposalId: proposalId,
               },
               source: "api",
             });

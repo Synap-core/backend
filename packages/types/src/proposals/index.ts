@@ -183,7 +183,8 @@ export interface ProposalReviewModel {
  * Written by global-validator and entity proposals from chat.
  * Approve uses this to emit `*.validated`.
  */
-export interface RequestShapedProposalData extends UpdateRequest {
+export interface RequestShapedProposalData
+  extends UpdateRequest, ProposalDataLifecycle {
   reasoning?: string;
   aiMetadata?: Record<string, unknown>;
 }
@@ -193,7 +194,7 @@ export interface RequestShapedProposalData extends UpdateRequest {
  * Written by hub document edit, infinite-chat document edit, user_edit.
  * Approve uses proposedContent and applies to storage/versions.
  */
-export interface DocumentContentProposalData {
+export interface DocumentContentProposalData extends ProposalDataLifecycle {
   proposedContent: string;
   proposedBy?: string;
   changes?: unknown[];
@@ -279,7 +280,7 @@ export type CompositeProposalOperation =
   | CompositeCreateEntityOp
   | CompositeCreateRelationOp;
 
-export interface CompositeProposalData {
+export interface CompositeProposalData extends ProposalDataLifecycle {
   /**
    * Ordered list of operations. The FIRST op MUST be a create_entity (the
    * primary entity); remaining ops are create_relation that may reference the
@@ -291,6 +292,43 @@ export interface CompositeProposalData {
   sourceId?: string;
   reasoning?: string;
   summary?: string;
+}
+
+/**
+ * Record of what a proposal MATERIALIZED on approval.
+ *
+ * Stamped onto `proposals.data.materialized` by the approve flow so a later
+ * `revert` can compute the exact inverse without a schema change. This is the
+ * canonical "what did approval produce" record:
+ *   - inline entity-create + composite-create mint FRESH ids (≠ proposal.targetId)
+ *     so the created ids would otherwise be unrecoverable from the row alone;
+ *   - relation/document ids created as a side effect are captured here too.
+ * Branches whose materialized id is deterministic from the row (generic
+ * `.validated` create/update where subjectId is known, document create where
+ * documentId === targetId) do not strictly need this, but populate it when cheap.
+ */
+export interface ProposalMaterializedRecord {
+  /** Entity ids CREATED by approval (revert → soft/hard delete each). */
+  entityIds?: string[];
+  /** Relation ids CREATED by approval (revert → delete each). */
+  relationIds?: string[];
+  /** Document ids CREATED by approval (revert → delete each). */
+  documentIds?: string[];
+}
+
+/**
+ * Lifecycle fields every stored-proposal variant may carry. Stamped onto the
+ * `proposals.data` JSONB after approval / revert (no schema change). Shared base
+ * so each variant — request-shaped, document-content, composite — accepts them
+ * without tripping object-literal excess-property checks at write sites.
+ */
+export interface ProposalDataLifecycle {
+  /** Set by approve — what this proposal produced (drives revert). */
+  materialized?: ProposalMaterializedRecord;
+  /** Set by revert — who/when/why the proposal's effect was undone. */
+  revertedBy?: string;
+  revertedAt?: string;
+  revertReason?: string;
 }
 
 /**

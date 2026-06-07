@@ -22,6 +22,8 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
+import { proposalsRouter as mainProposalsRouter } from "../../proposals.js";
+import { createHubProtocolCallerContext } from "../utils.js";
 
 export function registerProposalsRoutes(app: HubHono): void {
   // ── OpenAPI metadata for /proposals* routes ──────────────────────────────
@@ -61,6 +63,40 @@ export function registerProposalsRoutes(app: HubHono): void {
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Proposal not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/proposals/{id}/revert",
+    tags: ["Proposals"],
+    summary: "Revert an approved proposal",
+    description:
+      "Undoes the effect of an approved/auto-approved proposal: deletes the entities/relations/documents the approval created. Update and delete proposals cannot be reverted (no before-snapshot) and return 501.",
+    request: {
+      params: z.object({ id: z.string() }),
+      body: z.object({ reason: z.string().optional() }),
+    },
+    responses: {
+      200: {
+        description: "Revert applied",
+        schema: z.object({
+          success: z.boolean(),
+          reverted: z.object({
+            entityIds: z.array(z.string()).optional(),
+            relationIds: z.array(z.string()).optional(),
+            documentIds: z.array(z.string()).optional(),
+          }),
+        }),
+      },
+      400: {
+        description: "Not revertible (wrong status)",
+        schema: ErrorSchema,
+      },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Proposal not found", schema: ErrorSchema },
+      501: { description: "Revert not supported", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -152,6 +188,57 @@ export function registerProposalsRoutes(app: HubHono): void {
           : err instanceof TRPCError && err.code === "BAD_REQUEST"
             ? 400
             : 500;
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        code
+      );
+    }
+  });
+
+  /**
+   * POST /proposals/:id/revert
+   * Undo an approved/auto-approved proposal's effect. Delegates to the canonical
+   * `proposals.revert` tRPC mutation (governed deletes via the entity / relation
+   * / document routers) so behavior is identical to the in-app revert.
+   */
+  app.post("/proposals/:id/revert", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const proposalId = c.req.param("id");
+    let reason: string | undefined;
+    try {
+      const body = (await c.req.json().catch(() => ({}))) as {
+        reason?: string;
+      };
+      reason = typeof body.reason === "string" ? body.reason : undefined;
+    } catch {
+      reason = undefined;
+    }
+    try {
+      const userId = c.get("userId") as string;
+      const scopes = c.get("scopes") as string[];
+      const ctx = await createHubProtocolCallerContext(userId, scopes);
+      const caller = mainProposalsRouter.createCaller(
+        ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
+      );
+      const result = await caller.revert({ proposalId, reason });
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err, proposalId }, "revertProposal failed");
+      const code =
+        err instanceof TRPCError && err.code === "NOT_FOUND"
+          ? 404
+          : err instanceof TRPCError && err.code === "BAD_REQUEST"
+            ? 400
+            : err instanceof TRPCError && err.code === "FORBIDDEN"
+              ? 403
+              : err instanceof TRPCError && err.code === "NOT_IMPLEMENTED"
+                ? 501
+                : 500;
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         code

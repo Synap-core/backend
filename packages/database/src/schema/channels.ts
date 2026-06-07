@@ -2,7 +2,9 @@
  * Channels Schema — V2
  *
  * A channel is a conversation surface with a context scope.
- * 6 canonical types (V2 spec) replace legacy chat channel variants.
+ * 7 canonical types (V2 spec) replace legacy chat channel variants:
+ * personal, thread, sub_thread, feed, external, agent_collab, group
+ * (`group` — multi-human + multi-AI — was added after the original V2 6).
  * `channelPurpose` is removed — absorbed into channelType.
  * `scope` and `feedScope` are new.
  *
@@ -24,7 +26,8 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { agents } from "./agents.js";
 
 /**
- * Channel Types (V2) — 6 canonical types per the channel-system spec.
+ * Channel Types (V2) — 7 canonical types per the channel-system spec
+ * (the original 6 plus GROUP, added for multi-human + multi-AI rooms).
  *
  * PERSONAL     — The user's permanent AI assistant channel — pod-wide. One per
  *                user across the entire data pod. AI always active.

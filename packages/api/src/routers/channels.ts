@@ -887,10 +887,38 @@ export const channelsRouter = router({
         metadata: {
           topic: input.topic,
           visibility: input.visibility,
-          participants: input.participants ?? [],
           a2aiStatus: "active",
         },
       });
+
+      // channel_members is the source of truth for A2AI membership too (unified
+      // with GROUP channels) — the per-member capability flags here govern A2AI
+      // agent writes via checkPermissionOrPropose. Creator = human owner; each
+      // declared participant = ai_agent member with default capability flags.
+      const a2aiParticipantIds = Array.from(
+        new Set((input.participants ?? []).filter((id) => id !== ctx.userId))
+      );
+      await db
+        .insert(channelMembers)
+        .values([
+          {
+            channelId,
+            memberId: ctx.userId,
+            memberKind: ChannelMemberKind.HUMAN,
+            role: ChannelMemberRole.OWNER,
+            addedBy: ctx.userId,
+          },
+          ...a2aiParticipantIds.map((id) => ({
+            channelId,
+            memberId: id,
+            memberKind: ChannelMemberKind.AI_AGENT,
+            role: ChannelMemberRole.MEMBER,
+            addedBy: ctx.userId,
+          })),
+        ])
+        .onConflictDoNothing({
+          target: [channelMembers.channelId, channelMembers.memberId],
+        });
 
       emitChatEvent({
         event: "channel:created",
