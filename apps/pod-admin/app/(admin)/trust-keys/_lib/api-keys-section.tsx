@@ -105,9 +105,9 @@ const COMMON_SCOPES = [
   "data.read",
   "data.write",
   "hub-protocol.read",
-  "hub-protocol.write",
   "setup.agent",
-  "sync",
+  "chat.stream",
+  "realtime:observe",
 ];
 
 export function ApiKeysSection() {

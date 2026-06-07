@@ -537,6 +537,10 @@ registerRouter("aiProviderCredentials", aiProviderCredentialsRouter, {
   source: "core",
   description: "Per-workspace and per-user AI provider key overrides",
 });
+export {
+  resolveProviderCredential,
+  resolveProviderCredentialsBatch,
+} from "./routers/ai-provider-credentials.js";
 
 import { coreRouter } from "./root.js";
 import type { AppRouter } from "./root.js";

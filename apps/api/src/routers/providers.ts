@@ -16,14 +16,18 @@
 import { Hono } from "hono";
 import { authMiddleware } from "@synap/auth";
 import { db, isEncryptedServiceKey, decryptServiceKey } from "@synap/database";
-import {
-  aiProviders,
-  aiProviderCredentials,
-  workspaceMembers,
-} from "@synap/database/schema";
-import { asc, eq, and, isNull } from "drizzle-orm";
+import { aiProviders, workspaceMembers } from "@synap/database/schema";
+import { asc, eq, and } from "drizzle-orm";
+import { resolveProviderCredentialsBatch } from "@synap/api";
 
 const providersRouter = new Hono();
+
+/** Decrypt a stored service key, passing through plaintext legacy values. */
+function decrypt(encrypted: string): string {
+  return isEncryptedServiceKey(encrypted)
+    ? decryptServiceKey(encrypted)
+    : encrypted;
+}
 
 providersRouter.get("/models", authMiddleware, async (c) => {
   const rows = await db
@@ -69,65 +73,26 @@ providersRouter.get("/credentials", authMiddleware, async (c) => {
     .where(eq(aiProviders.enabled, true))
     .orderBy(asc(aiProviders.priority));
 
-  const result = await Promise.all(
-    rows.map(async (p) => {
-      // Resolution order: user-level > workspace > pod-wide
-      let apiKey: string | null = null;
-
-      if (userId) {
-        const userCred = await db
-          .select({ encryptedApiKey: aiProviderCredentials.encryptedApiKey })
-          .from(aiProviderCredentials)
-          .where(
-            and(
-              eq(aiProviderCredentials.providerId, p.providerId),
-              eq(aiProviderCredentials.userId, userId),
-              eq(aiProviderCredentials.enabled, true)
-            )
-          )
-          .limit(1);
-        if (userCred[0]) {
-          const raw = userCred[0].encryptedApiKey;
-          apiKey = isEncryptedServiceKey(raw) ? decryptServiceKey(raw) : raw;
-        }
-      }
-
-      if (!apiKey && workspaceId) {
-        const wsCred = await db
-          .select({ encryptedApiKey: aiProviderCredentials.encryptedApiKey })
-          .from(aiProviderCredentials)
-          .where(
-            and(
-              eq(aiProviderCredentials.providerId, p.providerId),
-              eq(aiProviderCredentials.workspaceId, workspaceId as any),
-              isNull(aiProviderCredentials.userId),
-              eq(aiProviderCredentials.enabled, true)
-            )
-          )
-          .limit(1);
-        if (wsCred[0]) {
-          const raw = wsCred[0].encryptedApiKey;
-          apiKey = isEncryptedServiceKey(raw) ? decryptServiceKey(raw) : raw;
-        }
-      }
-
-      if (!apiKey && p.encryptedApiKey) {
-        apiKey = isEncryptedServiceKey(p.encryptedApiKey)
-          ? decryptServiceKey(p.encryptedApiKey)
-          : p.encryptedApiKey;
-      }
-
-      return {
-        providerId: p.providerId,
-        name: p.name,
-        baseUrl: p.baseUrl,
-        models: p.models,
-        tags: p.tags,
-        priority: p.priority,
-        apiKey: apiKey ?? null,
-      };
-    })
+  const overrides = await resolveProviderCredentialsBatch(
+    rows.map((p) => p.providerId),
+    workspaceId ?? undefined,
+    userId ?? undefined
   );
+
+  const result = rows.map((p) => {
+    const override = overrides.get(p.providerId) ?? null;
+    const apiKey =
+      override ?? (p.encryptedApiKey ? decrypt(p.encryptedApiKey) : null);
+    return {
+      providerId: p.providerId,
+      name: p.name,
+      baseUrl: p.baseUrl,
+      models: p.models,
+      tags: p.tags,
+      priority: p.priority,
+      apiKey,
+    };
+  });
 
   return c.json({ providers: result });
 });

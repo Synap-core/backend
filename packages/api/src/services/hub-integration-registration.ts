@@ -57,6 +57,7 @@ export const INTEGRATION_HUB_SCOPES: Record<string, string[]> = {
     "mcp.write",
     "data.read",
     "data.write",
+    "chat.stream",
   ],
   openclaw: [
     "hub-protocol.read",
