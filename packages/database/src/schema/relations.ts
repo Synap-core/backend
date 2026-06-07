@@ -9,6 +9,7 @@
 import { pgTable, uuid, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { entities } from "./entities.js";
 import { cellInstances } from "./cell-instances.js";
+import type { ProvenanceKind } from "./provenance.js";
 
 /**
  * The kind of object on one end of a relation edge.
@@ -68,6 +69,14 @@ export const relations = pgTable("relations", {
 
   // Metadata (JSONB for extensibility)
   metadata: jsonb("metadata").default("{}"),
+
+  // Provenance (Wave B3) — who/what authored this edge. FKs + indexes in
+  // migration 0107 (relations is a flat pgTable with no index callback).
+  createdByKind: text("created_by_kind").$type<ProvenanceKind>(),
+  createdByUserId: text("created_by_user_id"),
+  agentUserId: text("agent_user_id"),
+  sourceProposalId: uuid("source_proposal_id"),
+  correlationId: uuid("correlation_id"),
 
   // Timestamps
   createdAt: timestamp("created_at", { mode: "date", withTimezone: true })

@@ -30,6 +30,12 @@ export interface CreateRelationInput {
   sourceCellId?: string | null;
   /** Cell-instance endpoint when targetKind='cell'. */
   targetCellId?: string | null;
+  // Provenance (Wave B3) — who/what authored this edge. Optional; defaults below.
+  createdByKind?: "human" | "ai_agent" | "system";
+  createdByUserId?: string;
+  agentUserId?: string;
+  sourceProposalId?: string;
+  correlationId?: string;
 }
 
 export interface UpdateRelationInput {
@@ -70,6 +76,13 @@ export class RelationRepository extends BaseRepository<
         workspaceId: data.workspaceId,
         userId: data.userId,
         metadata: data.metadata || {},
+        // Provenance (Wave B3)
+        createdByKind:
+          data.createdByKind ?? (data.agentUserId ? "ai_agent" : "human"),
+        createdByUserId: data.createdByUserId ?? data.userId,
+        agentUserId: data.agentUserId,
+        sourceProposalId: data.sourceProposalId,
+        correlationId: data.correlationId,
       } as NewRelation)
       .returning();
 

@@ -480,6 +480,12 @@ export const entitiesRouter = router({
             documentId,
             properties: propertiesWithContent,
             profileSlug,
+            // Provenance (Wave B3): inline (granted) write. source_proposal_id
+            // stays null on the inline path per decision.
+            createdByKind: input.agentUserId ? "ai_agent" : "human",
+            createdByUserId: ctx.userId,
+            agentUserId: input.agentUserId,
+            correlationId,
           },
           ctx.userId
         );

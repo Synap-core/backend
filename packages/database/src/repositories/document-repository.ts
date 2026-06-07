@@ -37,6 +37,12 @@ export interface CreateDocumentInput {
    * from the start (the canonical current content still lives in storage).
    */
   content?: string;
+  // Provenance (Wave B3) — who/what authored this row. Optional; defaults below.
+  createdByKind?: "human" | "ai_agent" | "system";
+  createdByUserId?: string;
+  agentUserId?: string;
+  sourceProposalId?: string;
+  correlationId?: string;
 }
 
 export interface UpdateDocumentInput {
@@ -80,6 +86,13 @@ export class DocumentRepository extends BaseRepository<
           metadata: data.metadata,
           currentVersion: 1,
           lastSavedVersion: data.content !== undefined ? 1 : 0,
+          // Provenance (Wave B3)
+          createdByKind:
+            data.createdByKind ?? (data.agentUserId ? "ai_agent" : "human"),
+          createdByUserId: data.createdByUserId ?? userId,
+          agentUserId: data.agentUserId,
+          sourceProposalId: data.sourceProposalId,
+          correlationId: data.correlationId,
         } as NewDocument)
         .returning();
 

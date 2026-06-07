@@ -192,6 +192,7 @@ ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "scope" text DEFAULT 'workspace'
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "user_id" text;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "entity_scope" text DEFAULT 'workspace';
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "default_dashboard_renderer" jsonb;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "is_active" boolean DEFAULT true;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "version" integer DEFAULT 1;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
@@ -3162,3 +3163,39 @@ INSERT INTO "_migrations" ("filename") VALUES
   ('0103_message_reactions.sql'),
   ('0104_channel_member_last_read.sql')
 ON CONFLICT ("filename") DO NOTHING;
+
+-- ── Wave B3: provenance columns on the knowledge-graph core (catch-up; see
+--    migration 0107_provenance_columns.sql). Additive + NULLABLE + idempotent. ──
+ALTER TABLE entities  ADD COLUMN IF NOT EXISTS created_by_kind    text;
+ALTER TABLE entities  ADD COLUMN IF NOT EXISTS created_by_user_id text;
+ALTER TABLE entities  ADD COLUMN IF NOT EXISTS agent_user_id      text;
+ALTER TABLE entities  ADD COLUMN IF NOT EXISTS source_proposal_id uuid;
+ALTER TABLE entities  ADD COLUMN IF NOT EXISTS correlation_id     uuid;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS created_by_kind    text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS created_by_user_id text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS agent_user_id      text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_proposal_id uuid;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS correlation_id     uuid;
+ALTER TABLE relations ADD COLUMN IF NOT EXISTS created_by_kind    text;
+ALTER TABLE relations ADD COLUMN IF NOT EXISTS created_by_user_id text;
+ALTER TABLE relations ADD COLUMN IF NOT EXISTS agent_user_id      text;
+ALTER TABLE relations ADD COLUMN IF NOT EXISTS source_proposal_id uuid;
+ALTER TABLE relations ADD COLUMN IF NOT EXISTS correlation_id     uuid;
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['entities','documents','relations'] LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = t || '_created_by_user_id_fkey') THEN
+      EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL', t, t || '_created_by_user_id_fkey');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = t || '_agent_user_id_fkey') THEN
+      EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I FOREIGN KEY (agent_user_id) REFERENCES users(id) ON DELETE SET NULL', t, t || '_agent_user_id_fkey');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = t || '_source_proposal_id_fkey') THEN
+      EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I FOREIGN KEY (source_proposal_id) REFERENCES proposals(id) ON DELETE SET NULL', t, t || '_source_proposal_id_fkey');
+    END IF;
+    EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON %I (agent_user_id)      WHERE agent_user_id      IS NOT NULL', t || '_agent_user_id_idx',      t);
+    EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON %I (correlation_id)     WHERE correlation_id     IS NOT NULL', t || '_correlation_id_idx',     t);
+    EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON %I (source_proposal_id) WHERE source_proposal_id IS NOT NULL', t || '_source_proposal_id_idx', t);
+  END LOOP;
+END $$;

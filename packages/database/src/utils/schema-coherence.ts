@@ -48,6 +48,39 @@ interface RequiredColumn {
  * Keep this list in sync with 0099_schema_reconciliation.sql.
  */
 const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
+  // Wave B3 provenance — tripwire on the KG core (0107). Checking 2 of the 5
+  // per table is enough to confirm the migration ran (it adds all 5 together).
+  {
+    table: "entities",
+    column: "created_by_kind",
+    addedBy: "0107_provenance_columns.sql",
+  },
+  {
+    table: "entities",
+    column: "correlation_id",
+    addedBy: "0107_provenance_columns.sql",
+  },
+  {
+    table: "documents",
+    column: "created_by_kind",
+    addedBy: "0107_provenance_columns.sql",
+  },
+  {
+    table: "documents",
+    column: "correlation_id",
+    addedBy: "0107_provenance_columns.sql",
+  },
+  {
+    table: "relations",
+    column: "created_by_kind",
+    addedBy: "0107_provenance_columns.sql",
+  },
+  {
+    table: "relations",
+    column: "correlation_id",
+    addedBy: "0107_provenance_columns.sql",
+  },
+
   // property_defs — audit flagged these (0057 / 0064 / 0065)
   {
     table: "property_defs",
@@ -198,6 +231,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "profiles",
     column: "default_detail_renderer",
     addedBy: "0024_profile_renderer_columns.sql",
+  },
+  {
+    table: "profiles",
+    column: "default_dashboard_renderer",
+    addedBy: "0106_profile_dashboard_renderer.sql",
   },
 
   // api_keys

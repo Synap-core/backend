@@ -38,6 +38,15 @@ export interface CreateEntityInput {
   workspaceId?: string | null; // null for pod-wide entities
   userId: string;
 
+  // Provenance (Wave B3) — who/what authored this row. Optional; the repo
+  // derives sensible defaults (created_by_user_id = userId; created_by_kind =
+  // ai_agent when agentUserId is present, else human).
+  createdByKind?: "human" | "ai_agent" | "system";
+  createdByUserId?: string;
+  agentUserId?: string;
+  sourceProposalId?: string;
+  correlationId?: string;
+
   /**
    * Skip property validation. Use for trusted seed data during workspace provisioning
    * where template property slugs may differ from system profile property defs.
@@ -252,6 +261,13 @@ export class EntityRepository extends BaseRepository<
         preview: data.preview,
         documentId: data.documentId,
         properties: validatedProperties,
+        // Provenance (Wave B3)
+        createdByKind:
+          data.createdByKind ?? (data.agentUserId ? "ai_agent" : "human"),
+        createdByUserId: data.createdByUserId ?? userId,
+        agentUserId: data.agentUserId,
+        sourceProposalId: data.sourceProposalId,
+        correlationId: data.correlationId,
       } as NewEntity)
       .returning();
 

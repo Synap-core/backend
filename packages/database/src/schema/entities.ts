@@ -17,6 +17,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { documents } from "./documents.js";
 import { profiles } from "./profiles.js";
+import type { ProvenanceKind } from "./provenance.js";
 
 // EntityType enum removed - use profile slugs (strings) instead
 
@@ -61,6 +62,16 @@ export const entities = pgTable(
 
     // Optimistic locking
     version: integer("version").default(1).notNull(),
+
+    // Provenance (Wave B3) — who/what authored this row. Nullable; legacy rows =
+    // NULL (treated as human/owner). FKs + indexes are added in migration 0107
+    // (kept off the Drizzle column defs to avoid schema import cycles, matching
+    // the existing plain-text user_id pattern).
+    createdByKind: text("created_by_kind").$type<ProvenanceKind>(),
+    createdByUserId: text("created_by_user_id"),
+    agentUserId: text("agent_user_id"),
+    sourceProposalId: uuid("source_proposal_id"),
+    correlationId: uuid("correlation_id"),
 
     // Timestamps
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })

@@ -13,6 +13,7 @@ import {
   index,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { ProvenanceKind } from "./provenance.js";
 
 /**
  * Documents table
@@ -55,6 +56,14 @@ export const documents = pgTable(
 
     // Metadata
     metadata: jsonb("metadata"), // Custom metadata
+
+    // Provenance (Wave B3) — who/what authored this row. FKs + indexes in
+    // migration 0107.
+    createdByKind: text("created_by_kind").$type<ProvenanceKind>(),
+    createdByUserId: text("created_by_user_id"),
+    agentUserId: text("agent_user_id"),
+    sourceProposalId: uuid("source_proposal_id"),
+    correlationId: uuid("correlation_id"),
 
     // Timestamps
     createdAt: timestamp("created_at", { withTimezone: true })
