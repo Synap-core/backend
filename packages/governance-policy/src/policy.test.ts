@@ -158,7 +158,50 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
     expect(v.verdict).toBe("propose");
   });
 
-  it("3. writesRequireProposal → propose on writes, exempt pure reads", () => {
+  it("3. isAgentOwnedWorkspace: non-destructive → execute (beats writesRequireProposal)", () => {
+    expect(
+      decideAgentPolicy({
+        subjectType: "entity",
+        action: "create",
+        writesRequireProposal: true,
+        isAgentOwnedWorkspace: true,
+      })
+    ).toEqual({ verdict: "execute" });
+  });
+  it("3. isAgentOwnedWorkspace: destructive → propose", () => {
+    expect(
+      decideAgentPolicy({
+        subjectType: "entity",
+        action: "delete",
+        isAgentOwnedWorkspace: true,
+      })
+    ).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.AGENT_OWNED_DESTRUCTIVE,
+    });
+  });
+  it("3. ADMIN_ACTIONS still propose before isAgentOwnedWorkspace (step 2 wins)", () => {
+    expect(
+      decideAgentPolicy({
+        subjectType: "workspace",
+        action: "update",
+        isAgentOwnedWorkspace: true,
+      })
+    ).toEqual({ verdict: "propose", reason: PROPOSE_REASON.ADMIN });
+  });
+
+  it("4. explicit autoApproveFor overrides writesRequireProposal", () => {
+    expect(
+      decideAgentPolicy({
+        subjectType: "entity",
+        action: "create",
+        writesRequireProposal: true,
+        autoApproveFor: ["entity.create"],
+      })
+    ).toEqual({ verdict: "execute" });
+  });
+
+  it("5. writesRequireProposal → propose on writes, exempt pure reads", () => {
     expect(
       decideAgentPolicy({
         subjectType: "entity",
@@ -178,7 +221,7 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
     ).toBe("execute"); // entity.read is auto-approved + pure read
   });
 
-  it("4. agent-owned + destructive → propose (overrides auto-approve)", () => {
+  it("6. agent-owned mode + destructive → propose (governanceMode path)", () => {
     const v = decideAgentPolicy({
       subjectType: "entity",
       action: "delete",
@@ -189,7 +232,7 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
       reason: PROPOSE_REASON.AGENT_OWNED_DESTRUCTIVE,
     });
   });
-  it("4. standard mode + destructive (not whitelisted) → default propose", () => {
+  it("6. standard mode + destructive (not whitelisted) → default propose", () => {
     const v = decideAgentPolicy({
       subjectType: "entity",
       action: "delete",
@@ -198,7 +241,7 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
     expect(v).toEqual({ verdict: "propose" });
   });
 
-  it("5. channel block → deny; channel propose → propose; channel act → fall through", () => {
+  it("7. channel block → deny; channel propose → propose; channel act → fall through", () => {
     expect(
       decideAgentPolicy({
         subjectType: "entity",
@@ -229,7 +272,7 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
       }).verdict
     ).toBe("execute"); // act → fall through → entity.create auto-approved
   });
-  it("5. channel gate is exempt for pure reads", () => {
+  it("7. channel gate is exempt for pure reads", () => {
     const v = decideAgentPolicy({
       subjectType: "entity",
       action: "read",
@@ -238,7 +281,7 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
     expect(v.verdict).toBe("execute");
   });
 
-  it("6. autoApprove whitelist → execute", () => {
+  it("8. autoApprove whitelist → execute", () => {
     expect(
       decideAgentPolicy({ subjectType: "entity", action: "create" }).verdict
     ).toBe("execute");
@@ -247,7 +290,7 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
     ).toBe("execute");
   });
 
-  it("7. default (not whitelisted, nothing else triggers) → propose with no preset reason", () => {
+  it("9. default (not whitelisted, nothing else triggers) → propose with no preset reason", () => {
     const v = decideAgentPolicy({ subjectType: "entity", action: "delete" });
     expect(v).toEqual({ verdict: "propose" });
   });

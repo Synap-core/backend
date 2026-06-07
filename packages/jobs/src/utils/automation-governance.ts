@@ -166,11 +166,16 @@ export async function checkAutomationWriteOrPropose(
   const agentUserId = ownerId;
 
   const [ws] = await db
-    .select({ settings: workspaces.settings })
+    .select({
+      settings: workspaces.settings,
+      workspaceType: workspaces.workspaceType,
+    })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
   const settings = ws?.settings as WorkspaceSettings | undefined;
+  const isAgentOwnedWorkspace =
+    ws?.workspaceType === "agent" && settings?.linkedAgentId === agentUserId;
 
   const agentMeta = ownerUser?.agentMetadata as AgentMetadata | null;
 
@@ -183,6 +188,7 @@ export async function checkAutomationWriteOrPropose(
     writesRequireProposal: agentMeta?.writesRequireProposal === true,
     governanceMode: settings?.governanceMode,
     autoApproveFor: settings?.aiGovernance?.autoApproveFor,
+    isAgentOwnedWorkspace,
   });
 
   if (decision.verdict === "deny") {
