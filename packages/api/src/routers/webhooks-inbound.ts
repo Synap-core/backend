@@ -105,15 +105,18 @@ webhooksInboundRouter.post("/messaging", async (c) => {
     return c.json({ error: "Messaging connector not configured" }, 503);
   }
 
-  let event;
+  let parsed: Awaited<ReturnType<typeof connector.parseWebhook>>;
   try {
-    event = await connector.parseWebhook(headers, rawBody);
+    parsed = await connector.parseWebhook(headers, rawBody);
   } catch (err) {
     logger.warn({ err }, "Webhook parse error");
     return c.json({ ok: true }); // always 200 to prevent Unipile retries on auth failures
   }
 
-  if (!event) return c.json({ ok: true });
+  if (!parsed) return c.json({ ok: true });
+  // Bind to a const so non-null narrowing holds inside the closures below
+  // (e.g. liveAccounts.find(a => a.externalId === event.accountExternalId)).
+  const event = parsed;
 
   try {
     if (event.type === "message.created") {

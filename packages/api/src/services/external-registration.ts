@@ -42,9 +42,10 @@ export async function createAndVerifyHubInboundKey(
   );
 
   const verified = await apiKeyService.validateApiKey(plainKey);
-  const scope = Array.isArray(verified?.scope)
-    ? (verified.scope as string[])
-    : [];
+  const scope =
+    verified && Array.isArray(verified.scope)
+      ? (verified.scope as string[])
+      : [];
 
   if (
     !verified ||

@@ -508,8 +508,12 @@ export async function checkPermissionOrPropose(
           });
         }
 
-        // verdict === "execute": auto-approved. Record an audit-trail row
-        // (non-blocking, non-critical) and grant.
+        // verdict === "execute": auto-approved. Record a secondary audit-trail
+        // row, then grant. The PRIMARY durable audit of an auto-approved action
+        // is the event spine (the caller still emits `{subject}.{action}`
+        // .requested/.completed), so this insert stays NON-BLOCKING — but it
+        // must never fail SILENTLY (that was the Wave-B gap), so failures are
+        // logged loudly instead of swallowed.
         const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
         db.insert(proposals)
           .values({
@@ -539,7 +543,12 @@ export async function checkPermissionOrPropose(
             threadId: threadId ?? undefined,
             commandRunId: commandRunId ?? undefined,
           })
-          .catch(() => {}); // non-critical — never block the operation
+          .catch((err) =>
+            logger.error(
+              { err, workspaceId, agentUserId, eventKey },
+              "Auto-approve audit-trail row insert failed (write still granted; event spine remains the primary audit)"
+            )
+          );
 
         return { granted: true };
       }

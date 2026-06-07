@@ -401,7 +401,7 @@ export async function routeProactiveMessage(
 
     // ── Deliver to each surface concurrently ──────────────────────────────
     const results = await Promise.allSettled(
-      activeSurfaces.map((surface) => {
+      activeSurfaces.map((surface): Promise<PostProactiveResult> => {
         switch (surface) {
           case "feed":
             return postToProactiveFeed(options);
@@ -409,6 +409,13 @@ export async function routeProactiveMessage(
             return postToPersonalChat(options);
           case "notification":
             return postProactiveNotification(options);
+          default:
+            // `surfaces` is a stored string[]; an unrecognized surface is a
+            // no-op skip rather than a crash (keeps the result type total).
+            return Promise.resolve({
+              posted: false,
+              reason: "unknown_surface",
+            });
         }
       })
     );
