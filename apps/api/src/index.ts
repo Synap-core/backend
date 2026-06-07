@@ -993,6 +993,10 @@ app.post("/api/ws-ticket", authMiddleware, async (c) => {
 import { providersRouter } from "./routers/providers.js";
 app.route("/api/hub/providers", providersRouter);
 
+// Automations schema — static reference document for trigger types, node types, CLI flags
+import { automationsSchemaRouter } from "./routers/automations-schema.js";
+app.route("/api/hub/automations/schema", automationsSchemaRouter);
+
 // Admin routes (public API for invitations)
 import { adminRouter } from "./routers/admin.js";
 app.route("/api/admin", adminRouter);
