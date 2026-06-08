@@ -115,7 +115,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
       );
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
-      const actorId = actorResolution.actorId;
+      // resolveActorId kept for its validation side-effect; return value unused.
       const caller = await getCaller(c, {
         workspaceId: body.workspaceId ?? null,
         userId: body.userId,

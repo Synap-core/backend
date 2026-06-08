@@ -590,7 +590,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
       const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
-      const actorId = actorResolution.actorId;
+      // resolveActorId is kept for its validation side-effect above; the entity
+      // is attributed via resolvedAgentUserId below, so its return is unused.
 
       const caller = await getCaller(c, {
         workspaceId: effectiveWorkspaceId,
@@ -706,7 +707,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
       const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
-      const actorId = actorResolution.actorId;
+      // resolveActorId is kept for its validation side-effect above; the entity
+      // is attributed via resolvedAgentUserId below, so its return is unused.
       const caller = await getCaller(c, {
         workspaceId: effectiveWorkspaceId,
         userId,

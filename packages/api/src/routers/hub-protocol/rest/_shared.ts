@@ -18,7 +18,6 @@ import {
   getWorkspaceMembership,
 } from "@synap/database";
 
-import { TRPCError } from "@trpc/server";
 import { hubProtocolRouter } from "../index.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 
@@ -264,17 +263,18 @@ export async function getCaller(
 ): Promise<HubProtocolCaller> {
   // SECURITY KEYSTONE: the acting identity is ALWAYS the authenticated owner
   // resolved by the auth middleware (agent-key → linkedUserId, sub-token → mapped
-  // user, Kratos → identity). A caller-supplied options.userId that DIFFERS is a
-  // forged-identity attempt — it would let any hub-protocol.read/.write key act
-  // as (and read/write the data of) another user. Reject it; never honor it.
-  const resolvedUserId = c.get("userId") as string;
-  if (options?.userId && options.userId !== resolvedUserId) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Cannot act as another user",
-    });
+  // user, Kratos → identity). A caller-supplied options.userId is IGNORED —
+  // honoring it would let a hub key act as (and read/write the data of) another
+  // user. We don't THROW on a mismatch (a redundant/legacy userId in the body
+  // shouldn't break first-party tools like the CLI) — we simply never honor it
+  // and log the discrepancy.
+  const userId = c.get("userId") as string;
+  if (options?.userId && options.userId !== userId) {
+    logger.warn(
+      { passedUserId: options.userId, resolvedUserId: userId },
+      "getCaller: ignoring caller-supplied userId; acting as the resolved owner"
+    );
   }
-  const userId = resolvedUserId;
   const scopes = c.get("scopes") as string[];
   const ctx = await createHubProtocolCallerContext(
     userId,
