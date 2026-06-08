@@ -24,11 +24,11 @@
  * workspace. Both speak to the same pod tRPC surface.
  */
 
-import { eq, inArray, isNull, or } from "@synap/database";
+import { eq, inArray, isNull, or, drizzleSql } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "@synap/database";
-import { workspaceMembers } from "@synap/database/schema";
+import { workspaceMembers, workspaces } from "@synap/database/schema";
 
 /**
  * Returns a Drizzle predicate matching rows visible to `userId`:
@@ -51,14 +51,37 @@ export function userVisibleWhere(
   workspaceIdColumn: AnyPgColumn,
   userId: string
 ): SQL {
-  const userWorkspaceIds = db
+  // A user can see a row's workspace if they are a MEMBER of it, they OWN it
+  // (ownerId is a first-class column, SEPARATE from workspace_members — a
+  // sovereign/single-user pod's owner may not have a member row, so membership
+  // alone would hide their own data), or it is POD-VISIBLE (readable pod-wide by
+  // design). This mirrors getUserAccessibleWorkspaceIds so reads are consistent.
+  const memberWs = db
     .select({ id: workspaceMembers.workspaceId })
     .from(workspaceMembers)
     .where(eq(workspaceMembers.userId, userId));
+  const ownedWs = db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(eq(workspaces.ownerId, userId));
+  const podVisibleWs = db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(
+      drizzleSql`${workspaces.settings}->>'workspaceVisibility' IN ('pod_visible','pod_joinable')`
+    );
 
-  // The non-null assertion is safe: `or` of two non-null operands is non-null.
+  // `proposals.workspace_id` is TEXT while `workspaces.id` /
+  // `workspace_members.workspace_id` are UUID — cast the column to uuid so the
+  // IN comparison matches. This is a no-op for the already-uuid columns this
+  // helper is also used on (entities/views/channels/automations); every stored
+  // value is a valid uuid.
+  const col = drizzleSql`${workspaceIdColumn}::uuid`;
+  // `or(...)` of non-null operands is non-null.
   return or(
     isNull(workspaceIdColumn),
-    inArray(workspaceIdColumn, userWorkspaceIds)
+    inArray(col, memberWs),
+    inArray(col, ownedWs),
+    inArray(col, podVisibleWs)
   )!;
 }

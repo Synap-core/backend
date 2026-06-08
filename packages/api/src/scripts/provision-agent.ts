@@ -137,6 +137,24 @@ async function resolveWorkspaceId(
   return first.id;
 }
 
+async function findWorkspaceOwner(
+  db: Awaited<ReturnType<typeof getDb>>,
+  workspaceId: string
+): Promise<string | null> {
+  const [row] = await db
+    .select({ id: users.id })
+    .from(users)
+    .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
+    .where(
+      and(
+        eq(workspaceMembers.workspaceId, workspaceId),
+        eq(workspaceMembers.role, "owner")
+      )
+    )
+    .limit(1);
+  return row?.id ?? null;
+}
+
 async function findAgent(
   db: Awaited<ReturnType<typeof getDb>>,
   workspaceId: string
@@ -151,12 +169,7 @@ async function findAgent(
         eq(workspaceMembers.workspaceId, workspaceId)
       )
     )
-    .where(
-      and(
-        eq(users.userType, "agent"),
-        eq(users.agentType, serviceType!)
-      )
-    )
+    .where(and(eq(users.userType, "agent"), eq(users.agentType, serviceType!)))
     .limit(1);
   return row;
 }
@@ -406,6 +419,8 @@ async function run() {
     const eventRepo = new EventRepository(sql);
     const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
 
+    const rotateLinkedUserId = await findWorkspaceOwner(db, workspaceId);
+
     await apiKeyRepo.create(
       {
         keyName: `${e.displayName} — workspace ${workspaceId} (rotated)`,
@@ -414,6 +429,7 @@ async function run() {
         scope: e.defaultScopes,
         userId: agent.id,
         keyType: "hub_inbound",
+        linkedUserId: rotateLinkedUserId,
         description: `Hub Protocol auth token for ${e.displayName} agent service. Used by the ${e.displayName} Docker container to authenticate inbound API calls to this Synap backend.`,
       },
       "system"
@@ -480,6 +496,8 @@ async function run() {
     invitedBy: null,
   });
 
+  const linkedUserId = await findWorkspaceOwner(db, workspaceId);
+
   const keyPrefix =
     process.env.NODE_ENV === "production"
       ? "synap_hub_live_"
@@ -497,6 +515,7 @@ async function run() {
       scope: e.defaultScopes,
       userId: agentId,
       keyType: "hub_inbound",
+      linkedUserId,
       description: `Hub Protocol auth token for ${e.displayName} agent service. Used by the ${e.displayName} Docker container to authenticate inbound API calls to this Synap backend.`,
     },
     "system"

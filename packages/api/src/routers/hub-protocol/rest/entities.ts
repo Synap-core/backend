@@ -14,6 +14,10 @@
 
 import { createRoute, z } from "@hono/zod-openapi";
 import { db, entities, profiles, eq, and, isNull } from "@synap/database";
+import { entityVectors } from "@synap/database/schema";
+import { sql as drizzleSql, inArray } from "drizzle-orm";
+import { searchService } from "@synap/search";
+import { getDefaultActiveService } from "../../../utils/intelligence-routing.js";
 
 import { relationsRouter } from "../../relations.js";
 import { createHubProtocolCallerContext } from "../utils.js";
@@ -462,6 +466,195 @@ export function registerEntitiesRoutes(app: HubHono): void {
       return c.json(result, 200);
     } catch (err) {
       logger.error({ err, entityId }, "entities.get failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Internal error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /entities/recall ───────────────────────────────────────────────
+  // Hybrid semantic recall: Typesense keyword + pgvector cosine search, merged
+  // via Reciprocal Rank Fusion (RRF). Must be registered BEFORE POST /entities
+  // so Hono's first-match router does not confuse "recall" with an entity id.
+  const recallEntitiesRoute = createRoute({
+    method: "post",
+    path: "/entities/recall",
+    tags: ["Entities"],
+    summary: "Hybrid semantic recall",
+    description:
+      "Combines Typesense keyword search and pgvector cosine similarity search, " +
+      "merged via Reciprocal Rank Fusion (RRF k=60). Falls back to Typesense-only " +
+      "when the embedding service is unavailable.",
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              query: z.string().min(1),
+              profileSlug: z.string().optional(),
+              workspaceId: z.string().optional(),
+              limit: z.number().int().min(1).max(100).optional(),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Merged entity results",
+        content: {
+          "application/json": {
+            schema: z.object({
+              entities: z.array(z.record(z.string(), z.unknown())),
+              source: z.enum(["hybrid", "typesense"]),
+            }),
+          },
+        },
+      },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(recallEntitiesRoute, async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const userId = c.get("userId") as string;
+    if (!userId) {
+      return c.json({ error: "Unauthorized" }, 403);
+    }
+
+    const body = c.req.valid("json");
+    const { query, profileSlug, workspaceId } = body;
+    const limit = body.limit ?? 20;
+
+    // ── Step 1: attempt vector search via IS embedding endpoint ────────────
+    let vectorEntityIds: string[] = [];
+    let usedVector = false;
+
+    try {
+      const { endpoint, apiKey } = await getDefaultActiveService();
+      const embRes = await fetch(`${endpoint}/api/embeddings`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": apiKey,
+        },
+        body: JSON.stringify({ text: query }),
+        signal: AbortSignal.timeout(5_000),
+      });
+
+      if (embRes.ok) {
+        const { embedding } = (await embRes.json()) as {
+          embedding?: number[];
+        };
+
+        if (Array.isArray(embedding) && embedding.length > 0) {
+          const vecLiteral = `[${embedding.join(",")}]`;
+          const rows = await db
+            .select({ entityId: entityVectors.entityId })
+            .from(entityVectors)
+            .where(drizzleSql`${entityVectors.userId} = ${userId}`)
+            .orderBy(
+              drizzleSql`${entityVectors.embedding} <=> ${vecLiteral}::vector`
+            )
+            .limit(limit * 2);
+
+          vectorEntityIds = rows.map((r) => r.entityId);
+          usedVector = true;
+        }
+      }
+    } catch {
+      // Non-fatal — fall through to Typesense-only
+    }
+
+    // ── Step 2: Typesense keyword search ───────────────────────────────────
+    let typesenseEntityIds: string[] = [];
+
+    try {
+      const searchResp = await searchService.search({
+        query,
+        userId,
+        workspaceId: workspaceId || undefined,
+        collections: ["entities"],
+        limit: limit * 2,
+        page: 1,
+      });
+
+      let hits = searchResp.results.filter((r) => r.collection === "entities");
+
+      if (profileSlug) {
+        hits = hits.filter(
+          (r) =>
+            (r.document as Record<string, unknown>).entityType ===
+              profileSlug ||
+            (r.document as Record<string, unknown>).type === profileSlug
+        );
+      }
+
+      typesenseEntityIds = hits
+        .map((r) => (r.document as Record<string, unknown>).id as string)
+        .filter(Boolean);
+    } catch {
+      // Non-fatal
+    }
+
+    // ── Step 3: RRF merge (k=60) ───────────────────────────────────────────
+    const scores = new Map<string, number>();
+
+    vectorEntityIds.forEach((entityId, rank) => {
+      scores.set(entityId, (scores.get(entityId) ?? 0) + 1 / (60 + rank + 1));
+    });
+    typesenseEntityIds.forEach((entityId, rank) => {
+      scores.set(entityId, (scores.get(entityId) ?? 0) + 1 / (60 + rank + 1));
+    });
+
+    const rankedIds = [...scores.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([id]) => id);
+
+    const source = (usedVector ? "hybrid" : "typesense") as
+      | "hybrid"
+      | "typesense";
+
+    if (rankedIds.length === 0) {
+      return c.json({ entities: [] as Record<string, unknown>[], source }, 200);
+    }
+
+    // ── Step 4: fetch full entity rows for top ids ─────────────────────────
+    try {
+      const rows = await db
+        .select()
+        .from(entities)
+        .where(
+          and(inArray(entities.id, rankedIds), isNull(entities.deletedAt))
+        );
+
+      // Re-sort to match RRF rank order
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      const ordered = rankedIds
+        .map((id) => byId.get(id))
+        .filter((r): r is NonNullable<typeof r> => r !== undefined);
+
+      return c.json(
+        { entities: ordered as Record<string, unknown>[], source },
+        200
+      );
+    } catch (err) {
+      logger.error({ err, userId }, "POST /entities/recall fetch failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Internal error" },
         500

@@ -92,6 +92,10 @@ import {
   handleAgentScheduler,
   AGENT_SCHEDULER_QUEUE,
 } from "./agent-scheduler.js";
+import {
+  handleProposalReviewedNotify,
+  PROPOSAL_REVIEWED_NOTIFY_QUEUE,
+} from "./proposal-reviewed-notifier.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -143,6 +147,7 @@ const ALL_QUEUES = [
   PROACTIVE_EVALUATE_QUEUE,
   PROACTIVE_SCAN_QUEUE,
   AGENT_SCHEDULER_QUEUE,
+  PROPOSAL_REVIEWED_NOTIFY_QUEUE,
 ];
 
 /**
@@ -402,6 +407,13 @@ export async function registerAllWorkers(): Promise<void> {
   // Agent scheduler (cron: every 1 minute — executes due [agent-sched] entities via IS)
   await boss.work(AGENT_SCHEDULER_QUEUE, async () => handleAgentScheduler());
   logger.info("Registered worker: agent-scheduler");
+
+  // Proposal reviewed notifier (on-demand — posts a status message back to the
+  // originating channel so waiting agents can resume work after approval/rejection)
+  await boss.work(PROPOSAL_REVIEWED_NOTIFY_QUEUE, async ([job]: any[]) =>
+    handleProposalReviewedNotify(job)
+  );
+  logger.info("Registered worker: proposal-reviewed-notifier");
 
   logger.info("All workers registered");
 }

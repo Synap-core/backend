@@ -74,7 +74,7 @@ import { relationsRouter } from "./relations.js";
 import { documentsRouter } from "./documents.js";
 import { messages } from "@synap/database/schema";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
-import { emitSideEffects } from "@synap/events";
+import { emitSideEffects, getBoss } from "@synap/events";
 import { notifications } from "@synap/database/schema";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
@@ -134,6 +134,29 @@ function emitProposalReviewed(
   });
   // Mark the corresponding notification as actioned (fire-and-forget)
   markProposalNotificationActioned(proposalId);
+  // Notify the originating channel so waiting agents can continue (fire-and-forget)
+  void enqueueProposalReviewedNotify(proposalId, status);
+}
+
+/**
+ * Fire-and-forget: enqueue a pg-boss job that posts a status message back to
+ * the channel where the proposal originated, so agents waiting for approval
+ * can resume work.
+ */
+function enqueueProposalReviewedNotify(
+  proposalId: string,
+  status: string
+): void {
+  void (async () => {
+    try {
+      await getBoss().send("proposal-reviewed-notify", { proposalId, status });
+    } catch (err) {
+      logger.warn(
+        { err, proposalId },
+        "Failed to enqueue proposal-reviewed-notify (non-fatal)"
+      );
+    }
+  })();
 }
 
 /**
