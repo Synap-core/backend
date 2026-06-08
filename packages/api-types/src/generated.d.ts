@@ -8862,6 +8862,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				embeddedViewIds?: string[] | undefined;
 				schemaSnapshot?: Record<string, any> | undefined;
 				snapshotUpdatedAt?: Date | undefined;
+				metadata?: Record<string, any> | undefined;
 				type?: string | undefined;
 			};
 			output: {
@@ -10757,6 +10758,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		resolveDashboard: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				profileSlug: string;
+			};
+			output: {
+				viewId: string;
+				config: unknown;
+				userAuthored: boolean;
+			} | {
+				viewId: null;
+				config: null;
+				userAuthored: boolean;
+			};
+			meta: object;
+		}>;
+		saveDashboard: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				profileSlug: string;
+				config: Record<string, any>;
 			};
 			output: {
 				viewId: string;
