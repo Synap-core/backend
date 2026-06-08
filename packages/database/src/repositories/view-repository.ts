@@ -64,6 +64,7 @@ export interface UpdateViewInput {
   embeddedViewIds?: string[];
   schemaSnapshot?: Record<string, unknown>;
   snapshotUpdatedAt?: Date;
+  metadata?: Record<string, unknown>;
 }
 
 export class ViewRepository extends BaseRepository<
