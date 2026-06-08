@@ -135,7 +135,7 @@ function emitProposalReviewed(
   // Mark the corresponding notification as actioned (fire-and-forget)
   markProposalNotificationActioned(proposalId);
   // Notify the originating channel so waiting agents can continue (fire-and-forget)
-  void enqueueProposalReviewedNotify(proposalId, status);
+  enqueueProposalReviewedNotify(proposalId, status);
 }
 
 /**

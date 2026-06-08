@@ -96,6 +96,7 @@ import {
   handleProposalReviewedNotify,
   PROPOSAL_REVIEWED_NOTIFY_QUEUE,
 } from "./proposal-reviewed-notifier.js";
+import { handleMemoryDecay, MEMORY_DECAY_QUEUE } from "./memory-decay.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -148,6 +149,7 @@ const ALL_QUEUES = [
   PROACTIVE_SCAN_QUEUE,
   AGENT_SCHEDULER_QUEUE,
   PROPOSAL_REVIEWED_NOTIFY_QUEUE,
+  MEMORY_DECAY_QUEUE,
 ];
 
 /**
@@ -414,6 +416,10 @@ export async function registerAllWorkers(): Promise<void> {
     handleProposalReviewedNotify(job)
   );
   logger.info("Registered worker: proposal-reviewed-notifier");
+
+  // Memory decay (cron: daily at 03:30 UTC — applies Ebbinghaus decay to knowledge_facts)
+  await boss.work(MEMORY_DECAY_QUEUE, async () => handleMemoryDecay());
+  logger.info("Registered worker: memory-decay");
 
   logger.info("All workers registered");
 }

@@ -179,6 +179,69 @@ export declare const knowledgeFacts: import("drizzle-orm/pg-core").PgTableWithCo
       {},
       {}
     >;
+    accessCount: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "access_count";
+        tableName: "knowledge_facts";
+        dataType: "number";
+        columnType: "PgInteger";
+        data: number;
+        driverParam: number;
+        notNull: true;
+        hasDefault: true;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    lastAccessedAt: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "last_accessed_at";
+        tableName: "knowledge_facts";
+        dataType: "date";
+        columnType: "PgTimestamp";
+        data: Date;
+        driverParam: string;
+        notNull: false;
+        hasDefault: false;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
+    relevanceScore: import("drizzle-orm/pg-core").PgColumn<
+      {
+        name: "relevance_score";
+        tableName: "knowledge_facts";
+        dataType: "number";
+        columnType: "PgReal";
+        data: number;
+        driverParam: string | number;
+        notNull: true;
+        hasDefault: true;
+        isPrimaryKey: false;
+        isAutoincrement: false;
+        hasRuntimeDefault: false;
+        enumValues: undefined;
+        baseColumn: never;
+        identity: undefined;
+        generated: undefined;
+      },
+      {},
+      {}
+    >;
   };
   dialect: "pg";
 }>;

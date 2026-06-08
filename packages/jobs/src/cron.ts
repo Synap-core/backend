@@ -100,5 +100,9 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("agent-scheduler", "* * * * *", {});
   logger.info("Registered cron: agent-scheduler (every 1min)");
 
+  // Memory decay (daily at 03:30 UTC — applies Ebbinghaus decay to knowledge_facts)
+  await boss.schedule("memory-decay", "30 3 * * *", {});
+  logger.info("Registered cron: memory-decay (daily at 03:30 UTC)");
+
   logger.info("All cron schedules registered");
 }

@@ -2223,6 +2223,37 @@ export const channelsRouter = router({
           : {}),
       });
 
+      // Lazily enroll the human owner + AI agent in channel_members so
+      // listRoomMembers returns real data for personal channels that were
+      // created without explicit participants. Idempotent via onConflictDoNothing.
+      const effectiveAgentUserId = agentUserId ?? resolvedService.agentUserId;
+      if (effectiveAgentUserId) {
+        db.insert(channelMembers)
+          .values([
+            {
+              channelId,
+              memberId: userId,
+              memberKind: ChannelMemberKind.HUMAN,
+              role: ChannelMemberRole.OWNER,
+              addedBy: userId,
+            },
+            {
+              channelId,
+              memberId: effectiveAgentUserId,
+              memberKind: ChannelMemberKind.AI_AGENT,
+              role: ChannelMemberRole.MEMBER,
+              addedBy: userId,
+            },
+          ])
+          .onConflictDoNothing()
+          .catch((err) =>
+            logger.warn(
+              { err, channelId },
+              "lazy channel_members enroll failed"
+            )
+          );
+      }
+
       // Automation side-effects: channel.message.created.completed for assistant reply
       emitSideEffects({
         subjectType: "channel_message",

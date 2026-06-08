@@ -563,10 +563,16 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
         if (Array.isArray(embedding) && embedding.length > 0) {
           const vecLiteral = `[${embedding.join(",")}]`;
+          const vectorWhere = profileSlug
+            ? and(
+                drizzleSql`${entityVectors.userId} = ${userId}`,
+                eq(entityVectors.entityType, profileSlug)
+              )
+            : drizzleSql`${entityVectors.userId} = ${userId}`;
           const rows = await db
             .select({ entityId: entityVectors.entityId })
             .from(entityVectors)
-            .where(drizzleSql`${entityVectors.userId} = ${userId}`)
+            .where(vectorWhere)
             .orderBy(
               drizzleSql`${entityVectors.embedding} <=> ${vecLiteral}::vector`
             )

@@ -348,6 +348,18 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0034_widget_trust_level.sql",
   },
 
+  // knowledge_facts — Ebbinghaus decay columns (0113)
+  {
+    table: "knowledge_facts",
+    column: "access_count",
+    addedBy: "0113_ebbinghaus_decay.sql",
+  },
+  {
+    table: "knowledge_facts",
+    column: "relevance_score",
+    addedBy: "0113_ebbinghaus_decay.sql",
+  },
+
   // channel_context_items
   {
     table: "channel_context_items",

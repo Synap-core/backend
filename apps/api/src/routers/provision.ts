@@ -588,44 +588,45 @@ provisionRouter.post("/register-intelligence", async (c) => {
     // IS uses this key for proactive outbound Hub Protocol calls (event-triggered skills, background tasks).
     let hubProtocolApiKey = process.env.HUB_PROTOCOL_API_KEY ?? "";
 
-    // Auto-generate a Hub Protocol API key if one hasn't been manually configured.
-    // This ensures IS always gets a valid key even on fresh pods with no .env setup.
-    // Key is rotated on every re-registration (delete + insert).
-    if (!hubProtocolApiKey) {
-      try {
-        const IS_HUB_ID = "intelligence-hub-primary";
-        const keyPrefix =
-          process.env.NODE_ENV === "production"
-            ? "synap_hub_live_"
-            : "synap_hub_test_";
-        const rawKey = `${keyPrefix}${randomBytes(32).toString("hex")}`;
-        const keyHash = await bcrypt.hash(rawKey, 12);
+    // Always register the hub protocol key in api_keys so the pod can validate
+    // IS callbacks. Whether the key is pre-configured via env or auto-generated,
+    // the registration step is the same — upsert by hub_id.
+    try {
+      const IS_HUB_ID = "intelligence-hub-primary";
+      const keyPrefix =
+        process.env.NODE_ENV === "production"
+          ? "synap_hub_live_"
+          : "synap_hub_test_";
 
-        // Delete any existing IS hub keys before issuing a fresh one.
-        await db.delete(apiKeys).where(eq(apiKeys.hubId, IS_HUB_ID));
-
-        await db.insert(apiKeys).values({
-          userId: "system",
-          keyName: "Intelligence Hub (auto-provisioned)",
-          keyPrefix,
-          keyHash,
-          keyType: "hub_inbound",
-          hubId: IS_HUB_ID,
-          scope: ["hub-protocol.read", "hub-protocol.write"],
-          isActive: true,
-        });
-
-        hubProtocolApiKey = rawKey;
-        logger.info(
-          { podId: payload.podId, keyPrefix },
-          "Auto-generated Hub Protocol API key for IS"
-        );
-      } catch (keyErr) {
-        logger.warn(
-          { err: keyErr },
-          "Failed to auto-generate Hub Protocol API key — IS will lack outbound Hub access"
-        );
+      if (!hubProtocolApiKey) {
+        hubProtocolApiKey = `${keyPrefix}${randomBytes(32).toString("hex")}`;
       }
+
+      const keyHash = await bcrypt.hash(hubProtocolApiKey, 12);
+
+      // Delete any existing IS hub keys before issuing the current one.
+      await db.delete(apiKeys).where(eq(apiKeys.hubId, IS_HUB_ID));
+
+      await db.insert(apiKeys).values({
+        userId: "system",
+        keyName: "Intelligence Hub IS Key",
+        keyPrefix,
+        keyHash,
+        keyType: "hub_inbound",
+        hubId: IS_HUB_ID,
+        scope: ["hub-protocol.read", "hub-protocol.write"],
+        isActive: true,
+      });
+
+      logger.info(
+        { podId: payload.podId, keyPrefix },
+        "Hub Protocol API key registered for IS"
+      );
+    } catch (keyErr) {
+      logger.warn(
+        { err: keyErr },
+        "Failed to register Hub Protocol API key — IS will lack outbound Hub access"
+      );
     }
 
     return c.json({ success: true, hubProtocolApiKey });

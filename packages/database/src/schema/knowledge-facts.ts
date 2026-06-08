@@ -11,6 +11,7 @@ import {
   uuid,
   text,
   real,
+  integer,
   timestamp,
   vector,
 } from "drizzle-orm/pg-core";
@@ -26,6 +27,9 @@ export const knowledgeFacts = pgTable("knowledge_facts", {
   createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
     .defaultNow()
     .notNull(),
+  accessCount: integer("access_count").notNull().default(0),
+  lastAccessedAt: timestamp("last_accessed_at", { withTimezone: true }),
+  relevanceScore: real("relevance_score").notNull().default(1),
 });
 
 export type KnowledgeFactRow = typeof knowledgeFacts.$inferSelect;

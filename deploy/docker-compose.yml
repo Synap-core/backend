@@ -159,6 +159,7 @@ services:
       PUBLIC_URL: ${PUBLIC_URL:-}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
+      KRATOS_PUBLIC_URL: http://kratos:4433
       STORAGE_PROVIDER: minio
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}

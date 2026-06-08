@@ -15,6 +15,8 @@ import {
   knowledgeRepository,
   eq,
   and,
+  inArray,
+  drizzleSql,
 } from "@synap/database";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -191,6 +193,18 @@ export function registerMemoryRoutes(app: HubHono): void {
         query: q,
         limit,
       });
+      // Fire-and-forget: increment access_count + last_accessed_at for recalled facts
+      if (facts.length > 0) {
+        const ids = facts.map((f) => f.id);
+        void db
+          .update(knowledgeFacts)
+          .set({
+            accessCount: drizzleSql`access_count + 1`,
+            lastAccessedAt: drizzleSql`NOW()`,
+          })
+          .where(inArray(knowledgeFacts.id, ids))
+          .catch(() => {});
+      }
       return c.json(facts, 200);
     } catch (err) {
       logger.error({ err }, "searchFacts failed");
@@ -251,6 +265,18 @@ export function registerMemoryRoutes(app: HubHono): void {
         embedding: body.embedding,
         limit: body.limit,
       });
+      // Fire-and-forget: increment access_count + last_accessed_at for recalled facts
+      if (facts.length > 0) {
+        const ids = facts.map((f) => f.id);
+        void db
+          .update(knowledgeFacts)
+          .set({
+            accessCount: drizzleSql`access_count + 1`,
+            lastAccessedAt: drizzleSql`NOW()`,
+          })
+          .where(inArray(knowledgeFacts.id, ids))
+          .catch(() => {});
+      }
       return c.json(facts, 200);
     } catch (err) {
       logger.error({ err }, "searchFactsSemantic failed");

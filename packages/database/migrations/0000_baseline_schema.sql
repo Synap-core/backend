@@ -1568,6 +1568,10 @@ ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "source_message_id" uuid;
 ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "confidence" real DEFAULT 0.5;
 ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "embedding" vector(1536);
 ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "access_count" integer NOT NULL DEFAULT 0;
+ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "last_accessed_at" timestamp with time zone;
+ALTER TABLE "knowledge_facts" ADD COLUMN IF NOT EXISTS "relevance_score" real NOT NULL DEFAULT 1.0;
+CREATE INDEX IF NOT EXISTS idx_knowledge_facts_relevance ON "knowledge_facts"(relevance_score DESC) WHERE relevance_score < 1.0;
 
 -- ─── 30. skills ──────────────────────────────────────────────────────────────
 
