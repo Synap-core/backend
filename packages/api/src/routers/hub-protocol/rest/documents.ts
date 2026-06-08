@@ -118,7 +118,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
       const actorId = actorResolution.actorId;
       const caller = await getCaller(c, {
         workspaceId: body.workspaceId ?? null,
-        userId: actorId,
+        userId: body.userId,
         sourceMessageId: body.sourceMessageId,
       });
       const result = await caller.documents.createDocument({

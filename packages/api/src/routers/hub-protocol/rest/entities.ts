@@ -594,7 +594,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
       const caller = await getCaller(c, {
         workspaceId: effectiveWorkspaceId,
-        userId: actorId,
+        userId,
         sourceMessageId: body.sourceMessageId,
       });
       const result = await caller.entities.createEntity({
@@ -709,7 +709,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       const actorId = actorResolution.actorId;
       const caller = await getCaller(c, {
         workspaceId: effectiveWorkspaceId,
-        userId: actorId,
+        userId,
         sourceMessageId: body.sourceMessageId,
       });
       const result = await caller.entities.updateEntity({
