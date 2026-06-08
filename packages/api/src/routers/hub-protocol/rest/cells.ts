@@ -188,6 +188,92 @@ export function registerCellsRoutes(app: HubHono): void {
   });
 
   /**
+   * POST /cells/define
+   * Define a new cell from raw source (Capability B: AI-generated cells).
+   * Idempotent: upserts on (typeKey, workspaceId).
+   * Body: { name, rendererSource, workspaceId, typeKey?, description?, defaultSize? }
+   */
+  app.post("/cells/define", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const rawBody = (await c.req.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (!rawBody) return c.json({ error: "Invalid JSON in request body" }, 400);
+
+    const parsed = z
+      .object({
+        name: z.string().min(1).max(120),
+        rendererSource: z.string().min(1),
+        workspaceId: z.string().min(1),
+        typeKey: z.string().min(1).max(120).optional(),
+        description: z.string().max(500).optional(),
+        defaultSize: z.object({ w: z.number(), h: z.number() }).optional(),
+      })
+      .safeParse(rawBody);
+
+    if (!parsed.success) {
+      return c.json(
+        { error: parsed.error.issues.map((i) => i.message).join(", ") },
+        400
+      );
+    }
+
+    const { name, rendererSource, workspaceId, description, defaultSize } =
+      parsed.data;
+    const userId = c.get("userId");
+    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
+      return c.json({ error: "Access denied to workspace" }, 403);
+    }
+
+    const slug = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+    const typeKey = parsed.data.typeKey ?? `generated:${slug}`;
+
+    try {
+      const db = await getDb();
+      await db
+        .insert(widgetDefinitions)
+        .values({
+          typeKey,
+          workspaceId,
+          name,
+          description: description ?? null,
+          category: "installed",
+          rendererType: "frame",
+          rendererSource,
+          deps: {},
+          configSchema: {},
+          defaultConfig: {},
+          defaultSize: defaultSize ?? { w: 6, h: 4 },
+          isActive: true,
+          trustLevel: "generated",
+        })
+        .onConflictDoUpdate({
+          target: [widgetDefinitions.typeKey, widgetDefinitions.workspaceId],
+          set: {
+            name,
+            description: description ?? null,
+            rendererSource,
+            isActive: true,
+            updatedAt: new Date(),
+          },
+        });
+      return c.json({ success: true, typeKey }, 201);
+    } catch (err) {
+      logger.error({ err }, "cells.define failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
    * DELETE /cells/:typeKey
    * Uninstall a cell (soft-delete widget_definition).
    */

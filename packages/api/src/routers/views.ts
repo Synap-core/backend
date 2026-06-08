@@ -912,6 +912,10 @@ export const viewsRouter = router({
         // NEW: Schema snapshot
         schemaSnapshot: z.record(z.string(), z.any()).optional(),
         snapshotUpdatedAt: z.date().optional(),
+        // Optional metadata patch — MERGED onto the existing view metadata
+        // (e.g. { userAuthored: true } when the user first edits a generated
+        // default bento). Never replaces the whole metadata object.
+        metadata: z.record(z.string(), z.any()).optional(),
         // View type (for switching between types)
         // Uses ViewTypeEnum from @synap-core/types for single source of truth
         type: ViewTypeEnum.optional(),
@@ -993,6 +997,10 @@ export const viewsRouter = router({
             | Record<string, unknown>
             | undefined,
           snapshotUpdatedAt: input.snapshotUpdatedAt,
+          // Merge the metadata patch onto existing metadata (never replace).
+          metadata: input.metadata
+            ? { ...metadata, ...input.metadata }
+            : undefined,
         },
         ctx.userId
       );

@@ -171,6 +171,8 @@ export class ViewRepository extends BaseRepository<
       updateData.schemaSnapshot = data.schemaSnapshot;
     if (data.snapshotUpdatedAt !== undefined)
       updateData.snapshotUpdatedAt = data.snapshotUpdatedAt;
+    if (data.metadata !== undefined)
+      updateData.metadata = data.metadata as Record<string, unknown>;
 
     const [view] = await this.db
       .update(views)

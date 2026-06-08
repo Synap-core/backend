@@ -17,19 +17,12 @@ const logger = createLogger({ module: "proposal-reviewed-notifier" });
 export const PROPOSAL_REVIEWED_NOTIFY_QUEUE = "proposal-reviewed-notify";
 
 function computeMessageHash(
+  proposalId: string,
   channelId: string,
-  content: string,
-  role: string
+  status: string
 ): string {
   return createHash("sha256")
-    .update(
-      JSON.stringify({
-        channelId,
-        content,
-        role,
-        timestamp: new Date().toISOString(),
-      })
-    )
+    .update(JSON.stringify({ proposalId, channelId, status }))
     .digest("hex");
 }
 
@@ -81,6 +74,22 @@ export async function handleProposalReviewedNotify(
     const label = proposal.targetType ?? "Change";
     const content = `[Proposal ${status}] ${label} has been ${status}. You may continue your work.`;
     const actorUserId = proposal.createdBy ?? proposal.agentUserId ?? "system";
+    const hash = computeMessageHash(proposalId, channelId, status);
+
+    // Dedup: pg-boss may retry; skip if already notified
+    const [existing] = await db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(eq(messages.hash, hash))
+      .limit(1);
+
+    if (existing) {
+      logger.info(
+        { proposalId, channelId },
+        "Notification already sent — skipping"
+      );
+      return;
+    }
 
     await db.insert(messages).values({
       id: randomUUID(),
@@ -88,7 +97,7 @@ export async function handleProposalReviewedNotify(
       role: MessageRole.SYSTEM,
       content,
       userId: actorUserId,
-      hash: computeMessageHash(channelId, content, "system"),
+      hash,
     });
 
     logger.info(

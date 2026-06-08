@@ -3571,11 +3571,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					createdAt: Date;
 					channelId: string;
+					relevanceScore: number | null;
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
 					conflictStatus: "pending" | "none" | "resolved";
-					relevanceScore: number | null;
 				}[] | undefined;
 				branchTree: any;
 			};
@@ -3750,11 +3750,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					createdAt: Date;
 					channelId: string;
+					relevanceScore: number | null;
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
 					conflictStatus: "pending" | "none" | "resolved";
-					relevanceScore: number | null;
 				}[];
 				entities: {
 					userId: string;
@@ -3763,11 +3763,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					createdAt: Date;
 					channelId: string;
+					relevanceScore: number | null;
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
 					conflictStatus: "pending" | "none" | "resolved";
-					relevanceScore: number | null;
 				}[];
 				documents: {
 					userId: string;
@@ -3776,11 +3776,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					createdAt: Date;
 					channelId: string;
+					relevanceScore: number | null;
 					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
 					conflictStatus: "pending" | "none" | "resolved";
-					relevanceScore: number | null;
 				}[];
 			};
 			meta: object;
@@ -9322,6 +9322,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					updatedAt: Date;
 					createdAt: Date;
+					lastAccessedAt: Date | null;
 					expiresAt: Date | null;
 					createdBy: string;
 					revokedAt: Date | null;
@@ -9335,7 +9336,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					access: string | null;
 					invitedUsers: string[] | null;
 					viewCount: number | null;
-					lastAccessedAt: Date | null;
 				}[];
 				resourceLabels: Record<string, string>;
 			};
@@ -9352,6 +9352,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				updatedAt: Date;
 				createdAt: Date;
+				lastAccessedAt: Date | null;
 				expiresAt: Date | null;
 				createdBy: string;
 				revokedAt: Date | null;
@@ -9365,7 +9366,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				access: string | null;
 				invitedUsers: string[] | null;
 				viewCount: number | null;
-				lastAccessedAt: Date | null;
 			}[];
 			meta: object;
 		}>;
