@@ -1306,8 +1306,14 @@ export const proposalsRouter = router({
           documentId,
           extension
         );
+        const mimeType =
+          docType === "html"
+            ? "text/html"
+            : docType === "code"
+              ? "text/plain"
+              : "text/markdown";
         const metadata = await storage.upload(storageKey, content, {
-          contentType: "text/markdown",
+          contentType: mimeType,
         });
         const versionId = randomUUID();
         const snapshot = await uploadDocumentVersionSnapshot({

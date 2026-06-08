@@ -28,6 +28,7 @@ import {
   isNull,
   documents,
   documentVersions,
+  workspaceMembers,
   documentSessions,
   normalizeDocumentType,
   storedVersionValues,
@@ -281,9 +282,7 @@ export const documentsRouter = router({
       const [document] = await db
         .select()
         .from(documents)
-        .where(
-          and(eq(documents.id, input.documentId), eq(documents.userId, userId))
-        )
+        .where(eq(documents.id, input.documentId))
         .limit(1);
 
       if (!document) {
@@ -291,6 +290,28 @@ export const documentsRouter = router({
           code: "NOT_FOUND",
           message: "Document not found",
         });
+      }
+
+      // Access check: owner OR workspace member (covers agent-created docs)
+      if (document.userId !== userId) {
+        if (!document.workspaceId) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Document not found",
+          });
+        }
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, document.workspaceId),
+            eq(workspaceMembers.userId, userId)
+          ),
+        });
+        if (!membership) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Document not found",
+          });
+        }
       }
 
       // All documents use MinIO storage (unified approach)
