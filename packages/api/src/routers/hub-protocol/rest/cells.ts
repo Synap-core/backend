@@ -3,7 +3,7 @@
  */
 
 import { z } from "zod";
-import { getDb, and, eq } from "@synap/database";
+import { getDb, and, eq, isNull, or } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 import {
   hasScope,
@@ -29,18 +29,19 @@ function getCpUrl(): string {
 export function registerCellsRoutes(app: HubHono): void {
   /**
    * GET /cells?workspaceId=...
-   * List installed ViewFrame cells for a workspace.
+   * List installed ViewFrame cells for a workspace, plus pod-global cells (workspaceId IS NULL).
+   * workspaceId is optional — when omitted, only pod-global cells are returned.
    */
   app.get("/cells", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
     const workspaceId = c.req.query("workspaceId");
-    if (!workspaceId) {
-      return c.json({ error: "workspaceId query param is required" }, 400);
-    }
     const userId = c.get("userId");
-    if (!(await verifyWorkspaceReadAccess(userId, workspaceId))) {
+    if (
+      workspaceId &&
+      !(await verifyWorkspaceReadAccess(userId, workspaceId))
+    ) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
     try {
@@ -48,8 +49,13 @@ export function registerCellsRoutes(app: HubHono): void {
       const rows = await db.query.widgetDefinitions.findMany({
         where: and(
           eq(widgetDefinitions.rendererType, "frame"),
-          eq(widgetDefinitions.workspaceId, workspaceId),
-          eq(widgetDefinitions.isActive, true)
+          eq(widgetDefinitions.isActive, true),
+          workspaceId
+            ? or(
+                isNull(widgetDefinitions.workspaceId),
+                eq(widgetDefinitions.workspaceId, workspaceId)
+              )
+            : isNull(widgetDefinitions.workspaceId)
         ),
         orderBy: (t, { asc }) => [asc(t.name)],
       });
@@ -190,8 +196,9 @@ export function registerCellsRoutes(app: HubHono): void {
   /**
    * POST /cells/define
    * Define a new cell from raw source (Capability B: AI-generated cells).
-   * Idempotent: upserts on (typeKey, workspaceId).
-   * Body: { name, rendererSource, workspaceId, typeKey?, description?, defaultSize? }
+   * Idempotent upsert on (typeKey, workspaceId).
+   * When workspaceId is omitted the cell is pod-global (visible in all workspaces).
+   * Body: { name, rendererSource, workspaceId?, typeKey?, description?, defaultSize? }
    */
   app.post("/cells/define", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -207,7 +214,7 @@ export function registerCellsRoutes(app: HubHono): void {
       .object({
         name: z.string().min(1).max(120),
         rendererSource: z.string().min(1),
-        workspaceId: z.string().min(1),
+        workspaceId: z.string().min(1).optional(),
         typeKey: z.string().min(1).max(120).optional(),
         description: z.string().max(500).optional(),
         defaultSize: z.object({ w: z.number(), h: z.number() }).optional(),
@@ -224,7 +231,9 @@ export function registerCellsRoutes(app: HubHono): void {
     const { name, rendererSource, workspaceId, description, defaultSize } =
       parsed.data;
     const userId = c.get("userId");
-    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
+
+    // Only gate workspace access when a specific workspace is targeted
+    if (workspaceId && !(await verifyWorkspaceAccess(userId, workspaceId))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
 
@@ -234,35 +243,64 @@ export function registerCellsRoutes(app: HubHono): void {
       .replace(/^-|-$/g, "");
     const typeKey = parsed.data.typeKey ?? `generated:${slug}`;
 
+    const values = {
+      typeKey,
+      workspaceId: workspaceId ?? null,
+      name,
+      description: description ?? null,
+      category: "installed" as const,
+      rendererType: "frame" as const,
+      rendererSource,
+      deps: {} as Record<string, string>,
+      configSchema: {},
+      defaultConfig: {},
+      defaultSize: defaultSize ?? { w: 6, h: 4 },
+      isActive: true,
+      trustLevel: "generated" as const,
+    };
+
     try {
       const db = await getDb();
-      await db
-        .insert(widgetDefinitions)
-        .values({
-          typeKey,
-          workspaceId,
-          name,
-          description: description ?? null,
-          category: "installed",
-          rendererType: "frame",
-          rendererSource,
-          deps: {},
-          configSchema: {},
-          defaultConfig: {},
-          defaultSize: defaultSize ?? { w: 6, h: 4 },
-          isActive: true,
-          trustLevel: "generated",
-        })
-        .onConflictDoUpdate({
-          target: [widgetDefinitions.typeKey, widgetDefinitions.workspaceId],
-          set: {
+
+      if (workspaceId) {
+        // Workspace-scoped: unique constraint on (typeKey, workspaceId) works normally
+        await db
+          .insert(widgetDefinitions)
+          .values(values)
+          .onConflictDoUpdate({
+            target: [widgetDefinitions.typeKey, widgetDefinitions.workspaceId],
+            set: {
+              name,
+              description: description ?? null,
+              rendererSource,
+              isActive: true,
+              updatedAt: new Date(),
+            },
+          });
+      } else {
+        // Pod-global (workspaceId IS NULL): PostgreSQL treats NULLs as distinct
+        // in unique indexes, so onConflictDoUpdate won't fire. Manual upsert.
+        const updated = await db
+          .update(widgetDefinitions)
+          .set({
             name,
             description: description ?? null,
             rendererSource,
             isActive: true,
             updatedAt: new Date(),
-          },
-        });
+          })
+          .where(
+            and(
+              eq(widgetDefinitions.typeKey, typeKey),
+              isNull(widgetDefinitions.workspaceId)
+            )
+          )
+          .returning({ id: widgetDefinitions.id });
+        if (updated.length === 0) {
+          await db.insert(widgetDefinitions).values(values);
+        }
+      }
+
       return c.json({ success: true, typeKey }, 201);
     } catch (err) {
       logger.error({ err }, "cells.define failed");

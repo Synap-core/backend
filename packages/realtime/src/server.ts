@@ -85,12 +85,12 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
  * CSWSH surface; derive from SYNAP_BASE_DOMAIN + the explicit allowlist instead.
  */
 function isAllowedRealtimeOrigin(origin?: string): boolean {
-  if (!origin) return true; // native/same-origin — CORS does not apply
+  if (!origin || origin === "null") return true; // native/same-origin or Electron (opaque origin) — CORS does not apply
   let u: URL;
   try {
     u = new URL(origin);
   } catch {
-    return false; // malformed or the literal "null"
+    return false; // malformed origin
   }
   const host = u.hostname.toLowerCase();
   const base = process.env.SYNAP_BASE_DOMAIN?.trim()
