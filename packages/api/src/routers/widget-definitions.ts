@@ -12,7 +12,7 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure } from "../trpc.js";
+import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { getDb, and, eq, or, isNull } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
@@ -109,14 +109,16 @@ export const widgetDefinitionsRouter = router({
    * List active widget definitions for a workspace.
    * Returns system-wide builtins first, then workspace-specific custom widgets.
    */
-  list: workspaceProcedure.query(async ({ ctx }) => {
+  list: podProcedure.query(async ({ ctx }) => {
     const db = await getDb();
     const rows = await db.query.widgetDefinitions.findMany({
       where: and(
-        or(
-          isNull(widgetDefinitions.workspaceId),
-          eq(widgetDefinitions.workspaceId, ctx.workspaceId!)
-        ),
+        ctx.workspaceId
+          ? or(
+              isNull(widgetDefinitions.workspaceId),
+              eq(widgetDefinitions.workspaceId, ctx.workspaceId)
+            )
+          : isNull(widgetDefinitions.workspaceId),
         eq(widgetDefinitions.isActive, true)
       ),
       orderBy: (t, { asc }) => [

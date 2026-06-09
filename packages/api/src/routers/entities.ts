@@ -857,7 +857,7 @@ export const entitiesRouter = router({
    * powering the bookmark ⭐ state and duplicate detection.
    * Returns a slim payload — no full property values, just what the index needs.
    */
-  listSavedUrls: workspaceProcedure
+  listSavedUrls: podProcedure
     .output(
       z.array(
         z.object({
@@ -870,6 +870,12 @@ export const entitiesRouter = router({
       )
     )
     .query(async ({ ctx }) => {
+      const workspaceFilter = ctx.workspaceId
+        ? or(
+            eq(entities.workspaceId, ctx.workspaceId),
+            isNull(entities.workspaceId)
+          )
+        : userVisibleWhere(entities.workspaceId, ctx.userId);
       const rows = await db
         .select({
           id: entities.id,
@@ -881,10 +887,7 @@ export const entitiesRouter = router({
         .from(entities)
         .where(
           and(
-            or(
-              eq(entities.workspaceId, ctx.workspaceId),
-              isNull(entities.workspaceId)
-            ),
+            workspaceFilter,
             drizzleSql`${entities.properties}->>'url' IS NOT NULL`,
             drizzleSql`${entities.properties}->>'url' != ''`
           )

@@ -173,15 +173,16 @@ const selectionContextSchema = z.object({
 
 export const intelligenceRouter = router({
   /** List commands for workspace */
-  listCommands: workspaceProcedure
+  listCommands: podProcedure
     .input(
       z.object({
         limit: z.number().min(1).max(100).default(50),
       })
     )
     .query(async ({ ctx, input }) => {
+      if (!ctx.workspaceId) return { commands: [] };
       const list = await db.query.intelligenceCommands.findMany({
-        where: eq(intelligenceCommands.workspaceId, ctx.workspaceId!),
+        where: eq(intelligenceCommands.workspaceId, ctx.workspaceId),
         orderBy: desc(intelligenceCommands.updatedAt),
         limit: input.limit,
       });
@@ -1192,10 +1193,7 @@ export const intelligenceRouter = router({
         .select({ id: users.id, email: users.email })
         .from(users)
         .where(
-          and(
-            eq(users.userType, "agent"),
-            eq(users.agentType, serviceType)
-          )
+          and(eq(users.userType, "agent"), eq(users.agentType, serviceType))
         )
         .limit(1);
 
