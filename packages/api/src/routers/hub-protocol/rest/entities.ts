@@ -920,6 +920,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
         title: body.title,
         preview: body.preview,
         metadata: body.metadata,
+        ...(body.deleteProperties
+          ? { deleteProperties: body.deleteProperties }
+          : {}),
         ...(body.reasoning ? { reasoning: body.reasoning } : {}),
       });
       return c.json(result, 200);

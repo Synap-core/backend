@@ -86,6 +86,14 @@ export interface UpdateEntityInput {
   workspaceId?: string | null;
 
   /**
+   * Keys to remove from the entity's properties object before applying any
+   * `properties` merge. Keys listed here are deleted even if `properties` is
+   * absent. Useful when the caller needs to remove a property without
+   * replacing the entire object.
+   */
+  deleteProperties?: string[];
+
+  /**
    * Suppress the repository's standard `entities.update.completed` event.
    *
    * Callers that emit their own domain event (e.g. the automation executor
@@ -343,11 +351,21 @@ export class EntityRepository extends BaseRepository<
 
     const validationProfileId = newProfileId || existing.profileId;
 
-    let updatedProperties = existing.properties || {};
+    // Apply key deletions first so the merge step never re-introduces them.
+    const baseProperties: Record<string, unknown> = {
+      ...(existing.properties as Record<string, unknown>),
+    };
+    if (data.deleteProperties?.length) {
+      for (const key of data.deleteProperties) {
+        delete baseProperties[key];
+      }
+    }
+
+    let updatedProperties: Record<string, unknown> = baseProperties;
     if (data.properties && validationProfileId) {
-      // Merge with existing properties
+      // Merge with existing properties (after deletions)
       const mergedProperties = {
-        ...(existing.properties as Record<string, unknown>),
+        ...baseProperties,
         ...data.properties,
       };
 
@@ -371,9 +389,9 @@ export class EntityRepository extends BaseRepository<
 
       updatedProperties = validationResult.normalized;
     } else if (data.properties) {
-      // No profile - just merge properties
+      // No profile - just merge properties (after deletions already applied to baseProperties)
       updatedProperties = {
-        ...(existing.properties as Record<string, unknown>),
+        ...baseProperties,
         ...data.properties,
       };
     }
@@ -399,7 +417,10 @@ export class EntityRepository extends BaseRepository<
 
     // 4. Reindex properties if changed — use the same lens as validation
     const reindexProfileId = newProfileId || existing.profileId;
-    if (data.properties && reindexProfileId) {
+    if (
+      (data.properties || data.deleteProperties?.length) &&
+      reindexProfileId
+    ) {
       const lensWorkspaceId = data.workspaceId ?? existing.workspaceId ?? null;
       this.propertyIndex
         .reindexEntity(

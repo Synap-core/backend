@@ -1073,6 +1073,8 @@ export const entitiesRouter = router({
         description: z.string().optional(),
         documentId: z.string().uuid().nullable().optional(),
         properties: z.record(z.string(), z.unknown()).optional(),
+        /** Keys to delete from the entity's properties object. Applied before `properties` merge. */
+        deleteProperties: z.array(z.string()).optional(),
         /** Change entity's profile type by slug (e.g. 'person' → 'contact') */
         profileSlug: z.string().optional(),
         source: z
@@ -1185,7 +1187,7 @@ export const entitiesRouter = router({
       let oldEntity:
         | { profileId: string | null; properties: unknown; type: string | null }
         | undefined;
-      if (input.properties) {
+      if (input.properties || input.deleteProperties?.length) {
         oldEntity = await database.query.entities.findFirst({
           where: eq(entities.id, input.id),
           columns: { profileId: true, properties: true, type: true },
@@ -1199,6 +1201,7 @@ export const entitiesRouter = router({
           preview: input.description || undefined,
           documentId: input.documentId,
           properties: input.properties || undefined,
+          deleteProperties: input.deleteProperties,
           profileSlug: input.profileSlug || undefined,
           // Thread the workspace lens so overlay props validate/index correctly
           workspaceId: governanceWorkspaceId,
@@ -1247,13 +1250,18 @@ export const entitiesRouter = router({
 
       // Compute changed properties before emit so automation triggers can filter on them
       const changedProperties: Record<string, unknown> = {};
-      if (input.properties && oldEntity) {
+      if ((input.properties || input.deleteProperties?.length) && oldEntity) {
         const oldProps =
           (oldEntity.properties as Record<string, unknown>) ?? {};
-        const mergedProps = { ...oldProps, ...input.properties };
+        // Apply deletions then merge new values, mirroring EntityRepository.update
+        const afterDeletions = { ...oldProps };
+        for (const key of input.deleteProperties ?? []) {
+          delete afterDeletions[key];
+        }
+        const mergedProps = { ...afterDeletions, ...(input.properties ?? {}) };
         for (const key of new Set([
           ...Object.keys(oldProps),
-          ...Object.keys(input.properties),
+          ...Object.keys(mergedProps),
         ])) {
           if (
             JSON.stringify(oldProps[key]) !== JSON.stringify(mergedProps[key])

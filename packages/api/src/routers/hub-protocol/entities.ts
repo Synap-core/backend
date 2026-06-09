@@ -191,6 +191,8 @@ export const entitiesRouter = router({
         title: z.string().optional(),
         preview: z.string().optional(),
         metadata: z.record(z.string(), z.any()).optional(),
+        /** Keys to remove from the entity's properties object. Applied before `metadata` merge. */
+        deleteProperties: z.array(z.string()).optional(),
         // agentUserId: the per-human agent user acting on behalf of userId.
         agentUserId: z.string().uuid().optional(),
         /** The proposing agent's own rationale, surfaced in the proposal inbox. */
@@ -212,6 +214,7 @@ export const entitiesRouter = router({
         title: input.title,
         description: input.preview,
         properties: input.metadata,
+        deleteProperties: input.deleteProperties,
         reasoning: input.reasoning,
         source: input.agentUserId ? "agent" : "intelligence",
         agentUserId: input.agentUserId,

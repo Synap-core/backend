@@ -130,6 +130,8 @@ export const UpdateEntityRequestSchema = z
     title: z.string().optional(),
     preview: z.string().optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
+    /** Keys to remove from the entity's properties object. Applied before `metadata` merge. */
+    deleteProperties: z.array(z.string()).optional(),
     reasoning: z
       .string()
       .optional()

@@ -887,38 +887,71 @@ ViewFrame is the standard way to create custom data visualizations in Synap. Use
 - The host injects a `SynapWidget` bridge for data access (same postMessage protocol as iframe widgets)
 - Security: `sandbox="allow-scripts allow-modals allow-popups"`, no `allow-same-origin`, no cookies, no pod token
 
-### Register a Widget via the Hub Protocol
+### Register a Cell via the Hub Protocol (canonical path)
 
-List installed widgets:
+**Use `POST /api/hub/cells/define` — this is the canonical Hub Protocol path for AI-generated cells.**
 
-```
-GET /api/hub/widget-definitions?workspaceId={workspaceId}
-Authorization: Bearer {SYNAP_HUB_API_KEY}
-```
-
-Install a new ViewFrame widget (creates a proposal for user review):
+It is idempotent (upserts on typeKey), pod-global by default (no workspaceId needed), and immediately available across all of the user's workspaces without any proposal step.
 
 ```
-POST /api/hub/widget-definitions
+POST /api/hub/cells/define
 Authorization: Bearer {SYNAP_HUB_API_KEY}
 Content-Type: application/json
 
 {
-  "userId": "{SYNAP_USER_ID}",
-  "workspaceId": "{workspaceId}",
-  "typeKey": "deal-stage-funnel",
   "name": "Deal Stage Funnel",
-  "description": "Funnel chart of deal pipeline stages",
-  "rendererType": "iframe",
-  "rendererSource": "<full HTML document — see template below>",
-  "defaultSize": { "w": 8, "h": 6 },
-  "category": "visualization"
+  "rendererSource": "<!DOCTYPE html>…</html>",
+  "typeKey": "deal-stage-funnel",        // optional — derived from name if omitted
+  "description": "Funnel chart of deal pipeline stages",  // optional
+  "defaultSize": { "w": 8, "h": 6 }     // optional
 }
 ```
 
-`typeKey` must be kebab-case matching `/^[a-z][a-z0-9-]+$/`. Use a descriptive name specific to the widget's content.
+**`workspaceId` is intentionally omitted** — cells defined without it are pod-global (`workspaceId IS NULL`), visible in every workspace the user owns. Pass `workspaceId` only when you explicitly want a cell scoped to a single workspace.
 
-The response carries `status: "ok"` (installed immediately) or `status: "proposed"` (queued for user review — surface `reviewUrl` to the user).
+Response: `{ "success": true, "typeKey": "generated:deal-stage-funnel" }`
+
+The typeKey is auto-prefixed `generated:` when not explicitly provided.
+
+**List cells (all pod-global + optionally workspace-specific):**
+
+```
+GET /api/hub/cells                         — pod-global only
+GET /api/hub/cells?workspaceId={id}        — pod-global + workspace-scoped
+Authorization: Bearer {SYNAP_HUB_API_KEY}
+```
+
+**Delete a cell:**
+
+```
+DELETE /api/hub/cells/{typeKey}            — pod-global row
+DELETE /api/hub/cells/{typeKey}?workspaceId={id}  — workspace-scoped row
+Authorization: Bearer {SYNAP_HUB_API_KEY}
+```
+
+**Open the cell in the browser (deep link):**
+
+```
+synap://open/cell/{typeKey}
+```
+
+The browser receives this deep link, looks the typeKey up in the cell registry (which polls `widget_definitions` every 10s), and opens it as a side panel tab with the cell's registered `meta.name` as the tab title.
+
+**Full AI artifact workflow:**
+
+```
+// 1. Generate the HTML/React cell
+POST /api/hub/cells/define
+{ "name": "Q2 Revenue Report", "rendererSource": "<!DOCTYPE html>…</html>" }
+// → { "success": true, "typeKey": "generated:q2-revenue-report" }
+
+// 2. Open it in the user's browser
+synap://open/cell/generated:q2-revenue-report
+```
+
+The cell appears immediately in the side panel with "Q2 Revenue Report" as the tab title. It persists across sessions and is available from any workspace.
+
+> **Note:** `POST /api/hub/widget-definitions` (tRPC path) still works but is the internal/admin path. Use `POST /api/hub/cells/define` for all agent-generated cells.
 
 ### The SynapWidget Bridge (inside the iframe)
 
