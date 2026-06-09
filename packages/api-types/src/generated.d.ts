@@ -2839,6 +2839,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description?: string | undefined;
 				documentId?: string | null | undefined;
 				properties?: Record<string, unknown> | undefined;
+				deleteProperties?: string[] | undefined;
 				profileSlug?: string | undefined;
 				source?: "user" | "system" | "ai" | "agent" | "intelligence" | "extension" | undefined;
 				reasoning?: string | undefined;
