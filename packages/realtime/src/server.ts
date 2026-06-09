@@ -14,7 +14,7 @@ import { CollaborationManager } from "./collaboration-manager.js";
 import { setupYjsServer, type YjsServerInstance } from "./yjs-server.js";
 import { setupBridge } from "./bridge.js";
 import { validateRealtimeApiKey } from "./api-key-auth.js";
-import { getKratosSessionByToken } from "@synap/auth";
+import { getKratosSessionByCookie } from "@synap/auth";
 import { db, and, eq } from "@synap/database";
 import { workspaceMembers, channels, views } from "@synap/database/schema";
 
@@ -239,9 +239,9 @@ presenceNamespace.use(async (socket, next) => {
       return next(new Error("Realtime auth: missing session token"));
     }
 
-    let session: Awaited<ReturnType<typeof getKratosSessionByToken>> | null;
+    let session: Awaited<ReturnType<typeof getKratosSessionByCookie>> | null;
     try {
-      session = await getKratosSessionByToken(token);
+      session = await getKratosSessionByCookie(token);
     } catch {
       return next(new Error("Realtime auth: session validation unavailable"));
     }

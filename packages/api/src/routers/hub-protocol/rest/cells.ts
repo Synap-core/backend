@@ -312,8 +312,9 @@ export function registerCellsRoutes(app: HubHono): void {
   });
 
   /**
-   * DELETE /cells/:typeKey
+   * DELETE /cells/:typeKey?workspaceId=...
    * Uninstall a cell (soft-delete widget_definition).
+   * workspaceId is optional — when omitted, deletes the pod-global row (workspaceId IS NULL).
    */
   app.delete("/cells/:typeKey", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -321,11 +322,8 @@ export function registerCellsRoutes(app: HubHono): void {
     }
     const typeKey = c.req.param("typeKey");
     const workspaceId = c.req.query("workspaceId");
-    if (!workspaceId) {
-      return c.json({ error: "workspaceId query param is required" }, 400);
-    }
     const userId = c.get("userId");
-    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
+    if (workspaceId && !(await verifyWorkspaceAccess(userId, workspaceId))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
     try {
@@ -336,7 +334,9 @@ export function registerCellsRoutes(app: HubHono): void {
         .where(
           and(
             eq(widgetDefinitions.typeKey, typeKey),
-            eq(widgetDefinitions.workspaceId, workspaceId)
+            workspaceId
+              ? eq(widgetDefinitions.workspaceId, workspaceId)
+              : isNull(widgetDefinitions.workspaceId)
           )
         );
       return c.json({ success: true });

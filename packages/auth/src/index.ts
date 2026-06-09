@@ -12,6 +12,7 @@ export {
   kratosAdmin,
   getKratosSession,
   getKratosSessionByToken,
+  getKratosSessionByCookie,
   getIdentityById,
   getSession,
 } from "./ory-kratos.js";

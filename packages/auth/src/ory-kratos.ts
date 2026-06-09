@@ -126,6 +126,36 @@ export async function getKratosSessionByToken(
 }
 
 /**
+ * Get session from Kratos using an ory_kratos_session cookie value.
+ * Used by Electron browser clients that authenticate via Kratos browser flows
+ * (which issue cookies, not API session tokens).
+ */
+export async function getKratosSessionByCookie(
+  cookieValue: string
+): Promise<any | null> {
+  try {
+    const { data: session } = await kratosPublic.toSession({
+      cookie: `ory_kratos_session=${cookieValue}`,
+    });
+    return session;
+  } catch (error: any) {
+    const status = error.response?.status as number | undefined;
+    if (status === 401 || status === 403) {
+      return null;
+    }
+    console.error(
+      "[getKratosSessionByCookie] Kratos unreachable or unexpected error:",
+      {
+        message: error.message,
+        status,
+        url: kratosPublicUrl,
+      }
+    );
+    throw error;
+  }
+}
+
+/**
  * Get session from request headers
  *
  * Checks both cookie-based auth (browser) and X-Session-Token header (API clients).
