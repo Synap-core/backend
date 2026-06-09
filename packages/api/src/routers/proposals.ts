@@ -1705,6 +1705,7 @@ export const proposalsRouter = router({
           properties: innerData.properties as
             | Record<string, unknown>
             | undefined,
+          deleteProperties: innerData.deleteProperties as string[] | undefined,
           source: "system",
         });
 

@@ -1162,6 +1162,7 @@ export const entitiesRouter = router({
           title: input.title,
           description: input.description,
           properties: input.properties,
+          deleteProperties: input.deleteProperties,
           documentId: input.documentId,
           profileSlug: input.profileSlug,
         },
