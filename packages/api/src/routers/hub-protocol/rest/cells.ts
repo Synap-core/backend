@@ -210,6 +210,12 @@ export function registerCellsRoutes(app: HubHono): void {
     > | null;
     if (!rawBody) return c.json({ error: "Invalid JSON in request body" }, 400);
 
+    // npm package name: optional scope (@org/pkg) + lowercase-kebab name, no URLs/protocols
+    const NPM_PKG_NAME_RE =
+      /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+    // Version string: semver range or "latest" — permissive but blocks blank/URL values
+    const NPM_VERSION_RE = /^[a-zA-Z0-9^~><= .*|-]{1,64}$/;
+
     const parsed = z
       .object({
         name: z.string().min(1).max(120),
@@ -218,6 +224,34 @@ export function registerCellsRoutes(app: HubHono): void {
         typeKey: z.string().min(1).max(120).optional(),
         description: z.string().max(500).optional(),
         defaultSize: z.object({ w: z.number(), h: z.number() }).optional(),
+        deps: z
+          .record(z.string(), z.string())
+          .optional()
+          .superRefine((val, ctx) => {
+            if (!val) return;
+            const entries = Object.entries(val);
+            if (entries.length > 30) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: "deps must have at most 30 entries",
+              });
+              return;
+            }
+            for (const [pkg, version] of entries) {
+              if (!NPM_PKG_NAME_RE.test(pkg)) {
+                ctx.addIssue({
+                  code: z.ZodIssueCode.custom,
+                  message: `Invalid package name in deps: "${pkg}"`,
+                });
+              }
+              if (!NPM_VERSION_RE.test(version)) {
+                ctx.addIssue({
+                  code: z.ZodIssueCode.custom,
+                  message: `Invalid version string for "${pkg}": "${version}"`,
+                });
+              }
+            }
+          }),
       })
       .safeParse(rawBody);
 
@@ -228,7 +262,7 @@ export function registerCellsRoutes(app: HubHono): void {
       );
     }
 
-    const { name, rendererSource, workspaceId, description, defaultSize } =
+    const { name, rendererSource, workspaceId, description, defaultSize, deps } =
       parsed.data;
     const userId = c.get("userId");
 
@@ -251,7 +285,7 @@ export function registerCellsRoutes(app: HubHono): void {
       category: "installed" as const,
       rendererType: "frame" as const,
       rendererSource,
-      deps: {} as Record<string, string>,
+      deps: (deps ?? {}) as Record<string, string>,
       configSchema: {},
       defaultConfig: {},
       defaultSize: defaultSize ?? { w: 6, h: 4 },
@@ -273,6 +307,7 @@ export function registerCellsRoutes(app: HubHono): void {
               name,
               description: description ?? null,
               rendererSource,
+              deps: (deps ?? {}) as Record<string, string>,
               isActive: true,
               updatedAt: new Date(),
             },
@@ -286,6 +321,7 @@ export function registerCellsRoutes(app: HubHono): void {
             name,
             description: description ?? null,
             rendererSource,
+            deps: (deps ?? {}) as Record<string, string>,
             isActive: true,
             updatedAt: new Date(),
           })

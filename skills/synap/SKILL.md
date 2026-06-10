@@ -860,6 +860,47 @@ When the user is interacting with Synap's AI Companion (the in-browser chat pane
 - **Only in Companion replies.** These patterns are silently ignored in non-companion channels, documents, and memory. Do not use them there.
 - **Combine with prose.** Don't lead with a chip — embed it naturally: `"Here are your open deals → [[view:xyz|Deals Pipeline]] · [[open:side|view:xyz]]"`
 
+## Focus Sessions — Goal-Bound Work Rooms
+
+A **focus session** is a named, multi-step work room where you and AI agents collaborate on a specific goal. Use one whenever the work has a clear end state, will take more than one exchange, or involves multiple agents.
+
+**When to propose a session** (via the proposal system — always ask first):
+- Research with 5+ sources → decision memo
+- Lead generation sprint → qualified list + outreach drafts
+- Incident investigation → postmortem doc
+- Data import → structured knowledge base
+- Any task you'd naturally call "a project" rather than "a question"
+
+**How the AI proposes a session:**
+
+```
+create_proposal with targetType: "focus_session"
+→ user reviews goal + rationale + expected outputs in ProposalReviewBoard
+→ on approval, session is created in focus_sessions table
+→ AI updates progress (0→100) via PATCH /api/hub/focus-sessions/:id { workspaceId, progress: N }
+→ session auto-surfaces in the Active Sessions bento widget on the user's home
+```
+
+**Session templates** (pass as `templateId`):
+`research-room` · `lead-sprint` · `decision-memo` · `import-cleanup` · `incident-room` · `campaign-intel`
+
+**Hub Protocol REST** (for IS → backend; always include `workspaceId`):
+- `POST /api/hub/focus-sessions` — create (include `correlationId` for idempotency)
+- `GET /api/hub/focus-sessions/:id?workspaceId=<id>` — read
+- `PATCH /api/hub/focus-sessions/:id` — update `{ workspaceId, progress, status, goal, agentIds }`
+
+**CLI** (use when running as Claude Code / OpenClaw agent):
+```bash
+synap session list [--workspace <id>] [--status active|paused|closed]  # list sessions
+synap session get <id> [--workspace <id>]                               # read a session
+synap session update <id> --workspace <id> --progress 50               # report progress
+synap session update <id> --workspace <id> --status paused             # pause
+synap session close <id> --workspace <id> [--recap "what was done"]    # close + recap
+```
+Note: sessions are **created** via `create_proposal` (governance) — there is no direct `synap session create`.
+
+**Discoverability**: the `active-sessions` bento widget is on the default home dashboard. Sessions group their related proposals under a shared `correlationId` in the Proposal Review Board.
+
 ## When you need more
 
 - Linking conventions, auto-sync table, relation types → **`linking.md`**
@@ -882,10 +923,19 @@ ViewFrame is the standard way to create custom data visualizations in Synap. Use
 
 ### What ViewFrame Is
 
-- A sandboxed iframe that renders any ES module (React component or plain JS module)
-- Dependencies resolved at runtime via **esm.sh import maps** — no build step
-- The host injects a `SynapWidget` bridge for data access (same postMessage protocol as iframe widgets)
+- A sandboxed iframe that renders **one ES module** that default-exports a React component (or plain JS)
+- Dependencies resolved at runtime via **esm.sh import maps** built from the `deps` map — no build step required
+- The host injects a `SynapWidget` bridge for data access and shell actions
 - Security: `sandbox="allow-scripts allow-modals allow-popups"`, no `allow-same-origin`, no cookies, no pod token
+
+### Authoring contract
+
+A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`):
+
+- The module **default-exports a React component** (or calls `SynapWidget.onInit()` for plain JS).
+- Bare imports (`"react"`, `"recharts"`, etc.) are resolved via the esm.sh import map generated from `deps`.
+- **No bundler, no `import` of local files** — everything is either inlined or declared in `deps`.
+- External CSS is not supported; inline `<style>` tags or CSS-in-JS only.
 
 ### Register a Cell via the Hub Protocol (canonical path)
 
@@ -903,9 +953,18 @@ Content-Type: application/json
   "rendererSource": "<!DOCTYPE html>…</html>",
   "typeKey": "deal-stage-funnel",        // optional — derived from name if omitted
   "description": "Funnel chart of deal pipeline stages",  // optional
-  "defaultSize": { "w": 8, "h": 6 }     // optional
+  "defaultSize": { "w": 8, "h": 6 },    // optional
+  "deps": {                              // optional — npm packages pinned for the import map
+    "recharts": "2.12.0",
+    "@tanstack/react-table": "8"
+  }
 }
 ```
+
+**`deps` rules:**
+- Keys are npm package names (`pkg` or `@scope/pkg`). URLs and protocols are rejected.
+- Values are version strings or `"latest"` — used verbatim in the esm.sh import map URL.
+- Maximum 30 entries. Omit `deps` (or pass `{}`) for React-only cells (React is always available).
 
 **`workspaceId` is intentionally omitted** — cells defined without it are pod-global (`workspaceId IS NULL`), visible in every workspace the user owns. Pass `workspaceId` only when you explicitly want a cell scoped to a single workspace.
 
@@ -942,7 +1001,8 @@ The browser receives this deep link, looks the typeKey up in the cell registry (
 ```
 // 1. Generate the HTML/React cell
 POST /api/hub/cells/define
-{ "name": "Q2 Revenue Report", "rendererSource": "<!DOCTYPE html>…</html>" }
+{ "name": "Q2 Revenue Report", "rendererSource": "<!DOCTYPE html>…</html>",
+  "deps": { "recharts": "2.12.0" } }
 // → { "success": true, "typeKey": "generated:q2-revenue-report" }
 
 // 2. Open it in the user's browser
@@ -953,49 +1013,132 @@ The cell appears immediately in the side panel with "Q2 Revenue Report" as the t
 
 > **Note:** `POST /api/hub/widget-definitions` (tRPC path) still works but is the internal/admin path. Use `POST /api/hub/cells/define` for all agent-generated cells.
 
+### CLI commands (when running as Claude Code / OpenClaw agent)
+
+```bash
+# Build a multi-file cell source into a single ES module bundle + emit deps map
+synap cell build <entry>           # e.g. synap cell build ./src/my-chart.tsx
+# → prints bundled source to stdout and writes deps.json alongside the entry
+
+# Push a built cell (source + deps) to the pod
+synap cell define \
+  --name "My Chart" \
+  --source ./dist/my-chart.js \
+  --deps ./deps.json \
+  [--typeKey my-chart] \
+  [--workspace <id>]
+
+# Document operations (attach prose or reports to entities)
+synap doc create --title "Q2 Report" --content ./report.md --entity <entityId>
+synap doc update <docId> --content ./updated-report.md
+
+# Arrange widgets on an existing bento view
+synap view arrange <viewId> --blocks '[{"id":"b1","kind":"widget","widgetKind":"generated:my-chart","layout":{"x":0,"y":0,"w":8,"h":6}}]'
+```
+
 ### The SynapWidget Bridge (inside the iframe)
 
 `window.SynapWidget` is injected automatically — do NOT import or `<script>` it.
 
+#### Queries (read-only, always approved)
+
 ```js
 SynapWidget.onInit(async ({ config, context }) => {
   // context: { workspaceId, viewId?, entityId?, sdkVersion }
-  const items = await SynapWidget.query("list_entities", {
-    profileSlug: "deal", // or 'task', 'person', 'company', any custom slug
+
+  // List entities
+  const deals = await SynapWidget.query("entities.list", {
+    profileSlug: "deal",
     limit: 200,
   });
-  render(items ?? []);
+
+  // Get a single entity
+  const entity = await SynapWidget.query("entities.get", { id: "uuid" });
+
+  // List views
+  const views = await SynapWidget.query("views.list", { workspaceId: context.workspaceId });
+
+  // List profiles
+  const profiles = await SynapWidget.query("profiles.list", {});
+
+  render(deals ?? []);
   SynapWidget.resize(document.body.scrollHeight);
 });
 ```
 
 All `query()` calls return a Promise. Entity shape: `{ id, title, profileSlug, properties, createdAt, … }`.
 
-Navigation and notifications:
+#### Mutations (governance-gated — return `{ status: "approved" | "proposed" | "denied" }`)
 
 ```js
-SynapWidget.navigate({ entityId: "entity-uuid" }); // opens entity detail
-SynapWidget.toast("Done!", "success"); // 'success' | 'error' | 'info'
+// Create an entity
+const result = await SynapWidget.mutate("create_entity", {
+  profileSlug: "task",
+  title: "Follow up",
+  properties: { status: "todo" },
+});
+// result.status === "approved" → result.id is the new entity id
+// result.status === "proposed" → result.proposalId, result.reviewUrl
+
+// Update an entity
+await SynapWidget.mutate("update_entity", {
+  id: "uuid",
+  properties: { status: "done" },
+});
+
+// Delete an entity (always proposed for agent-generated cells)
+await SynapWidget.mutate("delete_entity", { id: "uuid" });
+
+// Create a relation
+await SynapWidget.mutate("create_relation", {
+  sourceEntityId: "uuid-a",
+  targetEntityId: "uuid-b",
+  type: "related_to",
+});
+```
+
+**Always check `result.status`.** `"proposed"` is not an error — surface `result.reviewUrl` to the user.
+
+#### Shell actions
+
+```js
+SynapWidget.navigate({ entityId: "entity-uuid" }); // open entity detail in side panel
+SynapWidget.openPanel("entity-detail", { entityId: "uuid" }); // explicit panel open
+SynapWidget.toast("Saved!", "success");             // 'success' | 'error' | 'info'
+SynapWidget.resize(document.body.scrollHeight);     // resize the iframe to content height
+SynapWidget.updateContext({ viewId: "uuid" });      // update ambient context
+
+// Subscribe to live entity changes
+SynapWidget.subscribe("entity:changed", ({ entityId }) => {
+  // re-fetch and re-render when any entity in the pod changes
+});
 ```
 
 ### Common Dependency Patterns (esm.sh import map)
 
-```html
-<script type="importmap">
-  {
-    "imports": {
-      "react": "https://esm.sh/react@19",
-      "react-dom/client": "https://esm.sh/react-dom@19/client",
-      "react/jsx-runtime": "https://esm.sh/react@19/jsx-runtime",
-      "recharts": "https://esm.sh/recharts@2.12.0"
-    }
+The `deps` map in `/cells/define` drives the import map. Each key becomes a bare specifier in the `<script type="importmap">`, resolved to `https://esm.sh/<pkg>@<version>`.
+
+```json
+// deps in the define call:
+{ "recharts": "2.12.0", "d3": "7" }
+
+// → generates this importmap inside the frame:
+{
+  "imports": {
+    "react": "https://esm.sh/react@19",
+    "react-dom/client": "https://esm.sh/react-dom@19/client",
+    "react/jsx-runtime": "https://esm.sh/react@19/jsx-runtime",
+    "recharts": "https://esm.sh/recharts@2.12.0",
+    "d3": "https://esm.sh/d3@7"
   }
-</script>
+}
 ```
+
+React 19 core entries are always injected by the host — never put them in `deps`.
 
 Common library choices:
 
-| Category | Packages                                                       |
+| Category | Packages (put in `deps`)                                       |
 | -------- | -------------------------------------------------------------- |
 | Data viz | `recharts@2.12.0`, `d3@7`, `chart.js@4`, `observable-plot@0.6` |
 | Tables   | `@tanstack/react-table@8`                                      |
@@ -1010,40 +1153,26 @@ Common library choices:
   <head>
     <meta charset="utf-8" />
     <style>
-      * {
-        box-sizing: border-box;
-        margin: 0;
-      }
-      body {
-        font-family: -apple-system, sans-serif;
-        padding: 16px;
-        background: transparent;
-      }
+      * { box-sizing: border-box; margin: 0; }
+      body { font-family: -apple-system, sans-serif; padding: 16px; background: transparent; }
     </style>
-    <script type="importmap">
-      {
-        "imports": {
-          "react": "https://esm.sh/react@19",
-          "react-dom/client": "https://esm.sh/react-dom@19/client",
-          "react/jsx-runtime": "https://esm.sh/react@19/jsx-runtime"
-        }
-      }
-    </script>
+    <!-- importmap is injected by the host from deps — do not write one manually -->
   </head>
   <body>
     <div id="root"></div>
     <script type="module">
       import { createRoot } from "react-dom/client";
+      import { createElement as h, useState } from "react";
 
       SynapWidget.onInit(async ({ context }) => {
-        const items = await SynapWidget.query("list_entities", {
+        const items = await SynapWidget.query("entities.list", {
           profileSlug: "deal",
           limit: 200,
         }).catch(() => []);
 
-        // Build your UI here. Plain DOM or React both work.
-        document.getElementById("root").textContent =
-          `Loaded ${(items ?? []).length} deals`;
+        createRoot(document.getElementById("root")).render(
+          h("p", null, `Loaded ${(items ?? []).length} deals`)
+        );
 
         SynapWidget.resize(document.body.scrollHeight);
       });
@@ -1056,10 +1185,11 @@ Common library choices:
 
 - **Always call `SynapWidget.onInit()`** — the host will not send data until you register this handler.
 - **Call `SynapWidget.resize()`** after rendering to prevent clipping.
-- **Handle errors** — `query()` can fail; always `.catch()`.
+- **Handle errors** — `query()` and `mutate()` can fail; always `.catch()`.
+- **Check `result.status` on mutations** — `"proposed"` is governance, not an error; surface `reviewUrl`.
 - **Transparent background** — `background: transparent` on `body` inherits the host surface color.
 - **No external fetch** — the sandbox has no cross-origin access; all data must go through `SynapWidget`.
-- **Inline all styles** — no external CSS imports; CDN JS via import map is fine.
+- **Declare all non-React imports in `deps`** — the host generates the import map from that field.
 
 ---
 

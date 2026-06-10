@@ -451,18 +451,26 @@ Reorder or resize bento widgets on a \`bento\` view.
 List all available widget types (built-in + custom).
 Returns kind, name, description, configSchema, defaultConfig.
 
-### POST /widget-definitions
-Register a custom widget.
+### POST /cells/define
+Define a new ViewFrame cell (idempotent upsert). Prefer this over \`/widget-definitions\` for agent-generated cells.
 
 \`\`\`json
 {
   "name": "Revenue Gauge",
-  "kind": "revenue-gauge",
-  "config": { "metricKey": "mrr", "target": 50000 },
-  "source": "iframe",
-  "bundleSource": "https://cdn.example.com/revenue-gauge.js"
+  "rendererSource": "<!DOCTYPE html>…</html>",
+  "typeKey": "revenue-gauge",
+  "description": "MRR gauge widget",
+  "defaultSize": { "w": 6, "h": 4 },
+  "deps": { "recharts": "2.12.0" }
 }
 \`\`\`
+
+- \`deps\` keys are npm package names; values are version strings (max 30 entries). React 19 is always injected — never include it in \`deps\`.
+- Omit \`workspaceId\` for pod-global cells (visible in all workspaces, no proposal required).
+- Full in-frame API (queries, mutations, shell actions) — see \`synap\` skill ViewFrame Cells section.
+
+### POST /widget-definitions
+Internal/admin path for built-in widgets. Use \`/cells/define\` for agent-generated cells.
 
 ---
 
