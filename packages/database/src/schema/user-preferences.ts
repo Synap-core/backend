@@ -113,6 +113,14 @@ export const userPreferences = pgTable("user_preferences", {
       default?: string; // serviceId for general use
       chat?: string; // serviceId specifically for chat
       analysis?: string; // for future capabilities
+      /**
+       * USER-level default companion adjunct (agent-system id). When the
+       * companion / AI entry door opens without an explicit agentSystemId,
+       * this is used as the fallback. Orthogonal to the per-workspace
+       * intelligenceServiceId — this is a personal default, NOT per-channel
+       * routing. Unset → current behavior (workspace default).
+       */
+      defaultCompanionAgentId?: string;
     }>()
     .default({})
     .notNull(),

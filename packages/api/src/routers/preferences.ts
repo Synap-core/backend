@@ -296,6 +296,54 @@ export const preferencesRouter = router({
   }),
 
   /**
+   * Set the USER-level default companion adjunct (agent-system id).
+   *
+   * Stored inside the existing intelligenceServicePreferences jsonb (no
+   * migration). This is a PERSONAL default for the AI entry door / companion —
+   * orthogonal to the per-workspace intelligenceServiceId and NOT per-channel
+   * routing. Pass `null` to clear and revert to current (workspace-default)
+   * behavior.
+   */
+  setDefaultCompanion: protectedProcedure
+    .input(
+      z.object({
+        agentId: z.string().min(1).nullable(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const current = await ctx.db.query.userPreferences.findFirst({
+        where: eq(userPreferences.userId, ctx.userId),
+      });
+
+      const currentPrefs = (current?.intelligenceServicePreferences ||
+        {}) as Record<string, unknown>;
+
+      const newPrefs = { ...currentPrefs };
+      if (input.agentId) {
+        newPrefs.defaultCompanionAgentId = input.agentId;
+      } else {
+        delete newPrefs.defaultCompanionAgentId;
+      }
+
+      await ctx.db
+        .insert(userPreferences)
+        .values({
+          userId: ctx.userId,
+          intelligenceServicePreferences: newPrefs,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: userPreferences.userId,
+          set: {
+            intelligenceServicePreferences: newPrefs,
+            updatedAt: new Date(),
+          },
+        });
+
+      return { success: true, preferences: newPrefs };
+    }),
+
+  /**
    * Set intelligence service for a capability
    */
   setIntelligenceService: protectedProcedure

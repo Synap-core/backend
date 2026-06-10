@@ -66,6 +66,14 @@ const RegisterServiceSchema = z.object({
   apiKey: z.string().min(1),
   capabilities: z.array(z.string()).min(1),
   pricing: z.enum(["free", "premium", "enterprise", "custom"]).optional(),
+  /**
+   * Human-readable provider type. Also carries the agent-system "kind"
+   * (synap | remote | local) — represented WITHOUT a new column via the
+   * existing provider_type column + metadata.kind. No migration required.
+   */
+  providerType: z
+    .enum(["openai", "anthropic", "self-hosted", "custom"])
+    .optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -119,6 +127,7 @@ export const intelligenceRegistryRouter = router({
           apiKey: encryptServiceKey(input.apiKey),
           capabilities: input.capabilities,
           pricing: input.pricing || "free",
+          providerType: input.providerType ?? "custom",
           status: "active",
           enabled: true,
           metadata: input.metadata || {},
@@ -172,6 +181,9 @@ export const intelligenceRegistryRouter = router({
         version: s.version,
         capabilities: s.capabilities,
         pricing: s.pricing,
+        providerType: s.providerType,
+        /** Agent-system kind lives in metadata.kind (synap | remote | local) */
+        metadata: s.metadata,
         status: s.status,
         enabled: s.enabled,
         createdAt: s.createdAt,
@@ -1589,12 +1601,7 @@ async function findProvisionedAgent(
           eq(workspaceMembers.workspaceId, workspaceId)
         )
       )
-      .where(
-        and(
-          eq(users.userType, "agent"),
-          eq(users.agentType, serviceType)
-        )
-      )
+      .where(and(eq(users.userType, "agent"), eq(users.agentType, serviceType)))
       .limit(1);
     return row;
   } else {
@@ -1607,12 +1614,7 @@ async function findProvisionedAgent(
         agentMetadata: users.agentMetadata,
       })
       .from(users)
-      .where(
-        and(
-          eq(users.userType, "agent"),
-          eq(users.agentType, serviceType)
-        )
-      )
+      .where(and(eq(users.userType, "agent"), eq(users.agentType, serviceType)))
       .limit(1);
     return row;
   }

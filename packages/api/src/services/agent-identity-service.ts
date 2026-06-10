@@ -81,6 +81,51 @@ export function deriveAuthorshipMode(
   return "autonomous";
 }
 
+/**
+ * Ensure a managed `agents` registry row exists for a local/CLI adjunct,
+ * linked 1:1 to its agent-user via `agents.userId`.
+ *
+ * Idempotent by `agents.userId`: if a row already exists for this agent-user we
+ * leave it alone (only backfilling `userId` is not needed — we look it up by it).
+ * The row is `ownerType:'user'`, `metadata.kind:'local'`, and carries the CLI
+ * command (`metadata.agentCommand`) so the renderer can route a selected/mentioned
+ * adjunct to its terminal-cell. The slug is keyed on the agent-user id so it is
+ * stable and never collides with another user's same-typed adjunct under the
+ * `(intelligenceServiceId, slug)` unique index (intelligenceServiceId is null here).
+ */
+async function ensureLocalAdjunctRegistryRow(opts: {
+  agentUserId: string;
+  name: string;
+  agentType: string;
+}): Promise<void> {
+  const existing = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(eq(agents.userId, opts.agentUserId))
+    .limit(1);
+  if (existing.length > 0) return;
+
+  // The CLI command is the first token of the agentType (e.g. "claude" from a
+  // "claude" agentType); falls back to the agentType itself.
+  const agentCommand = opts.agentType.split(/\s/)[0] || opts.agentType;
+  const slug = `local:${opts.agentUserId.slice(0, 8)}`;
+
+  await db.insert(agents).values({
+    id: randomUUID(),
+    name: opts.name,
+    slug,
+    description: `Local agent adjunct (${agentCommand})`,
+    ownerType: "user",
+    userId: opts.agentUserId,
+    active: true,
+    metadata: {
+      kind: "local",
+      agentCommand,
+      agentType: opts.agentType,
+    },
+  });
+}
+
 export interface CreateNamedAgentResult {
   agentUserId: string;
   email: string;
@@ -143,6 +188,19 @@ export async function createNamedAgent(opts: {
       kratosIdentityId: `agent:${agentUserId}`,
     });
   }
+
+  // Ensure a managed REGISTRY row exists for this agent-user so it appears as a
+  // first-class ADJUNCT in the agent picker / management UI (agents.workspaceList
+  // now surfaces ownerType:'user' rows). Local CLI adjuncts (claude/codex/…) are
+  // HUB CLIENTS invoked client-side — the registry row links to the agent-user
+  // and carries kind:'local' + the CLI command so the UI can route a turn to the
+  // terminal-cell (Option A). Idempotent: keyed on (ownerType:'user' + slug), and
+  // re-linked if a row already exists for this user but isn't yet linked.
+  await ensureLocalAdjunctRegistryRow({
+    agentUserId,
+    name: opts.name,
+    agentType: opts.agentType,
+  });
 
   // Issue a fresh session API key for this agent
   const plainKey = `synap_hub_live_${randomBytes(32).toString("hex")}`;

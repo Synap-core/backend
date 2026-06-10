@@ -519,6 +519,87 @@ async function seedProfiles() {
         constraints: {},
         uiHints: { label: "User confirmed", inputType: "checkbox" },
       },
+      // Session profile properties
+      {
+        slug: "goal",
+        valueType: PropertyValueType.STRING,
+        constraints: { minLength: 1, maxLength: 2000 },
+        uiHints: {
+          label: "Goal",
+          inputType: "textarea",
+          placeholder: "What is the session trying to accomplish?",
+        },
+      },
+      {
+        slug: "linkedTaskId",
+        valueType: PropertyValueType.ENTITY_ID,
+        constraints: {},
+        uiHints: { label: "Linked Task", inputType: "entity-select" },
+      },
+      {
+        slug: "contextReport",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 50000 },
+        uiHints: {
+          label: "Context Report",
+          inputType: "markdown",
+          placeholder:
+            "AI's understanding of task, domain, constraints, and approach",
+        },
+      },
+      {
+        slug: "planReport",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 50000 },
+        uiHints: {
+          label: "Plan Report",
+          inputType: "markdown",
+          placeholder: "Decomposed plan, milestones, and execution strategy",
+        },
+      },
+      {
+        slug: "executionLog",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 100000 },
+        uiHints: {
+          label: "Execution Log",
+          inputType: "markdown",
+          placeholder: "Step-by-step execution transcript and results",
+        },
+      },
+      {
+        slug: "verificationReport",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 50000 },
+        uiHints: {
+          label: "Verification Report",
+          inputType: "markdown",
+          placeholder:
+            "Test results, verification outcomes, and pass/fail status",
+        },
+      },
+      {
+        slug: "aiModel",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 255 },
+        uiHints: {
+          label: "AI Model",
+          inputType: "text",
+          readonly: true,
+          placeholder: "e.g., claude-opus-4-1",
+        },
+      },
+      {
+        slug: "usedSkills",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: {
+          label: "Used Skills",
+          inputType: "tags",
+          readonly: true,
+          placeholder: "List of skills activated during session",
+        },
+      },
     ];
 
     const createdPropertyDefs = new Map<string, string>();
@@ -669,6 +750,18 @@ async function seedProfiles() {
           color: "#8B5CF6",
           description:
             "AI-inferred observations about the user: preferences, habits, working style",
+        },
+      },
+      // `session` — workspace-scoped autonomous work session entity
+      {
+        slug: "session",
+        displayName: "Session",
+        entityScope: "workspace",
+        uiHints: {
+          icon: "clock",
+          color: "#06B6D4",
+          description:
+            "Autonomous workspace session: goal, plan, execution log, and verification results",
         },
       },
     ];
@@ -1254,6 +1347,38 @@ async function seedProfiles() {
             displayOrder: prop.displayOrder,
           });
           console.log(`  ✓ Linked '${prop.slug}' to 'user_observation'`);
+        }
+      }
+    }
+
+    // Session profile properties
+    const sessionProfileId = createdProfiles.get("session");
+    if (sessionProfileId) {
+      const sessionProperties: Array<{
+        slug: string;
+        required: boolean;
+        displayOrder: number;
+      }> = [
+        { slug: "goal", required: true, displayOrder: 0 },
+        { slug: "status", required: false, displayOrder: 1 },
+        { slug: "linkedTaskId", required: false, displayOrder: 2 },
+        { slug: "contextReport", required: false, displayOrder: 3 },
+        { slug: "planReport", required: false, displayOrder: 4 },
+        { slug: "executionLog", required: false, displayOrder: 5 },
+        { slug: "verificationReport", required: false, displayOrder: 6 },
+        { slug: "aiModel", required: false, displayOrder: 7 },
+        { slug: "usedSkills", required: false, displayOrder: 8 },
+      ];
+      for (const prop of sessionProperties) {
+        const propertyDefId = createdPropertyDefs.get(prop.slug);
+        if (propertyDefId) {
+          await profilePropertyRepo.link({
+            profileId: sessionProfileId,
+            propertyDefId,
+            required: prop.required,
+            displayOrder: prop.displayOrder,
+          });
+          console.log(`  ✓ Linked '${prop.slug}' to 'session'`);
         }
       }
     }

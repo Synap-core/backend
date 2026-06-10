@@ -49,18 +49,39 @@ export const agentsRouter = router({
 
   /**
    * Workspace-scoped agent list (authenticated).
-   * Default: show system + provider agents.
+   * Default: show system + provider + user agents.
+   *
+   * `user`-owned agents are the local/CLI ADJUNCTS — registry rows created by
+   * the terminal when a local agent CLI (claude/codex/opencode) runs. Including
+   * them here makes them first-class in the agent picker / management UI so the
+   * user can discover, select, and @-mention them. Their "conversation" is the
+   * terminal-cell (Option A, terminal-routed) — see the renderer-side wiring.
    */
   workspaceList: workspaceProcedure
     .input(
       z.object({
-        ownerType: z.enum(["system", "provider"]).optional(),
+        ownerType: z.enum(["system", "provider", "user"]).optional(),
       })
     )
-    .query(async ({ input }) => {
-      const ownerFilter = input.ownerType
-        ? eq(agents.ownerType, input.ownerType)
-        : or(eq(agents.ownerType, "system"), eq(agents.ownerType, "provider"));
+    .query(async ({ ctx, input }) => {
+      // `system` + `provider` agents are SHARED (visible to everyone).
+      // `user`-owned agents are PRIVATE local/CLI adjuncts — they MUST be
+      // scoped to the requesting user, or one user's adjuncts leak into every
+      // other user's picker. Filter by USER, never by ownerType alone.
+      const ownAdjuncts = and(
+        eq(agents.ownerType, "user"),
+        eq(agents.userId, ctx.userId)
+      );
+      const ownerFilter =
+        input.ownerType === "user"
+          ? ownAdjuncts
+          : input.ownerType
+            ? eq(agents.ownerType, input.ownerType) // system | provider — shared
+            : or(
+                eq(agents.ownerType, "system"),
+                eq(agents.ownerType, "provider"),
+                ownAdjuncts
+              );
 
       return db
         .select()

@@ -162,6 +162,12 @@ export * from "./ai-providers.js";
 // NEW: AI Provider Credentials (per-workspace and per-user key overrides)
 export * from "./ai-provider-credentials.js";
 
+// NEW: Focus Sessions (goal-bound user work sessions — workflow side, not data side)
+export * from "./focus-sessions.js";
+
+// NEW: Agent Skills (knowledge base — platform infrastructure, not user-authored content)
+export * from "./agent-skills.js";
+
 // Provenance vocabulary (createdByKind column type — must be public so tsc
 // can name router return types without referencing internal dist paths)
 export type { ProvenanceKind } from "./provenance.js";

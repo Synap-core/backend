@@ -1,0 +1,262 @@
+/**
+ * Focus Sessions tRPC Router
+ *
+ * Goal-bound user work sessions — workflow-side, not data-side.
+ * Uses `protectedProcedure` (Kratos session cookie) since sessions
+ * span workspaces and are owned by the authenticated user.
+ */
+
+import { z } from "zod";
+import { router, protectedProcedure } from "../trpc.js";
+import { TRPCError } from "@trpc/server";
+import { db, eq, and, desc, focusSessions } from "@synap/database";
+import type { FocusSession } from "@synap/database/schema";
+
+// ── Shared input fragment ──────────────────────────────────────────────────
+
+const expectedOutputItemSchema = z.object({
+  kind: z.string(),
+  label: z.string(),
+  icon: z.string().optional(),
+});
+
+const statusFilterSchema = z
+  .enum(["active", "paused", "closed", "all"])
+  .default("all");
+
+// ── Router ─────────────────────────────────────────────────────────────────
+
+export const focusSessionsRouter = router({
+  /**
+   * List focus sessions for a specific workspace (most recent first).
+   */
+  list: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string(),
+        status: statusFilterSchema,
+        limit: z.number().int().min(1).max(50).default(20),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const conditions = [
+        eq(focusSessions.workspaceId, input.workspaceId),
+        eq(focusSessions.userId, ctx.userId),
+      ];
+
+      if (input.status !== "all") {
+        conditions.push(eq(focusSessions.status, input.status));
+      }
+
+      return db
+        .select()
+        .from(focusSessions)
+        .where(and(...conditions))
+        .orderBy(desc(focusSessions.startedAt))
+        .limit(input.limit);
+    }),
+
+  /**
+   * List focus sessions across ALL workspaces for the authenticated user.
+   * Used by Eve OS and cross-workspace surfaces.
+   */
+  listAll: protectedProcedure
+    .input(
+      z.object({
+        status: statusFilterSchema,
+        limit: z.number().int().min(1).max(50).default(20),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const conditions = [eq(focusSessions.userId, ctx.userId)];
+
+      if (input.status !== "all") {
+        conditions.push(eq(focusSessions.status, input.status));
+      }
+
+      return db
+        .select()
+        .from(focusSessions)
+        .where(and(...conditions))
+        .orderBy(desc(focusSessions.startedAt))
+        .limit(input.limit);
+    }),
+
+  /**
+   * Get a single focus session by ID.
+   * Scoped to the authenticated user — cannot read another user's session.
+   */
+  get: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const row = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.id),
+          eq(focusSessions.userId, ctx.userId)
+        ),
+      });
+
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.id} not found`,
+        });
+      }
+
+      return row;
+    }),
+
+  /**
+   * Get a focus session by IS correlation ID.
+   * Used by IS to link proposals and events back to the session.
+   */
+  getByCorrelationId: protectedProcedure
+    .input(z.object({ correlationId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const row = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.correlationId, input.correlationId),
+          eq(focusSessions.userId, ctx.userId)
+        ),
+      });
+
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `No focus session found for correlationId ${input.correlationId}`,
+        });
+      }
+
+      return row;
+    }),
+
+  /**
+   * Create a new focus session.
+   */
+  create: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string(),
+        goal: z.string().min(1).max(2000),
+        templateId: z.string().optional(),
+        expectedOutputs: z.array(expectedOutputItemSchema).default([]),
+        channelId: z.string().uuid().optional(),
+        agentIds: z.array(z.string()).default([]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [created] = await db
+        .insert(focusSessions)
+        .values({
+          workspaceId: input.workspaceId,
+          userId: ctx.userId,
+          goal: input.goal,
+          templateId: input.templateId ?? null,
+          expectedOutputs: input.expectedOutputs,
+          channelId: input.channelId ?? null,
+          agentIds: input.agentIds,
+          status: "active",
+        })
+        .returning();
+
+      return created as FocusSession;
+    }),
+
+  /**
+   * Update an existing focus session.
+   * Caller must own the session (userId check).
+   */
+  update: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        status: z.enum(["active", "paused", "closed"]).optional(),
+        progress: z.number().int().min(0).max(100).optional(),
+        channelId: z.string().uuid().optional(),
+        correlationId: z.string().optional(),
+        goal: z.string().min(1).max(2000).optional(),
+        agentIds: z.array(z.string()).optional(),
+        expectedOutputs: z.array(expectedOutputItemSchema).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Load first to verify ownership
+      const existing = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.id),
+          eq(focusSessions.userId, ctx.userId)
+        ),
+      });
+
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.id} not found`,
+        });
+      }
+
+      const { id: _id, ...patch } = input;
+
+      // Build only the fields that were supplied
+      const set: Partial<typeof focusSessions.$inferInsert> = {
+        updatedAt: new Date(),
+      };
+
+      if (patch.status !== undefined) set.status = patch.status;
+      if (patch.progress !== undefined) set.progress = patch.progress;
+      if (patch.channelId !== undefined) set.channelId = patch.channelId;
+      if (patch.correlationId !== undefined)
+        set.correlationId = patch.correlationId;
+      if (patch.goal !== undefined) set.goal = patch.goal;
+      if (patch.agentIds !== undefined) set.agentIds = patch.agentIds;
+      if (patch.expectedOutputs !== undefined)
+        set.expectedOutputs = patch.expectedOutputs;
+
+      // If transitioning to closed, stamp closedAt
+      if (patch.status === "closed" && existing.status !== "closed") {
+        set.closedAt = new Date();
+      }
+
+      const [updated] = await db
+        .update(focusSessions)
+        .set(set)
+        .where(eq(focusSessions.id, input.id))
+        .returning();
+
+      return updated as FocusSession;
+    }),
+
+  /**
+   * Close a focus session.
+   */
+  close: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const existing = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.id),
+          eq(focusSessions.userId, ctx.userId)
+        ),
+      });
+
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.id} not found`,
+        });
+      }
+
+      if (existing.status === "closed") {
+        return existing;
+      }
+
+      const now = new Date();
+      const [closed] = await db
+        .update(focusSessions)
+        .set({ status: "closed", closedAt: now, updatedAt: now })
+        .where(eq(focusSessions.id, input.id))
+        .returning();
+
+      return closed as FocusSession;
+    }),
+});

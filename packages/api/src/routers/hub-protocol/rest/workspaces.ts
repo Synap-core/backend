@@ -11,6 +11,7 @@ import {
   users,
   workspaces,
   workspaceMembers,
+  views,
   eq,
   and,
   inArray,
@@ -923,6 +924,98 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         "GET /workspaces/:workspaceId/eve-provider-routing failed"
       );
       return c.json({ error: "Failed to read provider routing" }, 500);
+    }
+  });
+
+  /**
+   * GET /workspaces/:workspaceId/home
+   *
+   * Returns the workspace's home bento layout so agents can see the current
+   * UI state before proposing changes. Looks up the view with
+   * type='bento' and metadata.homeScope set (the canonical home view),
+   * then returns its config (blocks array) plus a block summary for agents.
+   *
+   * Registered BEFORE /:workspaceId dynamic route catch-alls.
+   */
+  app.get("/workspaces/:workspaceId/home", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+
+    const userId = c.get("userId") as string;
+    const workspaceId = c.req.param("workspaceId");
+    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+
+    const membership = await db.query.workspaceMembers.findFirst({
+      where: and(
+        eq(workspaceMembers.workspaceId, workspaceId),
+        eq(workspaceMembers.userId, userId)
+      ),
+      columns: { role: true },
+    });
+    if (!membership) return c.json({ error: "Access denied" }, 403);
+
+    try {
+      // Find the canonical home bento view for this workspace.
+      // It is the view with type='bento' whose metadata.homeScope is set.
+      const wsViews = await db
+        .select({
+          id: views.id,
+          name: views.name,
+          config: views.config,
+          metadata: views.metadata,
+        })
+        .from(views)
+        .where(
+          and(eq(views.workspaceId, workspaceId), eq(views.type, "bento"))
+        );
+
+      const homeView =
+        wsViews.find((v) => {
+          const meta = (v.metadata ?? {}) as Record<string, unknown>;
+          return meta.homeScope != null;
+        }) ??
+        wsViews[0] ??
+        null;
+
+      if (!homeView) {
+        return c.json({
+          workspaceId,
+          homeViewId: null,
+          blocks: [],
+          blockSummary: [],
+        });
+      }
+
+      const config = (homeView.config ?? {}) as Record<string, unknown>;
+      const blocks = (config.blocks ?? config.layout ?? []) as Array<
+        Record<string, unknown>
+      >;
+
+      // Compact summary for agents — just what's present, not full block data
+      const blockSummary = blocks.map((b) => ({
+        kind: b.kind ?? b.type ?? "unknown",
+        typeKey: b.typeKey ?? b.widgetType ?? b.viewType ?? null,
+        label: b.label ?? b.title ?? b.name ?? null,
+        id: b.id ?? null,
+      }));
+
+      return c.json({
+        workspaceId,
+        homeViewId: homeView.id,
+        homeViewName: homeView.name,
+        blocks,
+        blockSummary,
+      });
+    } catch (err) {
+      logger.error(
+        { err, userId, workspaceId },
+        "GET /workspaces/:workspaceId/home failed"
+      );
+      return c.json({ error: "Failed to read home layout" }, 500);
     }
   });
 

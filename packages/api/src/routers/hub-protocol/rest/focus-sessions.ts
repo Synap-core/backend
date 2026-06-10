@@ -1,0 +1,382 @@
+/**
+ * Hub Protocol REST — focus sessions
+ *
+ * IS-facing REST surface for goal-bound user work sessions.
+ * All routes require hub-protocol.write (or .read) scope.
+ *
+ * Routes (static before dynamic — Hono is first-match):
+ *   GET    /focus-sessions          — list sessions for a workspace
+ *   GET    /focus-sessions/:id      — get a single session by id
+ *   POST   /focus-sessions          — create/upsert a session (by correlationId)
+ *   PATCH  /focus-sessions/:id      — update progress / status / correlationId
+ *
+ * Uses Drizzle directly — focusSessions lives on coreRouter, not hubProtocolRouter,
+ * so getCaller() (which creates a hubProtocolRouter caller) cannot reach it.
+ */
+
+import { z } from "@hono/zod-openapi";
+import { db, eq, and, desc, focusSessions } from "@synap/database";
+import { ErrorSchema } from "./_codecs/_openapi.js";
+import { registerOpenApi } from "./_codecs/_register.js";
+import { hasScope, logger, type HubHono } from "./_shared.js";
+
+// ── Wire schemas ───────────────────────────────────────────────────────────
+
+const ExpectedOutputItemSchema = z.object({
+  kind: z.string(),
+  label: z.string(),
+  icon: z.string().optional(),
+});
+
+const FocusSessionWireSchema = z.object({
+  id: z.string(),
+  workspaceId: z.string(),
+  userId: z.string(),
+  correlationId: z.string().nullable(),
+  goal: z.string(),
+  status: z.string(),
+  templateId: z.string().nullable(),
+  expectedOutputs: z.unknown(),
+  channelId: z.string().nullable(),
+  progress: z.number().nullable(),
+  agentIds: z.array(z.string()),
+  closedAt: z.string().nullable(),
+  contextReport: z.unknown().nullable(),
+  planReport: z.unknown().nullable(),
+  executionLog: z.unknown().nullable(),
+  verificationReport: z.unknown().nullable(),
+  startedAt: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+const CreateBodySchema = z.object({
+  workspaceId: z.string().min(1),
+  userId: z.string().min(1),
+  goal: z.string().min(1).max(2000),
+  correlationId: z.string().optional(),
+  templateId: z.string().optional(),
+  expectedOutputs: z.array(ExpectedOutputItemSchema).optional(),
+  channelId: z.string().uuid().optional(),
+  agentIds: z.array(z.string()).optional(),
+});
+
+const UpdateBodySchema = z.object({
+  workspaceId: z.string().min(1),
+  status: z.enum(["active", "paused", "closed"]).optional(),
+  progress: z.number().int().min(0).max(100).optional(),
+  channelId: z.string().uuid().optional(),
+  correlationId: z.string().optional(),
+  goal: z.string().min(1).max(2000).optional(),
+  agentIds: z.array(z.string()).optional(),
+  expectedOutputs: z.array(ExpectedOutputItemSchema).optional(),
+  contextReport: z.unknown().optional(),
+  planReport: z.unknown().optional(),
+  executionLog: z.unknown().optional(),
+  verificationReport: z.unknown().optional(),
+});
+
+// ── Registration ───────────────────────────────────────────────────────────
+
+export function registerFocusSessionsRoutes(app: HubHono): void {
+  // ── OpenAPI metadata ─────────────────────────────────────────────────────
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/focus-sessions",
+    tags: ["FocusSessions"],
+    summary: "List focus sessions for a workspace",
+    request: {
+      query: z.object({
+        workspaceId: z.string(),
+        status: z.enum(["active", "paused", "closed", "all"]).optional(),
+        limit: z.coerce.number().int().min(1).max(50).optional(),
+      }),
+    },
+    responses: {
+      200: { description: "Sessions", schema: z.array(FocusSessionWireSchema) },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/focus-sessions/:id",
+    tags: ["FocusSessions"],
+    summary: "Get a focus session by ID",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      query: z.object({ workspaceId: z.string() }),
+    },
+    responses: {
+      200: { description: "Session", schema: FocusSessionWireSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/focus-sessions",
+    tags: ["FocusSessions"],
+    summary: "Create a focus session",
+    description:
+      "IS creates a focus session, optionally with a correlationId for idempotency. " +
+      "If a session with the same correlationId already exists it is returned as-is.",
+    request: { body: CreateBodySchema },
+    responses: {
+      200: {
+        description: "Created or existing session",
+        schema: FocusSessionWireSchema,
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "patch",
+    path: "/focus-sessions/:id",
+    tags: ["FocusSessions"],
+    summary: "Update a focus session",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: UpdateBodySchema,
+    },
+    responses: {
+      200: { description: "Updated session", schema: FocusSessionWireSchema },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  // ── Handlers ─────────────────────────────────────────────────────────────
+  // Static route (/focus-sessions) BEFORE dynamic (/focus-sessions/:id) —
+  // Hono is first-match.
+
+  /**
+   * GET /focus-sessions?workspaceId=...&status=...&limit=...
+   */
+  app.get("/focus-sessions", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+
+    const workspaceId = c.req.query("workspaceId");
+    if (!workspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
+    }
+
+    const statusRaw = c.req.query("status") ?? "all";
+    const limitRaw = parseInt(c.req.query("limit") ?? "20", 10);
+    const limit = Number.isFinite(limitRaw)
+      ? Math.min(Math.max(limitRaw, 1), 50)
+      : 20;
+    const validStatuses = ["active", "paused", "closed", "all"] as const;
+    const status = validStatuses.includes(
+      statusRaw as (typeof validStatuses)[number]
+    )
+      ? (statusRaw as (typeof validStatuses)[number])
+      : "all";
+
+    try {
+      const conditions = [eq(focusSessions.workspaceId, workspaceId)];
+      if (status !== "all") {
+        conditions.push(eq(focusSessions.status, status));
+      }
+
+      const rows = await db
+        .select()
+        .from(focusSessions)
+        .where(and(...conditions))
+        .orderBy(desc(focusSessions.startedAt))
+        .limit(limit);
+
+      return c.json(rows);
+    } catch (err) {
+      logger.error({ err }, "focus-sessions.list failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * GET /focus-sessions/:id?workspaceId=...
+   * workspaceId is required to prevent cross-workspace reads.
+   */
+  app.get("/focus-sessions/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+
+    const id = c.req.param("id");
+    const workspaceId = c.req.query("workspaceId");
+    if (!workspaceId) {
+      return c.json({ error: "workspaceId query param is required" }, 400);
+    }
+
+    try {
+      const row = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, id),
+          eq(focusSessions.workspaceId, workspaceId)
+        ),
+      });
+
+      if (!row) {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+
+      return c.json(row);
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.get failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /focus-sessions
+   * IS creates a session, optionally with correlationId for idempotency.
+   */
+  app.post("/focus-sessions", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+
+    const raw = await c.req.json().catch(() => null);
+    if (!raw) return c.json({ error: "Invalid JSON in request body" }, 400);
+
+    const parsed = CreateBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      const message = parsed.error.issues
+        .map((i) =>
+          i.path.length ? `${i.path.join(".")}: ${i.message}` : i.message
+        )
+        .join(", ");
+      return c.json({ error: message }, 400);
+    }
+
+    const body = parsed.data;
+
+    try {
+      // Idempotency: if a correlationId was given, return the existing session.
+      if (body.correlationId) {
+        const existing = await db.query.focusSessions.findFirst({
+          where: eq(focusSessions.correlationId, body.correlationId),
+        });
+        if (existing) return c.json(existing);
+      }
+
+      const [created] = await db
+        .insert(focusSessions)
+        .values({
+          workspaceId: body.workspaceId,
+          userId: body.userId,
+          goal: body.goal,
+          correlationId: body.correlationId ?? null,
+          templateId: body.templateId ?? null,
+          expectedOutputs: body.expectedOutputs ?? [],
+          channelId: body.channelId ?? null,
+          agentIds: body.agentIds ?? [],
+          status: "active",
+        })
+        .returning();
+
+      return c.json(created);
+    } catch (err) {
+      logger.error({ err }, "focus-sessions.create failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * PATCH /focus-sessions/:id
+   * IS updates progress / status / correlationId.
+   */
+  app.patch("/focus-sessions/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+
+    const id = c.req.param("id");
+    const raw = await c.req.json().catch(() => null);
+    if (!raw) return c.json({ error: "Invalid JSON in request body" }, 400);
+
+    const parsed = UpdateBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      const message = parsed.error.issues
+        .map((i) =>
+          i.path.length ? `${i.path.join(".")}: ${i.message}` : i.message
+        )
+        .join(", ");
+      return c.json({ error: message }, 400);
+    }
+
+    try {
+      const existing = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, id),
+          eq(focusSessions.workspaceId, parsed.data.workspaceId)
+        ),
+      });
+
+      if (!existing) {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+
+      const { workspaceId: _ws, ...patch } = parsed.data;
+      const set: Partial<typeof focusSessions.$inferInsert> = {
+        updatedAt: new Date(),
+      };
+
+      if (patch.status !== undefined) set.status = patch.status;
+      if (patch.progress !== undefined) set.progress = patch.progress;
+      if (patch.channelId !== undefined) set.channelId = patch.channelId;
+      if (patch.correlationId !== undefined)
+        set.correlationId = patch.correlationId;
+      if (patch.goal !== undefined) set.goal = patch.goal;
+      if (patch.agentIds !== undefined) set.agentIds = patch.agentIds;
+      if (patch.expectedOutputs !== undefined)
+        set.expectedOutputs = patch.expectedOutputs;
+      if (patch.contextReport !== undefined)
+        set.contextReport = patch.contextReport;
+      if (patch.planReport !== undefined) set.planReport = patch.planReport;
+      if (patch.executionLog !== undefined)
+        set.executionLog = patch.executionLog;
+      if (patch.verificationReport !== undefined)
+        set.verificationReport = patch.verificationReport;
+
+      if (patch.status === "closed" && existing.status !== "closed") {
+        set.closedAt = new Date();
+      }
+
+      const [updated] = await db
+        .update(focusSessions)
+        .set(set)
+        .where(eq(focusSessions.id, id))
+        .returning();
+
+      return c.json(updated);
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.update failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+}

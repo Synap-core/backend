@@ -360,6 +360,18 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0113_ebbinghaus_decay.sql",
   },
 
+  // focus_sessions — goal-bound user work sessions (0114)
+  {
+    table: "focus_sessions",
+    column: "goal",
+    addedBy: "0114_focus_sessions.sql",
+  },
+  {
+    table: "focus_sessions",
+    column: "status",
+    addedBy: "0114_focus_sessions.sql",
+  },
+
   // channel_context_items
   {
     table: "channel_context_items",

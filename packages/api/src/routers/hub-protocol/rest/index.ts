@@ -51,5 +51,7 @@ export { registerManifestRoutes } from "./manifest.js";
 export { registerDiscoverRoutes } from "./discover.js";
 export { registerKeysRoutes } from "./keys.js";
 export { registerAiProvidersRoutes } from "./ai-providers.js";
+export { registerFocusSessionsRoutes } from "./focus-sessions.js";
+export { registerAgentSkillsRoutes } from "./agent-skills.js";
 
 export type { HubHono } from "./_shared.js";
