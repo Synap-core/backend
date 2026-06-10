@@ -14,8 +14,11 @@
  * - document.*.completed → document:created | document:updated | document:deleted
  * - workspaceMembers.add.completed → workspace:member_added
  * - workspaceMembers.remove.completed → workspace:member_removed
+ * - widget_definition.*.completed → widget_definition:changed
+ * - focus_session.*.completed → focus_session:updated
  */
 
+import { randomUUID } from "crypto";
 import type { EventRecord } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { EventNames } from "@synap-core/types/events";
@@ -91,8 +94,61 @@ function mapToSocketEvent(
       event: "workspace:member_removed",
       workspaceIdRequired: true,
     },
+    // Widget definitions (cells) — workspaceId optional (pod-global cells have none)
+    "widget_definition.create.completed": {
+      event: "widget_definition:changed",
+      workspaceIdRequired: false,
+    },
+    "widget_definition.update.completed": {
+      event: "widget_definition:changed",
+      workspaceIdRequired: false,
+    },
+    "widget_definition.delete.completed": {
+      event: "widget_definition:changed",
+      workspaceIdRequired: false,
+    },
+    // Focus sessions — always workspace-scoped
+    "focus_session.create.completed": {
+      event: "focus_session:updated",
+      workspaceIdRequired: true,
+    },
+    "focus_session.update.completed": {
+      event: "focus_session:updated",
+      workspaceIdRequired: true,
+    },
   };
   return m[eventType] ?? null;
+}
+
+/**
+ * Emit a realtime event directly (bypassing the event-store hook chain).
+ *
+ * Use this for write paths that do not go through EventRepository.append()
+ * (e.g. direct Drizzle writes in Hub REST handlers). The payload must include
+ * `workspaceId` (where applicable) and the primary entity `id` so the browser
+ * can invalidate the right TanStack Query cache entries.
+ *
+ * This constructs a minimal synthetic EventRecord — just enough for
+ * `emitDomainEventToRealtime` to extract the event name and workspace target.
+ */
+export function emitHubRealtimeEvent(opts: {
+  eventType: string;
+  subjectId: string;
+  userId: string;
+  data: Record<string, unknown>;
+}): void {
+  const record: EventRecord = {
+    id: randomUUID(),
+    timestamp: new Date(),
+    subjectId: opts.subjectId,
+    subjectType: opts.eventType.split(".")[0] ?? "unknown",
+    eventType: opts.eventType,
+    userId: opts.userId,
+    data: opts.data,
+    version: 1,
+    source: "api",
+  };
+  emitDomainEventToRealtime(record);
 }
 
 /**

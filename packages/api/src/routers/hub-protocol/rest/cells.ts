@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { getDb, and, eq, isNull, or } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
+import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import {
   hasScope,
   logger,
@@ -183,6 +184,13 @@ export function registerCellsRoutes(app: HubHono): void {
           },
         });
 
+      emitHubRealtimeEvent({
+        eventType: "widget_definition.create.completed",
+        subjectId: typeKey,
+        userId: userId ?? "",
+        data: { id: typeKey, typeKey, workspaceId: workspaceId ?? undefined, changeType: "created" },
+      });
+
       return c.json({ success: true, typeKey });
     } catch (err) {
       logger.error({ err }, "cells.install failed");
@@ -295,10 +303,11 @@ export function registerCellsRoutes(app: HubHono): void {
 
     try {
       const db = await getDb();
+      let changeType: "created" | "updated" = "created";
 
       if (workspaceId) {
         // Workspace-scoped: unique constraint on (typeKey, workspaceId) works normally
-        await db
+        const result = await db
           .insert(widgetDefinitions)
           .values(values)
           .onConflictDoUpdate({
@@ -311,7 +320,12 @@ export function registerCellsRoutes(app: HubHono): void {
               isActive: true,
               updatedAt: new Date(),
             },
-          });
+          })
+          .returning({ id: widgetDefinitions.id, updatedAt: widgetDefinitions.updatedAt, createdAt: widgetDefinitions.createdAt });
+        const row = result[0];
+        if (row && row.updatedAt && row.createdAt && row.updatedAt.getTime() !== row.createdAt.getTime()) {
+          changeType = "updated";
+        }
       } else {
         // Pod-global (workspaceId IS NULL): PostgreSQL treats NULLs as distinct
         // in unique indexes, so onConflictDoUpdate won't fire. Manual upsert.
@@ -334,8 +348,19 @@ export function registerCellsRoutes(app: HubHono): void {
           .returning({ id: widgetDefinitions.id });
         if (updated.length === 0) {
           await db.insert(widgetDefinitions).values(values);
+        } else {
+          changeType = "updated";
         }
       }
+
+      emitHubRealtimeEvent({
+        eventType: changeType === "created"
+          ? "widget_definition.create.completed"
+          : "widget_definition.update.completed",
+        subjectId: typeKey,
+        userId: userId ?? "",
+        data: { id: typeKey, typeKey, workspaceId: workspaceId ?? undefined, changeType },
+      });
 
       return c.json({ success: true, typeKey }, 201);
     } catch (err) {

@@ -16,6 +16,7 @@
 
 import { z } from "@hono/zod-openapi";
 import { db, eq, and, desc, focusSessions } from "@synap/database";
+import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { hasScope, logger, type HubHono } from "./_shared.js";
@@ -293,6 +294,19 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         })
         .returning();
 
+      emitHubRealtimeEvent({
+        eventType: "focus_session.create.completed",
+        subjectId: created.id,
+        userId: body.userId,
+        data: {
+          id: created.id,
+          workspaceId: created.workspaceId,
+          status: created.status,
+          goal: created.goal,
+          progress: created.progress,
+        },
+      });
+
       return c.json(created);
     } catch (err) {
       logger.error({ err }, "focus-sessions.create failed");
@@ -369,6 +383,19 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         .set(set)
         .where(eq(focusSessions.id, id))
         .returning();
+
+      emitHubRealtimeEvent({
+        eventType: "focus_session.update.completed",
+        subjectId: updated.id,
+        userId: updated.userId,
+        data: {
+          id: updated.id,
+          workspaceId: updated.workspaceId,
+          status: updated.status,
+          goal: updated.goal,
+          progress: updated.progress,
+        },
+      });
 
       return c.json(updated);
     } catch (err) {
