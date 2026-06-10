@@ -4,7 +4,7 @@
  * Handles CRUD for workspace-scoped relation type definitions.
  */
 
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, or, isNull, sql } from "drizzle-orm";
 import {
   relationDefs,
   type RelationDef,
@@ -129,7 +129,8 @@ export class RelationDefRepository {
     workspaceId?: string
   ): Promise<RelationDef | undefined> {
     const where = workspaceId
-      ? and(eq(relationDefs.id, id), (relationDefs, { or, isNull, eq }) =>
+      ? and(
+          eq(relationDefs.id, id),
           or(
             eq(relationDefs.workspaceId, workspaceId),
             isNull(relationDefs.workspaceId)
