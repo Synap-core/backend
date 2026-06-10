@@ -29,6 +29,7 @@ export const WireProposalSchema = z
     createdBy: z.string().nullable().optional(),
     createdAt: z.union([z.string(), z.date()]).optional(),
     updatedAt: z.union([z.string(), z.date()]).optional(),
+    sessionId: z.string().nullable().optional(),
   })
   .openapi("Proposal");
 
@@ -80,6 +81,10 @@ export const CreateProposalRequestSchema = z
       .record(z.string(), z.unknown())
       .describe("Free-form proposal payload — shape is targetType-specific."),
     summary: z.string().optional(),
+    sessionId: z
+      .string()
+      .optional()
+      .describe("Focus session ID to link this proposal to."),
     sourceMessageId: z
       .string()
       .optional()

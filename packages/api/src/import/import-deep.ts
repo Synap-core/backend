@@ -69,6 +69,10 @@ export interface DeepStructureStats {
   /** The workspace the model most often suggested these notes belong in. */
   suggestedWorkspaceId?: string;
   byType: Record<string, number>;
+  /** Wikilinks resolved to a batch entity or existing workspace entity. */
+  wikilinkLinksResolved: number;
+  /** Wikilinks with no match in the batch or workspace — skipped silently. */
+  wikilinkLinksUnresolved: number;
 }
 
 export interface DeepStructureResult {
@@ -267,6 +271,11 @@ export async function deepStructureImportItems(
   let itemsProcessed = 0;
   let itemsFailed = 0;
 
+  // Maps normTitle(item.title) → srcRef for the wikilink resolution pass below.
+  // Populated as provenance entities are created so that ordering is stable and
+  // the same normTitle logic is reused (no second normalizer).
+  const srcRefByNormTitle = new Map<string, string>();
+
   for (let i = 0; i < items.length; i++) {
     const res = extracted[i];
     if (!res || !Array.isArray(res.entities)) {
@@ -289,6 +298,8 @@ export async function deepStructureImportItems(
         content: items[i].body, // → versioned document on materialize
       });
       sourceDocCount++;
+      // Register for wikilink resolution — links target notes by their filename/title.
+      srcRefByNormTitle.set(normTitle(items[i].title), srcRef);
     }
 
     for (const e of res.entities) {
@@ -381,6 +392,89 @@ export async function deepStructureImportItems(
     }
   }
 
+  // 3. Wikilink resolution pass — emit `references` relations from each source
+  //    note's provenance entity to the target note's provenance entity (or an
+  //    existing workspace entity matched via resolveExisting). This preserves
+  //    the full Obsidian link graph that extractWikilinks() already parsed.
+  //
+  //    Dedup set is pre-seeded with relations already emitted (provenance links)
+  //    so we never emit a duplicate op for the same (source, target) pair.
+  let wikilinkLinksResolved = 0;
+  let wikilinkLinksUnresolved = 0;
+
+  if (includeProvenance && srcRefByNormTitle.size > 0) {
+    // Pre-seed the dedup set from ops already emitted so far.
+    const emittedRelationKeys = new Set<string>();
+    for (const op of operations) {
+      if (op.op === "create_relation") {
+        emittedRelationKeys.add(`${op.sourceRef}|${op.targetRef}`);
+      }
+    }
+
+    // For each item that has a provenance entity, resolve its wikilinks.
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!item.links || item.links.length === 0) continue;
+      const srcRef = srcRefByNormTitle.get(normTitle(item.title));
+      if (!srcRef) continue; // item had no body → no provenance entity → skip
+
+      for (const link of item.links) {
+        const targetKey = normTitle(link.targetName);
+
+        // (a) Resolve against the batch's own provenance title map.
+        let targetRef = srcRefByNormTitle.get(targetKey) ?? null;
+
+        // (b) If not in the batch and resolveExisting is available, try the
+        //     live workspace. We search as profileSlug="note" — the provenance
+        //     entities are always notes and wikilinks target notes by filename.
+        //     A hit returns the real entity id; we reference it directly in the
+        //     op (the materializer handles ref→id resolution for existing ids).
+        if (!targetRef && opts.resolveExisting) {
+          const existingId = await opts.resolveExisting(
+            "note",
+            link.targetName
+          );
+          if (existingId) {
+            // Use a synthetic ref that encodes the existing id so the
+            // materializer can resolve it. The convention for existingEntityId
+            // ops is already used elsewhere in this file (see linkedToExisting).
+            const existingRef = `existing_wl_${existingId}`;
+            // Only emit the anchor op once per unique existing entity.
+            if (!refByKey.has(`existing_wl|${existingId}`)) {
+              refByKey.set(`existing_wl|${existingId}`, existingRef);
+              operations.push({
+                op: "create_entity",
+                ref: existingRef,
+                profileSlug: "note",
+                title: link.targetName,
+                existingEntityId: existingId,
+              });
+            }
+            targetRef = refByKey.get(`existing_wl|${existingId}`) ?? null;
+          }
+        }
+
+        if (!targetRef || targetRef === srcRef) {
+          // Self-link or genuinely unresolved — skip silently, count it.
+          wikilinkLinksUnresolved++;
+          continue;
+        }
+
+        const dedupKey = `${srcRef}|${targetRef}`;
+        if (emittedRelationKeys.has(dedupKey)) continue;
+        emittedRelationKeys.add(dedupKey);
+
+        operations.push({
+          op: "create_relation",
+          type: "references",
+          sourceRef: srcRef,
+          targetRef,
+        });
+        wikilinkLinksResolved++;
+      }
+    }
+  }
+
   return {
     operations,
     stats: {
@@ -395,6 +489,8 @@ export async function deepStructureImportItems(
       sourceDocCount,
       suggestedWorkspaceId,
       byType,
+      wikilinkLinksResolved,
+      wikilinkLinksUnresolved,
     },
   };
 }

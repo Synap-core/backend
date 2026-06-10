@@ -88,6 +88,7 @@ export const proposals = pgTable(
     // Both nullable — pre-existing proposals have no linkage.
     correlationId: uuid("correlation_id"),
     requestedEventId: uuid("requested_event_id"),
+    sessionId: uuid("session_id"),
 
     // Expiry: proposals older than this are treated as expired
     expiresAt: timestamp("expires_at", { withTimezone: true }),
@@ -138,6 +139,7 @@ export const proposals = pgTable(
     correlationIdIdx: index("proposals_correlation_id_idx").on(
       table.correlationId
     ),
+    sessionIdIdx: index("proposals_session_id_idx").on(table.sessionId),
   })
 );
 
@@ -157,6 +159,7 @@ export interface Proposal {
   agentUserId: string | null;
   correlationId: string | null;
   requestedEventId: string | null;
+  sessionId: string | null;
   expiresAt: Date | null;
   reviewedBy: string | null;
   reviewedAt: Date | null;

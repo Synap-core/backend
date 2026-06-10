@@ -81,6 +81,13 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0107_provenance_columns.sql",
   },
 
+  // proposals — session_id FK (0119_add_session_id_to_proposals.sql)
+  {
+    table: "proposals",
+    column: "session_id",
+    addedBy: "0119_add_session_id_to_proposals.sql",
+  },
+
   // property_defs — audit flagged these (0057 / 0064 / 0065)
   {
     table: "property_defs",

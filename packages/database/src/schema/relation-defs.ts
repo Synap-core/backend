@@ -15,7 +15,6 @@ import {
   boolean,
   timestamp,
   index,
-  unique,
 } from "drizzle-orm/pg-core";
 import { workspaces } from "./workspaces.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
@@ -31,10 +30,10 @@ export const relationDefs = pgTable(
     displayName: text("display_name").notNull(), // e.g. "Works at"
     description: text("description"),
 
-    // Workspace scope
-    workspaceId: uuid("workspace_id")
-      .references(() => workspaces.id, { onDelete: "cascade" })
-      .notNull(),
+    // Workspace scope — nullable for pod-wide relation definitions
+    workspaceId: uuid("workspace_id").references(() => workspaces.id, {
+      onDelete: "cascade",
+    }),
     userId: text("user_id").notNull(), // Creator
 
     // UI hints (JSONB)
@@ -54,10 +53,9 @@ export const relationDefs = pgTable(
       .notNull(),
   },
   (table) => ({
-    slugWorkspaceUnique: unique("relation_defs_slug_workspace_unique").on(
-      table.slug,
-      table.workspaceId
-    ),
+    // Uniqueness enforced via partial indexes (migration 0118):
+    //   - pod-wide:  UNIQUE (slug) WHERE workspace_id IS NULL
+    //   - workspace: UNIQUE (slug, workspace_id) WHERE workspace_id IS NOT NULL
     workspaceIdx: index("relation_defs_workspace_id_idx").on(table.workspaceId),
   })
 );

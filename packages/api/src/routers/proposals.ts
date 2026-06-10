@@ -792,6 +792,10 @@ export const proposalsRouter = router({
         targetId: z.string().optional(),
         /** Filter to proposals originating from a specific chat thread */
         threadId: z.string().uuid().optional(),
+        /** Filter to proposals linked to a specific focus session via correlationId */
+        correlationId: z.string().optional(),
+        /** Filter to proposals linked to a specific focus session via session_id FK */
+        sessionId: z.string().uuid().optional(),
         /** Filter to proposals created by a specific agent */
         agentUserId: z.string().optional(),
         /** When true, only return proposals where agentUserId is not null */
@@ -842,6 +846,15 @@ export const proposalsRouter = router({
 
       if (input.threadId) {
         conditions.push(eq(proposals.threadId, input.threadId));
+      }
+
+      /** Filter to proposals with a specific correlationId (used to link back to focus sessions) */
+      if (input.correlationId) {
+        conditions.push(eq(proposals.correlationId, input.correlationId));
+      }
+
+      if (input.sessionId) {
+        conditions.push(eq(proposals.sessionId, input.sessionId));
       }
 
       if (input.status === "pending") {

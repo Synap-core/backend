@@ -17,16 +17,21 @@ export interface CreateEventBackedProposalInput {
   threadId?: string | null;
   commandRunId?: string | null;
   sourceMessageId?: string | null;
+  sessionId?: string | null;
   expiresAt?: Date | null;
 }
 
 export async function createEventBackedProposal(
   input: CreateEventBackedProposalInput
 ) {
+  // correlationId serves event-chain grouping, NOT session linking.
+  // When linked to a session, use session.id as correlationId so events
+  // are traceable back to the session. No randomUUID fallback for sessionId.
   const correlationId =
-    typeof input.data.correlationId === "string"
+    input.sessionId ??
+    (typeof input.data.correlationId === "string"
       ? input.data.correlationId
-      : randomUUID();
+      : randomUUID());
   const action = input.action ?? inferProposalAction(input.proposalType);
 
   const requestedEvent = await auditLog({
@@ -47,9 +52,7 @@ export async function createEventBackedProposal(
 
   const data = {
     ...input.data,
-    ...(input.summary
-      ? { _summary: input.summary, summary: input.summary }
-      : {}),
+    ...(input.summary ? { summary: input.summary } : {}),
     correlationId,
     ...(requestedEvent?.id ? { requestedEventId: requestedEvent.id } : {}),
   };
@@ -66,6 +69,7 @@ export async function createEventBackedProposal(
     threadId: input.threadId,
     commandRunId: input.commandRunId,
     sourceMessageId: input.sourceMessageId,
+    sessionId: input.sessionId ?? null,
     expiresAt: input.expiresAt,
     notificationDescription: input.summary,
   });

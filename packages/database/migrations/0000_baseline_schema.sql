@@ -94,14 +94,14 @@ CREATE INDEX IF NOT EXISTS "workspaces_active_idx"
 
 CREATE TABLE IF NOT EXISTS "workspace_members" (
   "id"            uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
-  "workspace_id"  uuid  NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "user_id"       text  NOT NULL,
   "role"          text  NOT NULL,
   "joined_at"     timestamp with time zone NOT NULL DEFAULT now(),
   "invited_by"    text
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
-ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "workspace_id" uuid("id") ON DELETE CASCADE;
 ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "user_id" text;
 ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "role" text;
 ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "joined_at" timestamp with time zone DEFAULT now();
@@ -234,7 +234,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS "profiles_slug_user_uniq"
 
 CREATE TABLE IF NOT EXISTS "profile_workspace_access" (
   "profile_id"    uuid NOT NULL REFERENCES "profiles"("id") ON DELETE CASCADE,
-  "workspace_id"  uuid NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "granted_at"    timestamp with time zone NOT NULL DEFAULT now(),
   PRIMARY KEY ("profile_id", "workspace_id")
 );
@@ -254,7 +254,7 @@ CREATE TABLE IF NOT EXISTS "relation_defs" (
   "slug"            text    NOT NULL,
   "display_name"    text    NOT NULL,
   "description"     text,
-  "workspace_id"    uuid    NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "user_id"         text    NOT NULL,
   "ui_hints"        jsonb   NOT NULL DEFAULT '{}',
   "is_directional"  boolean NOT NULL DEFAULT true,
@@ -770,7 +770,7 @@ CREATE INDEX IF NOT EXISTS "relations_type_idx"
 
 CREATE TABLE IF NOT EXISTS "cell_instances" (
   "id"                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  "workspace_id"       uuid NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "user_id"            text NOT NULL,
   "cell_type"          text NOT NULL,
   "config"             jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -1385,7 +1385,7 @@ CREATE INDEX IF NOT EXISTS "message_links_workspace_id_idx"
 
 CREATE TABLE IF NOT EXISTS "intelligence_commands" (
   "id"                           uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
-  "workspace_id"                 uuid    NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "created_by"                   text    NOT NULL,
   "title"                        text    NOT NULL,
   "prompt_template"              text    NOT NULL,
@@ -1513,6 +1513,7 @@ ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "source_message_id" uuid REFERE
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "agent_user_id" text REFERENCES "users"("id") ON DELETE SET NULL;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "correlation_id" uuid;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "requested_event_id" uuid;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "session_id" uuid REFERENCES "focus_sessions"("id") ON DELETE SET NULL;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_by" text;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_at" timestamp with time zone;
@@ -1547,6 +1548,9 @@ CREATE INDEX IF NOT EXISTS "idx_proposals_agent_user_id"
 
 CREATE INDEX IF NOT EXISTS "proposals_correlation_id_idx"
   ON "proposals" ("correlation_id");
+
+CREATE INDEX IF NOT EXISTS "idx_proposals_session_id"
+  ON "proposals" ("session_id");
 
 -- ─── 29. knowledge_facts ─────────────────────────────────────────────────────
 
@@ -1625,7 +1629,7 @@ CREATE INDEX IF NOT EXISTS "skills_name_idx"         ON "skills" ("name");
 CREATE TABLE IF NOT EXISTS "skill_triggers" (
   "id"              uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
   "skill_id"        uuid    NOT NULL REFERENCES "skills"("id") ON DELETE CASCADE,
-  "workspace_id"    uuid    NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "user_id"         text    NOT NULL,
   "type"            text    NOT NULL,
   "event_pattern"   text,
@@ -1710,7 +1714,7 @@ CREATE INDEX IF NOT EXISTS "agents_active_idx"     ON "agents" ("active");
 CREATE TABLE IF NOT EXISTS "agent_configs" (
   "id"                 uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"            text    NOT NULL,
-  "workspace_id"       uuid    NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "agent_type"         text    NOT NULL,
   "prompt_append"      text,
   "extra_tool_ids"     jsonb   NOT NULL DEFAULT '[]',
@@ -1792,7 +1796,7 @@ ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "last_health_status
 
 CREATE TABLE IF NOT EXISTS "automations" (
   "id"              uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
-  "workspace_id"    uuid    NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "created_by"      text    NOT NULL,
   "name"            text    NOT NULL,
   "description"     text,
@@ -2538,7 +2542,7 @@ CREATE INDEX IF NOT EXISTS "widget_def_is_active_idx"
 
 CREATE TABLE IF NOT EXISTS "mcp_servers" (
   "id"            uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
-  "workspace_id"  uuid    NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "slug"          text    NOT NULL,
   "name"          text    NOT NULL,
   "description"   text,
@@ -2735,7 +2739,7 @@ ON CONFLICT ("id") DO NOTHING;
 CREATE TABLE IF NOT EXISTS "signal_subscriptions" (
   "id"                      uuid      NOT NULL UNIQUE DEFAULT gen_random_uuid(),
   "user_id"                 text      NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
-  "workspace_id"            uuid      NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "topic"                   text      NOT NULL,
   "source_platform"         text,
   "source_route"            text,
@@ -2775,7 +2779,7 @@ CREATE INDEX IF NOT EXISTS "signal_subscriptions_topic_idx"
 CREATE TABLE IF NOT EXISTS "signal_classifications" (
   "id"               uuid      PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"          text      NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
-  "workspace_id"     uuid      NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "topic"            text      NOT NULL,
   "confidence"       numeric(3, 2) NOT NULL DEFAULT 0.00,
   "source_type"      text      NOT NULL,
@@ -2813,7 +2817,7 @@ CREATE INDEX IF NOT EXISTS "signal_classifications_recency_idx"
 CREATE TABLE IF NOT EXISTS "signal_fetch_history" (
   "id"                  uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"             text    NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
-  "workspace_id"        uuid    NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "source_route"        text    NOT NULL,
   "source_platform"     text    NOT NULL,
   "fetch_type"          text    NOT NULL,

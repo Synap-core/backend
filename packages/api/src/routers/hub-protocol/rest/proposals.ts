@@ -399,6 +399,7 @@ export function registerProposalsRoutes(app: HubHono): void {
       proposalType: string;
       data: Record<string, unknown>;
       summary?: string;
+      sessionId?: string;
       sourceMessageId?: string;
     };
     if (
@@ -419,6 +420,8 @@ export function registerProposalsRoutes(app: HubHono): void {
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
       const userId = resolvedAgentUserId ?? (c.get("userId") as string);
       const action = inferProposalAction(body.proposalType);
+      // sessionId resolution: explicit body field > X-Session-Id header > null
+      const sessionId = body.sessionId ?? c.req.header("x-session-id") ?? null;
       const isRequestShaped =
         typeof body.data.requestId === "string" &&
         typeof body.data.targetType === "string" &&
@@ -436,6 +439,7 @@ export function registerProposalsRoutes(app: HubHono): void {
         createdBy: resolvedAgentUserId ?? userId,
         threadId: body.channelId ?? null,
         sourceMessageId: body.sourceMessageId ?? null,
+        sessionId,
         data: isRequestShaped
           ? {
               ...body.data,

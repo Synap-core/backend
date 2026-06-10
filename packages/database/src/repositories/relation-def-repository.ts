@@ -4,7 +4,7 @@
  * Handles CRUD for workspace-scoped relation type definitions.
  */
 
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import {
   relationDefs,
   type RelationDef,
@@ -17,7 +17,8 @@ export interface CreateRelationDefInput {
   slug: string;
   displayName: string;
   description?: string;
-  workspaceId: string;
+  /** Nullable for pod-wide relation definitions */
+  workspaceId: string | null;
   userId: string;
   uiHints?: Record<string, unknown>;
   isDirectional?: boolean;
@@ -27,9 +28,43 @@ export class RelationDefRepository {
   constructor(private db: PostgresJsDatabase<typeof schema>) {}
 
   /**
-   * Create or update a relation definition (upsert on slug + workspaceId)
+   * Create a relation definition (find-or-create).
+   * Pod-wide defs (workspaceId = null) are unique by slug alone.
+   * Workspace defs are unique by (slug, workspaceId).
    */
   async create(input: CreateRelationDefInput): Promise<RelationDef> {
+    // Find existing
+    const existing = input.workspaceId
+      ? await this.db.query.relationDefs.findFirst({
+          where: and(
+            eq(relationDefs.slug, input.slug),
+            eq(relationDefs.workspaceId, input.workspaceId)
+          ),
+        })
+      : await this.db.query.relationDefs.findFirst({
+          where: and(
+            eq(relationDefs.slug, input.slug),
+            sql`${relationDefs.workspaceId} IS NULL`
+          ),
+        });
+
+    if (existing) {
+      // Update the existing def
+      const [updated] = await this.db
+        .update(relationDefs)
+        .set({
+          displayName: input.displayName,
+          description: input.description,
+          uiHints: input.uiHints || {},
+          isDirectional: input.isDirectional ?? true,
+          updatedAt: new Date(),
+        })
+        .where(eq(relationDefs.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    // Create new
     const [def] = await this.db
       .insert(relationDefs)
       .values({
@@ -41,59 +76,67 @@ export class RelationDefRepository {
         uiHints: input.uiHints || {},
         isDirectional: input.isDirectional ?? true,
       } as NewRelationDef)
-      .onConflictDoUpdate({
-        target: [relationDefs.slug, relationDefs.workspaceId],
-        set: {
-          displayName: input.displayName,
-          description: input.description,
-          uiHints: input.uiHints || {},
-          isDirectional: input.isDirectional ?? true,
-          updatedAt: new Date(),
-        },
-      })
       .returning();
 
     return def;
   }
 
   /**
-   * List all relation definitions for a workspace
+   * List relation definitions visible from a workspace.
+   * Includes both workspace-scoped defs AND pod-wide defs (workspace_id IS NULL).
    */
   async list(workspaceId: string): Promise<RelationDef[]> {
     return this.db.query.relationDefs.findMany({
-      where: eq(relationDefs.workspaceId, workspaceId),
+      where: (relationDefs, { or, isNull, eq }) =>
+        or(
+          eq(relationDefs.workspaceId, workspaceId),
+          isNull(relationDefs.workspaceId)
+        ),
       orderBy: (relationDefs, { asc }) => [asc(relationDefs.slug)],
     });
   }
 
   /**
-   * Get a relation definition by slug within a workspace
+   * Get a relation definition by slug. Searches workspace-scoped first,
+   * then falls back to pod-wide.
    */
   async getBySlug(
     slug: string,
     workspaceId: string
   ): Promise<RelationDef | undefined> {
-    return this.db.query.relationDefs.findFirst({
+    // Prefer workspace-scoped
+    const wsDef = await this.db.query.relationDefs.findFirst({
       where: and(
         eq(relationDefs.slug, slug),
         eq(relationDefs.workspaceId, workspaceId)
       ),
     });
+    if (wsDef) return wsDef;
+    // Fall back to pod-wide
+    return this.db.query.relationDefs.findFirst({
+      where: and(
+        eq(relationDefs.slug, slug),
+        sql`${relationDefs.workspaceId} IS NULL`
+      ),
+    });
   }
 
   /**
-   * Get a relation definition by ID (within a workspace)
+   * Get a relation definition by ID. Works for both workspace-scoped and pod-wide.
    */
   async getById(
     id: string,
-    workspaceId: string
+    workspaceId?: string
   ): Promise<RelationDef | undefined> {
-    return this.db.query.relationDefs.findFirst({
-      where: and(
-        eq(relationDefs.id, id),
-        eq(relationDefs.workspaceId, workspaceId)
-      ),
-    });
+    const where = workspaceId
+      ? and(eq(relationDefs.id, id), (relationDefs, { or, isNull, eq }) =>
+          or(
+            eq(relationDefs.workspaceId, workspaceId),
+            isNull(relationDefs.workspaceId)
+          )
+        )
+      : eq(relationDefs.id, id);
+    return this.db.query.relationDefs.findFirst({ where });
   }
 
   /**
@@ -101,7 +144,7 @@ export class RelationDefRepository {
    */
   async update(
     id: string,
-    workspaceId: string,
+    workspaceId: string | null,
     input: Partial<
       Pick<
         CreateRelationDefInput,
@@ -109,6 +152,9 @@ export class RelationDefRepository {
       >
     >
   ): Promise<RelationDef> {
+    const where = workspaceId
+      ? and(eq(relationDefs.id, id), eq(relationDefs.workspaceId, workspaceId))
+      : eq(relationDefs.id, id);
     const [updated] = await this.db
       .update(relationDefs)
       .set({
@@ -124,9 +170,7 @@ export class RelationDefRepository {
         }),
         updatedAt: new Date(),
       })
-      .where(
-        and(eq(relationDefs.id, id), eq(relationDefs.workspaceId, workspaceId))
-      )
+      .where(where)
       .returning();
 
     if (!updated) {
