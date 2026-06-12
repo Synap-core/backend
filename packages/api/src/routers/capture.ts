@@ -27,6 +27,7 @@ import {
   ProfileResolutionService,
   PropertyDefRepository,
   EntityUpsertService,
+  PropertyValidationError,
   workspaces,
   workspaceMembers,
   type PropertyValueType,
@@ -222,6 +223,21 @@ export const captureRouter = router({
         properties = { ...properties, content: inlineContent };
       }
 
+      // Salvage properties (kept for the note fallback): the generic content/url
+      // a note accepts — and the document link — so the user's body is never
+      // lost regardless of which fallback path runs.
+      const salvageProperties = {
+        ...(input.url ? { url: input.url } : {}),
+        ...(inlineContent !== undefined ? { content: inlineContent } : {}),
+      };
+
+      const originalProfileSlug = profileSlug;
+      // Additive provenance: degradedFrom set only when the final note fallback
+      // runs; propertiesDropped set only when the same-profile retry salvaged
+      // the typed profile by dropping its properties.
+      let degradedFrom: string | undefined;
+      let propertiesDropped: true | undefined;
+
       let entity: Awaited<ReturnType<typeof entityRepo.create>>;
       try {
         entity = await entityRepo.create(
@@ -236,32 +252,71 @@ export const captureRouter = router({
           userId
         );
       } catch (err) {
-        // Profile validation failed — retry as note
-        logger.warn(
-          { err, userId, profileSlug },
-          "Entity creation failed, retrying as note"
-        );
-        // Drop the typed AI properties (the likely cause of validation
-        // failure) but keep the generic content/url a note accepts — and the
-        // document link — so the user's body is never lost on fallback.
-        entity = await entityRepo.create(
-          {
-            workspaceId: workspaceId,
-            userId,
-            title,
-            properties: {
-              ...(input.url ? { url: input.url } : {}),
-              ...(inlineContent !== undefined
-                ? { content: inlineContent }
-                : {}),
+        // A PropertyValidationError means the PROFILE is valid but one of the
+        // typed properties failed schema validation — salvage the typed profile
+        // by retrying ONCE with the same profileSlug and properties stripped to
+        // the generic note-safe set, instead of throwing the profile away.
+        if (err instanceof PropertyValidationError) {
+          try {
+            logger.warn(
+              { err, userId, profileSlug },
+              "Entity creation failed validation — retrying same profile with properties dropped"
+            );
+            entity = await entityRepo.create(
+              {
+                workspaceId: workspaceId,
+                userId,
+                title,
+                properties: salvageProperties,
+                documentId,
+                profileSlug,
+              },
+              userId
+            );
+            propertiesDropped = true;
+          } catch (retryErr) {
+            // Same-profile retry still failed — last resort: fall back to note.
+            logger.warn(
+              { err: retryErr, userId, profileSlug },
+              "Same-profile retry failed, falling back to note"
+            );
+            entity = await entityRepo.create(
+              {
+                workspaceId: workspaceId,
+                userId,
+                title,
+                properties: salvageProperties,
+                documentId,
+                profileSlug: "note",
+              },
+              userId
+            );
+            degradedFrom = originalProfileSlug;
+            profileSlug = "note";
+            mode = "fallback";
+          }
+        } else {
+          // Not a property validation error (e.g. profile not accessible) —
+          // stripping properties wouldn't help; fall back to note directly.
+          logger.warn(
+            { err, userId, profileSlug },
+            "Entity creation failed (non-validation), falling back to note"
+          );
+          entity = await entityRepo.create(
+            {
+              workspaceId: workspaceId,
+              userId,
+              title,
+              properties: salvageProperties,
+              documentId,
+              profileSlug: "note",
             },
-            documentId,
-            profileSlug: "note",
-          },
-          userId
-        );
-        profileSlug = "note";
-        mode = "fallback";
+            userId
+          );
+          degradedFrom = originalProfileSlug;
+          profileSlug = "note";
+          mode = "fallback";
+        }
       }
 
       logger.info(
@@ -275,6 +330,10 @@ export const captureRouter = router({
         profileSlug,
         title,
         mode,
+        // Additive: original AI-chosen slug, only when the note fallback ran.
+        ...(degradedFrom ? { degradedFrom } : {}),
+        // Additive: true when the same-profile retry succeeded sans properties.
+        ...(propertiesDropped ? { propertiesDropped: true as const } : {}),
       };
     }),
 
@@ -489,6 +548,13 @@ export const captureRouter = router({
         }>
       > = {};
 
+      // When a dedup lookup throws (Typesense down/timeout), dedupCandidates is
+      // left empty for that entity — which is indistinguishable from "checked,
+      // found nothing". Track failures so the response can carry an ADDITIVE
+      // dedupSkipped flag, letting the caller tell "no duplicates" apart from
+      // "didn't check". (published api-types clients that ignore it are unaffected)
+      let dedupSkipped = false;
+
       try {
         for (const entity of structureResult.entities) {
           if (!entity.title) continue;
@@ -513,14 +579,23 @@ export const captureRouter = router({
                 profileSlug: (r.document.entityType as string) || "note",
                 score: r.textMatch / maxScore,
               }));
-          } catch {
+          } catch (err) {
             // Search failed for this entity — skip dedup
+            dedupSkipped = true;
+            logger.warn(
+              { err, userId, tempId: entity.tempId },
+              "Dedup search failed for entity — marking dedupSkipped"
+            );
             dedupCandidates[entity.tempId] = [];
           }
         }
-      } catch {
+      } catch (err) {
         // Typesense not available — skip all dedup
-        logger.warn("Typesense unavailable, skipping dedup search");
+        dedupSkipped = true;
+        logger.warn(
+          { err, userId },
+          "Typesense unavailable, skipping dedup search — marking dedupSkipped"
+        );
       }
 
       logger.info(
@@ -538,6 +613,10 @@ export const captureRouter = router({
         followUp: null as string | null,
         targetWorkspaceId: structureResult.targetWorkspaceId ?? null,
         dedupCandidates,
+        // Additive: true when one or more dedup searches threw, so the caller
+        // can distinguish "checked, no duplicates" from "didn't check". Omitted
+        // when all searches succeeded.
+        ...(dedupSkipped ? { dedupSkipped: true as const } : {}),
       };
     }),
 
@@ -712,6 +791,10 @@ export const captureRouter = router({
             ...(op.properties ?? {}),
             ...(inlineContent !== undefined ? { content: inlineContent } : {}),
           };
+          // Note-safe property set, kept regardless of which fallback runs so
+          // the materialized document link + content survive a downgrade.
+          const salvageProperties: Record<string, unknown> =
+            inlineContent !== undefined ? { content: inlineContent } : {};
           try {
             const e = await entityRepo.create(
               {
@@ -727,23 +810,61 @@ export const captureRouter = router({
             );
             return { id: e.id, profileSlug: op.profileSlug };
           } catch (err) {
-            logger.warn(
-              { err, profileSlug: op.profileSlug },
-              "Entity creation failed, retrying as note"
-            );
+            // PropertyValidationError = valid profile, invalid property. Salvage
+            // the typed profile by retrying ONCE with the same slug, properties
+            // stripped, before falling back to note.
+            if (err instanceof PropertyValidationError) {
+              try {
+                logger.warn(
+                  { err, profileSlug: op.profileSlug },
+                  "Entity creation failed validation — retrying same profile with properties dropped"
+                );
+                const s = await entityRepo.create(
+                  {
+                    workspaceId,
+                    userId,
+                    title: op.title,
+                    preview: op.description,
+                    properties: salvageProperties,
+                    documentId,
+                    profileSlug: op.profileSlug,
+                  },
+                  userId
+                );
+                return {
+                  id: s.id,
+                  profileSlug: op.profileSlug,
+                  propertiesDropped: true as const,
+                };
+              } catch (retryErr) {
+                logger.warn(
+                  { err: retryErr, profileSlug: op.profileSlug },
+                  "Same-profile retry failed, falling back to note"
+                );
+              }
+            } else {
+              logger.warn(
+                { err, profileSlug: op.profileSlug },
+                "Entity creation failed (non-validation), falling back to note"
+              );
+            }
             const f = await entityRepo.create(
               {
                 workspaceId,
                 userId,
                 title: op.title,
                 preview: op.description,
-                properties,
+                properties: salvageProperties,
                 documentId,
                 profileSlug: "note",
               },
               userId
             );
-            return { id: f.id, profileSlug: "note" };
+            return {
+              id: f.id,
+              profileSlug: "note",
+              degradedFrom: op.profileSlug,
+            };
           }
         },
       };
@@ -785,6 +906,10 @@ export const captureRouter = router({
         entityId: e.entityId,
         profileSlug: e.profileSlug,
         linked: e.linked,
+        // Additive: original slug when this entity was downgraded to a note.
+        ...(e.degradedFrom ? { degradedFrom: e.degradedFrom } : {}),
+        // Additive: true when the typed profile was salvaged sans properties.
+        ...(e.propertiesDropped ? { propertiesDropped: true as const } : {}),
       }));
       const createdRelations = result.relations.map((r) => ({
         sourceEntityId: r.sourceEntityId,
