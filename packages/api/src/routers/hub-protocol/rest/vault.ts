@@ -76,6 +76,8 @@ const ListSecretsResponseSchema = z.object({
 const RequestOutcomeResponseSchema = z.object({
   status: z.string(),
   vaultRef: z.string().nullable(),
+  scope: z.string().nullable(),
+  expiresAt: z.string().nullable(),
 });
 
 export function registerVaultRoutes(app: HubHono): void {
@@ -253,10 +255,16 @@ export function registerVaultRoutes(app: HubHono): void {
       });
       if (!row) return c.json({ error: "Request not found" }, 404);
 
-      const data = (row.data ?? {}) as { vaultRef?: string };
+      const data = (row.data ?? {}) as {
+        vaultRef?: string;
+        scope?: string;
+        expiresAt?: string | null;
+      };
       return c.json({
         status: row.status,
         vaultRef: data.vaultRef ?? null,
+        scope: data.scope ?? null,
+        expiresAt: data.expiresAt ?? null,
       });
     } catch (err) {
       logger.error({ err, proposalId }, "vault.request poll failed");

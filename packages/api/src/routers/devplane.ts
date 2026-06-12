@@ -24,6 +24,7 @@ import {
   isVaultReference,
   parseVaultReference,
   resolveVaultSecret,
+  VaultGrantError,
 } from "../utils/vault-resolver.js";
 import { encryptServerSide } from "@synap/database";
 
@@ -1306,11 +1307,28 @@ export const devplaneRouter = router({
         });
       }
 
-      const value = await resolveVaultSecret(
-        parsed.secretId,
-        ctx.userId,
-        parsed.fieldName
-      );
+      // Agent/IS redemption path: enforce AI access grant semantics. An ACTIVE
+      // vault_grants row must exist (granted via secretsVault.grantAIAccess) and
+      // one use is consumed atomically. Internal/service paths (getServiceConfig,
+      // getServiceSecret) do NOT pass requireGrant and remain ungated.
+      let value: string | null;
+      try {
+        value = await resolveVaultSecret(
+          parsed.secretId,
+          ctx.userId,
+          parsed.fieldName,
+          { requireGrant: true }
+        );
+      } catch (err) {
+        if (err instanceof VaultGrantError) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: `Vault access denied: ${err.code}`,
+            cause: err.code,
+          });
+        }
+        throw err;
+      }
 
       if (value === null) {
         throw new TRPCError({

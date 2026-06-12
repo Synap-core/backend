@@ -26,7 +26,12 @@ import {
   encryptionService,
   encryptServerSide,
 } from "@synap/database";
-import { proposals, secrets, ProposalStatus } from "@synap/database/schema";
+import {
+  proposals,
+  secrets,
+  vaultGrants,
+  ProposalStatus,
+} from "@synap/database/schema";
 import { auditLog } from "../utils/audit-log.js";
 
 // ============================================================================
@@ -606,6 +611,12 @@ export const secretsVaultRouter = router({
       z.object({
         secretId: z.string().uuid(),
         proposalId: z.string().uuid(),
+        // Grant scope chosen by the user via the "Once / Session / Permanent"
+        // pills. Defaults to 'session' when omitted.
+        scope: z.enum(["once", "session", "permanent"]).default("session"),
+        // Optional explicit session TTL (minutes). Overrides the proposal's
+        // requested ttl for 'session' scope. Ignored for 'once'/'permanent'.
+        ttlMinutes: z.number().int().positive().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -631,16 +642,74 @@ export const secretsVaultRouter = router({
         });
       }
 
-      // 3. Build the vault:// reference
+      // 3. Load the proposal to read its requested ttl (the agent's vault.request
+      //    embeds { ttl } in proposal data — see hub-protocol/rest/vault.ts).
+      const proposalRow = await db.query.proposals.findFirst({
+        where: and(
+          eq(proposals.id, input.proposalId),
+          eq(proposals.workspaceId, ctx.workspaceId)
+        ),
+        columns: { id: true, data: true, createdBy: true, agentUserId: true },
+      });
+      if (!proposalRow)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
+
+      const proposalData = (proposalRow.data ?? {}) as { ttl?: number };
+      const requestedTtl =
+        typeof proposalData.ttl === "number" ? proposalData.ttl : undefined;
+
+      // 4. Compute the grant window from scope.
+      //    once: 15min default & single use.
+      //    session: explicit ttlMinutes ?? requested ttl ?? 60 minutes.
+      //    permanent: no expiry, unlimited uses.
+      const now = Date.now();
+      let expiresAt: Date | null;
+      let maxUses: number | null;
+      if (input.scope === "once") {
+        expiresAt = new Date(now + 15 * 60 * 1000);
+        maxUses = 1;
+      } else if (input.scope === "permanent") {
+        expiresAt = null;
+        maxUses = null;
+      } else {
+        const minutes = input.ttlMinutes ?? requestedTtl ?? 60;
+        expiresAt = new Date(now + minutes * 60 * 1000);
+        maxUses = null;
+      }
+
+      // The agent the grant is issued to (best-effort): the proposal's agent
+      // author, falling back to its creator.
+      const grantedTo =
+        proposalRow.agentUserId ?? proposalRow.createdBy ?? null;
+
+      // 5. Build the vault:// reference
       const vaultRef = `vault://${secret.id}`;
 
-      // 4. Approve the proposal and embed the vault ref in data
+      // 6. Insert the grant row (the enforcement record consulted at redemption).
+      const [grant] = await db
+        .insert(vaultGrants)
+        .values({
+          secretId: secret.id,
+          proposalId: input.proposalId,
+          grantedTo,
+          workspaceId: ctx.workspaceId,
+          scope: input.scope,
+          expiresAt,
+          maxUses,
+          createdBy: ctx.userId,
+        })
+        .returning({ id: vaultGrants.id });
+
+      // 7. Approve the proposal and embed the vault ref + scope in data
       await db
         .update(proposals)
         .set({
           status: ProposalStatus.APPROVED,
           updatedAt: new Date(),
-          data: drizzleSql`data || jsonb_build_object('vaultRef', ${vaultRef}::text, 'secretId', ${secret.id}::text, 'approvedAt', ${new Date().toISOString()}::text)`,
+          data: drizzleSql`data || jsonb_build_object('vaultRef', ${vaultRef}::text, 'secretId', ${secret.id}::text, 'approvedAt', ${new Date().toISOString()}::text, 'grantId', ${grant.id}::text, 'scope', ${input.scope}::text, 'expiresAt', ${expiresAt ? expiresAt.toISOString() : null})`,
         })
         .where(
           and(
@@ -649,7 +718,7 @@ export const secretsVaultRouter = router({
           )
         );
 
-      // 5. Audit log
+      // 8. Audit log — record the scope and window.
       auditLog({
         subjectType: "vault_secret",
         action: "grant_ai_access",
@@ -657,9 +726,111 @@ export const secretsVaultRouter = router({
         subjectId: secret.id,
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
-        data: { proposalId: input.proposalId, vaultRef },
+        data: {
+          proposalId: input.proposalId,
+          vaultRef,
+          grantId: grant.id,
+          scope: input.scope,
+          expiresAt: expiresAt ? expiresAt.toISOString() : null,
+          maxUses,
+        },
       });
 
-      return { vaultRef, secretId: secret.id, proposalId: input.proposalId };
+      return {
+        vaultRef,
+        secretId: secret.id,
+        proposalId: input.proposalId,
+        grantId: grant.id,
+        scope: input.scope,
+        expiresAt: expiresAt ? expiresAt.toISOString() : null,
+      };
+    }),
+
+  // ==========================================================================
+  // Grant Management
+  // ==========================================================================
+
+  /**
+   * List grants for a secret (owner-only). Shows scope, window, and usage so the
+   * UI can render and revoke active AI access.
+   */
+  listGrants: protectedProcedure
+    .input(z.object({ secretId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      // Ownership check — only the secret owner may view its grants.
+      const secret = await db.query.secrets.findFirst({
+        where: and(
+          eq(secrets.id, input.secretId),
+          eq(secrets.userId, ctx.userId)
+        ),
+        columns: { id: true },
+      });
+      if (!secret)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Secret not found" });
+
+      const rows = await db.query.vaultGrants.findMany({
+        where: eq(vaultGrants.secretId, input.secretId),
+        orderBy: (t, { desc }) => [desc(t.createdAt)],
+      });
+
+      const now = Date.now();
+      return rows.map((g) => ({
+        id: g.id,
+        scope: g.scope,
+        grantedTo: g.grantedTo,
+        proposalId: g.proposalId,
+        expiresAt: g.expiresAt ? g.expiresAt.toISOString() : null,
+        maxUses: g.maxUses,
+        useCount: g.useCount,
+        revokedAt: g.revokedAt ? g.revokedAt.toISOString() : null,
+        createdAt: g.createdAt.toISOString(),
+        active:
+          !g.revokedAt &&
+          (!g.expiresAt || g.expiresAt.getTime() > now) &&
+          (g.maxUses == null || g.useCount < g.maxUses),
+      }));
+    }),
+
+  /**
+   * Revoke an AI access grant (owner-only). Idempotent — re-revoking is a no-op.
+   */
+  revokeGrant: protectedProcedure
+    .input(z.object({ grantId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      // Join to the owning secret to enforce owner-only revocation.
+      const grant = await db.query.vaultGrants.findFirst({
+        where: eq(vaultGrants.id, input.grantId),
+        columns: { id: true, secretId: true, revokedAt: true },
+      });
+      if (!grant)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Grant not found" });
+
+      const secret = await db.query.secrets.findFirst({
+        where: and(
+          eq(secrets.id, grant.secretId),
+          eq(secrets.userId, ctx.userId)
+        ),
+        columns: { id: true },
+      });
+      if (!secret)
+        throw new TRPCError({ code: "FORBIDDEN", message: "Not your secret" });
+
+      if (!grant.revokedAt) {
+        await db
+          .update(vaultGrants)
+          .set({ revokedAt: new Date() })
+          .where(eq(vaultGrants.id, input.grantId));
+
+        auditLog({
+          subjectType: "vault_secret",
+          action: "revoke_ai_access",
+          phase: "completed",
+          subjectId: grant.secretId,
+          userId: ctx.userId,
+          data: { grantId: input.grantId },
+        });
+      }
+
+      return { success: true };
     }),
 });

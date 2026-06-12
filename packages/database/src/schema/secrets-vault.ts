@@ -216,6 +216,81 @@ export const secretShares = pgTable(
 );
 
 // ============================================================================
+// Vault Grants (AI Access Scopes)
+// ============================================================================
+
+/**
+ * Scope of an AI access grant:
+ *   'once'      — single redemption (max_uses=1), short default TTL (15min).
+ *   'session'   — time-boxed (expires_at set from requested/explicit TTL).
+ *   'permanent' — never expires, unlimited uses (expires_at null, max_uses null).
+ */
+export const vaultGrantScopeEnum = pgEnum("vault_grant_scope", [
+  "once",
+  "session",
+  "permanent",
+]);
+
+export const VAULT_GRANT_SCOPES = vaultGrantScopeEnum.enumValues;
+export type VaultGrantScope = (typeof VAULT_GRANT_SCOPES)[number];
+
+/**
+ * Vault Grants
+ *
+ * Records an AI/agent access grant to a server-encrypted secret, created when a
+ * user approves a vault.request proposal via grantAIAccess. Enforced at
+ * redemption: the vault resolver looks up an ACTIVE grant (not revoked, not
+ * expired, use_count < max_uses) before returning a decrypted value to an
+ * agent/IS path, and atomically increments use_count.
+ *
+ * The pod's own internal/service redemption paths (getServiceConfig /
+ * getServiceSecret bootstrap creds) deliberately do NOT consult this table —
+ * grants gate agent/IS redemption only.
+ */
+export const vaultGrants = pgTable(
+  "vault_grants",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    secretId: uuid("secret_id")
+      .notNull()
+      .references(() => secrets.id, { onDelete: "cascade" }),
+
+    // The proposal this grant was approved against.
+    proposalId: uuid("proposal_id"),
+
+    // The requesting agent user id (nullable — a grant may be issued for a
+    // workspace rather than a specific agent identity).
+    grantedTo: text("granted_to"),
+    workspaceId: uuid("workspace_id"),
+
+    // Scope & enforcement window.
+    scope: vaultGrantScopeEnum("scope").notNull().default("session"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    maxUses: integer("max_uses"), // null = unlimited; 1 for 'once'
+    useCount: integer("use_count").notNull().default(0),
+
+    // Revocation.
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+
+    // Audit.
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    secretIdIdx: index("idx_vault_grants_secret_id").on(table.secretId),
+    grantedToIdx: index("idx_vault_grants_granted_to").on(table.grantedTo),
+    proposalIdIdx: index("idx_vault_grants_proposal_id").on(table.proposalId),
+    // Hot path: find active grants for a secret.
+    secretActiveIdx: index("idx_vault_grants_secret_active").on(
+      table.secretId,
+      table.revokedAt
+    ),
+  })
+);
+
+// ============================================================================
 // Secret Audit Log
 // ============================================================================
 
@@ -300,6 +375,8 @@ export type SecretAuditLogEntry = typeof secretAuditLog.$inferSelect;
 export type NewSecretAuditLogEntry = typeof secretAuditLog.$inferInsert;
 export type SecretVaultKey = typeof secretVaultKeys.$inferSelect;
 export type NewSecretVaultKey = typeof secretVaultKeys.$inferInsert;
+export type VaultGrant = typeof vaultGrants.$inferSelect;
+export type NewVaultGrant = typeof vaultGrants.$inferInsert;
 
 // ============================================================================
 // Relations
@@ -317,6 +394,14 @@ export const secretsRelations = relations(secrets, ({ one, many }) => ({
   tags: many(secretTags),
   shares: many(secretShares),
   auditLog: many(secretAuditLog),
+  grants: many(vaultGrants),
+}));
+
+export const vaultGrantsRelations = relations(vaultGrants, ({ one }) => ({
+  secret: one(secrets, {
+    fields: [vaultGrants.secretId],
+    references: [secrets.id],
+  }),
 }));
 
 export const secretTagsRelations = relations(secretTags, ({ one }) => ({
