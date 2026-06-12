@@ -96,7 +96,8 @@ export function registerSearchRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
-    const userId = c.req.query("userId");
+    const userId =
+      c.req.query("userId") ?? (c.get("userId") as string | undefined);
     const collection = c.req.query("collection");
     const query = c.req.query("query");
     const workspaceId = c.req.query("workspaceId");
@@ -141,7 +142,8 @@ export function registerSearchRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
-    const userId = c.req.query("userId");
+    const userId =
+      c.req.query("userId") ?? (c.get("userId") as string | undefined);
     const query = c.req.query("query");
     const workspaceId = c.req.query("workspaceId");
     const collections = c.req.query("collections"); // comma-separated
@@ -187,7 +189,8 @@ export function registerSearchRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
-    const userId = c.req.query("userId");
+    const userId =
+      c.req.query("userId") ?? (c.get("userId") as string | undefined);
     const query = c.req.query("query");
     const type = c.req.query("type");
     const limit = c.req.query("limit");
@@ -219,7 +222,8 @@ export function registerSearchRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
-    const userId = c.req.query("userId");
+    const userId =
+      c.req.query("userId") ?? (c.get("userId") as string | undefined);
     const query = c.req.query("query");
     const types = c.req.query("types"); // comma-separated
     const limit = c.req.query("limit");

@@ -16,6 +16,7 @@ import {
   cellInstances,
   roles,
   channels,
+  artifacts,
 } from "@synap/database/schema";
 import { registerVisibility } from "./visibility.js";
 
@@ -49,6 +50,11 @@ registerVisibility({
   table: channels,
   query: () => db.query.channels,
   rule: { kind: "workspace", workspaceColumn: channels.workspaceId },
+});
+registerVisibility({
+  table: artifacts,
+  query: () => db.query.artifacts,
+  rule: { kind: "workspace", workspaceColumn: artifacts.workspaceId },
 });
 
 // NOTE: only tables actually READ through scopedDb() are registered here.

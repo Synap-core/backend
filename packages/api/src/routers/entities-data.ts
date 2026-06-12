@@ -311,7 +311,22 @@ export async function generateAndStoreEmbedding(
   title: string,
   description?: string
 ): Promise<void> {
-  const textToEmbed = `${title} ${description || ""}`.trim();
+  // Load typed properties so the embedding represents type + properties, not
+  // just title+preview — this is what lets semantic recall match role/type/
+  // property queries (canonical builder shared with the worker + backfill).
+  const { db, entities, eq } = await import("@synap/database");
+  const { buildEntityEmbeddingText } = await import("@synap/ai-embeddings");
+  const [row] = await db
+    .select({ properties: entities.properties })
+    .from(entities)
+    .where(eq(entities.id, entityId))
+    .limit(1);
+  const textToEmbed = buildEntityEmbeddingText({
+    type: entityType,
+    title,
+    preview: description,
+    properties: (row?.properties as Record<string, unknown> | null) ?? null,
+  });
 
   try {
     const embedding =

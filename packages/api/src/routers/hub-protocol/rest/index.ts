@@ -54,5 +54,6 @@ export { registerAiProvidersRoutes } from "./ai-providers.js";
 export { registerFocusSessionsRoutes } from "./focus-sessions.js";
 export { registerAgentSkillsRoutes } from "./agent-skills.js";
 export { registerUiRoutes } from "./ui.js";
+export { registerArtifactsRoutes } from "./artifacts.js";
 
 export type { HubHono } from "./_shared.js";

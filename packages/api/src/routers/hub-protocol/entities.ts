@@ -258,4 +258,69 @@ export const entitiesRouter = router({
         proposalId: result.proposalId,
       };
     }),
+
+  /**
+   * Delete an entity.
+   * Requires: hub-protocol.write scope.
+   *
+   * Thin wrapper over the regular entities.delete procedure so governance
+   * (proposal-gated for agents) and the event chain are inherited. Closes the
+   * gap where the hub could create/read/update entities but not delete them.
+   */
+  deleteEntity: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        entityId: z.string().uuid(),
+        userId: z.string(),
+        // agentUserId: the per-human agent user acting on behalf of userId.
+        agentUserId: z.string().uuid().optional(),
+        /** The proposing agent's own rationale, surfaced in the proposal inbox. */
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Use the real user (input.userId), not ctx.userId (API key owner).
+      const callerContext = await createHubProtocolCallerContext(
+        input.userId,
+        ctx.scopes || [],
+        ctx.workspaceId ?? undefined,
+        ctx.sourceMessageId ?? undefined,
+        ctx.sessionId ?? undefined
+      );
+      const caller = regularEntitiesRouter.createCaller(callerContext);
+
+      const result = await caller.delete({
+        id: input.entityId,
+        reasoning: input.reasoning,
+        source: input.agentUserId ? "agent" : "intelligence",
+        agentUserId: input.agentUserId,
+      });
+
+      // proposalId only exists on the proposed branch — narrow before access.
+      if (
+        result.status === "proposed" &&
+        "proposalId" in result &&
+        result.proposalId
+      ) {
+        const { buildProposalResponseFields } =
+          await import("../../utils/permission-check.js");
+        const envelope = buildProposalResponseFields({
+          proposalId: result.proposalId,
+          subjectType: "entity",
+          action: "delete",
+          data: { id: input.entityId },
+        });
+        return {
+          status: result.status,
+          message: result.message,
+          proposalId: result.proposalId,
+          summary: envelope.summary,
+          reasoning: envelope.reasoning,
+          reviewPath: envelope.reviewPath,
+          reviewUrl: envelope.reviewUrl,
+        };
+      }
+
+      return { status: result.status, message: result.message };
+    }),
 });

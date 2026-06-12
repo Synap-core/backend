@@ -75,6 +75,7 @@ import {
   registerFocusSessionsRoutes,
   registerAgentSkillsRoutes,
   registerUiRoutes,
+  registerArtifactsRoutes,
 } from "./hub-protocol/rest/index.js";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
@@ -434,6 +435,7 @@ registerAiProvidersRoutes(app); // /ai-providers
 registerFocusSessionsRoutes(app); // /focus-sessions*
 registerAgentSkillsRoutes(app); // /agent-skills*
 registerUiRoutes(app); // /ui/focus
+registerArtifactsRoutes(app); // /artifacts*
 
 // ── OpenAPI stubs for routes not yet annotated inline ──────────────────────
 //

@@ -14,6 +14,7 @@ import {
   resolveDefaultIntelligenceEndpoint,
 } from "@synap/database";
 import { entities } from "@synap/database/schema";
+import { buildEntityEmbeddingText } from "@synap/ai-embeddings";
 
 /**
  * Generate embedding using the registered Intelligence Service (from DB)
@@ -45,9 +46,15 @@ async function generateAndStoreEmbedding(
   userId: string,
   entityType: string,
   title: string,
-  description?: string
+  description?: string,
+  properties?: Record<string, unknown> | null
 ): Promise<void> {
-  const textToEmbed = `${title} ${description || ""}`.trim();
+  const textToEmbed = buildEntityEmbeddingText({
+    type: entityType,
+    title,
+    preview: description,
+    properties: properties ?? null,
+  });
 
   const embedding = await generateEmbedding(textToEmbed);
   const embeddingStr = `[${embedding.join(",")}]`;
@@ -85,7 +92,8 @@ async function indexExistingEntities() {
         entity.userId,
         entity.type,
         entity.title || "",
-        entity.preview || undefined
+        entity.preview || undefined,
+        (entity.properties as Record<string, unknown> | null) ?? null
       );
 
       indexed++;

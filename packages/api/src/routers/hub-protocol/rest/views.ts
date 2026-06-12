@@ -107,10 +107,15 @@ export function registerViewsRoutes(app: HubHono): void {
         403
       );
     }
-    const userId = c.req.query("userId");
+    // Derive the acting user from the authenticated principal when ?userId is
+    // omitted (getCaller resolves the real owner regardless); only the workspace
+    // lens comes from the query. Matches every other hub read — no other endpoint
+    // forces the caller to carry the user UUID.
+    const userId =
+      c.req.query("userId") ?? (c.get("userId") as string | undefined);
     const workspaceId = c.req.query("workspaceId");
     if (!userId) {
-      return c.json({ error: "userId is required" }, 400);
+      return c.json({ error: "Unauthenticated" }, 403);
     }
     try {
       const caller = await getCaller(c, {

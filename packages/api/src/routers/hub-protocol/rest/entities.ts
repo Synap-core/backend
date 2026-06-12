@@ -949,4 +949,110 @@ export function registerEntitiesRoutes(app: HubHono): void {
       );
     }
   });
+
+  // ── DELETE /entities/:entityId ──────────────────────────────────────────
+  // Closes a real gap: the hub could create (POST), read (GET) and update
+  // (PATCH) entities but had no delete — an agent could write but never clean
+  // up. This is a THIN transport wrapper over the canonical `entities.delete`
+  // procedure, so governance (proposal-gated for agents → { status: "proposed",
+  // proposalId }) and the event chain are inherited, not re-implemented.
+  const deleteEntityRoute = createRoute({
+    method: "delete",
+    path: "/entities/{entityId}",
+    tags: ["Entities"],
+    summary: "Delete an entity",
+    description:
+      "Deletes an entity by id via the canonical entities.delete procedure. For " +
+      "agent keys this is proposal-gated (returns { status: 'proposed', proposalId }); " +
+      "auto-approved contexts complete inline. Acting identity is bound to the principal.",
+    request: {
+      params: z.object({ entityId: z.string() }),
+      query: z.object({
+        workspaceId: z.string().optional(),
+        userId: z.string().optional(),
+        reasoning: z.string().optional(),
+        agentUserId: z.string().optional(),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Deletion result (completed or proposed)",
+        content: { "application/json": { schema: z.object({}).passthrough() } },
+      },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(deleteEntityRoute, async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const { entityId } = c.req.valid("param");
+    const q = c.req.valid("query");
+
+    // Bind acting identity to the principal (closes the IDOR), mirroring PATCH:
+    // a missing workspace targets a pod-wide entity (workspace = null).
+    let userId: string;
+    let effectiveWorkspaceId: string | null;
+    if (!q.workspaceId) {
+      const authUserId = c.get("userId") as string | undefined;
+      if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
+      const isServiceKey = !!c.get("apiKeyId");
+      if (!isServiceKey && q.userId && q.userId !== authUserId) {
+        return c.json(
+          { error: "userId does not match the authenticated session" },
+          403
+        );
+      }
+      userId = isServiceKey ? (q.userId ?? authUserId) : authUserId;
+      effectiveWorkspaceId = null;
+    } else {
+      const acting = await resolveActingContext(c, {
+        userId: q.userId,
+        workspaceId: q.workspaceId,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      userId = acting.userId;
+      effectiveWorkspaceId = acting.workspaceId;
+    }
+
+    try {
+      // agentUserId drives proposal attribution; fall back to the auto-injected
+      // context value so agents using their own API key get attribution for free.
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const resolvedAgentUserId = q.agentUserId ?? ctxAgentUserId;
+      const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
+      if ("error" in actorResolution)
+        return c.json({ error: actorResolution.error }, 400);
+
+      const caller = await getCaller(c, {
+        workspaceId: effectiveWorkspaceId,
+        userId,
+      });
+      const result = await caller.entities.deleteEntity({
+        entityId,
+        userId,
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
+        ...(q.reasoning ? { reasoning: q.reasoning } : {}),
+      });
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err, entityId }, "deleteEntity failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
 }

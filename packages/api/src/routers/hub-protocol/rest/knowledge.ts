@@ -20,6 +20,9 @@ import {
   knowledgeKeysRepository,
   insertKnowledgeKeySchema,
   traverseEntityGraph,
+  db,
+  entities,
+  inArray,
 } from "@synap/database";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -163,7 +166,11 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     const queryParams = c.req.valid("query");
     const queryStr = queryParams.q ?? queryParams.query ?? "";
     const limit = parseInt(queryParams.limit ?? "10", 10);
-    const workspaceId = queryParams.workspaceId ?? authUserId;
+    // Knowledge is pod-wide, addressed in the authenticated user's namespace
+    // (see this route's description). A real workspace UUID is NOT a knowledge
+    // namespace — honoring `?workspaceId=<uuid>` silently searched an empty
+    // namespace and returned 0 hits. Always scope to the user namespace.
+    const workspaceId = authUserId;
 
     if (!queryStr) {
       return c.json({ error: "query parameter 'q' is required" }, 400);
@@ -464,7 +471,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     description: "maxDepth is clamped to 3.",
     request: {
       query: z.object({
-        userId: z.string(),
+        // Optional: the handler pins to the authenticated principal anyway.
+        userId: z.string().optional(),
         startEntityId: z.string(),
         maxDepth: z.string().optional(),
         relationshipTypes: z.string().optional(),
@@ -518,7 +526,34 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         relationshipTypes,
         workspaceIds: accessibleWsIds,
       });
-      return c.json(results, 200);
+
+      // Hydrate each node with title + entityType so callers (AI agents) get
+      // LABELED nodes, not bare ids. Previously every traversal forced an N+1
+      // GET /entities/{id} per node just to learn what each node was.
+      const nodes = results as unknown as Array<
+        Record<string, unknown> & { entityId?: string }
+      >;
+      const nodeIds = [
+        ...new Set(
+          nodes.map((n) => n.entityId).filter((id): id is string => Boolean(id))
+        ),
+      ];
+      const rows = nodeIds.length
+        ? await db.query.entities.findMany({
+            where: inArray(entities.id, nodeIds),
+            columns: { id: true, title: true, type: true },
+          })
+        : [];
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      const hydrated = nodes.map((n) => {
+        const row = n.entityId ? byId.get(n.entityId) : undefined;
+        return {
+          ...n,
+          title: row?.title ?? null,
+          entityType: row?.type ?? null,
+        };
+      });
+      return c.json(hydrated, 200);
     } catch (err) {
       logger.error({ err }, "traverseGraph failed");
       return c.json(

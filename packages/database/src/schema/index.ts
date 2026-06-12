@@ -168,6 +168,9 @@ export * from "./focus-sessions.js";
 // NEW: Agent Skills (knowledge base — platform infrastructure, not user-authored content)
 export * from "./agent-skills.js";
 
+// NEW: Artifacts (artifact ledger — lifecycle + provenance on cell instances; Phase 1 of Desk system)
+export * from "./artifacts.js";
+
 // Provenance vocabulary (createdByKind column type — must be public so tsc
 // can name router return types without referencing internal dist paths)
 export type { ProvenanceKind } from "./provenance.js";

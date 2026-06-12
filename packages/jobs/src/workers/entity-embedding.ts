@@ -8,6 +8,7 @@
 import type PgBoss from "pg-boss";
 import { sql, resolveDefaultIntelligenceEndpoint } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { buildEntityEmbeddingText } from "@synap/ai-embeddings";
 
 const logger = createLogger({ module: "entity-embedding-worker" });
 
@@ -42,27 +43,32 @@ export async function handleEntityEmbedding(
 ): Promise<void> {
   const { entityId, userId, entityType, title, preview } = job.data;
 
-  // If title not provided, fetch from DB
   let entityTitle = title;
   let entityPreview = preview;
   let type = entityType;
+  let entityProperties: Record<string, unknown> | null = null;
 
-  if (!entityTitle) {
-    const { entities, eq } = await import("@synap/database");
-    const { db } = await import("@synap/database");
+  // Always load the row for `properties` (and as fallback for title/type/preview)
+  // so the embedding includes typed properties — not just title+preview — which
+  // is what lets semantic recall match type/role/property queries.
+  {
+    const { entities, eq, db } = await import("@synap/database");
     const [entity] = await db
       .select({
         title: entities.title,
         type: entities.type,
         preview: entities.preview,
+        properties: entities.properties,
       })
       .from(entities)
       .where(eq(entities.id, entityId))
       .limit(1);
     if (entity) {
-      entityTitle = entity.title || "";
-      entityPreview = entity.preview || "";
-      type = entity.type;
+      entityTitle = entityTitle || entity.title || "";
+      entityPreview = entityPreview || entity.preview || "";
+      type = type || entity.type;
+      entityProperties =
+        (entity.properties as Record<string, unknown> | null) ?? null;
     }
   }
 
@@ -74,7 +80,12 @@ export async function handleEntityEmbedding(
     return;
   }
 
-  const textToEmbed = `${entityTitle} ${entityPreview || ""}`.trim();
+  const textToEmbed = buildEntityEmbeddingText({
+    type,
+    title: entityTitle,
+    preview: entityPreview,
+    properties: entityProperties,
+  });
   const embedding = await generateEmbedding(textToEmbed);
   const embeddingStr = `[${embedding.join(",")}]`;
 

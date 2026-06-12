@@ -526,6 +526,23 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0041_cell_instances.sql",
   },
 
+  // artifacts — artifact ledger, Phase 1 of Desk system (0125)
+  {
+    table: "artifacts",
+    column: "state",
+    addedBy: "0125_artifacts.sql",
+  },
+  {
+    table: "artifacts",
+    column: "placement",
+    addedBy: "0125_artifacts.sql",
+  },
+  {
+    table: "artifacts",
+    column: "origin_kind",
+    addedBy: "0125_artifacts.sql",
+  },
+
   // relations — polymorphic endpoints (0041)
   {
     table: "relations",
