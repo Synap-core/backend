@@ -452,6 +452,7 @@ export const SECRET_AUDIT_ACTIONS = [
   "password_changed",
   "vault_unlocked",
   "vault_locked",
+  "revealed",
 ] as const;
 
 export type SecretAuditAction = (typeof SECRET_AUDIT_ACTIONS)[number];

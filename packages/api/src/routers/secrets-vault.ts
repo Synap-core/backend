@@ -25,6 +25,8 @@ import {
   EventRepository,
   encryptionService,
   encryptServerSide,
+  decryptServerSide,
+  isServerVaultAvailable,
 } from "@synap/database";
 import {
   proposals,
@@ -96,16 +98,24 @@ const shareSecretSchema = z
   });
 
 const setupVaultSchema = z.object({
-  salt: z.string(),
-  keyDerivationAlgorithm: z.string(),
-  keyDerivationParams: z.object({
-    N: z.number(),
-    r: z.number(),
-    p: z.number(),
-  }),
-  verificationCipher: z.string(),
-  verificationIv: z.string(),
-  verificationTag: z.string(),
+  /**
+   * When mode is 'server' (or key-derivation fields are absent), the server
+   * handles all encryption via VAULT_SERVER_KEY.  All key-derivation fields
+   * are optional so the UI can call setupVault without sending inert placeholders.
+   */
+  mode: z.enum(["server", "client"]).optional(),
+  salt: z.string().optional(),
+  keyDerivationAlgorithm: z.string().optional(),
+  keyDerivationParams: z
+    .object({
+      N: z.number(),
+      r: z.number(),
+      p: z.number(),
+    })
+    .optional(),
+  verificationCipher: z.string().optional(),
+  verificationIv: z.string().optional(),
+  verificationTag: z.string().optional(),
   recoveryKeyHash: z.string().optional(),
 });
 
@@ -175,9 +185,12 @@ export const secretsVaultRouter = router({
       }
 
       await repo.setupVault(ctx.userId, {
+        mode: input.mode,
         salt: input.salt,
         keyDerivationAlgorithm: input.keyDerivationAlgorithm,
-        keyDerivationParams: input.keyDerivationParams,
+        keyDerivationParams: input.keyDerivationParams as
+          | Record<string, unknown>
+          | undefined,
         verificationCipher: input.verificationCipher,
         verificationIv: input.verificationIv,
         verificationTag: input.verificationTag,
@@ -268,6 +281,10 @@ export const secretsVaultRouter = router({
 
   /**
    * Get a single secret (includes encrypted data for client decryption)
+   *
+   * @legacy This procedure returns raw encrypted blobs for client-side decryption,
+   * which is no longer supported post server-only consolidation. Use `reveal` to
+   * retrieve the plaintext value of a server-encrypted secret.
    */
   get: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
@@ -312,6 +329,92 @@ export const secretsVaultRouter = router({
             ).map((t) => t.tag)
           : [],
       };
+    }),
+
+  /**
+   * Reveal the plaintext value of an owner-only, server-encrypted secret.
+   *
+   * Input:  { id: string }  — UUID of the secret to reveal.
+   * Output: { value: string | Record<string, unknown> }  — decrypted plaintext.
+   *         String secrets are returned as-is; JSON-object secrets are returned
+   *         as parsed objects (matching what `create` stored via serializeSecretValue).
+   *
+   * Access control:
+   *   - Owner-only: the calling user must own the secret (same check as get/update).
+   *   - No vault_grant required: grants gate agent/IS redemption, not owner reads.
+   *   - Legacy client-mode rows are refused with a clear message (no server key available).
+   *
+   * Audit: writes a `revealed` row to secret_audit_log.
+   */
+  reveal: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      // 1. Ownership check — reuses the same findById guard as get/update.
+      const repo = getRepository();
+      const secret = await repo.findById(input.id, ctx.userId);
+
+      if (!secret) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Secret not found",
+        });
+      }
+
+      // 2. Refuse legacy client-encrypted rows — server has no key for these.
+      if (secret.encryptionMode !== "server") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This secret predates the server-side vault consolidation. " +
+            "Delete and re-create it to enable owner reveal.",
+        });
+      }
+
+      // 3. Ensure VAULT_SERVER_KEY is configured on this pod.
+      if (!isServerVaultAvailable()) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "VAULT_SERVER_KEY is not configured on this server — cannot decrypt.",
+        });
+      }
+
+      // 4. Decrypt via the same server-vault machinery used by create/update.
+      //    decryptServerSide is the counterpart to encryptServerSide (server-vault.ts).
+      let plaintext: string;
+      try {
+        plaintext = decryptServerSide({
+          encryptedData: secret.encryptedData,
+          iv: secret.iv,
+          authTag: secret.authTag,
+        });
+      } catch (err) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "Failed to decrypt secret — key mismatch or data corruption.",
+        });
+      }
+
+      // 5. Attempt JSON parse so object-valued secrets come back as objects;
+      //    plain strings are returned as-is (mirrors serializeSecretValue behaviour).
+      let value: string | Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(plaintext) as unknown;
+        value =
+          parsed !== null &&
+          typeof parsed === "object" &&
+          !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : plaintext;
+      } catch {
+        value = plaintext;
+      }
+
+      // 6. Audit log — record the reveal action.
+      await repo.logAudit(secret.id, ctx.userId, "revealed");
+
+      return { value };
     }),
 
   /**

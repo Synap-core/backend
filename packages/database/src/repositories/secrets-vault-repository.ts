@@ -66,12 +66,15 @@ export interface ShareSecretInput {
 }
 
 export interface SetupVaultInput {
-  salt: string;
-  keyDerivationAlgorithm: string;
-  keyDerivationParams: Record<string, unknown>;
-  verificationCipher: string;
-  verificationIv: string;
-  verificationTag: string;
+  /** Mode marker. When 'server', key-derivation fields may be omitted and are
+   *  stored as placeholders — the server handles all encryption via VAULT_SERVER_KEY. */
+  mode?: "server" | "client";
+  salt?: string;
+  keyDerivationAlgorithm?: string;
+  keyDerivationParams?: Record<string, unknown>;
+  verificationCipher?: string;
+  verificationIv?: string;
+  verificationTag?: string;
   recoveryKeyHash?: string;
 }
 
@@ -133,16 +136,21 @@ export class SecretsVaultRepository extends BaseRepository<
       throw new Error("Vault already set up for this user");
     }
 
+    // Server-mode setup: key-derivation fields are not needed because the server
+    // encrypts via VAULT_SERVER_KEY. Store sentinel values so the NOT NULL schema
+    // constraints are satisfied and hasVaultSetup() returns true for both shapes.
+    const sentinel = "__server_mode__";
+
     const [vaultKey] = await this.db
       .insert(secretVaultKeys)
       .values({
         userId,
-        salt: data.salt,
-        keyDerivationAlgorithm: data.keyDerivationAlgorithm,
-        keyDerivationParams: data.keyDerivationParams,
-        verificationCipher: data.verificationCipher,
-        verificationIv: data.verificationIv,
-        verificationTag: data.verificationTag,
+        salt: data.salt ?? sentinel,
+        keyDerivationAlgorithm: data.keyDerivationAlgorithm ?? sentinel,
+        keyDerivationParams: data.keyDerivationParams ?? { mode: "server" },
+        verificationCipher: data.verificationCipher ?? sentinel,
+        verificationIv: data.verificationIv ?? sentinel,
+        verificationTag: data.verificationTag ?? sentinel,
         recoveryKeyHash: data.recoveryKeyHash,
         recoveryKeyCreatedAt: data.recoveryKeyHash ? new Date() : undefined,
       })
