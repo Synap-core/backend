@@ -3025,11 +3025,21 @@ export const channelsRouter = router({
     .query(async ({ input, ctx }) => {
       // scopedDb auto-ANDs the membership predicate — a non-member passing a
       // foreign workspaceId gets an empty tree instead of leaking its channels.
+      //
+      // CAP: hard limit of 500 most-recently-active channels. Without it this
+      // loaded every channel in the workspace and the tree build below is
+      // O(n²) (each node re-filters allChannels for its children). 500 is well
+      // above any realistic branch-tree size; if a workspace ever exceeds it,
+      // the oldest channels fall off the tree rather than the query starving
+      // the pool / blocking the event loop. Bump CHANNEL_TREE_CAP or move to
+      // cursor pagination if real workspaces approach the cap.
+      const CHANNEL_TREE_CAP = 500;
       const allChannels = await scopedDb(AccessContext.from(ctx)).findMany<
         typeof channels.$inferSelect
       >(channels, {
         where: eq(channels.workspaceId, input.workspaceId),
         orderBy: [desc(channels.updatedAt)],
+        limit: CHANNEL_TREE_CAP,
       });
 
       if (allChannels.length === 0) {

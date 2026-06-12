@@ -49,6 +49,19 @@ const FEED_PROACTIVE_EXECUTE_QUEUE = "feed-proactive-execute";
  */
 const MIN_RUN_GAP_MS = 23 * 60 * 60 * 1000; // 23 hours
 
+/**
+ * Jitter window (seconds) for spreading the executor jobs.
+ *
+ * Without this, every workspace whose schedule lands on the same minute (the
+ * default is 09:00 for all morning briefings) fires its `feed-proactive-execute`
+ * job in the SAME scheduler tick → a thundering herd of simultaneous IS calls
+ * that trips the intelligence-service rate limiter and backs up the queue. We
+ * give each due job a random `startAfter` in [0, JITTER_WINDOW_SECONDS] so the
+ * herd is smeared across a 5-minute window. The double-fire guard (lastRunAt /
+ * MIN_RUN_GAP_MS) still prevents duplicate fires across ticks.
+ */
+const JITTER_WINDOW_SECONDS = 300; // 5 minutes
+
 // ── Schedule shapes (as persisted by the migrations) ───────────────────────────
 
 interface DailySchedule {
@@ -230,7 +243,10 @@ export async function handleProactiveScheduler(): Promise<void> {
           runId: randomUUID(),
         };
 
-        await boss.send(FEED_PROACTIVE_EXECUTE_QUEUE, payload);
+        // Jitter: spread same-tick fires across a window so they don't
+        // stampede the intelligence service all at once (see JITTER_WINDOW).
+        const startAfter = Math.floor(Math.random() * JITTER_WINDOW_SECONDS);
+        await boss.send(FEED_PROACTIVE_EXECUTE_QUEUE, payload, { startAfter });
         scheduledCount++;
       } catch (err) {
         logger.error(

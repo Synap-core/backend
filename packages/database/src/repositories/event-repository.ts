@@ -464,14 +464,67 @@ export class EventRepository {
     correlationId: string,
     userId: string
   ): Promise<EventRecord[]> {
+    // Select only the columns mapRow consumes (not SELECT * over a wide
+    // JSONB-heavy hypertable) and cap the result so a pathological correlation
+    // fan-out can't materialize an unbounded set.
     const result = await this.query(
       `
-      SELECT * FROM events
+      SELECT id, timestamp, subject_id, subject_type, type, user_id,
+             data, metadata, source, correlation_id
+      FROM events
       WHERE correlation_id = $1
       AND user_id = $2
       ORDER BY timestamp ASC
+      LIMIT 1000
     `,
       [correlationId, userId]
+    );
+
+    return result.rows.map((row) => this.mapRow(row));
+  }
+
+  /**
+   * Batch-load correlated events for MANY correlation ids in a single query.
+   *
+   * Replaces the N+1 pattern of calling getCorrelatedEvents() once per row
+   * (which exhausted the connection pool on a page of proposals). Loads every
+   * correlated event for the page in ONE `correlation_id = ANY($1)` round-trip,
+   * then the caller groups in memory.
+   *
+   * SECURITY: same tenancy clamp as getCorrelatedEvents — events are restricted
+   * to `userId` so another tenant's events sharing a correlation id never leak.
+   *
+   * @param correlationIds - de-duplicated correlation ids for the page
+   * @param userId - owner clamp (required)
+   * @param limit - hard cap on rows returned across ALL ids (defense against a
+   *   pathological correlation fan-out); default 2000 covers normal pages.
+   * @returns flat list of EventRecord ordered by timestamp ASC; caller groups
+   *   by correlationId.
+   */
+  async getCorrelatedEventsBatch(
+    correlationIds: string[],
+    userId: string,
+    limit: number = 2000
+  ): Promise<EventRecord[]> {
+    if (correlationIds.length === 0) {
+      return [];
+    }
+
+    // Select only the columns mapRow needs (avoids SELECT * over a wide,
+    // JSONB-heavy hypertable). correlation_id is uuid[]; postgres.js casts the
+    // string[] param via ::uuid[] so non-uuid ids are rejected loudly rather
+    // than silently mismatching.
+    const result = await this.query(
+      `
+      SELECT id, timestamp, subject_id, subject_type, type, user_id,
+             data, metadata, source, correlation_id
+      FROM events
+      WHERE correlation_id = ANY($1::uuid[])
+      AND user_id = $2
+      ORDER BY timestamp ASC
+      LIMIT $3
+    `,
+      [correlationIds, userId, limit]
     );
 
     return result.rows.map((row) => this.mapRow(row));

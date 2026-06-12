@@ -7,6 +7,7 @@ import {
   timestamp,
   index,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { type z } from "zod";
 
@@ -119,6 +120,12 @@ export const notifications = pgTable(
       t.status,
       t.createdAt
     ),
+    // Partial index for the frequently-polled unread-count badge (migration 0122).
+    // Smaller + hotter than the full composite above since it only covers the
+    // live unread set (read/dismissed/actioned dominate over time).
+    idxUnreadUserWorkspace: index("notifs_unread_user_workspace_idx")
+      .on(t.userId, t.workspaceId)
+      .where(sql`${t.status} = 'unread'`),
     // Grouping queries
     idxGroupKey: index("notifs_group_key_idx").on(t.groupKey, t.workspaceId),
     // Source lookup (e.g. find notification for a proposal)

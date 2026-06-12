@@ -1318,16 +1318,27 @@ export const entitiesRouter = router({
         }
       }
 
-      // Dispatch entity embedding job (non-blocking — only if searchable fields changed)
+      // Dispatch entity embedding job (non-blocking — only if searchable fields changed).
+      // Debounce: rapid successive edits to the SAME entity collapse into one
+      // queued embedding job via pg-boss singleton throttling (singletonKey =
+      // entity id, throttled over a short window) so a burst of keystroke-level
+      // updates doesn't fire one embedding LLM call each.
       if (input.title !== undefined || input.description !== undefined) {
         try {
-          await getBoss().send("entity-embedding", {
-            entityId: input.id,
-            title: input.title,
-            preview: input.description,
-            userId: ctx.userId,
-            action: "update",
-          });
+          await getBoss().send(
+            "entity-embedding",
+            {
+              entityId: input.id,
+              title: input.title,
+              preview: input.description,
+              userId: ctx.userId,
+              action: "update",
+            },
+            {
+              singletonKey: `entity-embedding:${input.id}`,
+              singletonSeconds: 30,
+            }
+          );
         } catch (err) {
           logger.warn(
             { err },
