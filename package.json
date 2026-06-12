@@ -20,6 +20,7 @@
     "typecheck": "pnpm build",
     "publish:packages": "./scripts/publish-packages.sh",
     "publish:packages:dry-run": "./scripts/publish-packages.sh --dry-run",
+    "contracts:publish": "node scripts/contracts-publish.mjs",
     "lint": "eslint . --cache",
     "lint:fix": "eslint . --fix --cache",
     "format": "prettier --check .",
