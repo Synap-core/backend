@@ -31,6 +31,7 @@ import {
   sql,
   db as sharedDb,
   eq,
+  and,
   storedVersionValues,
   uploadDocumentVersionSnapshot,
   normalizeDocumentType,
@@ -42,6 +43,8 @@ import {
   documents,
   documentVersions,
   cellInstances,
+  workspaceMembers,
+  users,
 } from "@synap/database/schema";
 import {
   createUnifiedEvent,
@@ -121,6 +124,9 @@ export async function handleMaterialize(
         break;
       case "cell":
         await materializeCell(action, subjectId, userId, workspaceId, data);
+        break;
+      case "workspace":
+        await materializeWorkspace(action, subjectId, workspaceId, data);
         break;
       case "whiteboard":
         // Whiteboard proposals are handled inline by their own REST route;
@@ -658,6 +664,91 @@ async function materializeCell(
   logger.info(
     { subjectId, cellType, sourceDocumentId },
     "Cell instance materialized"
+  );
+}
+
+/**
+ * Materialize a workspace-membership join from a proposal-approved event
+ * (PRODUCT DECISION "agent asks to join").
+ *
+ * The proposal was filed by `checkPermissionOrPropose` when an agent actor was
+ * not a member of the workspace; on approval the proposals router emits
+ * `workspace.join.validated`, which the materialization hook routes here. This
+ * inserts the `workspace_members` row idempotently (onConflictDoNothing), so a
+ * pg-boss retry — or an agent that already gained membership another way — is a
+ * no-op rather than a duplicate/error.
+ *
+ * subjectId is the workspaceId (the proposal's targetId). The agent to add comes
+ * from `data.agentUserId`; the role from `data.role` (default editor).
+ */
+async function materializeWorkspace(
+  action: string,
+  subjectId: string,
+  workspaceId: string | undefined,
+  data: Record<string, unknown>
+): Promise<void> {
+  if (action !== "join") {
+    logger.warn(
+      { action },
+      "Workspace materialization only supports 'join' action"
+    );
+    return;
+  }
+
+  const targetWorkspaceId =
+    (data.workspaceId as string) || workspaceId || subjectId;
+  const agentUserId = data.agentUserId as string | undefined;
+  if (!targetWorkspaceId || !agentUserId) {
+    logger.error(
+      { subjectId, targetWorkspaceId, agentUserId },
+      "Workspace join missing workspaceId or agentUserId; skipping"
+    );
+    return;
+  }
+
+  const role = (data.role as string) || "editor";
+
+  // Idempotency: skip if the agent is already a member.
+  const existing = await sharedDb.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, targetWorkspaceId),
+      eq(workspaceMembers.userId, agentUserId)
+    ),
+    columns: { id: true },
+  });
+  if (existing) {
+    logger.warn(
+      { targetWorkspaceId, agentUserId },
+      "Agent already a workspace member, skipping join materialization"
+    );
+    return;
+  }
+
+  // Defence-in-depth: only ever materialize a join for an actual agent user row.
+  const agentUser = await sharedDb.query.users.findFirst({
+    where: eq(users.id, agentUserId),
+    columns: { userType: true },
+  });
+  if (agentUser?.userType !== "agent") {
+    logger.warn(
+      { agentUserId },
+      "Workspace join target is not an agent user; skipping"
+    );
+    return;
+  }
+
+  await sharedDb
+    .insert(workspaceMembers)
+    .values({
+      workspaceId: targetWorkspaceId,
+      userId: agentUserId,
+      role,
+    })
+    .onConflictDoNothing();
+
+  logger.info(
+    { targetWorkspaceId, agentUserId, role },
+    "Agent workspace membership materialized"
   );
 }
 

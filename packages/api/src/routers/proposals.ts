@@ -1751,6 +1751,70 @@ export const proposalsRouter = router({
         return { success: true };
       }
 
+      // Workspace-join proposal (PRODUCT DECISION "agent asks to join"): an agent
+      // filed this because it was not a workspace member. Approval emits a
+      // `workspace.join.validated` event → the materialization hook enqueues a job
+      // → the materializer's `workspace` case inserts the workspace_members row
+      // idempotently. This mirrors the generic `.validated` path but does not
+      // require request-shaped data (the join payload is a small {role,...} object,
+      // and targetType "workspace" / action "join" fall outside UpdateRequest's
+      // closed unions).
+      if (
+        proposal.targetType === "workspace" &&
+        proposal.proposalType === "join"
+      ) {
+        const joinData = (proposal.data ?? {}) as Record<string, unknown>;
+        const validatedEvent = await auditLog({
+          subjectType: "workspace",
+          action: "join",
+          phase: "validated",
+          // Governance-critical: a failed `.validated` append must NOT leave the
+          // proposal APPROVED-but-unmaterialized.
+          throwOnError: true,
+          subjectId: proposal.targetId,
+          userId,
+          workspaceId: proposal.workspaceId ?? undefined,
+          correlationId:
+            typeof joinData.correlationId === "string"
+              ? joinData.correlationId
+              : undefined,
+          data: {
+            role: typeof joinData.role === "string" ? joinData.role : "editor",
+            agentUserId: proposal.agentUserId ?? joinData.agentUserId,
+            workspaceId: proposal.workspaceId,
+            approvedBy: userId,
+            approvedAt: new Date().toISOString(),
+            approvalComment: input.comment,
+            sourceProposalId: input.proposalId,
+          },
+          source: "api",
+        });
+
+        const joinUpdatedData = {
+          ...joinData,
+          ...(validatedEvent ? { validatedEventId: validatedEvent.id } : {}),
+        };
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            data: joinUpdatedData,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return { success: true };
+      }
+
       // Generic flow: emit .validated event → materialization hook picks it up
       if (isRequestShapedProposalData(payload)) {
         const {

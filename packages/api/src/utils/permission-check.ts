@@ -403,6 +403,29 @@ export async function checkPermissionOrPropose(
     });
 
     if (!result.allowed) {
+      // PRODUCT DECISION ("agent asks to join"): an agent actor that is not yet
+      // a member of the workspace does not hard-deny — instead it files a
+      // `workspace.join` proposal the human can approve. Approval materializes a
+      // workspace_members row (see materializer `workspace` case) and the agent
+      // retries the original write. Any OTHER denial (insufficient role for a
+      // member, etc.) still hard-denies. Gated on the membership-miss reason so a
+      // member-but-under-privileged agent is NOT silently escalated to a join.
+      const isMembershipMiss =
+        result.reason === "User is not a member of this workspace";
+      if (isMembershipMiss && agentUserId) {
+        const join = await maybeCreateWorkspaceJoinProposal({
+          agentUserId,
+          requesterUserId: userId,
+          workspaceId,
+          correlationId,
+          threadId,
+          commandRunId,
+          sourceMessageId,
+          sessionId,
+        });
+        if (join) return join;
+        // Not an agent user row (defence-in-depth) → fall through to deny.
+      }
       logger.warn(
         {
           userId: effectiveUserId,
@@ -957,6 +980,119 @@ async function createProposal(opts: {
     reasoning: reasoning ?? `${action} ${singularType} requires your approval`,
     reviewPath,
     reviewUrl: `${STUDIO_APP_URL}${reviewPath}`,
+  };
+}
+
+/**
+ * Workspace-join proposal: an agent actor that is not yet a member of the
+ * workspace files this instead of being hard-denied. On approval the
+ * materializer (`workspace` case) inserts the workspace_members row.
+ *
+ * Returns the standard proposed envelope, or `null` when the actor is NOT an
+ * agent user row (so the caller falls through to a hard deny). DEDUPE: if a
+ * pending `workspace.join` proposal already exists for (agentUserId,
+ * workspaceId), its id is returned rather than creating a second one.
+ */
+async function maybeCreateWorkspaceJoinProposal(opts: {
+  agentUserId: string;
+  requesterUserId: string;
+  workspaceId: string;
+  correlationId?: string;
+  threadId?: string;
+  commandRunId?: string;
+  sourceMessageId?: string;
+  sessionId?: string;
+}): Promise<PermissionResult | null> {
+  const {
+    agentUserId,
+    requesterUserId,
+    workspaceId,
+    correlationId,
+    threadId,
+    commandRunId,
+    sourceMessageId,
+    sessionId,
+  } = opts;
+
+  // Defence-in-depth: confirm the actor really is an agent user row before
+  // minting a join proposal on its behalf.
+  const [agentUser] = await db
+    .select({ userType: users.userType, name: users.name })
+    .from(users)
+    .where(eq(users.id, agentUserId))
+    .limit(1);
+  if (agentUser?.userType !== "agent") return null;
+
+  const role = "editor";
+  const [ws] = await db
+    .select({ name: workspaces.name })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  const agentName = agentUser.name ?? "Agent";
+  const workspaceName = ws?.name ?? workspaceId;
+  const summary = `Agent ${agentName} requests to join workspace ${workspaceName} as ${role}`;
+
+  // DEDUPE: return an existing pending join proposal for this (agent, workspace)
+  // rather than stacking duplicates each time the agent retries the write.
+  const [existing] = await db
+    .select({ id: proposals.id })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.workspaceId, workspaceId),
+        eq(proposals.targetType, "workspace"),
+        eq(proposals.proposalType, "join"),
+        eq(proposals.agentUserId, agentUserId),
+        eq(proposals.status, ProposalStatus.PENDING)
+      )
+    )
+    .limit(1);
+
+  if (existing) {
+    return {
+      granted: false,
+      proposalId: existing.id,
+      summary,
+      reasoning: summary,
+      reviewPath: `/proposals/${existing.id}`,
+      reviewUrl: `${STUDIO_APP_URL}/proposals/${existing.id}`,
+    };
+  }
+
+  const { createEventBackedProposal } =
+    await import("./event-backed-proposal.js");
+  const { proposal: row } = await createEventBackedProposal({
+    userId: requesterUserId,
+    workspaceId,
+    targetType: "workspace",
+    targetId: workspaceId,
+    proposalType: "join",
+    action: "join",
+    source: "intelligence",
+    summary,
+    agentUserId,
+    createdBy: agentUserId,
+    threadId: threadId ?? null,
+    commandRunId: commandRunId ?? null,
+    sourceMessageId: sourceMessageId ?? null,
+    sessionId: sessionId ?? null,
+    data: {
+      role,
+      agentUserId,
+      requestedBy: "ai",
+      source: "agent",
+      ...(correlationId ? { correlationId } : {}),
+    },
+  });
+
+  return {
+    granted: false,
+    proposalId: row.id,
+    summary,
+    reasoning: summary,
+    reviewPath: `/proposals/${row.id}`,
+    reviewUrl: `${STUDIO_APP_URL}/proposals/${row.id}`,
   };
 }
 
