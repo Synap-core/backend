@@ -269,10 +269,19 @@ export async function handleSyncPull(): Promise<void> {
       }
     }
   } catch (err) {
-    // sync_peers table may not exist yet (migration not run) — suppress to avoid log spam
+    // Suppress expected/transient errors to avoid log spam: sync_peers not
+    // migrated yet, OR a connection reset (PGlite-socket on the embedded local
+    // pod can reset an idle pooled connection; in local-only mode there's no
+    // peer so the peer-fetch would no-op anyway — next tick retries).
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("relation") && msg.includes("does not exist")) {
-      logger.debug("Sync pull skipped — sync tables not yet migrated");
+    const transient =
+      (msg.includes("relation") && msg.includes("does not exist")) ||
+      msg.includes("ECONNRESET") ||
+      msg.includes("Connection terminated") ||
+      msg.includes("connection closed") ||
+      msg.includes("write EPIPE");
+    if (transient) {
+      logger.debug({ msg }, "Sync pull skipped (transient/no-peer)");
     } else {
       logger.error({ err }, "Sync pull worker top-level error");
     }

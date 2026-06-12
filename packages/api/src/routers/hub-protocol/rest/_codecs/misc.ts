@@ -165,7 +165,10 @@ export const ClusterTabsResponseSchema = z
 /** POST /capture/structure request body. */
 export const CaptureStructureRequestSchema = z
   .object({
-    userId: z.string(),
+    // Optional: when omitted, the route derives the acting user from the
+    // API-key principal via resolveActingContext (body.userId ?? authUserId).
+    // An explicit value is still honored for trusted on-behalf-of infra calls.
+    userId: z.string().optional(),
     text: z.string().min(1).max(8000),
     url: z.string().url().optional(),
     html: z.string().max(50_000).optional(),
@@ -188,7 +191,8 @@ export const CaptureStructureRequestSchema = z
 /** POST /capture/execute request body. */
 export const CaptureExecuteRequestSchema = z
   .object({
-    userId: z.string(),
+    // Optional: derived from the API-key principal when omitted (see above).
+    userId: z.string().optional(),
     workspaceId: z.string().uuid().optional(),
     entities: z.array(
       z.object({

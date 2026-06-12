@@ -50,8 +50,14 @@ async function initMigrationsTable(): Promise<void> {
   `;
 
   if (tableExists.length === 0) {
+    // IF NOT EXISTS is required for defensiveness: under PGlite (the embedded
+    // local pod) the information_schema.tables check above can return empty even
+    // when _migrations already exists on disk from a prior launch, so a bare
+    // CREATE TABLE would throw "relation _migrations already exists" (surfaced on
+    // the next pipelined await). Idempotent create + the upgrade-path checks below
+    // still run for real Postgres pods, where the existence check is reliable.
     await sql`
-      CREATE TABLE _migrations (
+      CREATE TABLE IF NOT EXISTS _migrations (
         id         SERIAL PRIMARY KEY,
         filename   TEXT        NOT NULL UNIQUE,
         applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -120,7 +126,13 @@ async function applyMigration(
   try {
     await sql.begin(async (tx) => {
       await tx.unsafe(migrationSQL);
-      await tx`INSERT INTO _migrations (filename) VALUES (${filename})`;
+      // ON CONFLICT DO NOTHING: on a FRESH pod, 0000_baseline_schema.sql
+      // pre-seeds _migrations with the filenames whose DDL it folds in (e.g.
+      // 0036_channel_members.sql). Those files are still in `pending` (the
+      // applied-set is read once, before baseline runs), so the runner
+      // re-applies their defensive IF-NOT-EXISTS DDL (harmless) and would
+      // otherwise collide on the unique filename here. Idempotent record.
+      await tx`INSERT INTO _migrations (filename) VALUES (${filename}) ON CONFLICT (filename) DO NOTHING`;
     });
     console.log(`✅ Applied: ${filename}\n`);
   } catch (error: any) {

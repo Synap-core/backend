@@ -327,9 +327,17 @@ export async function handleSyncPush(): Promise<void> {
       }
     }
   } catch (err) {
+    // Suppress expected/transient errors (no migration yet, or a PGlite-socket
+    // connection reset on the embedded local pod — no-op in local-only mode).
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("relation") && msg.includes("does not exist")) {
-      logger.debug("Sync push skipped — sync tables not yet migrated");
+    const transient =
+      (msg.includes("relation") && msg.includes("does not exist")) ||
+      msg.includes("ECONNRESET") ||
+      msg.includes("Connection terminated") ||
+      msg.includes("connection closed") ||
+      msg.includes("write EPIPE");
+    if (transient) {
+      logger.debug({ msg }, "Sync push skipped (transient/no-peer)");
     } else {
       logger.error({ err }, "Sync push worker top-level error");
     }

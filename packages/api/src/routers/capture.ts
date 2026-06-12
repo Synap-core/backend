@@ -445,7 +445,10 @@ export const captureRouter = router({
       //   is_invalid_response — IS reachable but returned null (5xx/validation/
       //                         timeout/network) — NOT a credentials problem
       const degradedFallback = (
-        degradedReason: "is_auth_error" | "is_invalid_response"
+        degradedReason:
+          | "is_auth_error"
+          | "is_invalid_response"
+          | "is_empty_result"
       ) => ({
         proposals: [
           {
@@ -516,6 +519,21 @@ export const captureRouter = router({
           "IS structure failed (non-auth) — returning degraded fallback, credential status left unchanged"
         );
         return degradedFallback("is_invalid_response");
+      }
+
+      // 1b. Silent-empty guard. The IS can return a well-formed 200 with ZERO
+      // entities and no followUp — e.g. when the model is over budget, the
+      // provider degraded, or the completion came back empty. Returning that as
+      // a success ({ proposals: [] }) would violate the trust contract: the user
+      // gave us text and we'd silently hand back nothing, not flagged as
+      // degraded. A followUp is a legitimate non-empty outcome (the model is
+      // asking a question), so only treat the truly-empty case as degraded.
+      if (!structureResult.followUp && structureResult.entities.length === 0) {
+        logger.warn(
+          { userId },
+          "IS returned zero entities without error — marking degraded (is_empty_result)"
+        );
+        return degradedFallback("is_empty_result");
       }
 
       // 2. If followUp, pass through immediately (no dedup yet)

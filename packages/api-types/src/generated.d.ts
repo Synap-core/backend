@@ -2413,7 +2413,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					score: number;
 				}>>;
 				degraded: true;
-				degradedReason: "is_auth_error" | "is_invalid_response";
+				degradedReason: "is_auth_error" | "is_invalid_response" | "is_empty_result";
 			} | {
 				dedupSkipped?: true | undefined;
 				proposals: {
@@ -2585,9 +2585,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				status: string;
 				message: string;
-				id: `${string}-${string}-${string}-${string}-${string}`;
 				entity: Record<string, unknown> | null;
 				proposalId: string;
+				id?: undefined;
 			} | {
 				status: string;
 				message: string;
@@ -2624,6 +2624,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileSlug?: string | undefined;
 				includeDescendants?: boolean | undefined;
 				globalOnly?: boolean | undefined;
+				includePodWide?: boolean | undefined;
 				sourceProposalId?: string | undefined;
 			};
 			output: {
@@ -13630,9 +13631,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				name: string;
 				type: "identity" | "password" | "api_key" | "credential" | "note" | "card" | "ssh_key" | "certificate" | "env_variable" | "database" | "oauth";
-				encryptedData: string;
-				iv: string;
-				authTag: string;
+				value: string | Record<string, unknown>;
 				url?: string | undefined;
 				category?: string | undefined;
 				description?: string | undefined;
@@ -13657,9 +13656,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				category?: string | null | undefined;
 				description?: string | null | undefined;
 				iconUrl?: string | null | undefined;
-				encryptedData?: string | undefined;
-				iv?: string | undefined;
-				authTag?: string | undefined;
+				value?: string | Record<string, unknown> | undefined;
 				isFavorite?: boolean | undefined;
 				sortOrder?: number | undefined;
 				passwordStrength?: number | undefined;

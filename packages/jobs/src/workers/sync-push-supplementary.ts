@@ -515,9 +515,21 @@ export async function handleSyncPushSupplementary(): Promise<void> {
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    const connReset =
+      msg.includes("ECONNRESET") ||
+      msg.includes("Connection terminated") ||
+      msg.includes("connection closed") ||
+      msg.includes("write EPIPE");
     if (msg.includes("relation") && msg.includes("does not exist")) {
       logger.warn(
         "Supplementary sync push skipped — sync tables not yet migrated (schema coherence should have caught this at boot)"
+      );
+    } else if (connReset) {
+      // Transient PGlite-socket reset on the embedded local pod — no-op in
+      // local-only mode (no peer); next tick retries.
+      logger.debug(
+        { msg },
+        "Supplementary sync push skipped (transient/no-peer)"
       );
     } else {
       logger.error({ err }, "Supplementary sync push worker top-level error");
