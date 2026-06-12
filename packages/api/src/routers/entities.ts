@@ -391,10 +391,14 @@ export const entitiesRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
+        // PHANTOM ENVELOPE ID FIX: a "proposed" response must NOT carry a
+        // top-level `id` that looks like a materialized entity id — nothing was
+        // created yet, and downstream callers were treating that phantom id as a
+        // real entity. Carry only `proposalId` (the reviewable handle). `entity`
+        // stays null to signal "no materialized row".
         return {
           status: "proposed",
           message: "Entity creation proposed for review",
-          id: entityId,
           entity: null as Record<string, unknown> | null,
           proposalId: perm.proposalId,
         };
@@ -618,11 +622,34 @@ export const entitiesRouter = router({
         includeDescendants: z.boolean().optional().default(false),
         /** When true, only return global entities */
         globalOnly: z.boolean().optional().default(false),
+        /**
+         * PRODUCT DECISION (scoped default): when a workspace is active, the
+         * list returns ONLY that workspace's entities by default — pod-wide
+         * (workspaceId IS NULL) rows are no longer mixed in, so a fresh
+         * workspace starts clean. Set `includePodWide: true` to restore the
+         * legacy union (this workspace's rows OR pod-wide globals). No data is
+         * migrated. Ignored for `globalOnly` and workspace-less callers (those
+         * already return pod-wide-only).
+         */
+        includePodWide: z.boolean().optional().default(false),
         /** Filter to entities materialized from a specific proposal (provenance). */
         sourceProposalId: z.string().uuid().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
+      // Scoped-by-default: with an active workspace and includePodWide=false,
+      // return ONLY that workspace's rows. includePodWide=true restores the
+      // legacy "workspace OR pod-wide globals" union. globalOnly / workspace-less
+      // callers are unaffected (they already resolve to pod-wide-only below).
+      const workspaceScopeCondition =
+        input.globalOnly || !ctx.workspaceId
+          ? isNull(entities.workspaceId)
+          : input.includePodWide
+            ? or(
+                eq(entities.workspaceId, ctx.workspaceId),
+                isNull(entities.workspaceId)
+              )
+            : eq(entities.workspaceId, ctx.workspaceId);
       // Visibility is gated by workspace membership (workspaceProcedure).
       // userId is attribution only — all workspace members see all workspace entities.
       const conditions: any[] = [isNull(entities.deletedAt)];
@@ -652,32 +679,13 @@ export const entitiesRouter = router({
           conditions.push(inArray(entities.type, profileSlugs));
         }
 
-        // Both pod-default and workspace-scoped profiles use the same read
-        // filter: rows pinned to this workspace OR genuinely-global rows
-        // (workspaceId IS NULL). A pod-default profile no longer skips the
-        // workspace filter — that previously leaked workspace-scoped imports
-        // (which now carry a real workspaceId) into every workspace. Truly
-        // pod-wide rows still have null workspaceId and remain visible
-        // everywhere.
-        conditions.push(
-          input.globalOnly || !ctx.workspaceId
-            ? isNull(entities.workspaceId)
-            : or(
-                eq(entities.workspaceId, ctx.workspaceId),
-                isNull(entities.workspaceId)
-              )
-        );
+        // Pod-default and workspace-scoped profiles share the same read filter
+        // (workspaceScopeCondition, computed above): workspace-only by default,
+        // or workspace OR pod-wide globals when includePodWide is set.
+        conditions.push(workspaceScopeCondition);
       } else {
-        // No profile filter — use standard workspace scoping.
-        // Workspace-less callers (hydration) see pod-wide only.
-        conditions.push(
-          input.globalOnly || !ctx.workspaceId
-            ? isNull(entities.workspaceId)
-            : or(
-                eq(entities.workspaceId, ctx.workspaceId),
-                isNull(entities.workspaceId)
-              )
-        );
+        // No profile filter — same workspace scoping.
+        conditions.push(workspaceScopeCondition);
       }
 
       const results = await db.query.entities.findMany({
@@ -1128,6 +1136,24 @@ export const entitiesRouter = router({
         }
       }
 
+      // PROPOSE-TIME VALIDATION: reject an update against a NONEXISTENT entity
+      // up front. Previously a missing target sailed past the gate and only blew
+      // up at approval with a raw 500 "Entity not found" — a proposal that can
+      // never materialize. Check existence BEFORE checkPermissionOrPropose so the
+      // caller gets an immediate NOT_FOUND instead of a doomed proposal.
+      {
+        const existing = await db.query.entities.findFirst({
+          where: and(eq(entities.id, input.id), isNull(entities.deletedAt)),
+          columns: { id: true },
+        });
+        if (!existing) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Entity not found: ${input.id}`,
+          });
+        }
+      }
+
       // Resolve framed-view trust SERVER-SIDE (never from the request body).
       const issuer = input.viewContext
         ? await resolveViewTrust(
@@ -1366,6 +1392,22 @@ export const entitiesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const correlationId = randomUUID();
+
+      // PROPOSE-TIME VALIDATION: reject a delete against a NONEXISTENT (or
+      // already-deleted) entity up front, so an agent never files a proposal that
+      // can only fail at approval with a raw 500.
+      {
+        const existing = await db.query.entities.findFirst({
+          where: and(eq(entities.id, input.id), isNull(entities.deletedAt)),
+          columns: { id: true },
+        });
+        if (!existing) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Entity not found: ${input.id}`,
+          });
+        }
+      }
 
       // 1. Emit .requested event
       const requestedEvent = await auditLog({

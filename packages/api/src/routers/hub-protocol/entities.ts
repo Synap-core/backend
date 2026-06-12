@@ -35,6 +35,13 @@ export const entitiesRouter = router({
          */
         type: z.string().optional(),
         limit: z.number().optional(),
+        /**
+         * Scoped-by-default (PRODUCT DECISION): with a workspaceId set, only that
+         * workspace's entities are returned. Pass true to also include pod-wide
+         * (workspaceId IS NULL) globals — the legacy behavior. Forwarded to the
+         * regular `list` procedure.
+         */
+        includePodWide: z.boolean().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -55,6 +62,9 @@ export const entitiesRouter = router({
       const result = await caller.list({
         profileSlug: profileSlug ?? undefined,
         limit: input.limit || 50,
+        ...(input.includePodWide !== undefined
+          ? { includePodWide: input.includePodWide }
+          : {}),
       });
 
       return result.entities;

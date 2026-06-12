@@ -144,6 +144,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
               "`workspace` = single workspace (requires workspaceId); " +
               "`all` = merge across all accessible workspaces."
           ),
+        includePodWide: z
+          .string()
+          .optional()
+          .describe(
+            "Scoped-by-default: with a workspaceId, only that workspace's " +
+              "entities are returned. Set `true` to also include pod-wide " +
+              "(null workspaceId) globals — the legacy behavior."
+          ),
       }),
     },
     responses: {
@@ -187,6 +195,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
     );
     const sortParam = (query.sort ?? "").trim();
     const scope = query.scope;
+    const includePodWide = query.includePodWide === "true";
 
     try {
       const effectiveWsIds = workspaceIdParam
@@ -246,6 +255,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
               workspaceId: wsId,
               profileSlug: profileSlug || undefined,
               limit,
+              includePodWide,
             })
           )
         );
@@ -282,6 +292,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         workspaceId: workspaceIdParam || undefined,
         profileSlug: profileSlug || undefined,
         limit,
+        includePodWide,
       });
 
       let rows = (listed as unknown[]).map((e) => entityToWire(e));
