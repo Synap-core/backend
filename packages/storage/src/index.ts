@@ -25,6 +25,10 @@ export { createFileStorageProvider, storage } from "./factory.js";
 // Export providers (for advanced usage)
 export { R2StorageProvider, type R2Config } from "./r2-provider.js";
 export { MinIOStorageProvider, type MinIOConfig } from "./minio-provider.js";
+export {
+  LocalStorageProvider,
+  type LocalStorageConfig,
+} from "./local-provider.js";
 
 // Backward compatibility: Export old R2Storage class
 // @deprecated Use IFileStorage interface and createFileStorageProvider() instead

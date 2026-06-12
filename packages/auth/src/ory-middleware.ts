@@ -11,6 +11,13 @@ import {
   getKratosSession,
   getKratosSessionByToken,
 } from "./ory-kratos.js";
+import {
+  buildLocalUser,
+  buildLocalSession,
+  isLocalModeEnabled,
+  getLocalAuthToken,
+  safeTokenEqual,
+} from "./local-mode.js";
 
 /**
  * Middleware for OAuth2 token authentication (Bearer tokens)
@@ -62,6 +69,39 @@ export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
   const cookie = c.req.header("cookie") || "";
   const sessionToken = c.req.header("x-session-token") || "";
 
+  // ── LOCAL MODE: fixed-identity auth, no Kratos ──────────────────────────
+  // Authenticate via a static bearer token or x-local-token header.
+  // The Electron host generates LOCAL_AUTH_TOKEN and passes it on every
+  // request. Any other token (or a missing token) → 401.
+  // ory_kratos_session cookie is NOT accepted here — LOCAL_MODE uses only
+  // bearer or x-local-token channels.
+  if (isLocalModeEnabled()) {
+    const localAuthToken = getLocalAuthToken();
+    const authHeader = c.req.header("Authorization") || "";
+    const bearerToken = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : "";
+    const incomingToken =
+      bearerToken || c.req.header("x-local-token") || sessionToken;
+
+    if (
+      !incomingToken ||
+      !localAuthToken ||
+      !safeTokenEqual(incomingToken, localAuthToken)
+    ) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    const localUser = buildLocalUser();
+    const localSession = buildLocalSession();
+    c.set("user", { ...localUser });
+    c.set("userId", localUser.id);
+    c.set("session", { ...localSession });
+    c.set("authenticated", true);
+    return next();
+  }
+  // ────────────────────────────────────────────────────────────────────────
+
   if (!cookie && !sessionToken) {
     return c.json(
       { error: "Unauthorized", details: "No session cookie or token" },
@@ -69,9 +109,9 @@ export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
     );
   }
 
-  // MOCK AUTH BYPASS (Development/Test Only)
+  // MOCK AUTH BYPASS (Test Only — not active in staging or production)
   if (
-    process.env.NODE_ENV !== "production" &&
+    process.env.NODE_ENV === "test" &&
     cookie.includes("mock-session-cookie=")
   ) {
     const match = cookie.match(/mock-session-cookie=([^;]+)/);

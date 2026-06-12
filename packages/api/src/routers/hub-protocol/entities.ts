@@ -133,7 +133,8 @@ export const entitiesRouter = router({
         input.userId,
         ctx.scopes || [],
         authWorkspaceId,
-        ctx.sourceMessageId ?? undefined
+        ctx.sourceMessageId ?? undefined,
+        ctx.sessionId ?? undefined
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 
@@ -205,7 +206,8 @@ export const entitiesRouter = router({
         input.userId,
         ctx.scopes || [],
         ctx.workspaceId ?? undefined,
-        ctx.sourceMessageId ?? undefined
+        ctx.sourceMessageId ?? undefined,
+        ctx.sessionId ?? undefined
       );
       const caller = regularEntitiesRouter.createCaller(callerContext);
 

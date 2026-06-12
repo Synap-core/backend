@@ -321,6 +321,8 @@ export interface PermissionCheckOpts {
   commandRunId?: string;
   /** Provenance: which specific message triggered this proposal */
   sourceMessageId?: string;
+  /** Session ID to link proposals to the active focus session */
+  sessionId?: string;
 }
 
 /**
@@ -356,6 +358,7 @@ export async function checkPermissionOrPropose(
     threadId,
     commandRunId,
     sourceMessageId,
+    sessionId,
     channelCapabilities,
   } = opts;
 
@@ -434,6 +437,7 @@ export async function checkPermissionOrPropose(
         threadId,
         commandRunId,
         sourceMessageId,
+        sessionId,
       });
     }
 
@@ -517,6 +521,7 @@ export async function checkPermissionOrPropose(
             threadId,
             commandRunId,
             sourceMessageId,
+            sessionId,
           });
         }
 
@@ -595,6 +600,7 @@ export async function checkPermissionOrPropose(
           threadId,
           commandRunId,
           sourceMessageId,
+          sessionId,
         });
       }
     }
@@ -824,6 +830,7 @@ async function createProposal(opts: {
   threadId?: string;
   commandRunId?: string;
   sourceMessageId?: string;
+  sessionId?: string;
 }): Promise<{
   granted: false;
   proposalId: string;
@@ -846,6 +853,7 @@ async function createProposal(opts: {
     threadId,
     commandRunId,
     sourceMessageId,
+    sessionId,
   } = opts;
 
   const targetId = (data.documentId ||
@@ -928,6 +936,7 @@ async function createProposal(opts: {
       threadId: threadId ?? null,
       commandRunId: commandRunId ?? null,
       sourceMessageId: sourceMessageId ?? null,
+      sessionId: sessionId ?? null,
       correlationId: resolvedCorrelationId,
       requestedEventId: reqEventId ?? null,
       notificationDescription: reasoning ?? `${action} ${singularType}`,

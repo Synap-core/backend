@@ -292,8 +292,16 @@ export const ListWorkspacesResponseSchema = z
       z.object({
         id: z.string(),
         name: z.string(),
+        entityCount: z
+          .number()
+          .optional()
+          .describe("Live (non-deleted) entity count in this workspace."),
       })
     ),
+    podEntityCount: z
+      .number()
+      .optional()
+      .describe("Count of pod-scoped entities (workspaceId = null)."),
   })
   .openapi("ListWorkspacesResponse");
 

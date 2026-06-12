@@ -34,6 +34,7 @@ export const CreateDocumentRequestSchema = z
     reasoning: z.string().optional(),
     agentUserId: z.string().optional(),
     sourceMessageId: z.string().optional(),
+    sessionId: z.string().optional(),
   })
   .openapi("CreateDocumentRequest");
 

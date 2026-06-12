@@ -57,6 +57,7 @@ import {
   mcpServers,
   sessions,
   SessionStatus,
+  focusSessions,
   compactedStates,
   agents,
   sourceConfigs,
@@ -1375,6 +1376,24 @@ export const channelsRouter = router({
         }
       }
 
+      // Look up active focus session for this channel — explicit, user-visible sessions
+      // that link proposals from this run to a goal-bound context.
+      // Separate from `activeSessionId` (IS memory compaction, internal).
+      let activeFocusSessionId: string | undefined;
+      try {
+        const activeFocusSession = await db.query.focusSessions.findFirst({
+          where: and(
+            eq(focusSessions.channelId, channelId),
+            eq(focusSessions.status, "active")
+          ),
+          columns: { id: true },
+          orderBy: (fs, { desc }) => [desc(fs.startedAt)],
+        });
+        activeFocusSessionId = activeFocusSession?.id;
+      } catch {
+        // Non-fatal — proposal linking degrades gracefully
+      }
+
       // Save user message
       const userMessageId = randomUUID();
       const userMessageHash = createHash("sha256")
@@ -1872,6 +1891,9 @@ export const channelsRouter = router({
           // Billing channel: Browser chat is included in subscription
           // Channel kind: signals to IS whether this is a private or shared channel
           channelKind,
+          // Active focus session — when set, IS tags all hub calls with X-Session-Id
+          // so proposals link to this user-visible, goal-bound session.
+          focusSessionId: activeFocusSessionId,
         });
 
         for await (const chunk of stream) {
@@ -2081,6 +2103,7 @@ export const channelsRouter = router({
               process.env.PUBLIC_URL || `https://${process.env.DOMAIN}`,
             dataPodApiKey: resolvedService.serviceApiKey,
             channelKind,
+            focusSessionId: activeFocusSessionId,
           });
         } catch (fallbackError) {
           // Both stream and non-streaming fallback failed — Intelligence Hub is down

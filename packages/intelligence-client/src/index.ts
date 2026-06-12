@@ -2,6 +2,7 @@ export {
   IntelligenceHubClient,
   AgentHubClient,
   intelligenceHubClient,
+  IntelligenceAuthError,
 } from "./intelligence-hub-client.js";
 
 export type {

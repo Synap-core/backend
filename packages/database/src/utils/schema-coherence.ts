@@ -422,6 +422,13 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0101_sync_generation_split_brain.sql",
   },
 
+  // sync_peers.local_role — local-twin role for split-brain handling (0120)
+  {
+    table: "sync_peers",
+    column: "local_role",
+    addedBy: "0120_sync_peers_local_role.sql",
+  },
+
   // trusted_issuers — pod-level registry of approved external services (0001)
   {
     table: "trusted_issuers",

@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS "workspace_members" (
   "invited_by"    text
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
-ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "workspace_id" uuid("id") ON DELETE CASCADE;
+ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
 ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "user_id" text;
 ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "role" text;
 ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "joined_at" timestamp with time zone DEFAULT now();
@@ -1079,19 +1079,8 @@ CREATE INDEX IF NOT EXISTS "channel_members_member_id_idx"
 CREATE UNIQUE INDEX IF NOT EXISTS "channel_members_channel_member_unique"
   ON "channel_members" ("channel_id", "member_id");
 
--- ─── 20c. message_reactions (0103) ──────────────────────────────────────────
-
-CREATE TABLE IF NOT EXISTS "message_reactions" (
-  "id"          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  "message_id"  uuid NOT NULL REFERENCES "messages"("id") ON DELETE CASCADE,
-  "user_id"     text NOT NULL,
-  "emoji"       text NOT NULL,
-  "created_at"  timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT "message_reactions_unique" UNIQUE ("message_id", "user_id", "emoji")
-);
-
-CREATE INDEX IF NOT EXISTS "message_reactions_message_id_idx"
-  ON "message_reactions" ("message_id");
+-- ─── 20c. message_reactions (0103) — moved after section 24 "messages"; its
+--          FK references "messages" which is created later in this file. ─────
 
 -- ─── 21. sessions ────────────────────────────────────────────────────────────
 
@@ -1303,6 +1292,20 @@ ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time
 CREATE INDEX IF NOT EXISTS "messages_channel_id_idx"
   ON "messages" ("channel_id");
 
+-- ─── 24b. message_reactions (0103) — placed after "messages" (FK dependency) ──
+
+CREATE TABLE IF NOT EXISTS "message_reactions" (
+  "id"          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "message_id"  uuid NOT NULL REFERENCES "messages"("id") ON DELETE CASCADE,
+  "user_id"     text NOT NULL,
+  "emoji"       text NOT NULL,
+  "created_at"  timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT "message_reactions_unique" UNIQUE ("message_id", "user_id", "emoji")
+);
+
+CREATE INDEX IF NOT EXISTS "message_reactions_message_id_idx"
+  ON "message_reactions" ("message_id");
+
 CREATE INDEX IF NOT EXISTS "messages_inbox_item_idx"
   ON "messages" ("inbox_item_id");
 
@@ -1513,7 +1516,8 @@ ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "source_message_id" uuid REFERE
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "agent_user_id" text REFERENCES "users"("id") ON DELETE SET NULL;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "correlation_id" uuid;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "requested_event_id" uuid;
-ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "session_id" uuid REFERENCES "focus_sessions"("id") ON DELETE SET NULL;
+-- (proposals.session_id REFERENCES focus_sessions — added after the
+--  focus_sessions section below; FK target is created later in this file.)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_by" text;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_at" timestamp with time zone;
@@ -1549,8 +1553,8 @@ CREATE INDEX IF NOT EXISTS "idx_proposals_agent_user_id"
 CREATE INDEX IF NOT EXISTS "proposals_correlation_id_idx"
   ON "proposals" ("correlation_id");
 
-CREATE INDEX IF NOT EXISTS "idx_proposals_session_id"
-  ON "proposals" ("session_id");
+-- (idx_proposals_session_id moved next to the proposals.session_id ALTER
+--  after the focus_sessions section below.)
 
 -- ─── 29. knowledge_facts ─────────────────────────────────────────────────────
 
@@ -2645,6 +2649,7 @@ ALTER TABLE "sync_peers" ADD COLUMN IF NOT EXISTS "enabled" boolean DEFAULT true
 ALTER TABLE "sync_peers" ADD COLUMN IF NOT EXISTS "label" text;
 ALTER TABLE "sync_peers" ADD COLUMN IF NOT EXISTS "auth_token" text;
 ALTER TABLE "sync_peers" ADD COLUMN IF NOT EXISTS "workspace_ids" text[];
+ALTER TABLE "sync_peers" ADD COLUMN IF NOT EXISTS "local_role" text DEFAULT 'unset';
 ALTER TABLE "sync_peers" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "sync_peers" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
@@ -3199,6 +3204,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS "idx_focus_sessions_correlation_id"
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_workspace_id" ON "focus_sessions" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_user_id"      ON "focus_sessions" ("user_id");
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_status"       ON "focus_sessions" ("status");
+-- One active session per channel + covering index for per-message lookup (0121)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_focus_sessions_active_channel
+  ON focus_sessions (channel_id)
+  WHERE status = 'active' AND channel_id IS NOT NULL;
+
+-- proposals → focus_sessions link (placed here: FK target must exist first)
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "session_id" uuid REFERENCES "focus_sessions"("id") ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS "idx_proposals_session_id"
+  ON "proposals" ("session_id");
 
 -- ── Wave B3: provenance columns on the knowledge-graph core (catch-up; see
 --    migration 0107_provenance_columns.sql). Additive + NULLABLE + idempotent. ──

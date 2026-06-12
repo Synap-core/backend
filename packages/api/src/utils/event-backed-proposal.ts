@@ -24,14 +24,13 @@ export interface CreateEventBackedProposalInput {
 export async function createEventBackedProposal(
   input: CreateEventBackedProposalInput
 ) {
-  // correlationId serves event-chain grouping, NOT session linking.
-  // When linked to a session, use session.id as correlationId so events
-  // are traceable back to the session. No randomUUID fallback for sessionId.
+  // correlationId serves event-chain grouping (grouping audit_log events
+  // within a single proposal's lifecycle), NOT session linking.
+  // Session linking uses the sessionId FK — set on the proposals table separately.
   const correlationId =
-    input.sessionId ??
-    (typeof input.data.correlationId === "string"
+    typeof input.data.correlationId === "string"
       ? input.data.correlationId
-      : randomUUID());
+      : randomUUID();
   const action = input.action ?? inferProposalAction(input.proposalType);
 
   const requestedEvent = await auditLog({

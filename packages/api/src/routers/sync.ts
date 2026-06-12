@@ -19,7 +19,6 @@ import { createLogger, config } from "@synap-core/core";
 import {
   db,
   syncPeers,
-  syncState,
   events,
   messages,
   automations,
@@ -27,16 +26,27 @@ import {
   intelligenceCommands,
   documents,
   documentVersions,
+  proposals,
+  focusSessions,
+  widgetDefinitions,
   eq,
   and,
   or,
+  inArray,
+  isNull,
   drizzleSql,
   syncReceiveInputSchema,
   materializeBatch,
   storedVersionValues,
   uploadDocumentVersionSnapshot,
 } from "@synap/database";
-import { intelligenceServices } from "@synap/database/schema";
+import {
+  intelligenceServices,
+  channels,
+  workspaces,
+  workspaceMembers,
+  propertyDefs,
+} from "@synap/database/schema";
 import { verifyCpJwt } from "../utils/jwks-client.js";
 import { invalidateSyncPeerCache } from "../utils/sync-realtime-hook.js";
 import {
@@ -45,6 +55,8 @@ import {
   getSyncGenerationRow,
   promoteToPrimary,
 } from "../utils/split-brain-service.js";
+import { upsertSyncPeer } from "./sync-management.js";
+import { safeTokenEqual } from "@synap/auth";
 
 const logger = createLogger({ module: "sync-receive" });
 
@@ -273,12 +285,12 @@ app.get("/pull", async (c) => {
     drizzleSql`${events.type} LIKE '%.completed'`,
   ];
 
-  // Apply workspace filtering if the peer has workspaceIds configured
+  // Apply workspace filtering if the peer has workspaceIds configured.
+  // Use parameterized inArray/isNull — no raw SQL interpolation.
   if (auth.workspaceIds && auth.workspaceIds.length > 0) {
-    const escaped = auth.workspaceIds.map((id) => id.replace(/'/g, "''"));
-    const inList = escaped.map((id) => `'${id}'`).join(",");
+    const workspaceIdExpr = drizzleSql<string>`(${events.data}->>'workspaceId')`;
     conditions.push(
-      drizzleSql`(${events.data}->>'workspaceId' IN (${drizzleSql.raw(inList)}) OR ${events.data}->>'workspaceId' IS NULL)`
+      or(inArray(workspaceIdExpr, auth.workspaceIds), isNull(workspaceIdExpr))!
     );
   }
 
@@ -359,6 +371,190 @@ const SUPPLEMENTARY_TABLES: Record<
   string,
   (rows: Record<string, unknown>[]) => Promise<number>
 > = {
+  /**
+   * workspaces — no FK dependencies on other synced tables.
+   * Must arrive before workspace_members, channels, property_defs, widget_definitions.
+   *
+   * Excluded: stripeCustomerId (billing credential), subscriptionStatus/Tier
+   * (billing state — intentionally kept per-pod).
+   */
+  workspaces: async (rows) => {
+    let processed = 0;
+    for (const row of rows) {
+      try {
+        const values: typeof workspaces.$inferInsert = {
+          id: row.id as string,
+          ownerId: row.ownerId as string,
+          name: (row.name as string) ?? "Synced Workspace",
+          description: (row.description as string) ?? null,
+          type: (row.type as string) ?? "personal",
+          settings:
+            (row.settings as typeof workspaces.$inferInsert.settings) ?? {},
+          systemSlug: (row.systemSlug as string) ?? null,
+          packageSlug: (row.packageSlug as string) ?? null,
+          provisioningProposalId:
+            (row.provisioningProposalId as string) ?? null,
+          provisioningStatus: (row.provisioningStatus as string) ?? null,
+          workspaceType: (row.workspaceType as string) ?? "personal",
+          // Billing columns are intentionally NOT synced (per-pod state):
+          subscriptionTier: null,
+          subscriptionStatus: null,
+          stripeCustomerId: null,
+          createdAt: row.createdAt
+            ? new Date(row.createdAt as string)
+            : new Date(),
+          updatedAt: row.updatedAt
+            ? new Date(row.updatedAt as string)
+            : new Date(),
+          archivedAt: row.archivedAt
+            ? new Date(row.archivedAt as string)
+            : null,
+        };
+        const updateSet: Partial<typeof workspaces.$inferInsert> = {
+          name: values.name,
+          description: values.description,
+          type: values.type,
+          settings: values.settings,
+          systemSlug: values.systemSlug,
+          packageSlug: values.packageSlug,
+          provisioningProposalId: values.provisioningProposalId,
+          provisioningStatus: values.provisioningStatus,
+          workspaceType: values.workspaceType,
+          archivedAt: values.archivedAt,
+          updatedAt: values.updatedAt,
+        };
+        await db.insert(workspaces).values(values).onConflictDoUpdate({
+          target: workspaces.id,
+          set: updateSet,
+        });
+        processed++;
+      } catch (err) {
+        logger.warn(
+          { table: "workspaces", rowId: row.id, err },
+          "Failed to upsert supplementary row"
+        );
+      }
+    }
+    return processed;
+  },
+
+  /**
+   * workspace_members — FK → workspaces.id (ON DELETE CASCADE).
+   * Must arrive after workspaces. Silently skips if workspace not present yet.
+   *
+   * No secret/credential columns.
+   */
+  workspace_members: async (rows) => {
+    let processed = 0;
+    for (const row of rows) {
+      try {
+        const values: typeof workspaceMembers.$inferInsert = {
+          id: row.id as string,
+          workspaceId: row.workspaceId as string,
+          userId: row.userId as string,
+          role: (row.role as string) ?? "viewer",
+          joinedAt: row.joinedAt
+            ? new Date(row.joinedAt as string)
+            : new Date(),
+          invitedBy: (row.invitedBy as string) ?? null,
+        };
+        const updateSet: Partial<typeof workspaceMembers.$inferInsert> = {
+          role: values.role,
+        };
+        await db.insert(workspaceMembers).values(values).onConflictDoUpdate({
+          target: workspaceMembers.id,
+          set: updateSet,
+        });
+        processed++;
+      } catch (err) {
+        logger.warn(
+          { table: "workspace_members", rowId: row.id, err },
+          "Failed to upsert supplementary row"
+        );
+      }
+    }
+    return processed;
+  },
+
+  /**
+   * channels — FK → workspaces.id (nullable, no cascade constraint in Drizzle schema).
+   * Must arrive after workspaces. assignedAgentId / senderAgentId FKs → agents.id
+   * (ON DELETE SET NULL) — missing agent produces null, which is safe.
+   *
+   * No secret/credential columns.
+   */
+  channels: async (rows) => {
+    let processed = 0;
+    for (const row of rows) {
+      try {
+        const values: typeof channels.$inferInsert = {
+          id: row.id as string,
+          userId: row.userId as string,
+          workspaceId: (row.workspaceId as string) ?? null,
+          title: (row.title as string) ?? null,
+          channelType:
+            (row.channelType as typeof channels.$inferInsert.channelType) ??
+            "thread",
+          scope:
+            (row.scope as typeof channels.$inferInsert.scope) ?? "workspace",
+          feedScope:
+            (row.feedScope as typeof channels.$inferInsert.feedScope) ?? null,
+          contextObjectType: (row.contextObjectType as string) ?? null,
+          contextObjectId: (row.contextObjectId as string) ?? null,
+          parentChannelId: (row.parentChannelId as string) ?? null,
+          branchedFromMessageId: (row.branchedFromMessageId as string) ?? null,
+          branchPurpose: (row.branchPurpose as string) ?? null,
+          status:
+            (row.status as typeof channels.$inferInsert.status) ?? "active",
+          aiReactionMode:
+            (row.aiReactionMode as typeof channels.$inferInsert.aiReactionMode) ??
+            "when_confident",
+          agentConfig: (row.agentConfig as Record<string, unknown>) ?? null,
+          mcpServerIds: (row.mcpServerIds as string[]) ?? null,
+          assignedAgentId: (row.assignedAgentId as string) ?? null,
+          senderAgentId: (row.senderAgentId as string) ?? null,
+          contextSummary: (row.contextSummary as string) ?? null,
+          resultSummary: (row.resultSummary as string) ?? null,
+          mergedIntoStateId: (row.mergedIntoStateId as string) ?? null,
+          externalSource: (row.externalSource as string) ?? null,
+          externalChannelId: (row.externalChannelId as string) ?? null,
+          externalId: (row.externalId as string) ?? null,
+          metadata: (row.metadata as Record<string, unknown>) ?? null,
+          createdAt: row.createdAt
+            ? new Date(row.createdAt as string)
+            : new Date(),
+          updatedAt: row.updatedAt
+            ? new Date(row.updatedAt as string)
+            : new Date(),
+          mergedAt: row.mergedAt ? new Date(row.mergedAt as string) : null,
+        };
+        const updateSet: Partial<typeof channels.$inferInsert> = {
+          title: values.title,
+          status: values.status,
+          aiReactionMode: values.aiReactionMode,
+          agentConfig: values.agentConfig,
+          contextSummary: values.contextSummary,
+          resultSummary: values.resultSummary,
+          mergedIntoStateId: values.mergedIntoStateId,
+          metadata: values.metadata,
+          mergedAt: values.mergedAt,
+          updatedAt: values.updatedAt,
+        };
+        await db.insert(channels).values(values).onConflictDoUpdate({
+          target: channels.id,
+          set: updateSet,
+        });
+        processed++;
+      } catch (err) {
+        logger.warn(
+          { table: "channels", rowId: row.id, err },
+          "Failed to upsert supplementary row"
+        );
+      }
+    }
+    return processed;
+  },
+
   messages: async (rows) => {
     let processed = 0;
     for (const row of rows) {
@@ -671,6 +867,331 @@ const SUPPLEMENTARY_TABLES: Record<
     }
     return processed;
   },
+
+  /**
+   * Proposals sync.
+   *
+   * Pod-portability audit:
+   * - `workspaceId` (text, nullable) — pod-scoped; UUIDs are stable across pods.
+   * - `threadId` FK → channels.id  — channels are replicated via event log
+   *   (channel.created.completed events). The FK is ON DELETE SET NULL, so a
+   *   missing channel does not prevent the upsert; it leaves threadId null.
+   * - `commandRunId` FK → command_runs.id — NOT replicated; set to null on sync
+   *   (ON DELETE SET NULL semantics preserved).
+   * - `sourceMessageId` FK → messages.id — messages ARE replicated (supplementary).
+   *   Order dependency: sync messages before proposals. Null-safe on missing row.
+   * - `agentUserId` FK → users.id — user records are replicated via event log
+   *   (user.created.completed). ON DELETE SET NULL if user not present yet.
+   * - `data` (jsonb) — payload; references entity UUIDs but no DB FK enforced.
+   *
+   * Conclusion: proposals ARE pod-portable. FK columns are all nullable with
+   * ON DELETE SET NULL, so missing referenced rows produce null fields rather
+   * than constraint failures. Upsert is safe.
+   */
+  proposals: async (rows) => {
+    let processed = 0;
+    for (const row of rows) {
+      try {
+        const values: typeof proposals.$inferInsert = {
+          id: row.id as string,
+          workspaceId: (row.workspaceId as string) ?? null,
+          targetType: (row.targetType as string) ?? "unknown",
+          targetId: (row.targetId as string) ?? "",
+          proposalType: (row.proposalType as string) ?? "edit",
+          data: (row.data as Record<string, unknown>) ?? {},
+          status:
+            (row.status as typeof proposals.$inferInsert.status) ?? "pending",
+          createdBy: (row.createdBy as string) ?? null,
+          // FK columns: carry the value but accept null if referenced row absent
+          threadId: (row.threadId as string) ?? null,
+          commandRunId: (row.commandRunId as string) ?? null,
+          sourceMessageId: (row.sourceMessageId as string) ?? null,
+          agentUserId: (row.agentUserId as string) ?? null,
+          correlationId: (row.correlationId as string) ?? null,
+          requestedEventId: (row.requestedEventId as string) ?? null,
+          sessionId: (row.sessionId as string) ?? null,
+          expiresAt: row.expiresAt ? new Date(row.expiresAt as string) : null,
+          reviewedBy: (row.reviewedBy as string) ?? null,
+          reviewedAt: row.reviewedAt
+            ? new Date(row.reviewedAt as string)
+            : null,
+          rejectionReason: (row.rejectionReason as string) ?? null,
+          comments: (row.comments as unknown[]) ?? [],
+          createdAt: row.createdAt
+            ? new Date(row.createdAt as string)
+            : new Date(),
+          updatedAt: row.updatedAt
+            ? new Date(row.updatedAt as string)
+            : new Date(),
+        };
+        const updateSet: Partial<typeof proposals.$inferInsert> = {
+          status: values.status,
+          data: values.data,
+          reviewedBy: values.reviewedBy,
+          reviewedAt: values.reviewedAt,
+          rejectionReason: values.rejectionReason,
+          comments: values.comments,
+          expiresAt: values.expiresAt,
+          updatedAt: values.updatedAt,
+        };
+        await db.insert(proposals).values(values).onConflictDoUpdate({
+          target: proposals.id,
+          set: updateSet,
+        });
+        processed++;
+      } catch (err) {
+        logger.warn(
+          { table: "proposals", rowId: row.id, err },
+          "Failed to upsert supplementary row"
+        );
+      }
+    }
+    return processed;
+  },
+
+  /**
+   * Focus sessions sync.
+   *
+   * Pod-portability audit:
+   * - `workspaceId` (text, not null) — pod-scoped; stable UUID.
+   * - `userId` (text, not null) — user records replicated via event log; stable.
+   * - `channelId` (uuid, nullable) FK → channels.id — no ON DELETE constraint
+   *   in schema (nullable uuid). Safe to carry; a missing channel leaves a
+   *   dangling FK until the channel event is replicated. Acceptable for sync
+   *   purposes (session is still queryable by id/workspaceId/userId).
+   * - `correlationId` (text, nullable, unique) — IS correlation token, not a DB FK.
+   *   UNIQUE constraint: if the same correlationId already exists from a prior sync
+   *   the row is deduplicated by the ON CONFLICT on `id`; no duplicate issue.
+   *
+   * Conclusion: focus_sessions ARE pod-portable.
+   */
+  focus_sessions: async (rows) => {
+    let processed = 0;
+    for (const row of rows) {
+      try {
+        const values: typeof focusSessions.$inferInsert = {
+          id: row.id as string,
+          workspaceId: row.workspaceId as string,
+          userId: row.userId as string,
+          correlationId: (row.correlationId as string) ?? null,
+          goal: (row.goal as string) ?? "",
+          status:
+            (row.status as typeof focusSessions.$inferInsert.status) ??
+            "active",
+          templateId: (row.templateId as string) ?? null,
+          expectedOutputs:
+            (row.expectedOutputs as typeof focusSessions.$inferInsert.expectedOutputs) ??
+            [],
+          channelId: (row.channelId as string) ?? null,
+          progress: (row.progress as number) ?? null,
+          agentIds: (row.agentIds as string[]) ?? [],
+          closedAt: row.closedAt ? new Date(row.closedAt as string) : null,
+          contextReport: (row.contextReport as Record<string, unknown>) ?? null,
+          planReport: (row.planReport as Record<string, unknown>) ?? null,
+          executionLog: (row.executionLog as Record<string, unknown>) ?? null,
+          verificationReport:
+            (row.verificationReport as Record<string, unknown>) ?? null,
+          startedAt: row.startedAt
+            ? new Date(row.startedAt as string)
+            : new Date(),
+          createdAt: row.createdAt
+            ? new Date(row.createdAt as string)
+            : new Date(),
+          updatedAt: row.updatedAt
+            ? new Date(row.updatedAt as string)
+            : new Date(),
+        };
+        const updateSet: Partial<typeof focusSessions.$inferInsert> = {
+          status: values.status,
+          progress: values.progress,
+          agentIds: values.agentIds,
+          closedAt: values.closedAt,
+          contextReport: values.contextReport,
+          planReport: values.planReport,
+          executionLog: values.executionLog,
+          verificationReport: values.verificationReport,
+          updatedAt: values.updatedAt,
+        };
+        await db.insert(focusSessions).values(values).onConflictDoUpdate({
+          target: focusSessions.id,
+          set: updateSet,
+        });
+        processed++;
+      } catch (err) {
+        logger.warn(
+          { table: "focus_sessions", rowId: row.id, err },
+          "Failed to upsert supplementary row"
+        );
+      }
+    }
+    return processed;
+  },
+
+  /**
+   * Widget definitions sync.
+   *
+   * Pod-portability audit:
+   * - `workspaceId` (uuid, nullable) FK → workspaces.id ON DELETE CASCADE.
+   *   If the workspace does not exist on the receiving pod, the insert will
+   *   fail with an FK violation. Strategy: skip silently (logged as warn) —
+   *   workspace-scoped widgets are only useful once their workspace is present.
+   *   System-wide widgets (workspaceId = null) have no FK and are always safe.
+   * - No user or credential FK columns.
+   * - `bundleSource` / `rendererSource` (text, nullable) — compiled bundles;
+   *   large but contain no secrets.
+   * - `configSchema` / `defaultConfig` (jsonb) — no secrets.
+   *
+   * Conclusion: widget_definitions ARE pod-portable with the FK caveat above.
+   * System-wide (workspaceId = null) widgets replicate unconditionally.
+   * Workspace-scoped widgets may silently skip if workspace is not present yet;
+   * a subsequent sync cycle after workspace replication will succeed.
+   */
+  widget_definitions: async (rows) => {
+    let processed = 0;
+    for (const row of rows) {
+      try {
+        const values: typeof widgetDefinitions.$inferInsert = {
+          id: row.id as string,
+          typeKey: (row.typeKey as string) ?? "synced-widget",
+          workspaceId: (row.workspaceId as string) ?? null,
+          name: (row.name as string) ?? "Synced Widget",
+          description: (row.description as string) ?? null,
+          icon: (row.icon as string) ?? null,
+          category: (row.category as string) ?? null,
+          rendererType:
+            (row.rendererType as typeof widgetDefinitions.$inferInsert.rendererType) ??
+            "builtin",
+          rendererSource: (row.rendererSource as string) ?? null,
+          source: (row.source as string) ?? null,
+          bundleSource: (row.bundleSource as string) ?? null,
+          configSchema: (row.configSchema as Record<string, unknown>) ?? {},
+          defaultConfig: (row.defaultConfig as Record<string, unknown>) ?? {},
+          defaultSize: (row.defaultSize as { w: number; h: number }) ?? {
+            w: 6,
+            h: 4,
+          },
+          minSize: (row.minSize as { w: number; h: number }) ?? null,
+          deps: (row.deps as Record<string, string>) ?? {},
+          isActive: (row.isActive as boolean) !== false,
+          version: (row.version as string) ?? "1.0.0",
+          trustLevel:
+            (row.trustLevel as typeof widgetDefinitions.$inferInsert.trustLevel) ??
+            "generated",
+          role:
+            (row.role as typeof widgetDefinitions.$inferInsert.role) ??
+            "widget",
+          contentKind:
+            (row.contentKind as typeof widgetDefinitions.$inferInsert.contentKind) ??
+            "widget",
+          createdAt: row.createdAt
+            ? new Date(row.createdAt as string)
+            : new Date(),
+          updatedAt: row.updatedAt
+            ? new Date(row.updatedAt as string)
+            : new Date(),
+        };
+        const updateSet: Partial<typeof widgetDefinitions.$inferInsert> = {
+          name: values.name,
+          description: values.description,
+          icon: values.icon,
+          category: values.category,
+          rendererType: values.rendererType,
+          rendererSource: values.rendererSource,
+          source: values.source,
+          bundleSource: values.bundleSource,
+          configSchema: values.configSchema,
+          defaultConfig: values.defaultConfig,
+          defaultSize: values.defaultSize,
+          minSize: values.minSize,
+          deps: values.deps,
+          isActive: values.isActive,
+          version: values.version,
+          trustLevel: values.trustLevel,
+          role: values.role,
+          contentKind: values.contentKind,
+          updatedAt: values.updatedAt,
+        };
+        await db.insert(widgetDefinitions).values(values).onConflictDoUpdate({
+          target: widgetDefinitions.id,
+          set: updateSet,
+        });
+        processed++;
+      } catch (err) {
+        logger.warn(
+          { table: "widget_definitions", rowId: row.id, err },
+          "Failed to upsert supplementary row"
+        );
+      }
+    }
+    return processed;
+  },
+
+  /**
+   * property_defs — FK → profiles.id (ON DELETE CASCADE, nullable) and
+   * workspaces.id (ON DELETE CASCADE, nullable). Both FKs are nullable so
+   * a missing profile/workspace produces null rather than a constraint error.
+   * relationDefId FK → relation_defs.id (ON DELETE SET NULL) — safe.
+   * targetProfileId FK → profiles.id (ON DELETE SET NULL) — safe.
+   *
+   * Excluded: valueType=SECRET properties carry no raw secret value in this
+   * table (secrets live in secrets_vault), so the row itself is safe to sync.
+   * However we exclude SECRET-typed rows as a defence-in-depth measure since
+   * the field name alone may be sensitive.
+   */
+  property_defs: async (rows) => {
+    let processed = 0;
+    for (const row of rows) {
+      try {
+        // Defence-in-depth: never replicate secret-typed property definitions
+        if (
+          typeof row.valueType === "string" &&
+          row.valueType.toLowerCase() === "secret"
+        ) {
+          continue;
+        }
+        const values: typeof propertyDefs.$inferInsert = {
+          id: row.id as string,
+          slug: row.slug as string,
+          profileId: (row.profileId as string) ?? null,
+          workspaceId: (row.workspaceId as string) ?? null,
+          valueType:
+            (row.valueType as typeof propertyDefs.$inferInsert.valueType) ??
+            "string",
+          constraints:
+            (row.constraints as typeof propertyDefs.$inferInsert.constraints) ??
+            {},
+          uiHints:
+            (row.uiHints as typeof propertyDefs.$inferInsert.uiHints) ?? {},
+          relationDefId: (row.relationDefId as string) ?? null,
+          targetProfileId: (row.targetProfileId as string) ?? null,
+          createdAt: row.createdAt
+            ? new Date(row.createdAt as string)
+            : new Date(),
+          updatedAt: row.updatedAt
+            ? new Date(row.updatedAt as string)
+            : new Date(),
+        };
+        const updateSet: Partial<typeof propertyDefs.$inferInsert> = {
+          constraints: values.constraints,
+          uiHints: values.uiHints,
+          relationDefId: values.relationDefId,
+          targetProfileId: values.targetProfileId,
+          updatedAt: values.updatedAt,
+        };
+        await db.insert(propertyDefs).values(values).onConflictDoUpdate({
+          target: propertyDefs.id,
+          set: updateSet,
+        });
+        processed++;
+      } catch (err) {
+        logger.warn(
+          { table: "property_defs", rowId: row.id, err },
+          "Failed to upsert supplementary row"
+        );
+      }
+    }
+    return processed;
+  },
 };
 
 app.post("/receive-supplementary", async (c) => {
@@ -798,8 +1319,17 @@ app.post("/receive-file", async (c) => {
   let body: z.infer<typeof filePayloadSchema>;
   try {
     body = filePayloadSchema.parse(await c.req.json());
-  } catch (_err) {
+  } catch (err) {
+    logger.warn({ err }, "Invalid payload in /receive-file");
     return c.json({ error: "Invalid payload" }, 400);
+  }
+
+  // Validate storageKey before passing to storage layer
+  if (
+    !/^[a-zA-Z0-9_\-/.]+$/.test(body.storageKey) ||
+    body.storageKey.includes("..")
+  ) {
+    return c.json({ error: "Invalid storageKey" }, 400);
   }
 
   try {
@@ -814,7 +1344,7 @@ app.post("/receive-file", async (c) => {
     const docValues: typeof documents.$inferInsert = {
       id: body.documentId,
       userId: "sync",
-      workspaceId: body.workspaceId ?? "",
+      workspaceId: body.workspaceId ?? null,
       title: body.title ?? "Synced Document",
       type: body.type ?? "document",
       storageKey: body.storageKey,
@@ -862,7 +1392,8 @@ app.post("/receive-file-version", async (c) => {
   let body: z.infer<typeof fileVersionPayloadSchema>;
   try {
     body = fileVersionPayloadSchema.parse(await c.req.json());
-  } catch (_err) {
+  } catch (err) {
+    logger.warn({ err }, "Invalid payload in /receive-file-version");
     return c.json({ error: "Invalid payload" }, 400);
   }
 
@@ -982,58 +1513,21 @@ app.post("/setup-peer", async (c) => {
 
   const { peerUrl, direction, authToken, label } = parsed.data;
 
-  // Check for duplicate (same peerUrl + direction)
-  const existing = await db.query.syncPeers.findFirst({
-    where: and(
-      eq(syncPeers.peerPodUrl, peerUrl),
-      eq(syncPeers.direction, direction)
-    ),
-  });
-
-  if (existing) {
-    // Update the existing peer instead of creating a duplicate
-    await db
-      .update(syncPeers)
-      .set({
-        authToken,
-        label: label ?? existing.label,
-        enabled: true,
-        updatedAt: new Date(),
-      })
-      .where(eq(syncPeers.id, existing.id));
-
-    logger.info(
-      { peerId: existing.id, peerUrl, direction },
-      "Sync peer updated via CP setup"
-    );
-    invalidateSyncPeerCache();
-    return c.json({ peerId: existing.id });
-  }
-
-  // Create new sync peer
-  const [peer] = await db
-    .insert(syncPeers)
-    .values({
-      peerPodUrl: peerUrl,
-      direction,
-      authToken,
-      label,
-      enabled: true,
-    })
-    .returning();
-
-  // Create initial sync_state row
-  await db.insert(syncState).values({
-    syncPeerId: peer.id,
+  // Delegate to shared helper — same logic used by the operator tRPC path
+  const peerId = await upsertSyncPeer({
+    peerPodUrl: peerUrl,
+    direction,
+    authToken,
+    label,
+    enabled: true,
   });
 
   logger.info(
-    { peerId: peer.id, peerUrl, direction, cpPodId: payload.podId },
-    "Sync peer created via CP setup"
+    { peerId, peerUrl, direction, cpPodId: payload.podId },
+    "Sync peer upserted via CP setup"
   );
 
-  invalidateSyncPeerCache();
-  return c.json({ peerId: peer.id });
+  return c.json({ peerId });
 });
 
 /**
@@ -1127,7 +1621,10 @@ app.get("/health", async (c) => {
     const tokenMatch = authHeader.match(/^Bearer\s+(.+)$/i);
     const callerToken = tokenMatch?.[1]?.trim();
     const isAuthenticated =
-      callerToken && peers.some((p) => p.authToken === callerToken);
+      callerToken &&
+      peers.some(
+        (p) => p.authToken != null && safeTokenEqual(p.authToken, callerToken)
+      );
 
     const states = await db.query.syncState.findMany();
     const stateMap = new Map(states.map((s) => [s.syncPeerId, s]));
@@ -1156,8 +1653,8 @@ app.get("/health", async (c) => {
       return c.json({ ...base, peerCount: peers.length, peers: peerSummaries });
     }
 
-    // Unauthenticated: only status + count (no topology leakage)
-    return c.json({ ...base, peerCount: peers.length });
+    // Unauthenticated: status only — no topology leakage (no peerCount)
+    return c.json(base);
   } catch {
     return c.json(base);
   }
@@ -1203,7 +1700,11 @@ app.get("/status", async (c) => {
     const peers = await db.query.syncPeers.findMany({
       columns: { authToken: true },
     });
-    const isAuthenticated = peers.some((p) => p.authToken === callerToken);
+    const isAuthenticated =
+      callerToken &&
+      peers.some(
+        (p) => p.authToken != null && safeTokenEqual(p.authToken, callerToken)
+      );
     if (!isAuthenticated) {
       return c.json({ error: "Unauthorized" }, 401);
     }

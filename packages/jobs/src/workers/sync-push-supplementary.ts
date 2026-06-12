@@ -25,8 +25,15 @@ import {
   and,
   or,
   gt,
+  drizzleSql,
 } from "@synap/database";
-import { intelligenceServices } from "@synap/database/schema";
+import {
+  intelligenceServices,
+  channels,
+  workspaces,
+  workspaceMembers,
+  propertyDefs,
+} from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "sync-push-supplementary" });
@@ -53,9 +60,108 @@ interface SupplementaryTableConfig {
 /**
  * Build the list of supplementary tables to sync.
  * Each entry defines how to query rows newer than the cursor.
+ *
+ * FK ordering contract (must be respected — receivers upsert in this order):
+ *   workspaces
+ *   → workspace_members  (FK → workspaces)
+ *   → channels           (FK → workspaces, agents; all nullable/SET NULL)
+ *   → messages           (FK → channels; nullable)
+ *   → property_defs      (FK → profiles, workspaces; all nullable/SET NULL)
+ *   → proposals          (FK → channels/messages; all SET NULL)
+ *   → focus_sessions     (FK → workspaces/channels; nullable)
+ *   → widget_definitions (FK → workspaces; CASCADE but nullable)
+ *   → automation_runs    (FK → automations)
  */
 function getTableConfigs(): SupplementaryTableConfig[] {
   return [
+    {
+      name: "workspaces",
+      queryFn: async (cursor: Date) => {
+        const rows = await db
+          .select({
+            id: workspaces.id,
+            ownerId: workspaces.ownerId,
+            name: workspaces.name,
+            description: workspaces.description,
+            type: workspaces.type,
+            settings: workspaces.settings,
+            systemSlug: workspaces.systemSlug,
+            packageSlug: workspaces.packageSlug,
+            provisioningProposalId: workspaces.provisioningProposalId,
+            provisioningStatus: workspaces.provisioningStatus,
+            workspaceType: workspaces.workspaceType,
+            // Billing columns intentionally excluded — per-pod state
+            createdAt: workspaces.createdAt,
+            updatedAt: workspaces.updatedAt,
+            archivedAt: workspaces.archivedAt,
+          })
+          .from(workspaces)
+          .where(gt(workspaces.updatedAt, cursor))
+          .orderBy(workspaces.updatedAt)
+          .limit(BATCH_SIZE);
+
+        if (rows.length === 0) return { rows: [], lastTimestamp: null };
+
+        const last = rows[rows.length - 1];
+        const lastTimestamp =
+          last.updatedAt instanceof Date
+            ? last.updatedAt.toISOString()
+            : String(last.updatedAt);
+
+        return {
+          rows: rows as unknown as Record<string, unknown>[],
+          lastTimestamp,
+        };
+      },
+    },
+    {
+      name: "workspace_members",
+      queryFn: async (cursor: Date) => {
+        const rows = await db
+          .select()
+          .from(workspaceMembers)
+          .where(gt(workspaceMembers.joinedAt, cursor))
+          .orderBy(workspaceMembers.joinedAt)
+          .limit(BATCH_SIZE);
+
+        if (rows.length === 0) return { rows: [], lastTimestamp: null };
+
+        const last = rows[rows.length - 1];
+        const lastTimestamp =
+          last.joinedAt instanceof Date
+            ? last.joinedAt.toISOString()
+            : String(last.joinedAt);
+
+        return {
+          rows: rows as unknown as Record<string, unknown>[],
+          lastTimestamp,
+        };
+      },
+    },
+    {
+      name: "channels",
+      queryFn: async (cursor: Date) => {
+        const rows = await db
+          .select()
+          .from(channels)
+          .where(gt(channels.updatedAt, cursor))
+          .orderBy(channels.updatedAt)
+          .limit(BATCH_SIZE);
+
+        if (rows.length === 0) return { rows: [], lastTimestamp: null };
+
+        const last = rows[rows.length - 1];
+        const lastTimestamp =
+          last.updatedAt instanceof Date
+            ? last.updatedAt.toISOString()
+            : String(last.updatedAt);
+
+        return {
+          rows: rows as unknown as Record<string, unknown>[],
+          lastTimestamp,
+        };
+      },
+    },
     {
       name: "messages",
       queryFn: async (cursor: Date) => {
@@ -180,6 +286,38 @@ function getTableConfigs(): SupplementaryTableConfig[] {
           .from(intelligenceCommands)
           .where(gt(intelligenceCommands.updatedAt, cursor))
           .orderBy(intelligenceCommands.updatedAt)
+          .limit(BATCH_SIZE);
+
+        if (rows.length === 0) return { rows: [], lastTimestamp: null };
+
+        const last = rows[rows.length - 1];
+        const lastTimestamp =
+          last.updatedAt instanceof Date
+            ? last.updatedAt.toISOString()
+            : String(last.updatedAt);
+
+        return {
+          rows: rows as unknown as Record<string, unknown>[],
+          lastTimestamp,
+        };
+      },
+    },
+    {
+      name: "property_defs",
+      queryFn: async (cursor: Date) => {
+        // Exclude SECRET-typed property defs — defence-in-depth (field names
+        // alone can be sensitive; actual secret values live in secrets_vault).
+        const rows = await db
+          .select()
+          .from(propertyDefs)
+          .where(
+            and(
+              gt(propertyDefs.updatedAt, cursor),
+              // drizzleSql comparison avoids importing the enum value here
+              drizzleSql`${propertyDefs.valueType} != 'secret'`
+            )
+          )
+          .orderBy(propertyDefs.updatedAt)
           .limit(BATCH_SIZE);
 
         if (rows.length === 0) return { rows: [], lastTimestamp: null };
@@ -378,8 +516,8 @@ export async function handleSyncPushSupplementary(): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes("relation") && msg.includes("does not exist")) {
-      logger.debug(
-        "Supplementary sync push skipped — sync tables not yet migrated"
+      logger.warn(
+        "Supplementary sync push skipped — sync tables not yet migrated (schema coherence should have caught this at boot)"
       );
     } else {
       logger.error({ err }, "Supplementary sync push worker top-level error");

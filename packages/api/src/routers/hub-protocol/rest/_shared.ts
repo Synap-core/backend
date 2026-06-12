@@ -259,6 +259,7 @@ export async function getCaller(
     workspaceId?: string | null;
     userId?: string;
     sourceMessageId?: string | null;
+    sessionId?: string | null;
   }
 ): Promise<HubProtocolCaller> {
   // SECURITY KEYSTONE: the acting identity is ALWAYS the authenticated owner
@@ -280,7 +281,8 @@ export async function getCaller(
     userId,
     scopes,
     options?.workspaceId,
-    options?.sourceMessageId
+    options?.sourceMessageId,
+    options?.sessionId
   );
   return hubProtocolRouter.createCaller(ctx as any);
 }

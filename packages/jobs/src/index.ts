@@ -35,3 +35,9 @@ export {
   A2AI_TRIGGER_JOB_OPTIONS,
   type A2AIResponseTriggerData,
 } from "./workers/a2ai-response-trigger.js";
+
+// Local sync driver — pg-boss-independent interval loop for LOCAL_MODE (Electron pod)
+export {
+  startLocalSyncDriver,
+  stopLocalSyncDriver,
+} from "./workers/local-sync-driver.js";

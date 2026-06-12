@@ -94,6 +94,24 @@ const importFileProgressSchema = z.object({
   error: z.string().optional(),
 });
 
+const uiFocusSurfaceSchema = z.object({
+  kind: z.enum(["cell", "view", "entity", "document", "channel", "app"]),
+  cellKey: z.string().optional(),
+  props: z.record(z.string(), z.unknown()).optional(),
+  viewId: z.string().optional(),
+  entityId: z.string().optional(),
+  documentId: z.string().optional(),
+  channelId: z.string().optional(),
+  appId: z.string().optional(),
+  placement: z.enum(["main", "side"]).optional(),
+  title: z.string().optional(),
+  workspaceId: z.string().optional(),
+});
+
+const uiFocusSchema = z.object({
+  surface: uiFocusSurfaceSchema,
+});
+
 // ============================================================================
 // Legacy schemas — added for the high-volume, well-typed emitters
 // ============================================================================
@@ -171,6 +189,7 @@ export const EventSchemas: Partial<Record<EventName, z.ZodType>> = {
   "hermes:task:completed": hermesTaskCompletedSchema,
   "hermes:task:failed": hermesTaskFailedSchema,
   "import:file:progress": importFileProgressSchema,
+  "ui:focus": uiFocusSchema,
 
   // Legacy (locked-down)
   "entity:created": entityCreatedSchema,

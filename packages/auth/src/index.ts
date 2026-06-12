@@ -40,3 +40,15 @@ export { orySessionMiddleware as authMiddleware } from "./ory-middleware.js";
 
 // Type exports (for compatibility)
 export type { Session, User } from "./types.js";
+
+// Local mode helpers (used by the embedded local pod — no Kratos/Hydra)
+export {
+  LOCAL_USER_ID,
+  buildLocalUser,
+  buildLocalSession,
+  buildLocalApiSession,
+  configureLocalMode,
+  isLocalModeEnabled,
+  getLocalAuthToken,
+  safeTokenEqual,
+} from "./local-mode.js";

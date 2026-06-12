@@ -194,6 +194,37 @@ export interface ChatStreamEvent {
 }
 
 // =============================================================================
+// UI Events
+// =============================================================================
+
+/**
+ * Payload for `ui:focus` — tells the browser to open a specific surface
+ * (entity, view, cell, document, channel, or app).
+ */
+export interface UiFocusEvent {
+  surface: {
+    kind: "cell" | "view" | "entity" | "document" | "channel" | "app";
+    // kind=cell
+    cellKey?: string;
+    props?: Record<string, unknown>;
+    // kind=view
+    viewId?: string;
+    // kind=entity
+    entityId?: string;
+    // kind=document
+    documentId?: string;
+    // kind=channel
+    channelId?: string;
+    // kind=app
+    appId?: string;
+    // shared
+    placement?: "main" | "side";
+    title?: string;
+    workspaceId?: string;
+  };
+}
+
+// =============================================================================
 // Server to Client Events Map
 // =============================================================================
 
@@ -228,6 +259,9 @@ export interface DomainServerToClientEvents {
   "hermes:task:completed": (data: HermesTaskCompletedEvent) => void;
   "hermes:task:failed": (data: HermesTaskFailedEvent) => void;
   "import:file:progress": (data: ImportFileProgressEvent) => void;
+
+  // UI gateway
+  "ui:focus": (data: UiFocusEvent) => void;
 
   // System
   error: (data: { code: string; message: string }) => void;
@@ -324,6 +358,9 @@ export const EventNames = {
   HERMES_TASK_COMPLETED: "hermes:task:completed",
   HERMES_TASK_FAILED: "hermes:task:failed",
   IMPORT_FILE_PROGRESS: "import:file:progress",
+
+  // UI gateway
+  UI_FOCUS: "ui:focus",
 } as const;
 
 export type EventName = (typeof EventNames)[keyof typeof EventNames];

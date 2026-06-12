@@ -118,6 +118,12 @@ export const CreateEntityRequestSchema = z
       .describe(
         "Optional message ID that triggered this write (for event chain causality)."
       ),
+    sessionId: z
+      .string()
+      .optional()
+      .describe(
+        "Optional session ID to link proposals created by this write to an active focus session."
+      ),
   })
   .openapi("CreateEntityRequest");
 
@@ -139,6 +145,7 @@ export const UpdateEntityRequestSchema = z
         "The proposing agent's rationale for this update, surfaced in the proposal inbox."
       ),
     sourceMessageId: z.string().optional(),
+    sessionId: z.string().optional(),
   })
   .openapi("UpdateEntityRequest");
 

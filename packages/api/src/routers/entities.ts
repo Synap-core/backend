@@ -374,6 +374,7 @@ export const entitiesRouter = router({
         correlationId,
         requestedEventId: requestedEvent?.id,
         sourceMessageId: ctx.sourceMessageId ?? undefined,
+        sessionId: ctx.sessionId ?? undefined,
         data: {
           id: entityId,
           profileSlug,
@@ -617,12 +618,18 @@ export const entitiesRouter = router({
         includeDescendants: z.boolean().optional().default(false),
         /** When true, only return global entities */
         globalOnly: z.boolean().optional().default(false),
+        /** Filter to entities materialized from a specific proposal (provenance). */
+        sourceProposalId: z.string().uuid().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
       // Visibility is gated by workspace membership (workspaceProcedure).
       // userId is attribution only — all workspace members see all workspace entities.
       const conditions: any[] = [isNull(entities.deletedAt)];
+
+      if (input.sourceProposalId) {
+        conditions.push(eq(entities.sourceProposalId, input.sourceProposalId));
+      }
 
       if (input.profileSlug) {
         // Resolve profile slugs to query (optionally including child profiles)
@@ -1160,6 +1167,7 @@ export const entitiesRouter = router({
         reasoning: input.reasoning,
         correlationId,
         requestedEventId: requestedEvent?.id,
+        sessionId: ctx.sessionId ?? undefined,
         data: {
           id: input.id,
           title: input.title,

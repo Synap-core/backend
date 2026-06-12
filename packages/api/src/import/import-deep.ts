@@ -411,6 +411,10 @@ export async function deepStructureImportItems(
       }
     }
 
+    // Memoize workspace lookups: hub notes are linked from many notes, and
+    // without this each occurrence fires a separate resolveExisting search.
+    const resolvedExistingByKey = new Map<string, string | null>();
+
     // For each item that has a provenance entity, resolve its wikilinks.
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
@@ -430,10 +434,11 @@ export async function deepStructureImportItems(
         //     A hit returns the real entity id; we reference it directly in the
         //     op (the materializer handles ref→id resolution for existing ids).
         if (!targetRef && opts.resolveExisting) {
-          const existingId = await opts.resolveExisting(
-            "note",
-            link.targetName
-          );
+          let existingId = resolvedExistingByKey.get(targetKey);
+          if (existingId === undefined) {
+            existingId = await opts.resolveExisting("note", link.targetName);
+            resolvedExistingByKey.set(targetKey, existingId);
+          }
           if (existingId) {
             // Use a synthetic ref that encodes the existing id so the
             // materializer can resolve it. The convention for existingEntityId

@@ -31,6 +31,22 @@ const MAX_ERROR_COUNT = 10;
 /** Maximum events per pull batch */
 const BATCH_SIZE = 500;
 
+/**
+ * Maximum batches consumed in a single tick during bootstrap mode.
+ * Bootstrap = cursor is at (or near) epoch, meaning the local pod has never
+ * synced before. We drain up to MAX_BOOTSTRAP_BATCHES × BATCH_SIZE = 25,000
+ * events in one scheduler tick to minimise the time-to-mirror on first pair.
+ * Steady-state (cursor is recent) stops after 1 batch as before.
+ */
+const MAX_BOOTSTRAP_BATCHES = 50;
+
+/**
+ * A cursor is considered "at epoch" (i.e. bootstrap mode) when it falls before
+ * this threshold. We use 2000-01-01 as the sentinel — any real data post-dates
+ * this, and new(0) (Unix epoch 1970) is comfortably before it.
+ */
+const BOOTSTRAP_EPOCH_THRESHOLD = new Date("2000-01-01T00:00:00Z");
+
 /** HTTP timeout for sync requests (ms) */
 const SYNC_TIMEOUT_MS = 30_000;
 
@@ -79,36 +95,95 @@ async function pullFromPeer(peer: {
 
   try {
     // Determine cursor: bidirectional peers use lastPullCursor, pure pull peers use lastCursor
-    const cursor =
+    let cursor =
       (peer.direction === "bidirectional"
         ? state.lastPullCursor
         : state.lastCursor) ?? new Date(0);
 
-    // Build URL
-    const baseUrl = peer.peerPodUrl.replace(/\/+$/, "");
-    const url = `${baseUrl}/api/sync/pull?since=${cursor.toISOString()}&limit=${BATCH_SIZE}`;
+    // Bootstrap mode: cursor is at or near epoch, meaning first-ever sync.
+    // We drain up to MAX_BOOTSTRAP_BATCHES batches in one tick to minimise
+    // time-to-mirror. Steady-state exits after the first batch (hasMore=false
+    // or cursor is recent).
+    const isBootstrap = cursor <= BOOTSTRAP_EPOCH_THRESHOLD;
+    const maxBatches = isBootstrap ? MAX_BOOTSTRAP_BATCHES : 1;
 
+    const baseUrl = peer.peerPodUrl.replace(/\/+$/, "");
     const headers: Record<string, string> = {};
     if (peer.authToken) {
       headers["Authorization"] = `Bearer ${peer.authToken}`;
     }
 
-    const response = await fetch(url, {
-      method: "GET",
-      headers,
-      signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
-    });
+    let totalEventsPulled = 0;
+    let totalMaterialized = 0;
+    let totalConflicts = 0;
+    let batchesConsumed = 0;
+    let lastCursorValue: string | null = null;
+    let nothingToPull = false;
 
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "unknown");
-      throw new Error(
-        `Peer responded ${response.status}: ${errorText.slice(0, 200)}`
-      );
+    for (let batch = 0; batch < maxBatches; batch++) {
+      const url = `${baseUrl}/api/sync/pull?since=${cursor.toISOString()}&limit=${BATCH_SIZE}`;
+
+      const response = await fetch(url, {
+        method: "GET",
+        headers,
+        signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "unknown");
+        throw new Error(
+          `Peer responded ${response.status}: ${errorText.slice(0, 200)}`
+        );
+      }
+
+      const result = (await response.json()) as SyncPullResponse;
+
+      if (!result.events || result.events.length === 0) {
+        nothingToPull = batch === 0; // only truly "nothing" on the very first fetch
+        break;
+      }
+
+      // Materialize events with conflict resolution
+      const batchResult = await materializeBatch(result.events, {
+        syncPeerId: peer.id,
+        checkConflicts: true,
+      });
+
+      totalEventsPulled += result.events.length;
+      totalMaterialized += batchResult.materialized;
+      totalConflicts += batchResult.conflicts;
+      batchesConsumed++;
+      lastCursorValue = result.cursor;
+
+      // Advance cursor in DB after each batch so progress is never lost
+      // even if we abort mid-loop on error.
+      const newCursor = result.cursor ? new Date(result.cursor) : null;
+      const cursorUpdate =
+        peer.direction === "bidirectional"
+          ? { lastPullCursor: newCursor }
+          : { lastCursor: newCursor };
+
+      await db
+        .update(syncState)
+        .set({
+          ...cursorUpdate,
+          lastSyncAt: new Date(),
+          eventsProcessed: state.eventsProcessed + totalEventsPulled,
+          updatedAt: new Date(),
+        })
+        .where(eq(syncState.id, state.id));
+
+      if (newCursor) {
+        cursor = newCursor;
+      }
+
+      // Exit loop if there's nothing more to fetch
+      if (!result.hasMore) {
+        break;
+      }
     }
 
-    const result = (await response.json()) as SyncPullResponse;
-
-    if (!result.events || result.events.length === 0) {
+    if (nothingToPull) {
       // Nothing to pull — mark idle
       await db
         .update(syncState)
@@ -117,28 +192,13 @@ async function pullFromPeer(peer: {
       return;
     }
 
-    // Materialize events with conflict resolution
-    const batchResult = await materializeBatch(result.events, {
-      syncPeerId: peer.id,
-      checkConflicts: true,
-    });
-
-    // Advance cursor
-    const newCursor = result.cursor ? new Date(result.cursor) : null;
-    const cursorUpdate =
-      peer.direction === "bidirectional"
-        ? { lastPullCursor: newCursor }
-        : { lastCursor: newCursor };
-
+    // Final status update
     await db
       .update(syncState)
       .set({
-        ...cursorUpdate,
-        lastSyncAt: new Date(),
         status: "idle",
         errorCount: 0,
         lastError: null,
-        eventsProcessed: state.eventsProcessed + result.events.length,
         updatedAt: new Date(),
       })
       .where(eq(syncState.id, state.id));
@@ -146,13 +206,14 @@ async function pullFromPeer(peer: {
     logger.info(
       {
         peerId: peer.id,
-        eventsPulled: result.events.length,
-        materialized: batchResult.materialized,
-        conflicts: batchResult.conflicts,
-        cursor: result.cursor,
-        hasMore: result.hasMore,
+        eventsPulled: totalEventsPulled,
+        materialized: totalMaterialized,
+        conflicts: totalConflicts,
+        batchesConsumed,
+        cursor: lastCursorValue,
+        bootstrapMode: isBootstrap,
       },
-      "Sync pull batch processed"
+      "Sync pull cycle completed"
     );
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);

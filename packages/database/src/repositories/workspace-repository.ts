@@ -9,7 +9,7 @@ import { workspaces, type WorkspaceSettings } from "../schema/workspaces.js";
 import { entities } from "../schema/entities.js";
 import { relations } from "../schema/relations.js";
 import { proposals } from "../schema/proposals.js";
-import { documents } from "../schema/documents.js";
+import { documents, documentVersions } from "../schema/documents.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import type { Workspace, NewWorkspace } from "../schema/workspaces.js";
@@ -132,10 +132,18 @@ export class WorkspaceRepository extends BaseRepository<
         // Lift promoted keys (0039) into their real columns when the patch sets
         // them — keeps columns in sync through the atomic JSONB merge path
         // (the provisioning-status transitions flow only through here).
-        ...(patch.systemSlug !== undefined ? { systemSlug: patch.systemSlug } : {}),
-        ...(patch.packageSlug !== undefined ? { packageSlug: patch.packageSlug } : {}),
-        ...(patch.proposalId !== undefined ? { provisioningProposalId: patch.proposalId } : {}),
-        ...(patch.provisioningStatus !== undefined ? { provisioningStatus: patch.provisioningStatus } : {}),
+        ...(patch.systemSlug !== undefined
+          ? { systemSlug: patch.systemSlug }
+          : {}),
+        ...(patch.packageSlug !== undefined
+          ? { packageSlug: patch.packageSlug }
+          : {}),
+        ...(patch.proposalId !== undefined
+          ? { provisioningProposalId: patch.proposalId }
+          : {}),
+        ...(patch.provisioningStatus !== undefined
+          ? { provisioningStatus: patch.provisioningStatus }
+          : {}),
         updatedAt: new Date(),
       } as Partial<NewWorkspace>)
       .where(eq(workspaces.id, id))
@@ -194,9 +202,22 @@ export class WorkspaceRepository extends BaseRepository<
       }
       const allDocs = [...wsDocs, ...linkedDocs];
       const documentIds = Array.from(new Set(allDocs.map((d) => d.id)));
-      const storageKeys = allDocs
+      const documentStorageKeys = allDocs
         .map((d) => d.storageKey)
         .filter((k): k is string => !!k);
+      const versionStorageKeys = documentIds.length
+        ? (
+            await tx
+              .select({ storageKey: documentVersions.storageKey })
+              .from(documentVersions)
+              .where(inArray(documentVersions.documentId, documentIds))
+          )
+            .map((d: { storageKey: string | null }) => d.storageKey)
+            .filter((k: string | null): k is string => !!k)
+        : [];
+      const storageKeys = Array.from(
+        new Set([...documentStorageKeys, ...versionStorageKeys])
+      );
 
       // 1) relations — workspace-scoped OR touching a workspace entity.
       const relConds: SQL[] = [eq(relations.workspaceId, workspaceId)];

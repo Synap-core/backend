@@ -111,6 +111,17 @@ const ServerConfigSchema = z.object({
   sharedPodMode: z.coerce.boolean().default(false),
   /** Disable pgvector semantic search (use on shared pods where workspace isolation is impractical). */
   vectorSearchEnabled: z.coerce.boolean().default(true),
+  /**
+   * Local Mode: embedded single-user pod with no Kratos/Hydra.
+   * Requires LOCAL_AUTH_TOKEN to be set. Incompatible with KRATOS_PUBLIC_URL
+   * (if both are set the process exits at startup with a loud error).
+   */
+  localMode: z.coerce.boolean().default(false),
+  /**
+   * The bearer token the Electron host generates and passes to the local pod.
+   * Required when localMode=true; ignored otherwise.
+   */
+  localAuthToken: z.string().optional(),
 });
 
 const Mem0ConfigSchema = z.object({
@@ -255,6 +266,8 @@ function loadConfig(): Config {
         controlPlaneUrl: process.env.CONTROL_PLANE_URL || undefined,
         sharedPodMode: process.env.SHARED_POD_MODE,
         vectorSearchEnabled: process.env.VECTOR_SEARCH_ENABLED,
+        localMode: process.env.LOCAL_MODE,
+        localAuthToken: process.env.LOCAL_AUTH_TOKEN || undefined,
       },
       mem0: {
         apiUrl: process.env.MEM0_API_URL,
@@ -355,6 +368,11 @@ export function validateConfig(
       break;
 
     case "ory":
+      // LOCAL_MODE bypasses all Ory requirements — the embedded pod uses
+      // fixed-identity auth (LOCAL_AUTH_TOKEN) instead of Kratos/Hydra.
+      if (config.server.localMode) {
+        break;
+      }
       if (!config.auth.kratosPublicUrl || !config.auth.hydraPublicUrl) {
         throw new Error(
           "Ory Stack requires KRATOS_PUBLIC_URL and HYDRA_PUBLIC_URL environment variables"

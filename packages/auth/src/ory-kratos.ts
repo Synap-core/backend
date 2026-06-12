@@ -9,6 +9,7 @@
  */
 
 import { Configuration, FrontendApi, IdentityApi } from "@ory/kratos-client";
+import { buildLocalSession, isLocalModeEnabled } from "./local-mode.js";
 
 const kratosPublicUrl =
   process.env.KRATOS_PUBLIC_URL || "http://localhost:4433";
@@ -35,13 +36,17 @@ export const kratosAdmin = new IdentityApi(
  * @returns Session data or null if invalid
  */
 export async function getKratosSession(cookie: string): Promise<any | null> {
-  // MOCK: In test/dev mode with disabled OAuth, accept mock cookies
+  // LOCAL MODE: resolve via the fixed local identity (no Kratos call)
+  if (isLocalModeEnabled()) {
+    return buildLocalSession();
+  }
+
+  // MOCK: In test mode with disabled OAuth, accept mock cookies
   if (
     process.env.NODE_ENV === "test" ||
     process.env.ENABLE_OAUTH2 === "false"
   ) {
     if (cookie.includes("mock-session-cookie")) {
-      console.log("[getKratosSession] Using MOCK session for testing");
       return {
         active: true,
         identity: {
@@ -103,6 +108,11 @@ export async function getIdentityById(identityId: string): Promise<any | null> {
 export async function getKratosSessionByToken(
   token: string
 ): Promise<any | null> {
+  // LOCAL MODE: resolve via the fixed local identity (no Kratos call)
+  if (isLocalModeEnabled()) {
+    return buildLocalSession();
+  }
+
   try {
     const { data: session } = await kratosPublic.toSession({
       xSessionToken: token,

@@ -12,7 +12,10 @@ import { TRPCError } from "@trpc/server";
 import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import { requireUserId, requireWorkspaceId } from "../utils/user-scoped.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
-import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
+import {
+  resolveIntelligenceService,
+  IntelligenceAuthError,
+} from "../utils/intelligence-routing.js";
 import {
   sql,
   eq,
@@ -173,11 +176,23 @@ export const captureRouter = router({
           );
         }
       } catch (err) {
-        logger.warn(
-          { err, userId },
-          "IS classification failed, falling back to note"
-        );
-        markServiceCredentialError();
+        // Only an upstream auth failure (401/403) means the pod's IS
+        // credentials are bad — mark credential_error so the frontend can
+        // drive re-provisioning. Every other failure (validation, timeout,
+        // 5xx, network) is a transient/degraded condition: fall back to a
+        // note WITHOUT poisoning the credential status.
+        if (err instanceof IntelligenceAuthError) {
+          logger.warn(
+            { err, userId, status: err.status },
+            "IS classification auth failure — marking credential_error, falling back to note"
+          );
+          markServiceCredentialError();
+        } else {
+          logger.warn(
+            { err, userId },
+            "IS classification failed (non-auth) — falling back to note"
+          );
+        }
       }
 
       // Merge optional URL into properties for bookmark-family profiles
@@ -362,56 +377,86 @@ export const captureRouter = router({
         existingEntityNames = [];
       }
 
-      const structureResult = await client.structure({
-        text: input.text,
-        url: input.url,
-        html: input.html,
-        context: input.context,
-        hints: {
-          availableProfiles,
-          availableWorkspaces,
-          existingEntityNames,
-          previousEntities: input.previousEntities,
-        },
+      // Degraded fallback proposal — a single note carrying the raw text, so a
+      // capture is never lost when the IS can't structure it. `degraded` +
+      // `degradedReason` are ADDITIVE response fields (published api-types
+      // clients that don't read them are unaffected) that tell the caller this
+      // came from the fallback path, and WHY:
+      //   is_auth_error      — IS rejected the pod credentials (401/403)
+      //   is_invalid_response — IS reachable but returned null (5xx/validation/
+      //                         timeout/network) — NOT a credentials problem
+      const degradedFallback = (
+        degradedReason: "is_auth_error" | "is_invalid_response"
+      ) => ({
+        proposals: [
+          {
+            tempId: "t1",
+            profileSlug: "note",
+            title: input.text.slice(0, 80).trim(),
+            description: input.text.length > 80 ? input.text : undefined,
+            properties: { content: input.text },
+            confidence: 0.3,
+          },
+        ],
+        relations: [] as Array<{
+          sourceTempId: string;
+          targetTempId: string;
+          relationType: string;
+        }>,
+        followUp: null as string | null,
+        targetWorkspaceId: null as string | null,
+        dedupCandidates: {} as Record<
+          string,
+          Array<{
+            entityId: string;
+            title: string;
+            profileSlug: string;
+            score: number;
+          }>
+        >,
+        degraded: true as const,
+        degradedReason,
       });
 
+      let structureResult: Awaited<ReturnType<typeof client.structure>>;
+      try {
+        structureResult = await client.structure({
+          text: input.text,
+          url: input.url,
+          html: input.html,
+          context: input.context,
+          hints: {
+            availableProfiles,
+            availableWorkspaces,
+            existingEntityNames,
+            previousEntities: input.previousEntities,
+          },
+        });
+      } catch (err) {
+        // Only an upstream auth failure reaches here as a throw — the client
+        // returns null for every non-auth failure. This is the ONLY path that
+        // should mark credential_error and trigger the re-provisioning loop.
+        if (err instanceof IntelligenceAuthError) {
+          logger.warn(
+            { userId, status: err.status },
+            "IS structure auth failure — marking service as credential_error"
+          );
+          markServiceCredentialError();
+          return degradedFallback("is_auth_error");
+        }
+        throw err;
+      }
+
       if (!structureResult) {
-        // IS unavailable — mark credentials and return fallback
-        // Frontend will detect this via /api/provision/status and trigger re-provisioning via CP
+        // IS reachable but did not return a usable structure (5xx, validation
+        // error, timeout, network). This is NOT a credentials problem — do NOT
+        // mark credential_error. Return a degraded fallback so the capture is
+        // preserved and the caller can surface the real (non-auth) cause.
         logger.warn(
           { userId },
-          "IS structure returned null — marking service as credential_error"
+          "IS structure failed (non-auth) — returning degraded fallback, credential status left unchanged"
         );
-        markServiceCredentialError();
-
-        return {
-          proposals: [
-            {
-              tempId: "t1",
-              profileSlug: "note",
-              title: input.text.slice(0, 80).trim(),
-              description: input.text.length > 80 ? input.text : undefined,
-              properties: { content: input.text },
-              confidence: 0.3,
-            },
-          ],
-          relations: [] as Array<{
-            sourceTempId: string;
-            targetTempId: string;
-            relationType: string;
-          }>,
-          followUp: null as string | null,
-          targetWorkspaceId: null as string | null,
-          dedupCandidates: {} as Record<
-            string,
-            Array<{
-              entityId: string;
-              title: string;
-              profileSlug: string;
-              score: number;
-            }>
-          >,
-        };
+        return degradedFallback("is_invalid_response");
       }
 
       // 2. If followUp, pass through immediately (no dedup yet)

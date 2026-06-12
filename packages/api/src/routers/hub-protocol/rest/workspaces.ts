@@ -9,16 +9,19 @@ import {
   sql,
   getDb,
   users,
+  entities,
   workspaces,
   workspaceMembers,
   views,
   eq,
   and,
+  isNull,
   inArray,
   EventRepository,
   WorkspaceRepository,
   type AgentMetadata,
 } from "@synap/database";
+import { sql as drizzleSql } from "drizzle-orm";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -346,9 +349,11 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         memberRows.map((row) => [row.workspaceId, row])
       );
       const wsIds = await getUserAccessibleWorkspaceIds(userId);
-      const rows =
+      // Per-workspace live entity counts + pod-global count, so agent
+      // orientation (`synap orient`) reports the truth instead of "empty".
+      const [rows, countRows, podCountRows] = await Promise.all([
         wsIds.length > 0
-          ? await db
+          ? db
               .select({
                 id: workspaces.id,
                 name: workspaces.name,
@@ -359,7 +364,31 @@ export function registerWorkspacesRoutes(app: HubHono): void {
               })
               .from(workspaces)
               .where(inArray(workspaces.id, wsIds))
-          : [];
+          : Promise.resolve([]),
+        wsIds.length > 0
+          ? db
+              .select({
+                workspaceId: entities.workspaceId,
+                count: drizzleSql<number>`cast(count(*) as integer)`,
+              })
+              .from(entities)
+              .where(
+                and(
+                  inArray(entities.workspaceId, wsIds),
+                  isNull(entities.deletedAt)
+                )
+              )
+              .groupBy(entities.workspaceId)
+          : Promise.resolve([]),
+        db
+          .select({ count: drizzleSql<number>`cast(count(*) as integer)` })
+          .from(entities)
+          .where(and(isNull(entities.workspaceId), isNull(entities.deletedAt))),
+      ]);
+      const entityCountByWorkspace = new Map(
+        countRows.map((row) => [row.workspaceId, row.count])
+      );
+      const podEntityCount = podCountRows[0]?.count ?? 0;
       const list = rows
         .filter((workspace) => workspace.archivedAt == null)
         .map((workspace) => {
@@ -384,9 +413,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
             appId: settings.appId ?? null,
             packageSlug: settings.packageSlug ?? null,
             systemSlug: settings.systemSlug ?? null,
+            entityCount: entityCountByWorkspace.get(workspace.id) ?? 0,
           };
         });
-      return c.json({ workspaces: list });
+      return c.json({ workspaces: list, podEntityCount });
     } catch (err) {
       logger.error({ err }, "GET /workspaces failed");
       return c.json({ error: "Failed to list workspaces" }, 500);

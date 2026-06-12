@@ -3,6 +3,10 @@
  *
  * Admin-only routes for managing pod-to-pod sync peers and monitoring status.
  * Uses podAdminProcedure — only pod administrators can manage sync.
+ *
+ * This is the OPERATOR-AUTHENTICATED path for peer registration. The CP-signed
+ * REST endpoint (`POST /api/sync/setup-peer`) is the Control-Plane path. Both
+ * call the same shared helper (`upsertSyncPeer`) to avoid logic duplication.
  */
 
 import { z } from "zod";
@@ -14,6 +18,7 @@ import {
   workspaces,
   eq,
   inArray,
+  and,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
@@ -24,6 +29,96 @@ import {
 } from "../utils/split-brain-service.js";
 
 const logger = createLogger({ module: "sync-management" });
+
+// ============================================================================
+// Shared peer-upsert helper — used by both this tRPC router (operator auth)
+// and the CP-signed REST endpoint (`POST /api/sync/setup-peer`).
+// ============================================================================
+
+export interface UpsertSyncPeerInput {
+  peerPodUrl: string;
+  direction: "push" | "pull" | "bidirectional";
+  authToken?: string | null;
+  label?: string | null;
+  workspaceIds?: string[] | null;
+  localRole?: "primary" | "secondary" | "unset" | null;
+  enabled?: boolean;
+}
+
+/**
+ * Insert or update a sync peer row and ensure a matching `sync_state` row
+ * exists. On conflict (same peerPodUrl + direction) the existing peer is
+ * updated rather than duplicated — matching the CP setup-peer behavior.
+ *
+ * Returns the peer id.
+ */
+export async function upsertSyncPeer(
+  input: UpsertSyncPeerInput
+): Promise<string> {
+  const existing = await db.query.syncPeers.findFirst({
+    where: and(
+      eq(syncPeers.peerPodUrl, input.peerPodUrl),
+      eq(syncPeers.direction, input.direction)
+    ),
+  });
+
+  if (existing) {
+    await db
+      .update(syncPeers)
+      .set({
+        authToken: input.authToken ?? existing.authToken,
+        label: input.label !== undefined ? input.label : existing.label,
+        workspaceIds:
+          input.workspaceIds !== undefined
+            ? input.workspaceIds
+            : existing.workspaceIds,
+        localRole:
+          input.localRole !== undefined
+            ? (input.localRole ?? "unset")
+            : (existing.localRole ?? "unset"),
+        enabled: input.enabled !== undefined ? input.enabled : existing.enabled,
+        updatedAt: new Date(),
+      })
+      .where(eq(syncPeers.id, existing.id));
+
+    logger.info(
+      {
+        peerId: existing.id,
+        peerUrl: input.peerPodUrl,
+        direction: input.direction,
+      },
+      "Sync peer updated via upsertSyncPeer"
+    );
+
+    invalidateSyncPeerCache();
+    return existing.id;
+  }
+
+  const [peer] = await db
+    .insert(syncPeers)
+    .values({
+      peerPodUrl: input.peerPodUrl,
+      direction: input.direction,
+      authToken: input.authToken ?? null,
+      label: input.label ?? null,
+      workspaceIds: input.workspaceIds ?? null,
+      localRole: input.localRole ?? "unset",
+      enabled: input.enabled !== undefined ? input.enabled : true,
+    })
+    .returning();
+
+  await db.insert(syncState).values({ syncPeerId: peer.id });
+
+  logger.info(
+    { peerId: peer.id, peerUrl: input.peerPodUrl, direction: input.direction },
+    "Sync peer created via upsertSyncPeer"
+  );
+
+  invalidateSyncPeerCache();
+  return peer.id;
+}
+
+// ============================================================================
 
 export const syncManagementRouter = router({
   /**
@@ -48,44 +143,52 @@ export const syncManagementRouter = router({
   }),
 
   /**
-   * Add a new sync peer
+   * Add or update a sync peer (operator-authenticated path).
+   *
+   * Supports all three directions including "bidirectional" (for local-twin setup).
+   * On duplicate (same peerPodUrl + direction) the existing peer is updated.
+   * `localRole` controls split-brain demotion behavior:
+   *   - "secondary" → pod is a local twin, never auto-demoted to readonly.
+   *   - "primary"   → authority pod; current split-brain behavior.
+   *   - "unset"     → legacy default (backward-compatible).
    */
   addPeer: podAdminProcedure
     .input(
       z.object({
         peerPodUrl: z.string().url(),
-        direction: z.enum(["push", "pull"]),
+        direction: z.enum(["push", "pull", "bidirectional"]),
         label: z.string().optional(),
         authToken: z.string().optional(),
         workspaceIds: z.array(z.string().uuid()).optional(),
+        localRole: z
+          .enum(["primary", "secondary", "unset"])
+          .optional()
+          .default("unset"),
         enabled: z.boolean().optional().default(true),
       })
     )
     .mutation(async ({ input }) => {
-      const [peer] = await db
-        .insert(syncPeers)
-        .values({
-          peerPodUrl: input.peerPodUrl,
-          direction: input.direction,
-          label: input.label,
-          authToken: input.authToken,
-          workspaceIds: input.workspaceIds,
-          enabled: input.enabled,
-        })
-        .returning();
-
-      // Create initial sync_state row
-      await db.insert(syncState).values({
-        syncPeerId: peer.id,
+      const peerId = await upsertSyncPeer({
+        peerPodUrl: input.peerPodUrl,
+        direction: input.direction,
+        authToken: input.authToken,
+        label: input.label,
+        workspaceIds: input.workspaceIds,
+        localRole: input.localRole,
+        enabled: input.enabled,
       });
 
       logger.info(
-        { peerId: peer.id, url: peer.peerPodUrl, direction: peer.direction },
-        "Sync peer added"
+        {
+          peerId,
+          url: input.peerPodUrl,
+          direction: input.direction,
+          localRole: input.localRole,
+        },
+        "Sync peer added via operator tRPC"
       );
 
-      invalidateSyncPeerCache();
-      return peer;
+      return { peerId };
     }),
 
   /**
@@ -113,12 +216,14 @@ export const syncManagementRouter = router({
     }),
 
   /**
-   * Update a sync peer (enable/disable, change workspaceIds, label, etc.)
+   * Update a sync peer (enable/disable, change workspaceIds, label, localRole, etc.)
    *
    * workspaceIds accepts:
    * - string[] — sync only these workspaces
    * - null     — clear the filter (sync all workspaces)
    * - omitted  — leave unchanged
+   *
+   * localRole: change the split-brain demotion behavior for this peer.
    */
   updatePeer: podAdminProcedure
     .input(
@@ -128,6 +233,7 @@ export const syncManagementRouter = router({
         label: z.string().optional(),
         authToken: z.string().optional(),
         workspaceIds: z.array(z.string().uuid()).nullable().optional(),
+        localRole: z.enum(["primary", "secondary", "unset"]).optional(),
         enabled: z.boolean().optional(),
       })
     )
@@ -154,6 +260,8 @@ export const syncManagementRouter = router({
         setValues.authToken = updates.authToken;
       if (updates.workspaceIds !== undefined)
         setValues.workspaceIds = updates.workspaceIds; // null clears filter, [] also clears (treated as "sync all")
+      if (updates.localRole !== undefined)
+        setValues.localRole = updates.localRole;
       if (updates.enabled !== undefined) setValues.enabled = updates.enabled;
 
       const [updated] = await db

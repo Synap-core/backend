@@ -17,7 +17,8 @@ export async function createHubProtocolCallerContext(
   userId: string,
   scopes: string[],
   workspaceId?: string | null,
-  sourceMessageId?: string | null
+  sourceMessageId?: string | null,
+  sessionId?: string | null
 ): Promise<
   Context & {
     scopes?: string[];
@@ -47,6 +48,8 @@ export async function createHubProtocolCallerContext(
     isHubProtocol: true,
     // Link proposals created during this request to the triggering message.
     sourceMessageId: sourceMessageId ?? null,
+    // Link proposals created during this request to the active session.
+    sessionId: sessionId ?? null,
   };
 
   return ctx;

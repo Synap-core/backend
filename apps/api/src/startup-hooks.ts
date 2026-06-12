@@ -7,7 +7,7 @@
  * - Default integrations
  */
 
-import { createLogger } from "@synap-core/core";
+import { createLogger, config } from "@synap-core/core";
 import {
   db,
   webhookSubscriptions,
@@ -208,12 +208,20 @@ async function loadCorsOrigins(): Promise<void> {
 // Critical secrets validation — fail fast before accepting traffic
 // ---------------------------------------------------------------------------
 
-const REQUIRED_SECRETS: string[] = [
+// In LOCAL_MODE, Kratos is not running — its cookie secret is irrelevant.
+// We keep the list dynamic so the check remains a single function.
+const REQUIRED_SECRETS_ALL: string[] = [
   "JWT_SECRET",
   // POSTGRES_PASSWORD is NOT checked here — it's interpolated into DATABASE_URL
   // by docker-compose and not passed as a separate env var to the container.
   "SYNAP_SERVICE_ENCRYPTION_KEY",
   "KRATOS_SECRETS_COOKIE",
+];
+
+const REQUIRED_SECRETS_LOCAL_MODE: string[] = [
+  "JWT_SECRET",
+  "SYNAP_SERVICE_ENCRYPTION_KEY",
+  // KRATOS_SECRETS_COOKIE intentionally omitted — Kratos is not used in local mode
 ];
 
 const RECOMMENDED_SECRETS: string[] = [
@@ -230,6 +238,10 @@ function validateCriticalSecrets(): void {
     );
     return;
   }
+
+  const REQUIRED_SECRETS = config.server.localMode
+    ? REQUIRED_SECRETS_LOCAL_MODE
+    : REQUIRED_SECRETS_ALL;
 
   const missing = REQUIRED_SECRETS.filter((key) => !process.env[key]?.trim());
 
@@ -384,6 +396,42 @@ export async function verifyPodAdminInvariant(): Promise<void> {
 }
 
 /**
+ * Ensure the local operator user and a personal workspace exist in local mode.
+ *
+ * Uses the same idempotent `seedAdminUser` path as the normal handshake flow,
+ * keyed on the stable LOCAL_USER_ID constant. Safe to call on every boot.
+ */
+async function ensureLocalUser(): Promise<void> {
+  if (!config.server.localMode) return;
+
+  try {
+    const { LOCAL_USER_ID } = await import("@synap/auth");
+    const { seedAdminUser } = await import("@synap/database");
+    const result = await seedAdminUser({
+      kratosIdentityId: LOCAL_USER_ID,
+      email: "operator@local",
+      name: "Local Operator",
+      emailVerified: true,
+    });
+    logger.info(
+      {
+        userId: LOCAL_USER_ID,
+        workspaceId: result.workspaceId,
+        alreadyExisted: result.alreadyExisted,
+      },
+      "Local mode: operator user ensured"
+    );
+  } catch (err) {
+    // Fatal in local mode — without a user row the pod cannot serve any request.
+    logger.error(
+      { err },
+      "Local mode: failed to ensure operator user row — aborting"
+    );
+    process.exit(1);
+  }
+}
+
+/**
  * Run all startup hooks
  */
 export async function runStartupHooks(): Promise<void> {
@@ -414,6 +462,10 @@ export async function runStartupHooks(): Promise<void> {
   // Trusted issuers are established at provisioning time via POST /api/provision/seed-trust
   // (authenticated with PROVISIONING_TOKEN). No startup seeding — the pod starts with zero
   // knowledge of the CP URL. Trust is purely provisioning-driven.
+
+  // LOCAL MODE: ensure the operator user + personal workspace exist in the DB.
+  // Must run before verifyPodAdminInvariant so the invariant check sees a user.
+  await ensureLocalUser();
 
   // Pod-admin invariant — non-fatal, surfaces a loud warning if broken so
   // operators see exactly which recovery command to run.

@@ -72,4 +72,9 @@ export interface Context {
    * When set, proposals created during this request are linked to this message.
    */
   sourceMessageId?: string | null;
+  /**
+   * Session ID that triggered this hub-protocol request.
+   * When set, proposals created during this request are linked to this session.
+   */
+  sessionId?: string | null;
 }

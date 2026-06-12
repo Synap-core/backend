@@ -9,6 +9,7 @@ export {
   resolveIntelligenceServiceByAgentId,
   resolveAgent,
   getDefaultActiveService,
+  IntelligenceAuthError,
 } from "@synap/intelligence-client";
 
 export type {

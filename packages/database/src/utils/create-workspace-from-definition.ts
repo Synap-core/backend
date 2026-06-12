@@ -1512,6 +1512,22 @@ export async function createWorkspaceFromDefinition(
     resolvedLayout = { ...settings.layout, sidebarItems: patchedItems };
   }
 
+  // Also resolve surface.viewId from viewName for items using the surface field
+  const patchedSurfaceItems = (
+    resolvedLayout ?? settings.layout
+  )?.sidebarItems?.map((item: any) => {
+    if (item.surface?.kind !== "view" || !item.surface.viewId) return item;
+    const resolvedId = viewMap[item.surface.viewId];
+    if (!resolvedId) return item;
+    return { ...item, surface: { ...item.surface, viewId: resolvedId } };
+  });
+  if (patchedSurfaceItems) {
+    resolvedLayout = {
+      ...(resolvedLayout ?? settings.layout),
+      sidebarItems: patchedSurfaceItems,
+    };
+  }
+
   // Atomically persist all accumulated settings in ONE call:
   // profileBentoViewIds, profileEntityBentoTemplates, homeDashboardViewId,
   // and final provisioningStatus / completedSteps.

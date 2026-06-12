@@ -51,6 +51,8 @@ import {
   stopBoss,
   registerAllWorkers,
   registerCronSchedules,
+  startLocalSyncDriver,
+  stopLocalSyncDriver,
 } from "@synap/jobs";
 import crypto from "crypto";
 import { verifyCpJwtWithTrust } from "@synap/api";
@@ -61,7 +63,11 @@ import {
   handshakeRateLimitMiddleware,
 } from "./middleware/security.js";
 import { eventStreamManager, setupEventBroadcasting } from "@synap/api";
-import { authMiddleware } from "@synap/auth";
+import {
+  authMiddleware,
+  configureLocalMode,
+  safeTokenEqual,
+} from "@synap/auth";
 import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
 
 // Setup event broadcasting to SSE clients
@@ -110,9 +116,36 @@ try {
   validateConfig("intelligenceHub");
   apiLogger.info("Intelligence Hub configuration validated");
 
-  // Validate Ory Stack (Kratos + Hydra) auth config
+  // LOCAL_MODE mutual-exclusion: LOCAL_MODE=true and KRATOS_PUBLIC_URL must
+  // not be set together — that would mean the operator forgot to remove Ory
+  // config from the env, which could silently leave the auth path ambiguous.
+  if (config.server.localMode && config.auth.kratosPublicUrl) {
+    apiLogger.error(
+      "LOCAL_MODE=true and KRATOS_PUBLIC_URL are both set. " +
+        "These are mutually exclusive: remove KRATOS_PUBLIC_URL (and HYDRA_PUBLIC_URL) " +
+        "when running in local mode."
+    );
+    process.exit(1);
+  }
+
+  // LOCAL_MODE requires LOCAL_AUTH_TOKEN — the Electron host generates and
+  // passes this token; without it the pod cannot authenticate any request.
+  if (config.server.localMode && !config.server.localAuthToken) {
+    apiLogger.error(
+      "LOCAL_MODE=true but LOCAL_AUTH_TOKEN is not set. " +
+        "The Electron host must generate a token and pass it as LOCAL_AUTH_TOKEN."
+    );
+    process.exit(1);
+  }
+
+  // Validate Ory Stack (Kratos + Hydra) auth config.
+  // In LOCAL_MODE this is a no-op (validateConfig branches on localMode).
   validateConfig("ory");
-  apiLogger.info("Ory Stack configuration validated");
+  if (config.server.localMode) {
+    apiLogger.info("Local mode: Ory Stack auth bypassed (fixed-identity)");
+  } else {
+    apiLogger.info("Ory Stack configuration validated");
+  }
 } catch (error) {
   apiLogger.error({ err: error }, "Configuration validation failed");
   apiLogger.error(
@@ -123,6 +156,11 @@ try {
   );
   process.exit(1);
 }
+
+// Initialise local-mode state from Zod-validated config values.
+// All auth paths (ory-middleware, ory-kratos, /api/session) read ONLY the
+// module-level state set here — no raw process.env.LOCAL_MODE reads in auth paths.
+configureLocalMode(config.server.localMode, config.server.localAuthToken);
 
 // Initialize Hono app
 const app = new Hono();
@@ -362,12 +400,24 @@ const proxyKratosRequest = async (c: HonoContext, kratosPath: string) => {
 // Caddy strips the /.ory/kratos/public prefix before forwarding to backend,
 // so Kratos internally sees /self-service/... paths directly.
 app.all("/.ory/kratos/public/*", async (c) => {
+  if (config.server.localMode) {
+    return c.json(
+      { error: "Kratos routes are not available in local mode" },
+      404
+    );
+  }
   const kratosPath = c.req.path.replace("/.ory/kratos/public", "");
   return proxyKratosRequest(c, kratosPath);
 });
 
 // Legacy route: /self-service/* (for backward compatibility)
 app.all("/self-service/*", async (c) => {
+  if (config.server.localMode) {
+    return c.json(
+      { error: "Kratos routes are not available in local mode" },
+      404
+    );
+  }
   const kratosPath = c.req.path.replace("/self-service", "");
   return proxyKratosRequest(c, kratosPath);
 });
@@ -419,6 +469,23 @@ app.post("/api/auth/token-exchange", async (c) => {
 //   Browser → POST ${podUrl}/api/handshake { token } (this endpoint) → Kratos session cookie
 app.use("/api/handshake", handshakeRateLimitMiddleware);
 app.post("/api/handshake", async (c) => {
+  // LOCAL MODE: no CP JWT, no Kratos session. Return the fixed local identity
+  // as a successful handshake payload so the browser client can proceed.
+  if (config.server.localMode) {
+    const { buildLocalSession, buildLocalUser } = await import("@synap/auth");
+    const localUser = buildLocalUser();
+    const localSession = buildLocalSession();
+    apiLogger.info(
+      { userId: localUser.id },
+      "Local mode handshake: returning fixed identity"
+    );
+    return c.json({
+      success: true,
+      session: localSession,
+      session_token: config.server.localAuthToken,
+    });
+  }
+
   try {
     const body = await c.req.json().catch(() => ({}));
     const {
@@ -875,6 +942,28 @@ app.post("/api/handshake", async (c) => {
 // Auth: ory_kratos_session cookie (set by /api/handshake). Public endpoint.
 // Returns 200 + session data if valid, 401 if missing or expired.
 app.get("/api/session", async (c) => {
+  // LOCAL MODE: validate the bearer/x-local-token and return the fixed identity.
+  // Only bearer + x-local-token are accepted — ory_kratos_session cookie is
+  // NOT a valid LOCAL_MODE token channel.
+  if (config.server.localMode) {
+    const authHeader = c.req.header("Authorization") || "";
+    const bearerToken = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : "";
+    const incomingToken = bearerToken || c.req.header("x-local-token") || "";
+
+    if (
+      !incomingToken ||
+      !config.server.localAuthToken ||
+      !safeTokenEqual(incomingToken, config.server.localAuthToken)
+    ) {
+      return c.json({ authenticated: false }, 401);
+    }
+
+    const { buildLocalApiSession } = await import("@synap/auth");
+    return c.json(buildLocalApiSession());
+  }
+
   const sessionToken = getCookie(c, "ory_kratos_session");
   if (!sessionToken) {
     return c.json({ authenticated: false }, 401);
@@ -900,9 +989,15 @@ app.get("/api/session", async (c) => {
   }
 });
 
-apiLogger.info(
-  "Ory Kratos routes enabled at /.ory/kratos/public/* and /self-service/*"
-);
+if (config.server.localMode) {
+  apiLogger.info(
+    "Local mode: Ory Kratos routes respond 404 at /.ory/kratos/public/* and /self-service/*"
+  );
+} else {
+  apiLogger.info(
+    "Ory Kratos routes enabled at /.ory/kratos/public/* and /self-service/*"
+  );
+}
 apiLogger.info("Token Exchange endpoint enabled at /api/auth/token-exchange");
 apiLogger.info("Control Plane handshake endpoint enabled at /api/handshake");
 
@@ -1506,17 +1601,30 @@ try {
         "API server started"
       );
 
-      // Start pg-boss job queue
-      try {
-        await startBoss();
-        await registerAllWorkers();
-        await registerCronSchedules();
-        apiLogger.info("pg-boss job queue started with all workers registered");
-      } catch (err) {
-        apiLogger.error(
-          { err },
-          "Failed to start pg-boss (non-fatal, side-effects will be unavailable)"
+      if (config.server.localMode) {
+        // Local mode: pg-boss is disabled (untested on PGlite and would
+        // double-fire sync workers alongside the local sync driver).
+        // The local sync driver handles all scheduling instead.
+        apiLogger.info(
+          "Local mode: pg-boss disabled; local sync driver handles scheduling"
         );
+        startLocalSyncDriver();
+        apiLogger.info("Local sync driver started (LOCAL_MODE)");
+      } else {
+        // Start pg-boss job queue
+        try {
+          await startBoss();
+          await registerAllWorkers();
+          await registerCronSchedules();
+          apiLogger.info(
+            "pg-boss job queue started with all workers registered"
+          );
+        } catch (err) {
+          apiLogger.error(
+            { err },
+            "Failed to start pg-boss (non-fatal, side-effects will be unavailable)"
+          );
+        }
       }
     }
   );
@@ -1555,6 +1663,9 @@ process.on("uncaughtException", (error) => {
 ["SIGTERM", "SIGINT"].forEach((signal) => {
   process.on(signal, async () => {
     apiLogger.info(`${signal} received, shutting down gracefully`);
+    if (config.server.localMode) {
+      stopLocalSyncDriver();
+    }
     try {
       await stopBoss();
       apiLogger.info("pg-boss stopped");

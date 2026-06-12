@@ -11,6 +11,7 @@
  * Lifecycle: active → paused ↔ active → closed
  */
 
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   uuid,
@@ -96,6 +97,13 @@ export const focusSessions = pgTable(
     ),
     userIdIdx: index("idx_focus_sessions_user_id").on(table.userId),
     statusIdx: index("idx_focus_sessions_status").on(table.status),
+    // Partial unique index: one active session per channel.
+    // Also serves as the covering index for channels.ts per-message lookup
+    // (WHERE channel_id = ? AND status = 'active'). NULL channel_id excluded
+    // so CLI/API sessions without a channel remain unconstrained.
+    activeChannelIdx: uniqueIndex("idx_focus_sessions_active_channel")
+      .on(table.channelId)
+      .where(sql`status = 'active' AND channel_id IS NOT NULL`),
   })
 );
 

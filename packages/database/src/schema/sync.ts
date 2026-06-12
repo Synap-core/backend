@@ -43,6 +43,19 @@ export const syncPeers = pgTable("sync_peers", {
   /** Workspace IDs to sync — null means sync all workspaces */
   workspaceIds: text("workspace_ids").array(),
 
+  /**
+   * Local-twin role for this peer relationship.
+   *
+   * - "primary"   → this pod is the authority; current split-brain behavior applies.
+   * - "secondary" → this pod is an offline-capable local twin; it is NEVER auto-demoted
+   *                 to readonly on divergence. On partition it logs loudly and continues,
+   *                 relying on LWW at materialization when reconnected.
+   * - "unset"     → no role configured; legacy behavior (backward-compatible default).
+   *
+   * NULL / "unset" → current behavior preserved (primary wins, lower-gen gets readonly).
+   */
+  localRole: text("local_role").default("unset"), // "primary" | "secondary" | "unset"
+
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

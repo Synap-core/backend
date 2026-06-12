@@ -62,6 +62,11 @@ export interface IntelligenceHubRequest {
   billingChannel?: "browser" | "api" | "relay";
   /** Channel kind: pm = private message / personal, group = workspace-shared channel */
   channelKind?: "pm" | "group";
+  /**
+   * Active focus session ID — when set, IS tags all hub calls with X-Session-Id
+   * so proposals from this run link to the user-visible goal-bound session.
+   */
+  focusSessionId?: string;
 }
 
 // ── Bulk CSV-mapping analysis types ─────────────────────────────────────────
@@ -200,6 +205,28 @@ function recordFailure(baseUrl: string): void {
   circuitBreaker.set(baseUrl, state);
 }
 
+// ── Auth-failure signal ──────────────────────────────────────────────────────
+//
+// Distinguishes an UPSTREAM credential failure (IS returned 401/403 → the pod's
+// API key is rejected) from every other failure mode (5xx, validation, timeout,
+// network), which all still surface as a graceful `null` return. Callers that
+// must drive the re-provisioning loop (markServiceCredentialError) should catch
+// THIS error type specifically and treat a plain `null` as a non-auth degrade.
+
+export class IntelligenceAuthError extends Error {
+  readonly status: number;
+  constructor(status: number, message?: string) {
+    super(message ?? `Intelligence Service auth failed: HTTP ${status}`);
+    this.name = "IntelligenceAuthError";
+    this.status = status;
+  }
+}
+
+/** True for HTTP statuses that mean the pod's IS credentials are rejected. */
+function isAuthStatus(status: number): boolean {
+  return status === 401 || status === 403;
+}
+
 // ── Fetch helper ─────────────────────────────────────────────────────────────
 
 const FETCH_TIMEOUT_MS = 30_000;
@@ -301,6 +328,7 @@ export class IntelligenceHubClient {
               mcpServers: request.mcpServers,
               workspaceSettings: request.workspaceSettings,
               channelKind: request.channelKind,
+              focusSessionId: request.focusSessionId,
             }),
           },
           // Chat (non-streaming fallback) can run a slow conversational LLM —
@@ -427,6 +455,7 @@ export class IntelligenceHubClient {
             deepAnalysis: request.deepAnalysis,
             workspaceSettings: request.workspaceSettings,
             channelKind: request.channelKind,
+            focusSessionId: request.focusSessionId,
           }),
         },
         // Streaming yields progressively; a 30s TOTAL abort wrongly kills a
@@ -684,6 +713,15 @@ export class IntelligenceHubClient {
           console.warn(
             `[IntelligenceHubClient] structure failed: ${response.status} ${response.statusText} (baseUrl=${this.baseUrl}, hasApiKey=${!!this.apiKey})`
           );
+          // Auth failures are the ONLY failure that should drive re-provisioning;
+          // surface them as a typed throw so callers can distinguish them from
+          // the graceful `null` we return for every other non-ok status.
+          if (isAuthStatus(response.status)) {
+            throw new IntelligenceAuthError(
+              response.status,
+              `Intelligence Service rejected credentials: ${response.status} ${response.statusText}`
+            );
+          }
           return null;
         }
         return (await response.json()) as Awaited<
@@ -693,6 +731,8 @@ export class IntelligenceHubClient {
         clearTimeout(timer);
       }
     } catch (err) {
+      // Preserve the auth signal — it must not be flattened into a null.
+      if (err instanceof IntelligenceAuthError) throw err;
       console.warn(
         `[IntelligenceHubClient] structure error: ${err instanceof Error ? err.message : String(err)} (baseUrl=${this.baseUrl})`
       );

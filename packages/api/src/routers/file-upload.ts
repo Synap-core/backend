@@ -16,8 +16,13 @@ import {
   eq,
   and,
   entities,
+  documents,
+  documentVersions,
+  workspaceMembers,
   EntityRepository,
   eventRepository,
+  storedVersionValues,
+  uploadDocumentVersionSnapshot,
 } from "@synap/database";
 import { channelContextItems } from "@synap/database/schema";
 import { authMiddleware } from "@synap/auth";
@@ -45,6 +50,29 @@ function isAllowedMimeType(mimeType: string): boolean {
   if (mimeType.startsWith("audio/")) return true;
   if (mimeType.startsWith("video/")) return true;
   return ALLOWED_MIME_TYPES.has(mimeType);
+}
+
+function documentTypeForMimeType(mimeType: string): string {
+  if (mimeType === "text/markdown") return "markdown";
+  if (mimeType === "text/html") return "html";
+  if (mimeType.startsWith("text/")) return "text";
+  if (mimeType === "application/json") return "code";
+  if (mimeType === "application/pdf") return "pdf";
+  if (
+    mimeType ===
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  ) {
+    return "docx";
+  }
+  return "file";
+}
+
+function brandAssetKindForMimeType(mimeType: string): string {
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
+  if (mimeType === "application/pdf") return "document";
+  return "other";
 }
 
 export const fileUploadApp = new Hono<{
@@ -122,34 +150,119 @@ fileUploadApp.post("/upload", async (c) => {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // Upload to storage (MinIO / R2)
+    // Upload current file content to storage (MinIO / R2).
     logger.info(
       { storageId, fileName: originalFileName, size: file.size, mimeType },
       "Uploading file to storage"
     );
 
-    await storage.upload(storagePath, buffer, { contentType: mimeType });
+    const metadata = await storage.upload(storagePath, buffer, {
+      contentType: mimeType,
+    });
+
+    // Canonical path: each uploaded blob gets a document row plus an immutable
+    // v1 snapshot. Entities link to the document; raw storage is never the only
+    // source of truth.
+    const documentId = randomUUID();
+    const versionId = randomUUID();
+    const documentType = documentTypeForMimeType(mimeType);
+    const snapshot = await uploadDocumentVersionSnapshot({
+      userId,
+      documentId,
+      versionId,
+      documentType,
+      mimeType,
+      content: buffer,
+    });
+    const [document] = await db.transaction(async (tx) => {
+      const [doc] = await tx
+        .insert(documents)
+        .values({
+          id: documentId,
+          userId,
+          workspaceId,
+          title: originalFileName,
+          type: documentType,
+          storageUrl: metadata.url,
+          storageKey: metadata.path,
+          size: metadata.size,
+          mimeType,
+          currentVersion: 1,
+          lastSavedVersion: 1,
+          metadata: {
+            originalFileName,
+            uploadKind: "file-upload",
+          },
+        })
+        .returning();
+
+      await tx.insert(documentVersions).values({
+        id: versionId,
+        documentId,
+        version: 1,
+        ...storedVersionValues(snapshot),
+        author: "user",
+        authorId: userId,
+        message: "Initial upload",
+      });
+
+      return [doc];
+    });
 
     // Create entity via EntityRepository — handles profile resolution, property indexing, event emission.
-    // Merge caller-provided properties; the storage path is written under storageKeyProperty so
-    // callers can map it directly to the profile field they care about (e.g. "asset-url" for brand-asset).
+    // Merge caller-provided properties. Legacy callers can still choose the
+    // storage-key property, but brand uploads link through asset-document-id so
+    // asset-url remains an actual external URL field.
     const entityRepo = new EntityRepository(db, eventRepository);
-    const createdEntity = await entityRepo.create(
-      {
-        profileSlug,
-        title: originalFileName,
-        workspaceId,
-        userId,
-        properties: {
-          ...extraProperties,
-          fileName: originalFileName,
-          mimeType,
-          fileSize: file.size,
-          [storageKeyProperty]: storagePath,
+    const effectiveStorageKeyProperty =
+      profileSlug === "brand-asset" && storageKeyProperty === "asset-url"
+        ? "storageKey"
+        : storageKeyProperty;
+    const documentProperties =
+      profileSlug === "brand-asset"
+        ? {
+            "asset-document-id": document.id,
+            "asset-kind":
+              (extraProperties["asset-kind"] as string | undefined) ??
+              brandAssetKindForMimeType(mimeType),
+          }
+        : {};
+    let createdEntity;
+    try {
+      createdEntity = await entityRepo.create(
+        {
+          profileSlug,
+          title: originalFileName,
+          workspaceId,
+          userId,
+          documentId: document.id,
+          properties: {
+            ...extraProperties,
+            ...documentProperties,
+            fileName: originalFileName,
+            mimeType,
+            fileSize: file.size,
+            documentId: document.id,
+            [effectiveStorageKeyProperty]: metadata.path,
+          },
         },
-      },
-      userId
-    );
+        userId
+      );
+    } catch (createError) {
+      try {
+        await db.delete(documents).where(eq(documents.id, document.id));
+        await Promise.allSettled([
+          storage.delete(metadata.path),
+          storage.delete(snapshot.storageKey),
+        ]);
+      } catch (cleanupError) {
+        logger.warn(
+          { err: cleanupError, documentId: document.id },
+          "Failed to clean up uploaded document after entity creation failure"
+        );
+      }
+      throw createError;
+    }
     // Use the canonical entity ID returned by the repository
     const createdEntityId = createdEntity.id;
 
@@ -185,7 +298,7 @@ fileUploadApp.post("/upload", async (c) => {
     let previewUrl: string | undefined;
     if (mimeType.startsWith("image/")) {
       try {
-        previewUrl = await storage.getSignedUrl(storagePath, 3600);
+        previewUrl = await storage.getSignedUrl(metadata.path, 3600);
       } catch {
         // Non-fatal
       }
@@ -196,12 +309,73 @@ fileUploadApp.post("/upload", async (c) => {
       fileName: originalFileName,
       mimeType,
       size: file.size,
-      storageKey: storagePath,
+      storageKey: metadata.path,
+      documentId: document.id,
       previewUrl: previewUrl ?? null,
     });
   } catch (error) {
     logger.error({ err: error }, "File upload failed");
     return c.json({ error: "File upload failed" }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /documents/:documentId/url — presigned download URL for document storage
+// ---------------------------------------------------------------------------
+fileUploadApp.get("/documents/:documentId/url", async (c) => {
+  const userId = c.get("userId");
+  if (!userId) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const documentId = c.req.param("documentId");
+
+  try {
+    const document = await db.query.documents.findFirst({
+      where: eq(documents.id, documentId),
+      columns: {
+        id: true,
+        userId: true,
+        workspaceId: true,
+        storageKey: true,
+      },
+    });
+
+    if (!document || !document.storageKey) {
+      return c.json({ error: "Document file not found" }, 404);
+    }
+
+    if (document.userId !== userId) {
+      if (!document.workspaceId) {
+        return c.json({ error: "Forbidden" }, 403);
+      }
+      const membership = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, document.workspaceId),
+          eq(workspaceMembers.userId, userId)
+        ),
+      });
+      if (!membership) {
+        return c.json({ error: "Forbidden" }, 403);
+      }
+    }
+
+    const expiresInSeconds = 3600;
+    const url = await storage.getSignedUrl(
+      document.storageKey,
+      expiresInSeconds
+    );
+    const expiresAt = new Date(
+      Date.now() + expiresInSeconds * 1000
+    ).toISOString();
+
+    return c.json({ url, expiresAt });
+  } catch (error) {
+    logger.error(
+      { err: error, documentId },
+      "Failed to generate document presigned URL"
+    );
+    return c.json({ error: "Failed to generate URL" }, 500);
   }
 });
 

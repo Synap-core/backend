@@ -85,6 +85,7 @@ export const documentsRouter = router({
         correlationId,
         requestedEventId: requestedEvent?.id,
         sourceMessageId: ctx.sourceMessageId ?? undefined,
+        sessionId: ctx.sessionId ?? undefined,
         data: {
           id: documentId,
           title: input.title,
@@ -288,6 +289,7 @@ export const documentsRouter = router({
         input.sourceMessageId ?? ctx.sourceMessageId ?? undefined;
       const threadId = input.threadId ?? undefined;
 
+      const sessionId = ctx.sessionId ?? undefined;
       const { proposal } = await createEventBackedProposal({
         userId: createdBy,
         workspaceId,
@@ -301,6 +303,7 @@ export const documentsRouter = router({
         createdBy,
         threadId: threadId ?? null,
         sourceMessageId: sourceMessageId ?? null,
+        sessionId,
         expiresAt,
         data: {
           source: "agent",

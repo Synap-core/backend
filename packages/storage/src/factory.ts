@@ -13,6 +13,10 @@
 import type { IFileStorage } from "./interface.js";
 import { R2StorageProvider, type R2Config } from "./r2-provider.js";
 import { MinIOStorageProvider, type MinIOConfig } from "./minio-provider.js";
+import {
+  LocalStorageProvider,
+  type LocalStorageConfig,
+} from "./local-provider.js";
 // Import errors from @synap-core/core to avoid circular dependency
 // @synap-core/core doesn't depend on @synap/database, breaking the cycle:
 // database → storage → core ✅ (no cycle!)
@@ -59,9 +63,20 @@ function getConfig(): AppConfig {
  */
 export function createFileStorageProvider(): IFileStorage {
   const config = getConfig();
-  const provider = config.storage.provider;
+  // STORAGE_PROVIDER=local OR localMode flag both select the filesystem provider
+  const provider: string =
+    process.env.STORAGE_PROVIDER === "local" || config.server.localMode
+      ? "local"
+      : config.storage.provider;
 
   switch (provider) {
+    case "local": {
+      const localConfig: LocalStorageConfig = {
+        rootDir: process.env.LOCAL_STORAGE_DIR ?? undefined,
+      };
+      return new LocalStorageProvider(localConfig);
+    }
+
     case "r2": {
       // Validate R2 configuration
       if (
@@ -102,7 +117,7 @@ export function createFileStorageProvider(): IFileStorage {
 
     default:
       throw new ValidationError(
-        `Unknown storage provider: ${provider}. Supported providers: "r2", "minio"`,
+        `Unknown storage provider: ${provider}. Supported providers: "r2", "minio", "local"`,
         { provider }
       );
   }

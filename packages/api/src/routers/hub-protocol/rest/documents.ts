@@ -107,6 +107,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
       reasoning?: string;
       agentUserId?: string;
       sourceMessageId?: string;
+      sessionId?: string;
     };
     try {
       const actorResolution = await resolveActorId(
@@ -116,10 +117,12 @@ export function registerDocumentsRoutes(app: HubHono): void {
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       // resolveActorId kept for its validation side-effect; return value unused.
+      const sessionId = body.sessionId ?? c.req.header("x-session-id") ?? null;
       const caller = await getCaller(c, {
         workspaceId: body.workspaceId ?? null,
         userId: body.userId,
         sourceMessageId: body.sourceMessageId,
+        sessionId,
       });
       const result = await caller.documents.createDocument({
         userId: body.userId,
@@ -302,7 +305,12 @@ export function registerDocumentsRoutes(app: HubHono): void {
         );
       }
 
-      const caller = await getCaller(c, { userId, sourceMessageId });
+      const sessionId = body.sessionId ?? c.req.header("x-session-id") ?? null;
+      const caller = await getCaller(c, {
+        userId,
+        sourceMessageId,
+        sessionId,
+      });
       const current = await caller.documents.getDocument({
         documentId,
         userId,
@@ -348,6 +356,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
       agentUserId?: string;
       threadId?: string;
       sourceMessageId?: string;
+      sessionId?: string;
       proposalType?: "ai_edit" | "user_suggestion" | "review_comment";
       changes: Array<{
         op: "insert" | "delete" | "replace";
@@ -359,8 +368,10 @@ export function registerDocumentsRoutes(app: HubHono): void {
       originalContent?: string;
     };
     try {
+      const sessionId = body.sessionId ?? c.req.header("x-session-id") ?? null;
       const caller = await getCaller(c, {
         sourceMessageId: body.sourceMessageId,
+        sessionId,
       });
       const result = await caller.documents.createDocumentProposal({
         documentId: body.documentId,

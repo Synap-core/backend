@@ -792,10 +792,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
       // resolveActorId is kept for its validation side-effect above; the entity
       // is attributed via resolvedAgentUserId below, so its return is unused.
 
+      const sessionId = body.sessionId ?? c.req.header("x-session-id") ?? null;
       const caller = await getCaller(c, {
         workspaceId: effectiveWorkspaceId,
         userId,
         sourceMessageId: body.sourceMessageId,
+        sessionId,
       });
       const result = await caller.entities.createEntity({
         userId,
@@ -908,10 +910,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
         return c.json({ error: actorResolution.error }, 400);
       // resolveActorId is kept for its validation side-effect above; the entity
       // is attributed via resolvedAgentUserId below, so its return is unused.
+      const sessionId = body.sessionId ?? c.req.header("x-session-id") ?? null;
       const caller = await getCaller(c, {
         workspaceId: effectiveWorkspaceId,
         userId,
         sourceMessageId: body.sourceMessageId,
+        sessionId,
       });
       const result = await caller.entities.updateEntity({
         entityId,

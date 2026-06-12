@@ -12,7 +12,14 @@
  * - Supports manual promotion via admin endpoint
  */
 
-import { db, syncGeneration, eq, drizzleSql } from "@synap/database";
+import {
+  db,
+  syncGeneration,
+  syncPeers,
+  eq,
+  and,
+  drizzleSql,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "split-brain-service" });
@@ -150,6 +157,18 @@ export async function recordPeerGeneration(
     peerGeneration !== state.generation; // Different generations = diverged
 
   if (isSplitBrain) {
+    // Check if this pod is configured as `secondary` on ANY enabled peer.
+    // A secondary pod is a local twin that must never be auto-demoted to readonly:
+    // it is designed to accumulate offline writes and rely on LWW at reconnect.
+    const secondaryPeer = await db.query.syncPeers.findFirst({
+      where: and(
+        eq(syncPeers.localRole, "secondary"),
+        eq(syncPeers.enabled, true)
+      ),
+      columns: { id: true },
+    });
+    const isSecondaryPod = secondaryPeer != null;
+
     logger.warn(
       {
         localGeneration: state.generation,
@@ -157,12 +176,18 @@ export async function recordPeerGeneration(
         lastKnownPeerGen: state.lastPeerGeneration,
         localRole: state.role,
         peerRole,
+        isSecondaryPod,
       },
-      "SPLIT-BRAIN DETECTED: Both pods advanced generation during partition"
+      isSecondaryPod
+        ? "SPLIT-BRAIN DETECTED (secondary pod): divergence logged — NOT demoting to readonly; LWW will resolve at materialization"
+        : "SPLIT-BRAIN DETECTED: Both pods advanced generation during partition"
     );
 
-    // The pod with LOWER generation (fewer writes) gets demoted to readonly
-    const shouldDemoteSelf = state.generation <= peerGeneration;
+    // Secondary pods are never demoted: they are offline-capable local twins.
+    // Primary / unset pods: the pod with fewer writes is demoted to readonly
+    // (existing behavior, preserved for backward compatibility).
+    const shouldDemoteSelf =
+      !isSecondaryPod && state.generation <= peerGeneration;
 
     const newRole = shouldDemoteSelf ? "readonly" : state.role;
 
@@ -182,7 +207,12 @@ export async function recordPeerGeneration(
 
     invalidateSyncGenerationCache();
 
-    if (shouldDemoteSelf) {
+    if (isSecondaryPod) {
+      logger.warn(
+        { localGen: state.generation, peerGen: peerGeneration },
+        "Secondary pod continues operating (offline-twin model); LWW resolves divergence"
+      );
+    } else if (shouldDemoteSelf) {
       logger.warn(
         { newRole, localGen: state.generation, peerGen: peerGeneration },
         "Pod demoted to read-only (fewer writes during partition)"
