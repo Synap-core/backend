@@ -403,6 +403,20 @@ $return_urls
     password:
       enabled: true
       config: {}
+    passkey:
+      enabled: true
+      config:
+        rp:
+          display_name: "Synap"
+          id: ${bare_root}
+          origins:
+$(if [ "$is_localhost" = true ]; then
+echo "            - http://localhost:3000"
+echo "            - http://localhost:4040"
+else
+echo "            - https://${domain}"
+echo "            - https://pod-admin.${bare_root}"
+fi)
     oidc:
       enabled: false
   flows:
