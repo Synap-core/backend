@@ -207,6 +207,31 @@ export const hubAutomationsRouter = router({
     }),
 
   /**
+   * Delete automation
+   * Requires: hub-protocol.write scope
+   */
+  deleteAutomation: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        workspaceId: z.string().uuid().nullable().optional(),
+        id: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const callerContext = await createHubProtocolCallerContext(
+        input.userId,
+        ctx.scopes || [],
+        input.workspaceId ?? null
+      );
+      const caller = regularAutomationsRouter.createCaller(callerContext);
+      return caller.delete({
+        id: input.id,
+        workspaceId: input.workspaceId ?? null,
+      });
+    }),
+
+  /**
    * Trigger automation manually (from IS or UI via IS)
    * Requires: hub-protocol.write scope
    */

@@ -36,6 +36,7 @@ import {
   appRouter,
   createContext as createApiContext,
   hubProtocolRestApp,
+  hubProtocolRouter,
   integrationsCapabilitiesApp,
   mcpHttpApp,
   fileUploadApp,
@@ -1129,6 +1130,50 @@ app.route("/api/webhooks/intelligence", intelligenceWebhookRouter);
 // Pod-to-Pod Sync receive endpoint (Bearer token auth from registered peers)
 import { syncReceiveApp } from "@synap/api";
 app.route("/api/sync", syncReceiveApp);
+
+// Hub Protocol tRPC bridge — Bearer API-key authenticated tRPC surface used by
+// the synap CLI and external agents (procedures: entities, profiles, relations,
+// views, sessions, automations, commands, skills, …). Registered BEFORE the
+// REST app mount at /api/hub so the /trpc subtree can't be shadowed by it.
+// Auth is enforced per-procedure via scopedProcedure (apiKeyMiddleware reads
+// the Authorization header from ctx.req).
+const hubTrpcBodyMethods = new Set([
+  "arrayBuffer",
+  "blob",
+  "formData",
+  "json",
+  "text",
+] as const);
+type HubTrpcBodyMethod = "json" | "text" | "arrayBuffer" | "blob" | "formData";
+
+app.use("/api/hub/trpc/*", async (c) => {
+  const req =
+    c.req.method === "GET" || c.req.method === "HEAD"
+      ? c.req.raw
+      : new Proxy(c.req.raw, {
+          get(target, prop) {
+            if (hubTrpcBodyMethods.has(prop as HubTrpcBodyMethod)) {
+              const m = prop as HubTrpcBodyMethod;
+              return () => c.req[m]();
+            }
+            return Reflect.get(target, prop, target);
+          },
+        });
+
+  const context = await createApiContext(req, c);
+
+  const res = await fetchRequestHandler({
+    endpoint: "/api/hub/trpc",
+    req,
+    router: hubProtocolRouter,
+    createContext: async () => context as any,
+    onError({ error, path }) {
+      apiLogger.error({ err: error, path }, "hub tRPC error");
+    },
+  });
+
+  return c.newResponse(res.body, res);
+});
 
 // Hub Protocol REST adapter (for Intelligence Service; API key auth)
 app.route("/api/hub", hubProtocolRestApp);
