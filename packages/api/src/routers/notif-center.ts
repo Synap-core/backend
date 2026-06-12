@@ -16,6 +16,7 @@ import {
   eq,
   and,
   desc,
+  count,
 } from "@synap/database";
 import { NotificationStatus } from "@synap/database";
 
@@ -115,8 +116,12 @@ export const notifCenterRouter = router({
    * Total unread count for the bell badge.
    */
   unreadCount: workspaceProcedure.query(async ({ ctx }) => {
-    const rows = await db
-      .select({ id: notifications.id })
+    // COUNT(*) in the DB — was materializing up to 100 id rows then taking
+    // .length (which also silently capped the badge at 100). This is polled
+    // frequently (bell badge); the aggregate is served entirely from the
+    // partial index `notifs_unread_user_workspace_idx` (migration 0122).
+    const [row] = await db
+      .select({ value: count() })
       .from(notifications)
       .where(
         and(
@@ -124,10 +129,9 @@ export const notifCenterRouter = router({
           eq(notifications.userId, ctx.userId),
           eq(notifications.status, NotificationStatus.UNREAD)
         )
-      )
-      .limit(100);
+      );
 
-    return { count: rows.length };
+    return { count: row?.value ?? 0 };
   }),
 
   /**

@@ -21,15 +21,27 @@ const DATABASE_URL =
   process.env.DATABASE_URL ||
   "postgresql://postgres:synap_dev_password@localhost:5432/synap";
 
+// Connection pool size.
+//
+// Default raised from 10 → 50 for launch. The previous default of 10 starved
+// the API under load: the API process serves all tRPC/HTTP requests AND shares
+// the box with ~40 pg-boss workers. pg-boss maintains its OWN pool (configured
+// where the boss is started, not here), so this value sizes ONLY the API/Drizzle
+// client. 50 is safe against Postgres' default `max_connections = 100`: it
+// leaves ~50 connections for pg-boss + admin/superuser-reserved slots. If you
+// raise DB_POOL_SIZE, also raise Postgres `max_connections` (or front the DB
+// with PgBouncer) so API + pg-boss + admin stay under it.
+const DB_POOL_SIZE = parseInt(process.env.DB_POOL_SIZE || "50", 10);
+
 logger.info({
-  poolSize: 10,
+  poolSize: DB_POOL_SIZE,
   url: DATABASE_URL.replace(/:[^:@]+@/, ":***@"), // Hide password in logs
   msg: "PostgreSQL connection pool initialized (postgres.js + Drizzle)",
 });
 
 // PostgreSQL connection configuration
 const connectionConfig = {
-  max: parseInt(process.env.DB_POOL_SIZE || "10"), // Connection pool size
+  max: DB_POOL_SIZE, // Connection pool size (env DB_POOL_SIZE, default 50)
   idle_timeout: 20, // Close idle connections after 20s
   connect_timeout: 10, // Fail fast if DB unreachable
   onnotice: () => {}, // Suppress NOTICE messages

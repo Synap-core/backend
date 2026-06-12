@@ -30,7 +30,7 @@ const DatabaseConfigSchema = z.object({
 });
 
 const StorageConfigSchema = z.object({
-  provider: z.enum(["r2", "minio"]).default("minio"), // Default to MinIO, auto-detect R2 if credentials present
+  provider: z.enum(["r2", "minio", "local"]).default("minio"), // MinIO default; R2 auto-detect; "local" = embedded filesystem (LOCAL_MODE/embedded pod)
   // R2 config
   r2AccountId: z.string().optional(),
   r2AccessKeyId: z.string().optional(),
@@ -147,7 +147,7 @@ export type StorageConfig = Omit<
   z.infer<typeof StorageConfigSchema>,
   "provider"
 > & {
-  provider: "r2" | "minio";
+  provider: "r2" | "minio" | "local";
 };
 export type AIConfig = z.infer<typeof AIConfigSchema>;
 export type AuthConfig = z.infer<typeof AuthConfigSchema>;
@@ -170,14 +170,16 @@ function loadConfig(): Config {
     const explicitProvider = process.env.STORAGE_PROVIDER as
       | "r2"
       | "minio"
+      | "local"
       | undefined;
     const hasR2Credentials =
       process.env.R2_ACCOUNT_ID &&
       process.env.R2_ACCESS_KEY_ID &&
       process.env.R2_SECRET_ACCESS_KEY;
 
-    // If provider not set, auto-detect: use R2 if credentials exist, otherwise MinIO
-    const detectedProvider: "r2" | "minio" =
+    // If provider not set, auto-detect: use R2 if credentials exist, otherwise MinIO.
+    // "local" (embedded filesystem) is only ever selected explicitly via STORAGE_PROVIDER=local.
+    const detectedProvider: "r2" | "minio" | "local" =
       explicitProvider || (hasR2Credentials ? "r2" : "minio");
 
     const rawConfig = {

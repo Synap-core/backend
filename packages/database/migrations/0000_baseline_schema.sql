@@ -1964,6 +1964,11 @@ CREATE INDEX IF NOT EXISTS "notifs_group_key_idx"
 CREATE INDEX IF NOT EXISTS "notifs_source_idx"
   ON "notifications" ("source_type", "source_id");
 
+-- Partial index for the frequently-polled unread-count badge (migration 0122).
+CREATE INDEX IF NOT EXISTS "notifs_unread_user_workspace_idx"
+  ON "notifications" ("user_id", "workspace_id")
+  WHERE "status" = 'unread';
+
 CREATE TABLE IF NOT EXISTS "notification_preferences" (
   "id"                  uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"             text    NOT NULL,

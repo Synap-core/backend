@@ -64,6 +64,16 @@ export interface MaterializeEntityResult {
   profileSlug: string;
   /** True when this op linked an existing entity (existingEntityId) vs created. */
   linked: boolean;
+  /**
+   * Set by callers that DOWNGRADE a failed create to a note fallback — carries
+   * the originally requested profileSlug. Additive; absent on the happy path.
+   */
+  degradedFrom?: string;
+  /**
+   * Set by callers that SALVAGE a validation failure by retrying the same
+   * profile with properties dropped. Additive; absent on the happy path.
+   */
+  propertiesDropped?: true;
 }
 
 export interface MaterializeRelationResult {
@@ -141,6 +151,8 @@ export async function materializeCompositeGraph(
     let realId: string;
     let linkedExisting = false;
     let resultProfileSlug = op.profileSlug;
+    let degradedFrom: string | undefined;
+    let propertiesDropped: true | undefined;
     if (op.existingEntityId) {
       realId = op.existingEntityId;
       linkedExisting = true;
@@ -162,6 +174,10 @@ export async function materializeCompositeGraph(
       // retry-as-note downgrades the slug); prefer it for the response.
       resultProfileSlug =
         (result as { profileSlug?: string }).profileSlug ?? op.profileSlug;
+      // Carry caller-reported salvage/downgrade provenance through (additive).
+      degradedFrom = (result as { degradedFrom?: string }).degradedFrom;
+      propertiesDropped = (result as { propertiesDropped?: true })
+        .propertiesDropped;
       created++;
     }
 
@@ -173,6 +189,8 @@ export async function materializeCompositeGraph(
       entityId: realId,
       profileSlug: resultProfileSlug,
       linked: linkedExisting,
+      ...(degradedFrom ? { degradedFrom } : {}),
+      ...(propertiesDropped ? { propertiesDropped: true as const } : {}),
     });
   }
 

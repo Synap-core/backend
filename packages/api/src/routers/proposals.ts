@@ -263,9 +263,11 @@ async function enrichProposalsForDisplay(
       requests[idx]?.sourceId || undefined,
     ])
   );
+  // correlation_id is a uuid column — clamp to valid uuids so the batch query's
+  // ::uuid[] cast can't throw on a legacy non-uuid value.
   const correlationIds = uniqueStrings(
     requests.map((request) => request.correlationId)
-  );
+  ).filter(isLikelyUUID);
 
   const eventRepo = new EventRepository(sql);
   const [entityRows, userRows, traceEntries] = await Promise.all([
@@ -293,16 +295,24 @@ async function enrichProposalsForDisplay(
           .from(users)
           .where(inArray(users.id, userIds))
       : Promise.resolve([]),
+    // ONE batched query for ALL correlation ids on this page (was N+1: one
+    // round-trip per proposal → pool exhaustion). Grouped in memory below.
     correlationIds.length > 0
-      ? Promise.all(
-          correlationIds.map(
-            async (correlationId) =>
-              [
-                correlationId,
-                await eventRepo.getCorrelatedEvents(correlationId, userId),
-              ] as const
-          )
-        )
+      ? eventRepo
+          .getCorrelatedEventsBatch(correlationIds, userId)
+          .then((events) => {
+            const grouped = new Map<string, EventRecord[]>();
+            for (const ev of events) {
+              const key = ev.correlationId;
+              if (!key) continue;
+              const bucket = grouped.get(key);
+              if (bucket) bucket.push(ev);
+              else grouped.set(key, [ev]);
+            }
+            return Array.from(grouped.entries()) as Array<
+              readonly [string, EventRecord[]]
+            >;
+          })
       : Promise.resolve([] as Array<readonly [string, EventRecord[]]>),
   ]);
 
