@@ -18,6 +18,7 @@ import {
   sql,
   eq,
   and,
+  inArray,
   drizzleSql,
   secretVaultKeys,
   SECRET_TYPES,
@@ -893,6 +894,49 @@ export const secretsVaultRouter = router({
           (g.maxUses == null || g.useCount < g.maxUses),
       }));
     }),
+
+  /**
+   * List grants across ALL of the caller's secrets — the owner's "who has AI
+   * access to what" view (vault Access tab). Per-secret `listGrants` stays for
+   * the secret-detail context. Field names match the UI contract directly:
+   * `grantId` (not `id`) and `secretName` are included so clients need no
+   * remapping.
+   */
+  listAllGrants: protectedProcedure.query(async ({ ctx }) => {
+    const owned = await db.query.secrets.findMany({
+      where: eq(secrets.userId, ctx.userId),
+      columns: { id: true, name: true },
+    });
+    if (owned.length === 0) return [];
+    const nameById = new Map(owned.map((s) => [s.id, s.name]));
+
+    const rows = await db.query.vaultGrants.findMany({
+      where: inArray(
+        vaultGrants.secretId,
+        owned.map((s) => s.id)
+      ),
+      orderBy: (t, { desc }) => [desc(t.createdAt)],
+    });
+
+    const now = Date.now();
+    return rows.map((g) => ({
+      grantId: g.id,
+      secretId: g.secretId,
+      secretName: nameById.get(g.secretId) ?? null,
+      grantedTo: g.grantedTo,
+      proposalId: g.proposalId,
+      scope: g.scope,
+      expiresAt: g.expiresAt ? g.expiresAt.toISOString() : null,
+      maxUses: g.maxUses,
+      useCount: g.useCount,
+      revokedAt: g.revokedAt ? g.revokedAt.toISOString() : null,
+      createdAt: g.createdAt.toISOString(),
+      active:
+        !g.revokedAt &&
+        (!g.expiresAt || g.expiresAt.getTime() > now) &&
+        (g.maxUses == null || g.useCount < g.maxUses),
+    }));
+  }),
 
   /**
    * Revoke an AI access grant (owner-only). Idempotent — re-revoking is a no-op.
