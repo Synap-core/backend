@@ -33,6 +33,7 @@ import {
   eq,
   storedVersionValues,
   uploadDocumentVersionSnapshot,
+  normalizeDocumentType,
 } from "@synap/database";
 import {
   entities,
@@ -40,6 +41,7 @@ import {
   views,
   documents,
   documentVersions,
+  cellInstances,
 } from "@synap/database/schema";
 import {
   createUnifiedEvent,
@@ -117,6 +119,18 @@ export async function handleMaterialize(
           correlationId
         );
         break;
+      case "cell":
+        await materializeCell(action, subjectId, userId, workspaceId, data);
+        break;
+      case "whiteboard":
+        // Whiteboard proposals are handled inline by their own REST route;
+        // the materializer path is not yet implemented. Log and skip rather
+        // than hard-fail so the job does not fill the retry queue.
+        logger.warn(
+          { subjectType, action, subjectId },
+          "Whiteboard materialization via worker is not yet supported; skipping"
+        );
+        return;
       default:
         logger.warn(
           { subjectType },
@@ -510,6 +524,141 @@ async function materializeView(
   } else if (action === "delete") {
     await viewRepo.delete(subjectId, userId);
   }
+}
+
+/**
+ * Materialize a cell operation from a proposal-approved event.
+ *
+ * The proposal data payload carries everything written by the REST route into
+ * checkPermissionOrPropose({ data: { cellType, name, html?, userId, workspaceId, ... } }).
+ * For html-embed cells the `html` field is present and a backing document is
+ * created in MinIO + document_versions (mirroring the inline path in
+ * rest/cell-instances.ts POST /cell-instances/html). For generic cells only a
+ * cell_instances row is inserted.
+ */
+async function materializeCell(
+  action: string,
+  subjectId: string,
+  userId: string,
+  workspaceId: string | undefined,
+  data: Record<string, unknown>
+): Promise<void> {
+  if (action !== "create") {
+    logger.warn(
+      { action },
+      "Cell materialization only supports 'create' action"
+    );
+    return;
+  }
+
+  // Idempotency: skip if the cell already exists (pg-boss may retry the job)
+  const existing = await sharedDb.query.cellInstances.findFirst({
+    where: eq(cellInstances.id, subjectId),
+    columns: { id: true },
+  });
+  if (existing) {
+    logger.warn(
+      { subjectId },
+      "Cell instance already exists, skipping materialization"
+    );
+    return;
+  }
+
+  const cellType = (data.cellType as string) || "html-embed";
+  const name = data.name as string | undefined;
+  const effectiveUserId = (data.userId as string) || userId;
+  const effectiveWorkspaceId =
+    (data.workspaceId as string) || workspaceId || "";
+  const agentUserId = data.agentUserId as string | undefined;
+  const html = data.html as string | undefined;
+
+  // For html-embed cells: create a backing document in MinIO + document_versions,
+  // then create the cell_instances row referencing it. Mirrors the inline path in
+  // rest/cell-instances.ts POST /cell-instances/html.
+  let sourceDocumentId: string | undefined =
+    (data.sourceDocumentId as string) || undefined;
+
+  if (cellType === "html-embed" && html && !sourceDocumentId) {
+    const { randomUUID } = await import("crypto");
+    const { storage } = await import("@synap/storage");
+
+    const title = name ?? "HTML Cell";
+    const documentId = randomUUID();
+    const docType = normalizeDocumentType("text", "text");
+    const storageKey = storage.buildPath(
+      effectiveUserId,
+      "document",
+      documentId,
+      "html"
+    );
+
+    const metadata = await storage.upload(storageKey, html, {
+      contentType: "text/html",
+    });
+
+    const versionId = randomUUID();
+    const snapshot = await uploadDocumentVersionSnapshot({
+      userId: effectiveUserId,
+      documentId,
+      versionId,
+      documentType: "html",
+      mimeType: "text/html",
+      content: html,
+    });
+
+    await sharedDb
+      .insert(documents)
+      .values({
+        id: documentId,
+        userId: effectiveUserId,
+        workspaceId: effectiveWorkspaceId,
+        title,
+        type: docType as "text" | "markdown" | "code" | "pdf" | "docx",
+        storageUrl: metadata.url,
+        storageKey: metadata.path,
+        size: metadata.size,
+        mimeType: "text/html",
+        currentVersion: 1,
+        lastSavedVersion: 1,
+      })
+      .onConflictDoNothing();
+
+    await sharedDb
+      .insert(documentVersions)
+      .values({
+        id: versionId,
+        documentId,
+        version: 1,
+        ...storedVersionValues(snapshot),
+        author: "user",
+        authorId: effectiveUserId,
+        message: "Initial version",
+      })
+      .onConflictDoNothing();
+
+    sourceDocumentId = documentId;
+  }
+
+  await sharedDb
+    .insert(cellInstances)
+    .values({
+      id: subjectId,
+      workspaceId: effectiveWorkspaceId,
+      userId: effectiveUserId,
+      cellType,
+      config: (data.config as Record<string, unknown>) ?? {},
+      name,
+      isTemplate: (data.isTemplate as boolean) ?? false,
+      sourceDocumentId,
+      createdByKind: agentUserId ? "agent" : "user",
+      trustLevel: agentUserId ? "generated" : "trusted",
+    })
+    .onConflictDoNothing();
+
+  logger.info(
+    { subjectId, cellType, sourceDocumentId },
+    "Cell instance materialized"
+  );
 }
 
 // ── CLI Command Execution (proposal-approved) ────────────────────────────────

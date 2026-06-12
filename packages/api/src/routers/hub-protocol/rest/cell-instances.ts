@@ -203,7 +203,16 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         subjectType: "cell",
         action: "create",
         source: body.agentUserId ? "agent" : "intelligence",
-        data: { cellType: body.cellType, name: body.name },
+        data: {
+          cellType: body.cellType,
+          name: body.name,
+          userId,
+          workspaceId: body.workspaceId,
+          config: body.config ?? {},
+          isTemplate: body.isTemplate ?? false,
+          sourceDocumentId: body.sourceDocumentId,
+          agentUserId: body.agentUserId,
+        },
         reasoning: body.reasoning,
         sourceMessageId: body.sourceMessageId,
       });
@@ -286,7 +295,14 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         subjectType: "cell",
         action: "create",
         source: body.agentUserId ? "agent" : "intelligence",
-        data: { cellType: "html-embed", name: body.name },
+        data: {
+          cellType: "html-embed",
+          name: body.name,
+          html: body.html,
+          userId,
+          workspaceId: body.workspaceId,
+          agentUserId: body.agentUserId,
+        },
         reasoning: body.reasoning,
         sourceMessageId: body.sourceMessageId,
       });
