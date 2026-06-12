@@ -15,6 +15,7 @@ import {
 } from "./_codecs/automation.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
+import { AUTOMATION_SCHEMA } from "./automation-schema-doc.js";
 
 export function registerAutomationsRoutes(app: HubHono): void {
   // ── OpenAPI metadata for /automations* routes ────────────────────────────
@@ -257,6 +258,25 @@ export function registerAutomationsRoutes(app: HubHono): void {
         500
       );
     }
+  });
+
+  /**
+   * GET /automations/schema
+   *
+   * Static, agent-readable automation reference document. Registered with the
+   * standard hub-protocol.read Bearer scope check so AGENTS can read it — the
+   * legacy apps/api mount was cookie-gated (authMiddleware) and 401'd Bearer
+   * callers. MUST be declared BEFORE GET /automations/:automationId so Hono's
+   * first-match router does not capture "schema" as an automationId.
+   */
+  app.get("/automations/schema", (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Missing scope: hub-protocol.read required" },
+        403
+      );
+    }
+    return c.json(AUTOMATION_SCHEMA);
   });
 
   /**
