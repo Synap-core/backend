@@ -19,6 +19,7 @@ import {
   isNull,
   inArray,
   encryptServerSide,
+  getWorkspaceMembership,
   SECRET_TYPES,
 } from "@synap/database";
 import { secrets, secretAuditLog, proposals } from "@synap/database/schema";
@@ -245,15 +246,26 @@ export function registerVaultRoutes(app: HubHono): void {
         ? [acting.userId, ctxAgentUserId]
         : [acting.userId];
 
+      // Look up by id + authorship, then verify membership of the proposal's
+      // OWN workspace. (resolveActingContext with an empty body falls back to
+      // the caller's first accessible workspace, which is rarely the one the
+      // request was filed in — binding the query to it made every poll 404.)
       const row = await db.query.proposals.findFirst({
         where: and(
           eq(proposals.id, proposalId),
-          eq(proposals.workspaceId, acting.workspaceId),
           inArray(proposals.createdBy, authoredBy)
         ),
-        columns: { status: true, data: true },
+        columns: { status: true, data: true, workspaceId: true },
       });
       if (!row) return c.json({ error: "Request not found" }, 404);
+      if (row.workspaceId) {
+        const membership = await getWorkspaceMembership(
+          db,
+          row.workspaceId,
+          acting.userId
+        );
+        if (!membership) return c.json({ error: "Request not found" }, 404);
+      }
 
       const data = (row.data ?? {}) as {
         vaultRef?: string;
