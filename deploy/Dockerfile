@@ -23,8 +23,11 @@ COPY packages/auth/package.json          ./packages/auth/
 COPY packages/core/package.json          ./packages/core/
 COPY packages/database/package.json      ./packages/database/
 COPY packages/events/package.json        ./packages/events/
+COPY packages/external-connect-client/package.json ./packages/external-connect-client/
 COPY packages/feed-service/package.json  ./packages/feed-service/
+COPY packages/governance-policy/package.json ./packages/governance-policy/
 COPY packages/hub-protocol/package.json  ./packages/hub-protocol/
+COPY packages/hub-rest-client/package.json ./packages/hub-rest-client/
 COPY packages/intelligence-client/package.json ./packages/intelligence-client/
 COPY packages/jobs/package.json          ./packages/jobs/
 COPY packages/realtime/package.json      ./packages/realtime/
