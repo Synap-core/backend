@@ -13,12 +13,28 @@
  */
 
 import { Hono } from "hono";
+import type { MiddlewareHandler } from "hono";
 import { authMiddleware } from "@synap/auth";
-import { AUTOMATION_SCHEMA } from "@synap/api";
+import { AUTOMATION_SCHEMA, apiKeyService } from "@synap/api";
 
 const automationsSchemaRouter = new Hono();
 
-automationsSchemaRouter.get("/", authMiddleware, (c) =>
+// This mount registers BEFORE the hub-protocol REST app on the same path
+// (/api/hub/automations/schema), so it shadows the Bearer route — Hono
+// dispatches the first registration. Accept BOTH principals here: a valid
+// pod API key (agents/CLI) or the browser session cookie.
+const cookieOrApiKeyAuth: MiddlewareHandler = async (c, next) => {
+  const auth = c.req.header("authorization");
+  const bearer = auth?.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (bearer) {
+    const record = await apiKeyService.validateApiKey(bearer);
+    if (record) return next();
+    return c.json({ error: "Invalid API key" }, 401);
+  }
+  return authMiddleware(c, next);
+};
+
+automationsSchemaRouter.get("/", cookieOrApiKeyAuth, (c) =>
   c.json(AUTOMATION_SCHEMA)
 );
 
