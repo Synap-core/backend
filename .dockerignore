@@ -2,7 +2,7 @@ node_modules
 .turbo
 dist
 build
-*.tsbuildinfo
+**/*.tsbuildinfo
 
 # Environment
 .env
