@@ -24,6 +24,7 @@ import {
   SecretsVaultRepository,
   EventRepository,
   encryptionService,
+  encryptServerSide,
 } from "@synap/database";
 import { proposals, secrets, ProposalStatus } from "@synap/database/schema";
 import { auditLog } from "../utils/audit-log.js";
@@ -34,6 +35,17 @@ import { auditLog } from "../utils/audit-log.js";
 
 const secretTypeSchema = z.enum(SECRET_TYPES);
 
+/**
+ * Plaintext secret value. Either a bare string (api_key, note, env_variable)
+ * or a structured object (credential, card, identity). The server encrypts
+ * this into the {encryptedData, iv, authTag} blob via VAULT_SERVER_KEY before
+ * it touches the DB — the client never encrypts post server-only consolidation.
+ */
+const secretValueSchema = z.union([
+  z.string(),
+  z.record(z.string(), z.unknown()),
+]);
+
 const createSecretSchema = z.object({
   name: z.string().min(1).max(255),
   type: secretTypeSchema,
@@ -41,9 +53,7 @@ const createSecretSchema = z.object({
   category: z.string().max(100).optional(),
   description: z.string().max(1000).optional(),
   iconUrl: z.string().url().optional(),
-  encryptedData: z.string(), // Client-encrypted JSON blob
-  iv: z.string(), // Base64 IV
-  authTag: z.string(), // Base64 auth tag
+  value: secretValueSchema, // Plaintext — server-encrypted before storage
   passwordStrength: z.number().min(0).max(4).optional(),
   tags: z.array(z.string().max(100)).optional(),
   workspaceId: z.string().uuid().optional(),
@@ -56,14 +66,17 @@ const updateSecretSchema = z.object({
   category: z.string().max(100).optional().nullable(),
   description: z.string().max(1000).optional().nullable(),
   iconUrl: z.string().url().optional().nullable(),
-  encryptedData: z.string().optional(),
-  iv: z.string().optional(),
-  authTag: z.string().optional(),
+  value: secretValueSchema.optional(), // Plaintext — server-encrypted before storage
   isFavorite: z.boolean().optional(),
   sortOrder: z.number().int().optional(),
   passwordStrength: z.number().min(0).max(4).optional(),
   tags: z.array(z.string().max(100)).optional(),
 });
+
+/** Serialize a plaintext secret value to the string the server encrypts. */
+function serializeSecretValue(value: string | Record<string, unknown>): string {
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
 
 const shareSecretSchema = z
   .object({
@@ -304,14 +317,10 @@ export const secretsVaultRouter = router({
     .mutation(async ({ ctx, input }) => {
       const repo = getRepository();
 
-      // Verify vault is set up
-      const hasVault = await repo.hasVaultSetup(ctx.userId);
-      if (!hasVault) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "Vault not set up. Please set up your vault first.",
-        });
-      }
+      // Server-only consolidation: encrypt the plaintext value with VAULT_SERVER_KEY.
+      // The row is persisted with encryptionMode 'server' (the schema default), so
+      // it is resolvable by the vault resolver and grantable to AI.
+      const blob = encryptServerSide(serializeSecretValue(input.value));
 
       const secret = await repo.create(
         {
@@ -321,9 +330,9 @@ export const secretsVaultRouter = router({
           category: input.category,
           description: input.description,
           iconUrl: input.iconUrl,
-          encryptedData: input.encryptedData,
-          iv: input.iv,
-          authTag: input.authTag,
+          encryptedData: blob.encryptedData,
+          iv: blob.iv,
+          authTag: blob.authTag,
           passwordStrength: input.passwordStrength,
           tags: input.tags,
           workspaceId: input.workspaceId,
@@ -346,9 +355,26 @@ export const secretsVaultRouter = router({
     .input(updateSecretSchema)
     .mutation(async ({ ctx, input }) => {
       const repo = getRepository();
-      const { id, ...updateData } = input;
+      const { id, value, ...rest } = input;
 
-      const secret = await repo.update(id, updateData, ctx.userId);
+      // Server-encrypt the new plaintext value (if a rotation was supplied).
+      const encryptedFields =
+        value !== undefined
+          ? (() => {
+              const blob = encryptServerSide(serializeSecretValue(value));
+              return {
+                encryptedData: blob.encryptedData,
+                iv: blob.iv,
+                authTag: blob.authTag,
+              };
+            })()
+          : {};
+
+      const secret = await repo.update(
+        id,
+        { ...rest, ...encryptedFields },
+        ctx.userId
+      );
 
       return {
         id: secret.id,
@@ -593,12 +619,15 @@ export const secretsVaultRouter = router({
       if (!secret)
         throw new TRPCError({ code: "NOT_FOUND", message: "Secret not found" });
 
-      // 2. Only server-encrypted secrets can be resolved by the vault resolver
+      // 2. Tolerance check for LEGACY client-encrypted rows only. Post server-only
+      //    consolidation all new secrets are server-encrypted and grantable; a
+      //    non-'server' row can only be a pre-consolidation client-mode secret,
+      //    which the vault resolver cannot decrypt (no master password on server).
       if (secret.encryptionMode !== "server") {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
-            'Only server-encrypted secrets can be granted to AI. Re-save the secret with "AI accessible" mode.',
+            "This secret predates the server-side vault consolidation and cannot be granted to AI. Delete and re-create it to enable AI access.",
         });
       }
 

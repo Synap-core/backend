@@ -85,10 +85,14 @@ export const secrets = pgTable(
     authTag: text("auth_tag").notNull(), // GCM authentication tag (base64)
 
     // Encryption mode:
-    //   'client' (default) — zero-knowledge, encrypted by the client with user's master key
-    //   'server'           — encrypted by the server using VAULT_SERVER_KEY; readable server-side
-    //                        Used for service bootstrap credentials (Hub Protocol API keys, etc.)
-    encryptionMode: text("encryption_mode").notNull().default("client"),
+    //   'server' (default) — encrypted by the server using VAULT_SERVER_KEY; readable server-side.
+    //                        This is the ONLY write path post server-only consolidation: on a
+    //                        sovereign pod the server already holds all data plaintext, and AI
+    //                        credential grants require server-readable secrets.
+    //   'client'           — LEGACY: zero-knowledge, encrypted by the client with user's master key.
+    //                        Still readable (list/get) for backward compatibility on pods that hold
+    //                        such rows, but no longer written and cannot be granted to AI.
+    encryptionMode: text("encryption_mode").notNull().default("server"),
 
     // Optional: links this secret to a registered intelligence service (e.g. "openclaw-abc12345").
     // Used by getServiceConfig to fetch credentials by serviceId without scanning all user secrets.
