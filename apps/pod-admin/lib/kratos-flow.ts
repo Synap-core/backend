@@ -272,8 +272,94 @@ export async function submitLoginFlow(
 }
 
 // ---------------------------------------------------------------------------
+// Settings flow (passkey enrollment) — requires an authenticated session.
+// ---------------------------------------------------------------------------
+
+export interface SubmitSettingsFlowResult {
+  /** Re-render with the returned flow (validation messages, refreshed nodes). */
+  flow?: KratosFlow;
+  /** Settings update succeeded. */
+  success?: boolean;
+  structuralError?: { id?: string; code?: number; message?: string };
+}
+
+export async function createSettingsFlow(): Promise<KratosFlow> {
+  const res = await fetch(`${kratosPublic()}/self-service/settings/browser`, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+    redirect: "follow",
+  });
+  if (!res.ok) {
+    let body: { message?: string; reason?: string } = {};
+    try {
+      body = (await res.json()) as typeof body;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(body.message ?? `Failed to create settings flow (${res.status})`);
+  }
+  return (await res.json()) as KratosFlow;
+}
+
+export async function submitSettingsFlow(
+  flow: KratosFlow,
+  body: Record<string, unknown>
+): Promise<SubmitSettingsFlowResult> {
+  const action = resolveActionUrl(flow.ui.action);
+  const method = (flow.ui.method || "POST").toUpperCase();
+  const res = await fetch(action, {
+    method,
+    credentials: "include",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const isJson = (res.headers.get("content-type") ?? "").includes("application/json");
+  let data: unknown = null;
+  if (isJson) {
+    try {
+      data = await res.json();
+    } catch {
+      /* ignore */
+    }
+  }
+  // Settings success returns the flow with state "success" (200).
+  if (isJson && res.ok && typeof data === "object" && data !== null) {
+    const d = data as KratosFlow & { state?: string };
+    if (d.state === "success") return { success: true, flow: d };
+    if ("ui" in d && typeof d.ui === "object") return { flow: d };
+  }
+  if (isJson && typeof data === "object" && data !== null && "error" in data) {
+    const err = (data as { error?: { id?: string; code?: number; message?: string } }).error;
+    return {
+      structuralError: {
+        id: err?.id,
+        code: err?.code ?? res.status,
+        message: err?.message ?? `Passkey enrollment failed (${res.status})`,
+      },
+    };
+  }
+  throw new Error(`Passkey enrollment failed (${res.status})`);
+}
+
+// ---------------------------------------------------------------------------
 // Extraction helpers
 // ---------------------------------------------------------------------------
+
+/** Raw string value of a named input node (e.g. passkey_challenge), or null. */
+export function nodeValue(flow: KratosFlow, name: string): string | null {
+  for (const n of flow.ui.nodes) {
+    if (n.attributes?.name === name) {
+      const v = n.attributes.value;
+      return typeof v === "string" ? v : null;
+    }
+  }
+  return null;
+}
+
+/** True when the flow carries Kratos passkey nodes (passkey method available). */
+export function hasPasskeyNodes(flow: KratosFlow): boolean {
+  return flow.ui.nodes.some((n) => n.group === "passkey");
+}
 
 export function collectErrorMessages(flow: KratosFlow): string[] {
   const ui = (flow.ui.messages ?? [])
