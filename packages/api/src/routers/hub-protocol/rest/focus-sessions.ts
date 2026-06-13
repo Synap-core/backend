@@ -16,10 +16,16 @@
 
 import { z } from "@hono/zod-openapi";
 import { db, eq, and, desc, focusSessions } from "@synap/database";
+import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  resolveActingContext,
+  type HubHono,
+} from "./_shared.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -62,8 +68,11 @@ const CreateBodySchema = z.object({
   agentIds: z.array(z.string()).optional(),
 });
 
+// workspaceId is accepted for back-compat with CLI callers that still send it,
+// but the authoritative workspace comes from the LOADED ROW (write-gate rule:
+// never trust a caller-supplied workspaceId for scoping a mutation).
 const UpdateBodySchema = z.object({
-  workspaceId: z.string().min(1),
+  workspaceId: z.string().min(1).optional(),
   status: z.enum(["active", "paused", "closed"]).optional(),
   progress: z.number().int().min(0).max(100).optional(),
   channelId: z.string().uuid().optional(),
@@ -75,6 +84,8 @@ const UpdateBodySchema = z.object({
   planReport: z.unknown().optional(),
   executionLog: z.unknown().optional(),
   verificationReport: z.unknown().optional(),
+  agentUserId: z.string().uuid().optional(),
+  reasoning: z.string().optional(),
 });
 
 // ── Registration ───────────────────────────────────────────────────────────
@@ -249,6 +260,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   /**
    * POST /focus-sessions
    * IS creates a session, optionally with correlationId for idempotency.
+   * Goes through checkPermissionOrPropose so the governance membrane is honored.
    */
   app.post("/focus-sessions", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -270,6 +282,15 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
 
     const body = parsed.data;
 
+    // Bind the acting identity to the authenticated principal and verify
+    // workspace membership — mirrors artifacts.ts POST pattern.
+    const acting = await resolveActingContext(c, {
+      userId: body.userId,
+      workspaceId: body.workspaceId,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const { userId, workspaceId } = acting;
+
     try {
       // Idempotency: if a correlationId was given, return the existing session.
       if (body.correlationId) {
@@ -279,11 +300,43 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         if (existing) return c.json(existing);
       }
 
+      // Governance membrane — focus_session.create goes through checkPermissionOrPropose.
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId: ctxAgentUserId,
+        workspaceId,
+        subjectType: "focus_session",
+        action: "create",
+        source: "intelligence",
+        data: {
+          goal: body.goal,
+          templateId: body.templateId,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        return c.json({ error: perm.reason }, 403);
+      }
+      if ("proposalId" in perm) {
+        return c.json({
+          status: "proposed",
+          message: "Focus session creation proposed for review",
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+          session: null,
+        });
+      }
+
       const [created] = await db
         .insert(focusSessions)
         .values({
-          workspaceId: body.workspaceId,
-          userId: body.userId,
+          workspaceId,
+          userId,
           goal: body.goal,
           correlationId: body.correlationId ?? null,
           templateId: body.templateId ?? null,
@@ -297,7 +350,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       emitHubRealtimeEvent({
         eventType: "focus_session.create.completed",
         subjectId: created.id,
-        userId: body.userId,
+        userId,
         data: {
           id: created.id,
           workspaceId: created.workspaceId,
@@ -320,6 +373,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   /**
    * PATCH /focus-sessions/:id
    * IS updates progress / status / correlationId.
+   *
+   * Write-gate pattern (mirrors artifacts.ts PATCH):
+   *   1. Load the row by id alone (never trust a caller-supplied workspaceId for scoping).
+   *   2. Verify the caller's membership in the LOADED ROW's workspace via resolveActingContext.
+   *   3. Gate through checkPermissionOrPropose — the membrane decides approve vs propose.
+   *   4. Execute the raw DB update only after gate approval.
    */
   app.patch("/focus-sessions/:id", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -340,19 +399,63 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({ error: message }, 400);
     }
 
+    // workspaceId from the body is accepted for back-compat but NOT used for scoping.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { workspaceId: _ignored, ...patch } = parsed.data;
+
     try {
+      // Step 1: load by id alone — workspaceId comes from the ROW, not the body.
       const existing = await db.query.focusSessions.findFirst({
-        where: and(
-          eq(focusSessions.id, id),
-          eq(focusSessions.workspaceId, parsed.data.workspaceId)
-        ),
+        where: eq(focusSessions.id, id),
       });
 
       if (!existing) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
 
-      const { workspaceId: _ws, ...patch } = parsed.data;
+      // Step 2: verify the caller's membership in the row's workspace.
+      const acting = await resolveActingContext(c, {
+        workspaceId: existing.workspaceId,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const { userId, workspaceId } = acting;
+
+      // Step 3: governance membrane.
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const agentUserId = patch.agentUserId ?? ctxAgentUserId;
+
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId,
+        workspaceId,
+        subjectType: "focus_session",
+        action: "update",
+        source: "intelligence",
+        reasoning: patch.reasoning,
+        data: {
+          id,
+          status: patch.status,
+          progress: patch.progress,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        return c.json({ error: perm.reason }, 403);
+      }
+      if ("proposalId" in perm) {
+        return c.json({
+          status: "proposed",
+          message: "Focus session update proposed for review",
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+          session: null,
+        });
+      }
+
+      // Step 4: execute the update.
       const set: Partial<typeof focusSessions.$inferInsert> = {
         updatedAt: new Date(),
       };
@@ -387,7 +490,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       emitHubRealtimeEvent({
         eventType: "focus_session.update.completed",
         subjectId: updated.id,
-        userId: updated.userId,
+        userId,
         data: {
           id: updated.id,
           workspaceId: updated.workspaceId,

@@ -14,13 +14,15 @@
 
 import { createRoute, z } from "@hono/zod-openapi";
 import { db, entities, profiles, eq, and, isNull } from "@synap/database";
-import { entityVectors } from "@synap/database/schema";
-import { sql as drizzleSql, inArray } from "drizzle-orm";
-import { searchService } from "@synap/search";
-import { getDefaultActiveService } from "../../../utils/intelligence-routing.js";
+import { inArray } from "drizzle-orm";
 
 import { relationsRouter } from "../../relations.js";
 import { createHubProtocolCallerContext } from "../utils.js";
+import {
+  retrieve,
+  hybridRecall,
+  type ProfileCatalogEntry,
+} from "../../../services/retrieval/index.js";
 import {
   CreateEntityRequestSchema,
   CreateEntityResponseSchema,
@@ -551,107 +553,23 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const { query, profileSlug, workspaceId } = body;
     const limit = body.limit ?? 20;
 
-    // ── Step 1: attempt vector search via IS embedding endpoint ────────────
-    let vectorEntityIds: string[] = [];
-    let usedVector = false;
-
-    try {
-      const { endpoint, apiKey } = await getDefaultActiveService();
-      const embRes = await fetch(`${endpoint}/api/embeddings`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": apiKey,
-        },
-        body: JSON.stringify({ text: query }),
-        signal: AbortSignal.timeout(5_000),
-      });
-
-      if (embRes.ok) {
-        const { embedding } = (await embRes.json()) as {
-          embedding?: number[];
-        };
-
-        if (Array.isArray(embedding) && embedding.length > 0) {
-          const vecLiteral = `[${embedding.join(",")}]`;
-          const vectorWhere = profileSlug
-            ? and(
-                drizzleSql`${entityVectors.userId} = ${userId}`,
-                eq(entityVectors.entityType, profileSlug)
-              )
-            : drizzleSql`${entityVectors.userId} = ${userId}`;
-          const rows = await db
-            .select({ entityId: entityVectors.entityId })
-            .from(entityVectors)
-            .where(vectorWhere)
-            .orderBy(
-              drizzleSql`${entityVectors.embedding} <=> ${vecLiteral}::vector`
-            )
-            .limit(limit * 2);
-
-          vectorEntityIds = rows.map((r) => r.entityId);
-          usedVector = true;
-        }
-      }
-    } catch {
-      // Non-fatal — fall through to Typesense-only
-    }
-
-    // ── Step 2: Typesense keyword search ───────────────────────────────────
-    let typesenseEntityIds: string[] = [];
-
-    try {
-      const searchResp = await searchService.search({
-        query,
-        userId,
-        workspaceId: workspaceId || undefined,
-        collections: ["entities"],
-        limit: limit * 2,
-        page: 1,
-      });
-
-      let hits = searchResp.results.filter((r) => r.collection === "entities");
-
-      if (profileSlug) {
-        hits = hits.filter(
-          (r) =>
-            (r.document as Record<string, unknown>).entityType ===
-              profileSlug ||
-            (r.document as Record<string, unknown>).type === profileSlug
-        );
-      }
-
-      typesenseEntityIds = hits
-        .map((r) => (r.document as Record<string, unknown>).id as string)
-        .filter(Boolean);
-    } catch {
-      // Non-fatal
-    }
-
-    // ── Step 3: RRF merge (k=60) ───────────────────────────────────────────
-    const scores = new Map<string, number>();
-
-    vectorEntityIds.forEach((entityId, rank) => {
-      scores.set(entityId, (scores.get(entityId) ?? 0) + 1 / (60 + rank + 1));
+    // Hybrid recall (pgvector + Typesense + RRF), optionally type-scoped — the
+    // ONE canonical implementation, shared with the retrieval engine so the two
+    // paths can't drift. (POST /entities/retrieve adds type inference on top.)
+    const { ids: rankedIds, usedVector } = await hybridRecall({
+      query,
+      userId,
+      workspaceId,
+      profileSlug,
+      limit,
     });
-    typesenseEntityIds.forEach((entityId, rank) => {
-      scores.set(entityId, (scores.get(entityId) ?? 0) + 1 / (60 + rank + 1));
-    });
-
-    const rankedIds = [...scores.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, limit)
-      .map(([id]) => id);
-
-    const source = (usedVector ? "hybrid" : "typesense") as
-      | "hybrid"
-      | "typesense";
+    const source: "hybrid" | "typesense" = usedVector ? "hybrid" : "typesense";
 
     if (rankedIds.length === 0) {
       return c.json({ entities: [] as Record<string, unknown>[], source }, 200);
     }
 
-    // ── Step 4: fetch full entity rows for top ids ─────────────────────────
+    // ── Fetch full entity rows for top ids ─────────────────────────────────
     try {
       const rows = await db
         .select()
@@ -672,6 +590,112 @@ export function registerEntitiesRoutes(app: HubHono): void {
       );
     } catch (err) {
       logger.error({ err, userId }, "POST /entities/recall fetch failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Internal error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /entities/retrieve ─────────────────────────────────────────────
+  // Synap Retrieval Engine (Phase 1). Unlike /entities/recall (raw hybrid
+  // signal), this INFERS the target entity type(s) + property hints from the
+  // natural-language query and fuses unscoped recall with type-scoped recall,
+  // so "who is the VP of Product" surfaces the person (with role=VP Product) and
+  // "what did we decide" surfaces the decision — the queries raw recall missed at
+  // top-K. Returns the `understanding` for glass-box retrieval + eval.
+  // See team/platform/retrieval-architecture.mdx.
+  const retrieveEntitiesRoute = createRoute({
+    method: "post",
+    path: "/entities/retrieve",
+    tags: ["Entities"],
+    summary: "Type-aware hybrid retrieval (Synap Retrieval Engine)",
+    description:
+      "Infers entity type(s) + property hints from the query, fuses unscoped + " +
+      "type-scoped recall (RRF), and returns ranked entities plus the inferred " +
+      "understanding. Phase 1 of the SRE.",
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              query: z.string().min(1),
+              workspaceId: z.string().optional(),
+              limit: z.number().int().min(1).max(100).optional(),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Ranked entities + retrieval understanding",
+        content: {
+          "application/json": {
+            schema: z.object({
+              entities: z.array(z.record(z.string(), z.unknown())),
+              understanding: z.record(z.string(), z.unknown()),
+              source: z.enum(["hybrid", "typesense"]),
+            }),
+          },
+        },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(retrieveEntitiesRoute, async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+
+    const body = c.req.valid("json");
+    const workspaceId = body.workspaceId ?? null;
+
+    try {
+      // The CATALOG (for type inference) needs a concrete workspace — listProfiles
+      // requires one — so resolve the user's first accessible workspace when no
+      // lens is pinned. But RECALL keeps the caller's requested lens: a null
+      // workspaceId means user-scoped / pod-wide results, NOT workspace-0 results.
+      // (Catalog from one workspace + pod-wide recall is fine: profile slugs are
+      // largely shared, and a missing slug just means no type-scoped boost.)
+      let catalogWs = workspaceId;
+      if (!catalogWs) {
+        const wsIds = await getUserAccessibleWorkspaceIds(userId);
+        catalogWs = wsIds[0] ?? null;
+      }
+
+      let catalog: ProfileCatalogEntry[] = [];
+      if (catalogWs) {
+        const caller = await getCaller(c, { workspaceId: catalogWs });
+        const { profiles: profileRows } = await caller.profiles.listProfiles({
+          userId,
+          workspaceId: catalogWs,
+        });
+        catalog = profileRows.flatMap((p) =>
+          p.slug ? [{ slug: p.slug, displayName: p.displayName ?? p.slug }] : []
+        );
+      }
+
+      const result = await retrieve({
+        query: body.query,
+        userId,
+        workspaceId, // caller's lens (null = pod-wide), NOT the catalog workspace
+        limit: body.limit,
+        catalog,
+      });
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err, userId }, "POST /entities/retrieve failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Internal error" },
         500

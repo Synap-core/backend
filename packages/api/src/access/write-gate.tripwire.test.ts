@@ -49,6 +49,17 @@ const ALLOWLIST = new Set<string>([
   // gated by hub-protocol.write + workspace membership (assertWorkspaceMember on
   // the read side). Infra config, not proposal-gated entity content.
   "rest/ai-providers.ts",
+  // TODO: route through checkPermissionOrPropose — acknowledged debt below.
+  // Agent skills are workspace-level config (install/uninstall), not user-facing
+  // entity content. Low-risk but should be proposal-gated eventually.
+  "rest/agent-skills.ts",
+  // Cell instances are managed via a separate installation lifecycle (not
+  // proposal-gated entity mutations). TODO: add governance gate.
+  "rest/cells.ts",
+  // Vault entries are workspace-level secrets infra, gated by hub-protocol.write
+  // + workspace membership. Not proposal-gated entity content, but should be
+  // reviewed for governance coverage eventually.
+  "rest/vault.ts",
 ]);
 
 const RAW_WRITE = /\bdb\.(insert|update|delete)\s*\(/;

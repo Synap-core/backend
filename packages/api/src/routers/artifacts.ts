@@ -14,6 +14,7 @@ import { TRPCError } from "@trpc/server";
 import { getDb, eq, and, desc, artifacts } from "@synap/database";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { AccessContext, scopedDb } from "../access/index.js";
+import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { emitHubRealtimeEvent } from "../utils/domain-event-bridge.js";
 import type { Artifact } from "@synap/database/schema";
 
@@ -64,7 +65,48 @@ export const artifactsRouter = router({
         .where(
           and(
             visibility,
-            eq(artifacts.workspaceId, ctx.workspaceId),
+            input.state !== undefined
+              ? eq(artifacts.state, input.state)
+              : undefined,
+            input.placement !== undefined
+              ? eq(artifacts.placement, input.placement)
+              : undefined,
+            input.sessionId !== undefined
+              ? eq(artifacts.sessionId, input.sessionId)
+              : undefined
+          )
+        )
+        .orderBy(desc(artifacts.createdAt))
+        .limit(input.limit);
+
+      return rows;
+    }),
+
+  /**
+   * List artifacts across ALL workspaces the user belongs to.
+   *
+   * Same input/output shape as `list` so consumers can swap without
+   * restructuring the call site. Used by Eve OS and cross-workspace surfaces.
+   * Scoped by userId (the natural user-wide predicate for artifacts).
+   */
+  listAll: protectedProcedure
+    .input(
+      z.object({
+        state: artifactStateSchema.optional(),
+        placement: artifactPlacementSchema.optional(),
+        sessionId: z.string().uuid().optional(),
+        limit: z.number().int().min(1).max(100).default(50),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const database = await getDb();
+
+      const rows = await database
+        .select()
+        .from(artifacts)
+        .where(
+          and(
+            userVisibleWhere(artifacts.workspaceId, ctx.userId),
             input.state !== undefined
               ? eq(artifacts.state, input.state)
               : undefined,
@@ -143,7 +185,7 @@ export const artifactsRouter = router({
         .returning();
 
       emitHubRealtimeEvent({
-        eventType: "artifact:changed",
+        eventType: "artifact.changed.completed",
         subjectId: created.id,
         userId: ctx.userId,
         data: {
@@ -220,7 +262,7 @@ export const artifactsRouter = router({
         .returning();
 
       emitHubRealtimeEvent({
-        eventType: "artifact:changed",
+        eventType: "artifact.changed.completed",
         subjectId: updated.id,
         userId: ctx.userId,
         data: {

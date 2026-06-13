@@ -11,14 +11,21 @@
  *
  * Uses Drizzle directly — artifacts lives on coreRouter, not hubProtocolRouter,
  * so getCaller() (which creates a hubProtocolRouter caller) cannot reach it.
+ * Writes go through checkPermissionOrPropose so the governance membrane is honored.
  */
 
 import { z } from "@hono/zod-openapi";
 import { db, eq, and, desc, artifacts } from "@synap/database";
+import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  resolveActingContext,
+  type HubHono,
+} from "./_shared.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -58,12 +65,18 @@ const CreateBodySchema = z.object({
   actorId: z.string().optional(),
   sessionId: z.string().uuid().optional(),
   placement: z.enum(["desk", "home", "sidebar", "library"]).optional(),
+  agentUserId: z.string().uuid().optional(),
+  reasoning: z.string().optional(),
 });
 
+// workspaceId is intentionally excluded from the PATCH body — the authoritative
+// workspace comes from the LOADED ROW (write-gate rule: never trust a caller-
+// supplied workspaceId for scoping a mutation).
 const UpdateBodySchema = z.object({
-  workspaceId: z.string().min(1),
   state: z.enum(["working", "kept", "swept"]).optional(),
   placement: z.enum(["desk", "home", "sidebar", "library"]).optional(),
+  agentUserId: z.string().uuid().optional(),
+  reasoning: z.string().optional(),
 });
 
 // ── Registration ───────────────────────────────────────────────────────────
@@ -101,10 +114,13 @@ export function registerArtifactsRoutes(app: HubHono): void {
     tags: ["Artifacts"],
     summary: "Create an artifact",
     description:
-      "IS/agent creates an artifact. originKind defaults to 'agent' for hub-authenticated requests.",
+      "IS/agent creates an artifact. originKind defaults to 'agent' for hub-authenticated requests. Goes through the governance membrane — may return { status: 'proposed', proposalId } for agent callers.",
     request: { body: CreateBodySchema },
     responses: {
-      200: { description: "Created artifact", schema: ArtifactWireSchema },
+      200: {
+        description: "Created artifact or proposal",
+        schema: z.object({}).passthrough(),
+      },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
@@ -116,12 +132,17 @@ export function registerArtifactsRoutes(app: HubHono): void {
     path: "/artifacts/:id",
     tags: ["Artifacts"],
     summary: "Update artifact state / placement",
+    description:
+      "Loads the row by id, verifies the caller's workspace membership against the row's workspace, then gates through the governance membrane.",
     request: {
       params: z.object({ id: z.string().uuid() }),
       body: UpdateBodySchema,
     },
     responses: {
-      200: { description: "Updated artifact", schema: ArtifactWireSchema },
+      200: {
+        description: "Updated artifact or proposal",
+        schema: z.object({}).passthrough(),
+      },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
@@ -202,7 +223,7 @@ export function registerArtifactsRoutes(app: HubHono): void {
 
   /**
    * POST /artifacts
-   * IS/agent creates an artifact — originKind defaults to 'agent'.
+   * IS/agent creates an artifact — goes through checkPermissionOrPropose.
    */
   app.post("/artifacts", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -224,12 +245,59 @@ export function registerArtifactsRoutes(app: HubHono): void {
 
     const body = parsed.data;
 
+    // Bind the acting identity to the authenticated principal and verify
+    // workspace membership — mirrors entities.ts POST pattern.
+    const acting = await resolveActingContext(c, {
+      userId: body.userId,
+      workspaceId: body.workspaceId,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const { userId, workspaceId } = acting;
+
+    // Governance membrane — artifact.create goes through checkPermissionOrPropose.
+    // If it's in DEFAULT_AUTO_APPROVE the membrane approves inline; otherwise it
+    // returns a proposalId for the agent to surface to the user.
+    const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+    const agentUserId = body.agentUserId ?? ctxAgentUserId;
+
     try {
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId,
+        workspaceId,
+        subjectType: "artifact",
+        action: "create",
+        source: "intelligence",
+        reasoning: body.reasoning,
+        data: {
+          kind: body.kind,
+          title: body.title,
+          placement: body.placement ?? "desk",
+          refId: body.refId,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        return c.json({ error: perm.reason }, 403);
+      }
+      if ("proposalId" in perm) {
+        return c.json({
+          status: "proposed",
+          message: "Artifact creation proposed for review",
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+          artifact: null,
+        });
+      }
+
       const [created] = await db
         .insert(artifacts)
         .values({
-          workspaceId: body.workspaceId,
-          userId: body.userId,
+          workspaceId,
+          userId,
           kind: body.kind,
           refId: body.refId ?? null,
           cellKey: body.cellKey ?? null,
@@ -245,9 +313,9 @@ export function registerArtifactsRoutes(app: HubHono): void {
         .returning();
 
       emitHubRealtimeEvent({
-        eventType: "artifact:changed",
+        eventType: "artifact.changed.completed",
         subjectId: created.id,
-        userId: body.userId,
+        userId,
         data: {
           id: created.id,
           workspaceId: created.workspaceId,
@@ -271,6 +339,12 @@ export function registerArtifactsRoutes(app: HubHono): void {
   /**
    * PATCH /artifacts/:id
    * IS/agent transitions state and/or placement.
+   *
+   * Write-gate pattern (mirrors entities.ts PATCH):
+   *   1. Load the row by id alone (never trust a caller-supplied workspaceId for scoping).
+   *   2. Verify the caller's membership in the LOADED ROW's workspace via resolveActingContext.
+   *   3. Gate through checkPermissionOrPropose — the membrane decides approve vs propose.
+   *   4. Execute the raw DB update only after gate approval.
    */
   app.patch("/artifacts/:id", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -291,19 +365,61 @@ export function registerArtifactsRoutes(app: HubHono): void {
       return c.json({ error: message }, 400);
     }
 
+    const patch = parsed.data;
+
     try {
+      // Step 1: load by id alone — workspaceId comes from the ROW, not the body.
       const existing = await db.query.artifacts.findFirst({
-        where: and(
-          eq(artifacts.id, id),
-          eq(artifacts.workspaceId, parsed.data.workspaceId)
-        ),
+        where: eq(artifacts.id, id),
       });
 
       if (!existing) {
         return c.json({ error: `Artifact ${id} not found` }, 404);
       }
 
-      const { workspaceId: _ws, ...patch } = parsed.data;
+      // Step 2: verify the caller's membership in the row's workspace.
+      const acting = await resolveActingContext(c, {
+        workspaceId: existing.workspaceId,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const { userId, workspaceId } = acting;
+
+      // Step 3: governance membrane.
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const agentUserId = patch.agentUserId ?? ctxAgentUserId;
+
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId,
+        workspaceId,
+        subjectType: "artifact",
+        action: "setState",
+        source: "intelligence",
+        reasoning: patch.reasoning,
+        data: {
+          id,
+          state: patch.state,
+          placement: patch.placement,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        return c.json({ error: perm.reason }, 403);
+      }
+      if ("proposalId" in perm) {
+        return c.json({
+          status: "proposed",
+          message: "Artifact update proposed for review",
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+          artifact: null,
+        });
+      }
+
+      // Step 4: execute the update.
       const now = new Date();
       const set: Partial<typeof artifacts.$inferInsert> = {
         updatedAt: now,
@@ -329,9 +445,9 @@ export function registerArtifactsRoutes(app: HubHono): void {
         .returning();
 
       emitHubRealtimeEvent({
-        eventType: "artifact:changed",
+        eventType: "artifact.changed.completed",
         subjectId: updated.id,
-        userId: updated.userId,
+        userId,
         data: {
           id: updated.id,
           workspaceId: updated.workspaceId,

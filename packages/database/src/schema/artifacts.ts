@@ -23,34 +23,6 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
-export enum ArtifactKind {
-  VIEW = "view",
-  CELL = "cell",
-  DOCUMENT = "document",
-  ENTITY = "entity",
-  URL = "url",
-}
-
-export enum ArtifactOriginKind {
-  USER = "user",
-  AGENT = "agent",
-  DEEPLINK = "deeplink",
-  SYSTEM = "system",
-}
-
-export enum ArtifactState {
-  WORKING = "working",
-  KEPT = "kept",
-  SWEPT = "swept",
-}
-
-export enum ArtifactPlacement {
-  DESK = "desk",
-  HOME = "home",
-  SIDEBAR = "sidebar",
-  LIBRARY = "library",
-}
-
 export const artifacts = pgTable(
   "artifacts",
   {

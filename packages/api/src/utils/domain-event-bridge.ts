@@ -16,6 +16,7 @@
  * - workspaceMembers.remove.completed → workspace:member_removed
  * - widget_definition.*.completed → widget_definition:changed
  * - focus_session.*.completed → focus_session:updated
+ * - artifact.changed.completed → artifact:changed
  */
 
 import { randomUUID } from "crypto";
@@ -114,6 +115,11 @@ function mapToSocketEvent(
     },
     "focus_session.update.completed": {
       event: "focus_session:updated",
+      workspaceIdRequired: true,
+    },
+    // Artifacts — always workspace-scoped
+    "artifact.changed.completed": {
+      event: "artifact:changed",
       workspaceIdRequired: true,
     },
   };

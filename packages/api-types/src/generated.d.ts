@@ -8311,7 +8311,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					profileEntityBentoTemplates?: Record<string, {
 						blocks: Record<string, unknown>[];
 					}> | undefined;
-					workspacePurpose?: "personal" | "agent" | "project" | "library" | "operational" | undefined;
+					workspacePurpose?: "personal" | "agent" | "library" | "project" | "operational" | undefined;
 					workspaceSubtype?: string | undefined;
 					workspaceVisibility?: "members" | "private" | "pod_visible" | "pod_joinable" | "public_link" | undefined;
 					workspaceCapabilities?: string[] | undefined;
@@ -13553,16 +13553,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		setupVault: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				salt: string;
-				keyDerivationAlgorithm: string;
-				keyDerivationParams: {
+				mode?: "client" | "server" | undefined;
+				salt?: string | undefined;
+				keyDerivationAlgorithm?: string | undefined;
+				keyDerivationParams?: {
 					N: number;
 					r: number;
 					p: number;
-				};
-				verificationCipher: string;
-				verificationIv: string;
-				verificationTag: string;
+				} | undefined;
+				verificationCipher?: string | undefined;
+				verificationIv?: string | undefined;
+				verificationTag?: string | undefined;
 				recoveryKeyHash?: string | undefined;
 			};
 			output: {
@@ -13624,6 +13625,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				updatedAt: Date;
 				tags: string[];
+			};
+			meta: object;
+		}>;
+		reveal: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				value: string | Record<string, unknown>;
 			};
 			meta: object;
 		}>;
@@ -13782,11 +13792,43 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				secretId: string;
 				proposalId: string;
+				scope?: "session" | "once" | "permanent" | undefined;
+				ttlMinutes?: number | undefined;
 			};
 			output: {
 				vaultRef: string;
 				secretId: string;
 				proposalId: string;
+				grantId: string;
+				scope: "session" | "once" | "permanent";
+				expiresAt: string | null;
+			};
+			meta: object;
+		}>;
+		listGrants: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				secretId: string;
+			};
+			output: {
+				id: string;
+				scope: "session" | "once" | "permanent";
+				grantedTo: string | null;
+				proposalId: string | null;
+				expiresAt: string | null;
+				maxUses: number | null;
+				useCount: number;
+				revokedAt: string | null;
+				createdAt: string;
+				active: boolean;
+			}[];
+			meta: object;
+		}>;
+		revokeGrant: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				grantId: string;
+			};
+			output: {
+				success: boolean;
 			};
 			meta: object;
 		}>;
@@ -14271,6 +14313,130 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				planReport: unknown;
 				executionLog: unknown;
 				verificationReport: unknown;
+			};
+			meta: object;
+		}>;
+	}>>;
+	artifacts: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				state?: "working" | "kept" | "swept" | undefined;
+				placement?: "desk" | "home" | "sidebar" | "library" | undefined;
+				sessionId?: string | undefined;
+				limit?: number | undefined;
+			};
+			output: {
+				id: string;
+				workspaceId: string;
+				userId: string;
+				kind: "url" | "entity" | "cell" | "document" | "view";
+				refId: string | null;
+				cellKey: string | null;
+				props: unknown;
+				title: string;
+				originKind: "user" | "system" | "agent" | "deeplink";
+				actorId: string | null;
+				sessionId: string | null;
+				state: "working" | "kept" | "swept";
+				placement: "desk" | "home" | "sidebar" | "library";
+				keptAt: Date | null;
+				sweptAt: Date | null;
+				createdAt: Date;
+				updatedAt: Date;
+			}[];
+			meta: object;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				userId: string;
+				workspaceId: string;
+				sessionId: string | null;
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				title: string;
+				kind: "url" | "entity" | "cell" | "document" | "view";
+				refId: string | null;
+				cellKey: string | null;
+				props: unknown;
+				originKind: "user" | "system" | "agent" | "deeplink";
+				actorId: string | null;
+				state: "working" | "kept" | "swept";
+				placement: "desk" | "home" | "sidebar" | "library";
+				keptAt: Date | null;
+				sweptAt: Date | null;
+			};
+			meta: object;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				kind: "url" | "entity" | "cell" | "document" | "view";
+				title: string;
+				refId?: string | undefined;
+				cellKey?: string | undefined;
+				props?: unknown;
+				originKind?: "user" | "system" | "agent" | "deeplink" | undefined;
+				actorId?: string | undefined;
+				sessionId?: string | undefined;
+				placement?: "desk" | "home" | "sidebar" | "library" | undefined;
+			};
+			output: {
+				userId: string;
+				workspaceId: string;
+				sessionId: string | null;
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				title: string;
+				kind: "url" | "entity" | "cell" | "document" | "view";
+				refId: string | null;
+				cellKey: string | null;
+				props: unknown;
+				originKind: "user" | "system" | "agent" | "deeplink";
+				actorId: string | null;
+				state: "working" | "kept" | "swept";
+				placement: "desk" | "home" | "sidebar" | "library";
+				keptAt: Date | null;
+				sweptAt: Date | null;
+			};
+			meta: object;
+		}>;
+		setState: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				state: "working" | "kept" | "swept";
+				placement?: "desk" | "home" | "sidebar" | "library" | undefined;
+			};
+			output: {
+				userId: string;
+				workspaceId: string;
+				sessionId: string | null;
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				title: string;
+				kind: "url" | "entity" | "cell" | "document" | "view";
+				refId: string | null;
+				cellKey: string | null;
+				props: unknown;
+				originKind: "user" | "system" | "agent" | "deeplink";
+				actorId: string | null;
+				state: "working" | "kept" | "swept";
+				placement: "desk" | "home" | "sidebar" | "library";
+				keptAt: Date | null;
+				sweptAt: Date | null;
 			};
 			meta: object;
 		}>;
