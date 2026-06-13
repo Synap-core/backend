@@ -22,7 +22,7 @@ import {
   getWorkspaceMembership,
   SECRET_TYPES,
 } from "@synap/database";
-import { secrets, secretAuditLog, proposals } from "@synap/database/schema";
+import { secrets, secretAuditLog, proposals, users } from "@synap/database/schema";
 
 import { NotificationService } from "../../../notifications/NotificationService.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
@@ -144,6 +144,17 @@ export function registerVaultRoutes(app: HubHono): void {
     const ttl = body.ttl ?? 60;
 
     try {
+      // Resolve the requesting agent's display name so the approval card can
+      // show WHO is asking (the proposal only stores agentUserId otherwise).
+      let agentName: string | null = null;
+      if (userId) {
+        const agentRow = await db.query.users.findFirst({
+          where: eq(users.id, userId),
+          columns: { name: true },
+        });
+        agentName = agentRow?.name ?? null;
+      }
+
       const summary = `AI requests ${body.secretType} for ${body.service}: ${body.purpose}`;
       const { proposal: row } = await createEventBackedProposal({
         userId,
@@ -167,6 +178,7 @@ export function registerVaultRoutes(app: HubHono): void {
           requestedBy: "ai",
           source: "agent",
           sourceId: userId,
+          agentName,
         },
       });
 
