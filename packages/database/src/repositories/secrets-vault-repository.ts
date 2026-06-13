@@ -66,9 +66,8 @@ export interface ShareSecretInput {
 }
 
 export interface SetupVaultInput {
-  /** Mode marker. When 'server', key-derivation fields may be omitted and are
-   *  stored as placeholders — the server handles all encryption via VAULT_SERVER_KEY. */
-  mode?: "server" | "client";
+  /** Key-derivation fields may be omitted and are stored as placeholders — the
+   *  server handles all encryption via VAULT_SERVER_KEY. */
   salt?: string;
   keyDerivationAlgorithm?: string;
   keyDerivationParams?: Record<string, unknown>;
@@ -514,11 +513,25 @@ export class SecretsVaultRepository extends BaseRepository<
       const urlObj = new URL(url);
       const domain = urlObj.hostname;
 
+      // FIX 7 (autofill, backend half): match the host at a host BOUNDARY, not an
+      // arbitrary substring. A naive `LIKE %domain%` lets paypal.com match
+      // paypal.com.evil (wrong-origin autofill). We anchor the stored URL's host
+      // on a scheme/host boundary: the host must appear right after `://` (with
+      // optional `user@`) and be terminated by end-of-host (`/`, `:`, `?`, `#`,
+      // or end of string), OR be a subdomain (`.<domain>` at the same boundary).
+      // Escape regex metacharacters in the domain (dots etc.) so they match
+      // literally. The definitive same-origin check is also enforced
+      // browser-side; this just keeps the candidate set from being dangerously
+      // loose.
+      const escaped = domain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // ://[user@](sub.)?domain  then end-of-host terminator
+      const pattern = `://([^/@]*@)?([^/:?#]*\\.)?${escaped}([/:?#]|$)`;
+
       return this.db.query.secrets.findMany({
         where: and(
           eq(secrets.userId, userId),
           isNull(secrets.deletedAt),
-          sql`${secrets.url} LIKE ${`%${domain}%`}`
+          sql`${secrets.url} ~* ${pattern}`
         ),
         with: {
           tags: true,
