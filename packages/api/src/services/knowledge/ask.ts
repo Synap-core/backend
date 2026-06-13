@@ -8,8 +8,15 @@
  * backbone); the others only when cued, so the common case is a single SRE call.
  *
  * Glass-box, like the SRE: the result says WHICH substrates were queried, which
- * is primary, and carries the SRE's understanding + CRAG verdict — so a caller
- * (and the agent) can see the routing, never a black box.
+ * is primary, which DEGRADED (errored vs genuinely-empty — we never present a
+ * store outage as "found nothing"), and carries the SRE's understanding + CRAG
+ * verdict — so a caller (and the agent) can see the routing, never a black box.
+ *
+ * Scoping note (glass-box honesty): the three stores scope differently and that
+ * is by design — semantic + episodic are userId-scoped; procedural (knowledge_keys
+ * has no user-owner column) is addressed in the user's namespace via the
+ * workspaceId slot, exactly as the sibling `GET /knowledge/search` does. A pinned
+ * workspace narrows the semantic lens; a null lens means pod-wide for the user.
  *
  * See team/platform/unified-knowledge-access.mdx.
  */
@@ -34,6 +41,8 @@ export interface AskParams {
 export interface AskAnswer {
   substrate: SubstrateKind;
   items: Record<string, unknown>[];
+  /** `ok` = the store answered (possibly with 0 items); `error` = it failed and items is NOT authoritative. */
+  status: "ok" | "error";
 }
 
 export interface AskResult {
@@ -44,10 +53,29 @@ export interface AskResult {
   primary: SubstrateKind;
   /** One answer block per queried substrate, primary first. */
   answers: AskAnswer[];
+  /** Substrates that ERRORED (their block carries status:"error"; items unreliable). */
+  degraded: SubstrateKind[];
   /** The semantic engine's query understanding (glass-box). */
   understanding: QueryUnderstanding;
   /** The semantic engine's CRAG verdict. */
   verdict: RetrievalVerdict;
+}
+
+type Settled = { status: "ok" | "error"; items: Record<string, unknown>[] };
+
+/**
+ * Run an ancillary store and report whether it ACTUALLY answered. We degrade an
+ * outage to an empty result (the answer must survive a how-to-doc store being
+ * down) but NEVER conflate "errored" with "found nothing" — that would be a
+ * confident lie. The status rides along so the caller can tell them apart.
+ */
+async function settle(p: Promise<unknown[]>): Promise<Settled> {
+  try {
+    const items = (await p) as Record<string, unknown>[];
+    return { status: "ok", items };
+  } catch {
+    return { status: "error", items: [] };
+  }
 }
 
 export async function ask(params: AskParams): Promise<AskResult> {
@@ -55,17 +83,24 @@ export async function ask(params: AskParams): Promise<AskResult> {
   const limit = params.limit ?? 10;
   const { substrates, primary } = classifySubstrates(query);
 
-  // Semantic always runs (the backbone). Procedural / episodic run only when
-  // cued. Each ancillary store degrades to [] on failure — a missing how-to-doc
-  // store must never sink the whole answer.
+  // Semantic always runs (the backbone) and is NOT wrapped — a total retrieval
+  // failure should surface as an error, not a silent empty answer. Procedural /
+  // episodic run only when cued and each reports its own ok/error status.
   const semanticP = retrieve({ query, userId, workspaceId, catalog, limit });
+  // knowledge_keys has no user column; scope to the user's namespace (workspaceId
+  // slot), matching GET /knowledge/search — `undefined` would read UNFILTERED
+  // across every user/workspace on the pod.
   const proceduralP = substrates.includes("procedural")
-    ? knowledgeKeysRepository
-        .searchFullText(query, workspaceId ?? undefined, limit)
-        .catch(() => [])
+    ? settle(
+        knowledgeKeysRepository.searchFullText(
+          query,
+          workspaceId ?? userId,
+          limit
+        )
+      )
     : Promise.resolve(null);
   const episodicP = substrates.includes("episodic")
-    ? knowledgeRepository.searchFacts({ userId, query, limit }).catch(() => [])
+    ? settle(knowledgeRepository.searchFacts({ userId, query, limit }))
     : Promise.resolve(null);
 
   const [semantic, procedural, episodic] = await Promise.all([
@@ -75,23 +110,31 @@ export async function ask(params: AskParams): Promise<AskResult> {
   ]);
 
   const answers: AskAnswer[] = [
-    { substrate: "semantic", items: semantic.entities },
+    { substrate: "semantic", items: semantic.entities, status: "ok" },
   ];
+  const degraded: SubstrateKind[] = [];
   if (procedural) {
     answers.push({
       substrate: "procedural",
-      items: procedural as Record<string, unknown>[],
+      items: procedural.items,
+      status: procedural.status,
     });
+    if (procedural.status === "error") degraded.push("procedural");
   }
   if (episodic) {
     answers.push({
       substrate: "episodic",
-      items: episodic as Record<string, unknown>[],
+      items: episodic.items,
+      status: episodic.status,
     });
+    if (episodic.status === "error") degraded.push("episodic");
   }
-  // Surface the most-relevant substrate first.
-  answers.sort((a, b) =>
-    a.substrate === primary ? -1 : b.substrate === primary ? 1 : 0
+  // Surface the most-relevant substrate first. Total-order comparator
+  // (primary → 0, others → 1); stable sort preserves the natural
+  // semantic→procedural→episodic order among the rest.
+  answers.sort(
+    (a, b) =>
+      (a.substrate === primary ? 0 : 1) - (b.substrate === primary ? 0 : 1)
   );
 
   return {
@@ -99,6 +142,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
     routedTo: substrates,
     primary,
     answers,
+    degraded,
     understanding: semantic.understanding,
     verdict: semantic.verdict,
   };

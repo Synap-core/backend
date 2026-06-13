@@ -13553,7 +13553,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		setupVault: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				mode?: "client" | "server" | undefined;
 				salt?: string | undefined;
 				keyDerivationAlgorithm?: string | undefined;
 				keyDerivationParams?: {

@@ -565,4 +565,116 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       );
     }
   });
+
+  // ── POST /knowledge/ask ───────────────────────────────────────────────────
+  // The ONE read door. Classifies substrate intent and routes a natural-language
+  // query to the right store(s) — semantic (entity graph, via the Synap Retrieval
+  // Engine), procedural (knowledge_keys how-to docs), episodic (knowledge_facts
+  // raw captures) — returning one provenance-tagged answer. Glass-box: the result
+  // says which substrates answered, which is primary, plus the SRE's understanding
+  // + verdict. See team/platform/unified-knowledge-access.mdx.
+  const askRoute = createRoute({
+    method: "post",
+    path: "/knowledge/ask",
+    tags: ["Knowledge"],
+    summary: "Unified knowledge access — one routed read door",
+    description:
+      "Routes a natural-language query to the right knowledge substrate(s) — " +
+      "semantic (typed entities), procedural (how-to docs), episodic (captures) " +
+      "— and returns one answer tagged with which substrate(s) answered.",
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              query: z.string().min(1),
+              workspaceId: z.string().optional(),
+              limit: z.number().int().min(1).max(100).optional(),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Routed knowledge answer",
+        content: {
+          "application/json": {
+            schema: z.object({
+              query: z.string(),
+              routedTo: z.array(z.string()),
+              primary: z.string(),
+              answers: z.array(
+                z.object({
+                  substrate: z.string(),
+                  items: z.array(z.record(z.string(), z.unknown())),
+                  status: z.enum(["ok", "error"]),
+                })
+              ),
+              degraded: z.array(z.string()),
+              understanding: z.record(z.string(), z.unknown()),
+              verdict: z.enum(["confident", "ambiguous", "empty"]),
+            }),
+          },
+        },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(askRoute, async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+
+    const body = c.req.valid("json");
+    const workspaceId = body.workspaceId ?? null;
+
+    try {
+      // The semantic engine's CATALOG (type inference) needs a concrete
+      // workspace; resolve the user's first accessible one when no lens is
+      // pinned. Routing/recall keep the caller's lens (null = pod-wide).
+      let catalogWs = workspaceId;
+      if (!catalogWs) {
+        const wsIds = await getUserAccessibleWorkspaceIds(userId);
+        catalogWs = wsIds[0] ?? null;
+      }
+
+      let catalog: ProfileCatalogEntry[] = [];
+      if (catalogWs) {
+        const caller = await getCaller(c, { workspaceId: catalogWs });
+        const { profiles: profileRows } = await caller.profiles.listProfiles({
+          userId,
+          workspaceId: catalogWs,
+        });
+        catalog = profileRows.flatMap((p) =>
+          p.slug ? [{ slug: p.slug, displayName: p.displayName ?? p.slug }] : []
+        );
+      }
+
+      const result = await ask({
+        query: body.query,
+        userId,
+        workspaceId,
+        limit: body.limit,
+        catalog,
+      });
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err, userId }, "POST /knowledge/ask failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Internal error" },
+        500
+      );
+    }
+  });
 }

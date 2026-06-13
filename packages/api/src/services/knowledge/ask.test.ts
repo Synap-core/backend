@@ -1,0 +1,158 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// Mock the three substrate stores so we test ONLY the router's
+// classify → route → fuse logic, not the underlying retrievers.
+const retrieveMock = vi.fn();
+const searchFullTextMock = vi.fn();
+const searchFactsMock = vi.fn();
+
+vi.mock("../retrieval/retrieve.js", () => ({
+  retrieve: (...args: unknown[]) => retrieveMock(...args),
+}));
+vi.mock("@synap/database", () => ({
+  knowledgeRepository: {
+    searchFacts: (...args: unknown[]) => searchFactsMock(...args),
+  },
+  knowledgeKeysRepository: {
+    searchFullText: (...args: unknown[]) => searchFullTextMock(...args),
+  },
+}));
+
+const { ask } = await import("./ask.js");
+
+const baseParams = {
+  userId: "user-1",
+  workspaceId: null,
+  catalog: [],
+  limit: 5,
+};
+
+const semanticResult = {
+  entities: [{ id: "e1", title: "Acme" }],
+  understanding: { confidence: 0.9 },
+  verdict: "confident",
+  source: "hybrid",
+};
+
+beforeEach(() => {
+  retrieveMock.mockReset().mockResolvedValue(semanticResult);
+  searchFullTextMock
+    .mockReset()
+    .mockResolvedValue([{ key: "deploy", value: "How to deploy" }]);
+  searchFactsMock
+    .mockReset()
+    .mockResolvedValue([{ id: "f1", fact: "noted X" }]);
+});
+
+describe("ask router", () => {
+  it("a plain entity query hits ONLY semantic", async () => {
+    const r = await ask({ ...baseParams, query: "the Acme project" });
+    expect(retrieveMock).toHaveBeenCalledTimes(1);
+    expect(searchFullTextMock).not.toHaveBeenCalled();
+    expect(searchFactsMock).not.toHaveBeenCalled();
+    expect(r.routedTo).toEqual(["semantic"]);
+    expect(r.primary).toBe("semantic");
+    expect(r.answers).toHaveLength(1);
+    expect(r.answers[0].substrate).toBe("semantic");
+    expect(r.answers[0].items).toEqual(semanticResult.entities);
+    expect(r.answers[0].status).toBe("ok");
+    expect(r.degraded).toEqual([]);
+  });
+
+  it("carries the semantic engine's understanding + verdict (glass-box)", async () => {
+    const r = await ask({ ...baseParams, query: "the Acme project" });
+    expect(r.understanding).toEqual(semanticResult.understanding);
+    expect(r.verdict).toBe("confident");
+  });
+
+  it("a 'how to' query also hits procedural, primary-first", async () => {
+    const r = await ask({ ...baseParams, query: "how to deploy the backend" });
+    expect(searchFullTextMock).toHaveBeenCalledTimes(1);
+    expect(searchFactsMock).not.toHaveBeenCalled();
+    expect(r.routedTo).toContain("procedural");
+    expect(r.primary).toBe("procedural");
+    expect(r.answers[0].substrate).toBe("procedural"); // primary listed first
+  });
+
+  it("a 'what did I note' query also hits episodic, primary-first", async () => {
+    const r = await ask({
+      ...baseParams,
+      query: "what did I note about pricing",
+    });
+    expect(searchFactsMock).toHaveBeenCalledTimes(1);
+    expect(searchFullTextMock).not.toHaveBeenCalled();
+    expect(r.primary).toBe("episodic");
+    expect(r.answers[0].substrate).toBe("episodic");
+  });
+
+  it("orders three substrates primary-first, semantic-before-episodic for the rest", async () => {
+    const r = await ask({ ...baseParams, query: "remember how to deploy" });
+    // classifier: procedural primary, also episodic. semantic always runs.
+    expect(r.routedTo).toEqual(["semantic", "procedural", "episodic"]);
+    expect(r.answers.map((a) => a.substrate)).toEqual([
+      "procedural", // primary
+      "semantic", // then natural order
+      "episodic",
+    ]);
+  });
+
+  // ── Glass-box honesty: errored ≠ empty ────────────────────────────────────
+  it("tags an errored ancillary store status:'error' + lists it in degraded (NOT a silent empty)", async () => {
+    searchFullTextMock.mockRejectedValue(new Error("knowledge_keys down"));
+    const r = await ask({ ...baseParams, query: "how to deploy" });
+    const procedural = r.answers.find((a) => a.substrate === "procedural");
+    expect(procedural?.status).toBe("error");
+    expect(procedural?.items).toEqual([]);
+    expect(r.degraded).toContain("procedural");
+    // semantic (backbone) still answers
+    const semantic = r.answers.find((a) => a.substrate === "semantic");
+    expect(semantic?.items).toEqual(semanticResult.entities);
+  });
+
+  it("a genuinely-empty ancillary store is status:'ok' (NOT degraded)", async () => {
+    searchFullTextMock.mockResolvedValue([]);
+    const r = await ask({ ...baseParams, query: "how to deploy" });
+    const procedural = r.answers.find((a) => a.substrate === "procedural");
+    expect(procedural?.status).toBe("ok");
+    expect(procedural?.items).toEqual([]);
+    expect(r.degraded).toEqual([]);
+  });
+
+  // ── Scoping (security): procedural must not read unfiltered ────────────────
+  it("scopes procedural search to the user's namespace when no workspace lens is pinned", async () => {
+    await ask({ ...baseParams, workspaceId: null, query: "how to deploy" });
+    // workspaceId ?? userId — NEVER undefined (which is the unfiltered branch).
+    expect(searchFullTextMock).toHaveBeenCalledWith(
+      "how to deploy",
+      "user-1",
+      5
+    );
+  });
+
+  it("uses the pinned workspace lens for procedural search when provided", async () => {
+    await ask({ ...baseParams, workspaceId: "ws-9", query: "how to deploy" });
+    expect(searchFullTextMock).toHaveBeenCalledWith("how to deploy", "ws-9", 5);
+  });
+
+  it("propagates limit to every routed store", async () => {
+    await ask({ ...baseParams, limit: 3, query: "remember how to deploy" });
+    expect(retrieveMock).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 3 })
+    );
+    expect(searchFullTextMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      3
+    );
+    expect(searchFactsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 3 })
+    );
+  });
+
+  it("passes the caller's lens (workspaceId) straight through to retrieve", async () => {
+    await ask({ ...baseParams, workspaceId: "ws-9", query: "anything" });
+    expect(retrieveMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "ws-9" })
+    );
+  });
+});

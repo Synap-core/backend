@@ -141,9 +141,9 @@ export const hubProfilesRouter = router({
         input.workspaceId
       );
       const caller = regularProfilesRouter.createCaller(callerContext);
+      // TODO(slot): hub exposed a slot param the renderer API doesn't accept
       return caller.getEffectiveRenderers({
         profileSlug: input.profileSlug,
-        slot: input.slot,
       });
     }),
 

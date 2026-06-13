@@ -77,10 +77,18 @@ synap orient --json                                    # discover userId + works
 synap use <workspace-name-or-id>                       # set active workspace
 synap create entity --profile=task --name="…" --props='{"status":"todo","priority":"high"}' --json
 synap set entity <id> --props='{"status":"done"}' --json  # merge-patch (only changed keys)
-synap search "query" --json
-synap remember "fact about the user" --json
-synap recall "query" --json
+synap ask "your question" --json                       # ONE read door — routes to the right store(s) + shows which answered
+synap capture --type=lesson --claim="…" --json         # structured write — validated learnings
+synap remember "loose fact about the user" --json      # quick fact → episodic memory
 ```
+
+**Reading is one verb: `ask`.** It classifies your question and routes it across the
+three memory substrates — semantic (the typed entity graph), procedural (how-to
+docs), episodic (raw captures) — then returns one answer tagged with which
+substrate(s) actually answered (and which, if any, were unavailable). Don't pick a
+store to read from; `ask` picks for you and tells you what it did.
+`synap search`/`recall`/`graph`/`explain` still exist as the low-level doors `ask`
+routes to — reach for them only when you deliberately want one substrate.
 
 ```bash
 # REST (when no Bash access)
@@ -91,6 +99,7 @@ PATCH  /api/hub/documents/{id}    body: { userId, title?, content? }   ← full 
 POST   /api/hub/relations         body: { userId, sourceEntityId, targetEntityId, type }
 GET    /api/hub/entities?q=…&profileSlug=task&workspaceId=…
 GET    /api/hub/entities/{id}/connections?userId=…
+POST   /api/hub/knowledge/ask     body: { query, workspaceId?, limit? }   ← ONE read door, routes across substrates
 POST   /api/hub/memory            body: { userId, fact }
 GET    /api/hub/memory?userId=…&query=…
 ```
@@ -149,8 +158,8 @@ GET /api/hub/discover?userId={userId}&workspaceId={workspaceId}
 `scope: "workspace"` = scoped to one workspace (deal, file, capture, custom profiles).  
 Each profile includes its full property schema. Use `createCommand` as a template.
 
-**2. Search before answering**  
-Before answering any question about the user's projects, tasks, contacts, decisions, or anything they might have captured — search Synap first. Do not answer from your training or context window when Synap may have the authoritative answer.
+**2. Ask before answering**  
+Before answering any question about the user's projects, tasks, contacts, decisions, or anything they might have captured — `ask` Synap first (`synap ask "…"` / `POST /api/hub/knowledge/ask`). It routes across all three memory substrates in one call. Do not answer from your training or context window when Synap may have the authoritative answer.
 
 **3. Save proactively — without waiting to be asked**  
 When the user shares a decision, task, meeting outcome, contact, or any durable information: save it. Don't ask "should I save this?" for obviously important information. Use:
@@ -627,7 +636,20 @@ POST /api/hub/threads/{threadId}/messages
 
 ## Reading
 
-Graph-based, not semantic. Type filter → relations → neighborhood.
+**Start with `ask` — the one routed read door.** It classifies the question and
+queries the right substrate(s) for you, returning a glass-box answer (which
+substrates answered, which were unavailable, plus the engine's verdict). Reach for
+the low-level doors below only when you deliberately want a single substrate or a
+specific shape (a graph traversal, a typed-entity filter, an entity's neighborhood).
+
+```
+# THE read door — routes across semantic / procedural / episodic, tells you which answered
+POST /api/hub/knowledge/ask   body: { query, workspaceId?, limit? }
+  → { query, routedTo: [...], primary, answers: [{ substrate, items, status }], degraded, understanding, verdict }
+```
+
+Low-level doors (`ask` routes to these — graph-based, not semantic; type filter →
+relations → neighborhood):
 
 ```
 # Keyword search across everything (entities, documents, views, threads)
@@ -865,6 +887,7 @@ When the user is interacting with Synap's AI Companion (the in-browser chat pane
 A **focus session** is a named, multi-step work room where you and AI agents collaborate on a specific goal. Use one whenever the work has a clear end state, will take more than one exchange, or involves multiple agents.
 
 **When to propose a session** (via the proposal system — always ask first):
+
 - Research with 5+ sources → decision memo
 - Lead generation sprint → qualified list + outreach drafts
 - Incident investigation → postmortem doc
@@ -885,11 +908,13 @@ create_proposal with targetType: "focus_session"
 `research-room` · `lead-sprint` · `decision-memo` · `import-cleanup` · `incident-room` · `campaign-intel`
 
 **Hub Protocol REST** (for IS → backend; always include `workspaceId`):
+
 - `POST /api/hub/focus-sessions` — create (include `correlationId` for idempotency)
 - `GET /api/hub/focus-sessions/:id?workspaceId=<id>` — read
 - `PATCH /api/hub/focus-sessions/:id` — update `{ workspaceId, progress, status, goal, agentIds }`
 
 **CLI** (use when running as Claude Code / OpenClaw agent):
+
 ```bash
 synap session list [--workspace <id>] [--status active|paused|closed]  # list sessions
 synap session get <id> [--workspace <id>]                               # read a session
@@ -897,6 +922,7 @@ synap session update <id> --workspace <id> --progress 50               # report 
 synap session update <id> --workspace <id> --status paused             # pause
 synap session close <id> --workspace <id> [--recap "what was done"]    # close + recap
 ```
+
 Note: sessions are **created** via `create_proposal` (governance) — there is no direct `synap session create`.
 
 **Discoverability**: the `active-sessions` bento widget is on the default home dashboard. Sessions group their related proposals under a shared `correlationId` in the Proposal Review Board.
@@ -962,6 +988,7 @@ Content-Type: application/json
 ```
 
 **`deps` rules:**
+
 - Keys are npm package names (`pkg` or `@scope/pkg`). URLs and protocols are rejected.
 - Values are version strings or `"latest"` — used verbatim in the esm.sh import map URL.
 - Maximum 30 entries. Omit `deps` (or pass `{}`) for React-only cells (React is always available).
@@ -1056,7 +1083,9 @@ SynapWidget.onInit(async ({ config, context }) => {
   const entity = await SynapWidget.query("entities.get", { id: "uuid" });
 
   // List views
-  const views = await SynapWidget.query("views.list", { workspaceId: context.workspaceId });
+  const views = await SynapWidget.query("views.list", {
+    workspaceId: context.workspaceId,
+  });
 
   // List profiles
   const profiles = await SynapWidget.query("profiles.list", {});
@@ -1104,9 +1133,9 @@ await SynapWidget.mutate("create_relation", {
 ```js
 SynapWidget.navigate({ entityId: "entity-uuid" }); // open entity detail in side panel
 SynapWidget.openPanel("entity-detail", { entityId: "uuid" }); // explicit panel open
-SynapWidget.toast("Saved!", "success");             // 'success' | 'error' | 'info'
-SynapWidget.resize(document.body.scrollHeight);     // resize the iframe to content height
-SynapWidget.updateContext({ viewId: "uuid" });      // update ambient context
+SynapWidget.toast("Saved!", "success"); // 'success' | 'error' | 'info'
+SynapWidget.resize(document.body.scrollHeight); // resize the iframe to content height
+SynapWidget.updateContext({ viewId: "uuid" }); // update ambient context
 
 // Subscribe to live entity changes
 SynapWidget.subscribe("entity:changed", ({ entityId }) => {
@@ -1153,8 +1182,15 @@ Common library choices:
   <head>
     <meta charset="utf-8" />
     <style>
-      * { box-sizing: border-box; margin: 0; }
-      body { font-family: -apple-system, sans-serif; padding: 16px; background: transparent; }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+      }
+      body {
+        font-family: -apple-system, sans-serif;
+        padding: 16px;
+        background: transparent;
+      }
     </style>
     <!-- importmap is injected by the host from deps — do not write one manually -->
   </head>

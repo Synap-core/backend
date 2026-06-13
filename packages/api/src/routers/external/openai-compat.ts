@@ -19,7 +19,7 @@
 import { Hono, Context } from "hono";
 import { z } from "zod";
 import { db, eq, and } from "@synap/database";
-import { workspaceMembers, aiProviders } from "@synap/database/schema";
+import { workspaceMembers } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
 import {
   ensureAgentThread,

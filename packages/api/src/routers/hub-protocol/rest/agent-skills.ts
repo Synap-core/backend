@@ -16,16 +16,8 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import {
-  db,
-  eq,
-  and,
-  or,
-  ilike,
-  inArray,
-  sql,
-  agentSkills,
-} from "@synap/database";
+import { db, eq, and, agentSkills } from "@synap/database";
+import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { hasScope, logger, type HubHono } from "./_shared.js";
@@ -192,14 +184,18 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     const offset = parseInt(c.req.query("offset") ?? "0", 10);
 
     try {
-      const conditions: ReturnType<typeof eq>[] = [];
+      const conditions: SQL[] = [];
 
       if (topic) {
-        conditions.push(sql`${agentSkills.topics} @> ARRAY[${topic}]::text[]`);
+        conditions.push(
+          drizzleSql`${agentSkills.topics} @> ARRAY[${topic}]::text[]`
+        );
       }
 
       if (tag) {
-        conditions.push(sql`${agentSkills.tags} @> ARRAY[${tag}]::text[]`);
+        conditions.push(
+          drizzleSql`${agentSkills.tags} @> ARRAY[${tag}]::text[]`
+        );
       }
 
       const where = conditions.length > 0 ? and(...conditions) : undefined;

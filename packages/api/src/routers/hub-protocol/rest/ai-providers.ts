@@ -105,7 +105,7 @@ const UpsertBody = z.object({
     .array(
       z.object({
         id: z.string(),
-        tier: z.string().optional(),
+        tier: z.enum(["free", "balanced", "advanced", "complex"]).optional(),
         contextWindow: z.number().optional(),
       })
     )

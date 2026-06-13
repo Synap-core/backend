@@ -17,9 +17,12 @@ describe("classifySubstrates", () => {
     expect(r.primary).toBe("procedural");
   });
 
-  it("routes a runbook/guide query to procedural", () => {
+  it("routes a runbook / step-by-step query to procedural", () => {
     expect(classifySubstrates("the deploy runbook").primary).toBe("procedural");
-    expect(classifySubstrates("setup guide for kratos").substrates).toContain(
+    expect(
+      classifySubstrates("set up kratos step by step").substrates
+    ).toContain("procedural");
+    expect(classifySubstrates("documentation for the api").primary).toBe(
       "procedural"
     );
   });
@@ -43,10 +46,36 @@ describe("classifySubstrates", () => {
   });
 
   it("procedural wins over episodic on ties", () => {
-    // contains both a 'how to' and 'remember'
     const r = classifySubstrates("remember how to deploy");
     expect(r.primary).toBe("procedural");
     expect(r.substrates).toContain("procedural");
     expect(r.substrates).toContain("episodic");
+  });
+
+  // ── False-positive guards: this product's entity vocabulary collides with
+  //    naive substring cues ("deploy", "setup", "guide" are common entity names).
+  //    Word boundaries + dropping bare-noun cues must keep these semantic-only.
+  describe("does NOT mis-route entity-name queries", () => {
+    const entityQueries = [
+      "the Deploy Helper project", // "deploy" the entity name, not the verb
+      "Configure Inc, our client", // "configure" in a company name
+      "the Install wizard entity",
+      "Footsteps to Freedom album", // must not match "steps to" mid-word
+      "Remembrance Inc", // must not match "remember" mid-word
+      "the Setup app", // bare "setup" is no longer a cue
+      "the Guide Michelin contact", // bare "guide" is no longer a cue
+    ];
+    for (const q of entityQueries) {
+      it(`"${q}" → semantic-only`, () => {
+        const r = classifySubstrates(q);
+        expect(r.substrates).toEqual(["semantic"]);
+        expect(r.primary).toBe("semantic");
+      });
+    }
+  });
+
+  it("empty / whitespace query is semantic-only", () => {
+    expect(classifySubstrates("").substrates).toEqual(["semantic"]);
+    expect(classifySubstrates("   ").primary).toBe("semantic");
   });
 });

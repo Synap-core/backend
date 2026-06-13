@@ -28,6 +28,7 @@ const UpdateDocumentBodySchema = z.object({
   content: z.string().optional(),
   agentUserId: z.string().optional(),
   sourceMessageId: z.string().optional(),
+  sessionId: z.string().optional(),
 });
 
 export function registerDocumentsRoutes(app: HubHono): void {
@@ -305,7 +306,8 @@ export function registerDocumentsRoutes(app: HubHono): void {
         );
       }
 
-      const sessionId = body.sessionId ?? c.req.header("x-session-id") ?? null;
+      const sessionId =
+        body.data.sessionId ?? c.req.header("x-session-id") ?? null;
       const caller = await getCaller(c, {
         userId,
         sourceMessageId,
