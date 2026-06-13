@@ -636,6 +636,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
               entities: z.array(z.record(z.string(), z.unknown())),
               understanding: z.record(z.string(), z.unknown()),
               source: z.enum(["hybrid", "typesense"]),
+              verdict: z.enum(["confident", "ambiguous", "empty"]),
             }),
           },
         },

@@ -10,6 +10,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@synap/ai-embeddings": "workspace:*",
     "@synap/database": "workspace:*",
     "typesense": "^1.8.2"
   },

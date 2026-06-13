@@ -13823,6 +13823,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 			meta: object;
 		}>;
+		listAllGrants: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				grantId: string;
+				secretId: string;
+				secretName: string | null;
+				grantedTo: string | null;
+				proposalId: string | null;
+				scope: "session" | "once" | "permanent";
+				expiresAt: string | null;
+				maxUses: number | null;
+				useCount: number;
+				revokedAt: string | null;
+				createdAt: string;
+				active: boolean;
+			}[];
+			meta: object;
+		}>;
 		revokeGrant: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				grantId: string;
@@ -14328,6 +14346,34 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				state?: "working" | "kept" | "swept" | undefined;
+				placement?: "desk" | "home" | "sidebar" | "library" | undefined;
+				sessionId?: string | undefined;
+				limit?: number | undefined;
+			};
+			output: {
+				id: string;
+				workspaceId: string;
+				userId: string;
+				kind: "url" | "entity" | "cell" | "document" | "view";
+				refId: string | null;
+				cellKey: string | null;
+				props: unknown;
+				title: string;
+				originKind: "user" | "system" | "agent" | "deeplink";
+				actorId: string | null;
+				sessionId: string | null;
+				state: "working" | "kept" | "swept";
+				placement: "desk" | "home" | "sidebar" | "library";
+				keptAt: Date | null;
+				sweptAt: Date | null;
+				createdAt: Date;
+				updatedAt: Date;
+			}[];
+			meta: object;
+		}>;
+		listAll: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				state?: "working" | "kept" | "swept" | undefined;
 				placement?: "desk" | "home" | "sidebar" | "library" | undefined;

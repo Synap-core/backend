@@ -5,6 +5,7 @@
 import { BaseIndexer } from "./base-indexer.js";
 import type { SearchDocument } from "../types/index.js";
 import { toSearchWorkspaceScope } from "../utils/workspace-scope.js";
+import { buildEntityEmbeddingText } from "@synap/ai-embeddings";
 
 interface Entity {
   id: string;
@@ -17,6 +18,12 @@ interface Entity {
   type: string;
   tags: string[] | null;
   status: string | null;
+  /**
+   * Typed property values. Already present on the Drizzle row fetched by
+   * IndexingService — we now serialize it into the searchable `content` so
+   * keyword search matches property values (e.g. role="VP Product").
+   */
+  properties: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -25,10 +32,20 @@ export class EntityIndexer extends BaseIndexer<Entity> {
   collectionName = "entities";
 
   async toSearchDocument(entity: Entity): Promise<SearchDocument> {
+    // Fold serialized property values into `content` (already a searchable
+    // string field — no Typesense schema migration). Reuses the embedding
+    // builder's filtering (skips _-keys, *Id keys, nulls, long/nested values),
+    // so "VP Product" / "Paris" / "Q3" become keyword-matchable.
+    const propsText = entity.properties
+      ? buildEntityEmbeddingText({ properties: entity.properties })
+      : "";
+    const content =
+      [entity.content, propsText].filter(Boolean).join("\n") || undefined;
+
     const doc: SearchDocument = {
       id: entity.id,
       title: entity.title,
-      content: entity.content || undefined,
+      content,
       description: entity.description || undefined,
       userId: entity.userId,
       workspaceId: toSearchWorkspaceScope(entity.workspaceId),

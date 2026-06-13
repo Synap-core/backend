@@ -14,6 +14,8 @@
  * profiles). The IS can refine ambiguous cases in a later phase.
  */
 
+import { COMMON_STOPWORDS } from "./stopwords.js";
+
 export interface ProfileCatalogEntry {
   slug: string;
   displayName: string;
@@ -119,8 +121,14 @@ const ROLE_KEYWORDS = [
   "designer",
 ];
 
+// RECENCY cues only. The temporal signal scores by last-activity (event chain /
+// updatedAt), so it serves "what changed / latest / recently active". Due-date
+// cues (due/overdue/upcoming/by Friday) are deliberately EXCLUDED — they need a
+// `properties.dueDate` proximity signal (a later phase + the /entities date-range
+// filter), and claiming them here would apply a recency boost that's irrelevant
+// (or backwards) for "what's overdue".
 const TEMPORAL_RE =
-  /\b(recent|recently|latest|newest|last (week|month|year|night|quarter)|yesterday|today|tonight|upcoming|soon|this (week|month|quarter|year)|due|overdue|since|before|after|until|by (monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b/;
+  /\b(recent|recently|latest|newest|changed|last (week|month|year|night|quarter)|yesterday|today|tonight|this (week|month|quarter|year)|since)\b/;
 
 function tokenize(s: string): string[] {
   return s
@@ -142,25 +150,10 @@ function extractPropertyHints(query: string): PropertyHint[] {
   // "key value" patterns with any connector or just whitespace: "status done",
   // "status: done", "priority = high", "role is manager". Skip stopword values
   // so "role of the manager" doesn't capture "of".
-  const STOP = new Set([
-    "is",
-    "are",
-    "was",
-    "of",
-    "the",
-    "a",
-    "an",
-    "to",
-    "in",
-    "on",
-    "for",
-    "with",
-    "and",
-  ]);
   for (const m of lower.matchAll(
     /\b(status|priority|stage|role|assignee|owner)\b[:=\s]+([a-z0-9-]+)/g
   )) {
-    if (!STOP.has(m[2])) hints.push({ key: m[1], value: m[2] });
+    if (!COMMON_STOPWORDS.has(m[2])) hints.push({ key: m[1], value: m[2] });
   }
 
   // quoted phrases are strong hints

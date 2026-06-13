@@ -1,20 +1,26 @@
 /**
- * Synap Retrieval Engine — Phase 1 orchestrator (the structured signal).
+ * Synap Retrieval Engine — the orchestrator (all five signals + correction).
  *
- * understand() → embed once → fuse UNSCOPED recall with TYPE-SCOPED recall for
- * each inferred profile type. Entities of the inferred type land in both lists →
- * boosted by RRF; everything else still flows through the unscoped list → no
- * recall loss when the inference is wrong. A light property-hint re-rank gives a
- * BOUNDED lift to rows whose property VALUES match (e.g. role=VP) — it nudges,
- * never partitions, so it can't override RRF wholesale.
+ *   understand(query) → embed once
+ *   → recall passes:  semantic (pgvector) + lexical (Typesense), unscoped AND
+ *                     type-scoped per inferred profile (the STRUCTURED signal)
+ *   → GRAPH signal:   PPR-lite over native relations from the top recall hits,
+ *                     fused into the candidate pool (multi-hop reach)
+ *   → composite re-rank (ONE sort): fused position + bounded property-hint boost
+ *                     + bounded temporal recency boost (when the query is temporal)
+ *   → CRAG grade:     verdict for glass-box; re-key an EMPTY result set once
  *
- * This is the foundation later phases extend (graph PPR, temporal, CRAG).
+ * Embeddings are one signal among five over the graph we already own. Each boost
+ * is bounded (a nudge, never a partition) so RRF stays the primary ranking.
  * See team/platform/retrieval-architecture.mdx.
  */
 
-import { db, entities, and, inArray, isNull } from "@synap/database";
+import { db, entities, and, eq, inArray, isNull } from "@synap/database";
 import { embedQuery, hybridRecall, rrf } from "./hybrid-recall.js";
-import { matchesHint } from "./property-hint-match.js";
+import { graphExpand, type Seed } from "./graph-signal.js";
+import { latestEventTimestamps } from "./temporal-signal.js";
+import { compositeRerank } from "./composite-rerank.js";
+import { gradeResults, rekey, type RetrievalVerdict } from "./grade.js";
 import {
   understandQuery,
   type ProfileCatalogEntry,
@@ -35,6 +41,35 @@ export interface RetrieveResult {
   /** Why these results — surfaced for glass-box debugging + eval. */
   understanding: QueryUnderstanding;
   source: "hybrid" | "typesense";
+  /** CRAG verdict on the result set. */
+  verdict: RetrievalVerdict;
+}
+
+const GRAPH_SEED_CAP = 10;
+
+type EntityRow = typeof entities.$inferSelect;
+
+async function fetchOrdered(
+  ids: string[],
+  userId: string
+): Promise<EntityRow[]> {
+  if (ids.length === 0) return [];
+  // Defense-in-depth: gate on the loaded row's userId even though every id
+  // source upstream (recall + graph edges) is already user-scoped.
+  const rows = await db
+    .select()
+    .from(entities)
+    .where(
+      and(
+        inArray(entities.id, ids),
+        eq(entities.userId, userId),
+        isNull(entities.deletedAt)
+      )
+    );
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  return ids
+    .map((id) => byId.get(id))
+    .filter((r): r is EntityRow => r !== undefined);
 }
 
 export async function retrieve(
@@ -46,9 +81,7 @@ export async function retrieve(
   const understanding = understandQuery(query, catalog);
   const embedding = await embedQuery(query); // once; reused across fused passes
 
-  // baseline unscoped pass + one type-scoped pass per inferred type (max 2).
-  // Each pass already widens its own candidate scan internally — pass `limit`,
-  // not a pre-widened value, so the scan isn't compounded.
+  // 1. Recall passes — semantic + lexical, unscoped baseline + type-scoped.
   const passes = await Promise.all([
     hybridRecall({ query, userId, workspaceId, limit, embedding }),
     ...understanding.profileTypes.slice(0, 2).map((slug) =>
@@ -62,52 +95,87 @@ export async function retrieve(
       })
     ),
   ]);
-
   const usedVector = passes.some((p) => p.usedVector);
   const source: "hybrid" | "typesense" = usedVector ? "hybrid" : "typesense";
+  const recallLists = passes.map((p) => p.ids);
 
-  // Fuse into a pool 2× the final limit to give the re-rank some headroom.
-  const fusedIds = rrf(
-    passes.map((p) => p.ids),
-    60,
-    limit * 2
-  );
+  // 2. Graph signal — expand the top recall hits across the relation graph and
+  //    fuse the connected entities into the candidate pool (multi-hop reach).
+  const recallSeeds = rrf(recallLists, 60).slice(0, GRAPH_SEED_CAP);
+  const seeds: Seed[] = recallSeeds.map((id, i) => ({
+    id,
+    weight: 1 / (i + 1),
+  }));
+  // hops:2 reaches deal→company→person (the motivating 2-hop query); damping
+  // decays the 2-hop contribution to ≤0.125 so far neighbors stay quiet.
+  const graphHits = await graphExpand(seeds, userId, {
+    seedCap: GRAPH_SEED_CAP,
+    hops: 2,
+  });
+  const graphList = graphHits.map((h) => h.id);
+
+  // 3. Fuse recall + graph into a pool 2× the final limit (re-rank headroom).
+  const fusedIds = rrf([...recallLists, graphList], 60, limit * 2);
+
+  // 3b. CRAG correction: the grader is the SINGLE source of truth for "should we
+  //     correct?". On an empty pool it returns correction "rekey" → re-query once
+  //     with content keywords (strip question/stopwords) so a lexical re-query can
+  //     hit where the full phrasing buried the signal.
   if (fusedIds.length === 0) {
-    return { entities: [], understanding, source };
+    if (gradeResults(understanding, []).correction === "rekey") {
+      const kw = rekey(query);
+      if (kw && kw !== query.toLowerCase().trim()) {
+        const r2 = await hybridRecall({
+          query: kw,
+          userId,
+          workspaceId,
+          limit,
+        });
+        if (r2.ids.length > 0) {
+          const rows2 = await fetchOrdered(r2.ids, userId);
+          return {
+            entities: rows2.slice(0, limit) as Record<string, unknown>[],
+            understanding,
+            source: r2.usedVector ? "hybrid" : "typesense",
+            verdict: gradeResults(
+              understanding,
+              rows2.map((r) => r.type)
+            ).verdict,
+          };
+        }
+      }
+    }
+    return { entities: [], understanding, source, verdict: "empty" };
   }
 
-  // Fetch rows, preserve fused order.
-  const rows = await db
-    .select()
-    .from(entities)
-    .where(and(inArray(entities.id, fusedIds), isNull(entities.deletedAt)));
-  const byId = new Map(rows.map((r) => [r.id, r]));
-  let ordered = fusedIds
-    .map((id) => byId.get(id))
-    .filter((r): r is NonNullable<typeof r> => r !== undefined);
+  const ordered = await fetchOrdered(fusedIds, userId);
 
-  // Bounded property-hint re-rank: fused position is the primary signal; a hint
-  // match adds a small, capped boost. A single hit lifts a near-miss a few
-  // places but cannot drag a low-ranked row to the top.
-  if (understanding.propertyHints.length > 0) {
-    const HINT_BOOST = 3;
-    const n = ordered.length;
-    ordered = ordered
-      .map((row, i) => {
-        const props =
-          (row as { properties?: Record<string, unknown> }).properties ?? {};
-        const hits = understanding.propertyHints.filter((h) =>
-          matchesHint(props, h)
-        ).length;
-        return { row, score: n - i + Math.min(hits, 2) * HINT_BOOST };
-      })
-      .sort((a, b) => b.score - a.score)
-      .map((x) => x.row);
-  }
+  // 4. Composite re-rank — fused position primary; property + temporal boosts are
+  //    bounded to a fraction of the position span (see composite-rerank.ts).
+  const now = Date.now();
+  const eventTs = understanding.temporal
+    ? await latestEventTimestamps(
+        ordered.map((r) => r.id),
+        userId
+      )
+    : undefined;
+  const reranked = compositeRerank(ordered, {
+    propertyHints: understanding.propertyHints,
+    temporal: understanding.temporal,
+    now,
+    eventTs,
+  });
+
+  const finalRows = reranked.slice(0, limit);
+  const verdict = gradeResults(
+    understanding,
+    finalRows.map((r) => r.type)
+  ).verdict;
 
   return {
-    entities: ordered.slice(0, limit) as Record<string, unknown>[],
+    entities: finalRows as Record<string, unknown>[],
     understanding,
     source,
+    verdict,
   };
 }

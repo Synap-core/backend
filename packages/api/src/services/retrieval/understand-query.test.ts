@@ -81,10 +81,18 @@ describe("understandQuery — temporal", () => {
     expect(understandQuery("what changed recently", CATALOG).temporal).toBe(
       true
     );
-    expect(understandQuery("upcoming events", CATALOG).temporal).toBe(true);
-    expect(understandQuery("tasks due before friday", CATALOG).temporal).toBe(
+    expect(understandQuery("the latest updates", CATALOG).temporal).toBe(true);
+    expect(understandQuery("notes from last week", CATALOG).temporal).toBe(
       true
     );
+  });
+
+  it("does NOT flag due-date phrasing (recency boost cannot serve it)", () => {
+    expect(understandQuery("what is overdue", CATALOG).temporal).toBe(false);
+    expect(understandQuery("tasks due before friday", CATALOG).temporal).toBe(
+      false
+    );
+    expect(understandQuery("upcoming events", CATALOG).temporal).toBe(false);
   });
 
   it("does not flag a non-temporal query", () => {
