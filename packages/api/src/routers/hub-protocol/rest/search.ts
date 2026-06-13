@@ -22,6 +22,9 @@ export function registerSearchRoutes(app: HubHono): void {
     path: "/search/collection",
     tags: ["Search"],
     summary: "Search a single Typesense collection",
+    deprecated: true,
+    description:
+      "DEPRECATED — prefer POST /knowledge/ask, which routes across all substrates. Still functional for existing integrations.",
     request: {
       query: SearchCollectionQuerySchema,
     },
@@ -38,6 +41,9 @@ export function registerSearchRoutes(app: HubHono): void {
     path: "/search",
     tags: ["Search"],
     summary: "Cross-collection Typesense search",
+    deprecated: true,
+    description:
+      "DEPRECATED — prefer POST /knowledge/ask, which routes across all substrates. Still functional for existing integrations.",
     request: {
       query: SearchQuerySchema,
     },
@@ -54,6 +60,9 @@ export function registerSearchRoutes(app: HubHono): void {
     path: "/search/documents",
     tags: ["Search"],
     summary: "Search documents only",
+    deprecated: true,
+    description:
+      "DEPRECATED — prefer POST /knowledge/ask, which routes across all substrates. Still functional for existing integrations.",
     request: {
       query: SearchDocumentsQuerySchema,
     },
@@ -73,8 +82,9 @@ export function registerSearchRoutes(app: HubHono): void {
     path: "/vector-search",
     tags: ["Search"],
     summary: "PGVector semantic search",
+    deprecated: true,
     description:
-      "Disabled on shared pods (returns empty / 503 when VECTOR_SEARCH_ENABLED=false).",
+      "DEPRECATED — prefer POST /knowledge/ask (the SRE already uses pgvector internally as one signal). Disabled on shared pods (returns empty / 503 when VECTOR_SEARCH_ENABLED=false).",
     request: {
       query: VectorSearchQuerySchema,
     },

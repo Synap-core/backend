@@ -109,6 +109,27 @@ describe("ask router", () => {
     expect(semantic?.items).toEqual(semanticResult.entities);
   });
 
+  it("intent stays cued but primary FALLS BACK when the cued substrate is empty (dogfood: how-to → entity)", async () => {
+    // "how to deploy …" cues procedural, but the deploy runbook is an ENTITY
+    // (devplane_recipe), so knowledge_keys returns nothing and semantic answers.
+    // primary must point where the answer actually is — never at an empty store.
+    searchFullTextMock.mockResolvedValue([]);
+    const r = await ask({
+      ...baseParams,
+      query: "how to deploy the intelligence service",
+    });
+    expect(r.intent).toBe("procedural"); // the cue is preserved (glass-box)
+    expect(r.primary).toBe("semantic"); // but primary = the substrate that answered
+    expect(r.answers[0].substrate).toBe("semantic"); // and it's listed first
+  });
+
+  it("primary stays the cued substrate when it DID answer", async () => {
+    // default mock: searchFullText returns a row → procedural answered
+    const r = await ask({ ...baseParams, query: "how to deploy the backend" });
+    expect(r.intent).toBe("procedural");
+    expect(r.primary).toBe("procedural");
+  });
+
   it("a genuinely-empty ancillary store is status:'ok' (NOT degraded)", async () => {
     searchFullTextMock.mockResolvedValue([]);
     const r = await ask({ ...baseParams, query: "how to deploy" });

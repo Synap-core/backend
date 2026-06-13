@@ -63,6 +63,12 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
   "relation.create",
   "channel.create",
   "terminal.read_logs",
+  // Playbooks & Capability Substrate — reads auto-approve; create/update/archive
+  // intentionally omitted so they route to a proposal in agent workspaces.
+  "playbook.read",
+  "tool.read",
+  "link.read",
+  "capability.read",
 ];
 
 /** Actions that always require a proposal in agent-owned workspaces. */

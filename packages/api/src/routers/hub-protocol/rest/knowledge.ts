@@ -603,6 +603,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
             schema: z.object({
               query: z.string(),
               routedTo: z.array(z.string()),
+              intent: z.string(),
               primary: z.string(),
               answers: z.array(
                 z.object({

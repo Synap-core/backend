@@ -65,6 +65,7 @@ import {
 } from "../utils/personal-channel.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { withWorkspaceProposalIdLock } from "../services/workspace-creation-service.js";
+import { resolveWorkspaceExtends } from "../services/workspace-composition.js";
 
 const logger = createLogger({ module: "workspaces" });
 
@@ -2042,6 +2043,28 @@ export const workspacesRouter = router({
           .object({
             workspaceName: z.string().optional(),
             description: z.string().optional(),
+            /**
+             * Workspace composition (north star §10): import/extend bricks
+             * (profiles + views) from another SHARED/PUBLIC/SYSTEM workspace.
+             * Resolved + merged (COPY semantics) by `resolveWorkspaceExtends`
+             * before materialization. Each `source` is a workspaceId or a
+             * systemSlug; omit `import`/a key to import all. Reads are
+             * access-gated — a caller can only import from a workspace they can
+             * see (member / pod_visible / pod_joinable / system).
+             */
+            extends: z
+              .array(
+                z.object({
+                  source: z.string().min(1),
+                  import: z
+                    .object({
+                      profiles: z.array(z.string()).optional(),
+                      views: z.array(z.string()).optional(),
+                    })
+                    .optional(),
+                })
+              )
+              .optional(),
             profiles: z
               .array(
                 z.object({
@@ -2529,10 +2552,19 @@ export const workspacesRouter = router({
             }
           }
 
+          // Workspace composition (north star §10): resolve `definition.extends`
+          // into copied profiles/views BEFORE materialization. Cross-workspace
+          // reads inside the resolver are access-gated (member / pod_visible /
+          // pod_joinable / system) via validateWorkspaceAccess — a caller can
+          // only import from a workspace they can see. Best-effort: unreadable
+          // or missing sources are skipped, never fatal.
+          const { definition: composedDefinition, provenance: composedFrom } =
+            await resolveWorkspaceExtends(input.definition, ctx.userId);
+
           let result: Awaited<ReturnType<typeof createWorkspaceFromDefinition>>;
           try {
             result = await createWorkspaceFromDefinition({
-              definition: input.definition,
+              definition: composedDefinition,
               userId: ctx.userId,
               packageSlug: input.packageSlug,
               packageVersion: input.packageVersion,
@@ -2635,10 +2667,12 @@ export const workspacesRouter = router({
             });
           }
 
-          // Stamp caller-supplied proposalId and appId into settings. Best-effort:
-          // a failure here just means the next call may create a duplicate (proposalId)
-          // or the workspace won't appear in app-filtered list queries (appId).
-          if (input.proposalId || input.appId) {
+          // Stamp caller-supplied proposalId/appId + composition provenance into
+          // settings. Best-effort: a failure here just means the next call may
+          // create a duplicate (proposalId), the workspace won't appear in
+          // app-filtered list queries (appId), or imported bricks won't carry a
+          // "from <source>" tag (composedFrom).
+          if (input.proposalId || input.appId || composedFrom.length > 0) {
             try {
               const ws = await db.query.workspaces.findFirst({
                 where: eq(workspaces.id, result.workspaceId),
@@ -2655,6 +2689,7 @@ export const workspacesRouter = router({
                       ? { proposalId: input.proposalId }
                       : {}),
                     ...(input.appId ? { appId: input.appId } : {}),
+                    ...(composedFrom.length > 0 ? { composedFrom } : {}),
                   } satisfies WorkspaceSettings,
                   ...(input.proposalId
                     ? { provisioningProposalId: input.proposalId }
@@ -2669,7 +2704,7 @@ export const workspacesRouter = router({
                   proposalId: input.proposalId,
                   appId: input.appId,
                 },
-                "Failed to stamp proposalId/appId into workspace settings (non-fatal)"
+                "Failed to stamp proposalId/appId/composedFrom into workspace settings (non-fatal)"
               );
             }
           }

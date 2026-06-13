@@ -59,6 +59,8 @@ interface RegisterRouteConfig {
   description?: string;
   /** Reference name for $ref (optional). */
   operationId?: string;
+  /** Marks the route deprecated in the OpenAPI spec (still functional). */
+  deprecated?: boolean;
   /** Whether the route is publicly accessible. Defaults to bearerAuth. */
   security?: Array<Record<string, string[]>>;
   /** Request shape — body / params / query / headers. */
@@ -119,6 +121,7 @@ export function registerOpenApi(
     summary: config.summary,
     description: config.description,
     operationId: config.operationId,
+    deprecated: config.deprecated,
     security: config.security ?? [{ bearerAuth: [] }],
     request: Object.keys(request).length > 0 ? request : undefined,
     responses: responses as never,

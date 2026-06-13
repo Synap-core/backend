@@ -48,6 +48,8 @@ Synap is a typed knowledge graph with four distinct memory stores. Understanding
 | **Agent knowledge**   | `knowledge` profile               | agent workspace      | Typed entity (type/claim/why)      | Validated learnings: gotchas, lessons, decisions — agent self-improvement |
 | **Procedural docs**   | `GET/PUT /api/hub/knowledge/:key` | pod or namespace     | Key-value markdown                 | Runbooks, how-tos addressed by key string (e.g. "deploy:backend")         |
 
+> **Substrate names (the tables under the hood):** _episodic memory_ = `knowledge_facts`, _procedural docs_ = `knowledge_keys`, _semantic_ = `entities`. Both `knowledge_*` tables say "knowledge" but are different memory kinds — that's why `ask` routes for you instead of making you pick. You almost never address a store directly; `synap ask` classifies intent and queries the right one(s).
+
 ### Data layers — the graph itself
 
 | Layer         | What it is                                     | When to use                                              |
@@ -60,14 +62,14 @@ Synap is a typed knowledge graph with four distinct memory stores. Understanding
 
 ### Key profiles for AI use
 
-| Profile slug       | Scope     | Who writes | Purpose                                                       |
-| ------------------ | --------- | ---------- | ------------------------------------------------------------- |
-| `note`             | workspace | human + AI | Quick captures, scratchpad                                    |
-| `knowledge`        | workspace | agent      | Validated gotchas/lessons/decisions (use in agent workspace)  |
-| `user_observation` | pod       | AI only    | Durable user model — habits, communication style, preferences |
-| `decision`         | pod       | human + AI | Architectural decisions with rationale                        |
-| `research`         | pod       | AI         | Investigation with sources + conclusion                       |
-| `question`         | pod       | human + AI | Open inquiry, closed when a decision answers it               |
+| Profile slug       | Scope     | Who writes | Purpose                                                                                                                                                                                 |
+| ------------------ | --------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `note`             | workspace | human + AI | Quick captures, scratchpad                                                                                                                                                              |
+| `knowledge`        | workspace | agent      | Validated gotchas/lessons/decisions — the profile `synap capture --type` writes (ek_type/ek_claim/ek_why). DOMAIN = the workspace (knowledge in the builder ws = engineering knowledge) |
+| `user_observation` | pod       | AI only    | Durable user model — habits, communication style, preferences                                                                                                                           |
+| `decision`         | pod       | human + AI | Architectural decisions with rationale                                                                                                                                                  |
+| `research`         | pod       | AI         | Investigation with sources + conclusion                                                                                                                                                 |
+| `question`         | pod       | human + AI | Open inquiry, closed when a decision answers it                                                                                                                                         |
 
 ## Quick reference — 90% of tasks in 30 lines
 
@@ -77,18 +79,19 @@ synap orient --json                                    # discover userId + works
 synap use <workspace-name-or-id>                       # set active workspace
 synap create entity --profile=task --name="…" --props='{"status":"todo","priority":"high"}' --json
 synap set entity <id> --props='{"status":"done"}' --json  # merge-patch (only changed keys)
-synap ask "your question" --json                       # ONE read door — routes to the right store(s) + shows which answered
-synap capture --type=lesson --claim="…" --json         # structured write — validated learnings
-synap remember "loose fact about the user" --json      # quick fact → episodic memory
+synap ask "your question" --json                       # THE read verb — routes to the right store(s) + shows which answered
+synap capture --type=lesson --claim="…" --json         # THE structured-write verb — routed to the right profile
+synap note "loose fact" --json                          # quick note entity
 ```
 
-**Reading is one verb: `ask`.** It classifies your question and routes it across the
-three memory substrates — semantic (the typed entity graph), procedural (how-to
-docs), episodic (raw captures) — then returns one answer tagged with which
-substrate(s) actually answered (and which, if any, were unavailable). Don't pick a
-store to read from; `ask` picks for you and tells you what it did.
-`synap search`/`recall`/`graph`/`explain` still exist as the low-level doors `ask`
-routes to — reach for them only when you deliberately want one substrate.
+**The canonical verbs:** `ask` (read) · `capture` (structured write) · `note` (quick
+write) · `orient` (bootstrap). **Reading is one verb: `ask`** — it classifies your
+question and routes across the three memory substrates (semantic = the typed entity
+graph, procedural = how-to docs, episodic = raw captures), returning one answer
+tagged with which substrate(s) answered (and which, if any, were unavailable). Don't
+pick a store; `ask` picks for you and tells you what it did. (`graph` for an explicit
+traversal and `get`/`show`/`browse` for direct lookups remain; there is no `search`
+or `recall` — `ask` is the door.)
 
 ```bash
 # REST (when no Bash access)
@@ -198,14 +201,14 @@ synap orient --json
 # Never hardcode workspace IDs — discover them here.
 ```
 
-**Search (Typesense-powered, cross-collection):**
+**Ask (the one read verb — routes across all substrates):**
 
 ```bash
-synap search "project ideas" --json
-synap search "Antoine" --type=entity --workspace=<id> --json
-synap search "meeting notes" --type=doc --limit=5 --json
-# Omit --workspace to search pod-wide. Include it to scope to one workspace.
-# Use search for name/keyword queries. For semantic/conceptual search, use Hub Protocol memory endpoints.
+synap ask "project ideas" --json
+synap ask "what did Antoine decide about auth" --workspace=<id> --json
+synap ask "how do I deploy the backend" --json   # routes to procedural how-to docs
+# Omit --workspace for pod-wide; include it to scope to one workspace.
+# `ask` classifies intent and unions the right substrate(s) — it replaces search/recall.
 ```
 
 **Read entities:**
@@ -217,11 +220,11 @@ synap list entities --profile=task --workspace=<id> --json
 synap get entity <id> --json
 ```
 
-**Episodic memory (session facts, loose context):**
+**Quick note (loose context → a note entity):**
 
 ```bash
-synap remember "Key decision: use Typesense for search" --json
-synap recall "Typesense" --limit=5 --json
+synap note "Key decision: use Typesense for search" --json
+# Retrieve later with the one read verb: synap ask "Typesense decision"
 ```
 
 **Structured knowledge (durable, typed, searchable — preferred for engineering learnings):**
@@ -235,17 +238,19 @@ synap capture --type gotcha --claim "Hono static routes must come before /:id" \
 synap capture --type lesson --claim "code-read ≠ runtime-true for library APIs" \
   --evidence "tldraw 2.4.6 binding API changed silently from props.start.boundShapeId"
 
-# Recall across your knowledge base with full-text search
-synap recall "hono routing" --structured --json
-synap recall "tldraw" --structured --type gotcha --json
+# A quick decision-note is a typed knowledge entry (ek_type=decision):
+synap capture --type decision --claim "Use Typesense for entity search" \
+  --why "pgvector deferred to V1; Typesense ships now" --json
+
+# Retrieve any of it later with the one read verb:
+synap ask "hono routing gotcha" --json
 
 # Prerequisite (run once): provision your agent workspace and set it active
 synap workspace provision-agent --json
 ```
 
-`synap capture` / `synap recall --structured` uses the `engineering_knowledge` entity profile.
-`synap remember` / `synap recall` (without `--structured`) uses the ephemeral `/memory` store.
-Use structured knowledge for anything worth remembering across sessions and projects.
+`synap capture --type` writes a typed **`knowledge`** entity; `ek_type` (gotcha|lesson|decision|reference) discriminates the kind — **one store, type tags, not a residual dump**. It's workspace-scoped, so the active workspace supplies the domain (there is no `engineering_knowledge`). A formal **decision RECORD** (rationale, alternatives, superseded-by lifecycle) is a different artifact — use smart `synap capture "<free text>"` or `synap create entity --profile=decision`. Retrieve everything with `synap ask`.
+Use `capture` for anything worth remembering across sessions and projects.
 
 **Write:**
 
@@ -261,7 +266,7 @@ synap set entity <id> --props='{"status":"done"}' --json
 - Always use `--json` when calling from code — clean stdout, no spinners, machine-parseable
 - Run `synap orient` first to discover workspace IDs — never hardcode them
 - Omit `--workspace` to operate pod-wide; include it to scope to a specific workspace
-- `synap search` is Typesense (fast keyword/name search). Semantic search → Hub Protocol `GET /api/hub/memory?query=…`
+- `synap ask` is the one read verb — it routes keyword + semantic + procedural automatically; you never choose a search backend.
 
 ---
 

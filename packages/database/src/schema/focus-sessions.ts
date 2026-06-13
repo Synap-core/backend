@@ -54,6 +54,12 @@ export const focusSessions = pgTable(
     /** Which session template was used to bootstrap this session (optional). */
     templateId: text("template_id"),
     /**
+     * The Playbook this session was instantiated from (config → runtime link).
+     * FK enforced at the DB level (migration 0126, ON DELETE SET NULL).
+     * Supersedes the loose `templateId` text stub.
+     */
+    playbookId: uuid("playbook_id"),
+    /**
      * Expected deliverables declared at session start.
      * Shape: [{ kind: string, label: string, icon?: string }]
      */
@@ -97,6 +103,7 @@ export const focusSessions = pgTable(
     ),
     userIdIdx: index("idx_focus_sessions_user_id").on(table.userId),
     statusIdx: index("idx_focus_sessions_status").on(table.status),
+    playbookIdIdx: index("idx_focus_sessions_playbook_id").on(table.playbookId),
     // Partial unique index: one active session per channel.
     // Also serves as the covering index for channels.ts per-message lookup
     // (WHERE channel_id = ? AND status = 'active'). NULL channel_id excluded

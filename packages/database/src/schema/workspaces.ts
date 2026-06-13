@@ -325,6 +325,26 @@ export interface WorkspaceDefaultSource {
   label?: string;
 }
 
+/**
+ * Provenance record for a workspace composed via `definition.extends`
+ * (Wave 7 / north star §10 — workspace composition). One entry per resolved
+ * source. COPY semantics: the imported profiles/views are independent copies
+ * on this workspace; this is a snapshot of where they came from, not a live
+ * link. Surfaced in the frontend so an imported brick reads "from <source>".
+ */
+export interface WorkspaceComposedFromEntry {
+  /** Resolved source workspace id. */
+  sourceWorkspaceId: string;
+  /** The original `source` ref as declared (workspaceId or systemSlug). */
+  source: string;
+  /** Profile slugs imported from this source. */
+  profiles: string[];
+  /** View names imported from this source. */
+  views: string[];
+  /** ISO timestamp of when the import was resolved. */
+  importedAt: string;
+}
+
 export interface WorkspaceSettings {
   // ─── Entity & UI Settings ───────────────────────────────────────────────────
   defaultEntityTypes?: string[];
@@ -361,6 +381,14 @@ export interface WorkspaceSettings {
    * workspaces so features can resolve defaults without copying data.
    */
   defaultSources?: Record<string, WorkspaceDefaultSource>;
+
+  // ─── Workspace composition (north star §10) ─────────────────────────────────
+  /**
+   * Provenance of bricks (profiles/views) imported from other workspaces via
+   * `definition.extends`. COPY semantics — a snapshot of origin, not a live
+   * dependency. Used by the UI to tag imported bricks with their source.
+   */
+  composedFrom?: WorkspaceComposedFromEntry[];
 
   // ─── MCP Server integrations ─────────────────────────────────────────────────
   /** External MCP servers whose tools will be available to AI agents in this workspace */

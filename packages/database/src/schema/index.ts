@@ -171,6 +171,12 @@ export * from "./agent-skills.js";
 // NEW: Artifacts (artifact ledger — lifecycle + provenance on cell instances; Phase 1 of Desk system)
 export * from "./artifacts.js";
 
+// NEW: Playbooks & Capability Substrate (CONFIG) — registered tools, session
+// templates (playbooks), and the polymorphic config/runtime graph (links).
+export * from "./tools.js";
+export * from "./playbooks.js";
+export * from "./links.js";
+
 // Provenance vocabulary (createdByKind column type — must be public so tsc
 // can name router return types without referencing internal dist paths)
 export type { ProvenanceKind } from "./provenance.js";

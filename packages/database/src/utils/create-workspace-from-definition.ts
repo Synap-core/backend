@@ -124,6 +124,22 @@ export interface WorkspaceDefinitionInput {
   sourceRoles?: Record<string, WorkspaceSourceRole>;
   /** Domain/capability → default source workspace references. */
   defaultSources?: Record<string, WorkspaceDefaultSource>;
+  /**
+   * Workspace composition (north star §10): import/extend bricks (profiles +
+   * views) from another SHARED/PUBLIC/SYSTEM workspace. Each `source` is a
+   * workspaceId or a systemSlug; omit `import` (or a key within it) to import
+   * all profiles/views. Resolved + merged by `resolveWorkspaceExtends()` in the
+   * API layer BEFORE this definition is materialized — by the time
+   * `createWorkspaceFromDefinition` runs, `extends` has been flattened into
+   * `profiles`/`views` (COPY semantics) and removed.
+   */
+  extends?: Array<{
+    source: string;
+    import?: {
+      profiles?: string[];
+      views?: string[];
+    };
+  }>;
   profiles?: Array<{
     slug: string;
     displayName: string;

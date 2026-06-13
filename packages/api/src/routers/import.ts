@@ -12,6 +12,7 @@ import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { ImportOrchestrator } from "../services/import-orchestrator.js";
 import { EventNames } from "@synap-core/types/events";
+import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 
 const logger = createLogger({ module: "import-router" });
 
@@ -25,6 +26,35 @@ const ImportItemSchema = z.object({
 const SubmitBatchSchema = z.object({
   workspaceId: z.string().uuid().optional(),
   items: z.array(ImportItemSchema).min(1).max(50),
+});
+
+// Preview-before-apply (the in-app import "reveal"). Raw text items (not base64)
+// — markdown/obsidian/csv/bookmark — structured into a composite graph the user
+// reviews inline, then materializes by echoing back the SAME operations.
+const RevealSource = z.enum(["obsidian", "markdown", "csv", "bookmark"]);
+
+const AnalyzeImportSchema = z.object({
+  workspaceId: z.string().uuid().optional(),
+  source: RevealSource,
+  items: z
+    .array(
+      z.object({
+        path: z.string().min(1).max(1024),
+        content: z.string().max(200_000),
+      })
+    )
+    .min(1)
+    .max(2000),
+  relationType: z.string().min(1).max(64).optional(),
+  aiStructure: z.boolean().optional().default(true),
+});
+
+const ApplyImportSchema = z.object({
+  workspaceId: z.string().uuid().optional(),
+  source: RevealSource,
+  // The exact operations returned by `analyze` — echoed back so what the user
+  // previewed is what is created (no server re-structuring drift).
+  operations: z.array(z.record(z.string(), z.unknown())).max(8000),
 });
 
 // ─── Router ─────────────────────────────────────────────────────────────────
@@ -47,6 +77,62 @@ export const importRouter = router({
         trpcCtx: ctx as unknown as Record<string, unknown>,
       });
       return orchestrator.submitBatch(input.items);
+    }),
+
+  /**
+   * Preview the structured import graph WITHOUT writing entities. Returns the
+   * composite operations (so the client renders the CompositeProposalGraph
+   * reveal inline) plus a governed `import.graph` proposal id. Pair with `apply`.
+   */
+  analyze: workspaceProcedure
+    .input(AnalyzeImportSchema)
+    .mutation(async ({ ctx, input }) => {
+      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace ID required. Set X-Workspace-Id or pass workspaceId.",
+        });
+      }
+      const orchestrator = new ImportOrchestrator({
+        workspaceId,
+        userId: ctx.userId as string,
+        trpcCtx: ctx as unknown as Record<string, unknown>,
+      });
+      return orchestrator.analyze({
+        source: input.source,
+        items: input.items,
+        relationType: input.relationType,
+        aiStructure: input.aiStructure,
+      });
+    }),
+
+  /**
+   * Materialize the previewed graph: takes the exact `operations` from `analyze`
+   * and creates entities + relations, workspace-scoped. User-confirmed direct
+   * write of their own data (the preview was the review).
+   */
+  apply: workspaceProcedure
+    .input(ApplyImportSchema)
+    .mutation(async ({ ctx, input }) => {
+      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace ID required. Set X-Workspace-Id or pass workspaceId.",
+        });
+      }
+      const orchestrator = new ImportOrchestrator({
+        workspaceId,
+        userId: ctx.userId as string,
+        trpcCtx: ctx as unknown as Record<string, unknown>,
+      });
+      return orchestrator.apply({
+        source: input.source,
+        operations: input.operations as unknown as CompositeProposalOperation[],
+      });
     }),
 
   // ─── LinkedIn connections bulk import ───────────────────────────────────────

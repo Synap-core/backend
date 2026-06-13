@@ -12,7 +12,8 @@
  * IF NOT EXISTS), and a pod that stopped at an earlier version would be
  * missing columns the runtime code expects.
  *
- * The 0099_schema_reconciliation.sql migration is the catch-up. This file
+ * `0000_baseline_schema.sql` is the consolidated catch-up (the older
+ * `0099_schema_reconciliation.sql` was folded into it). This file
  * is the *tripwire*: it runs on every server boot (right after migrations,
  * before the HTTP server starts listening) and fails loudly if any critical
  * column is still missing. If it throws, the pod exits non-zero and the
@@ -541,6 +542,38 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "artifacts",
     column: "origin_kind",
     addedBy: "0125_artifacts.sql",
+  },
+
+  // tools / playbooks / links — Playbooks & Capability Substrate (0126)
+  {
+    table: "tools",
+    column: "kind",
+    addedBy: "0126_playbooks_capability_substrate.sql",
+  },
+  {
+    table: "tools",
+    column: "created_by",
+    addedBy: "0126_playbooks_capability_substrate.sql",
+  },
+  {
+    table: "playbooks",
+    column: "goal_template",
+    addedBy: "0126_playbooks_capability_substrate.sql",
+  },
+  {
+    table: "playbooks",
+    column: "status",
+    addedBy: "0126_playbooks_capability_substrate.sql",
+  },
+  {
+    table: "links",
+    column: "from_type",
+    addedBy: "0126_playbooks_capability_substrate.sql",
+  },
+  {
+    table: "links",
+    column: "link_type",
+    addedBy: "0126_playbooks_capability_substrate.sql",
   },
 
   // relations — polymorphic endpoints (0041)

@@ -34,6 +34,9 @@ import {
 import { sanitizeImportPath, mimeFromPath } from "../utils/import-path.js";
 import { channelsRouter } from "../routers/channels.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
+import { materializeCompositeGraph } from "../utils/materialize-composite.js";
+import { entitiesRouter as regularEntitiesRouter } from "../routers/entities.js";
+import { relationsRouter } from "../routers/relations.js";
 import { getBoss } from "@synap/jobs";
 import {
   LINKEDIN_BULK_IMPORT_QUEUE,
@@ -78,6 +81,20 @@ export type SubmitBatchItem = {
   path: string;
   contentBase64: string;
   mimeType?: string;
+};
+
+export type ImportRevealSource = "obsidian" | "markdown" | "csv" | "bookmark";
+
+export type ImportAnalyzeInput = {
+  source: ImportRevealSource;
+  items: Array<{ path: string; content: string }>;
+  relationType?: string;
+  aiStructure?: boolean;
+};
+
+export type ImportApplyInput = {
+  source: ImportRevealSource;
+  operations: CompositeProposalOperation[];
 };
 
 export class ImportOrchestrator {
@@ -487,6 +504,170 @@ export class ImportOrchestrator {
       proposalId: (created as { id?: string })?.id ?? null,
       itemCount,
     };
+  }
+
+  /**
+   * Preview-before-apply: structure the supplied items into a composite graph
+   * (deep for prose, shallow for structured), record it as a governed
+   * `import.graph` proposal, AND return the operations so the caller can render
+   * the reveal inline (CompositeProposalGraph) without a round-trip. Pure read +
+   * one proposal row; nothing materializes here. The caller then passes the SAME
+   * `operations` to `apply()` so what the user previewed is exactly what is
+   * created (no re-structuring drift).
+   */
+  async analyze(input: ImportAnalyzeInput) {
+    const { workspaceId, userId } = this.ctx;
+    const { availableProfiles, validSlugs, availableWorkspaces } =
+      await this.resolveProfileHints();
+    const items = adaptItems(input.source as ImportAdapterSource, input.items);
+
+    let aiTyped = 0;
+    const isProse = input.source === "obsidian" || input.source === "markdown";
+    let operations: CompositeProposalOperation[] | undefined;
+    let summary = "";
+    let droppedReferences = 0;
+    let stats: Record<string, unknown> = {};
+    let mode: "deep" | "shallow" = "shallow";
+
+    if (isProse && input.aiStructure !== false) {
+      try {
+        const { client } = await resolveIntelligenceService({
+          userId,
+          workspaceId,
+          capability: "default",
+        });
+        const deep = await deepStructureImportItems(
+          items,
+          client,
+          {
+            availableProfiles,
+            validSlugs,
+            availableWorkspaces,
+            resolveExisting: makeGraphResolver(searchService, {
+              userId,
+              workspaceId,
+            }),
+          },
+          { logger }
+        );
+        if (deep.stats.entityCount > 0) {
+          operations = deep.operations;
+          aiTyped = deep.stats.entityCount;
+          mode = "deep";
+          stats = { ...deep.stats };
+          const typeCount = Object.keys(deep.stats.byType).length;
+          summary = `Deep import ${deep.stats.itemsProcessed} ${input.source} note(s) → ${deep.stats.entityCount} entities (${typeCount} types), ${deep.stats.relationCount} relations`;
+        }
+      } catch (e) {
+        logger.warn(
+          { e, userId },
+          "import.analyze deep failed, falling back to shallow"
+        );
+      }
+    }
+
+    if (mode === "shallow") {
+      if (input.aiStructure !== false) {
+        try {
+          const { client } = await resolveIntelligenceService({
+            userId,
+            workspaceId,
+            capability: "default",
+          });
+          const enriched = await aiEnrichImportItems(
+            items,
+            client,
+            { availableProfiles },
+            { logger }
+          );
+          aiTyped = enriched.aiTyped;
+        } catch (e) {
+          logger.warn(
+            { e, userId },
+            "import.analyze AI enrich failed, using deterministic"
+          );
+        }
+      }
+      const proposal = buildImportProposal(
+        items,
+        input.relationType,
+        validSlugs
+      );
+      const composite = importProposalToComposite(proposal);
+      operations = composite.operations;
+      droppedReferences = composite.droppedReferences;
+      stats = { ...proposal.stats };
+      summary = `Import ${proposal.stats.itemCount} ${input.source} item(s) → ${proposal.stats.typeCount} type(s), ${operations.length - proposal.stats.itemCount} link(s)`;
+    }
+
+    const ops = operations ?? [];
+    const { proposal: created } = await createEventBackedProposal({
+      userId,
+      workspaceId,
+      targetType: "entity",
+      targetId: randomUUID(),
+      proposalType: "import.graph",
+      action: "create",
+      source: "intelligence",
+      summary,
+      data: { operations: ops, source: input.source },
+    });
+
+    logger.info(
+      {
+        userId,
+        workspaceId,
+        source: input.source,
+        mode,
+        proposalId: (created as { id?: string })?.id,
+        droppedReferences,
+        aiTyped,
+        ...stats,
+      },
+      "import.analyze"
+    );
+    return {
+      workspaceId,
+      source: input.source,
+      mode,
+      proposalId: (created as { id?: string })?.id ?? null,
+      operations: ops,
+      summary,
+      stats,
+      droppedReferences,
+      aiTyped,
+    };
+  }
+
+  /**
+   * Materialize the EXACT operations the user previewed in `analyze()` — N
+   * entities + linked documents + M relations, workspace-scoped (pinned to this
+   * workspace, purged with it). This is a user-confirmed direct write of their
+   * own data (the preview WAS the review), so it follows the same "human UI
+   * action = direct write" rule as the REST /import/apply path and reuses the
+   * identical composite materializer the proposal-approve loop uses.
+   */
+  async apply(input: ImportApplyInput) {
+    const { workspaceId, userId, trpcCtx } = this.ctx;
+
+    const callerCtx = { ...trpcCtx, workspaceId, userId };
+    const entityCaller = regularEntitiesRouter.createCaller(callerCtx as never);
+    const relationCaller = relationsRouter.createCaller(callerCtx as never);
+
+    const { created, linked } = await materializeCompositeGraph(
+      input.operations,
+      entityCaller,
+      relationCaller,
+      (err, type) =>
+        logger.warn({ err, type }, "import.apply: relation create failed"),
+      { workspaceScoped: true }
+    );
+
+    logger.info(
+      { userId, workspaceId, source: input.source, created, linked },
+      "import.apply materialized"
+    );
+    return { workspaceId, source: input.source, created, linked };
   }
 
   async queueLinkedInContacts(contacts: LinkedInContactPayload[]) {

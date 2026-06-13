@@ -49,7 +49,14 @@ export interface AskResult {
   query: string;
   /** Substrates queried (semantic always present). */
   routedTo: SubstrateKind[];
-  /** Most-likely-relevant substrate — its answer is listed first. */
+  /** What the query's cues SUGGESTED (e.g. a "how to" → procedural). Glass-box intent. */
+  intent: SubstrateKind;
+  /**
+   * The substrate that ACTUALLY answered — its block is listed first. Honest:
+   * never points at a substrate that returned nothing. If the cued `intent`
+   * substrate came back empty (e.g. "how to deploy" but the runbook lives as an
+   * entity, not a procedural doc), `primary` falls back to whatever did answer.
+   */
   primary: SubstrateKind;
   /** One answer block per queried substrate, primary first. */
   answers: AskAnswer[];
@@ -81,7 +88,7 @@ async function settle(p: Promise<unknown[]>): Promise<Settled> {
 export async function ask(params: AskParams): Promise<AskResult> {
   const { query, userId, workspaceId, catalog } = params;
   const limit = params.limit ?? 10;
-  const { substrates, primary } = classifySubstrates(query);
+  const { substrates, primary: intent } = classifySubstrates(query);
 
   // Semantic always runs (the backbone) and is NOT wrapped — a total retrieval
   // failure should surface as an error, not a silent empty answer. Procedural /
@@ -129,6 +136,20 @@ export async function ask(params: AskParams): Promise<AskResult> {
     });
     if (episodic.status === "error") degraded.push("episodic");
   }
+  // EFFECTIVE primary = the substrate that actually answered (never one that
+  // came back empty). Prefer the cued `intent`; if it's empty, fall back to
+  // whatever did answer (procedural → episodic → semantic). Caught by dogfood:
+  // "how to deploy" cues procedural, but the deploy runbook is an entity, so
+  // procedural was empty and semantic held the answer — primary must say so.
+  const answered = (s: SubstrateKind): boolean =>
+    answers.some(
+      (a) => a.substrate === s && a.status === "ok" && a.items.length > 0
+    );
+  const primary: SubstrateKind = answered(intent)
+    ? intent
+    : ((["procedural", "episodic", "semantic"] as const).find(answered) ??
+      intent);
+
   // Surface the most-relevant substrate first. Total-order comparator
   // (primary → 0, others → 1); stable sort preserves the natural
   // semantic→procedural→episodic order among the rest.
@@ -140,6 +161,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
   return {
     query,
     routedTo: substrates,
+    intent,
     primary,
     answers,
     degraded,

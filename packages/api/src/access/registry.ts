@@ -17,6 +17,9 @@ import {
   roles,
   channels,
   artifacts,
+  tools,
+  playbooks,
+  links,
 } from "@synap/database/schema";
 import { registerVisibility } from "./visibility.js";
 
@@ -55,6 +58,24 @@ registerVisibility({
   table: artifacts,
   query: () => db.query.artifacts,
   rule: { kind: "workspace", workspaceColumn: artifacts.workspaceId },
+});
+
+// Playbooks & Capability Substrate — all three carry a nullable workspaceId
+// (NULL = pod-wide config visible to every workspace).
+registerVisibility({
+  table: tools,
+  query: () => db.query.tools,
+  rule: { kind: "workspace", workspaceColumn: tools.workspaceId },
+});
+registerVisibility({
+  table: playbooks,
+  query: () => db.query.playbooks,
+  rule: { kind: "workspace", workspaceColumn: playbooks.workspaceId },
+});
+registerVisibility({
+  table: links,
+  query: () => db.query.links,
+  rule: { kind: "workspace", workspaceColumn: links.workspaceId },
 });
 
 // NOTE: only tables actually READ through scopedDb() are registered here.
