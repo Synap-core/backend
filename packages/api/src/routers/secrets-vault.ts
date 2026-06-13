@@ -10,7 +10,7 @@
  * - Complete audit trail
  */
 
-import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
+import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
@@ -747,18 +747,44 @@ export const secretsVaultRouter = router({
 
       // 3. Load the proposal to read its requested ttl (the agent's vault.request
       //    embeds { ttl } in proposal data — see hub-protocol/rest/vault.ts).
+      //    Vault grants are USER/DEVICE-level, not gated on the frontend's active
+      //    workspace: the proposal already carries its workspaceId, so we read it
+      //    from there. Authorization = secret ownership (checked above) PLUS
+      //    membership of the proposal's workspace (below) — so a grant works even
+      //    when the UI isn't currently focused on that workspace.
       const proposalRow = await db.query.proposals.findFirst({
-        where: and(
-          eq(proposals.id, input.proposalId),
-          eq(proposals.workspaceId, ctx.workspaceId)
-        ),
-        columns: { id: true, data: true, createdBy: true, agentUserId: true },
+        where: eq(proposals.id, input.proposalId),
+        columns: {
+          id: true,
+          data: true,
+          createdBy: true,
+          agentUserId: true,
+          workspaceId: true,
+        },
       });
       if (!proposalRow)
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Proposal not found",
         });
+
+      // Workspace from the request, not the UI. If the proposal is workspace-
+      // scoped, require the approver to be a member of THAT workspace (defense
+      // against approving another tenant's proposal). Pod-wide proposals
+      // (workspaceId null) are gated by secret ownership alone.
+      const grantWorkspaceId = proposalRow.workspaceId ?? null;
+      if (grantWorkspaceId) {
+        const membership = await getWorkspaceMembership(
+          db,
+          grantWorkspaceId,
+          ctx.userId
+        );
+        if (!membership)
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Not a member of this proposal's workspace",
+          });
+      }
 
       const proposalData = (proposalRow.data ?? {}) as { ttl?: number };
       const requestedTtl =
@@ -798,7 +824,7 @@ export const secretsVaultRouter = router({
           secretId: secret.id,
           proposalId: input.proposalId,
           grantedTo,
-          workspaceId: ctx.workspaceId,
+          workspaceId: grantWorkspaceId,
           scope: input.scope,
           expiresAt,
           maxUses,
@@ -814,12 +840,7 @@ export const secretsVaultRouter = router({
           updatedAt: new Date(),
           data: drizzleSql`data || jsonb_build_object('vaultRef', ${vaultRef}::text, 'secretId', ${secret.id}::text, 'approvedAt', ${new Date().toISOString()}::text, 'grantId', ${grant.id}::text, 'scope', ${input.scope}::text, 'expiresAt', ${expiresAt ? expiresAt.toISOString() : null})`,
         })
-        .where(
-          and(
-            eq(proposals.id, input.proposalId),
-            eq(proposals.workspaceId, ctx.workspaceId)
-          )
-        );
+        .where(eq(proposals.id, input.proposalId));
 
       // 8. Audit log — record the scope and window.
       auditLog({
@@ -828,7 +849,7 @@ export const secretsVaultRouter = router({
         phase: "completed",
         subjectId: secret.id,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: grantWorkspaceId ?? undefined,
         data: {
           proposalId: input.proposalId,
           vaultRef,
