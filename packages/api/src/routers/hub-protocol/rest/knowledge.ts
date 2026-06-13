@@ -33,10 +33,13 @@ import {
 } from "./_codecs/knowledge.js";
 import {
   getUserAccessibleWorkspaceIds,
+  getCaller,
   hasScope,
   logger,
   type HubHono,
 } from "./_shared.js";
+import { ask } from "../../../services/knowledge/index.js";
+import { type ProfileCatalogEntry } from "../../../services/retrieval/index.js";
 
 const ArchiveKnowledgeResponseSchema = z
   .object({ success: z.boolean() })
