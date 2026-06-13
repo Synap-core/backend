@@ -648,7 +648,17 @@ export class IntelligenceHubClient {
    * Falls back gracefully — returns null on failure.
    */
   async structure(input: {
-    text: string;
+    text?: string;
+    /**
+     * Binary/text source normalized to text via the hub's ContentExtractor
+     * BEFORE structuring. Either `text` or `file` must be present.
+     */
+    file?: {
+      content: string;
+      mimeType: string;
+      filename?: string;
+      encoding?: "base64" | "utf8";
+    };
     url?: string;
     html?: string;
     context?: string;
@@ -692,6 +702,16 @@ export class IntelligenceHubClient {
     }>;
     followUp: string | null;
     targetWorkspaceId?: string | null;
+    /** Honesty markers when an input could not be fully extracted/structured. */
+    degraded?: boolean;
+    degradedReason?: string;
+    /** Summary of the extraction pass when a `file` input was normalized to text. */
+    extraction?: {
+      kind: string;
+      extractor: string;
+      metadata?: Record<string, unknown>;
+      warnings?: string[];
+    };
   } | null> {
     try {
       const controller = new AbortController();

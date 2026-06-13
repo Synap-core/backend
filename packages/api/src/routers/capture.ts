@@ -347,7 +347,18 @@ export const captureRouter = router({
     .use(aiRateLimitMiddleware)
     .input(
       z.object({
-        text: z.string().min(1).max(8000),
+        // Optional now: a binary input (PDF/photo/docx/audio) can arrive via
+        // `file` and be normalized to text by IS's extractor before structuring.
+        text: z.string().max(8000).optional(),
+        /** Binary/text source normalized to text by IS before structuring. */
+        file: z
+          .object({
+            content: z.string(),
+            mimeType: z.string(),
+            filename: z.string().optional(),
+            encoding: z.enum(["base64", "utf8"]).optional(),
+          })
+          .optional(),
         url: z.string().url().optional(),
         html: z.string().max(50_000).optional(),
         context: z.string().optional(),
@@ -368,8 +379,14 @@ export const captureRouter = router({
       const userId = requireUserId(ctx.userId);
       const workspaceId = ctx.workspaceId; // string | null — pod-wide allowed
 
+      // Text is optional now (a `file` may carry the payload instead); guard
+      // every `input.text` use. The note-fallback below needs SOME text, so use
+      // a safe local that prefers text and falls back to a filename hint.
+      const inputText =
+        input.text ?? (input.file?.filename ? `[file: ${input.file.filename}]` : "");
+
       logger.debug(
-        { userId, contentLength: input.text.length },
+        { userId, contentLength: input.text?.length ?? 0 },
         "Structure capture: calling IS"
       );
 
@@ -421,7 +438,7 @@ export const captureRouter = router({
       try {
         const existing = await searchService.searchCollection(
           "entities",
-          input.text.slice(0, 200),
+          inputText.slice(0, 200),
           { userId, workspaceId: workspaceId ?? undefined, limit: 30 }
         );
         existingEntityNames = Array.from(
@@ -454,9 +471,9 @@ export const captureRouter = router({
           {
             tempId: "t1",
             profileSlug: "note",
-            title: input.text.slice(0, 80).trim(),
-            description: input.text.length > 80 ? input.text : undefined,
-            properties: { content: input.text },
+            title: inputText.slice(0, 80).trim(),
+            description: inputText.length > 80 ? inputText : undefined,
+            properties: { content: inputText },
             confidence: 0.3,
           },
         ],
@@ -483,7 +500,8 @@ export const captureRouter = router({
       let structureResult: Awaited<ReturnType<typeof client.structure>>;
       try {
         structureResult = await client.structure({
-          text: input.text,
+          text: input.text ?? "",
+          file: input.file,
           url: input.url,
           html: input.html,
           context: input.context,
@@ -536,6 +554,13 @@ export const captureRouter = router({
         return degradedFallback("is_empty_result");
       }
 
+      // Additive extraction summary from the IS response (present when a `file`
+      // input was normalized to text upstream). Passed through to the tRPC
+      // caller without changing existing fields — published clients ignore it.
+      const extractionPassThrough = structureResult.extraction
+        ? { extraction: structureResult.extraction }
+        : {};
+
       // 2. If followUp, pass through immediately (no dedup yet)
       if (structureResult.followUp) {
         return {
@@ -552,6 +577,7 @@ export const captureRouter = router({
               score: number;
             }>
           >,
+          ...extractionPassThrough,
         };
       }
 
@@ -635,6 +661,7 @@ export const captureRouter = router({
         // can distinguish "checked, no duplicates" from "didn't check". Omitted
         // when all searches succeeded.
         ...(dedupSkipped ? { dedupSkipped: true as const } : {}),
+        ...extractionPassThrough,
       };
     }),
 
