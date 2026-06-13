@@ -100,11 +100,10 @@ const shareSecretSchema = z
 
 const setupVaultSchema = z.object({
   /**
-   * When mode is 'server' (or key-derivation fields are absent), the server
-   * handles all encryption via VAULT_SERVER_KEY.  All key-derivation fields
-   * are optional so the UI can call setupVault without sending inert placeholders.
+   * The server handles all encryption via VAULT_SERVER_KEY. All key-derivation
+   * fields are optional so the UI can call setupVault without sending inert
+   * placeholders. (A `mode` field was removed — it was never consumed.)
    */
-  mode: z.enum(["server", "client"]).optional(),
   salt: z.string().optional(),
   keyDerivationAlgorithm: z.string().optional(),
   keyDerivationParams: z
@@ -186,7 +185,6 @@ export const secretsVaultRouter = router({
       }
 
       await repo.setupVault(ctx.userId, {
-        mode: input.mode,
         salt: input.salt,
         keyDerivationAlgorithm: input.keyDerivationAlgorithm,
         keyDerivationParams: input.keyDerivationParams as
