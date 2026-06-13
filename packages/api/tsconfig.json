@@ -28,6 +28,9 @@
       "path": "../governance-policy"
     },
     {
+      "path": "../playbooks"
+    },
+    {
       "path": "../jobs"
     },
     {

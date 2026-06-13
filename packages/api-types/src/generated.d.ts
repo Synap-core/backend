@@ -2439,7 +2439,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		structure: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				text: string;
+				text?: string | undefined;
+				file?: {
+					content: string;
+					mimeType: string;
+					filename?: string | undefined;
+					encoding?: "base64" | "utf8" | undefined;
+				} | undefined;
 				url?: string | undefined;
 				html?: string | undefined;
 				context?: string | undefined;
@@ -2478,6 +2484,36 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				degraded: true;
 				degradedReason: "is_auth_error" | "is_invalid_response" | "is_empty_result";
 			} | {
+				extraction: {
+					kind: string;
+					extractor: string;
+					metadata?: Record<string, unknown>;
+					warnings?: string[];
+				};
+				dedupSkipped?: true | undefined;
+				proposals: {
+					tempId: string;
+					profileSlug: string;
+					title: string;
+					description?: string;
+					properties?: Record<string, unknown>;
+					confidence: number;
+				}[];
+				relations: {
+					sourceTempId: string;
+					targetTempId: string;
+					relationType: string;
+				}[];
+				followUp: string | null;
+				targetWorkspaceId: string | null;
+				dedupCandidates: Record<string, {
+					entityId: string;
+					title: string;
+					profileSlug: string;
+					score: number;
+				}[]>;
+			} | {
+				extraction?: undefined;
 				dedupSkipped?: true | undefined;
 				proposals: {
 					tempId: string;
@@ -14243,6 +14279,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				goal: string;
 				status: "active" | "paused" | "closed";
 				templateId: string | null;
+				playbookId: string | null;
 				expectedOutputs: unknown;
 				channelId: string | null;
 				progress: number | null;
@@ -14271,6 +14308,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				goal: string;
 				status: "active" | "paused" | "closed";
 				templateId: string | null;
+				playbookId: string | null;
 				expectedOutputs: unknown;
 				channelId: string | null;
 				progress: number | null;
@@ -14302,6 +14340,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "active" | "paused" | "closed";
 				goal: string;
 				templateId: string | null;
+				playbookId: string | null;
 				expectedOutputs: unknown;
 				progress: number | null;
 				agentIds: string[] | null;
@@ -14329,6 +14368,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "active" | "paused" | "closed";
 				goal: string;
 				templateId: string | null;
+				playbookId: string | null;
 				expectedOutputs: unknown;
 				progress: number | null;
 				agentIds: string[] | null;
@@ -14365,6 +14405,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "active" | "paused" | "closed";
 				goal: string;
 				templateId: string | null;
+				playbookId: string | null;
 				expectedOutputs: unknown;
 				progress: number | null;
 				agentIds: string[] | null;
@@ -14403,6 +14444,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "active" | "paused" | "closed";
 				goal: string;
 				templateId: string | null;
+				playbookId: string | null;
 				expectedOutputs: unknown;
 				progress: number | null;
 				agentIds: string[] | null;
@@ -14430,6 +14472,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "active" | "paused" | "closed";
 				goal: string;
 				templateId: string | null;
+				playbookId: string | null;
 				expectedOutputs: unknown;
 				progress: number | null;
 				agentIds: string[] | null;

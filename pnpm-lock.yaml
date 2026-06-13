@@ -364,6 +364,9 @@ importers:
       '@synap/jobs':
         specifier: workspace:*
         version: link:../jobs
+      '@synap/playbooks':
+        specifier: workspace:*
+        version: link:../playbooks
       '@synap/search':
         specifier: workspace:*
         version: link:../search

@@ -15,7 +15,8 @@
 
 import { getDb, eq, and, or, links } from "@synap/database";
 import type { Link } from "@synap/database/schema";
-import type { LinkInput, LinkEndpointType, LinkType } from "@synap/playbooks";
+import type { LinkInput, LinkEndpointType } from "@synap/playbooks";
+import { userVisibleWhere } from "../../utils/user-visible-where.js";
 
 /**
  * Create a single link edge. Idempotent on the unique edge
@@ -89,14 +90,13 @@ export async function createLinks(inputs: LinkInput[]): Promise<Link[]> {
  * powers a detail page's related panel + the capability graph:
  *   WHERE (from_type, from_id) = (type, id) OR (to_type, to_id) = (type, id)
  *
- * `workspaceId` is accepted for call-site symmetry but NOT used to filter:
- * links are addressed by their globally-unique polymorphic endpoint ids, and a
- * workspace filter would wrongly hide pod-wide (workspaceId = NULL) edges that
- * legitimately point at this endpoint. Callers that already scoped the endpoint
- * id get exactly its edges.
+ * SCOPED: results are restricted to edges the user may see —
+ * `userVisibleWhere(links.workspaceId, userId)` = pod-wide (workspaceId NULL)
+ * OR a workspace the user belongs to. Without this, any authenticated user could
+ * read the link graph of workspaces they're not a member of.
  */
 export async function getLinksFor(
-  _workspaceId: string | null,
+  userId: string,
   type: LinkEndpointType,
   id: string
 ): Promise<Link[]> {
@@ -105,9 +105,12 @@ export async function getLinksFor(
     .select()
     .from(links)
     .where(
-      or(
-        and(eq(links.fromType, type), eq(links.fromId, id)),
-        and(eq(links.toType, type), eq(links.toId, id))
+      and(
+        userVisibleWhere(links.workspaceId, userId),
+        or(
+          and(eq(links.fromType, type), eq(links.fromId, id)),
+          and(eq(links.toType, type), eq(links.toId, id))
+        )
       )
     );
 

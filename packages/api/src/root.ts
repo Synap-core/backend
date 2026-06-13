@@ -60,6 +60,7 @@ import { subscriptionsRouter } from "./routers/subscriptions.js";
 import { aiProvidersRouter } from "./routers/ai-providers.js";
 import { aiProviderCredentialsRouter } from "./routers/ai-provider-credentials.js";
 import { focusSessionsRouter } from "./routers/focus-sessions.js";
+import { playbooksRouter } from "./routers/playbooks.js";
 import { artifactsRouter } from "./routers/artifacts.js";
 
 /**
@@ -128,6 +129,7 @@ export const coreRouter = router({
   aiProviders: aiProvidersRouter,
   aiProviderCredentials: aiProviderCredentialsRouter,
   focusSessions: focusSessionsRouter,
+  playbooks: playbooksRouter,
   artifacts: artifactsRouter,
 });
 

@@ -20,6 +20,7 @@ import {
   and,
   inArray,
   drizzleSql,
+  getWorkspaceMembership,
   secretVaultKeys,
   SECRET_TYPES,
   SecretsVaultRepository,
@@ -708,7 +709,7 @@ export const secretsVaultRouter = router({
    *
    * Returns the vault:// reference for the approved secret.
    */
-  grantAIAccess: workspaceProcedure
+  grantAIAccess: protectedProcedure
     .input(
       z.object({
         secretId: z.string().uuid(),

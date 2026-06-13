@@ -61,6 +61,7 @@
     "@synap/events": "workspace:*",
     "@synap/feed-service": "workspace:*",
     "@synap/governance-policy": "workspace:*",
+    "@synap/playbooks": "workspace:*",
     "@synap/intelligence-client": "workspace:*",
     "@synap/jobs": "workspace:*",
     "@synap/search": "workspace:*",
