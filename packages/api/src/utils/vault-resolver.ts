@@ -6,7 +6,8 @@ export {
   resolveVaultReferences,
   getServiceSecret,
   upsertServiceSecret,
-  consumeGrant,
+  findRedeemableGrant,
+  incrementGrant,
   VaultGrantError,
 } from "@synap/database";
-export type { GrantDenialCode } from "@synap/database";
+export type { GrantDenialCode, GrantRedeemer } from "@synap/database";

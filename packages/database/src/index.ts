@@ -56,10 +56,11 @@ export {
   resolveVaultReferences,
   getServiceSecret,
   upsertServiceSecret,
-  consumeGrant,
+  findRedeemableGrant,
+  incrementGrant,
   VaultGrantError,
 } from "./utils/vault-resolver.js";
-export type { GrantDenialCode } from "./utils/vault-resolver.js";
+export type { GrantDenialCode, GrantRedeemer } from "./utils/vault-resolver.js";
 
 // Schema coherence tripwire — pod-startup guard against schema drift
 export {

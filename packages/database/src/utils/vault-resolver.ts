@@ -70,49 +70,86 @@ export class VaultGrantError extends Error {
 }
 
 /**
- * Atomically consume one use of an ACTIVE grant for a secret.
+ * The principal redeeming a grant. Used to bind redemption to the grantee so a
+ * grant issued to one agent/workspace cannot be redeemed by another principal
+ * that merely happens to resolve for the same secret owner.
+ *
+ * - `agentUserId`: the specific agent identity the grant was issued to
+ *   (matches vault_grants.granted_to). NULL on a grant means "any agent".
+ * - `workspaceId`: the workspace the grant is scoped to
+ *   (matches vault_grants.workspace_id). NULL on a grant means "any workspace".
+ *
+ * A NULL column on the grant is treated as a wildcard (unscoped grant); a
+ * non-NULL column MUST equal the redeemer's corresponding value.
+ */
+export interface GrantRedeemer {
+  agentUserId?: string | null;
+  workspaceId?: string | null;
+}
+
+/**
+ * Find the single best ACTIVE grant for a secret that the given redeemer is
+ * entitled to redeem, WITHOUT consuming it. (Consumption happens later, only
+ * after the secret successfully decrypts — see `incrementGrant` — so a decrypt
+ * or missing-secret failure never burns a once-grant.)
  *
  * "Active" = revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
- * AND (max_uses IS NULL OR use_count < max_uses). Increments use_count in the
- * same statement so concurrent redemptions cannot over-consume a capped grant.
- * If multiple active grants exist for the secret, any one suffices (the one with
- * the soonest expiry / lowest remaining uses is preferred so 'once' grants are
- * spent first).
+ * AND (max_uses IS NULL OR use_count < max_uses).
  *
- * Returns `{ ok: true, grantId }` on success, or `{ ok: false, code }` with a
- * specific denial reason for diagnostics.
+ * Grantee binding: a grant is only a candidate when its granted_to / workspace_id
+ * either is NULL (unscoped wildcard) or equals the redeemer's value. This makes
+ * the granted_to / workspace_id columns enforcement-bearing (see schema comments
+ * at secrets-vault.ts ~261-264), not just audit metadata.
+ *
+ * Ordering prefers the MOST-CONSTRAINED grant so single-use ('once') grants are
+ * spent before broader ones:
+ *   1. capped grants first              -> (max_uses IS NOT NULL) DESC
+ *   2. then soonest expiry              -> expires_at ASC NULLS LAST
+ *   3. then fewest remaining uses       -> (max_uses - use_count) ASC NULLS LAST
+ *
+ * Returns `{ ok: true, grantId }` with the chosen candidate, or `{ ok: false,
+ * code }` with a specific denial reason (scoped to the same redeemer predicate)
+ * for diagnostics.
  */
-export async function consumeGrant(
-  secretId: string
+export async function findRedeemableGrant(
+  secretId: string,
+  redeemer: GrantRedeemer
 ): Promise<
   { ok: true; grantId: string } | { ok: false; code: GrantDenialCode }
 > {
   const db = await getDb();
+  const agentUserId = redeemer.agentUserId ?? null;
+  const workspaceId = redeemer.workspaceId ?? null;
 
-  // Single round-trip: pick the best active grant and bump use_count atomically.
-  const updated = await db.execute(drizzleSql`
-    UPDATE vault_grants
-    SET use_count = use_count + 1
-    WHERE id = (
-      SELECT id FROM vault_grants
-      WHERE secret_id = ${secretId}
-        AND revoked_at IS NULL
-        AND (expires_at IS NULL OR expires_at > now())
-        AND (max_uses IS NULL OR use_count < max_uses)
-      ORDER BY expires_at ASC NULLS LAST, max_uses ASC NULLS LAST
-      LIMIT 1
-      FOR UPDATE SKIP LOCKED
-    )
-    RETURNING id
+  // Read-only candidate find: most-constrained active grant for this redeemer.
+  const candidate = await db.execute(drizzleSql`
+    SELECT id FROM vault_grants
+    WHERE secret_id = ${secretId}
+      AND revoked_at IS NULL
+      AND (expires_at IS NULL OR expires_at > now())
+      AND (max_uses IS NULL OR use_count < max_uses)
+      AND (granted_to IS NULL OR granted_to = ${agentUserId})
+      AND (workspace_id IS NULL OR workspace_id = ${workspaceId})
+    ORDER BY
+      (max_uses IS NOT NULL) DESC,
+      expires_at ASC NULLS LAST,
+      (max_uses - use_count) ASC NULLS LAST
+    LIMIT 1
   `);
 
   // postgres-js: db.execute returns a RowList (array-like) of result rows.
-  const grantId = (updated as unknown as Array<{ id: string }>)[0]?.id;
+  const grantId = (candidate as unknown as Array<{ id: string }>)[0]?.id;
   if (grantId) return { ok: true, grantId };
 
-  // No active grant consumed — classify why for the caller's error code.
+  // No redeemable grant — classify why, scoped to the SAME redeemer predicate so
+  // we don't misreport based on a grant this principal could never redeem. We
+  // pick the newest matching grant and report its specific failure reason.
   const any = await db.query.vaultGrants.findFirst({
-    where: eq(vaultGrants.secretId, secretId),
+    where: and(
+      eq(vaultGrants.secretId, secretId),
+      drizzleSql`(${vaultGrants.grantedTo} IS NULL OR ${vaultGrants.grantedTo} = ${agentUserId})`,
+      drizzleSql`(${vaultGrants.workspaceId} IS NULL OR ${vaultGrants.workspaceId} = ${workspaceId})`
+    ),
     columns: {
       revokedAt: true,
       expiresAt: true,
@@ -131,39 +168,67 @@ export async function consumeGrant(
 }
 
 /**
+ * Atomically consume ONE use of a specific grant by id, guarded by the active
+ * predicate. This is the serialization point that prevents over-redemption of a
+ * capped grant under concurrency: the guarded UPDATE only succeeds for the
+ * caller that wins the race in the window between candidate-find and increment.
+ *
+ * Returns true if this call consumed the use; false if the grant was revoked,
+ * expired, or already exhausted by a concurrent redeemer (lost race).
+ */
+export async function incrementGrant(grantId: string): Promise<boolean> {
+  const db = await getDb();
+  const updated = await db.execute(drizzleSql`
+    UPDATE vault_grants
+    SET use_count = use_count + 1
+    WHERE id = ${grantId}
+      AND revoked_at IS NULL
+      AND (expires_at IS NULL OR expires_at > now())
+      AND (max_uses IS NULL OR use_count < max_uses)
+    RETURNING id
+  `);
+  return (updated as unknown as Array<{ id: string }>).length > 0;
+}
+
+/**
  * Resolve a single vault reference to its plaintext value.
  *
  * @param secretId - UUID of the secret
  * @param userId - Owner of the secret (for access control)
  * @param fieldName - Optional JSON field within the decrypted data
  * @param opts.requireGrant - When true, enforce AI access grant semantics: an
- *   ACTIVE vault_grants row must exist for the secret and one use is consumed.
- *   Set ONLY by agent/IS redemption paths. Throws VaultGrantError if no active
- *   grant exists. Internal/service redemption paths leave this unset.
+ *   ACTIVE vault_grants row redeemable by `opts.redeemer` must exist for the
+ *   secret, and one use is consumed ONLY AFTER the secret successfully decrypts
+ *   (so a decrypt/missing-secret failure never burns a once-grant). Set ONLY by
+ *   agent/IS redemption paths. Throws VaultGrantError if no redeemable grant
+ *   exists. Internal/service redemption paths leave this unset.
+ * @param opts.redeemer - The principal redeeming the grant (see GrantRedeemer).
+ *   Binds redemption to the grantee so a grant issued to one agent/workspace is
+ *   not redeemable by another. Required in practice whenever requireGrant is set.
  * @returns Resolved plaintext value, or null if unresolvable
  */
 export async function resolveVaultSecret(
   secretId: string,
   userId: string,
   fieldName?: string,
-  opts?: { requireGrant?: boolean }
+  opts?: { requireGrant?: boolean; redeemer?: GrantRedeemer }
 ): Promise<string | null> {
   if (!isServerVaultAvailable()) {
     logger.warn("VAULT_SERVER_KEY not configured — cannot resolve vault refs");
     return null;
   }
 
-  // Enforce grant semantics BEFORE decrypting when this is an agent/IS path.
+  // FIX 2: when this is an agent/IS path, find a redeemable grant BEFORE
+  // decrypting (throws if none) but DEFER the consuming increment until after a
+  // successful decrypt, so a decrypt/missing-secret failure cannot burn a grant.
+  let pendingGrantId: string | null = null;
   if (opts?.requireGrant) {
-    const grant = await consumeGrant(secretId);
+    const grant = await findRedeemableGrant(secretId, opts.redeemer ?? {});
     if (!grant.ok) {
       logger.warn({ secretId, code: grant.code }, "Vault grant check failed");
       throw new VaultGrantError(grant.code);
     }
-    logger.info(
-      { secretId, grantId: grant.grantId },
-      "Vault grant consumed for agent/IS redemption"
-    );
+    pendingGrantId = grant.grantId;
   }
 
   const db = await getDb();
@@ -197,40 +262,66 @@ export async function resolveVaultSecret(
     return null;
   }
 
+  let plaintext: string;
   try {
-    const plaintext = decryptServerSide({
+    plaintext = decryptServerSide({
       encryptedData: secret.encryptedData!,
       iv: secret.iv!,
       authTag: secret.authTag!,
     });
-
-    // If a field name is specified, parse as JSON and extract
-    if (fieldName) {
-      try {
-        const data = JSON.parse(plaintext) as Record<string, unknown>;
-        const value = data[fieldName];
-        return value != null ? String(value) : null;
-      } catch {
-        // Not JSON — return full plaintext if no field specified
-        logger.warn(
-          { secretId, fieldName },
-          "Secret data is not JSON, cannot extract field"
-        );
-        return null;
-      }
-    }
-
-    return plaintext;
   } catch (err) {
     logger.error({ err, secretId }, "Failed to decrypt vault secret");
     return null;
   }
+
+  // Decrypt succeeded — NOW consume the grant. The guarded increment is the
+  // serialization point that prevents over-redemption of a capped grant under
+  // concurrency; if we lost the race in the window, the grant is exhausted.
+  if (pendingGrantId) {
+    const consumed = await incrementGrant(pendingGrantId);
+    if (!consumed) {
+      logger.warn(
+        { secretId, grantId: pendingGrantId },
+        "Vault grant exhausted in redemption window"
+      );
+      throw new VaultGrantError("grant_exhausted");
+    }
+    logger.info(
+      { secretId, grantId: pendingGrantId },
+      "Vault grant consumed for agent/IS redemption"
+    );
+  }
+
+  // If a field name is specified, parse as JSON and extract
+  if (fieldName) {
+    try {
+      const data = JSON.parse(plaintext) as Record<string, unknown>;
+      const value = data[fieldName];
+      return value != null ? String(value) : null;
+    } catch {
+      // Not JSON — return full plaintext if no field specified
+      logger.warn(
+        { secretId, fieldName },
+        "Secret data is not JSON, cannot extract field"
+      );
+      return null;
+    }
+  }
+
+  return plaintext;
 }
 
 /**
  * Resolve all vault references in a key-value config object.
  * Non-vault values are passed through unchanged.
  * Unresolvable references are replaced with empty string + warning logged.
+ *
+ * SECURITY: This path is INTENTIONALLY ungated — it does NOT enforce grant
+ * semantics (no requireGrant) because it serves the service/automation bootstrap
+ * path (e.g. injecting env vars into automation/MCP/webhook execution). It must
+ * therefore NEVER be called with agent-controlled `config` or secretIds. Callers
+ * that redeem on behalf of an agent must use resolveVaultSecret({ requireGrant,
+ * redeemer }) instead so the grant gate runs.
  *
  * @param config - Key-value pairs that may contain vault:// references
  * @param userId - Owner for access control

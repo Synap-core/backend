@@ -1307,17 +1307,31 @@ export const devplaneRouter = router({
         });
       }
 
-      // Agent/IS redemption path: enforce AI access grant semantics. An ACTIVE
-      // vault_grants row must exist (granted via secretsVault.grantAIAccess) and
-      // one use is consumed atomically. Internal/service paths (getServiceConfig,
-      // getServiceSecret) do NOT pass requireGrant and remain ungated.
+      // Agent/IS redemption path: enforce AI access grant semantics. A grant
+      // (issued via secretsVault.grantAIAccess) redeemable by THIS principal must
+      // exist; one use is consumed only after a successful decrypt. Internal/
+      // service paths (getServiceConfig, getServiceSecret) do NOT pass
+      // requireGrant and remain ungated.
+      //
+      // Redeemer binding: this workspaceProcedure ctx exposes a guaranteed
+      // `workspaceId` but NOT an `agentUserId` (agentUserId only exists on the
+      // hub-protocol REST/api-key context — see hub-protocol/rest/context.ts —
+      // not on the tRPC Context used here). We therefore bind on `workspaceId` as
+      // the enforceable floor: a grant scoped to a different workspace cannot be
+      // redeemed here. Per-AGENT binding (granted_to) requires plumbing the
+      // agent identity onto this call site; until then we leave agentUserId
+      // unset so grants with a non-null granted_to fall back to workspace scope
+      // rather than fabricating an identity. (Grants issued by grantAIAccess set
+      // granted_to to the proposal's agent/creator, so binding agentUserId here
+      // to ctx.userId would WRONGLY reject legitimate redemptions — hence we omit
+      // it deliberately.)
       let value: string | null;
       try {
         value = await resolveVaultSecret(
           parsed.secretId,
           ctx.userId,
           parsed.fieldName,
-          { requireGrant: true }
+          { requireGrant: true, redeemer: { workspaceId: ctx.workspaceId } }
         );
       } catch (err) {
         if (err instanceof VaultGrantError) {
