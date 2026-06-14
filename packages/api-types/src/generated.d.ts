@@ -2108,6 +2108,9 @@ export type Playbook = typeof playbooks.$inferSelect;
  *   source              --feeds-->             playbook     (input-strategy source)
  *   tool                --provided_by-->       source       (tool backed by a provider)
  *   participant|channel --member_of-->         session      (room participants)
+ *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
+ *   entity(knowledge)   --documents-->         tool | skill (knowledge↔config bridge)
+ *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
  *
  * Design doc: team/platform/playbooks-capability-substrate.mdx
  */
@@ -2117,7 +2120,23 @@ export type Playbook = typeof playbooks.$inferSelect;
  */
 export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant";
 /** The relationship an edge expresses. */
-export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "targets" | "produced" | "member_of" | "feeds" | "promoted_to" | "provided_by";
+export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "targets" | "produced" | "member_of" | "feeds" | "promoted_to" | "provided_by" | "about" | "documents" | "concerns";
+/**
+ * Playbook Runs Schema — the run ledger (executor spine, Phase 3)
+ *
+ * RUNTIME (not config, not entity DATA). A playbook_run is one execution of a
+ * Playbook: created when `runPlaybook` dispatches a playbook to its executor
+ * (`is-agent` | `external-agent` | `hybrid`). It links the config (`playbook_id`)
+ * to the runtime (`session_id`) and records status/summary/error as the executor
+ * reports back (capture-back via the Hub `POST /runs/:id/capture` route).
+ *
+ * Part of the Playbooks & Capability Substrate
+ * (team/platform/playbooks-capability-substrate.mdx §4.3-4.4).
+ */
+/** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
+export type PlaybookRunExecutorRef = "is-agent" | "external-agent" | "hybrid";
+/** Lifecycle of a run. */
+export type PlaybookRunStatus = "running" | "completed" | "failed" | "proposed";
 /**
  * EventRecord - Database representation of an event
  *
@@ -8272,6 +8291,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					sourceProposalId: string | null;
 					deletedAt: Date | null;
 				}[];
+				configLinks: {
+					workspaceId: string | null;
+					id: string;
+					createdAt: Date;
+					metadata: unknown;
+					createdBy: string | null;
+					linkType: LinkType;
+					fromType: LinkEndpointType;
+					fromId: string;
+					toType: LinkEndpointType;
+					toId: string;
+				}[];
 			};
 			meta: object;
 		}>;
@@ -13092,6 +13123,57 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		analyzeLarge: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				source: "markdown" | "obsidian" | "csv" | "bookmark";
+				items: {
+					path: string;
+					content: string;
+				}[];
+				workspaceId?: string | undefined;
+				relationType?: string | undefined;
+				aiStructure?: boolean | undefined;
+			};
+			output: {
+				workspaceId: string;
+				source: ImportRevealSource;
+				mode: "deep";
+				proposalId: string | null;
+				operations: CompositeProposalOperation[];
+				summary: string;
+				stats: {
+					itemsProcessed: number;
+					itemsFailed: number;
+					entityCount: number;
+					relationCount: number;
+					duplicatesMerged: number;
+					linkedToExisting: number;
+					documentCount: number;
+					sourceDocCount: number;
+					byType: Record<string, number>;
+					wikilinkLinksResolved: number;
+					wikilinkLinksUnresolved: number;
+					chunks: number;
+				};
+				aiTyped: number;
+			};
+			meta: object;
+		}>;
+		applyLarge: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				source: "markdown" | "obsidian" | "csv" | "bookmark";
+				operations: Record<string, unknown>[];
+				workspaceId?: string | undefined;
+			};
+			output: {
+				workspaceId: string;
+				source: ImportRevealSource;
+				created: number;
+				linked: number;
+				chunks: number;
+			};
+			meta: object;
+		}>;
 		linkedInContacts: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				contacts: {
@@ -13645,7 +13727,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		addPeer: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				peerPodUrl: string;
-				direction: "push" | "bidirectional" | "pull";
+				direction: "push" | "bidirectional" | "pull" | "inbound";
 				label?: string | undefined;
 				authToken?: string | undefined;
 				workspaceIds?: string[] | undefined;
@@ -15550,6 +15632,64 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelSpec: unknown;
 				};
 				status: "promoted";
+				message: string;
+				proposalId: string | null;
+			};
+			meta: object;
+		}>;
+		run: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				playbookId: string;
+				params?: Record<string, unknown> | undefined;
+				agentIds?: string[] | undefined;
+				agentUserId?: string | undefined;
+				source?: string | undefined;
+				reasoning?: string | undefined;
+			};
+			output: {
+				run: null;
+				session: FocusSession | null;
+				status: "proposed";
+				message: string;
+				proposalId: string;
+			} | {
+				run: {
+					error: string | null;
+					workspaceId: string | null;
+					sessionId: string | null;
+					id: string;
+					input: unknown;
+					startedAt: Date;
+					status: PlaybookRunStatus;
+					createdBy: string;
+					completedAt: Date | null;
+					playbookId: string;
+					executor: PlaybookRunExecutorRef;
+					summary: string | null;
+				};
+				session: {
+					userId: string;
+					workspaceId: string;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					correlationId: string | null;
+					channelId: string | null;
+					startedAt: Date;
+					status: "active" | "paused" | "closed";
+					goal: string;
+					templateId: string | null;
+					playbookId: string | null;
+					expectedOutputs: unknown;
+					progress: number | null;
+					agentIds: string[] | null;
+					closedAt: Date | null;
+					contextReport: unknown;
+					planReport: unknown;
+					executionLog: unknown;
+					verificationReport: unknown;
+				};
+				status: "running";
 				message: string;
 				proposalId: string | null;
 			};
