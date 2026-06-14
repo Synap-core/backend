@@ -25,10 +25,8 @@ export interface EnsureDefaultViewsResult {
 /**
  * Create default views for a workspace if they don't exist
  *
- * Creates:
- * - "Home" (bento view - workspace dashboard)
- * - "All Tasks" (table view)
- * - "Task Board" (kanban view)
+ * Creates task-oriented starter views. Workspace Home bento defaults are owned
+ * by the Browser client so there is one canonical home layout.
  *
  * @param workspaceId - The workspace ID
  * @param userId - The user ID (workspace owner or member with write access)
@@ -68,28 +66,17 @@ export async function ensureDefaultViews(
 
     const hasAllTasks = existingViews.some((v) => v.name === "All Tasks");
     const hasTaskBoard = existingViews.some((v) => v.name === "Task Board");
-    const hasHome = allWorkspaceViews.some(
-      (v) =>
-        v.type === "bento" &&
-        (v.metadata as Record<string, unknown>)?.homeScope === "workspace"
-    );
-
-    // Skip only if Home is done AND (task views done OR task profile not available)
+    // Skip if task views are done, or when the task profile is not available.
+    // The Browser renders the canonical Home bento fallback when no pod Home
+    // config exists, so the backend intentionally does not seed one here.
     const taskViewsDone = !taskProfile || (hasAllTasks && hasTaskBoard);
-    if (hasHome && taskViewsDone) {
+    if (taskViewsDone) {
       return {
         status: "skipped",
         message: "Default views already exist",
         viewsCreated: 0,
         viewIds: existingViews
-          .filter(
-            (v) =>
-              v.name === "All Tasks" ||
-              v.name === "Task Board" ||
-              (v.type === "bento" &&
-                (v.metadata as Record<string, unknown>)?.homeScope ===
-                  "workspace")
-          )
+          .filter((v) => v.name === "All Tasks" || v.name === "Task Board")
           .map((v) => v.id),
       };
     }
@@ -175,94 +162,6 @@ export async function ensureDefaultViews(
         userId
       );
       createdViewIds.push(taskBoardView.id);
-    }
-
-    // 3. Create "Home" bento view (workspace dashboard)
-    if (!hasHome) {
-      const DEFAULT_HOME_CONFIG = {
-        layout: "bento",
-        breakpoints: {
-          lg: { cols: 12, rowHeight: 60, gap: 12 },
-          md: { cols: 8, rowHeight: 60, gap: 12 },
-          sm: { cols: 4, rowHeight: 60, gap: 12 },
-        },
-        blocks: [
-          // Row 0: Welcome greeting (full width)
-          {
-            id: "welcome-header",
-            kind: "widget",
-            widgetType: "welcome",
-            pos: { x: 0, y: 0, w: 12, h: 2 },
-          },
-          // Row 2: Quick capture + stat cards
-          {
-            id: "quick-capture",
-            kind: "widget",
-            widgetType: "capture-flow",
-            config: { placeholder: "Save a note, bookmark, or idea..." },
-            pos: { x: 0, y: 2, w: 4, h: 3 },
-          },
-          {
-            id: "stat-bookmarks",
-            kind: "widget",
-            widgetType: "stat-card",
-            config: {
-              profileSlug: "bookmark",
-              label: "Bookmarks",
-              aggregation: "count",
-              icon: "Bookmark",
-              chartType: "sparkline",
-            },
-            pos: { x: 4, y: 2, w: 3, h: 3 },
-          },
-          {
-            id: "stat-notes",
-            kind: "widget",
-            widgetType: "stat-card",
-            config: {
-              profileSlug: "note",
-              label: "Notes",
-              aggregation: "count",
-              icon: "FileText",
-              chartType: "sparkline",
-            },
-            pos: { x: 7, y: 2, w: 3, h: 3 },
-          },
-          {
-            id: "workspace-info",
-            kind: "widget",
-            widgetType: "workspace-info",
-            pos: { x: 10, y: 2, w: 2, h: 3 },
-          },
-          // Row 5: Feed + Calendar
-          {
-            id: "feed",
-            kind: "widget",
-            widgetType: "feed",
-            pos: { x: 0, y: 5, w: 4, h: 6 },
-          },
-          {
-            id: "calendar",
-            kind: "widget",
-            widgetType: "calendar",
-            pos: { x: 4, y: 5, w: 8, h: 6 },
-          },
-        ],
-      };
-
-      const homeView = await viewRepo.create(
-        {
-          type: "bento",
-          name: "Home",
-          description: "Workspace home dashboard",
-          workspaceId,
-          userId,
-          config: DEFAULT_HOME_CONFIG,
-          metadata: { homeScope: "workspace" },
-        },
-        userId
-      );
-      createdViewIds.push(homeView.id);
     }
 
     return {

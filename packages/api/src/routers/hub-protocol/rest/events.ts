@@ -4,9 +4,12 @@
  * connectors that previously polled).
  */
 
+import { randomUUID } from "crypto";
+
 import { z } from "@hono/zod-openapi";
 import { streamSSE } from "hono/streaming";
 
+import { createSynapEvent } from "@synap-core/core";
 import { eventRepository, type EventRecord } from "@synap/database";
 
 import { eventStreamManager } from "../../../event-stream-manager.js";
@@ -20,6 +23,33 @@ import {
   logger,
   type HubHono,
 } from "./_shared.js";
+
+/**
+ * Body contract for POST /agent-runs. costUsd is nullable (NULL = provider did
+ * not report a price — honest, never a fabricated 0). latencyMs / toolCount /
+ * runStatus are required; everything else is optional.
+ */
+const AgentRunBodySchema = z.object({
+  workspaceId: z.string(),
+  agentUserId: z.string(),
+  agentType: z.string(),
+  threadId: z.string().optional(),
+  sessionId: z.string().optional(),
+  correlationId: z.string().uuid().optional(),
+  tokensIn: z.number().int().optional(),
+  tokensOut: z.number().int().optional(),
+  tokensTotal: z.number().int().optional(),
+  costUsd: z.number().nullable().optional(),
+  provider: z.string().optional(),
+  model: z.string().optional(),
+  latencyMs: z.number().int(),
+  toolCount: z.number().int(),
+  toolsUsed: z.array(z.string()).optional(),
+  runStatus: z.enum(["succeeded", "failed"]),
+  finishReason: z.string().optional(),
+  errorMessage: z.string().optional(),
+  summary: z.string().optional(),
+});
 
 export function registerEventsRoutes(app: HubHono): void {
   // ── OpenAPI metadata for /events (NOT /events/stream — SSE) ──────────────
@@ -381,6 +411,88 @@ export function registerEventsRoutes(app: HubHono): void {
         cleanup();
       }
     });
+  });
+
+  /**
+   * POST /agent-runs — "watch your agent work"
+   *
+   * Records a completed agent run as an `agentRun.create.completed` event with
+   * first-class telemetry columns (cost / tokens / latency / tool count /
+   * authorship). Persisted via the HOOKED eventRepository.append() so it both
+   * lands in the event log AND broadcasts to the realtime bus (Socket.IO
+   * `agent_run:updated` + SSE) for the live agent-watch surface.
+   *
+   * Static route — declared before any future `/:id` dynamic route.
+   */
+  app.post("/agent-runs", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    // Pin ownership to the authenticated bearer-key user — never trust a body
+    // userId (would let an agent key write into another user's event log).
+    const userId = c.get("userId") as string;
+    if (!userId) return c.json({ error: "userId is required" }, 400);
+
+    const raw = await c.req.json().catch(() => null);
+    if (!raw) return c.json({ error: "Invalid JSON body" }, 400);
+
+    const parsed = AgentRunBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid body", issues: parsed.error.flatten() },
+        400
+      );
+    }
+    const b = parsed.data;
+
+    const runId = randomUUID();
+
+    try {
+      const event = createSynapEvent({
+        type: "agentRun.create.completed",
+        subjectId: runId,
+        subjectType: "agentRun",
+        userId,
+        // Workspace + non-telemetry context lives in data so realtime targeting
+        // (event.data.workspaceId) and downstream consumers can read it.
+        data: {
+          workspaceId: b.workspaceId,
+          threadId: b.threadId,
+          sessionId: b.sessionId,
+          toolsUsed: b.toolsUsed,
+          summary: b.summary,
+          errorMessage: b.errorMessage,
+        },
+        correlationId: b.correlationId,
+        // First-class telemetry → real columns on events.
+        isAgent: true,
+        agentUserId: b.agentUserId,
+        agentType: b.agentType,
+        model: b.model,
+        provider: b.provider,
+        costUsd: b.costUsd ?? null,
+        tokensIn: b.tokensIn,
+        tokensOut: b.tokensOut,
+        tokensTotal: b.tokensTotal,
+        latencyMs: b.latencyMs,
+        toolCount: b.toolCount,
+        runStatus: b.runStatus,
+        finishReason: b.finishReason,
+      });
+
+      const record = await eventRepository.append(event);
+      return c.json({ eventId: record.id, runId });
+    } catch (err) {
+      logger.error({ err, userId, runId }, "POST /agent-runs failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
   });
 
   /**

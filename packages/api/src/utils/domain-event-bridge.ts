@@ -122,6 +122,13 @@ function mapToSocketEvent(
       event: "artifact:changed",
       workspaceIdRequired: true,
     },
+    // Agent runs — "watch your agent work". workspaceId lives in event.data
+    // (the hub handler nests it there), so workspaceIdRequired targets the
+    // workspace room. Carries the full telemetry payload + actor fields.
+    "agentRun.create.completed": {
+      event: "agent_run:updated",
+      workspaceIdRequired: true,
+    },
   };
   return m[eventType] ?? null;
 }
@@ -186,6 +193,23 @@ export function emitDomainEventToRealtime(event: EventRecord): void {
     subjectType: event.subjectType,
     userId: event.userId,
     eventType: event.eventType,
+    // Phase 0 — actor on the wire + agent-run telemetry. Sourced from the event
+    // row's real columns (undefined for non-agent events; never crashes legacy
+    // events). The full telemetry block lets the `agent_run:updated` socket
+    // event carry cost/usage without re-querying.
+    isAgent: event.isAgent,
+    agentUserId: event.agentUserId,
+    agentType: event.agentType,
+    model: event.model,
+    provider: event.provider,
+    costUsd: event.costUsd,
+    tokensIn: event.tokensIn,
+    tokensOut: event.tokensOut,
+    tokensTotal: event.tokensTotal,
+    latencyMs: event.latencyMs,
+    toolCount: event.toolCount,
+    runStatus: event.runStatus,
+    finishReason: event.finishReason,
   } as Record<string, unknown>;
   // So frontend can invalidate documents.get({ documentId })
   if (event.eventType.startsWith("document.")) {

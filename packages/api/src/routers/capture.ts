@@ -44,6 +44,7 @@ import {
   materializeCompositeGraph,
   createRelationsFromRefs,
 } from "../utils/materialize-composite.js";
+import { makeExternalLinkIdempotency } from "../utils/entity-link-idempotency.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 
 const logger = createLogger({ module: "capture-router" });
@@ -383,7 +384,8 @@ export const captureRouter = router({
       // every `input.text` use. The note-fallback below needs SOME text, so use
       // a safe local that prefers text and falls back to a filename hint.
       const inputText =
-        input.text ?? (input.file?.filename ? `[file: ${input.file.filename}]` : "");
+        input.text ??
+        (input.file?.filename ? `[file: ${input.file.filename}]` : "");
 
       logger.debug(
         { userId, contentLength: input.text?.length ?? 0 },
@@ -759,6 +761,14 @@ export const captureRouter = router({
         ),
         /** User-selected workspace override — takes precedence over session default. */
         targetWorkspaceId: z.string().uuid().nullish(),
+        /**
+         * Client-stable idempotency namespace (U1). When supplied, a retry of
+         * this execute with the SAME key links the entities it already created
+         * (keyed by `${key}:${tempId}`) instead of duplicating them. Distinct
+         * tempIds → distinct keys, so two same-named entities stay separate.
+         * Optional / back-compat — absent = unchanged behavior.
+         */
+        idempotencyKey: z.string().max(200).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -943,6 +953,17 @@ export const captureRouter = router({
           source: "capture",
           resolveRelationType: (type) =>
             validRelationSlugs.has(type) ? type : FALLBACK_RELATION_TYPE,
+          // U1: when the caller supplies a stable key, a retry links the
+          // entities it already created (keyed by `${key}:${tempId}`) instead of
+          // duplicating. Absent → no idempotency (unchanged).
+          ...(input.idempotencyKey
+            ? {
+                idempotency: makeExternalLinkIdempotency(database, {
+                  namespace: input.idempotencyKey,
+                  provider: "capture",
+                }),
+              }
+            : {}),
         }
       );
 

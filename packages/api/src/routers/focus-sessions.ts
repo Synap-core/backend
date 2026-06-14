@@ -11,6 +11,7 @@ import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, desc, focusSessions } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
+import { getLinksFor } from "../services/links/links-service.js";
 
 // ── Shared input fragment ──────────────────────────────────────────────────
 
@@ -24,9 +25,56 @@ const statusFilterSchema = z
   .enum(["active", "paused", "closed", "all"])
   .default("all");
 
+// ── Links sub-router (read-only) ───────────────────────────────────────────
+
+const sessionLinksRouter = router({
+  /**
+   * Return all `links` edges where fromType='session' AND fromId=sessionId,
+   * plus reverse edges where toType='session' AND toId=sessionId.
+   *
+   * Groups results by `linkType` so the frontend can render "tools used",
+   * "skills used", "produced entities", "targets", etc. without reshaping.
+   *
+   * Scoping: reuses getLinksFor which applies userVisibleWhere (pod-wide OR
+   * workspace the user belongs to). The session ownership check mirrors the
+   * get procedure — we verify ownership before exposing the link graph.
+   */
+  bySession: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      // Verify session ownership before exposing its link graph.
+      const session = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.sessionId),
+          eq(focusSessions.userId, ctx.userId)
+        ),
+      });
+
+      if (!session) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+
+      const edges = await getLinksFor(ctx.userId, "session", input.sessionId);
+
+      // Group by linkType for convenient frontend consumption.
+      const grouped: Record<string, typeof edges> = {};
+      for (const edge of edges) {
+        const key = edge.linkType;
+        if (!grouped[key]) grouped[key] = [];
+        grouped[key].push(edge);
+      }
+
+      return { edges, grouped };
+    }),
+});
+
 // ── Router ─────────────────────────────────────────────────────────────────
 
 export const focusSessionsRouter = router({
+  links: sessionLinksRouter,
   /**
    * List focus sessions for a specific workspace (most recent first).
    */

@@ -33,6 +33,7 @@ export const SUBJECT_TYPES = [
   "skill",
   "backgroundTask",
   "agent",
+  "agentRun",
   "chatThread",
   "template",
   "inboxItem",

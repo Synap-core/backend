@@ -2156,6 +2156,19 @@ export interface EventRecord {
 	causationId?: string;
 	correlationId?: string;
 	source: string;
+	isAgent?: boolean;
+	agentUserId?: string;
+	agentType?: string;
+	model?: string;
+	provider?: string;
+	costUsd?: number | null;
+	tokensIn?: number;
+	tokensOut?: number;
+	tokensTotal?: number;
+	latencyMs?: number;
+	toolCount?: number;
+	runStatus?: string;
+	finishReason?: string;
 }
 /** Minimal message fields for list/preview */
 export interface LinkedMessagePreview {
@@ -3217,6 +3230,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: EventRecord[];
 			meta: object;
 		}>;
+		listByCorrelationId: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				correlationId: string;
+			};
+			output: {
+				id: string;
+				timestamp: Date;
+				type: string;
+				subjectType: string;
+				subjectId: string;
+				data: Record<string, unknown>;
+				metadata: Record<string, unknown> | undefined;
+				source: string;
+				correlationId: string | undefined;
+				userId: string;
+			}[];
+			meta: object;
+		}>;
 		count: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				userId?: string | undefined;
@@ -3395,6 +3426,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					relationType: string;
 				}[];
 				targetWorkspaceId?: string | null | undefined;
+				idempotencyKey?: string | undefined;
 			};
 			output: {
 				created: {
@@ -3922,13 +3954,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdByUserId: string | null;
 				createdAt: Date;
 				correlationId: string | null;
+				agentUserId: string | null;
 				profileId: string | null;
 				title: string | null;
 				preview: string | null;
 				documentId: string | null;
 				version: number;
 				createdByKind: ProvenanceKind | null;
-				agentUserId: string | null;
 				sourceProposalId: string | null;
 				deletedAt: Date | null;
 			};
@@ -4185,7 +4217,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -6933,11 +6965,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				timestamp: Date;
 				updatedAt: Date;
 				createdAt: Date;
+				provider: string;
 				title: string;
 				preview: string | null;
 				status: string | null;
 				externalId: string;
-				provider: string;
 				account: string;
 				deepLink: string | null;
 				snoozedUntil: Date | null;
@@ -8153,6 +8185,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdByUserId: string | null;
 					createdAt: Date;
 					correlationId: string | null;
+					agentUserId: string | null;
 					profileId: string | null;
 					title: string | null;
 					preview: string | null;
@@ -8161,7 +8194,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					systemData: unknown;
 					version: number;
 					createdByKind: ProvenanceKind | null;
-					agentUserId: string | null;
 					sourceProposalId: string | null;
 					deletedAt: Date | null;
 				}[];
@@ -8205,8 +8237,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					metadata: unknown;
 					correlationId: string | null;
-					createdByKind: ProvenanceKind | null;
 					agentUserId: string | null;
+					createdByKind: ProvenanceKind | null;
 					sourceProposalId: string | null;
 					sourceEntityId: string | null;
 					targetEntityId: string | null;
@@ -8249,8 +8281,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					metadata: unknown;
 					correlationId: string | null;
-					createdByKind: ProvenanceKind | null;
 					agentUserId: string | null;
+					createdByKind: ProvenanceKind | null;
 					sourceProposalId: string | null;
 					sourceEntityId: string | null;
 					targetEntityId: string | null;
@@ -8279,6 +8311,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdByUserId: string | null;
 					createdAt: Date;
 					correlationId: string | null;
+					agentUserId: string | null;
 					profileId: string | null;
 					title: string | null;
 					preview: string | null;
@@ -8287,7 +8320,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					systemData: unknown;
 					version: number;
 					createdByKind: ProvenanceKind | null;
-					agentUserId: string | null;
 					sourceProposalId: string | null;
 					deletedAt: Date | null;
 				}[];
@@ -8354,6 +8386,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						createdByUserId: string | null;
 						createdAt: Date;
 						correlationId: string | null;
+						agentUserId: string | null;
 						profileId: string | null;
 						title: string | null;
 						preview: string | null;
@@ -8362,7 +8395,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						systemData: unknown;
 						version: number;
 						createdByKind: ProvenanceKind | null;
-						agentUserId: string | null;
 						sourceProposalId: string | null;
 						deletedAt: Date | null;
 					} | null;
@@ -8484,6 +8516,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdByUserId: string | null;
 					createdAt: Date;
 					correlationId: string | null;
+					agentUserId: string | null;
 					profileId: string | null;
 					title: string | null;
 					preview: string | null;
@@ -8492,7 +8525,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					systemData: unknown;
 					version: number;
 					createdByKind: ProvenanceKind | null;
-					agentUserId: string | null;
 					sourceProposalId: string | null;
 					deletedAt: Date | null;
 				};
@@ -8509,6 +8541,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdByUserId: string | null;
 					createdAt: Date;
 					correlationId: string | null;
+					agentUserId: string | null;
 					profileId: string | null;
 					title: string | null;
 					preview: string | null;
@@ -8517,7 +8550,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					systemData: unknown;
 					version: number;
 					createdByKind: ProvenanceKind | null;
-					agentUserId: string | null;
 					sourceProposalId: string | null;
 					deletedAt: Date | null;
 				};
@@ -8530,8 +8562,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					metadata: unknown;
 					correlationId: string | null;
-					createdByKind: ProvenanceKind | null;
 					agentUserId: string | null;
+					createdByKind: ProvenanceKind | null;
 					sourceProposalId: string | null;
 					sourceEntityId: string | null;
 					targetEntityId: string | null;
@@ -8566,6 +8598,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdByUserId: string | null;
 					createdAt: Date;
 					correlationId: string | null;
+					agentUserId: string | null;
 					profileId: string | null;
 					title: string | null;
 					preview: string | null;
@@ -8574,7 +8607,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					systemData: unknown;
 					version: number;
 					createdByKind: ProvenanceKind | null;
-					agentUserId: string | null;
 					sourceProposalId: string | null;
 					deletedAt: Date | null;
 				}[];
@@ -8587,8 +8619,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					metadata: unknown;
 					correlationId: string | null;
-					createdByKind: ProvenanceKind | null;
 					agentUserId: string | null;
+					createdByKind: ProvenanceKind | null;
 					sourceProposalId: string | null;
 					sourceEntityId: string | null;
 					targetEntityId: string | null;
@@ -8622,8 +8654,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					metadata: unknown;
 					correlationId: string | null;
-					createdByKind: ProvenanceKind | null;
 					agentUserId: string | null;
+					createdByKind: ProvenanceKind | null;
 					sourceProposalId: string | null;
 					sourceEntityId: string | null;
 					targetEntityId: string | null;
@@ -10270,6 +10302,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdByUserId: string | null;
 					createdAt: Date;
 					correlationId: string | null;
+					agentUserId: string | null;
 					profileId: string | null;
 					title: string | null;
 					preview: string | null;
@@ -10278,7 +10311,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					systemData: unknown;
 					version: number;
 					createdByKind: ProvenanceKind | null;
-					agentUserId: string | null;
 					sourceProposalId: string | null;
 					deletedAt: Date | null;
 				} | {
@@ -13114,6 +13146,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				source: "markdown" | "obsidian" | "csv" | "bookmark";
 				operations: Record<string, unknown>[];
 				workspaceId?: string | undefined;
+				idempotencyKey?: string | undefined;
 			};
 			output: {
 				workspaceId: string;
@@ -13164,6 +13197,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				source: "markdown" | "obsidian" | "csv" | "bookmark";
 				operations: Record<string, unknown>[];
 				workspaceId?: string | undefined;
+				idempotencyKey?: string | undefined;
 			};
 			output: {
 				workspaceId: string;
@@ -15150,6 +15184,49 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		links: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			meta: object;
+			errorShape: {
+				message: string;
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+				data: import("@trpc/server").TRPCDefaultErrorData;
+			};
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			bySession: import("@trpc/server").TRPCQueryProcedure<{
+				input: {
+					sessionId: string;
+				};
+				output: {
+					edges: {
+						workspaceId: string | null;
+						id: string;
+						createdAt: Date;
+						metadata: unknown;
+						createdBy: string | null;
+						linkType: LinkType;
+						fromType: LinkEndpointType;
+						fromId: string;
+						toType: LinkEndpointType;
+						toId: string;
+					}[];
+					grouped: Record<string, {
+						workspaceId: string | null;
+						id: string;
+						createdAt: Date;
+						metadata: unknown;
+						createdBy: string | null;
+						linkType: LinkType;
+						fromType: LinkEndpointType;
+						fromId: string;
+						toType: LinkEndpointType;
+						toId: string;
+					}[]>;
+				};
+				meta: object;
+			}>;
+		}>>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId: string;
@@ -15693,6 +15770,37 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string | null;
 			};
+			meta: object;
+		}>;
+	}>>;
+	playbookRuns: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		listBySession: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				sessionId: string;
+			};
+			output: {
+				id: string;
+				workspaceId: string | null;
+				playbookId: string;
+				sessionId: string | null;
+				executor: PlaybookRunExecutorRef;
+				status: PlaybookRunStatus;
+				input: unknown;
+				summary: string | null;
+				error: string | null;
+				startedAt: Date;
+				completedAt: Date | null;
+				createdBy: string;
+			}[];
 			meta: object;
 		}>;
 	}>>;

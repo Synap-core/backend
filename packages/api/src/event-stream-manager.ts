@@ -240,6 +240,22 @@ class EventStreamManager {
       causationId: event.causationId,
       source: event.source,
       version: event.version,
+      // Phase 0 — actor on the wire + agent-run telemetry, sourced from the
+      // event row's real columns. Undefined for non-agent / non-run events so
+      // existing SSE consumers are unaffected.
+      isAgent: event.isAgent,
+      agentUserId: event.agentUserId,
+      agentType: event.agentType,
+      model: event.model,
+      provider: event.provider,
+      costUsd: event.costUsd,
+      tokensIn: event.tokensIn,
+      tokensOut: event.tokensOut,
+      tokensTotal: event.tokensTotal,
+      latencyMs: event.latencyMs,
+      toolCount: event.toolCount,
+      runStatus: event.runStatus,
+      finishReason: event.finishReason,
     });
 
     const sseMessage = `data: ${data}\n\n`;

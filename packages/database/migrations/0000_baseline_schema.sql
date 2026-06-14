@@ -141,12 +141,40 @@ CREATE TABLE IF NOT EXISTS "events" (
   "source"         text      DEFAULT 'api',
   "correlation_id" uuid,
   "user_id"        text      NOT NULL,
+  -- Agent-run observability telemetry (0131). All nullable, no defaults.
+  "is_agent"       boolean,
+  "agent_user_id"  text,
+  "agent_type"     text,
+  "model"          text,
+  "provider"       text,
+  "cost_usd"       numeric(12,6),
+  "tokens_in"      integer,
+  "tokens_out"     integer,
+  "tokens_total"   integer,
+  "latency_ms"     integer,
+  "tool_count"     integer,
+  "run_status"     text,
+  "finish_reason"  text,
   PRIMARY KEY ("id", "timestamp")
 );
--- NOTE: No ALTER TABLE guard for "events" — it is a TimescaleDB hypertable
--- with columnstore compression. ALTER TABLE ADD COLUMN with non-constant defaults
--- is not supported on compressed hypertables. The CREATE TABLE IF NOT EXISTS above
--- handles fresh installs; existing hypertables already have the correct schema.
+-- NOTE on ALTER for "events": it is a TimescaleDB hypertable with columnstore
+-- compression. ADD COLUMN with a *non-constant* default is unsupported on a
+-- compressed hypertable — but the observability columns below are all nullable
+-- with NO default, which IS supported, so the catch-up ALTERs are safe on an
+-- existing hypertable. (Catch-up DDL kept identical to 0131_agent_run_observability.sql.)
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "is_agent"      boolean;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "agent_user_id" text;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "agent_type"    text;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "model"         text;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "provider"      text;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "cost_usd"      numeric(12,6);
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "tokens_in"     integer;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "tokens_out"    integer;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "tokens_total"  integer;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "latency_ms"    integer;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "tool_count"    integer;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "run_status"    text;
+ALTER TABLE "events" ADD COLUMN IF NOT EXISTS "finish_reason" text;
 
 CREATE INDEX IF NOT EXISTS "idx_events_subject"
   ON "events" ("subject_type", "subject_id", "timestamp");
@@ -161,6 +189,11 @@ CREATE INDEX IF NOT EXISTS "idx_events_timestamp"
 CREATE INDEX IF NOT EXISTS "idx_events_correlation_id"
   ON "events" ("correlation_id")
   WHERE "correlation_id" IS NOT NULL;
+
+-- Agent-run observability: "all runs by this agent" lookup (migration 0131).
+CREATE INDEX IF NOT EXISTS "events_agent_user_id_idx"
+  ON "events" ("agent_user_id")
+  WHERE "agent_user_id" IS NOT NULL;
 
 -- ─── 4. profiles + profile_workspace_access ──────────────────────────────────
 

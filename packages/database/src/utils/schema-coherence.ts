@@ -588,6 +588,23 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0129_playbook_runs.sql",
   },
 
+  // events — agent-run observability telemetry (0131)
+  {
+    table: "events",
+    column: "is_agent",
+    addedBy: "0131_agent_run_observability.sql",
+  },
+  {
+    table: "events",
+    column: "agent_user_id",
+    addedBy: "0131_agent_run_observability.sql",
+  },
+  {
+    table: "events",
+    column: "run_status",
+    addedBy: "0131_agent_run_observability.sql",
+  },
+
   // relations — polymorphic endpoints (0041)
   {
     table: "relations",

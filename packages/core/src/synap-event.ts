@@ -56,6 +56,26 @@ export const SynapEventSchema = z.object({
 
   // Request Tracking (for async responses)
   requestId: z.string().uuid().optional(), // For linking API requests to events
+
+  // ── Agent-run observability telemetry (optional top-level fields) ─────────
+  // Persisted into REAL columns on the events table (not JSONB) by
+  // EventRepository.append(). Present on agentRun.* events and any
+  // agent-authored event. All optional/nullable so every existing event
+  // (which sets none of these) still validates unchanged. cost is null when the
+  // provider does not report a price (honest, never a fabricated 0).
+  isAgent: z.boolean().optional(),
+  agentUserId: z.string().optional(),
+  agentType: z.string().optional(),
+  model: z.string().optional(),
+  provider: z.string().optional(),
+  costUsd: z.number().nullable().optional(),
+  tokensIn: z.number().int().optional(),
+  tokensOut: z.number().int().optional(),
+  tokensTotal: z.number().int().optional(),
+  latencyMs: z.number().int().optional(),
+  toolCount: z.number().int().optional(),
+  runStatus: z.string().optional(),
+  finishReason: z.string().optional(),
 });
 
 export type SynapEvent = z.infer<typeof SynapEventSchema>;
@@ -369,6 +389,20 @@ export function createSynapEvent(input: {
   causationId?: string;
   requestId?: string;
   metadata?: Record<string, unknown>; // Optional metadata
+  // Agent-run observability telemetry (optional; persisted into real columns)
+  isAgent?: boolean;
+  agentUserId?: string;
+  agentType?: string;
+  model?: string;
+  provider?: string;
+  costUsd?: number | null;
+  tokensIn?: number;
+  tokensOut?: number;
+  tokensTotal?: number;
+  latencyMs?: number;
+  toolCount?: number;
+  runStatus?: string;
+  finishReason?: string;
 }): SynapEvent {
   // Validate event data against type-specific schema if schema exists
   let validatedData: Record<string, unknown> = input.data;
@@ -398,6 +432,20 @@ export function createSynapEvent(input: {
     correlationId: input.correlationId,
     causationId: input.causationId,
     requestId: input.requestId,
+    // Agent-run observability telemetry (undefined → omitted by Zod)
+    isAgent: input.isAgent,
+    agentUserId: input.agentUserId,
+    agentType: input.agentType,
+    model: input.model,
+    provider: input.provider,
+    costUsd: input.costUsd,
+    tokensIn: input.tokensIn,
+    tokensOut: input.tokensOut,
+    tokensTotal: input.tokensTotal,
+    latencyMs: input.latencyMs,
+    toolCount: input.toolCount,
+    runStatus: input.runStatus,
+    finishReason: input.finishReason,
   });
 }
 

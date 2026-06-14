@@ -242,6 +242,38 @@ export const eventsRouter = router({
     }),
 
   /**
+   * Return the event timeline for a focus session's IS correlationId,
+   * ordered chronologically. The correlationId on focus_sessions is a text
+   * column but events.correlation_id is uuid — the repository casts via
+   * ::uuid[] so a non-uuid value is rejected at the DB level.
+   *
+   * SECURITY: tenancy-clamped to ctx.userId — another user's events that
+   * happen to share the same correlationId are never returned.
+   */
+  listByCorrelationId: protectedProcedure
+    .input(z.object({ correlationId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const eventRepo = getEventRepository();
+      const events = await eventRepo.getCorrelatedEvents(
+        input.correlationId,
+        userId
+      );
+      return events.map((e) => ({
+        id: e.id,
+        timestamp: e.timestamp,
+        type: e.eventType,
+        subjectType: e.subjectType,
+        subjectId: e.subjectId,
+        data: e.data,
+        metadata: e.metadata,
+        source: e.source,
+        correlationId: e.correlationId,
+        userId: e.userId,
+      }));
+    }),
+
+  /**
    * Count events (for pagination/analytics)
    */
   count: protectedProcedure

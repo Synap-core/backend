@@ -135,6 +135,26 @@ export interface MaterializeOptions {
    * call. Entities created in THIS call append to (and override) the seed.
    */
   seedRefToRealId?: Record<string, string>;
+  /**
+   * Operation-keyed idempotency (U1). When present, each created entity is keyed
+   * in an external-link store by `${namespace}:${op.ref}` where `namespace` is a
+   * CLIENT-STABLE id (import proposalId / capture idempotencyKey). Before
+   * creating an op with a `ref`, we `lookup(provider, externalId)`: a hit LINKS
+   * the existing entity (retry-safe — no duplicate); a miss creates then
+   * `register`s the key. Distinct ops have distinct `op.ref` → distinct keys →
+   * both create (two same-named notes stay separate). Absent → behavior is
+   * byte-identical to today (no idempotency).
+   */
+  idempotency?: {
+    namespace: string;
+    provider: string;
+    lookup: (provider: string, externalId: string) => Promise<string | null>;
+    register: (
+      entityId: string,
+      provider: string,
+      externalId: string
+    ) => Promise<void>;
+  };
 }
 
 export async function materializeCompositeGraph(
@@ -163,12 +183,33 @@ export async function materializeCompositeGraph(
     let resultProfileSlug = op.profileSlug;
     let degradedFrom: string | undefined;
     let propertiesDropped: true | undefined;
+    // Operation-keyed idempotency (U1): if this op already materialized under
+    // the caller's stable namespace (a retry), link the prior entity instead of
+    // re-creating. Keyed by `${namespace}:${op.ref}` — distinct ops have
+    // distinct refs, so two same-named entities never collide.
+    const idemExternalId =
+      options?.idempotency && op.ref
+        ? `${options.idempotency.namespace}:${op.ref}`
+        : undefined;
+    let idemHitId: string | null = null;
+    if (options?.idempotency && idemExternalId && !op.existingEntityId) {
+      idemHitId = await options.idempotency.lookup(
+        options.idempotency.provider,
+        idemExternalId
+      );
+    }
+
     if (op.existingEntityId) {
       // `existingEntityId` is normally a real entity UUID, but a chunked import
       // may link to an entity CREATED in an earlier chunk — in that case it is a
       // synthetic ref present in the seeded map. Resolve through the seed (no-op
       // for a real UUID, which is absent from the map).
       realId = refToRealId[op.existingEntityId] ?? op.existingEntityId;
+      linkedExisting = true;
+    } else if (idemHitId) {
+      // Same namespace + ref seen before → link the prior entity (retry-safe,
+      // no duplicate). Treated exactly like the existingEntityId link branch.
+      realId = idemHitId;
       linkedExisting = true;
     } else {
       const result = await entityCaller.create({
@@ -193,6 +234,15 @@ export async function materializeCompositeGraph(
       propertiesDropped = (result as { propertiesDropped?: true })
         .propertiesDropped;
       created++;
+      // Register the op's stable key so a retry under the same namespace links
+      // this entity instead of re-creating it.
+      if (options?.idempotency && idemExternalId) {
+        await options.idempotency.register(
+          realId,
+          options.idempotency.provider,
+          idemExternalId
+        );
+      }
     }
 
     registerEntityRef(refToRealId, i, op.ref, realId, !primaryId);

@@ -19,6 +19,9 @@ import {
   text,
   index,
   primaryKey,
+  boolean,
+  integer,
+  numeric,
 } from "drizzle-orm/pg-core";
 
 export const events = pgTable(
@@ -58,6 +61,26 @@ export const events = pgTable(
 
     // Which user does this event belong to?
     userId: text("user_id").notNull(),
+
+    // ─── Agent-run observability telemetry (0131) ───────────────────────────
+    // First-class columns (NOT jsonb) so an agentRun event — and any
+    // agent-authored .completed event — carries authorship + cost/usage that
+    // can be indexed and aggregated. All nullable: a non-agent / non-LLM event
+    // simply leaves them NULL. cost is NULL when the provider does not report a
+    // price (honest, never a fabricated 0).
+    isAgent: boolean("is_agent"),
+    agentUserId: text("agent_user_id"),
+    agentType: text("agent_type"),
+    model: text("model"),
+    provider: text("provider"),
+    costUsd: numeric("cost_usd", { precision: 12, scale: 6 }),
+    tokensIn: integer("tokens_in"),
+    tokensOut: integer("tokens_out"),
+    tokensTotal: integer("tokens_total"),
+    latencyMs: integer("latency_ms"),
+    toolCount: integer("tool_count"),
+    runStatus: text("run_status"),
+    finishReason: text("finish_reason"),
   },
   (table) => ({
     // ✨ COMPOSITE PK: Required for TimescaleDB hypertable with primary key
@@ -75,6 +98,9 @@ export const events = pgTable(
 
     // INDEX: For time-based queries
     timestampIdx: index("idx_events_timestamp").on(table.timestamp),
+
+    // INDEX: agent-run observability — "all runs by this agent" (0131)
+    agentUserIdIdx: index("events_agent_user_id_idx").on(table.agentUserId),
   })
 );
 

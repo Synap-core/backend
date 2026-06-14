@@ -66,6 +66,24 @@ export interface EventRecord {
   causationId?: string;
   correlationId?: string;
   source: string;
+
+  // ── Agent-run observability telemetry (0131) ──────────────────────────────
+  // Populated from the events table's real columns. Undefined for events that
+  // do not carry telemetry (the vast majority). cost is null when the provider
+  // reported no price.
+  isAgent?: boolean;
+  agentUserId?: string;
+  agentType?: string;
+  model?: string;
+  provider?: string;
+  costUsd?: number | null;
+  tokensIn?: number;
+  tokensOut?: number;
+  tokensTotal?: number;
+  latencyMs?: number;
+  toolCount?: number;
+  runStatus?: string;
+  finishReason?: string;
 }
 
 export interface EventStreamOptions {
@@ -198,8 +216,24 @@ export class EventRepository {
           metadata,
           source,
           correlation_id,
-          timestamp
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          timestamp,
+          is_agent,
+          agent_user_id,
+          agent_type,
+          model,
+          provider,
+          cost_usd,
+          tokens_in,
+          tokens_out,
+          tokens_total,
+          latency_ms,
+          tool_count,
+          run_status,
+          finish_reason
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+          $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+        )
         RETURNING *
       `,
         [
@@ -215,6 +249,20 @@ export class EventRepository {
           validated.timestamp instanceof Date
             ? validated.timestamp.toISOString()
             : validated.timestamp,
+          // Agent-run observability telemetry (nullable; absent on most events)
+          validated.isAgent ?? null,
+          validated.agentUserId ?? null,
+          validated.agentType ?? null,
+          validated.model ?? null,
+          validated.provider ?? null,
+          validated.costUsd ?? null,
+          validated.tokensIn ?? null,
+          validated.tokensOut ?? null,
+          validated.tokensTotal ?? null,
+          validated.latencyMs ?? null,
+          validated.toolCount ?? null,
+          validated.runStatus ?? null,
+          validated.finishReason ?? null,
         ]
       );
 
@@ -470,7 +518,10 @@ export class EventRepository {
     const result = await this.query(
       `
       SELECT id, timestamp, subject_id, subject_type, type, user_id,
-             data, metadata, source, correlation_id
+             data, metadata, source, correlation_id,
+             is_agent, agent_user_id, agent_type, model, provider, cost_usd,
+             tokens_in, tokens_out, tokens_total, latency_ms, tool_count,
+             run_status, finish_reason
       FROM events
       WHERE correlation_id = $1
       AND user_id = $2
@@ -517,7 +568,10 @@ export class EventRepository {
     const result = await this.query(
       `
       SELECT id, timestamp, subject_id, subject_type, type, user_id,
-             data, metadata, source, correlation_id
+             data, metadata, source, correlation_id,
+             is_agent, agent_user_id, agent_type, model, provider, cost_usd,
+             tokens_in, tokens_out, tokens_total, latency_ms, tool_count,
+             run_status, finish_reason
       FROM events
       WHERE correlation_id = ANY($1::uuid[])
       AND user_id = $2
@@ -738,6 +792,31 @@ export class EventRepository {
       causationId: row.causation_id as string | undefined,
       correlationId: row.correlation_id as string | undefined,
       source: row.source as string,
+      // Agent-run observability telemetry. Columns may be absent on rows
+      // selected before the migration ran, or on older pods — coalesce to
+      // undefined so existing readers never break. numeric(cost_usd) comes back
+      // as a string from postgres.js → parse to a number (null stays null).
+      isAgent:
+        row.is_agent === undefined || row.is_agent === null
+          ? undefined
+          : (row.is_agent as boolean),
+      agentUserId: (row.agent_user_id as string | null) ?? undefined,
+      agentType: (row.agent_type as string | null) ?? undefined,
+      model: (row.model as string | null) ?? undefined,
+      provider: (row.provider as string | null) ?? undefined,
+      costUsd:
+        row.cost_usd === null
+          ? null
+          : row.cost_usd === undefined
+            ? undefined
+            : Number(row.cost_usd),
+      tokensIn: (row.tokens_in as number | null) ?? undefined,
+      tokensOut: (row.tokens_out as number | null) ?? undefined,
+      tokensTotal: (row.tokens_total as number | null) ?? undefined,
+      latencyMs: (row.latency_ms as number | null) ?? undefined,
+      toolCount: (row.tool_count as number | null) ?? undefined,
+      runStatus: (row.run_status as string | null) ?? undefined,
+      finishReason: (row.finish_reason as string | null) ?? undefined,
     };
   }
 }

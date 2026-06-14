@@ -55,6 +55,10 @@ const ApplyImportSchema = z.object({
   // The exact operations returned by `analyze` — echoed back so what the user
   // previewed is what is created (no server re-structuring drift).
   operations: z.array(z.record(z.string(), z.unknown())).max(8000),
+  // Client-stable idempotency namespace (U1). When supplied (e.g. the analyze
+  // proposalId), a retry of this apply with the SAME key links the entities it
+  // already created instead of duplicating them. Absent → unchanged behavior.
+  idempotencyKey: z.string().max(200).optional(),
 });
 
 // Large (chunked) variants — same shape as analyze/apply with raised ceilings.
@@ -168,6 +172,7 @@ export const importRouter = router({
       return orchestrator.apply({
         source: input.source,
         operations: input.operations as unknown as CompositeProposalOperation[],
+        idempotencyKey: input.idempotencyKey,
       });
     }),
 
@@ -226,6 +231,7 @@ export const importRouter = router({
       return orchestrator.applyLarge({
         source: input.source,
         operations: input.operations as unknown as CompositeProposalOperation[],
+        idempotencyKey: input.idempotencyKey,
       });
     }),
 

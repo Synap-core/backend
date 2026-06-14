@@ -36,6 +36,7 @@ import { sanitizeImportPath, mimeFromPath } from "../utils/import-path.js";
 import { channelsRouter } from "../routers/channels.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../utils/materialize-composite.js";
+import { makeExternalLinkIdempotency } from "../utils/entity-link-idempotency.js";
 import { entitiesRouter as regularEntitiesRouter } from "../routers/entities.js";
 import { relationsRouter } from "../routers/relations.js";
 import { getBoss } from "@synap/jobs";
@@ -96,6 +97,12 @@ export type ImportAnalyzeInput = {
 export type ImportApplyInput = {
   source: ImportRevealSource;
   operations: CompositeProposalOperation[];
+  /**
+   * Client-stable idempotency namespace (U1). When set, materialization is keyed
+   * per-op so a retry of this apply links the entities it already created instead
+   * of duplicating them. Absent → unchanged (no idempotency).
+   */
+  idempotencyKey?: string;
 };
 
 /** Tuning for the chunked large-import variants. */
@@ -672,7 +679,19 @@ export class ImportOrchestrator {
       relationCaller,
       (err, type) =>
         logger.warn({ err, type }, "import.apply: relation create failed"),
-      { workspaceScoped: true }
+      {
+        workspaceScoped: true,
+        // U1: when the caller supplies a stable key, retries link instead of
+        // duplicating. Absent → no idempotency (unchanged).
+        ...(input.idempotencyKey
+          ? {
+              idempotency: makeExternalLinkIdempotency(db, {
+                namespace: input.idempotencyKey,
+                provider: "import",
+              }),
+            }
+          : {}),
+      }
     );
 
     logger.info(
@@ -888,6 +907,17 @@ export class ImportOrchestrator {
     let created = 0;
     let linked = 0;
 
+    // U1: build the idempotency hooks ONCE (stable namespace) and pass them to
+    // every chunk. Chunk refs are already re-namespaced (c0_e0, c1_e0, …) so
+    // per-op keys stay distinct across chunks and stable on retry. Absent key →
+    // no idempotency (unchanged).
+    const idempotency = input.idempotencyKey
+      ? makeExternalLinkIdempotency(db, {
+          namespace: input.idempotencyKey,
+          provider: "import",
+        })
+      : undefined;
+
     const totalChunks = Math.max(
       1,
       Math.ceil(input.operations.length / chunkSize)
@@ -915,7 +945,11 @@ export class ImportOrchestrator {
             { err, type },
             "import.applyLarge: relation create failed"
           ),
-        { workspaceScoped: true, seedRefToRealId: refToRealId }
+        {
+          workspaceScoped: true,
+          seedRefToRealId: refToRealId,
+          ...(idempotency ? { idempotency } : {}),
+        }
       );
       // Carry this chunk's ref→id mappings forward for cross-chunk relations.
       Object.assign(refToRealId, res.refToRealId);
