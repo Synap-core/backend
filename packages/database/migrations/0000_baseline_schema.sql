@@ -3348,3 +3348,28 @@ ALTER TABLE "focus_sessions"
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_playbook_id"
   ON "focus_sessions" ("playbook_id")
   WHERE "playbook_id" IS NOT NULL;
+
+-- ── Playbook Runs (0129_playbook_runs.sql catch-up) ───────────────────────────
+-- The run ledger — one row per execution of a Playbook (executor spine, P3).
+-- FKs to playbooks + focus_sessions, both of which exist above.
+CREATE TABLE IF NOT EXISTS "playbook_runs" (
+  "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "workspace_id" uuid,
+  "playbook_id"  uuid        NOT NULL REFERENCES "playbooks"("id") ON DELETE CASCADE,
+  "session_id"   uuid        REFERENCES "focus_sessions"("id") ON DELETE SET NULL,
+  "executor"     text        NOT NULL,
+  "status"       text        NOT NULL DEFAULT 'running',
+  "input"        jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  "summary"      text,
+  "error"        text,
+  "started_at"   timestamptz NOT NULL DEFAULT now(),
+  "completed_at" timestamptz,
+  "created_by"   text        NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "idx_playbook_runs_playbook_id"
+  ON "playbook_runs" ("playbook_id");
+CREATE INDEX IF NOT EXISTS "idx_playbook_runs_session_id"
+  ON "playbook_runs" ("session_id")
+  WHERE "session_id" IS NOT NULL;
+CREATE INDEX IF NOT EXISTS "idx_playbook_runs_workspace_status"
+  ON "playbook_runs" ("workspace_id", "status");

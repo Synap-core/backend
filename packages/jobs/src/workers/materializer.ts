@@ -35,6 +35,9 @@ import {
   storedVersionValues,
   uploadDocumentVersionSnapshot,
   normalizeDocumentType,
+  links,
+  type LinkEndpointType,
+  type LinkType,
 } from "@synap/database";
 import {
   entities,
@@ -127,6 +130,9 @@ export async function handleMaterialize(
         break;
       case "workspace":
         await materializeWorkspace(action, subjectId, workspaceId, data);
+        break;
+      case "link":
+        await materializeLink(action, workspaceId, data);
         break;
       case "whiteboard":
         // Whiteboard proposals are handled inline by their own REST route;
@@ -681,6 +687,54 @@ async function materializeCell(
  * subjectId is the workspaceId (the proposal's targetId). The agent to add comes
  * from `data.agentUserId`; the role from `data.role` (default editor).
  */
+/**
+ * Materialize an approved `link.create` proposal — insert the edge into the
+ * `links` config/runtime graph. Closes the loop for the bridge write path
+ * (`POST /api/hub/links`): in agent workspaces `link.create` routes to a
+ * proposal, and without this case the approval would flip APPROVED while the
+ * edge was silently never written. Idempotent (the unique-edge index +
+ * onConflictDoNothing) so a retried job can't error or duplicate.
+ */
+async function materializeLink(
+  action: string,
+  workspaceId: string | undefined,
+  data: Record<string, unknown>
+): Promise<void> {
+  if (action !== "create") {
+    logger.warn({ action }, "Link materialization only supports 'create'");
+    return;
+  }
+  const fromType = data.fromType as LinkEndpointType | undefined;
+  const fromId = data.fromId as string | undefined;
+  const toType = data.toType as LinkEndpointType | undefined;
+  const toId = data.toId as string | undefined;
+  const linkType = data.linkType as LinkType | undefined;
+  if (!fromType || !fromId || !toType || !toId || !linkType) {
+    logger.error(
+      { fromType, fromId, toType, toId, linkType },
+      "Link materialization missing required fields; skipping"
+    );
+    return;
+  }
+  const db = await getDb();
+  await db
+    .insert(links)
+    .values({
+      workspaceId: workspaceId ?? null,
+      fromType,
+      fromId,
+      toType,
+      toId,
+      linkType,
+      metadata: (data.metadata as Record<string, unknown>) ?? {},
+    })
+    .onConflictDoNothing();
+  logger.info(
+    { fromType, fromId, toType, toId, linkType },
+    "Link materialized"
+  );
+}
+
 async function materializeWorkspace(
   action: string,
   subjectId: string,

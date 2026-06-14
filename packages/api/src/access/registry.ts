@@ -20,6 +20,7 @@ import {
   tools,
   playbooks,
   links,
+  playbookRuns,
 } from "@synap/database/schema";
 import { registerVisibility } from "./visibility.js";
 
@@ -76,6 +77,11 @@ registerVisibility({
   table: links,
   query: () => db.query.links,
   rule: { kind: "workspace", workspaceColumn: links.workspaceId },
+});
+registerVisibility({
+  table: playbookRuns,
+  query: () => db.query.playbookRuns,
+  rule: { kind: "workspace", workspaceColumn: playbookRuns.workspaceId },
 });
 
 // NOTE: only tables actually READ through scopedDb() are registered here.

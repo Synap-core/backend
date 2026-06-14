@@ -111,6 +111,12 @@ interface DeepStructureOptions {
     profileSlug: string,
     title: string
   ) => Promise<string | null>;
+  /**
+   * Entity names found in EARLIER chunks of a larger import, pre-seeded into the
+   * `existingEntityNames` hint so this chunk unifies entities it has not itself
+   * seen. Used by `analyzeLarge` (cross-chunk dedup); omitted for a single call.
+   */
+  seedExistingNames?: string[];
 }
 
 interface DeepStructureDeps {
@@ -201,6 +207,10 @@ export async function deepStructureImportItems(
     ReturnType<StructureCapableClient["structure"]>
   > | null> = new Array(items.length).fill(null);
   const seenTitles = new Set<string>();
+  // Pre-seed with entity names from earlier chunks (cross-chunk dedup): later
+  // chunks get awareness of entities found before this call started.
+  if (opts.seedExistingNames)
+    for (const n of opts.seedExistingNames) seenTitles.add(normTitle(n));
   const wsVotes = new Map<string, number>(); // targetWorkspaceId → count
   for (let start = 0; start < items.length; start += concurrency) {
     const waveHint = Array.from(seenTitles).slice(0, 120);

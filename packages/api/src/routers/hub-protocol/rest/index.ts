@@ -26,6 +26,7 @@ export { registerAgentConfigsRoutes } from "./agent-configs.js";
 export { registerViewsRoutes } from "./views.js";
 export { registerProfilesRoutes } from "./profiles.js";
 export { registerRelationsRoutes } from "./relations.js";
+export { registerLinksRoutes } from "./links.js";
 export { registerRelationDefsRoutes } from "./relation-defs.js";
 export { registerSessionsRoutes } from "./sessions.js";
 export { registerWidgetDefinitionsRoutes } from "./widget-definitions.js";
@@ -55,5 +56,6 @@ export { registerFocusSessionsRoutes } from "./focus-sessions.js";
 export { registerAgentSkillsRoutes } from "./agent-skills.js";
 export { registerUiRoutes } from "./ui.js";
 export { registerArtifactsRoutes } from "./artifacts.js";
+export { registerRunsRoutes } from "./runs.js";
 
 export type { HubHono } from "./_shared.js";

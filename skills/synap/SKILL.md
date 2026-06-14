@@ -37,18 +37,22 @@ Your job is to turn unstructured input into a **connected** knowledge graph. Iso
 
 ## Mental model
 
-Synap is a typed knowledge graph with four distinct memory stores. Understanding the separation is critical — writing to the wrong store degrades the graph.
+Synap is a typed knowledge graph. **Reading is one verb (`synap ask`) — it routes for you.** Writing is where you must pick the right lane: the destination is decided by the **KIND** of knowledge, not by whichever workspace happens to be active.
 
-### Memory stores — pick the right one
+### Where to write what — the four lanes (decide by KIND)
 
-| Store                 | Endpoint / Profile                | Scope                | Structure                          | When to use                                                               |
-| --------------------- | --------------------------------- | -------------------- | ---------------------------------- | ------------------------------------------------------------------------- |
-| **Episodic memory**   | `POST /api/hub/memory`            | userId (pod-wide)    | Unstructured string + vector       | Fast facts, chat turns, session context — IS auto-writes                  |
-| **User observations** | `user_observation` profile        | pod (all workspaces) | Typed entity (category/confidence) | Durable AI-inferred model of the user: habits, style, preferences         |
-| **Agent knowledge**   | `knowledge` profile               | agent workspace      | Typed entity (type/claim/why)      | Validated learnings: gotchas, lessons, decisions — agent self-improvement |
-| **Procedural docs**   | `GET/PUT /api/hub/knowledge/:key` | pod or namespace     | Key-value markdown                 | Runbooks, how-tos addressed by key string (e.g. "deploy:backend")         |
+Ask yourself: _who does this knowledge serve?_
 
-> **Substrate names (the tables under the hood):** _episodic memory_ = `knowledge_facts`, _procedural docs_ = `knowledge_keys`, _semantic_ = `entities`. Both `knowledge_*` tables say "knowledge" but are different memory kinds — that's why `ask` routes for you instead of making you pick. You almost never address a store directly; `synap ask` classifies intent and queries the right one(s).
+| If it…                                                                                  | Lane        | Where it goes                                                                 | Governance                                                                                                 |
+| --------------------------------------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **helps YOU (the AI)** — a tool gotcha, a lesson about how to work, your own scratchpad | **AI-self** | the **shared agent memory** (default `synap capture`)                         | auto-approved (it's your memory)                                                                           |
+| **is about the USER** — how they work/talk/decide, their preferences, their life        | **User**    | pod-wide `user_observation` (`synap observe write`)                           | inferences are **proposed** (you review); explicit "I always X" auto-saves — never model the user silently |
+| **is GLOBAL truth** — a best-practice, runbook, how-to that holds across projects       | **Global**  | pod-wide procedural (`synap` → `update_knowledge` / `PUT /knowledge/:key`)    | proposal-gated (shared truth is reviewed)                                                                  |
+| **is about the CURRENT WORK** — the project/task/domain you're working on               | **Work**    | the **linked workspace** (`synap capture --workspace <id>` / `create entity`) | proposal-gated (it's the user's real data)                                                                 |
+
+> **Why this matters:** writing to the wrong lane degrades the graph. A code gotcha you learned is **AI-self** (shared agent memory, auto) — not the user's Builder workspace. A fact about how the user organizes projects is **User** (pod-wide, proposed) — not your scratchpad. `synap capture` tells you which lane + governance it used; check it.
+
+> **Substrate names (tables under the hood):** _semantic_ = `entities`, _episodic_ = `knowledge_facts`, _procedural_ = `knowledge_keys`. `ask` queries across them so you never pick on read.
 
 ### Data layers — the graph itself
 
@@ -921,6 +925,7 @@ create_proposal with targetType: "focus_session"
 **CLI** (use when running as Claude Code / OpenClaw agent):
 
 ```bash
+synap session start --goal "<goal>" [--workspace <id>]                 # create + start a session
 synap session list [--workspace <id>] [--status active|paused|closed]  # list sessions
 synap session get <id> [--workspace <id>]                               # read a session
 synap session update <id> --workspace <id> --progress 50               # report progress
@@ -928,7 +933,7 @@ synap session update <id> --workspace <id> --status paused             # pause
 synap session close <id> --workspace <id> [--recap "what was done"]    # close + recap
 ```
 
-Note: sessions are **created** via `create_proposal` (governance) — there is no direct `synap session create`.
+Note: `synap session start` creates a session directly (the agent-facing path). All hub-protocol writes are governance-gated server-side; the in-browser AI companion surfaces session creation through the proposal flow.
 
 **Discoverability**: the `active-sessions` bento widget is on the default home dashboard. Sessions group their related proposals under a shared `correlationId` in the Proposal Review Board.
 

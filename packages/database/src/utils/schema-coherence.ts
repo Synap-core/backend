@@ -576,6 +576,18 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0126_playbooks_capability_substrate.sql",
   },
 
+  // playbook_runs — the run ledger / executor spine (0127)
+  {
+    table: "playbook_runs",
+    column: "playbook_id",
+    addedBy: "0129_playbook_runs.sql",
+  },
+  {
+    table: "playbook_runs",
+    column: "status",
+    addedBy: "0129_playbook_runs.sql",
+  },
+
   // relations — polymorphic endpoints (0041)
   {
     table: "relations",

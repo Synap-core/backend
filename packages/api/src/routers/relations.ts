@@ -60,6 +60,7 @@ import {
 } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { getLinksFor } from "../services/links/links-service.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
@@ -256,8 +257,20 @@ export const relationsRouter = router({
         )
         .filter((id): id is string => id !== null);
 
+      // UNIFIED GRAPH (Option-3 bridge): an entity's neighbours include both
+      // entity DATA edges (`relations`) AND config/runtime edges (`links`) where
+      // it is an endpoint — e.g. a knowledge entity `--about--> tool`. Surface
+      // the config-links alongside the related entities so the detail "related"
+      // panel reads ONE neighbour list. Additive: `entities` is unchanged for
+      // existing consumers; `configLinks` is the new config-graph slice.
+      const configLinks = await getLinksFor(
+        ctx.userId,
+        "entity",
+        input.entityId
+      );
+
       if (relatedEntityIds.length === 0) {
-        return { entities: [] };
+        return { entities: [], configLinks };
       }
 
       // Fetch the actual entities
@@ -268,7 +281,7 @@ export const relationsRouter = router({
         ),
       });
 
-      return { entities: relatedEntities };
+      return { entities: relatedEntities, configLinks };
     }),
 
   /**

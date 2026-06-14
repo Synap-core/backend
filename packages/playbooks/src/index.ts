@@ -117,7 +117,11 @@ export type LinkType =
   | "member_of"
   | "feeds"
   | "promoted_to"
-  | "provided_by";
+  | "provided_by"
+  // knowledge↔config bridge edges (entity DATA pointing at config objects)
+  | "about"
+  | "documents"
+  | "concerns";
 
 /** A request to create a link edge (id/createdAt assigned by the store). */
 export interface LinkInput {
@@ -147,7 +151,14 @@ export interface RunContext {
 }
 
 export interface RunResult {
-  status: "completed" | "failed" | "proposed";
+  /**
+   * Terminal: completed | failed | proposed. Non-terminal: `running` — the
+   * executor dispatched the work but it finishes ASYNCHRONOUSLY (e.g. the
+   * is-agent posts into a channel and the IS responds out-of-band; the
+   * external-agent fires a BYOA webhook and the agent captures back later).
+   * The runner records the run as-is and the run is closed via capture-back.
+   */
+  status: "running" | "completed" | "failed" | "proposed";
   summary?: string;
   /** Ids of artifacts/entities produced (used to write `produced` links). */
   producedIds?: string[];

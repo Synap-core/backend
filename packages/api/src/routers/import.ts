@@ -57,6 +57,40 @@ const ApplyImportSchema = z.object({
   operations: z.array(z.record(z.string(), z.unknown())).max(8000),
 });
 
+// Large (chunked) variants — same shape as analyze/apply with raised ceilings.
+// The orchestrator splits the corpus into chunks internally while preserving
+// cross-chunk dedup. These run SYNCHRONOUSLY in one request today, so the
+// ceilings are deliberately bounded (not "no cap") to keep wall-clock + body
+// size sane until a pg-boss-backed worker streams them as a background job
+// (see UI-CONSOLIDATION-PLAN.md → large-import). An aggregate byte budget
+// mirrors submitBatch's MAX_BATCH_BYTES, scaled.
+const MAX_LARGE_CONTENT_BYTES = 48 * 1024 * 1024; // 48MB total text/request
+
+const AnalyzeLargeImportSchema = AnalyzeImportSchema.extend({
+  items: z
+    .array(
+      z.object({
+        path: z.string().min(1).max(1024),
+        content: z.string().max(200_000),
+      })
+    )
+    .min(1)
+    .max(4_000)
+    .superRefine((items, ctx) => {
+      const bytes = items.reduce((sum, it) => sum + it.content.length, 0);
+      if (bytes > MAX_LARGE_CONTENT_BYTES) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Import too large (${Math.round(bytes / 1024 / 1024)}MB). Split it into smaller batches (max ${MAX_LARGE_CONTENT_BYTES / 1024 / 1024}MB).`,
+        });
+      }
+    }),
+});
+
+const ApplyLargeImportSchema = ApplyImportSchema.extend({
+  operations: z.array(z.record(z.string(), z.unknown())).max(25_000),
+});
+
 // ─── Router ─────────────────────────────────────────────────────────────────
 
 export const importRouter = router({
@@ -113,7 +147,9 @@ export const importRouter = router({
    * and creates entities + relations, workspace-scoped. User-confirmed direct
    * write of their own data (the preview was the review).
    */
-  apply: workspaceProcedure
+  // NOTE: must NOT be named `apply` — tRPC v11.17+ rejects reserved words
+  // (Function.prototype.apply) as procedure keys and refuses to build the router.
+  applyImport: workspaceProcedure
     .input(ApplyImportSchema)
     .mutation(async ({ ctx, input }) => {
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
@@ -130,6 +166,64 @@ export const importRouter = router({
         trpcCtx: ctx as unknown as Record<string, unknown>,
       });
       return orchestrator.apply({
+        source: input.source,
+        operations: input.operations as unknown as CompositeProposalOperation[],
+      });
+    }),
+
+  /**
+   * Large-corpus variant of `analyze`: chunks the items internally (cross-chunk
+   * dedup preserved via a shared graph resolver) so an arbitrarily large prose
+   * import produces ONE governed `import.graph` proposal without hitting the
+   * per-call deep ceiling. Returns the same shape family as `analyze`.
+   */
+  analyzeLarge: workspaceProcedure
+    .input(AnalyzeLargeImportSchema)
+    .mutation(async ({ ctx, input }) => {
+      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace ID required. Set X-Workspace-Id or pass workspaceId.",
+        });
+      }
+      const orchestrator = new ImportOrchestrator({
+        workspaceId,
+        userId: ctx.userId as string,
+        trpcCtx: ctx as unknown as Record<string, unknown>,
+      });
+      return orchestrator.analyzeLarge({
+        source: input.source,
+        items: input.items,
+        relationType: input.relationType,
+        aiStructure: input.aiStructure,
+      });
+    }),
+
+  /**
+   * Large-corpus variant of `applyImport`: chunks the operations internally
+   * (cumulative ref→id map carried across chunks so cross-chunk relations
+   * resolve) and materializes them workspace-scoped. Same auth/workspace pattern
+   * as `applyImport`.
+   */
+  applyLarge: workspaceProcedure
+    .input(ApplyLargeImportSchema)
+    .mutation(async ({ ctx, input }) => {
+      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace ID required. Set X-Workspace-Id or pass workspaceId.",
+        });
+      }
+      const orchestrator = new ImportOrchestrator({
+        workspaceId,
+        userId: ctx.userId as string,
+        trpcCtx: ctx as unknown as Record<string, unknown>,
+      });
+      return orchestrator.applyLarge({
         source: input.source,
         operations: input.operations as unknown as CompositeProposalOperation[],
       });

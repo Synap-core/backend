@@ -1361,6 +1361,763 @@ export interface AiProviderModelEntry {
 	costPer1MInput?: number;
 	costPer1MOutput?: number;
 }
+declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
+	name: "focus_sessions";
+	schema: undefined;
+	columns: {
+		id: import("drizzle-orm/pg-core").PgColumn<{
+			name: "id";
+			tableName: "focus_sessions";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: true;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		workspaceId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "workspace_id";
+			tableName: "focus_sessions";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		userId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "user_id";
+			tableName: "focus_sessions";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		correlationId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "correlation_id";
+			tableName: "focus_sessions";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		goal: import("drizzle-orm/pg-core").PgColumn<{
+			name: "goal";
+			tableName: "focus_sessions";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		status: import("drizzle-orm/pg-core").PgColumn<{
+			name: "status";
+			tableName: "focus_sessions";
+			dataType: "string";
+			columnType: "PgText";
+			data: "active" | "paused" | "closed";
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				"active",
+				"paused",
+				"closed"
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		templateId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "template_id";
+			tableName: "focus_sessions";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		playbookId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "playbook_id";
+			tableName: "focus_sessions";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		expectedOutputs: import("drizzle-orm/pg-core").PgColumn<{
+			name: "expected_outputs";
+			tableName: "focus_sessions";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: false;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		channelId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "channel_id";
+			tableName: "focus_sessions";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		progress: import("drizzle-orm/pg-core").PgColumn<{
+			name: "progress";
+			tableName: "focus_sessions";
+			dataType: "number";
+			columnType: "PgInteger";
+			data: number;
+			driverParam: string | number;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		agentIds: import("drizzle-orm/pg-core").PgColumn<{
+			name: "agent_ids";
+			tableName: "focus_sessions";
+			dataType: "array";
+			columnType: "PgArray";
+			data: string[];
+			driverParam: string | string[];
+			notNull: false;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: import("drizzle-orm").Column<{
+				name: "agent_ids";
+				tableName: "focus_sessions";
+				dataType: "string";
+				columnType: "PgText";
+				data: string;
+				driverParam: string;
+				notNull: false;
+				hasDefault: false;
+				isPrimaryKey: false;
+				isAutoincrement: false;
+				hasRuntimeDefault: false;
+				enumValues: [
+					string,
+					...string[]
+				];
+				baseColumn: never;
+				identity: undefined;
+				generated: undefined;
+			}, {}, {}>;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {
+			size: undefined;
+			baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
+				name: "agent_ids";
+				dataType: "string";
+				columnType: "PgText";
+				data: string;
+				enumValues: [
+					string,
+					...string[]
+				];
+				driverParam: string;
+			}, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
+		}>;
+		closedAt: import("drizzle-orm/pg-core").PgColumn<{
+			name: "closed_at";
+			tableName: "focus_sessions";
+			dataType: "date";
+			columnType: "PgTimestamp";
+			data: Date;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		contextReport: import("drizzle-orm/pg-core").PgColumn<{
+			name: "context_report";
+			tableName: "focus_sessions";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		planReport: import("drizzle-orm/pg-core").PgColumn<{
+			name: "plan_report";
+			tableName: "focus_sessions";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		executionLog: import("drizzle-orm/pg-core").PgColumn<{
+			name: "execution_log";
+			tableName: "focus_sessions";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		verificationReport: import("drizzle-orm/pg-core").PgColumn<{
+			name: "verification_report";
+			tableName: "focus_sessions";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		startedAt: import("drizzle-orm/pg-core").PgColumn<{
+			name: "started_at";
+			tableName: "focus_sessions";
+			dataType: "date";
+			columnType: "PgTimestamp";
+			data: Date;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		createdAt: import("drizzle-orm/pg-core").PgColumn<{
+			name: "created_at";
+			tableName: "focus_sessions";
+			dataType: "date";
+			columnType: "PgTimestamp";
+			data: Date;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		updatedAt: import("drizzle-orm/pg-core").PgColumn<{
+			name: "updated_at";
+			tableName: "focus_sessions";
+			dataType: "date";
+			columnType: "PgTimestamp";
+			data: Date;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+	};
+	dialect: "pg";
+}>;
+export type FocusSession = typeof focusSessions.$inferSelect;
+/**
+ * Playbooks Schema — session templates (CONFIGURATION)
+ *
+ * A Playbook is a *template* of a Session: a goal (with params), the
+ * capabilities (tools/skills/commands) the AI may use, an input-strategy
+ * ("what to check"), a channel spec (the room), expected outputs, an optional
+ * schedule, and an executor target (IS / BYOA / hybrid).
+ *
+ * CONFIGURATION, not entity DATA — playbooks live in their own table; a runtime
+ * `focus_sessions` row is an *instance* of a playbook (focus_sessions.playbook_id).
+ * The richer JSONB shapes (params/input_strategy/channel_spec/expected_outputs/
+ * schedule) conform to the contracts in @synap/playbooks; they are stored loosely
+ * here and interpreted at the domain/API boundary.
+ *
+ * Design doc: team/platform/playbooks-capability-substrate.mdx
+ */
+/** Which "hands" run this playbook. Mirrors @synap/playbooks ExecutorRef. */
+export type PlaybookExecutorRef = "is-agent" | "external-agent" | "hybrid";
+declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
+	name: "playbooks";
+	schema: undefined;
+	columns: {
+		id: import("drizzle-orm/pg-core").PgColumn<{
+			name: "id";
+			tableName: "playbooks";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: true;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		workspaceId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "workspace_id";
+			tableName: "playbooks";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		createdBy: import("drizzle-orm/pg-core").PgColumn<{
+			name: "created_by";
+			tableName: "playbooks";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		name: import("drizzle-orm/pg-core").PgColumn<{
+			name: "name";
+			tableName: "playbooks";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		description: import("drizzle-orm/pg-core").PgColumn<{
+			name: "description";
+			tableName: "playbooks";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		goalTemplate: import("drizzle-orm/pg-core").PgColumn<{
+			name: "goal_template";
+			tableName: "playbooks";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		params: import("drizzle-orm/pg-core").PgColumn<{
+			name: "params";
+			tableName: "playbooks";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		inputStrategy: import("drizzle-orm/pg-core").PgColumn<{
+			name: "input_strategy";
+			tableName: "playbooks";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		channelSpec: import("drizzle-orm/pg-core").PgColumn<{
+			name: "channel_spec";
+			tableName: "playbooks";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		expectedOutputs: import("drizzle-orm/pg-core").PgColumn<{
+			name: "expected_outputs";
+			tableName: "playbooks";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		schedule: import("drizzle-orm/pg-core").PgColumn<{
+			name: "schedule";
+			tableName: "playbooks";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		executor: import("drizzle-orm/pg-core").PgColumn<{
+			name: "executor";
+			tableName: "playbooks";
+			dataType: "string";
+			columnType: "PgText";
+			data: PlaybookExecutorRef;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				"is-agent",
+				"external-agent",
+				"hybrid"
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {
+			$type: PlaybookExecutorRef;
+		}>;
+		status: import("drizzle-orm/pg-core").PgColumn<{
+			name: "status";
+			tableName: "playbooks";
+			dataType: "string";
+			columnType: "PgText";
+			data: "active" | "draft" | "paused" | "archived";
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				"draft",
+				"active",
+				"paused",
+				"archived"
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		metadata: import("drizzle-orm/pg-core").PgColumn<{
+			name: "metadata";
+			tableName: "playbooks";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		createdAt: import("drizzle-orm/pg-core").PgColumn<{
+			name: "created_at";
+			tableName: "playbooks";
+			dataType: "date";
+			columnType: "PgTimestamp";
+			data: Date;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		updatedAt: import("drizzle-orm/pg-core").PgColumn<{
+			name: "updated_at";
+			tableName: "playbooks";
+			dataType: "date";
+			columnType: "PgTimestamp";
+			data: Date;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+	};
+	dialect: "pg";
+}>;
+export type Playbook = typeof playbooks.$inferSelect;
+/**
+ * Links Schema — the config/runtime graph edges
+ *
+ * A polymorphic edge between CONFIGURATION/RUNTIME objects (playbook · tool ·
+ * skill · command · session · source) and, where useful, entity DATA. This is
+ * the deliberate mirror of the entity `relations` table — `relations` is the
+ * graph for entity DATA; `links` is the graph for everything else — keeping the
+ * data/config separation clean while still letting config point at data.
+ *
+ * ONE table powers every detail page's "related" panel and the capability graph:
+ * `SELECT * FROM links WHERE (from_type,from_id)=$ OR (to_type,to_id)=$`.
+ *
+ * Edge semantics (linkType):
+ *   playbook            --grants-->            tool | skill | command
+ *   skill               --requires-->          tool
+ *   command             --requires-->          tool        (command tool deps)
+ *   session             --instantiated_from--> playbook
+ *   session             --used-->              tool | skill (run provenance)
+ *   session             --targets-->           entity       (e.g. a linked task)
+ *   session             --produced-->          entity       (run output)
+ *   session             --promoted_to-->       playbook     (promotion lineage)
+ *   source              --feeds-->             playbook     (input-strategy source)
+ *   tool                --provided_by-->       source       (tool backed by a provider)
+ *   participant|channel --member_of-->         session      (room participants)
+ *
+ * Design doc: team/platform/playbooks-capability-substrate.mdx
+ */
+/**
+ * The kind of object on either end of a link edge.
+ * `participant` = a user-id OR agent-user-id (both live in the `users` table).
+ */
+export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant";
+/** The relationship an edge expresses. */
+export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "targets" | "produced" | "member_of" | "feeds" | "promoted_to" | "provided_by";
 /**
  * EventRecord - Database representation of an event
  *
@@ -2292,6 +3049,52 @@ export interface ReactionEvent {
 	note?: string;
 	/** the fan-out */
 	reactions: Reaction[];
+}
+/**
+ * @synap/playbooks — Playbooks & Capability Substrate contracts
+ *
+ * The pure, I/O-free DOMAIN contracts for the autonomous-capability spine:
+ * Tool · Skill(ref) · Playbook · Link · Executor · PlaybookRun.
+ *
+ * Contains NO database / event / proposal side effects — ONLY types + the
+ * Executor interface. Persistence ROW types live in @synap/database/schema
+ * (tools / playbooks / links); the interfaces here describe the behavioral
+ * shapes the loosely-typed JSONB columns conform to, applied at the domain/API
+ * boundary. Small string-unions are intentionally re-declared here (rather than
+ * imported from @synap/database) so this package stays dependency-free — they
+ * must stay in lock-step with the `.$type<>()` unions in the schema files.
+ *
+ * Design doc: team/platform/playbooks-capability-substrate.mdx
+ */
+/** IS persona-agent · BYOA external agent (Claude Code, CLI) · hybrid. */
+export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
+/** A credential a Tool/Skill needs at run time — mirrors the vault taxonomy. */
+export interface CredentialRequirement {
+	/** Logical name the tool/skill references (e.g. "apiKey"). */
+	name: string;
+	secretType: "api-key" | "credential" | "ssh-key" | "oauth-token" | "env-variable" | "connection-string";
+	/** Human-facing reason, surfaced in the vault approval proposal. */
+	purpose?: string;
+}
+/** What a Playbook can GRANT / a run uses. (Tools and Skills are linked, not merged.) */
+export type GrantableKind = "tool" | "skill" | "command";
+/**
+ * The normalized shape the Phase-1 adapters produce from builtin IS tools,
+ * code/instruction skills, intelligence_commands, and source providers — so a
+ * Playbook can grant capabilities uniformly and the AI can discover them.
+ */
+/** The full read-model kind set: grantables + the discoverable source systems. */
+export type CapabilityKind = GrantableKind | "source-provider" | "builtin-tool";
+export interface Capability {
+	kind: CapabilityKind;
+	id: string;
+	name: string;
+	description?: string | null;
+	inputSchema: Record<string, unknown>;
+	credentials?: CredentialRequirement[];
+	executor: ExecutorRef;
+	/** Whether AI use is auto-approved or routed through a proposal. */
+	governance: "auto" | "propose";
 }
 /**
  * Core API Router
@@ -12275,7 +13078,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
-		apply: import("@trpc/server").TRPCMutationProcedure<{
+		applyImport: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				source: "markdown" | "obsidian" | "csv" | "bookmark";
 				operations: Record<string, unknown>[];
@@ -14481,6 +15284,274 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				planReport: unknown;
 				executionLog: unknown;
 				verificationReport: unknown;
+			};
+			meta: object;
+		}>;
+	}>>;
+	playbooks: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		links: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			meta: object;
+			errorShape: {
+				message: string;
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+				data: import("@trpc/server").TRPCDefaultErrorData;
+			};
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			getFor: import("@trpc/server").TRPCQueryProcedure<{
+				input: {
+					type: "session" | "source" | "channel" | "command" | "entity" | "playbook" | "tool" | "skill" | "participant";
+					id: string;
+				};
+				output: {
+					workspaceId: string | null;
+					id: string;
+					createdAt: Date;
+					metadata: unknown;
+					createdBy: string | null;
+					linkType: LinkType;
+					fromType: LinkEndpointType;
+					fromId: string;
+					toType: LinkEndpointType;
+					toId: string;
+				}[];
+				meta: object;
+			}>;
+		}>>;
+		capabilityRegistry: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			meta: object;
+			errorShape: {
+				message: string;
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+				data: import("@trpc/server").TRPCDefaultErrorData;
+			};
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			list: import("@trpc/server").TRPCQueryProcedure<{
+				input: void;
+				output: Capability[];
+				meta: object;
+			}>;
+		}>>;
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				status?: "active" | "paused" | "archived" | "draft" | undefined;
+				limit?: number | undefined;
+			} | undefined;
+			output: {
+				id: string;
+				workspaceId: string | null;
+				createdBy: string;
+				name: string;
+				description: string | null;
+				goalTemplate: string;
+				params: unknown;
+				inputStrategy: unknown;
+				channelSpec: unknown;
+				expectedOutputs: unknown;
+				schedule: unknown;
+				executor: PlaybookExecutorRef;
+				status: "active" | "paused" | "archived" | "draft";
+				metadata: unknown;
+				createdAt: Date;
+				updatedAt: Date;
+			}[];
+			meta: object;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				name: string;
+				workspaceId: string | null;
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				metadata: unknown;
+				status: "active" | "paused" | "archived" | "draft";
+				description: string | null;
+				createdBy: string;
+				schedule: unknown;
+				params: unknown;
+				expectedOutputs: unknown;
+				executor: PlaybookExecutorRef;
+				goalTemplate: string;
+				inputStrategy: unknown;
+				channelSpec: unknown;
+			};
+			meta: object;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				name: string;
+				goalTemplate: string;
+				agentUserId?: string | undefined;
+				source?: string | undefined;
+				reasoning?: string | undefined;
+				description?: string | undefined;
+				params?: Record<string, unknown>[] | undefined;
+				inputStrategy?: Record<string, unknown> | undefined;
+				channelSpec?: Record<string, unknown> | undefined;
+				expectedOutputs?: Record<string, unknown>[] | undefined;
+				schedule?: unknown;
+				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
+				status?: "active" | "paused" | "archived" | "draft" | undefined;
+			};
+			output: {
+				playbook: Playbook | null;
+				status: "proposed";
+				message: string;
+				proposalId: string;
+			} | {
+				playbook: Playbook;
+				status: "created";
+				message: string;
+				proposalId: string | null;
+			};
+			meta: object;
+		}>;
+		update: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				agentUserId?: string | undefined;
+				source?: string | undefined;
+				reasoning?: string | undefined;
+				name?: string | undefined;
+				description?: string | undefined;
+				goalTemplate?: string | undefined;
+				params?: Record<string, unknown>[] | undefined;
+				inputStrategy?: Record<string, unknown> | undefined;
+				channelSpec?: Record<string, unknown> | undefined;
+				expectedOutputs?: Record<string, unknown>[] | undefined;
+				schedule?: unknown;
+				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
+				status?: "active" | "paused" | "archived" | "draft" | undefined;
+			};
+			output: {
+				playbook: Playbook | null;
+				status: "proposed";
+				message: string;
+				proposalId: string;
+			} | {
+				playbook: Playbook;
+				status: "updated";
+				message: string;
+				proposalId: string | null;
+			};
+			meta: object;
+		}>;
+		archive: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				agentUserId?: string | undefined;
+				source?: string | undefined;
+				reasoning?: string | undefined;
+			};
+			output: {
+				playbook: Playbook | null;
+				status: "proposed";
+				message: string;
+				proposalId: string;
+			} | {
+				playbook: Playbook;
+				status: "archived";
+				message: string;
+				proposalId: string | null;
+			};
+			meta: object;
+		}>;
+		instantiate: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				playbookId: string;
+				params?: Record<string, unknown> | undefined;
+				agentIds?: string[] | undefined;
+				channelId?: string | undefined;
+				agentUserId?: string | undefined;
+				source?: string | undefined;
+				reasoning?: string | undefined;
+			};
+			output: {
+				session: FocusSession | null;
+				status: "proposed";
+				message: string;
+				proposalId: string;
+			} | {
+				session: {
+					userId: string;
+					workspaceId: string;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					correlationId: string | null;
+					channelId: string | null;
+					startedAt: Date;
+					status: "active" | "paused" | "closed";
+					goal: string;
+					templateId: string | null;
+					playbookId: string | null;
+					expectedOutputs: unknown;
+					progress: number | null;
+					agentIds: string[] | null;
+					closedAt: Date | null;
+					contextReport: unknown;
+					planReport: unknown;
+					executionLog: unknown;
+					verificationReport: unknown;
+				};
+				status: "created";
+				message: string;
+				proposalId: string | null;
+			};
+			meta: object;
+		}>;
+		promote: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+				name?: string | undefined;
+				description?: string | undefined;
+				agentUserId?: string | undefined;
+				source?: string | undefined;
+				reasoning?: string | undefined;
+			};
+			output: {
+				playbook: Playbook | null;
+				status: "proposed";
+				message: string;
+				proposalId: string;
+			} | {
+				playbook: {
+					name: string;
+					workspaceId: string | null;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					metadata: unknown;
+					status: "active" | "paused" | "archived" | "draft";
+					description: string | null;
+					createdBy: string;
+					schedule: unknown;
+					params: unknown;
+					expectedOutputs: unknown;
+					executor: PlaybookExecutorRef;
+					goalTemplate: string;
+					inputStrategy: unknown;
+					channelSpec: unknown;
+				};
+				status: "promoted";
+				message: string;
+				proposalId: string | null;
 			};
 			meta: object;
 		}>;

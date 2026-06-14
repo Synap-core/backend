@@ -19,13 +19,25 @@
 import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { getDb, eq, and, desc, playbooks } from "@synap/database";
-import type { Playbook } from "@synap/database/schema";
+import {
+  getDb,
+  eq,
+  and,
+  desc,
+  playbooks,
+  focusSessions,
+} from "@synap/database";
+import type { Playbook, FocusSession } from "@synap/database/schema";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { getLinksFor } from "../services/links/links-service.js";
 import { listCapabilities } from "../services/capabilities/capability-registry.js";
+import {
+  instantiateSession,
+  promoteSessionToPlaybook,
+} from "../services/playbooks/playbook-lifecycle.js";
+import { runPlaybook } from "../services/playbooks/run-playbook.js";
 
 // ── Shared input schemas ─────────────────────────────────────────────────────
 
@@ -393,6 +405,235 @@ export const playbooksRouter = router({
         playbook: archived as Playbook,
         status: "archived" as const,
         message: "Playbook archived",
+        proposalId: null as string | null,
+      };
+    }),
+
+  /**
+   * Instantiate a runtime session from a playbook (config → runtime).
+   * Governance-gated (focus_session create): AI callers route through a proposal;
+   * a human member creates directly. On "proposed" no session is written.
+   */
+  instantiate: workspaceProcedure
+    .input(
+      z.object({
+        playbookId: z.string().uuid(),
+        params: z.record(z.string(), z.unknown()).optional(),
+        agentIds: z.array(z.string()).optional(),
+        channelId: z.string().uuid().optional(),
+        agentUserId: z.string().uuid().optional(),
+        source: z.string().optional(),
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // The playbook must be visible in this workspace (pod-wide or a member ws).
+      const playbook = await scopedDb(
+        AccessContext.from(ctx)
+      ).findFirst<Playbook>(playbooks, {
+        where: eq(playbooks.id, input.playbookId),
+      });
+      if (!playbook) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+
+      // Editor+ write floor — workspaceProcedure only verifies membership of ANY
+      // role; instantiating a session is a write, so require editor+ like the
+      // rest of this router's mutations.
+      const database = await getDb();
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: ctx.workspaceId,
+      });
+
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: ctx.workspaceId,
+        subjectType: "focus_session",
+        action: "create",
+        source: input.source,
+        reasoning: input.reasoning,
+        data: { playbookId: input.playbookId, name: playbook.name },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          session: null as FocusSession | null,
+          status: "proposed" as const,
+          message: "Session instantiation proposed for review",
+          proposalId: perm.proposalId,
+        };
+      }
+
+      const session = await instantiateSession({
+        playbookId: input.playbookId,
+        workspaceId: ctx.workspaceId,
+        userId: input.agentUserId ?? ctx.userId,
+        params: input.params,
+        channelId: input.channelId ?? null,
+        agentIds: input.agentIds,
+      });
+      return {
+        session,
+        status: "created" as const,
+        message: "Session instantiated",
+        proposalId: null as string | null,
+      };
+    }),
+
+  /**
+   * Promote a validated session into a reusable Playbook (runtime → config).
+   * Write-gated on the LOADED session's workspace; governance-gated (playbook
+   * create). Re-grants the capabilities the session used and records lineage.
+   */
+  promote: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        name: z.string().min(1).max(500).optional(),
+        description: z.string().optional(),
+        agentUserId: z.string().uuid().optional(),
+        source: z.string().optional(),
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const database = await getDb();
+
+      // Load by id ONLY, then gate on the loaded row's workspace.
+      const session = await database.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, input.sessionId),
+      });
+      if (!session) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Session ${input.sessionId} not found`,
+        });
+      }
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: session.workspaceId,
+      });
+
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: session.workspaceId,
+        subjectType: "playbook",
+        action: "create",
+        source: input.source,
+        reasoning: input.reasoning,
+        data: { sessionId: input.sessionId, name: input.name },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          playbook: null as Playbook | null,
+          status: "proposed" as const,
+          message: "Playbook promotion proposed for review",
+          proposalId: perm.proposalId,
+        };
+      }
+
+      const playbook = await promoteSessionToPlaybook({
+        sessionId: input.sessionId,
+        userId: input.agentUserId ?? ctx.userId,
+        name: input.name,
+        description: input.description,
+      });
+      return {
+        playbook,
+        status: "promoted" as const,
+        message: "Session promoted to playbook",
+        proposalId: null as string | null,
+      };
+    }),
+
+  /**
+   * Run a playbook (config → runtime → dispatch). The executor spine (P3):
+   * instantiates a session, creates the run channel, records a playbook_run, and
+   * dispatches to the playbook's executor (is-agent | external-agent | hybrid).
+   *
+   * Governance: editor+ write floor + checkPermissionOrPropose
+   * ({ subjectType: "playbook", action: "run" }). On "denied" → 403; on
+   * "proposed" → no run is created (the proposal is the record). Only on
+   * approval does `runPlaybook` execute.
+   */
+  run: workspaceProcedure
+    .input(
+      z.object({
+        playbookId: z.string().uuid(),
+        params: z.record(z.string(), z.unknown()).optional(),
+        agentIds: z.array(z.string()).optional(),
+        agentUserId: z.string().uuid().optional(),
+        source: z.string().optional(),
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // The playbook must be visible in this workspace (pod-wide or a member ws).
+      const playbook = await scopedDb(
+        AccessContext.from(ctx)
+      ).findFirst<Playbook>(playbooks, {
+        where: eq(playbooks.id, input.playbookId),
+      });
+      if (!playbook) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+
+      // Editor+ write floor — running a playbook spawns a session + channel +
+      // run (all writes), so require editor+ like the rest of this router.
+      const database = await getDb();
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: ctx.workspaceId,
+      });
+
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: ctx.workspaceId,
+        subjectType: "playbook",
+        action: "run",
+        source: input.source,
+        reasoning: input.reasoning,
+        data: { playbookId: input.playbookId, name: playbook.name },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          run: null,
+          session: null as FocusSession | null,
+          status: "proposed" as const,
+          message: "Playbook run proposed for review",
+          proposalId: perm.proposalId,
+        };
+      }
+
+      const { run, session } = await runPlaybook({
+        playbookId: input.playbookId,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        params: input.params,
+        agentIds: input.agentIds,
+        agentUserId: input.agentUserId,
+      });
+
+      return {
+        run,
+        session,
+        status: "running" as const,
+        message: "Playbook run started",
         proposalId: null as string | null,
       };
     }),

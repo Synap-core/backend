@@ -49,6 +49,7 @@ import {
   registerProfilesRoutes,
   registerProposalsRoutes,
   registerRelationsRoutes,
+  registerLinksRoutes,
   registerRelationDefsRoutes,
   registerSearchRoutes,
   registerSessionsRoutes,
@@ -76,6 +77,7 @@ import {
   registerAgentSkillsRoutes,
   registerUiRoutes,
   registerArtifactsRoutes,
+  registerRunsRoutes,
 } from "./hub-protocol/rest/index.js";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
@@ -407,6 +409,7 @@ registerAgentConfigsRoutes(app); // /agent-configs
 registerViewsRoutes(app); // /views*
 registerProfilesRoutes(app); // /profiles*, /property-defs*
 registerRelationsRoutes(app); // /relations*
+registerLinksRoutes(app); // /links (config/runtime graph; knowledge↔config bridge)
 registerRelationDefsRoutes(app); // /relation-defs*
 registerSessionsRoutes(app); // /sessions*, /compacted-states*
 registerWidgetDefinitionsRoutes(app); // /widget-definitions
@@ -436,6 +439,7 @@ registerFocusSessionsRoutes(app); // /focus-sessions*
 registerAgentSkillsRoutes(app); // /agent-skills*
 registerUiRoutes(app); // /ui/focus
 registerArtifactsRoutes(app); // /artifacts*
+registerRunsRoutes(app); // /runs/:runId/capture (playbook run capture-back)
 
 // ── OpenAPI stubs for routes not yet annotated inline ──────────────────────
 //

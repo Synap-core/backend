@@ -1,0 +1,76 @@
+/**
+ * Canonical IS auto-respond kickoff — the ONE path that makes the Intelligence
+ * Service respond to a user message in a channel.
+ *
+ * Resolves the workspace's chat IS endpoint, then enqueues the A2AI_TRIGGER
+ * pg-boss job. Extracted from the (previously inline-duplicated) threads.ts
+ * postMessage / postMessagesBatch handlers so every caller — REST threads AND
+ * the playbook executor (P3) — uses the SAME path, never a side-channel
+ * reimplementation (a bare websocket broadcast does NOT enqueue the IS).
+ *
+ * IS-eligible channels: THREAD / AGENT_COLLAB only (matches the existing gate).
+ * Best-effort: the triggering message is already persisted; a failed trigger is
+ * logged and swallowed. Returns true iff the job was enqueued.
+ */
+
+import { db, eq } from "@synap/database";
+import { channels, ChannelType } from "@synap/database/schema";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "trigger-auto-respond" });
+
+export async function triggerAutoRespond(params: {
+  channelId: string;
+  userMessageId: string;
+  content: string;
+  /** The principal whose message triggered the response (sourceAgentUserId). */
+  sourceUserId?: string | null;
+}): Promise<boolean> {
+  const channel = await db.query.channels.findFirst({
+    where: eq(channels.id, params.channelId),
+  });
+  if (
+    !channel?.workspaceId ||
+    !(
+      channel.channelType === ChannelType.THREAD ||
+      channel.channelType === ChannelType.AGENT_COLLAB
+    )
+  ) {
+    return false;
+  }
+  try {
+    const { resolveIntelligenceService } =
+      await import("./intelligence-routing.js");
+    const { getBoss, A2AI_TRIGGER_QUEUE, A2AI_TRIGGER_JOB_OPTIONS } =
+      await import("@synap/jobs");
+    const resolvedService = await resolveIntelligenceService({
+      userId: channel.userId,
+      workspaceId: channel.workspaceId,
+      capability: "chat",
+    });
+    await getBoss().send(
+      A2AI_TRIGGER_QUEUE,
+      {
+        channelId: params.channelId,
+        userMessageId: params.userMessageId,
+        content: params.content,
+        userId: channel.userId,
+        workspaceId: channel.workspaceId,
+        agentType: "meta",
+        sourceAgentUserId: params.sourceUserId ?? null,
+        serviceUrl: resolvedService.endpoint,
+        serviceApiKey: resolvedService.serviceApiKey,
+        serviceId: resolvedService.serviceId,
+        agentUserId: resolvedService.agentUserId,
+      },
+      A2AI_TRIGGER_JOB_OPTIONS
+    );
+    return true;
+  } catch (err) {
+    logger.warn(
+      { err, channelId: params.channelId },
+      "triggerAutoRespond failed"
+    );
+    return false;
+  }
+}

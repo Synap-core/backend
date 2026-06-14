@@ -22,6 +22,9 @@
  *   source              --feeds-->             playbook     (input-strategy source)
  *   tool                --provided_by-->       source       (tool backed by a provider)
  *   participant|channel --member_of-->         session      (room participants)
+ *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
+ *   entity(knowledge)   --documents-->         tool | skill (knowledge↔config bridge)
+ *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
  *
  * Design doc: team/platform/playbooks-capability-substrate.mdx
  */
@@ -63,7 +66,11 @@ export type LinkType =
   | "member_of"
   | "feeds"
   | "promoted_to"
-  | "provided_by";
+  | "provided_by"
+  // knowledge↔config bridge edges (entity DATA pointing at config objects)
+  | "about"
+  | "documents"
+  | "concerns";
 
 export const links = pgTable(
   "links",

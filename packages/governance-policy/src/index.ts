@@ -21,6 +21,9 @@
  * to be an agent user):
  *   1. CBAC capability allowlist  → deny if the agent lacks the capability
  *   2. ADMIN_ACTIONS              → always propose (even for owned workspace)
+ *   2.5 user_observation by KIND  → INFERENCE propose / EXPLICIT execute
+ *                                    (governs by the observation's nature, NOT
+ *                                     the routing workspace — see below)
  *   3. isAgentOwnedWorkspace      → execute (non-destructive) / propose (destructive)
  *   4. explicit autoApproveFor    → execute (overrides writesRequireProposal)
  *   5. writesRequireProposal      → propose on non-pure-read writes
@@ -301,6 +304,20 @@ export interface AgentPolicyInput {
    * multiplayer channel. Absent/undefined → no per-channel tightening.
    */
   channelCapabilities?: Partial<ChannelCapabilityGrant> | null;
+  /**
+   * The entity profile slug of the write SUBJECT (e.g. "user_observation"),
+   * when the write targets an entity. Used by the governance-by-KIND rule:
+   * a `user_observation` is governed by the nature of the observation, not by
+   * the routing workspace. Absent/undefined → rule does not fire.
+   */
+  subjectProfileSlug?: string | null;
+  /**
+   * The `uo_validated` property of a `user_observation` subject. Distinguishes
+   * an EXPLICIT observation (user-stated, validated === true → auto-approve)
+   * from an INFERENCE (AI-inferred, anything else → propose). Only consulted
+   * when `subjectProfileSlug === "user_observation"`.
+   */
+  subjectUoValidated?: boolean | null;
 }
 
 /**
@@ -322,6 +339,8 @@ export const PROPOSE_REASON = {
     "Destructive action in agent-owned workspace requires human approval.",
   CHANNEL_PROPOSE:
     "Teammate may propose in this channel; write requires human approval.",
+  USER_OBSERVATION_INFERENCE:
+    "AI-inferred observation about the user requires human validation before it is stored.",
 } as const;
 
 const CHANNEL_BLOCK_REASON =
@@ -351,6 +370,28 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // 2. ADMIN_ACTIONS → always propose (even for owned workspace).
   if (ADMIN_ACTIONS.includes(eventKey)) {
     return { verdict: "propose", reason: PROPOSE_REASON.ADMIN };
+  }
+
+  // 2.5 GOVERNANCE BY KIND — user_observation.
+  // A `user_observation` entity is governed by the NATURE of the observation,
+  // not by the routing workspace: an INFERENCE (AI-inferred about the user) is
+  // always proposed for human validation; an EXPLICIT observation (user-stated,
+  // uo_validated === true) auto-approves. This precedes ownership / autoApprove /
+  // writesRequireProposal precisely BECAUSE the routing workspace must not change
+  // the verdict — an inference must never silently land just because it routed
+  // through an agent-owned workspace, and an explicit one must not be forced into
+  // a proposal there either. Pure-read actions on the profile are exempt (a
+  // `user_observation.read` is just a read). Only fires for write actions.
+  if (
+    input.subjectProfileSlug === "user_observation" &&
+    !isPureReadAction(subjectType, action, eventKey)
+  ) {
+    return input.subjectUoValidated === true
+      ? { verdict: "execute" }
+      : {
+          verdict: "propose",
+          reason: PROPOSE_REASON.USER_OBSERVATION_INFERENCE,
+        };
   }
 
   // 3. Agent owns this workspace (linkedAgentId === agentUserId, workspaceType="agent").

@@ -176,6 +176,8 @@ export * from "./artifacts.js";
 export * from "./tools.js";
 export * from "./playbooks.js";
 export * from "./links.js";
+// Playbook run ledger (RUNTIME) — one row per playbook execution (executor spine, P3).
+export * from "./playbook-runs.js";
 
 // Provenance vocabulary (createdByKind column type — must be public so tsc
 // can name router return types without referencing internal dist paths)

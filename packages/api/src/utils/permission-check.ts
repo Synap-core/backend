@@ -510,6 +510,23 @@ export async function checkPermissionOrPropose(
         // → writesRequireProposal → agent-owned mode destructive → per-channel
         // grant → default autoApproveFor → default) and returns the verdict.
         // Side effects stay here.
+        // GOVERNANCE BY KIND (user_observation): surface the write subject's
+        // profile slug + its `uo_validated` flag to the policy so a user_observation
+        // is governed by the nature of the observation (inference vs explicit),
+        // not the routing workspace. Both signals ride in the gate `data` payload
+        // (entity create/update carries `profileSlug` + `properties`); we read
+        // them defensively (absent → rule no-ops in the policy).
+        const subjectProfileSlug =
+          typeof data?.profileSlug === "string" ? data.profileSlug : undefined;
+        const dataProperties = (data?.properties ?? null) as Record<
+          string,
+          unknown
+        > | null;
+        const subjectUoValidated =
+          typeof dataProperties?.uo_validated === "boolean"
+            ? dataProperties.uo_validated
+            : undefined;
+
         const agentMetadata = agentUser.agentMetadata as AgentMetadata | null;
         const decision = decideAgentPolicy({
           subjectType,
@@ -520,6 +537,8 @@ export async function checkPermissionOrPropose(
           autoApproveFor: explicitAutoApproveFor,
           isAgentOwnedWorkspace,
           channelCapabilities,
+          subjectProfileSlug,
+          subjectUoValidated,
         });
 
         if (decision.verdict === "deny") {

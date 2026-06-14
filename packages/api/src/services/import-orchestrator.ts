@@ -17,6 +17,7 @@ import {
   deepStructureImportItems,
   makeGraphResolver,
 } from "../import/import-deep.js";
+import { SharedGraphResolver } from "../import/shared-graph-resolver.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { searchService } from "@synap/search";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
@@ -96,6 +97,17 @@ export type ImportApplyInput = {
   source: ImportRevealSource;
   operations: CompositeProposalOperation[];
 };
+
+/** Tuning for the chunked large-import variants. */
+export type LargeImportOpts = {
+  /** Items per analyze chunk (default 750). */
+  analyzeChunkSize?: number;
+  /** Operations per apply chunk (default 4000, under the 8000 schema max). */
+  applyChunkSize?: number;
+};
+
+const ANALYZE_CHUNK_SIZE = 750;
+const APPLY_CHUNK_SIZE = 4000;
 
 export class ImportOrchestrator {
   constructor(private readonly ctx: OrchestratorContext) {}
@@ -668,6 +680,278 @@ export class ImportOrchestrator {
       "import.apply materialized"
     );
     return { workspaceId, source: input.source, created, linked };
+  }
+
+  /**
+   * No-cap, quality-preserving large analyze. Mirrors `analyze()` (deep prose
+   * structuring → ONE governed `import.graph` proposal) but CHUNKS the items so
+   * an arbitrarily large corpus never blows the per-call ceilings — WITHOUT
+   * losing the cross-note dedup that makes the import a single graph.
+   *
+   * The trick: `deepStructureImportItems` only dedups within its own call. Here a
+   * single `SharedGraphResolver` lives ACROSS chunks, so a person named in chunk
+   * 1 and chunk 5 resolves to ONE entity (chunk 5 links to chunk 1's creation
+   * instead of re-creating). After each chunk we `registerCreated` every
+   * create_entity op and feed the accumulated names forward as the next chunk's
+   * `existingEntityNames` hint.
+   *
+   * Returns the same shape family as `analyze()`: one proposal id + the merged
+   * operations + summary/stats. Prose-only (deep path); structured sources should
+   * keep using `analyze()` where 1 row = 1 entity is already correct.
+   */
+  async analyzeLarge(input: ImportAnalyzeInput, opts?: LargeImportOpts) {
+    const { workspaceId, userId } = this.ctx;
+    const chunkSize = Math.max(1, opts?.analyzeChunkSize ?? ANALYZE_CHUNK_SIZE);
+    const { availableProfiles, validSlugs, availableWorkspaces } =
+      await this.resolveProfileHints();
+    const items = adaptItems(input.source as ImportAdapterSource, input.items);
+
+    const { client } = await resolveIntelligenceService({
+      userId,
+      workspaceId,
+      capability: "default",
+    });
+
+    // ONE shared resolver across all chunks — wraps the live-search resolver and
+    // adds earlier-chunk-created + memoized state (cross-chunk dedup).
+    const shared = new SharedGraphResolver(
+      makeGraphResolver(searchService, { userId, workspaceId })
+    );
+
+    const batchId = randomUUID();
+    const operations: CompositeProposalOperation[] = [];
+    const byType: Record<string, number> = {};
+    let entityCount = 0;
+    let relationCount = 0;
+    let duplicatesMerged = 0;
+    let linkedToExisting = 0;
+    let documentCount = 0;
+    let sourceDocCount = 0;
+    let itemsProcessed = 0;
+    let itemsFailed = 0;
+    let wikilinkLinksResolved = 0;
+    let wikilinkLinksUnresolved = 0;
+
+    const totalChunks = Math.max(1, Math.ceil(items.length / chunkSize));
+    for (let c = 0; c < totalChunks; c++) {
+      const chunk = items.slice(c * chunkSize, (c + 1) * chunkSize);
+      if (chunk.length === 0) continue;
+      void emitImportFileProgress(
+        {
+          batchId,
+          path: `chunk ${c + 1}/${totalChunks}`,
+          index: c,
+          total: totalChunks,
+          status: "processing",
+        },
+        userId
+      ).catch(() => {});
+
+      const deep = await deepStructureImportItems(
+        chunk,
+        client,
+        {
+          availableProfiles,
+          validSlugs,
+          availableWorkspaces,
+          resolveExisting: (slug, title) => shared.resolveExisting(slug, title),
+          seedExistingNames: shared.getExistingEntityNames(),
+        },
+        { logger }
+      );
+
+      // Re-namespace this chunk's refs so they never collide with another
+      // chunk's `e0`/`src0`/… and stay stable for the cross-chunk apply.
+      const prefix = `c${c}_`;
+      for (const op of deep.operations) {
+        if (op.op === "create_entity") {
+          const newRef = op.ref ? `${prefix}${op.ref}` : undefined;
+          operations.push({ ...op, ref: newRef });
+          // Feed every created (non-linked) entity into the shared resolver so
+          // the NEXT chunk dedups against it. Linked ops already point at a real
+          // id, so registering them would shadow the live entity needlessly.
+          if (!op.existingEntityId && newRef)
+            shared.registerCreated(
+              op.profileSlug,
+              op.title || "Untitled",
+              newRef
+            );
+        } else {
+          operations.push({
+            ...op,
+            sourceRef: `${prefix}${op.sourceRef}`,
+            targetRef: `${prefix}${op.targetRef}`,
+          });
+        }
+      }
+
+      entityCount += deep.stats.entityCount;
+      relationCount += deep.stats.relationCount;
+      duplicatesMerged += deep.stats.duplicatesMerged;
+      linkedToExisting += deep.stats.linkedToExisting;
+      documentCount += deep.stats.documentCount;
+      sourceDocCount += deep.stats.sourceDocCount;
+      itemsProcessed += deep.stats.itemsProcessed;
+      itemsFailed += deep.stats.itemsFailed;
+      wikilinkLinksResolved += deep.stats.wikilinkLinksResolved;
+      wikilinkLinksUnresolved += deep.stats.wikilinkLinksUnresolved;
+      for (const [t, n] of Object.entries(deep.stats.byType))
+        byType[t] = (byType[t] ?? 0) + n;
+
+      void emitImportFileProgress(
+        {
+          batchId,
+          path: `chunk ${c + 1}/${totalChunks}`,
+          index: c,
+          total: totalChunks,
+          status: "done",
+        },
+        userId
+      ).catch(() => {});
+    }
+
+    const typeCount = Object.keys(byType).length;
+    const summary = `Deep import ${itemsProcessed} ${input.source} note(s) → ${entityCount} entit${entityCount === 1 ? "y" : "ies"} (${typeCount} type${typeCount === 1 ? "" : "s"}), ${relationCount} relation(s)${linkedToExisting ? `, ${linkedToExisting} linked to existing` : ""}`;
+
+    const stats = {
+      itemsProcessed,
+      itemsFailed,
+      entityCount,
+      relationCount,
+      duplicatesMerged,
+      linkedToExisting,
+      documentCount,
+      sourceDocCount,
+      byType,
+      wikilinkLinksResolved,
+      wikilinkLinksUnresolved,
+      chunks: totalChunks,
+    };
+
+    const { proposal: created } = await createEventBackedProposal({
+      userId,
+      workspaceId,
+      targetType: "entity",
+      targetId: batchId,
+      proposalType: "import.graph",
+      action: "create",
+      source: "intelligence",
+      summary,
+      data: { operations, source: input.source },
+    });
+
+    logger.info(
+      {
+        userId,
+        workspaceId,
+        source: input.source,
+        mode: "deep",
+        proposalId: (created as { id?: string })?.id,
+        ...stats,
+      },
+      "import.analyzeLarge"
+    );
+
+    return {
+      workspaceId,
+      source: input.source,
+      mode: "deep" as const,
+      proposalId: (created as { id?: string })?.id ?? null,
+      operations,
+      summary,
+      stats,
+      aiTyped: entityCount,
+    };
+  }
+
+  /**
+   * No-cap apply. Mirrors `apply()` (materialize exact operations,
+   * workspace-scoped) but CHUNKS the operations so an arbitrarily large graph
+   * stays under the per-call ceiling. A cumulative `refToRealId` is carried
+   * across chunks (seeded into each `materializeCompositeGraph` call) so a
+   * relation whose endpoints were created in an EARLIER chunk still resolves.
+   *
+   * Safe because the analyze path always emits an entity op BEFORE any relation
+   * that references it (no forward references), so chunking in operation order +
+   * the cumulative seed never strands a relation.
+   */
+  async applyLarge(input: ImportApplyInput, opts?: LargeImportOpts) {
+    const { workspaceId, userId, trpcCtx } = this.ctx;
+    const chunkSize = Math.max(1, opts?.applyChunkSize ?? APPLY_CHUNK_SIZE);
+
+    const callerCtx = { ...trpcCtx, workspaceId, userId };
+    const entityCaller = regularEntitiesRouter.createCaller(callerCtx as never);
+    const relationCaller = relationsRouter.createCaller(callerCtx as never);
+
+    const batchId = randomUUID();
+    const refToRealId: Record<string, string> = {};
+    let created = 0;
+    let linked = 0;
+
+    const totalChunks = Math.max(
+      1,
+      Math.ceil(input.operations.length / chunkSize)
+    );
+    for (let c = 0; c < totalChunks; c++) {
+      const chunk = input.operations.slice(c * chunkSize, (c + 1) * chunkSize);
+      if (chunk.length === 0) continue;
+      void emitImportFileProgress(
+        {
+          batchId,
+          path: `chunk ${c + 1}/${totalChunks}`,
+          index: c,
+          total: totalChunks,
+          status: "processing",
+        },
+        userId
+      ).catch(() => {});
+
+      const res = await materializeCompositeGraph(
+        chunk,
+        entityCaller,
+        relationCaller,
+        (err, type) =>
+          logger.warn(
+            { err, type },
+            "import.applyLarge: relation create failed"
+          ),
+        { workspaceScoped: true, seedRefToRealId: refToRealId }
+      );
+      // Carry this chunk's ref→id mappings forward for cross-chunk relations.
+      Object.assign(refToRealId, res.refToRealId);
+      created += res.created;
+      linked += res.linked;
+
+      void emitImportFileProgress(
+        {
+          batchId,
+          path: `chunk ${c + 1}/${totalChunks}`,
+          index: c,
+          total: totalChunks,
+          status: "done",
+        },
+        userId
+      ).catch(() => {});
+    }
+
+    logger.info(
+      {
+        userId,
+        workspaceId,
+        source: input.source,
+        created,
+        linked,
+        chunks: totalChunks,
+      },
+      "import.applyLarge materialized"
+    );
+    return {
+      workspaceId,
+      source: input.source,
+      created,
+      linked,
+      chunks: totalChunks,
+    };
   }
 
   async queueLinkedInContacts(contacts: LinkedInContactPayload[]) {

@@ -323,6 +323,80 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
   });
 });
 
+describe("decideAgentPolicy — governance by KIND (user_observation)", () => {
+  it("INFERENCE (uo_validated !== true) → propose, regardless of workspace", () => {
+    // Inference in an agent-owned workspace would normally execute (step 3);
+    // the KIND rule (step 2.5) precedes it and forces a proposal.
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      subjectProfileSlug: "user_observation",
+      subjectUoValidated: false,
+      isAgentOwnedWorkspace: true,
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.USER_OBSERVATION_INFERENCE,
+    });
+  });
+
+  it("INFERENCE (uo_validated undefined) → propose (default = inference)", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      subjectProfileSlug: "user_observation",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.USER_OBSERVATION_INFERENCE,
+    });
+  });
+
+  it("EXPLICIT (uo_validated === true) → execute, regardless of workspace", () => {
+    // Even with writesRequireProposal (a twin agent that proposes all writes),
+    // an EXPLICIT user-stated observation auto-approves via the KIND rule.
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      subjectProfileSlug: "user_observation",
+      subjectUoValidated: true,
+      writesRequireProposal: true,
+    });
+    expect(v).toEqual({ verdict: "execute" });
+  });
+
+  it("the KIND rule is exempt for pure reads (user_observation.read just reads)", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "read",
+      subjectProfileSlug: "user_observation",
+      subjectUoValidated: false,
+    });
+    expect(v.verdict).toBe("execute");
+  });
+
+  it("does not affect other profiles (a normal entity is unchanged)", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      subjectProfileSlug: "note",
+      subjectUoValidated: false,
+    });
+    expect(v.verdict).toBe("execute"); // entity.create auto-approved as before
+  });
+
+  it("ADMIN_ACTIONS still precede the KIND rule (step 2 wins over 2.5)", () => {
+    // Defensive: an admin verb is never reclassified by a subject slug.
+    const v = decideAgentPolicy({
+      subjectType: "workspace",
+      action: "update",
+      subjectProfileSlug: "user_observation",
+      subjectUoValidated: true,
+    });
+    expect(v).toEqual({ verdict: "propose", reason: PROPOSE_REASON.ADMIN });
+  });
+});
+
 describe("constants are intact", () => {
   it("DEFAULT_AUTO_APPROVE contains the known routine writes", () => {
     for (const k of [

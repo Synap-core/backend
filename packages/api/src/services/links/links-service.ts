@@ -24,6 +24,8 @@ import { userVisibleWhere } from "../../utils/user-visible-where.js";
  * no-op and returns the existing row (or undefined if a concurrent racer won
  * and the conflict skipped the RETURNING row).
  */
+// NOTE: reserved for P5 link UI (ad-hoc single-edge writes). Today every link
+// write goes through `createLinks` (batch); this single-item form has no caller yet.
 export async function createLink(input: LinkInput): Promise<Link | undefined> {
   const db = await getDb();
   const [created] = await db
@@ -118,6 +120,8 @@ export async function getLinksFor(
 }
 
 /** Delete a single link edge by id. */
+// NOTE: reserved for P5 link UI (unlink). No caller yet — link removal is not
+// yet exposed; when it is, the caller must gate (links-service is caller-gated).
 export async function deleteLink(id: string): Promise<void> {
   const db = await getDb();
   await db.delete(links).where(eq(links.id, id));

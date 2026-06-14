@@ -128,6 +128,13 @@ export interface MaterializeOptions {
    * Defaults to "system" (proposal-approve / import). Capture may pass its own.
    */
   source?: string;
+  /**
+   * Pre-existing ref→realId mappings from EARLIER chunks of a chunked import.
+   * Seeded into pass 1's map so pass 2 relations whose endpoints were created in
+   * a previous chunk still resolve. Used by `applyLarge`; omitted for a single
+   * call. Entities created in THIS call append to (and override) the seed.
+   */
+  seedRefToRealId?: Record<string, string>;
 }
 
 export async function materializeCompositeGraph(
@@ -139,8 +146,11 @@ export async function materializeCompositeGraph(
 ): Promise<MaterializeResult> {
   // Pass 1 — entities → ref→realId map. An op may LINK an existing entity
   // (existingEntityId) instead of creating one; in that case we register its
-  // refs and skip creation.
-  const refToRealId: Record<string, string> = {};
+  // refs and skip creation. Seeded with earlier-chunk refs (chunked imports) so
+  // pass-2 relations across chunk boundaries resolve.
+  const refToRealId: Record<string, string> = {
+    ...(options?.seedRefToRealId ?? {}),
+  };
   const entities: MaterializeEntityResult[] = [];
   let primaryId = "";
   let created = 0;
@@ -154,7 +164,11 @@ export async function materializeCompositeGraph(
     let degradedFrom: string | undefined;
     let propertiesDropped: true | undefined;
     if (op.existingEntityId) {
-      realId = op.existingEntityId;
+      // `existingEntityId` is normally a real entity UUID, but a chunked import
+      // may link to an entity CREATED in an earlier chunk — in that case it is a
+      // synthetic ref present in the seeded map. Resolve through the seed (no-op
+      // for a real UUID, which is absent from the map).
+      realId = refToRealId[op.existingEntityId] ?? op.existingEntityId;
       linkedExisting = true;
     } else {
       const result = await entityCaller.create({

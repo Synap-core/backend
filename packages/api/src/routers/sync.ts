@@ -79,12 +79,17 @@ async function authenticateReceivePeer(
 
   const token = match[1].trim();
 
-  // A peer that pushes to us is registered locally with direction "pull" or "bidirectional"
+  // A peer that pushes to us is registered locally with direction "pull" or
+  // "bidirectional" — OR "inbound" (an auth-only peer that never runs outbound
+  // workers, used by an UNREACHABLE peer like the user's local pod behind NAT:
+  // the local pod drives both push+pull from its side, and this pod just needs
+  // to authenticate its inbound calls without trying to reach 127.0.0.1).
   const peer = await db.query.syncPeers.findFirst({
     where: and(
       or(
         eq(syncPeers.direction, "pull"),
-        eq(syncPeers.direction, "bidirectional")
+        eq(syncPeers.direction, "bidirectional"),
+        eq(syncPeers.direction, "inbound")
       ),
       eq(syncPeers.enabled, true),
       eq(syncPeers.authToken, token)
@@ -111,12 +116,16 @@ async function authenticatePullPeer(
 
   const token = match[1].trim();
 
-  // A peer that pulls from us is registered locally with direction "push" or "bidirectional"
+  // A peer that pulls from us is registered locally with direction "push" or
+  // "bidirectional" — OR "inbound" (auth-only; see authenticateReceivePeer). An
+  // inbound peer (the user's NAT'd local pod) pulls our events from its side; we
+  // only authenticate the request and never try to reach it.
   const peer = await db.query.syncPeers.findFirst({
     where: and(
       or(
         eq(syncPeers.direction, "push"),
-        eq(syncPeers.direction, "bidirectional")
+        eq(syncPeers.direction, "bidirectional"),
+        eq(syncPeers.direction, "inbound")
       ),
       eq(syncPeers.enabled, true),
       eq(syncPeers.authToken, token)
@@ -1454,7 +1463,7 @@ const httpsUrl = z
 
 const setupPeerInputSchema = z.object({
   peerUrl: httpsUrl,
-  direction: z.enum(["push", "pull", "bidirectional"]),
+  direction: z.enum(["push", "pull", "bidirectional", "inbound"]),
   authToken: z.string().min(1),
   label: z.string().optional(),
 });

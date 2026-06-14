@@ -1,0 +1,74 @@
+/**
+ * IsAgentExecutor — the IS-native executor (Phase 3).
+ *
+ * Unifies the IS call path behind one entry: a Playbook whose `executor` is
+ * `is-agent` dispatches the resolved goal into the run's session channel, which
+ * is what the IS chat pipeline consumes. The session already carries a channel
+ * (created by `runPlaybook` before dispatch), so this executor only needs to
+ * POST the goal as the kickoff message.
+ *
+ * The IS works ASYNCHRONOUSLY in the channel after the kickoff; completion and
+ * capture-back happen out-of-band via the Hub `POST /runs/:id/capture` route.
+ * So this executor returns `{ status: "running" }` — it does not block on the
+ * agent finishing.
+ *
+ * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.4).
+ */
+
+import { createHash, randomUUID } from "node:crypto";
+import { getDb, messages } from "@synap/database";
+import { MessageRole } from "@synap/database/schema";
+import { triggerAutoRespond } from "../../../utils/trigger-auto-respond.js";
+import type { Executor, RunContext, RunResult } from "@synap/playbooks";
+
+export class IsAgentExecutor implements Executor {
+  readonly ref = "is-agent" as const;
+
+  async run(ctx: RunContext): Promise<RunResult> {
+    if (!ctx.channelId) {
+      return {
+        status: "failed",
+        error: "is-agent executor requires a channel (runner must create one)",
+      };
+    }
+
+    const db = await getDb();
+
+    // Post the resolved goal as a USER message — the persisted kickoff message
+    // the IS responds to. Attributed to the run's acting principal.
+    const messageId = randomUUID();
+    const hash = createHash("sha256")
+      .update(`${messageId}${ctx.goal}`)
+      .digest("hex");
+
+    await db.insert(messages).values({
+      id: messageId,
+      channelId: ctx.channelId,
+      role: MessageRole.USER,
+      content: ctx.goal,
+      userId: ctx.userId,
+      previousHash: "",
+      hash,
+    });
+
+    // CANONICAL IS kickoff — the SAME pg-boss A2AI_TRIGGER path the threads REST
+    // route uses (resolveIntelligenceService + getBoss().send), NOT a side-channel
+    // websocket broadcast (which would never enqueue the IS → the run would hang
+    // in "running" forever). Only THREAD / AGENT_COLLAB channels are IS-eligible.
+    const triggered = await triggerAutoRespond({
+      channelId: ctx.channelId,
+      userMessageId: messageId,
+      content: ctx.goal,
+      sourceUserId: ctx.userId,
+    });
+    if (!triggered) {
+      return {
+        status: "failed",
+        error:
+          "IS auto-respond could not be triggered (channel not IS-eligible or IS unresolved)",
+      };
+    }
+
+    return { status: "running", summary: "dispatched to IS in channel" };
+  }
+}

@@ -590,6 +590,14 @@ async function seedProfiles() {
             "AI-inferred observations about the user: preferences, habits, working style",
         },
       },
+      // NOTE: there is intentionally NO `skill` entity profile. A Skill is CONFIG
+      // (AI know-how), not entity DATA — it lives in the `skills` / `agent_skills`
+      // config tables and is wired into the graph via `links`, not `entities`.
+      // The legacy `skill` entity profile is dead (0 entities); migration
+      // 0128_dedup_skill_profile defensively deactivates any remnant row on
+      // already-deployed pods. Do NOT add a `skill` profile object here — the
+      // seed's existence check only finds ACTIVE profiles, so re-adding it would
+      // resurrect the deactivated row.
     ];
 
     const createdProfiles = new Map<string, string>();

@@ -239,6 +239,138 @@ export function registerConnectorsRoutes(app: HubHono): void {
     }
   );
 
+  // ── GET /connectors/schema ───────────────────────────────────────────────
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/connectors/schema",
+      tags: ["Connectors"],
+      summary:
+        "Return available connector providers with their actions for agent context",
+      responses: {
+        200: {
+          description: "Connector schema",
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  providers: z.array(
+                    z.object({
+                      id: z.string(),
+                      provider: z.string(),
+                      displayName: z.string().optional(),
+                      connected: z.boolean(),
+                      connectionId: z.string().optional(),
+                    })
+                  ),
+                })
+                .openapi("ConnectorSchema"),
+            },
+          },
+        },
+        503: {
+          description: "Not configured",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+      },
+    }),
+    async (c) => {
+      const connector = syncConnectorRegistry.get("nango") as
+        | NangoConnector
+        | undefined;
+      if (!connector || !connector.isConfigured()) {
+        return c.json({ error: "Nango not configured" }, 503);
+      }
+      const userId = c.get("userId") as string;
+      const [integrations, connections] = await Promise.all([
+        connector.listIntegrations(),
+        connector.listConnections(userId),
+      ]);
+      const connMap = new Map(
+        connections.map((conn) => [conn.provider, conn.connectionId])
+      );
+      return c.json(
+        {
+          providers: integrations.map((i) => ({
+            id: i.uniqueKey,
+            provider: i.provider,
+            displayName: i.displayName,
+            connected: connMap.has(i.uniqueKey),
+            connectionId: connMap.get(i.uniqueKey),
+          })),
+        },
+        200
+      );
+    }
+  );
+
+  // ── POST /connectors/disconnect ───────────────────────────────────────────
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/connectors/disconnect",
+      tags: ["Connectors"],
+      summary:
+        "Disconnect a connection by connectionId (POST alternative to DELETE)",
+      request: {
+        body: {
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  connectionId: z.string(),
+                  provider: z.string().optional(),
+                })
+                .openapi("DisconnectRequest"),
+            },
+          },
+        },
+      },
+      responses: {
+        200: {
+          description: "Connection revoked",
+          content: {
+            "application/json": {
+              schema: z
+                .object({ success: z.boolean() })
+                .openapi("DisconnectResult"),
+            },
+          },
+        },
+        500: {
+          description: "Internal error",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+        503: {
+          description: "Not configured",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+      },
+    }),
+    async (c) => {
+      const connector = syncConnectorRegistry.get("nango") as
+        | NangoConnector
+        | undefined;
+      if (!connector || !connector.isConfigured()) {
+        return c.json({ error: "Nango not configured" }, 503);
+      }
+      const { connectionId } = c.req.valid("json");
+      try {
+        await connector.revokeConnection(connectionId);
+        return c.json({ success: true }, 200);
+      } catch (err) {
+        logger.error(
+          { err, connectionId },
+          "POST /connectors/disconnect failed"
+        );
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          500
+        );
+      }
+    }
+  );
+
   // ── POST /connectors/actions ──────────────────────────────────────────────
   app.openapi(
     createRoute({

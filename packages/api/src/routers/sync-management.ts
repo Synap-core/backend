@@ -37,7 +37,10 @@ const logger = createLogger({ module: "sync-management" });
 
 export interface UpsertSyncPeerInput {
   peerPodUrl: string;
-  direction: "push" | "pull" | "bidirectional";
+  // "inbound" = auth-only peer: authenticates the remote's inbound push/pull but
+  // is NEVER picked up by this pod's outbound workers (used for an unreachable
+  // peer such as the user's NAT'd local pod — the local pod drives sync).
+  direction: "push" | "pull" | "bidirectional" | "inbound";
   authToken?: string | null;
   label?: string | null;
   workspaceIds?: string[] | null;
@@ -156,7 +159,7 @@ export const syncManagementRouter = router({
     .input(
       z.object({
         peerPodUrl: z.string().url(),
-        direction: z.enum(["push", "pull", "bidirectional"]),
+        direction: z.enum(["push", "pull", "bidirectional", "inbound"]),
         label: z.string().optional(),
         authToken: z.string().optional(),
         workspaceIds: z.array(z.string().uuid()).optional(),
