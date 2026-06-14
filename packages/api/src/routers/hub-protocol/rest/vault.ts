@@ -21,8 +21,16 @@ import {
   encryptServerSide,
   getWorkspaceMembership,
   SECRET_TYPES,
+  parseVaultReference,
+  resolveVaultSecret,
+  VaultGrantError,
 } from "@synap/database";
-import { secrets, secretAuditLog, proposals, users } from "@synap/database/schema";
+import {
+  secrets,
+  secretAuditLog,
+  proposals,
+  users,
+} from "@synap/database/schema";
 
 import { NotificationService } from "../../../notifications/NotificationService.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
@@ -296,6 +304,97 @@ export function registerVaultRoutes(app: HubHono): void {
         { error: err instanceof Error ? err.message : "Unknown error" },
         500
       );
+    }
+  });
+
+  // ── POST /vault/redeem ─────────────────────────────────────────────────────
+  // Grant-gated redemption: an agent (e.g. a running skill) resolves a vault://
+  // ref it was GRANTED to plaintext, consuming one grant use. Routes through the
+  // SAME canonical resolver as automations (resolveVaultSecret) but with the
+  // GATED props (requireGrant + redeemer). The redeemer is SERVER-DERIVED from
+  // the authenticated principal — never the caller — and the grant gate (scoped
+  // to grantee + workspace + TTL + use-count) is what authorizes it. Only
+  // server-encrypted secrets resolve; client-encrypted ones never leave the
+  // user's device.
+  const RedeemRequestSchema = z.object({ ref: z.string() });
+  const RedeemResponseSchema = z.object({ value: z.string() });
+  registerOpenApi(app, {
+    method: "post",
+    path: "/vault/redeem",
+    tags: ["Vault"],
+    summary: "Redeem a granted vault reference to its value",
+    description:
+      "Resolves a vault:// reference the authenticated agent has an active grant for, consuming one grant use. 403 if no redeemable grant exists for this principal.",
+    request: { body: RedeemRequestSchema },
+    responses: {
+      200: {
+        description: "Resolved secret value",
+        schema: RedeemResponseSchema,
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "No redeemable grant", schema: ErrorSchema },
+      404: {
+        description: "Secret not found / unresolvable",
+        schema: ErrorSchema,
+      },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/vault/redeem", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const raw = (await c.req.json().catch(() => null)) as {
+      ref?: unknown;
+    } | null;
+    const refStr = typeof raw?.ref === "string" ? raw.ref : null;
+    if (!refStr) return c.json({ error: "ref (vault://…) is required" }, 400);
+    const parsed = parseVaultReference(refStr);
+    if (!parsed) return c.json({ error: "Invalid vault reference" }, 400);
+
+    // Redeemer is SERVER-DERIVED — never trust the body. The grant gate binds
+    // redemption to THIS principal (vault_grants.granted_to / workspace_id).
+    const acting = await resolveActingContext(c, {});
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const agentUserId =
+      (c.get("agentUserId") as string | undefined) ?? acting.userId;
+
+    // The owner load only enables decrypt; authorization is the grant gate
+    // (findRedeemableGrant by secretId + redeemer), NOT ownership.
+    const secret = await db.query.secrets.findFirst({
+      where: eq(secrets.id, parsed.secretId),
+      columns: { userId: true },
+    });
+    // Return the SAME 403 as a grant denial for a non-existent secret — no
+    // secret-existence oracle (a missing secret has no redeemable grant anyway).
+    if (!secret) {
+      return c.json({ error: "Vault grant denied: no_grant" }, 403);
+    }
+
+    try {
+      const value = await resolveVaultSecret(
+        parsed.secretId,
+        secret.userId,
+        parsed.fieldName,
+        {
+          requireGrant: true,
+          redeemer: { agentUserId, workspaceId: acting.workspaceId ?? null },
+        }
+      );
+      if (value === null) {
+        return c.json(
+          { error: "Secret could not be resolved (server-encrypted only)" },
+          404
+        );
+      }
+      return c.json({ value });
+    } catch (err) {
+      if (err instanceof VaultGrantError) {
+        return c.json({ error: `Vault grant denied: ${err.code}` }, 403);
+      }
+      logger.error({ err, secretId: parsed.secretId }, "vault.redeem failed");
+      return c.json({ error: "Vault redeem failed" }, 500);
     }
   });
 

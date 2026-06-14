@@ -361,7 +361,7 @@ async function seedProfiles() {
         constraints: { enum: ["active", "achieved", "paused", "abandoned"] },
         uiHints: { label: "Status", inputType: "select" },
       },
-      // knowledge / engineering_knowledge shared properties
+      // `knowledge` profile properties (ek_*)
       {
         slug: "ek_type",
         valueType: PropertyValueType.STRING,
@@ -563,17 +563,11 @@ async function seedProfiles() {
           description: "The workspace's anchoring goal",
         },
       },
-      {
-        slug: "engineering_knowledge",
-        displayName: "Knowledge",
-        entityScope: "workspace",
-        uiHints: {
-          icon: "brain",
-          color: "#6366F1",
-          description:
-            "Structured engineering knowledge: gotchas, lessons, decisions, references",
-        },
-      },
+      // NOTE: `engineering_knowledge` was a backward-compat ALIAS of `knowledge`
+      // (same ek_* shape, same scope, same displayName). It is removed from the
+      // seed — capture now writes `knowledge` and migration
+      // 0127_dedup_engineering_knowledge re-points any legacy entities. Do not
+      // re-add it; it collides on the system-slug unique constraint.
       {
         slug: "knowledge",
         displayName: "Knowledge",
@@ -810,7 +804,6 @@ async function seedProfiles() {
       { slug: "ek_evidence", required: false, displayOrder: 3 },
       { slug: "ek_tags", required: false, displayOrder: 4 },
     ];
-    await linkProps("engineering_knowledge", ekProps);
     await linkProps("knowledge", ekProps);
 
     await linkProps("user_observation", [
