@@ -22,7 +22,10 @@ import {
   resolveActorId,
   type HubHono,
 } from "./_shared.js";
-import { createLink } from "../../../services/links/links-service.js";
+import {
+  createLink,
+  getLinksFor,
+} from "../../../services/links/links-service.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import type { LinkEndpointType, LinkType } from "@synap/playbooks";
 
@@ -167,6 +170,75 @@ export function registerLinksRoutes(app: HubHono): void {
       return c.json({ status: "created", link: created ?? null });
     } catch (err) {
       logger.error({ err }, "createLink failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/links",
+    tags: ["Links"],
+    summary: "Read a node's links (neighbours in the config/runtime graph)",
+    description:
+      "Returns every edge touching (type, id) — the REST mirror of the canonical getLinksFor reader. Lets any agent/app traverse the graph (tool↔vault, skill↔tool, session↔used→tool, playbook→grants→capability) uniformly. Scoped to the caller's visible workspaces.",
+    request: {
+      query: z.object({
+        type: z.enum(LINK_ENDPOINT_TYPES),
+        id: z.string().min(1),
+      }),
+    },
+    responses: {
+      200: {
+        description: "The edges touching this node",
+        schema: z.object({ links: z.array(z.record(z.string(), z.any())) }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  /**
+   * GET /links?type=&id= — neighbour read. The canonical getLinksFor reader,
+   * exposed over REST so external agents/cells can traverse the graph the same
+   * way the tRPC `playbooks.links.getFor` does for the frontend.
+   */
+  app.get("/links", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const type = c.req.query("type");
+    const id = c.req.query("id");
+    if (
+      !type ||
+      !id ||
+      !(LINK_ENDPOINT_TYPES as readonly string[]).includes(type)
+    ) {
+      return c.json(
+        {
+          error:
+            "Query params `type` (a link endpoint type) and `id` are required",
+        },
+        400
+      );
+    }
+    // Bind acting identity to the authenticated principal (workspace scoping is
+    // applied inside getLinksFor via userVisibleWhere).
+    const acting = await resolveActingContext(c, {});
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+    try {
+      const links = await getLinksFor(
+        acting.userId,
+        type as LinkEndpointType,
+        id
+      );
+      return c.json({ links });
+    } catch (err) {
+      logger.error({ err }, "getLinksFor failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

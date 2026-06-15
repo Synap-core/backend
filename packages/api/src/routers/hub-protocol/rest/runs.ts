@@ -37,6 +37,12 @@ const CaptureRequestSchema = z.object({
   status: z.enum(["running", "completed", "failed", "proposed"]).optional(),
   error: z.string().max(10_000).optional(),
   producedEntityIds: z.array(z.string()).optional(),
+  /** Capabilities the run actually invoked → `session → used → {tool|skill|command}` provenance. */
+  usedCapabilities: z
+    .array(
+      z.object({ kind: z.enum(["tool", "skill", "command"]), id: z.string() })
+    )
+    .optional(),
   agentUserId: z.string().optional(),
 });
 
@@ -81,6 +87,7 @@ export function registerRunsRoutes(app: HubHono): void {
       status?: "running" | "completed" | "failed" | "proposed";
       error?: string;
       producedEntityIds?: string[];
+      usedCapabilities?: { kind: "tool" | "skill" | "command"; id: string }[];
       agentUserId?: string;
     };
 
@@ -173,6 +180,22 @@ export function registerRunsRoutes(app: HubHono): void {
             }))
           );
         }
+      }
+
+      // Record invoked capabilities as `session → used → {tool|skill|command}` —
+      // the provenance the session room's "Tools & skills" Frame reads, and what
+      // promoteSessionToPlaybook re-grants. Capped; idempotent (links unique edge).
+      if (run.sessionId && run.workspaceId && body.usedCapabilities?.length) {
+        await createLinks(
+          body.usedCapabilities.slice(0, 100).map((cap) => ({
+            workspaceId: run.workspaceId,
+            fromType: "session" as const,
+            fromId: run.sessionId as string,
+            toType: cap.kind,
+            toId: cap.id,
+            linkType: "used" as const,
+          }))
+        );
       }
 
       return c.json({

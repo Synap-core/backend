@@ -3380,6 +3380,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				followUp: string | null;
 				targetWorkspaceId: string | null;
+				targetWorkspaceReason: string | null;
+				targetWorkspaceConfidence: number | null;
 				dedupCandidates: Record<string, {
 					entityId: string;
 					title: string;
@@ -3404,6 +3406,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				followUp: string | null;
 				targetWorkspaceId: string | null;
+				targetWorkspaceReason: string | null;
+				targetWorkspaceConfidence: number | null;
 				dedupCandidates: Record<string, {
 					entityId: string;
 					title: string;
@@ -4108,6 +4112,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				title?: string | undefined;
 			};
 			output: {
+				channelId: `${string}-${string}-${string}-${string}-${string}`;
+				status: "created";
+			};
+			meta: object;
+		}>;
+		createAndLinkToSession: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+				participants?: string[] | undefined;
+				title?: string | undefined;
+			};
+			output: {
+				channelId: string;
+				status: "exists";
+			} | {
 				channelId: `${string}-${string}-${string}-${string}-${string}`;
 				status: "created";
 			};
@@ -15464,6 +15483,26 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				planReport: unknown;
 				executionLog: unknown;
 				verificationReport: unknown;
+			};
+			meta: object;
+		}>;
+		grantCapability: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+				capabilityKind: "command" | "tool" | "skill";
+				capabilityId: string;
+				agentUserId?: string | undefined;
+				source?: string | undefined;
+				reasoning?: string | undefined;
+			};
+			output: {
+				granted: boolean;
+				status: "proposed";
+				proposalId: string;
+			} | {
+				granted: boolean;
+				status: "granted";
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;

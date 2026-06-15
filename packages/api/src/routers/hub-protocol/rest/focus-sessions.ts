@@ -17,6 +17,7 @@
 import { z } from "@hono/zod-openapi";
 import { db, eq, and, desc, focusSessions } from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
+import { createLinks } from "../../../services/links/links-service.js";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -528,6 +529,68 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json(updated);
     } catch (err) {
       logger.error({ err, id }, "focus-sessions.update failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /focus-sessions/:id/used — record a capability invocation as
+   * `session --used--> {tool|skill|command}`. This is PROVENANCE, written at the
+   * moment the agent USES a capability (the IS tool-wrapper fires it), so it is
+   * auto (not governance-gated) — it asserts what happened, it doesn't mutate
+   * user data. Idempotent via the links unique edge. Powers the session room's
+   * "Tools & skills" Frame and promoteSessionToPlaybook's capability re-grant.
+   */
+  app.post("/focus-sessions/:id/used", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = c.req.param("id");
+    const body = (await c.req.json().catch(() => null)) as {
+      capabilityKind?: "tool" | "skill" | "command";
+      capabilityId?: string;
+    } | null;
+    if (
+      !body?.capabilityId ||
+      !["tool", "skill", "command"].includes(body.capabilityKind ?? "")
+    ) {
+      return c.json(
+        {
+          error:
+            "`capabilityKind` (tool|skill|command) and `capabilityId` are required",
+        },
+        400
+      );
+    }
+    try {
+      // Load by id, bind to the row's workspace (membership check).
+      const session = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, id),
+      });
+      if (!session)
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      const acting = await resolveActingContext(c, {
+        workspaceId: session.workspaceId ?? undefined,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      await createLinks([
+        {
+          workspaceId: session.workspaceId,
+          fromType: "session",
+          fromId: session.id,
+          toType: body.capabilityKind as "tool" | "skill" | "command",
+          toId: body.capabilityId,
+          linkType: "used",
+          metadata: { usedAt: new Date().toISOString() },
+        },
+      ]);
+      return c.json({ status: "recorded" as const });
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.used failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

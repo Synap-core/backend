@@ -12,7 +12,14 @@
 -- use_count. The pod's own service-bootstrap paths (getServiceConfig /
 -- getServiceSecret) deliberately bypass this table.
 
-CREATE TYPE vault_grant_scope AS ENUM ('once', 'session', 'permanent');
+-- Postgres has no `CREATE TYPE IF NOT EXISTS`, so guard the enum creation so the
+-- migration is idempotent (the type may already exist from 0000_baseline_schema.sql
+-- or a prior partial run). Without this, a re-run throws 42710 and the strict
+-- runner halts every subsequent migration (the local-pod boot failure).
+DO $$ BEGIN
+  CREATE TYPE vault_grant_scope AS ENUM ('once', 'session', 'permanent');
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
 
 CREATE TABLE IF NOT EXISTS vault_grants (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -11,7 +11,9 @@ import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, desc, focusSessions } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
-import { getLinksFor } from "../services/links/links-service.js";
+import { getLinksFor, createLinks } from "../services/links/links-service.js";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { emitSideEffects } from "@synap/events";
 
 // ── Shared input fragment ──────────────────────────────────────────────────
 
@@ -306,5 +308,87 @@ export const focusSessionsRouter = router({
         .returning();
 
       return closed as FocusSession;
+    }),
+
+  /**
+   * Grant a capability (tool/skill/command) to a live session — the runtime
+   * counterpart to a playbook's static grants. Writes `session --grants-->
+   * {capability}` so the session room's "add tool/skill" affordance has a
+   * backing edge. Gated by checkPermissionOrPropose (AI grants route to a
+   * reviewable proposal). Idempotent via the links unique-edge index.
+   */
+  grantCapability: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        capabilityKind: z.enum(["tool", "skill", "command"]),
+        capabilityId: z.string(),
+        agentUserId: z.string().uuid().optional(),
+        source: z.string().optional(),
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Load by id ONLY, then gate on the loaded row's workspace.
+      const session = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, input.sessionId),
+      });
+      if (!session) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: session.workspaceId,
+        subjectType: "focus_session",
+        action: "grant_capability",
+        source: input.source,
+        reasoning: input.reasoning,
+        data: {
+          sessionId: input.sessionId,
+          capabilityKind: input.capabilityKind,
+          capabilityId: input.capabilityId,
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          granted: false,
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+        };
+      }
+
+      await createLinks([
+        {
+          workspaceId: session.workspaceId,
+          fromType: "session",
+          fromId: session.id,
+          toType: input.capabilityKind,
+          toId: input.capabilityId,
+          linkType: "grants",
+          metadata: { grantedAt: new Date().toISOString() },
+        },
+      ]);
+
+      emitSideEffects({
+        subjectType: "focus_session",
+        action: "grant_capability",
+        subjectId: session.id,
+        userId: ctx.userId,
+        workspaceId: session.workspaceId,
+        data: {
+          capabilityKind: input.capabilityKind,
+          capabilityId: input.capabilityId,
+        },
+      });
+
+      return { granted: true, status: "granted" as const };
     }),
 });

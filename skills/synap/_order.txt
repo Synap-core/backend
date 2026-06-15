@@ -8,6 +8,8 @@ work-flow.md
 linking-principle.md
 governance-rules.md
 writes.md
+graph-gardening.md
+next-action.md
 reading.md
 multi-entity-capture.md
 worked-examples.md
