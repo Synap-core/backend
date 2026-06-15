@@ -62,6 +62,7 @@ import { aiProviderCredentialsRouter } from "./routers/ai-provider-credentials.j
 import { focusSessionsRouter } from "./routers/focus-sessions.js";
 import { playbooksRouter } from "./routers/playbooks.js";
 import { playbookRunsRouter } from "./routers/playbook-runs.js";
+import { agentRunsRouter } from "./routers/agent-runs.js";
 import { artifactsRouter } from "./routers/artifacts.js";
 
 /**
@@ -132,6 +133,7 @@ export const coreRouter = router({
   focusSessions: focusSessionsRouter,
   playbooks: playbooksRouter,
   playbookRuns: playbookRunsRouter,
+  agentRuns: agentRunsRouter,
   artifacts: artifactsRouter,
 });
 

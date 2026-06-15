@@ -959,7 +959,11 @@ export const captureRouter = router({
           ...(input.idempotencyKey
             ? {
                 idempotency: makeExternalLinkIdempotency(database, {
-                  namespace: input.idempotencyKey,
+                  // userId-scoped: capture's idempotencyKey is CLIENT-supplied,
+                  // so without this a colliding key could link another tenant's
+                  // entity (the global provider/externalId index). Prefixing the
+                  // user id makes cross-tenant collision impossible.
+                  namespace: `${userId}:${input.idempotencyKey}`,
                   provider: "capture",
                 }),
               }

@@ -712,6 +712,62 @@ export class EventRepository {
   }
 
   /**
+   * List completed agent runs from the event log.
+   *
+   * Agent runs are persisted as `agentRun.create.completed` events (see
+   * POST /api/hub/agent-runs) with first-class telemetry columns. This is the
+   * read counterpart: a USER-scoped list, newest first, with optional
+   * workspace narrowing (workspace context lives in data->>'workspaceId').
+   *
+   * SECURITY: `userId` is required and always clamps the result to the owner —
+   * never expose another tenant's runs. Mirrors searchEvents' filter/order
+   * style and reuses mapRow so every telemetry column comes back populated.
+   *
+   * @param filters.userId      owner clamp (required)
+   * @param filters.workspaceId optional workspace narrowing
+   * @param filters.limit       default 50
+   * @param filters.cursor      timestamp keyset cursor — return runs strictly
+   *                            older than this ISO timestamp (for pagination)
+   */
+  async listAgentRuns(filters: {
+    userId: string;
+    workspaceId?: string;
+    limit?: number;
+    cursor?: Date;
+  }): Promise<EventRecord[]> {
+    let query = `
+      SELECT id, timestamp, subject_id, subject_type, type, user_id,
+             data, metadata, source, correlation_id,
+             is_agent, agent_user_id, agent_type, model, provider, cost_usd,
+             tokens_in, tokens_out, tokens_total, latency_ms, tool_count,
+             run_status, finish_reason
+      FROM events
+      WHERE type = 'agentRun.create.completed'
+      AND user_id = $1
+    `;
+    const params: unknown[] = [filters.userId];
+    let paramIndex = 2;
+
+    if (filters.workspaceId) {
+      query += ` AND data->>'workspaceId' = $${paramIndex}`;
+      params.push(filters.workspaceId);
+      paramIndex++;
+    }
+
+    if (filters.cursor) {
+      query += ` AND timestamp < $${paramIndex}`;
+      params.push(filters.cursor.toISOString());
+      paramIndex++;
+    }
+
+    query += ` ORDER BY timestamp DESC LIMIT $${paramIndex}`;
+    params.push(filters.limit ?? 50);
+
+    const result = await this.query(query, params);
+    return result.rows.map((row) => this.mapRow(row));
+  }
+
+  /**
    * Count events (for analytics)
    */
   async countEvents(

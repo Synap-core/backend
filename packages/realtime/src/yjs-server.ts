@@ -27,7 +27,7 @@ import {
   workspaceMembers,
 } from "@synap/database/schema";
 import { storage } from "@synap/storage";
-import { recordYjsPersist } from "./bridge.js";
+import { recordYjsPersist, recordYjsPersistFailure } from "./bridge.js";
 import { randomUUID } from "crypto";
 
 export interface YjsServerConfig {
@@ -192,7 +192,7 @@ class DatabasePersistence {
           console.warn(
             `[Yjs] Whiteboard ${roomName} missing storageKey — deriving fallback`
           );
-          const userId = (doc as any).userId ?? "system";
+          const userId = (doc as { userId?: string }).userId ?? "system";
           storageKey = `whiteboards/${userId}/${documentId}.json`;
           await db
             .update(documents)
@@ -213,7 +213,9 @@ class DatabasePersistence {
         });
 
         let content: string;
-        if (Object.keys(store).length > 0) {
+        const storeIsEmpty = Object.keys(store).length === 0;
+
+        if (!storeIsEmpty) {
           // Tldraw store found — save as JSON
           content = JSON.stringify({ store });
         } else {
@@ -226,7 +228,57 @@ class DatabasePersistence {
           content = `yjs:${Buffer.from(state).toString("base64")}`;
         }
 
-        // Retry MinIO upload up to 3 times with exponential backoff
+        // --- GUARD 1: Never overwrite non-empty with empty store ---
+        // If the Yjs map is empty, check what's already in MinIO before writing.
+        // An empty client state must not clobber existing content (e.g. after a
+        // client error, reconnect, or partial sync).
+        if (storeIsEmpty) {
+          let priorIsNonEmpty = false;
+          try {
+            const priorBuf = await storage.downloadBuffer(storageKey);
+            const priorLen = priorBuf.byteLength;
+            if (priorLen > 0) {
+              // Legacy yjs: blob — treat any blob larger than a trivial Yjs header as non-empty
+              const priorStr = priorBuf.toString("utf-8");
+              if (priorStr.startsWith("yjs:")) {
+                priorIsNonEmpty = priorStr.length > 6; // "yjs:" + at least 2 base64 chars
+              } else {
+                // JSON path: check for non-empty store
+                try {
+                  const priorParsed = JSON.parse(priorStr) as {
+                    store?: TldrawStoreSnapshot;
+                  };
+                  const priorStore = priorParsed.store ?? priorParsed;
+                  priorIsNonEmpty =
+                    typeof priorStore === "object" &&
+                    priorStore !== null &&
+                    Object.keys(priorStore).length > 0;
+                } catch {
+                  // Unparseable prior content — treat as non-empty to be safe
+                  priorIsNonEmpty = priorLen > 4;
+                }
+              }
+            }
+          } catch {
+            // Download failed or object doesn't exist yet.
+            // If uncertain, err on the side of safety: skip the empty write.
+            priorIsNonEmpty = true;
+          }
+
+          if (priorIsNonEmpty) {
+            console.warn(
+              `[Yjs] Refusing to overwrite non-empty whiteboard ${roomName} with empty store — skipping write`
+            );
+            return;
+          }
+          // Prior is also empty (or didn't exist) — safe to proceed with empty write
+        }
+
+        // NOTE: versioned backups are taken on SESSION CLOSE (see createSnapshot),
+        // not on every ~10s save — one bounded snapshot per editing session, so
+        // overwrites stay recoverable without unbounded per-save storage bloat.
+
+        // --- Upload with retry (3 attempts, exponential backoff) ---
         let uploadOk = false;
         for (let attempt = 0; attempt < 3; attempt++) {
           try {
@@ -247,12 +299,18 @@ class DatabasePersistence {
             );
           }
         }
+
+        // --- GUARD 3: Fail LOUD on upload failure ---
         if (!uploadOk) {
           console.error(
-            `[Yjs] All MinIO upload attempts failed for ${roomName} — data may be lost`
+            `[Yjs] All MinIO upload attempts failed for ${roomName} — whiteboard data NOT saved`,
+            { roomName, storageKey, contentBytes: content.length }
           );
+          recordYjsPersistFailure();
+          // Do NOT bump updatedAt — the DB timestamp must reflect the last VERIFIED save
           return;
         }
+
         await db
           .update(documents)
           .set({ updatedAt: new Date() })
@@ -349,15 +407,38 @@ class DatabasePersistence {
       const isWhiteboard = roomName.startsWith("whiteboard-");
 
       if (isWhiteboard) {
-        // Whiteboards: just ensure MinIO is up-to-date (writeState already did this).
-        // No version row needed — whiteboards are always "latest state" in MinIO.
-        // Only persist to MinIO as final flush.
+        // Whiteboards: ensure MinIO is up-to-date (final flush), then take ONE
+        // bounded version backup for this editing session so any later overwrite
+        // is recoverable. (writeState itself never bumps updatedAt on a failed
+        // upload, so we re-read the doc to reflect the verified state.)
         await this.writeState(roomName, ydoc);
 
-        await db
-          .update(documents)
-          .set({ updatedAt: new Date() })
-          .where(eq(documents.id, documentId));
+        // Session-close backup — best-effort, never blocks. A SINGLE rolling
+        // `.bak` key (overwritten each session close) so it stays bounded to ONE
+        // object per board: it holds the previous session's final state, which is
+        // the one-step rollback that would have recovered the original incident.
+        // (Deeper versioned history — keep-last-N / point-in-time — needs storage
+        // bucket-versioning or a list() API the IFileStorage interface lacks today;
+        // tracked as the Pillar-B follow-up in WHITEBOARD-DURABILITY-ARCHITECTURE.md.)
+        if (doc.storageKey) {
+          try {
+            const current = await storage.downloadBuffer(doc.storageKey);
+            if (current.byteLength > 2) {
+              const backupKey = `${doc.storageKey}.bak`;
+              await storage.upload(backupKey, current, {
+                contentType: "application/json",
+              });
+              console.log(
+                `[Yjs] Session-close backup for ${roomName}: ${backupKey} (${current.byteLength} bytes)`
+              );
+            }
+          } catch (backupErr) {
+            console.warn(
+              `[Yjs] Session-close backup failed for ${roomName} (non-fatal):`,
+              backupErr
+            );
+          }
+        }
 
         console.log(
           `[Yjs] Final save for whiteboard ${roomName} (session closed)`

@@ -174,6 +174,12 @@ export async function materializeCompositeGraph(
   const entities: MaterializeEntityResult[] = [];
   let primaryId = "";
   let created = 0;
+  // Idempotency keys already handled in THIS materialize call. Guards against a
+  // duplicate `op.ref` within ONE proposal silently merging two distinct
+  // entities (a producer bug): a second op with the same key creates a separate
+  // entity instead of linking to the first. Cross-CALL retries (key registered
+  // in a prior call, absent here) still link correctly.
+  const idemSeenThisCall = new Set<string>();
   for (let i = 0; i < operations.length; i++) {
     const op = operations[i];
     if (op.op !== "create_entity") continue;
@@ -192,7 +198,14 @@ export async function materializeCompositeGraph(
         ? `${options.idempotency.namespace}:${op.ref}`
         : undefined;
     let idemHitId: string | null = null;
-    if (options?.idempotency && idemExternalId && !op.existingEntityId) {
+    if (
+      options?.idempotency &&
+      idemExternalId &&
+      !op.existingEntityId &&
+      // Only honor a hit from a PRIOR call (a real retry). A hit on a key already
+      // created in THIS call is a within-proposal duplicate ref → do NOT merge.
+      !idemSeenThisCall.has(idemExternalId)
+    ) {
       idemHitId = await options.idempotency.lookup(
         options.idempotency.provider,
         idemExternalId
@@ -211,6 +224,7 @@ export async function materializeCompositeGraph(
       // no duplicate). Treated exactly like the existingEntityId link branch.
       realId = idemHitId;
       linkedExisting = true;
+      if (idemExternalId) idemSeenThisCall.add(idemExternalId);
     } else {
       const result = await entityCaller.create({
         profileSlug: op.profileSlug,
@@ -242,6 +256,7 @@ export async function materializeCompositeGraph(
           options.idempotency.provider,
           idemExternalId
         );
+        idemSeenThisCall.add(idemExternalId);
       }
     }
 

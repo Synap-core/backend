@@ -40,6 +40,57 @@ const EventSourceSchema = z.enum([
   "migration",
   "system",
 ]);
+const TimeSeriesPeriodSchema = z.enum(["day", "week", "month"]);
+
+type TimeSeriesPeriod = z.infer<typeof TimeSeriesPeriodSchema>;
+
+function getBucketStart(date: Date, period: TimeSeriesPeriod): Date {
+  const next = new Date(date);
+  if (period === "day") {
+    next.setHours(0, 0, 0, 0);
+    return next;
+  }
+  if (period === "month") {
+    next.setDate(1);
+    next.setHours(0, 0, 0, 0);
+    return next;
+  }
+  const day = next.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  next.setDate(next.getDate() + diff);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function addPeriod(date: Date, period: TimeSeriesPeriod, amount: number): Date {
+  const next = new Date(date);
+  if (period === "day") next.setDate(next.getDate() + amount);
+  else if (period === "week") next.setDate(next.getDate() + amount * 7);
+  else next.setMonth(next.getMonth() + amount);
+  return getBucketStart(next, period);
+}
+
+function defaultRange(period: TimeSeriesPeriod): { from: Date; to: Date } {
+  const bucketCount = period === "day" ? 14 : 12;
+  const end = addPeriod(getBucketStart(new Date(), period), period, 1);
+  const from = addPeriod(end, period, -bucketCount);
+  return { from, to: end };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function recordProfileSlug(value: unknown): string | undefined {
+  const record = asRecord(value);
+  const direct = record.profileSlug ?? record.profile_slug ?? record.type;
+  if (typeof direct === "string") return direct;
+  const entity = asRecord(record.entity);
+  const nested = entity.profileSlug ?? entity.profile_slug ?? entity.type;
+  return typeof nested === "string" ? nested : undefined;
+}
 
 export const eventsRouter = router({
   /**
@@ -271,6 +322,109 @@ export const eventsRouter = router({
         correlationId: e.correlationId,
         userId: e.userId,
       }));
+    }),
+
+  /**
+   * Scoped event activity buckets for charts.
+   *
+   * This intentionally returns aggregate points instead of raw event rows so
+   * entity-detail/chart widgets can show time dimension without broad event-log
+   * reads. Results are always clamped to the current user; workspace filtering
+   * additionally verifies workspace membership.
+   */
+  aggregateTimeSeries: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid().optional(),
+        subjectId: z.string().optional(),
+        subjectType: subjectTypeSchema.optional(),
+        profileSlug: z.string().optional(),
+        eventTypes: z.array(z.string().min(1)).optional(),
+        period: TimeSeriesPeriodSchema.default("week"),
+        range: z
+          .object({
+            from: z.coerce.date(),
+            to: z.coerce.date(),
+          })
+          .optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const eventRepo = getEventRepository();
+
+      if (input.workspaceId) {
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: (members, { and, eq }) =>
+            and(
+              eq(members.workspaceId, input.workspaceId!),
+              eq(members.userId, userId)
+            ),
+        });
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Cannot aggregate events for this workspace",
+          });
+        }
+      }
+
+      const fallbackRange = defaultRange(input.period);
+      const fromDate = input.range?.from ?? fallbackRange.from;
+      const toDate = input.range?.to ?? fallbackRange.to;
+      const bucketStarts: Date[] = [];
+      for (
+        let cursor = getBucketStart(fromDate, input.period);
+        cursor.getTime() < toDate.getTime();
+        cursor = addPeriod(cursor, input.period, 1)
+      ) {
+        bucketStarts.push(cursor);
+      }
+
+      const buckets = new Map(
+        bucketStarts.map((start) => [start.toISOString(), 0])
+      );
+      const events = await eventRepo.searchEvents({
+        userId,
+        workspaceId: input.workspaceId,
+        subjectId: input.subjectId,
+        subjectType: input.subjectType,
+        fromDate,
+        toDate,
+        limit: 5000,
+      });
+      const eventTypeSet = input.eventTypes?.length
+        ? new Set(input.eventTypes)
+        : null;
+
+      for (const event of events) {
+        if (eventTypeSet && !eventTypeSet.has(event.eventType)) continue;
+        if (input.profileSlug) {
+          const dataSlug = recordProfileSlug(event.data);
+          const metadataSlug = recordProfileSlug(event.metadata);
+          if (
+            dataSlug !== input.profileSlug &&
+            metadataSlug !== input.profileSlug
+          ) {
+            continue;
+          }
+        }
+        const timestamp = new Date(event.timestamp).getTime();
+        if (Number.isNaN(timestamp)) continue;
+        const bucketKey = getBucketStart(
+          new Date(timestamp),
+          input.period
+        ).toISOString();
+        if (!buckets.has(bucketKey)) continue;
+        buckets.set(bucketKey, (buckets.get(bucketKey) ?? 0) + 1);
+      }
+
+      return {
+        points: bucketStarts.map((start) => ({
+          x: start.toISOString(),
+          y: buckets.get(start.toISOString()) ?? 0,
+        })),
+      };
     }),
 
   /**

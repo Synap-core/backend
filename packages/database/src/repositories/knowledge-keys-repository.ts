@@ -330,7 +330,12 @@ export class KnowledgeKeysRepository {
 
     if (safeTerms.length === 0) return [];
 
-    const tsqueryStr = safeTerms.map((t) => `${t}:*`).join(" & ");
+    // OR-join (not AND): a natural-language question ("how to deploy the backend
+    // runbook") must match a runbook even though the doc contains none of the
+    // filler words ("how", "the", "runbook"). The 'simple' config keeps stopwords
+    // as lexemes, so an AND query fails on any term absent from the doc. OR +
+    // ts_rank ordering recalls every doc sharing a term, best-match first.
+    const tsqueryStr = safeTerms.map((t) => `${t}:*`).join(" | ");
     const tsquery = sql.raw(`to_tsquery('simple', '${tsqueryStr}'::text)`);
 
     const conditions: ReturnType<typeof and>[] = [

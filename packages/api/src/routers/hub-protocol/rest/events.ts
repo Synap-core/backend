@@ -496,6 +496,75 @@ export function registerEventsRoutes(app: HubHono): void {
   });
 
   /**
+   * GET /agent-runs — list completed agent runs for external agents.
+   *
+   * Read counterpart to POST /agent-runs: returns `agentRun.create.completed`
+   * events (newest first) with their telemetry projection. Scoped to the
+   * authenticated bearer-key user — never a caller-supplied userId.
+   *
+   * Static route — declared before any future `/:id` dynamic route on this
+   * router (Hono matches in declaration order).
+   *
+   * Query params (all optional):
+   *   ?workspaceId=<id>  — narrow to a single workspace (data.workspaceId)
+   *   ?limit=<n>          — default 50, hard-capped at 200
+   */
+  app.get("/agent-runs", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    // Pin to the authenticated owner — never a caller-supplied query userId.
+    const userId = c.get("userId") as string;
+    if (!userId) return c.json({ error: "userId is required" }, 400);
+
+    const workspaceId = c.req.query("workspaceId");
+    const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 200);
+
+    try {
+      const runs = await eventRepository.listAgentRuns({
+        userId,
+        workspaceId,
+        limit,
+      });
+      const agentRuns = runs.map((e) => {
+        const data = (e.data ?? {}) as Record<string, unknown>;
+        return {
+          id: e.id,
+          agentUserId: e.agentUserId,
+          agentType: e.agentType,
+          model: e.model,
+          provider: e.provider,
+          costUsd: e.costUsd,
+          tokensIn: e.tokensIn,
+          tokensOut: e.tokensOut,
+          tokensTotal: e.tokensTotal,
+          latencyMs: e.latencyMs,
+          toolCount: e.toolCount,
+          runStatus: e.runStatus,
+          finishReason: e.finishReason,
+          summary: typeof data.summary === "string" ? data.summary : undefined,
+          workspaceId:
+            typeof data.workspaceId === "string" ? data.workspaceId : undefined,
+          sessionId:
+            typeof data.sessionId === "string" ? data.sessionId : undefined,
+          correlationId: e.correlationId,
+          createdAt: e.timestamp,
+        };
+      });
+      return c.json({ agentRuns });
+    } catch (err) {
+      logger.error({ err, userId }, "listAgentRuns failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
    * POST /events/broadcast
    * Emit an arbitrary socket event to the user's presence room.
    * Used by IS tools (e.g. web_search) to signal session activity to

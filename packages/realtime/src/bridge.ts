@@ -55,10 +55,19 @@ let getYjsServer: YjsServerAccessor = () => null;
 
 /** Track last successful MinIO/DB write for /health/yjs */
 let lastPersistAt: Date | null = null;
+/** Track last upload failure for /health/yjs — a non-null value means the durable layer is degraded */
+let lastPersistFailureAt: Date | null = null;
+let persistFailureCount = 0;
 const serverStartAt = new Date();
 
 export function recordYjsPersist(): void {
   lastPersistAt = new Date();
+}
+
+/** Call when ALL MinIO upload attempts fail so the failure is observable via /health/yjs */
+export function recordYjsPersistFailure(): void {
+  lastPersistFailureAt = new Date();
+  persistFailureCount += 1;
 }
 
 /**
@@ -139,9 +148,11 @@ async function handleBridgeRequest(
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(
       JSON.stringify({
-        status: "ok",
+        status: lastPersistFailureAt ? "degraded" : "ok",
         activeRooms,
         lastPersistAt: lastPersistAt?.toISOString() ?? null,
+        lastPersistFailureAt: lastPersistFailureAt?.toISOString() ?? null,
+        persistFailureCount,
         uptimeSeconds,
       })
     );

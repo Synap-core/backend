@@ -39,20 +39,19 @@ Your job is to turn unstructured input into a **connected** knowledge graph. Iso
 
 Synap is a typed knowledge graph. **Reading is one verb (`synap ask`) — it routes for you.** Writing is where you must pick the right lane: the destination is decided by the **KIND** of knowledge, not by whichever workspace happens to be active.
 
-### Where to write what — the four lanes (decide by KIND)
+### Where to write what — the three lanes (decide by KIND)
 
-Ask yourself: _who does this knowledge serve?_
+Ask yourself: _who does this knowledge serve?_ **There is no private AI scratchpad** — structuring knowledge into a real lane IS your job. Never write a `note` (that's the human's raw inbox); always `capture` into a lane.
 
-| If it…                                                                                  | Lane        | Where it goes                                                                 | Governance                                                                                                 |
-| --------------------------------------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| **helps YOU (the AI)** — a tool gotcha, a lesson about how to work, your own scratchpad | **AI-self** | the **shared agent memory** (default `synap capture`)                         | auto-approved (it's your memory)                                                                           |
-| **is about the USER** — how they work/talk/decide, their preferences, their life        | **User**    | pod-wide `user_observation` (`synap observe write`)                           | inferences are **proposed** (you review); explicit "I always X" auto-saves — never model the user silently |
-| **is GLOBAL truth** — a best-practice, runbook, how-to that holds across projects       | **Global**  | pod-wide procedural (`synap` → `update_knowledge` / `PUT /knowledge/:key`)    | proposal-gated (shared truth is reviewed)                                                                  |
-| **is about the CURRENT WORK** — the project/task/domain you're working on               | **Work**    | the **linked workspace** (`synap capture --workspace <id>` / `create entity`) | proposal-gated (it's the user's real data)                                                                 |
+| If it…                                                                                                                          | Lane                 | Where it goes                                                                            | Governance                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **is about the CURRENT WORK** — domain know-how for the project/task you're on (incl. a domain-specific gotcha/lesson/decision) | **Work** _(default)_ | a `knowledge` entity in the **active workspace** (`synap capture --type …`)              | proposal-gated (it's the user's real data; the workspace IS the domain — Builder ≠ marketing)              |
+| **is GLOBAL truth** — a best-practice / runbook / how-to that holds across ALL projects                                         | **Global**           | pod-wide procedural `knowledge_keys` (`synap capture --global --type … [--key ns:slug]`) | reviewed for shared truth                                                                                  |
+| **is about the USER** — how they work/talk/decide, their preferences, their life                                                | **User**             | pod-wide `user_observation` (`synap observe write` / `record_observation` tool)          | inferences are **proposed** (you review); explicit "I always X" auto-saves — never model the user silently |
 
-> **Why this matters:** writing to the wrong lane degrades the graph. A code gotcha you learned is **AI-self** (shared agent memory, auto) — not the user's Builder workspace. A fact about how the user organizes projects is **User** (pod-wide, proposed) — not your scratchpad. `synap capture` tells you which lane + governance it used; check it.
+> **Why this matters:** writing to the wrong lane degrades the graph. A gotcha you learned about the **current project** is **Work** (the active workspace — its domain). A best-practice that holds **everywhere** is **Global** (`--global`, pod-wide). A fact about **how the user works** is **User** (pod-wide, inferences proposed). `synap capture` echoes which lane + governance it used; check it.
 
-> **Substrate names (tables under the hood):** _semantic_ = `entities`, _episodic_ = `knowledge_facts`, _procedural_ = `knowledge_keys`. `ask` queries across them so you never pick on read.
+> **Substrate names (tables under the hood):** _semantic_ = `entities` (the `knowledge` profile, workspace-scoped = domain separation), _episodic_ = `knowledge_facts`, _procedural_ = `knowledge_keys` (pod-wide runbooks). `ask` queries across them so you never pick on read.
 
 ### Data layers — the graph itself
 
@@ -66,14 +65,14 @@ Ask yourself: _who does this knowledge serve?_
 
 ### Key profiles for AI use
 
-| Profile slug       | Scope     | Who writes | Purpose                                                                                                                                                                                 |
-| ------------------ | --------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `note`             | workspace | human + AI | Quick captures, scratchpad                                                                                                                                                              |
-| `knowledge`        | workspace | agent      | Validated gotchas/lessons/decisions — the profile `synap capture --type` writes (ek_type/ek_claim/ek_why). DOMAIN = the workspace (knowledge in the builder ws = engineering knowledge) |
-| `user_observation` | pod       | AI only    | Durable user model — habits, communication style, preferences                                                                                                                           |
-| `decision`         | pod       | human + AI | Architectural decisions with rationale                                                                                                                                                  |
-| `research`         | pod       | AI         | Investigation with sources + conclusion                                                                                                                                                 |
-| `question`         | pod       | human + AI | Open inquiry, closed when a decision answers it                                                                                                                                         |
+| Profile slug       | Scope     | Who writes     | Purpose                                                                                                                                                                                                                                       |
+| ------------------ | --------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `note`             | pod       | **human only** | The human's raw "dump now, structure later" inbox. **The AI never writes a note** — structuring into a lane is its job; use `capture` instead.                                                                                                |
+| `knowledge`        | workspace | AI             | Validated gotchas/lessons/decisions — the **Work lane** (default `synap capture --type`; ek_type/ek_claim/ek_why). DOMAIN = the workspace (a Builder gotcha ≠ a marketing one). Cross-project runbooks go to `knowledge_keys` via `--global`. |
+| `user_observation` | pod       | AI only        | Durable user model — habits, communication style, preferences                                                                                                                                                                                 |
+| `decision`         | pod       | human + AI     | Architectural decisions with rationale                                                                                                                                                                                                        |
+| `research`         | pod       | AI             | Investigation with sources + conclusion                                                                                                                                                                                                       |
+| `question`         | pod       | human + AI     | Open inquiry, closed when a decision answers it                                                                                                                                                                                               |
 
 ## Quick reference — 90% of tasks in 30 lines
 
@@ -84,12 +83,15 @@ synap use <workspace-name-or-id>                       # set active workspace
 synap create entity --profile=task --name="…" --props='{"status":"todo","priority":"high"}' --json
 synap set entity <id> --props='{"status":"done"}' --json  # merge-patch (only changed keys)
 synap ask "your question" --json                       # THE read verb — routes to the right store(s) + shows which answered
-synap capture --type=lesson --claim="…" --json         # THE structured-write verb — routed to the right profile
-synap note "loose fact" --json                          # quick note entity
+synap capture --type=lesson --claim="…" --json         # Work lane (default) — domain knowledge → active workspace
+synap capture --global --type=reference --claim="…" --json  # Global lane — pod-wide cross-cutting runbook (knowledge_keys)
+synap observe write "…" --json                          # User lane — durable user model (inferences proposed)
 ```
 
-**The canonical verbs:** `ask` (read) · `capture` (structured write) · `note` (quick
-write) · `orient` (bootstrap). **Reading is one verb: `ask`** — it classifies your
+**The canonical verbs:** `ask` (read) · `capture` (structured write — pick a lane:
+Work default / `--global` / `observe` for User) · `orient` (bootstrap). `note` exists
+for the HUMAN's raw "dump now, structure later" inbox — **the AI always `capture`s
+instead.** **Reading is one verb: `ask`** — it classifies your
 question and routes across the three memory substrates (semantic = the typed entity
 graph, procedural = how-to docs, episodic = raw captures), returning one answer
 tagged with which substrate(s) answered (and which, if any, were unavailable). Don't
@@ -193,8 +195,7 @@ The CLI reads the active pod and workspace from `~/.synap/config.json`. Set cont
 
 ```bash
 synap pods use <profile-name>          # switch active pod
-synap use <workspace-id>               # switch active workspace
-synap workspace provision-agent --json # provision your agent workspace + auto-sets it active
+synap use <workspace-id>               # switch active workspace (captures land here — it IS the domain)
 ```
 
 **Always orient first:**
@@ -224,17 +225,19 @@ synap list entities --profile=task --workspace=<id> --json
 synap get entity <id> --json
 ```
 
-**Quick note (loose context → a note entity):**
+**Capturing a decision (the AI structures — it never `note`s):**
 
 ```bash
-synap note "Key decision: use Typesense for search" --json
+synap capture --type decision --claim "Use Typesense for entity search" --json
 # Retrieve later with the one read verb: synap ask "Typesense decision"
 ```
+
+> `synap note` is the HUMAN's raw "dump now, structure later" inbox. As the AI, always `capture` into a lane — structuring is your job.
 
 **Structured knowledge (durable, typed, searchable — preferred for engineering learnings):**
 
 ```bash
-# Capture a gotcha, lesson, decision, or reference into your agent workspace
+# Work lane (default): a domain gotcha/lesson/decision → knowledge entity in the ACTIVE workspace
 synap capture --type gotcha --claim "Hono static routes must come before /:id" \
   --why "First-match routing; dynamic routes eat static ones" \
   --tags "repo:synap-backend,layer:routing" --json
@@ -246,14 +249,15 @@ synap capture --type lesson --claim "code-read ≠ runtime-true for library APIs
 synap capture --type decision --claim "Use Typesense for entity search" \
   --why "pgvector deferred to V1; Typesense ships now" --json
 
-# Retrieve any of it later with the one read verb:
-synap ask "hono routing gotcha" --json
+# Global lane: a runbook/best-practice that holds across ALL projects → pod-wide knowledge_keys
+synap capture --global --type reference --claim "Always fix the canonical path, never a workaround" \
+  --key "principle:root-cause" --json
 
-# Prerequisite (run once): provision your agent workspace and set it active
-synap workspace provision-agent --json
+# Retrieve any of it later with the one read verb (it spans every lane):
+synap ask "hono routing gotcha" --json
 ```
 
-`synap capture --type` writes a typed **`knowledge`** entity; `ek_type` (gotcha|lesson|decision|reference) discriminates the kind — **one store, type tags, not a residual dump**. It's workspace-scoped, so the active workspace supplies the domain (there is no `engineering_knowledge`). A formal **decision RECORD** (rationale, alternatives, superseded-by lifecycle) is a different artifact — use smart `synap capture "<free text>"` or `synap create entity --profile=decision`. Retrieve everything with `synap ask`.
+`synap capture --type` writes a typed **`knowledge`** entity in the **active workspace** (the Work lane); `ek_type` (gotcha|lesson|decision|reference) discriminates the kind — **one store, type tags, not a residual dump**. It's workspace-scoped, so the active workspace supplies the domain — a Builder gotcha ≠ a marketing one (there is no `engineering_knowledge`). Add **`--global`** to write a pod-wide cross-cutting runbook to `knowledge_keys` instead. A formal **decision RECORD** (rationale, alternatives, superseded-by lifecycle) is a different artifact — use smart `synap capture "<free text>"` or `synap create entity --profile=decision`. Retrieve everything with `synap ask`.
 Use `capture` for anything worth remembering across sessions and projects.
 
 **Write:**

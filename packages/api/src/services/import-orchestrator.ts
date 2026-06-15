@@ -686,7 +686,9 @@ export class ImportOrchestrator {
         ...(input.idempotencyKey
           ? {
               idempotency: makeExternalLinkIdempotency(db, {
-                namespace: input.idempotencyKey,
+                // userId-scoped so the global (provider, externalId) index can
+                // never collide across tenants.
+                namespace: `${this.ctx.userId}:${input.idempotencyKey}`,
                 provider: "import",
               }),
             }
@@ -913,7 +915,8 @@ export class ImportOrchestrator {
     // no idempotency (unchanged).
     const idempotency = input.idempotencyKey
       ? makeExternalLinkIdempotency(db, {
-          namespace: input.idempotencyKey,
+          // userId-scoped (see apply()) — global index, no cross-tenant collision.
+          namespace: `${this.ctx.userId}:${input.idempotencyKey}`,
           provider: "import",
         })
       : undefined;
