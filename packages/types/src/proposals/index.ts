@@ -187,6 +187,21 @@ export interface RequestShapedProposalData
   extends UpdateRequest, ProposalDataLifecycle {
   reasoning?: string;
   aiMetadata?: Record<string, unknown>;
+  /**
+   * Before-snapshot captured at proposal-creation time for UPDATE proposals.
+   * Mirrors the top-level fields of `data` (title, description, profileSlug,
+   * documentId) plus a `properties` map, holding the entity's state BEFORE the
+   * proposed change. The review layer prefers this over a live entity lookup so
+   * the before→after diff is durable — it survives approval/materialization and
+   * any concurrent edit to the live entity. Absent for create/delete/composite.
+   */
+  previousData?: {
+    title?: string | null;
+    description?: string | null;
+    profileSlug?: string | null;
+    documentId?: string | null;
+    properties?: Record<string, unknown>;
+  };
 }
 
 /**

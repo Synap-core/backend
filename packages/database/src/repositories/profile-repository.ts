@@ -241,36 +241,46 @@ export class ProfileRepository {
     userId: string,
     workspaceId: string
   ): Promise<Profile[]> {
-    const rows = await this.db
-      .selectDistinctOn([profiles.id], { p: profiles })
-      .from(profiles)
-      .leftJoin(
-        profileWorkspaceAccess,
-        and(
+    // A workspace-less context (capture/structure when no workspace is active,
+    // hydration onboarding) passes "" here. The workspace-scoped predicates bind
+    // workspaceId into UUID columns, so binding "" makes Postgres throw
+    // `invalid input syntax for type uuid: ""`. When there is no workspace, drop
+    // every workspace-scoped branch and return SYSTEM + USER profiles only —
+    // exactly what a workspace-less user should see (and what callers document).
+    const hasWorkspace = Boolean(workspaceId);
+
+    // Join only on profileId when workspace-less (never binds "" to a uuid). The
+    // SHARED branch — which depends on a matched access row — is dropped below in
+    // that case, so the broader join can't widen the result.
+    const joinCondition = hasWorkspace
+      ? and(
           eq(profileWorkspaceAccess.profileId, profiles.id),
           eq(profileWorkspaceAccess.workspaceId, workspaceId)
         )
-      )
-      .where(
+      : eq(profileWorkspaceAccess.profileId, profiles.id);
+
+    const scopeBranches = [
+      eq(profiles.scope, ProfileScope.SYSTEM),
+      and(eq(profiles.scope, ProfileScope.USER), eq(profiles.userId, userId)),
+    ];
+    if (hasWorkspace) {
+      scopeBranches.push(
         and(
-          eq(profiles.isActive, true),
-          or(
-            eq(profiles.scope, ProfileScope.SYSTEM),
-            and(
-              eq(profiles.scope, ProfileScope.WORKSPACE),
-              eq(profiles.workspaceId, workspaceId)
-            ),
-            and(
-              eq(profiles.scope, ProfileScope.USER),
-              eq(profiles.userId, userId)
-            ),
-            and(
-              eq(profiles.scope, ProfileScope.SHARED),
-              isNotNull(profileWorkspaceAccess.workspaceId)
-            )
-          )
+          eq(profiles.scope, ProfileScope.WORKSPACE),
+          eq(profiles.workspaceId, workspaceId)
+        ),
+        and(
+          eq(profiles.scope, ProfileScope.SHARED),
+          isNotNull(profileWorkspaceAccess.workspaceId)
         )
-      )
+      );
+    }
+
+    const rows = await this.db
+      .selectDistinctOn([profiles.id], { p: profiles })
+      .from(profiles)
+      .leftJoin(profileWorkspaceAccess, joinCondition)
+      .where(and(eq(profiles.isActive, true), or(...scopeBranches)))
       .orderBy(profiles.id, profiles.displayName);
 
     return rows.map((r) => r.p);

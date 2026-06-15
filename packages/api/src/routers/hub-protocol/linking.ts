@@ -111,7 +111,7 @@ export const linkingRouter = router({
           relationshipType:
             input.relationshipType as ChannelContextRelationshipType,
           userId: input.userId,
-          workspaceId: channel.workspaceId ?? "",
+          workspaceId: channel.workspaceId ?? null,
           sourceMessageId: input.sourceMessageId,
           conflictStatus: ChannelContextConflictStatus.NONE,
         });
@@ -202,7 +202,7 @@ export const linkingRouter = router({
           relationshipType:
             input.relationshipType as ChannelContextRelationshipType,
           userId: input.userId,
-          workspaceId: channel.workspaceId ?? "",
+          workspaceId: channel.workspaceId ?? null,
           sourceMessageId: input.sourceMessageId,
           conflictStatus: ChannelContextConflictStatus.NONE,
         });

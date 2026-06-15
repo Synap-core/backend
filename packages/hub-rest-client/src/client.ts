@@ -73,8 +73,17 @@ export interface HubRestClientConfig {
   apiKey: string;
   /** Default workspace ID — used when not specified per call */
   workspaceId?: string;
-  /** Optional request timeout in ms (default: 30000) */
+  /** Optional request timeout in ms (default: 30000). Fallback when read/write timeouts are unset. */
   timeoutMs?: number;
+  /** Optional read (GET) timeout in ms (default: timeoutMs ?? 30000). */
+  readTimeoutMs?: number;
+  /** Optional write (non-GET) timeout in ms (default: timeoutMs ?? 30000). */
+  writeTimeoutMs?: number;
+  /**
+   * Max attempts for a request (default: 3). Retries ONLY on network failure or
+   * 5xx — never on 4xx, never on a caller-provided abort. Set to 1 to disable.
+   */
+  maxAttempts?: number;
 }
 
 function normalizeUrl(url: string): string {
@@ -131,6 +140,9 @@ export class HubRestClient {
   private readonly base: string;
   private readonly headers: Record<string, string>;
   private readonly timeoutMs: number;
+  private readonly readTimeoutMs: number;
+  private readonly writeTimeoutMs: number;
+  private readonly maxAttempts: number;
   readonly workspaceId: string | undefined;
 
   /** Cached from GET /users/me — avoids repeated identity calls. */
@@ -144,6 +156,9 @@ export class HubRestClient {
     };
     this.workspaceId = config.workspaceId;
     this.timeoutMs = config.timeoutMs ?? 30_000;
+    this.readTimeoutMs = config.readTimeoutMs ?? this.timeoutMs;
+    this.writeTimeoutMs = config.writeTimeoutMs ?? this.timeoutMs;
+    this.maxAttempts = Math.max(1, config.maxAttempts ?? 3);
   }
 
   /** User id for the current API key (Hub REST requires userId on several GETs). */
@@ -154,33 +169,112 @@ export class HubRestClient {
     return me.id;
   }
 
-  private async request<T>(
+  /**
+   * The ONE shared request loop. Per-method timeout (GET = read, else write, or a
+   * caller override) + up to `maxAttempts` with exponential backoff. Retries ONLY
+   * on a network failure or 5xx; NEVER on a 4xx or a caller abort. Returns the raw
+   * `Response` for any non-5xx (ok OR 4xx) — the typed entry points below decide
+   * how to interpret it. This is the single source of retry/timeout truth, shared
+   * by the CLI and the IS's `ISHubClient` (which reuses the protected entry points
+   * rather than re-implementing fetch).
+   */
+  private async fetchWithRetry(
+    method: string,
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+    timeoutMsOverride?: number
+  ): Promise<Response> {
+    const url = `${this.base}${path}`;
+    const perAttemptTimeout =
+      timeoutMsOverride ??
+      (method.toUpperCase() === "GET"
+        ? this.readTimeoutMs
+        : this.writeTimeoutMs);
+
+    let lastError: unknown;
+    for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, 1_000 * attempt)); // 0, 1s, 2s, …
+      }
+      const timeout = AbortSignal.timeout(perAttemptTimeout);
+      const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+      try {
+        const res = await fetch(url, {
+          method,
+          headers: this.headers,
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+          signal: combined,
+        });
+        if (res.status < 500) return res; // ok or 4xx — caller decides; never retry
+        lastError = new Error(`HTTP ${res.status}`); // 5xx — retry until exhausted
+      } catch (err) {
+        if (signal?.aborted) throw err; // caller asked to abort — honor it
+        lastError = err; // network/abort-timeout — retry
+      }
+    }
+    throw lastError;
+  }
+
+  /** Build a HubApiError from a non-ok Response (reads the JSON error body). */
+  private async toHubError(res: Response): Promise<HubApiError> {
+    const errorBody = await res.json().catch(() => ({}));
+    return new HubApiError(
+      formatHubErrorMessage(res.status, res.statusText, errorBody),
+      res.status,
+      errorBody
+    );
+  }
+
+  /** Parse a 2xx body, tolerating an empty/204 response (returns undefined). */
+  private async parseBody<T>(res: Response): Promise<T> {
+    const text = await res.text();
+    return (text ? JSON.parse(text) : undefined) as T;
+  }
+
+  /**
+   * Typed JSON request — throws `HubApiError` on any non-2xx. Protected so the IS
+   * subclass reuses it. Tolerates an empty/204 body (returns `undefined`).
+   */
+  protected async request<T>(
     method: string,
     path: string,
     body?: unknown,
     signal?: AbortSignal
   ): Promise<T> {
-    const url = `${this.base}${path}`;
-    const timeout = AbortSignal.timeout(this.timeoutMs);
-    const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    const res = await this.fetchWithRetry(method, path, body, signal);
+    if (!res.ok) throw await this.toHubError(res);
+    return this.parseBody<T>(res);
+  }
 
-    const res = await fetch(url, {
-      method,
-      headers: this.headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: combined,
-    });
+  /**
+   * Like `request<T>` but returns `null` on 404/403 (the "absent/forbidden →
+   * empty" contract several IS reads use) instead of throwing.
+   */
+  protected async requestOrNull<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal
+  ): Promise<T | null> {
+    const res = await this.fetchWithRetry(method, path, body, signal);
+    if (res.status === 404 || res.status === 403) return null;
+    if (!res.ok) throw await this.toHubError(res);
+    return this.parseBody<T | null>(res);
+  }
 
-    if (!res.ok) {
-      const errorBody = await res.json().catch(() => ({}));
-      throw new HubApiError(
-        formatHubErrorMessage(res.status, res.statusText, errorBody),
-        res.status,
-        errorBody
-      );
-    }
-
-    return res.json() as Promise<T>;
+  /**
+   * The raw `Response` (same retry/timeout infra), for the few callers that read
+   * `.text()`, branch on status themselves, or need a per-call timeout override.
+   */
+  protected async requestRaw(
+    method: string,
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+    timeoutMsOverride?: number
+  ): Promise<Response> {
+    return this.fetchWithRetry(method, path, body, signal, timeoutMsOverride);
   }
 
   // ─── Identity ─────────────────────────────────────────────────────────────

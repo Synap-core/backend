@@ -24,7 +24,7 @@
  * workspace. Both speak to the same pod tRPC surface.
  */
 
-import { eq, inArray, isNull, or, drizzleSql } from "@synap/database";
+import { and, eq, inArray, isNull, or, drizzleSql } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "@synap/database";
@@ -84,4 +84,41 @@ export function userVisibleWhere(
     inArray(col, ownedWs),
     inArray(col, podVisibleWs)
   )!;
+}
+
+/**
+ * The workspace dimension as a LENS over the user floor. This is the one place
+ * the "workspace is an optional narrowing, the user is the boundary" rule is
+ * encoded — three states of `lens`:
+ *
+ *   - `undefined` → no lens: everything the USER can see (all their workspaces
+ *      + pod-wide globals). The "pod-wide view" / Eve-OS / cross-workspace case.
+ *   - `null`      → globals only (`workspaceId IS NULL`).
+ *   - `"<id>"`    → that workspace's rows + pod-wide globals.
+ *
+ * A specific lens is INTERSECTED with the user floor, so a stale or forged
+ * workspace id can never widen access past what the user may already see — the
+ * lens only narrows. (When the id is one the user can see, the AND simplifies to
+ * exactly "that workspace + globals".)
+ */
+export function workspaceLensWhere(
+  workspaceIdColumn: AnyPgColumn,
+  userId: string,
+  lens?: string | null,
+  opts?: { includeGlobals?: boolean }
+): SQL {
+  const floor = userVisibleWhere(workspaceIdColumn, userId);
+  // No lens = the pod-wide / user-focused view → globals ARE visible (the floor
+  // already includes `IS NULL`).
+  if (lens === undefined) return floor;
+  if (lens === null) return isNull(workspaceIdColumn);
+  // A SPECIFIC workspace is selected → show THAT workspace only; pod-wide globals
+  // do NOT bleed into a focused workspace (product decision 2026-06-15). The
+  // exception is SUBSTRATE config (builtin widgets, base relation-defs, SYSTEM
+  // profiles) which must stay visible inside every workspace — those rules pass
+  // `includeGlobals: true`. Either way it's intersected with the user floor so
+  // the lens can only narrow.
+  return opts?.includeGlobals
+    ? and(or(isNull(workspaceIdColumn), eq(workspaceIdColumn, lens)), floor)!
+    : and(eq(workspaceIdColumn, lens), floor)!;
 }

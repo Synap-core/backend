@@ -48,6 +48,7 @@ import {
   cellInstances,
   workspaceMembers,
   users,
+  proposals,
 } from "@synap/database/schema";
 import {
   createUnifiedEvent,
@@ -319,6 +320,19 @@ async function materializeEntity(
         correlationId: (data.correlationId as string) || undefined,
       },
       userId
+    );
+
+    // Provenance: if this entity was produced inside a focus session, record
+    // `session --produced--> entity`. The proposal carries `session_id` (set by
+    // the channel when an active focus session owns the message); we resolve it
+    // here — the single chokepoint every approve path flows through — so the
+    // session room's Deliverable surface populates BY CONSTRUCTION, not only
+    // when a BYOA agent explicitly calls POST /runs/:runId/capture.
+    await linkSessionProduced(
+      database,
+      data.sourceProposalId as string | undefined,
+      subjectId,
+      entityWorkspaceId
     );
   } else if (action === "update") {
     const entityId = (data.id as string) || subjectId;
@@ -695,6 +709,47 @@ async function materializeCell(
  * edge was silently never written. Idempotent (the unique-edge index +
  * onConflictDoNothing) so a retried job can't error or duplicate.
  */
+/**
+ * Write a `session --produced--> entity` provenance edge when an entity was
+ * materialized from a proposal that belongs to a focus session. Resolves the
+ * session from the proposal's `session_id` FK (the canonical link, mig 0119).
+ *
+ * No-op when the proposal has no session (the common non-session write).
+ * Idempotent via the links unique-edge index + onConflictDoNothing, so a
+ * pg-boss retry can neither error nor duplicate. This is the in-channel
+ * counterpart to the explicit BYOA capture-back (POST /runs/:runId/capture);
+ * together they make the Deliverable surface complete for every session.
+ */
+async function linkSessionProduced(
+  db: Awaited<ReturnType<typeof getDb>>,
+  sourceProposalId: string | undefined,
+  entityId: string,
+  workspaceId: string | null | undefined
+): Promise<void> {
+  if (!sourceProposalId) return;
+  const proposal = await sharedDb.query.proposals.findFirst({
+    where: eq(proposals.id, sourceProposalId),
+    columns: { sessionId: true },
+  });
+  if (!proposal?.sessionId) return;
+  await db
+    .insert(links)
+    .values({
+      workspaceId: workspaceId ?? null,
+      fromType: "session" as LinkEndpointType,
+      fromId: proposal.sessionId,
+      toType: "entity" as LinkEndpointType,
+      toId: entityId,
+      linkType: "produced" as LinkType,
+      metadata: {},
+    })
+    .onConflictDoNothing();
+  logger.info(
+    { sessionId: proposal.sessionId, entityId },
+    "Linked session --produced--> entity"
+  );
+}
+
 async function materializeLink(
   action: string,
   workspaceId: string | undefined,

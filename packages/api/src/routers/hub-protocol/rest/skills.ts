@@ -545,37 +545,43 @@ function loadSkillPackagesFromDisk(): SkillPackage[] | null {
   const skillsDir = candidates.find((d) => fs.existsSync(d));
   if (!skillsDir) return null;
 
-  const SKILL_FILES: { slug: string; files: string[] }[] = [
-    {
-      slug: "synap",
-      files: ["SKILL.md", "capture.md", "linking.md", "governance.md"],
-    },
-    { slug: "synap-schema", files: ["SKILL.md"] },
-    {
-      slug: "synap-ui",
-      files: [
-        "SKILL.md",
-        "bento-recipes.md",
-        "widget-catalog.md",
-        "view-types.md",
-      ],
-    },
-  ];
+  // The 3 baseline skill packages. Topic files are the source of truth and the
+  // monolithic SKILL.md is a generated build artifact (see skills/build.mjs).
+  // Enumerate every `*.md` in each package dynamically so adding a topic file
+  // does not require editing this list. SKILL.md is always served first (it is
+  // the `?scope=core` payload); the remaining topic files follow, sorted.
+  const SKILL_SLUGS = ["synap", "synap-schema", "synap-ui"];
 
   const packages: SkillPackage[] = [];
-  for (const { slug, files } of SKILL_FILES) {
+  for (const slug of SKILL_SLUGS) {
+    const pkgDir = path.join(skillsDir, slug);
+    if (!fs.existsSync(pkgDir)) continue;
+
+    let mdFiles: string[];
+    try {
+      mdFiles = fs
+        .readdirSync(pkgDir)
+        .filter((f) => f.endsWith(".md"))
+        .sort();
+    } catch {
+      continue;
+    }
+    // SKILL.md first (the assembled monolith / core scope), then the rest.
+    mdFiles = mdFiles.filter((f) => f !== "SKILL.md");
+    if (fs.existsSync(path.join(pkgDir, "SKILL.md"))) {
+      mdFiles.unshift("SKILL.md");
+    }
+
     const loaded: SkillFile[] = [];
-    for (const file of files) {
-      const filePath = path.join(skillsDir, slug, file);
-      if (fs.existsSync(filePath)) {
-        try {
-          loaded.push({
-            path: file,
-            content: fs.readFileSync(filePath, "utf-8"),
-          });
-        } catch {
-          /* skip unreadable */
-        }
+    for (const file of mdFiles) {
+      const filePath = path.join(pkgDir, file);
+      try {
+        loaded.push({
+          path: file,
+          content: fs.readFileSync(filePath, "utf-8"),
+        });
+      } catch {
+        /* skip unreadable */
       }
     }
     if (loaded.length) packages.push({ slug, files: loaded });

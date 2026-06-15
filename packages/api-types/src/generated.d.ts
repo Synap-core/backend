@@ -3248,6 +3248,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 			meta: object;
 		}>;
+		aggregateTimeSeries: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+				subjectId?: string | undefined;
+				subjectType?: "user" | "message" | "apiKey" | "system" | "entity" | "chat" | "workspace" | "member" | "document" | "task" | "relation" | "project" | undefined;
+				profileSlug?: string | undefined;
+				eventTypes?: string[] | undefined;
+				period?: "day" | "week" | "month" | undefined;
+				range?: {
+					from: unknown;
+					to: unknown;
+				} | undefined;
+			};
+			output: {
+				points: {
+					x: string;
+					y: number;
+				}[];
+			};
+			meta: object;
+		}>;
 		count: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				userId?: string | undefined;
@@ -15800,6 +15821,44 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				completedAt: Date | null;
 				createdBy: string;
+			}[];
+			meta: object;
+		}>;
+	}>>;
+	agentRuns: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+				limit?: number | undefined;
+			};
+			output: {
+				id: string;
+				agentUserId: string | undefined;
+				agentType: string | undefined;
+				model: string | undefined;
+				provider: string | undefined;
+				costUsd: number | null | undefined;
+				tokensIn: number | undefined;
+				tokensOut: number | undefined;
+				tokensTotal: number | undefined;
+				latencyMs: number | undefined;
+				toolCount: number | undefined;
+				runStatus: string | undefined;
+				finishReason: string | undefined;
+				summary: string | undefined;
+				workspaceId: string | undefined;
+				sessionId: string | undefined;
+				correlationId: string | undefined;
+				createdAt: Date;
 			}[];
 			meta: object;
 		}>;

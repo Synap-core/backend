@@ -28,6 +28,8 @@ metadata:
 
 You build the surfaces the user sees: views over their data, bento dashboards, full workspaces tuned for a domain. The core rule: **emergent complexity.** A workspace is a lens; a view is a lens; a bento is a composition of lenses. Everything renders through the cell system, nothing is hardcoded.
 
+---
+
 ## Before you build anything
 
 Always inventory. Never hallucinate view types, widget kinds, or profiles.
@@ -48,6 +50,8 @@ GET /api/hub/views?userId={userId}&workspaceId={workspaceId}
 ```
 
 Widget definitions are the source of truth for which cells are installed and how to configure them. **Never guess cell kinds.** If a cell doesn't appear in the registry, don't reference it (unless it's a browser-native cell from the manifest).
+
+---
 
 ## Four things you can build
 
@@ -74,6 +78,8 @@ Widget definitions are the source of truth for which cells are installed and how
    - Always `GET /api/hub/widget-definitions` first — if a cell already covers the need, use it. New cell definitions are permanent; only create when genuinely novel.
    - For the full in-frame query/mutate/shell-actions API see the `synap` skill's **ViewFrame Cells** section (or load `synap-ui:SKILL` via `GET /api/hub/skills/system?sections=synap-ui:SKILL`).
 
+---
+
 ## View types (16 total, 12 implemented)
 
 Pick one that matches the data's shape AND the user's intent:
@@ -98,6 +104,8 @@ Pick one that matches the data's shape AND the user's intent:
 | `mindmap`        | no          | (Defer)                                                    |
 
 Decision: the data has statuses → `kanban`. Dates → `calendar`. Many columns → `table`. Mixed types → `masonry` or `bento`. Full reference in **`view-types.md`**.
+
+---
 
 ## Creating a view
 
@@ -125,6 +133,8 @@ POST /api/hub/views
 ```
 
 The `config` shape varies by view type — kanban needs `groupBy`, calendar needs a date property, gallery needs an image property. When in doubt, fetch an existing view of the same type first and mirror its structure.
+
+---
 
 ## Bento layouts
 
@@ -161,6 +171,8 @@ Block kinds:
 - `widget` — renders a registered cell by `widgetKind` with `config`
 
 Full widget catalog in **`widget-catalog.md`**. Layout patterns in **`bento-recipes.md`**.
+
+---
 
 ## Creating or proposing a workspace
 
@@ -210,6 +222,8 @@ The canonical flow:
 
 4. **On no**, don't commit. Offer to adjust.
 
+---
+
 ## Proposing vs. extending
 
 Before proposing a new workspace, ask: does one of the user's existing workspaces fit? A "Content" workspace and a "Writing" workspace are the same lens. Adding a view to the existing workspace is almost always better than creating a new one.
@@ -221,6 +235,8 @@ Create new when:
 - A different team/collaborator set makes sense
 
 Otherwise: add a view, add a bento block, add properties — don't multiply workspaces.
+
+---
 
 ## Worked example — "Make me a CRM"
 
@@ -241,6 +257,8 @@ Otherwise: add a view, add a bento block, add properties — don't multiply work
 4. Show to user. Confirm.
 5. Commit via `POST /workspaces`.
 
+---
+
 ## Arranging a bento after creation
 
 ```json
@@ -249,6 +267,8 @@ POST /api/hub/views/{bentoViewId}/arrange
 ```
 
 `bento.arrange` is auto-approved by default. Safe to run without hesitation when the user rearranges or adds widgets.
+
+---
 
 ## Common mistakes
 
@@ -260,6 +280,8 @@ POST /api/hub/views/{bentoViewId}/arrange
 6. **Ignoring color/icon.** Profiles and workspaces both take `uiHints.icon` and `uiHints.color` — set them. Untitled gray workspaces feel like a bug.
 7. **Hardcoding config for view types you haven't checked.** Each view type's `config` shape is different. Get an example from `/views` first.
 8. **Forgetting entityScope implications.** A view on a pod-scope profile (`note`) will show entities from every workspace the user can access — filter appropriately if you want workspace-local results.
+
+---
 
 ## AI Companion integration
 
@@ -288,6 +310,8 @@ These cell keys are registered in the browser app but may not appear in `GET /ap
 | `entity-list`   | Bento / views      | List of entities for a given profile                         |
 
 **Rule:** If a cell key is not in `GET /api/hub/widget-definitions`, do NOT reference it in bento config unless it is one of the four browser-native keys above. Unknown keys will silently fail to render.
+
+---
 
 ## When you need more
 

@@ -74,3 +74,10 @@ data/
 # oh-my-claudecode runtime state — local agent memory, sessions, checkpoints,
 # transient HUD/stdin caches. Per-machine, per-session: never source-controlled.
 .omc/
+
+# Skill packages: the monolithic SKILL.md is a GENERATED build artifact
+# (skills/build.mjs assembles it from _skill.yaml + _order.txt + topic files,
+# which ARE the source of truth). Regenerate with `node skills/build.mjs`.
+skills/synap/SKILL.md
+skills/synap-schema/SKILL.md
+skills/synap-ui/SKILL.md

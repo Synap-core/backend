@@ -407,7 +407,7 @@ async function materializeDocument(
       .values({
         id: subjectId,
         userId: (data.userId as string) ?? "sync",
-        workspaceId: (data.workspaceId as string) ?? "",
+        workspaceId: (data.workspaceId as string) ?? null,
         title: (data.title as string) ?? "Synced Document",
         type: (data.type as string) ?? "text",
         language: data.language as string | undefined,
@@ -453,7 +453,7 @@ async function materializeRelation(
       .values({
         id: subjectId,
         userId: (data.userId as string) ?? "sync",
-        workspaceId: (data.workspaceId as string) ?? "",
+        workspaceId: (data.workspaceId as string) ?? null,
         sourceEntityId: data.sourceEntityId as string,
         targetEntityId: data.targetEntityId as string,
         type: (data.type as string) ?? "related_to",

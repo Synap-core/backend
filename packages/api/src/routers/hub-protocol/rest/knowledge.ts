@@ -101,7 +101,18 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     const limit = parseInt(query.limit ?? "50", 10);
     const offset = parseInt(query.offset ?? "0", 10);
 
-    const workspaceId = query.workspaceId ?? authUserId;
+    // A caller-supplied workspaceId MUST be one this agent's user can access,
+    // else an agent key scoped to one workspace could read another workspace's
+    // keys (the capability scope only proves "may call knowledge reads", not
+    // "may see THIS workspace"). No param → the user's personal namespace.
+    let workspaceId = authUserId;
+    if (query.workspaceId) {
+      const accessible = await getUserAccessibleWorkspaceIds(authUserId);
+      if (!accessible.includes(query.workspaceId)) {
+        return c.json({ error: "Forbidden: not a member of workspace" }, 403);
+      }
+      workspaceId = query.workspaceId;
+    }
 
     try {
       const items = await knowledgeKeysRepository.list({
@@ -237,7 +248,16 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     const { key } = c.req.valid("param");
     const { workspaceId: wsParam } = c.req.valid("query");
     const decodedKey = decodeURIComponent(key);
-    const workspaceId = wsParam ?? authUserId;
+    // Membership-gate a caller-supplied workspaceId (see list route above).
+    // No param → the user's personal namespace.
+    let workspaceId = authUserId;
+    if (wsParam) {
+      const accessible = await getUserAccessibleWorkspaceIds(authUserId);
+      if (!accessible.includes(wsParam)) {
+        return c.json({ error: "Forbidden: not a member of workspace" }, 403);
+      }
+      workspaceId = wsParam;
+    }
 
     try {
       const record = await knowledgeKeysRepository.getByKey(

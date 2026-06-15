@@ -965,6 +965,7 @@ export const captureRouter = router({
                   // user id makes cross-tenant collision impossible.
                   namespace: `${userId}:${input.idempotencyKey}`,
                   provider: "capture",
+                  userId,
                 }),
               }
             : {}),

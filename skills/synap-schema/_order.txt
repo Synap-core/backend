@@ -1,0 +1,12 @@
+profiles.md
+before-you-touch.md
+discover-profiles.md
+extend-vs-create.md
+creating-profiles.md
+property-defs.md
+overlay-properties.md
+entity-scope.md
+relations.md
+worked-example.md
+common-mistakes.md
+more.md

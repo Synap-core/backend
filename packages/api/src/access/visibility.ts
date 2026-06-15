@@ -12,7 +12,7 @@
 import { and, eq } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { workspaceLensWhere } from "../utils/user-visible-where.js";
 import type { AccessContext } from "./context.js";
 
 /**
@@ -21,12 +21,60 @@ import type { AccessContext } from "./context.js";
  * consumer is dead abstraction).
  */
 export type VisibilityRule =
-  /** Visible if the row's workspace is pod-wide (NULL) or one the user belongs to. */
-  | { kind: "workspace"; workspaceColumn: AnyPgColumn }
+  /**
+   * SHARED workspace data: visible if the row's workspace is pod-wide (NULL,
+   * readable by everyone) or one the user belongs to — narrowed by the active
+   * lens (`access.workspaceLens`). Use for config/shared rows (automations,
+   * channels, relation-defs…). NOT for user-private rows — NULL would leak them
+   * pod-wide; use `workspaceOwned` for those.
+   */
+  | {
+      kind: "workspace";
+      workspaceColumn: AnyPgColumn;
+      /**
+       * Keep pod-wide globals (workspaceId NULL) visible even when a SPECIFIC
+       * workspace lens is active. Default false → a focused workspace shows only
+       * its own rows. Set true ONLY for substrate config that every workspace
+       * needs (builtin widgets, base relation-defs). At the user-wide/no-lens
+       * view globals are always visible regardless.
+       */
+      includeGlobalsInLens?: boolean;
+    }
+  /**
+   * PRIVATE workspace data: the workspace lens AND the row is owned by the user.
+   * The `userId` floor means a NULL-workspace (unfiled) row stays visible only
+   * to its owner, never pod-wide. Use for entities/notes/documents etc.
+   *
+   * PLANNED: no table registers this kind yet — it is the landing zone for the
+   * user-private tables in the in-progress consolidation (first consumer =
+   * entities/documents). Kept ahead of its consumer deliberately, not by
+   * oversight; unit-tested in access.test.ts. Wire or remove when that wave lands.
+   */
+  | {
+      kind: "workspaceOwned";
+      workspaceColumn: AnyPgColumn;
+      userColumn: AnyPgColumn;
+      includeGlobalsInLens?: boolean;
+    }
   /** Visible only to the owning user. */
   | { kind: "user"; userColumn: AnyPgColumn }
   /** No restriction — globally readable (e.g. system catalogs). */
-  | { kind: "podWide" };
+  | { kind: "podWide" }
+  /**
+   * Escape hatch for a table whose visibility can't be expressed by the shapes
+   * above (e.g. `profiles`: a 4-way scope enum + a grant-table EXISTS). The
+   * predicate is lens- and user-aware via the passed `AccessContext`. Keep these
+   * rare — one real consumer each, predicate co-located with the table's repo.
+   *
+   * PLANNED: no table registers this kind yet — first consumer = `profiles`
+   * (whose reads still flow through ProfileRepository.getAccessibleProfiles, NOT
+   * scopedDb, today; see registry.ts). Ahead of its consumer deliberately;
+   * unit-tested in access.test.ts. Wire or remove when the profiles wave lands.
+   */
+  | {
+      kind: "custom";
+      predicate: (access: AccessContext) => SQL | undefined;
+    };
 
 /**
  * Minimal shape of a Drizzle relational-query namespace (`db.query.<table>`).
@@ -90,7 +138,24 @@ export function visibilityPredicate(
     case "user":
       return eq(rule.userColumn, access.userId);
     case "workspace":
-      return userVisibleWhere(rule.workspaceColumn, access.userId);
+      return workspaceLensWhere(
+        rule.workspaceColumn,
+        access.userId,
+        access.workspaceLens,
+        { includeGlobals: rule.includeGlobalsInLens }
+      );
+    case "workspaceOwned":
+      return and(
+        eq(rule.userColumn, access.userId),
+        workspaceLensWhere(
+          rule.workspaceColumn,
+          access.userId,
+          access.workspaceLens,
+          { includeGlobals: rule.includeGlobalsInLens }
+        )
+      );
+    case "custom":
+      return rule.predicate(access);
   }
 }
 

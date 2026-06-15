@@ -33,6 +33,9 @@ import {
   uploadDocumentVersionSnapshot,
   ProfileResolutionService,
   sql,
+  links,
+  type LinkEndpointType,
+  type LinkType,
 } from "@synap/database";
 import type { EventRecord } from "@synap/database";
 import { ProposalStatus, workspaces } from "@synap/database/schema";
@@ -401,6 +404,13 @@ function buildProposalReviewModel(params: {
   const graph = isCompositeProposalData(rawData)
     ? buildProposalGraph(rawData)
     : undefined;
+  // Durable before-snapshot captured at proposal-creation time (entity updates).
+  // Preferred over the live `current` entity so the diff survives approval and
+  // concurrent edits. Absent on legacy proposals → falls back to `current`.
+  const previousData =
+    isRequestShapedProposalData(rawData) && rawData.previousData
+      ? rawData.previousData
+      : undefined;
   const reviewEvents = events.map(toProposalReviewEvent);
   const requestedEvent =
     reviewEvents.find((event) => event.phase === "requested") ??
@@ -432,7 +442,12 @@ function buildProposalReviewModel(params: {
     requestedEventId: request.requestedEventId ?? requestedEvent?.eventId,
     validatedEventId: request.validatedEventId ?? validatedEvent?.eventId,
     completedEventId: request.completedEventId ?? completedEvent?.eventId,
-    changes: buildProposalChanges(requestData, request.changeType, current),
+    changes: buildProposalChanges(
+      requestData,
+      request.changeType,
+      current,
+      previousData
+    ),
     ...(graph ? { graph } : {}),
     events: reviewEvents,
   };
@@ -530,6 +545,18 @@ function buildProposalChanges(
     preview?: string | null;
     type?: string | null;
     properties?: unknown;
+  },
+  /**
+   * Durable before-snapshot persisted at proposal-creation time (entity updates).
+   * Preferred over `current` so the diff survives approval/materialization and
+   * concurrent edits. Absent on legacy proposals → `current` is used.
+   */
+  previousData?: {
+    title?: string | null;
+    description?: string | null;
+    profileSlug?: string | null;
+    documentId?: string | null;
+    properties?: Record<string, unknown>;
   }
 ): ProposalReviewChange[] {
   const changes: ProposalReviewChange[] = [];
@@ -540,14 +567,25 @@ function buildProposalChanges(
         ? "create"
         : "update";
 
-  // Current-state lookup so update diffs show before→after (not just after).
-  // Maps each proposed top-level field to the matching entity column.
+  // Before-state lookup so update diffs show before→after (not just after).
+  // Source of truth: the persisted `previousData` snapshot when present (durable),
+  // otherwise the live `current` entity columns (legacy fallback).
+  const snapshotProps =
+    previousData?.properties && typeof previousData.properties === "object"
+      ? previousData.properties
+      : undefined;
   const currentProps =
     current?.properties && typeof current.properties === "object"
       ? (current.properties as Record<string, unknown>)
       : {};
   const beforeFor = (key: string): unknown => {
-    if (operation !== "update" || !current) return undefined;
+    if (operation !== "update") return undefined;
+    if (previousData) {
+      // The snapshot stores keys as title/description/profileSlug/documentId.
+      const snapValue = previousData[key as keyof typeof previousData];
+      if (snapValue !== undefined) return snapValue ?? undefined;
+    }
+    if (!current) return undefined;
     if (key === "title") return current.title ?? undefined;
     if (key === "description") return current.preview ?? undefined;
     if (key === "profileSlug") return current.type ?? undefined;
@@ -567,6 +605,12 @@ function buildProposalChanges(
     }
   }
 
+  const beforePropFor = (key: string): unknown => {
+    if (operation !== "update") return undefined;
+    if (snapshotProps && key in snapshotProps) return snapshotProps[key];
+    return currentProps[key];
+  };
+
   const properties =
     data.properties && typeof data.properties === "object"
       ? (data.properties as Record<string, unknown>)
@@ -576,7 +620,7 @@ function buildProposalChanges(
       path: `properties.${key}`,
       label: labelFromPath(key),
       operation,
-      before: operation === "update" ? currentProps[key] : undefined,
+      before: beforePropFor(key),
       after: value,
       valueType: valueTypeOf(value),
     });
@@ -1212,6 +1256,29 @@ export const proposalsRouter = router({
           materialized: compositeMaterialized,
         };
 
+        // Provenance: record `session --produced--> entity` for every entity this
+        // session created (the composite/AI-capture path doesn't flow through the
+        // worker's materializeEntity hook). Together with that hook and the explicit
+        // BYOA capture-back, the session room's Deliverable surface populates by
+        // construction. Idempotent via the links unique-edge index.
+        const producedEntityIds = compositeMaterialized.entityIds ?? [];
+        if (proposal.sessionId && producedEntityIds.length > 0) {
+          await db
+            .insert(links)
+            .values(
+              producedEntityIds.map((entityId) => ({
+                workspaceId: proposal.workspaceId ?? null,
+                fromType: "session" as LinkEndpointType,
+                fromId: proposal.sessionId as string,
+                toType: "entity" as LinkEndpointType,
+                toId: entityId,
+                linkType: "produced" as LinkType,
+                metadata: {},
+              }))
+            )
+            .onConflictDoNothing();
+        }
+
         await db
           .update(proposals)
           .set({
@@ -1670,6 +1737,25 @@ export const proposalsRouter = router({
           ...(payload as StoredProposalData),
           materialized: createMaterialized,
         };
+
+        // Provenance: record `session --produced--> entity` for this single-entity
+        // create too (mirrors the composite path + the worker hook). Without this
+        // the most common AI-single-create case would silently miss the session
+        // room's Deliverable surface. Idempotent via the links unique-edge index.
+        if (proposal.sessionId && createdEntity?.id) {
+          await db
+            .insert(links)
+            .values({
+              workspaceId: proposal.workspaceId ?? null,
+              fromType: "session" as LinkEndpointType,
+              fromId: proposal.sessionId,
+              toType: "entity" as LinkEndpointType,
+              toId: createdEntity.id,
+              linkType: "produced" as LinkType,
+              metadata: {},
+            })
+            .onConflictDoNothing();
+        }
 
         await db
           .update(proposals)

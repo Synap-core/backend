@@ -45,6 +45,7 @@ import {
 } from "../utils/command-template.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import { scopedDb, AccessContext } from "../access/index.js";
 import {
   ensureAgentThread,
   getAgentIdBySlug,
@@ -180,12 +181,18 @@ export const intelligenceRouter = router({
       })
     )
     .query(async ({ ctx, input }) => {
-      if (!ctx.workspaceId) return { commands: [] };
-      const list = await db.query.intelligenceCommands.findMany({
-        where: eq(intelligenceCommands.workspaceId, ctx.workspaceId),
-        orderBy: desc(intelligenceCommands.updatedAt),
-        limit: input.limit,
-      });
+      // Workspace lens: focused → that workspace's commands only (== prior
+      // eq(ws)); no workspace → pod-wide commands (globals) instead of the old
+      // empty list, per the "globals in the pod-wide view" decision.
+      const list = await scopedDb(
+        AccessContext.from(ctx).withLens(ctx.workspaceId ?? null)
+      ).findMany<typeof intelligenceCommands.$inferSelect>(
+        intelligenceCommands,
+        {
+          orderBy: desc(intelligenceCommands.updatedAt),
+          limit: input.limit,
+        }
+      );
       return { commands: list };
     }),
 

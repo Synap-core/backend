@@ -690,6 +690,7 @@ export class ImportOrchestrator {
                 // never collide across tenants.
                 namespace: `${this.ctx.userId}:${input.idempotencyKey}`,
                 provider: "import",
+                userId: this.ctx.userId,
               }),
             }
           : {}),
@@ -918,8 +919,14 @@ export class ImportOrchestrator {
           // userId-scoped (see apply()) — global index, no cross-tenant collision.
           namespace: `${this.ctx.userId}:${input.idempotencyKey}`,
           provider: "import",
+          userId: this.ctx.userId,
         })
       : undefined;
+    // One dedup guard shared across all chunks of THIS apply, so a duplicate
+    // op.ref split across two chunks can't merge two distinct entities (the
+    // per-call Set would otherwise reset each chunk). Fresh per apply → retries
+    // (a new applyLarge call) still link correctly via the registered keys.
+    const idemSeen = idempotency ? new Set<string>() : undefined;
 
     const totalChunks = Math.max(
       1,
@@ -952,6 +959,7 @@ export class ImportOrchestrator {
           workspaceScoped: true,
           seedRefToRealId: refToRealId,
           ...(idempotency ? { idempotency } : {}),
+          ...(idemSeen ? { idemSeen } : {}),
         }
       );
       // Carry this chunk's ref→id mappings forward for cross-chunk relations.

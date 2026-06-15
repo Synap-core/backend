@@ -115,6 +115,14 @@ export interface CreateEntityInput {
   status?: string;
   priority?: "low" | "medium" | "high" | "urgent";
   dueDate?: string;
+  // Agent attribution — the IS threads these so writes are recorded as agent
+  // actions (governance/provenance); the CLI omits them. The backend reads them
+  // from the body (sessionId is also accepted via the x-session-id header).
+  agentUserId?: string;
+  sessionId?: string;
+  reasoning?: string;
+  sourceMessageId?: string;
+  extractedFromMessageId?: string;
 }
 
 export interface UpdateEntityInput {

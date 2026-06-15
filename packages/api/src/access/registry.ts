@@ -21,6 +21,10 @@ import {
   playbooks,
   links,
   playbookRuns,
+  relationDefs,
+  widgetDefinitions,
+  skillTriggers,
+  intelligenceCommands,
 } from "@synap/database/schema";
 import { registerVisibility } from "./visibility.js";
 
@@ -82,6 +86,45 @@ registerVisibility({
   table: playbookRuns,
   query: () => db.query.playbookRuns,
   rule: { kind: "workspace", workspaceColumn: playbookRuns.workspaceId },
+});
+
+// SUBSTRATE config — NULL workspace = pod-wide builtin/base config that EVERY
+// workspace needs (base relation types, builtin widgets), so globals stay
+// visible inside a focused workspace (`includeGlobalsInLens: true`). userId here
+// is creator-attribution, NOT a visibility floor.
+registerVisibility({
+  table: relationDefs,
+  query: () => db.query.relationDefs,
+  rule: {
+    kind: "workspace",
+    workspaceColumn: relationDefs.workspaceId,
+    includeGlobalsInLens: true,
+  },
+});
+registerVisibility({
+  table: widgetDefinitions,
+  query: () => db.query.widgetDefinitions,
+  rule: {
+    kind: "workspace",
+    workspaceColumn: widgetDefinitions.workspaceId,
+    includeGlobalsInLens: true,
+  },
+});
+
+// Operational workspace config (member-shared; NOT substrate) — a focused
+// workspace shows only its own rows, pod-wide rows surface in the user-wide view.
+registerVisibility({
+  table: skillTriggers,
+  query: () => db.query.skillTriggers,
+  rule: { kind: "workspace", workspaceColumn: skillTriggers.workspaceId },
+});
+registerVisibility({
+  table: intelligenceCommands,
+  query: () => db.query.intelligenceCommands,
+  rule: {
+    kind: "workspace",
+    workspaceColumn: intelligenceCommands.workspaceId,
+  },
 });
 
 // NOTE: only tables actually READ through scopedDb() are registered here.

@@ -85,34 +85,41 @@ export class RelationDefRepository {
    * List relation definitions visible from a workspace.
    * Includes both workspace-scoped defs AND pod-wide defs (workspace_id IS NULL).
    */
-  async list(workspaceId: string): Promise<RelationDef[]> {
+  async list(workspaceId?: string | null): Promise<RelationDef[]> {
+    // Workspace is a LENS: present → this workspace's defs + pod-wide globals;
+    // absent (null/undefined) → globals only. Never bind a falsy workspaceId
+    // into the uuid column (that throws `invalid input syntax for type uuid`).
     return this.db.query.relationDefs.findMany({
       where: (relationDefs, { or, isNull, eq }) =>
-        or(
-          eq(relationDefs.workspaceId, workspaceId),
-          isNull(relationDefs.workspaceId)
-        ),
+        workspaceId
+          ? or(
+              eq(relationDefs.workspaceId, workspaceId),
+              isNull(relationDefs.workspaceId)
+            )
+          : isNull(relationDefs.workspaceId),
       orderBy: (relationDefs, { asc }) => [asc(relationDefs.slug)],
     });
   }
 
   /**
-   * Get a relation definition by slug. Searches workspace-scoped first,
-   * then falls back to pod-wide.
+   * Get a relation definition by slug. With a workspace lens, prefers the
+   * workspace-scoped def then falls back to pod-wide; without one, pod-wide only.
    */
   async getBySlug(
     slug: string,
-    workspaceId: string
+    workspaceId?: string | null
   ): Promise<RelationDef | undefined> {
-    // Prefer workspace-scoped
-    const wsDef = await this.db.query.relationDefs.findFirst({
-      where: and(
-        eq(relationDefs.slug, slug),
-        eq(relationDefs.workspaceId, workspaceId)
-      ),
-    });
-    if (wsDef) return wsDef;
-    // Fall back to pod-wide
+    // Prefer workspace-scoped only when a workspace lens is active.
+    if (workspaceId) {
+      const wsDef = await this.db.query.relationDefs.findFirst({
+        where: and(
+          eq(relationDefs.slug, slug),
+          eq(relationDefs.workspaceId, workspaceId)
+        ),
+      });
+      if (wsDef) return wsDef;
+    }
+    // Pod-wide (global) fallback.
     return this.db.query.relationDefs.findFirst({
       where: and(
         eq(relationDefs.slug, slug),

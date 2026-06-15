@@ -22,7 +22,7 @@
  * risk.
  */
 
-import { db, eq, and, entityExternalLinks } from "@synap/database";
+import { db, eq, and, entityExternalLinks, relations } from "@synap/database";
 
 /** nangoConnectionId sentinel for non-OAuth imports (mirrors entity-upsert-service). */
 const DIRECT_IMPORT_CONNECTION_ID = "direct-import";
@@ -36,17 +36,38 @@ export interface EntityLinkIdempotency {
     provider: string,
     externalId: string
   ) => Promise<void>;
+  /**
+   * Relation-retry idempotency: entities are keyed via external-links, but
+   * relations have no external-link row, so a retry would re-create them. This
+   * checks DB REALITY — true if a relation (sourceEntityId, targetEntityId,
+   * type) already exists for this tenant. Checking reality (not inferring from
+   * which entities were linked) is required: a crash AFTER pass-1 but BEFORE
+   * pass-2 leaves entities-without-relations, and the retry must still create
+   * the relations. Scoped by userId so the global relations table can't leak
+   * cross-tenant. Only invoked when idempotency is active (keyed apply), so the
+   * per-relation query cost is paid only by retry-safe imports/captures.
+   */
+  relationExists: (
+    sourceEntityId: string,
+    targetEntityId: string,
+    type: string
+  ) => Promise<boolean>;
 }
 
 /**
  * Build the idempotency hooks for a materialization, keyed in
  * `entity_external_links` by (provider, externalId). `namespace` MUST be a
  * client-stable id (proposalId / capture idempotencyKey) so a retry reproduces
- * the same external ids and links instead of re-creating.
+ * the same external ids and links instead of re-creating. `userId` scopes the
+ * relation-existence check to the tenant.
  */
 export function makeExternalLinkIdempotency(
   database: typeof db,
-  { namespace, provider }: { namespace: string; provider: string }
+  {
+    namespace,
+    provider,
+    userId,
+  }: { namespace: string; provider: string; userId: string }
 ): EntityLinkIdempotency {
   return {
     namespace,
@@ -74,6 +95,18 @@ export function makeExternalLinkIdempotency(
           status: "active",
         })
         .onConflictDoNothing();
+    },
+    relationExists: async (sourceEntityId, targetEntityId, type) => {
+      const existing = await database.query.relations.findFirst({
+        where: and(
+          eq(relations.userId, userId),
+          eq(relations.sourceEntityId, sourceEntityId),
+          eq(relations.targetEntityId, targetEntityId),
+          eq(relations.type, type)
+        ),
+        columns: { id: true },
+      });
+      return Boolean(existing);
     },
   };
 }

@@ -65,6 +65,84 @@ describe("visibilityPredicate — one rule per scoping shape", () => {
     );
     expect(p).toBeDefined();
   });
+
+  it("workspace rule is defined in all three lens states (user-wide / globals / narrowed)", () => {
+    const rule = {
+      kind: "workspace" as const,
+      workspaceColumn: entities.workspaceId,
+    };
+    expect(visibilityPredicate(rule, op.withLens(undefined))).toBeDefined();
+    expect(visibilityPredicate(rule, op.withLens(null))).toBeDefined();
+    expect(visibilityPredicate(rule, op.withLens("ws-1"))).toBeDefined();
+  });
+
+  it("workspace rule with a focused lens is defined with and without includeGlobalsInLens", () => {
+    const focused = op.withLens("ws-1");
+    // default: focused workspace only (globals excluded)
+    expect(
+      visibilityPredicate(
+        { kind: "workspace", workspaceColumn: entities.workspaceId },
+        focused
+      )
+    ).toBeDefined();
+    // substrate opt-in: globals stay visible inside the focused workspace
+    expect(
+      visibilityPredicate(
+        {
+          kind: "workspace",
+          workspaceColumn: entities.workspaceId,
+          includeGlobalsInLens: true,
+        },
+        focused
+      )
+    ).toBeDefined();
+  });
+
+  it("workspaceOwned → a defined predicate (user floor AND workspace lens)", () => {
+    const p = visibilityPredicate(
+      {
+        kind: "workspaceOwned",
+        workspaceColumn: entities.workspaceId,
+        userColumn: entities.userId,
+      },
+      op
+    );
+    expect(p).toBeDefined();
+  });
+
+  it("custom → receives the AccessContext and returns its predicate", () => {
+    let seen: AccessContext | undefined;
+    const sentinel = visibilityPredicate(
+      {
+        kind: "custom",
+        predicate: (access) => {
+          seen = access;
+          return undefined;
+        },
+      },
+      op
+    );
+    expect(seen).toBe(op);
+    expect(sentinel).toBeUndefined();
+  });
+});
+
+describe("AccessContext.withLens — the optional workspace lens", () => {
+  const op = AccessContext.operator({ userId: "u1" });
+
+  it("defaults to user-wide (undefined lens), preserving identity", () => {
+    expect(op.workspaceLens).toBeUndefined();
+  });
+
+  it("withLens carries the 3-state lens without mutating identity", () => {
+    expect(op.withLens("ws-1").workspaceLens).toBe("ws-1");
+    expect(op.withLens(null).workspaceLens).toBeNull();
+    expect(op.withLens(undefined).workspaceLens).toBeUndefined();
+    // identity is preserved across the narrowing
+    const lensed = op.withLens("ws-1");
+    expect(lensed.userId).toBe("u1");
+    expect(lensed.actor).toBe("operator");
+  });
 });
 
 describe("registry — declaration is mandatory", () => {

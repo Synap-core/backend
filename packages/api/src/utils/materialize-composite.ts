@@ -34,6 +34,17 @@ export async function createRelationsFromRefs(
     /** Validate/normalize the relation type (e.g. slug fallback). */
     resolveRelationType?: (type: string) => string;
     onError?: (err: unknown, type: string) => void;
+    /**
+     * Relation-retry idempotency (U1): true if this (source, target, type) edge
+     * already exists for the tenant → skip re-creating it. Entities are keyed
+     * via external-links; relations dedup by DB existence. Only passed when
+     * idempotency is active.
+     */
+    relationExists?: (
+      sourceEntityId: string,
+      targetEntityId: string,
+      type: string
+    ) => Promise<boolean>;
   }
 ): Promise<MaterializeRelationResult[]> {
   const relations: MaterializeRelationResult[] = [];
@@ -45,6 +56,14 @@ export async function createRelationsFromRefs(
       const type = opts?.resolveRelationType
         ? opts.resolveRelationType(op.type)
         : op.type;
+      // Retry-safe: an identical edge already in the graph (a retry, or a
+      // duplicate op within this proposal) is skipped, not re-created.
+      if (
+        opts?.relationExists &&
+        (await opts.relationExists(sourceEntityId, targetEntityId, type))
+      ) {
+        continue;
+      }
       await relationCaller.create({ sourceEntityId, targetEntityId, type });
       relations.push({ sourceEntityId, targetEntityId, type });
     } catch (err) {
@@ -154,7 +173,23 @@ export interface MaterializeOptions {
       provider: string,
       externalId: string
     ) => Promise<void>;
+    // Relation-retry idempotency: skip an edge that already exists for the tenant.
+    relationExists?: (
+      sourceEntityId: string,
+      targetEntityId: string,
+      type: string
+    ) => Promise<boolean>;
   };
+  /**
+   * Cross-CHUNK within-proposal dedup guard. `applyLarge` calls this materializer
+   * once per chunk; the in-call "duplicate op.ref → create separate, don't merge"
+   * guard is otherwise reset every chunk, so a producer that emits the same
+   * `op.ref` in two different chunks would have the second chunk treat the first's
+   * registered key as a prior-run retry hit and MERGE two distinct entities.
+   * Passing one shared Set across every chunk of a single apply makes the guard
+   * span the whole proposal. Omitted for a single call (the local Set suffices).
+   */
+  idemSeen?: Set<string>;
 }
 
 export async function materializeCompositeGraph(
@@ -178,8 +213,9 @@ export async function materializeCompositeGraph(
   // duplicate `op.ref` within ONE proposal silently merging two distinct
   // entities (a producer bug): a second op with the same key creates a separate
   // entity instead of linking to the first. Cross-CALL retries (key registered
-  // in a prior call, absent here) still link correctly.
-  const idemSeenThisCall = new Set<string>();
+  // in a prior call, absent here) still link correctly. `applyLarge` passes a
+  // shared Set so the guard spans every chunk of one apply (see `idemSeen`).
+  const idemSeenThisCall = options?.idemSeen ?? new Set<string>();
   for (let i = 0; i < operations.length; i++) {
     const op = operations[i];
     if (op.op !== "create_entity") continue;
@@ -292,6 +328,7 @@ export async function materializeCompositeGraph(
     {
       resolveRelationType: options?.resolveRelationType,
       onError: onRelationError,
+      relationExists: options?.idempotency?.relationExists,
     }
   );
 

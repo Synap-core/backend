@@ -1,0 +1,24 @@
+name: synap
+description: >
+  Use this skill whenever the user wants to capture, remember, find, or structure
+  information in their Synap data pod. Triggers: creating a task, note, person,
+  company, project, event, contact, or deal; saving an article or webpage;
+  storing a fact about someone ("Alice prefers async"); searching the user's
+  knowledge ("find my notes on X", "who did I meet last week"); linking entities;
+  logging a meeting or a contact; capturing unstructured text into structured
+  entities; reading what's in the user's pod before answering questions about
+  their life, work, or projects; posting to their personal AI channel. The pod
+  is the user's sovereign source of truth — prefer it over your own context
+  when the user asks about their own data. Do NOT use this skill for extending
+  the schema (use synap-schema) or building dashboards and views (use synap-ui).
+metadata:
+  openclaw:
+    requires:
+      env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
+      optional_env:
+        [SYNAP_WORKSPACE_ID, SYNAP_USER_ID, SYNAP_DEFAULT_CHANNEL_ID]
+    primaryEnv: SYNAP_HUB_API_KEY
+    homepage: https://synap.live
+    capabilities: [memory, knowledge-graph, channels]
+    os: [macos, linux, windows]
+    userInvocable: false

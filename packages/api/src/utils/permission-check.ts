@@ -923,6 +923,18 @@ async function createProposal(opts: {
   const resolvedCorrelationId = correlationId ?? randomUUID();
   const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
 
+  // Capture a BEFORE-snapshot for entity UPDATE proposals so the review layer can
+  // render a durable before→after field diff. Without this the diff relies on the
+  // live entity still holding its pre-update state at read time, which breaks once
+  // the proposal is approved (entity now mutated) or the entity is edited
+  // concurrently. We snapshot ONLY the fields the proposed `data` touches.
+  const previousData = await captureEntityPreviousData(
+    singularType,
+    action,
+    targetId,
+    data
+  );
+
   // TX-1: append the `.requested` event AND insert the proposal atomically, so a
   // proposal can never exist without its originating spine event (and the
   // correlation linkage is always consistent). BEHAVIOR CHANGE (intentional): a
@@ -961,6 +973,7 @@ async function createProposal(opts: {
       summary,
       correlationId: resolvedCorrelationId,
       ...(reqEventId ? { requestedEventId: reqEventId } : {}),
+      ...(previousData ? { previousData } : {}),
     };
 
     const pendingInput: CreatePendingProposalInput = {
@@ -1113,6 +1126,84 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
     reviewPath: `/proposals/${row.id}`,
     reviewUrl: `${STUDIO_APP_URL}/proposals/${row.id}`,
   };
+}
+
+/**
+ * Snapshot the BEFORE state of an entity for an UPDATE proposal, scoped to the
+ * fields the proposed `data` actually touches. Returns `undefined` for any
+ * non-entity / non-update target, when the targetId is not a real entity UUID,
+ * or when the entity can't be loaded (best-effort — never blocks proposal
+ * creation). The shape mirrors `RequestShapedProposalData["previousData"]`.
+ */
+async function captureEntityPreviousData(
+  subjectType: string,
+  action: string,
+  targetId: string,
+  data: Record<string, unknown>
+): Promise<RequestShapedProposalData["previousData"] | undefined> {
+  const normalizedAction = action === "edit" ? "update" : action;
+  if (subjectType !== "entity" || normalizedAction !== "update")
+    return undefined;
+  if (!isLikelyUUID(targetId)) return undefined;
+
+  try {
+    const [entity] = await db
+      .select({
+        title: entities.title,
+        preview: entities.preview,
+        type: entities.type,
+        documentId: entities.documentId,
+        properties: entities.properties,
+      })
+      .from(entities)
+      .where(eq(entities.id, targetId))
+      .limit(1);
+    if (!entity) return undefined;
+
+    const snapshot: NonNullable<RequestShapedProposalData["previousData"]> = {};
+    if (data.title !== undefined) snapshot.title = entity.title ?? null;
+    if (data.description !== undefined)
+      snapshot.description = entity.preview ?? null;
+    if (data.profileSlug !== undefined)
+      snapshot.profileSlug = entity.type ?? null;
+    if (data.documentId !== undefined)
+      snapshot.documentId = entity.documentId ?? null;
+
+    // Snapshot only the property keys the proposal sets or deletes, so the
+    // before-map stays scoped to what actually changes.
+    const proposedProps =
+      data.properties && typeof data.properties === "object"
+        ? (data.properties as Record<string, unknown>)
+        : {};
+    const deleteKeys = Array.isArray(data.deleteProperties)
+      ? (data.deleteProperties as unknown[]).filter(
+          (k): k is string => typeof k === "string"
+        )
+      : [];
+    const touchedKeys = new Set<string>([
+      ...Object.keys(proposedProps),
+      ...deleteKeys,
+    ]);
+    if (touchedKeys.size > 0) {
+      const currentProps =
+        entity.properties && typeof entity.properties === "object"
+          ? (entity.properties as Record<string, unknown>)
+          : {};
+      const beforeProps: Record<string, unknown> = {};
+      for (const key of touchedKeys) {
+        beforeProps[key] = currentProps[key];
+      }
+      snapshot.properties = beforeProps;
+    }
+
+    return Object.keys(snapshot).length > 0 ? snapshot : undefined;
+  } catch (err) {
+    logger.warn(
+      { err, targetId },
+      "captureEntityPreviousData failed (proposal created without before-snapshot)"
+    );
+    return undefined;
+  }
 }
 
 async function resolveProposalTargetName(

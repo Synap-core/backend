@@ -1,0 +1,22 @@
+name: synap-schema
+description: >
+  Use this skill when the user needs to extend Synap's data model — defining a
+  new type of thing (entity profile) or adding/modifying fields (property defs)
+  on existing types. Triggers: "I need a new type for podcasts/recipes/workouts/
+  clients/books/plants/investments", "add a priority field to tasks", "create a
+  property for tracking budget", "I want to track Y and it's not in my current
+  schema", defining custom relations, setting up a profile for a specific domain
+  (real estate, music production, research, fitness, cooking). Also triggers on:
+  "do I already have a profile for X?", "what fields does <profile> have?",
+  extending an existing profile with workspace-specific overlay properties.
+  Do NOT use this skill for creating instances of existing types — the core
+  `synap` skill handles that. This skill changes the SCHEMA, not the data.
+metadata:
+  openclaw:
+    requires:
+      env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
+    primaryEnv: SYNAP_HUB_API_KEY
+    homepage: https://synap.live
+    capabilities: [schema, profiles, properties]
+    os: [macos, linux, windows]
+    userInvocable: false

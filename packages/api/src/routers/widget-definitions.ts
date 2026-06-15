@@ -14,8 +14,9 @@
 import { z } from "zod";
 import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { getDb, and, eq, or, isNull } from "@synap/database";
+import { getDb, and, eq, or, isNull, asc } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
+import { scopedDb, AccessContext } from "../access/index.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { compileWidgetSource } from "../utils/widget-compiler.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
@@ -109,23 +110,20 @@ export const widgetDefinitionsRouter = router({
    * List active widget definitions for a workspace.
    * Returns system-wide builtins first, then workspace-specific custom widgets.
    */
+  // Workspace is a LENS: active workspace → that workspace's defs + pod-wide
+  // builtins (NULL); no workspace → builtins only (lens=null). Scoping is the
+  // registered `workspace` rule applied by scopedDb — behaviour-identical to the
+  // prior hand-rolled `or(isNull, eq(ws))` / `isNull` branch.
   list: podProcedure.query(async ({ ctx }) => {
-    const db = await getDb();
-    const rows = await db.query.widgetDefinitions.findMany({
-      where: and(
-        ctx.workspaceId
-          ? or(
-              isNull(widgetDefinitions.workspaceId),
-              eq(widgetDefinitions.workspaceId, ctx.workspaceId)
-            )
-          : isNull(widgetDefinitions.workspaceId),
-        eq(widgetDefinitions.isActive, true)
-      ),
-      orderBy: (t, { asc }) => [
+    const rows = await scopedDb(
+      AccessContext.from(ctx).withLens(ctx.workspaceId ?? null)
+    ).findMany<typeof widgetDefinitions.$inferSelect>(widgetDefinitions, {
+      where: eq(widgetDefinitions.isActive, true),
+      orderBy: [
         // Builtins first (workspaceId null sorts before UUIDs)
-        asc(t.workspaceId),
-        asc(t.category),
-        asc(t.name),
+        asc(widgetDefinitions.workspaceId),
+        asc(widgetDefinitions.category),
+        asc(widgetDefinitions.name),
       ],
     });
     return rows;

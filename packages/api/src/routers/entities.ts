@@ -31,6 +31,9 @@ import {
   EntityRepository,
   DocumentRepository,
   drizzleSql,
+  links,
+  type LinkEndpointType,
+  type LinkType,
 } from "@synap/database";
 import {
   entities,
@@ -526,6 +529,29 @@ export const entitiesRouter = router({
           code: "INTERNAL_SERVER_ERROR",
           message: `Entity creation failed: ${msg}`,
         });
+      }
+
+      // Provenance: when this entity is created inside a focus session, record
+      // `session --produced--> entity`. This is the AUTO-APPROVED (granted) inline
+      // path — the default live BYOA case (`entity.create` ∈ DEFAULT_AUTO_APPROVE),
+      // which never enqueues the materializer worker nor a proposal. Without this
+      // emit the session room's Deliverable surface stays empty even on success.
+      // The proposal-gated paths (worker + composite + single-entity approve) emit
+      // the same link; together all four paths populate by construction.
+      // Idempotent via the links unique-edge index.
+      if (ctx.sessionId && createdEntity?.id) {
+        await database
+          .insert(links)
+          .values({
+            workspaceId: entityWorkspaceId ?? null,
+            fromType: "session" as LinkEndpointType,
+            fromId: ctx.sessionId,
+            toType: "entity" as LinkEndpointType,
+            toId: createdEntity.id,
+            linkType: "produced" as LinkType,
+            metadata: {},
+          })
+          .onConflictDoNothing();
       }
 
       // 3b. Auto-sync entity_id properties → relations (non-blocking)

@@ -180,10 +180,18 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
 
-    const workspaceId = c.req.query("workspaceId");
-    if (!workspaceId) {
+    const workspaceIdParam = c.req.query("workspaceId");
+    if (!workspaceIdParam) {
       return c.json({ error: "workspaceId is required" }, 400);
     }
+    // Validate the caller is a member of the requested workspace and bind the
+    // acting user. Without this the read scoped by a caller-supplied workspaceId
+    // ALONE with no userId floor — exposing every member's private sessions in
+    // any workspace id an agent key chose to pass (cross-user + cross-workspace).
+    const acting = await resolveActingContext(c, {
+      workspaceId: workspaceIdParam,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
     const statusRaw = c.req.query("status") ?? "all";
     const limitRaw = parseInt(c.req.query("limit") ?? "20", 10);
@@ -198,7 +206,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       : "all";
 
     try {
-      const conditions = [eq(focusSessions.workspaceId, workspaceId)];
+      const conditions = [
+        eq(focusSessions.workspaceId, acting.workspaceId),
+        eq(focusSessions.userId, acting.userId),
+      ];
       if (status !== "all") {
         conditions.push(eq(focusSessions.status, status));
       }
@@ -230,16 +241,24 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     }
 
     const id = c.req.param("id");
-    const workspaceId = c.req.query("workspaceId");
-    if (!workspaceId) {
+    const workspaceIdParam = c.req.query("workspaceId");
+    if (!workspaceIdParam) {
       return c.json({ error: "workspaceId query param is required" }, 400);
     }
+    // Membership-validate the workspace + bind the acting user (userId floor) —
+    // see the list route above; without it any agent key could read any user's
+    // session in any workspace.
+    const acting = await resolveActingContext(c, {
+      workspaceId: workspaceIdParam,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
     try {
       const row = await db.query.focusSessions.findFirst({
         where: and(
           eq(focusSessions.id, id),
-          eq(focusSessions.workspaceId, workspaceId)
+          eq(focusSessions.workspaceId, acting.workspaceId),
+          eq(focusSessions.userId, acting.userId)
         ),
       });
 
@@ -293,9 +312,15 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
 
     try {
       // Idempotency: if a correlationId was given, return the existing session.
+      // Floor by the acting user + bound workspace so a guessed/colliding
+      // correlationId can't return another user's session (defense-in-depth).
       if (body.correlationId) {
         const existing = await db.query.focusSessions.findFirst({
-          where: eq(focusSessions.correlationId, body.correlationId),
+          where: and(
+            eq(focusSessions.correlationId, body.correlationId),
+            eq(focusSessions.userId, userId),
+            eq(focusSessions.workspaceId, workspaceId)
+          ),
         });
         if (existing) return c.json(existing);
       }

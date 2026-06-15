@@ -221,7 +221,19 @@ function FlowFields({
   submitting,
   error,
 }: FlowFieldsProps) {
-  const inputs = flow.ui.nodes.filter((n) => n.type === "input");
+  // Pod Admin is an email + password OPERATOR console. The shared Kratos config
+  // may have other methods enabled (passkey / webauthn / oidc) for the BROWSER
+  // app's login flow — those inject extra UI nodes (e.g. a `passkey_login_trigger`)
+  // that this generic renderer would otherwise draw as a stray, purposeless input.
+  // Render ONLY the credential groups so this form is always a clean email+password
+  // operator login, regardless of what methods the browser flow turns on.
+  const CREDENTIAL_GROUPS = new Set(["default", "password"]);
+  const inputs = flow.ui.nodes.filter(
+    (n) =>
+      n.type === "input" &&
+      (!n.group || CREDENTIAL_GROUPS.has(n.group)) &&
+      n.attributes?.type !== "button"
+  );
 
   return (
     <form className="flex flex-col gap-4" onSubmit={onSubmit}>

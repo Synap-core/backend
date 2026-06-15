@@ -18,6 +18,7 @@ import {
 } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { scopedDb, AccessContext } from "../access/index.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
@@ -744,13 +745,15 @@ export const skillsRouter = router({
   listTriggers: workspaceProcedure
     .input(z.object({ skillId: z.string().uuid().optional() }))
     .query(async ({ input, ctx }) => {
-      const conditions = [eq(skillTriggers.workspaceId, ctx.workspaceId)];
-      if (input.skillId)
-        conditions.push(eq(skillTriggers.skillId, input.skillId));
-      return db
-        .select()
-        .from(skillTriggers)
-        .where(and(...conditions));
+      // Workspace lens (focused → this workspace's triggers only); scoping is the
+      // registered `workspace` rule. Behaviour-identical to the prior eq(ws).
+      return scopedDb(
+        AccessContext.from(ctx).withLens(ctx.workspaceId)
+      ).findMany<typeof skillTriggers.$inferSelect>(skillTriggers, {
+        where: input.skillId
+          ? eq(skillTriggers.skillId, input.skillId)
+          : undefined,
+      });
     }),
 
   toggleTrigger: workspaceProcedure

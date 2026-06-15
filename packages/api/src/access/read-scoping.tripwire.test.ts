@@ -77,6 +77,12 @@ const ALLOWLIST = new Set<string>([
   // User-scoped inside eventRepository.searchEvents({ userId }) — the workspaceId
   // is only a narrowing filter on already-user-scoped events.
   "subscriptions.ts::listAll",
+  // events has NO workspace_id column (workspace lives in JSONB data->>'workspaceId')
+  // so it cannot use scopedDb. The read is safe by construction: searchEvents
+  // ALWAYS floors by userId, and input.workspaceId is membership-checked against
+  // workspaceMembers before the read (events.ts:356-369). See WORKSPACE-LENS-
+  // CONSOLIDATION-PLAN.md §P3 (events → justified allowlist, not scopedDb).
+  "events.ts::aggregateTimeSeries",
 ]);
 
 function collectRouterFiles(dir: string): string[] {

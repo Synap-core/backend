@@ -27,6 +27,8 @@ metadata:
 
 You extend a user's Synap pod schema: new entity profiles, new properties on existing profiles, overlay properties scoped to one workspace. The core rule: **reuse before extending.** Creating duplicate profiles fractures the graph.
 
+---
+
 ## Before you touch anything
 
 Always inventory first. Never assume the schema is empty.
@@ -41,6 +43,8 @@ GET /api/hub/property-defs?userId={userId}&workspaceId={workspaceId}&profileId={
 ```
 
 The `synap` skill's `scripts/orient.sh` already fetches profiles — reuse its output.
+
+---
 
 ## Discover profiles — never assume
 
@@ -67,6 +71,8 @@ Custom workspace templates (devplane, content, etc.) add their own profiles enti
 
 Before creating a new profile: **does one of these already fit?** A podcast episode is arguably an `article`. A meeting is an `event`. A book to read is an `article` or `bookmark`. Err on the side of reuse + extension, not creation.
 
+---
+
 ## When to extend an existing profile vs. create a new one
 
 Extend when:
@@ -82,6 +88,8 @@ Create new when:
 - The domain model genuinely calls for a new first-class type (recipe, workout, podcast episode, investment, plant, medication, vehicle, property listing…)
 
 Prefer **inheritance** over new profiles when a system parent fits. `contact extends person` is the pattern — a new `client` profile can `parentProfileSlug: "contact"` and only add the fields that differ.
+
+---
 
 ## Creating a new profile
 
@@ -100,6 +108,8 @@ POST /api/hub/profiles
 ```
 
 Then add properties one by one (see below). You do NOT declare properties inline on the profile — they're separate rows.
+
+---
 
 ## Creating properties
 
@@ -131,6 +141,8 @@ For linking properties, always use `entity_id` with `targetProfileSlug` in const
 
 This enables auto-sync (see `../synap/linking.md`) — the property becomes a typed link that shows up in graph traversals automatically.
 
+---
+
 ## Workspace overlay properties
 
 New concept (2026-04-10+). A single profile (say `task`) can have **different fields in different workspaces** without copying the profile. Set `overlay: true` on `POST /property-defs`:
@@ -154,6 +166,8 @@ Use cases:
 
 Overlays don't leak: workspace A can't see workspace B's overlay properties even though both share the profile. For the full scope model, read **`property-types.md`** §Overlay.
 
+---
+
 ## Entity scope (pod-wide vs. workspace-scoped)
 
 Profiles have an `entityScope` that determines where entities of that type live:
@@ -162,6 +176,8 @@ Profiles have an `entityScope` that determines where entities of that type live:
 - `entityScope: "workspace"` — entities live in the workspace they were created in. Good for deals, files, workspace-specific artifacts.
 
 Defaults to `workspace` if not set on the profile. The user can toggle this per profile in ProfileEditor Settings. If you're creating a profile for something clearly pod-wide (a person, a podcast the user follows, a book in their library), set `entityScope: "pod"` explicitly.
+
+---
 
 ## Custom relations
 
@@ -181,6 +197,8 @@ POST /api/hub/relation-defs
 ```
 
 Defining a relation def is rarely worth it — `related_to` + a property usually suffices. Only create one when the relationship is semantic enough that UI should treat it specially (e.g., show "mentored by Jane" on a person's profile card).
+
+---
 
 ## Worked example — "I want to track podcasts I listen to"
 
@@ -213,6 +231,8 @@ Defining a relation def is rarely worth it — `related_to` + a property usually
 
 7. Tell the user. "I added `podcast` and `podcast_episode` to your pod with linking between them. You can create your first episode now, or want me to also add a view for it?" (Hand off to the `synap-ui` skill if they say yes.)
 
+---
+
 ## Common mistakes
 
 1. **Creating a profile that already exists (e.g., `meeting` when `event` fits).** Always inventory first.
@@ -222,6 +242,8 @@ Defining a relation def is rarely worth it — `related_to` + a property usually
 5. **Forgetting `entityScope`.** Defaults to `workspace`. If the thing is pod-wide (people, books, podcasts), set it explicitly.
 6. **Creating an overlay when a base property is wanted.** Overlays only appear in one workspace. If the user wants the field everywhere, don't set `overlay: true`.
 7. **Creating a custom profile when extension would work.** `client extends contact` is cleaner than a parallel `client` profile.
+
+---
 
 ## When you need more
 

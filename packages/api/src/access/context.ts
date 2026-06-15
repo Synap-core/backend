@@ -36,7 +36,14 @@ export class AccessContext {
     /** Set iff a confirmed AI agent is the actor; the agent's user id. */
     readonly agentUserId: string | undefined,
     /** "operator" (human/UI) or "agent" (AI/Hub Protocol). */
-    readonly actor: Actor
+    readonly actor: Actor,
+    /**
+     * The active workspace LENS, or `undefined` for the pod-wide (user-wide)
+     * view. The user floor is ALWAYS applied regardless; the lens only narrows
+     * (see `workspaceLensWhere`). 3-state: `undefined` = all my workspaces +
+     * globals · `null` = globals only · `"<id>"` = that workspace + globals.
+     */
+    readonly workspaceLens: string | null | undefined = undefined
   ) {}
 
   /** Operator/UI boundary — built from the tRPC context (Kratos cookie). */
@@ -84,6 +91,21 @@ export class AccessContext {
     return ctx.isHubProtocol
       ? AccessContext.agent(ctx)
       : AccessContext.operator(ctx);
+  }
+
+  /**
+   * Return a copy narrowed to a workspace lens (from `X-Workspace-Id` / an
+   * explicit request param). Opt-in: a context with no lens stays user-wide, so
+   * existing scopedDb consumers are unchanged. Pass `undefined` for user-wide,
+   * `null` for globals-only, a workspace id to narrow to it (+ globals).
+   */
+  withLens(workspaceLens: string | null | undefined): AccessContext {
+    return new AccessContext(
+      this.userId,
+      this.agentUserId,
+      this.actor,
+      workspaceLens
+    );
   }
 
   /** True iff a confirmed agentUserId is present (NOT merely "came via hub"). */
