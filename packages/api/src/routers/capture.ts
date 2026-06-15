@@ -570,6 +570,9 @@ export const captureRouter = router({
           relations: structureResult.relations,
           followUp: structureResult.followUp,
           targetWorkspaceId: structureResult.targetWorkspaceId ?? null,
+          targetWorkspaceReason: structureResult.targetWorkspaceReason ?? null,
+          targetWorkspaceConfidence:
+            structureResult.targetWorkspaceConfidence ?? null,
           dedupCandidates: {} as Record<
             string,
             Array<{
@@ -658,6 +661,9 @@ export const captureRouter = router({
         relations: structureResult.relations,
         followUp: null as string | null,
         targetWorkspaceId: structureResult.targetWorkspaceId ?? null,
+        targetWorkspaceReason: structureResult.targetWorkspaceReason ?? null,
+        targetWorkspaceConfidence:
+          structureResult.targetWorkspaceConfidence ?? null,
         dedupCandidates,
         // Additive: true when one or more dedup searches threw, so the caller
         // can distinguish "checked, no duplicates" from "didn't check". Omitted

@@ -138,6 +138,9 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     path: "/knowledge/search",
     tags: ["Knowledge"],
     summary: "Full-text search knowledge entries",
+    deprecated: true,
+    description:
+      "DEPRECATED — prefer POST /knowledge/ask, whose procedural lane calls the exact same searchFullText. Still functional for existing integrations.",
     request: {
       query: z.object({
         q: z.string().optional(),

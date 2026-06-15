@@ -407,10 +407,12 @@ function buildProposalReviewModel(params: {
   // Durable before-snapshot captured at proposal-creation time (entity updates).
   // Preferred over the live `current` entity so the diff survives approval and
   // concurrent edits. Absent on legacy proposals → falls back to `current`.
-  const previousData =
-    isRequestShapedProposalData(rawData) && rawData.previousData
-      ? rawData.previousData
-      : undefined;
+  // `previousData` is declared on RequestShapedProposalData in @synap-core/types
+  // (src); read it via a local shape so this compiles against the published dist
+  // until the types package rebuilds.
+  const previousData = isRequestShapedProposalData(rawData)
+    ? (rawData as ProposalPreviousDataCarrier).previousData
+    : undefined;
   const reviewEvents = events.map(toProposalReviewEvent);
   const requestedEvent =
     reviewEvents.find((event) => event.phase === "requested") ??
@@ -537,6 +539,19 @@ function toProposalReviewEvent(event: {
   };
 }
 
+/** Before-snapshot persisted on an UPDATE proposal's stored data. Mirrors the
+ * `previousData` field declared on RequestShapedProposalData in @synap-core/types. */
+interface ProposalPreviousData {
+  title?: string | null;
+  description?: string | null;
+  profileSlug?: string | null;
+  documentId?: string | null;
+  properties?: Record<string, unknown>;
+}
+/** Local read-shape so the persisted snapshot is accessible against the published
+ * @synap-core/types dist before it rebuilds with the new field. */
+type ProposalPreviousDataCarrier = { previousData?: ProposalPreviousData };
+
 function buildProposalChanges(
   data: Record<string, unknown>,
   changeType: string,
@@ -551,13 +566,7 @@ function buildProposalChanges(
    * Preferred over `current` so the diff survives approval/materialization and
    * concurrent edits. Absent on legacy proposals → `current` is used.
    */
-  previousData?: {
-    title?: string | null;
-    description?: string | null;
-    profileSlug?: string | null;
-    documentId?: string | null;
-    properties?: Record<string, unknown>;
-  }
+  previousData?: ProposalPreviousData
 ): ProposalReviewChange[] {
   const changes: ProposalReviewChange[] = [];
   const operation =

@@ -116,6 +116,32 @@ export type LargeImportOpts = {
 const ANALYZE_CHUNK_SIZE = 750;
 const APPLY_CHUNK_SIZE = 4000;
 
+/**
+ * The `data` payload for an `import.graph` proposal. Centralised so the three
+ * proposal-creation sites (submitBatch / analyze / analyzeLarge) cannot drift —
+ * a new provenance field is added ONCE, here. These keys are read by
+ * `buildRequestFromProposal` → the proposal review UI:
+ *   source     — where it came from
+ *   sourceId   — stable id of this import unit (batchId, else the proposal target)
+ *   contentRef — object-storage location of the raw uploaded blob, when one exists
+ *   reasoning  — human-readable justification, when a producer has one
+ */
+function buildImportGraphProposalData(input: {
+  operations: CompositeProposalOperation[];
+  source: string;
+  sourceId: string;
+  contentRef?: { storageKey: string; mimeType?: string; size?: number };
+  reasoning?: string;
+}): Record<string, unknown> {
+  return {
+    operations: input.operations,
+    source: input.source,
+    sourceId: input.sourceId,
+    ...(input.contentRef ? { contentRef: input.contentRef } : {}),
+    ...(input.reasoning ? { reasoning: input.reasoning } : {}),
+  };
+}
+
 export class ImportOrchestrator {
   constructor(private readonly ctx: OrchestratorContext) {}
 
@@ -293,9 +319,11 @@ export class ImportOrchestrator {
 
         if (engineSource) {
           try {
-            const { proposalId } = await this.proposeImportGraph(engineSource, [
-              { path, content },
-            ]);
+            const { proposalId } = await this.proposeImportGraph(
+              engineSource,
+              [{ path, content }],
+              { sourceId: batchId, contentRef: { storageKey, mimeType } }
+            );
             if (proposalId) {
               // ONE composite graph proposal per file (was N per-row proposals).
               // entitiesCreated stays 0 — nothing materializes until approval.
@@ -413,7 +441,13 @@ export class ImportOrchestrator {
    */
   private async proposeImportGraph(
     source: ImportAdapterSource,
-    raw: Array<{ path: string; content: string }>
+    raw: Array<{ path: string; content: string }>,
+    provenance?: {
+      /** Stable id for this import unit (batchId) — used as `data.sourceId`. */
+      sourceId?: string;
+      /** Object-storage location of the raw uploaded blob, if any. */
+      contentRef?: { storageKey: string; mimeType?: string; size?: number };
+    }
   ): Promise<{ proposalId: string | null; itemCount: number }> {
     const { workspaceId, userId } = this.ctx;
     const items = adaptItems(source, raw);
@@ -507,16 +541,22 @@ export class ImportOrchestrator {
       summary = `Import ${proposal.stats.itemCount} ${source} item(s) → ${proposal.stats.typeCount} type(s), ${linkCount} link(s)`;
     }
 
+    const targetId = randomUUID();
     const { proposal: created } = await createEventBackedProposal({
       userId,
       workspaceId,
       targetType: "entity",
-      targetId: randomUUID(),
+      targetId,
       proposalType: "import.graph",
       action: "create",
       source: "intelligence",
       summary,
-      data: { operations, source },
+      data: buildImportGraphProposalData({
+        operations,
+        source,
+        sourceId: provenance?.sourceId ?? targetId,
+        contentRef: provenance?.contentRef,
+      }),
     });
 
     return {
@@ -620,16 +660,21 @@ export class ImportOrchestrator {
     }
 
     const ops = operations ?? [];
+    const targetId = randomUUID();
     const { proposal: created } = await createEventBackedProposal({
       userId,
       workspaceId,
       targetType: "entity",
-      targetId: randomUUID(),
+      targetId,
       proposalType: "import.graph",
       action: "create",
       source: "intelligence",
       summary,
-      data: { operations: ops, source: input.source },
+      data: buildImportGraphProposalData({
+        operations: ops,
+        source: input.source,
+        sourceId: targetId,
+      }),
     });
 
     logger.info(
@@ -859,7 +904,11 @@ export class ImportOrchestrator {
       action: "create",
       source: "intelligence",
       summary,
-      data: { operations, source: input.source },
+      data: buildImportGraphProposalData({
+        operations,
+        source: input.source,
+        sourceId: batchId,
+      }),
     });
 
     logger.info(

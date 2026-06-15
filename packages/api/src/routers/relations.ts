@@ -75,6 +75,17 @@ import {
  */
 const DirectionSchema = z.enum(["source", "target", "both"]).default("both");
 
+/**
+ * Generic built-in relation types introduced by "impact-aware writes". These
+ * are accepted by `create` WITHOUT a workspace relation-def (like
+ * SYSTEM_RELATION_TYPES) so the entity-create handler can auto-connect
+ * same-named facets across profiles. Kept deliberately generic.
+ *
+ * - `same_subject`: two entities (different profiles, same name) are facets of
+ *   one real-world subject — e.g. a `person` and a `company` both named "Acme".
+ */
+export const IMPACT_RELATION_TYPES = ["same_subject"] as const;
+
 export const relationsRouter = router({
   /**
    * List all semantic relations in the current workspace.
@@ -365,10 +376,12 @@ export const relationsRouter = router({
         });
       }
 
-      // Validate type: must be a system type OR a workspace-defined relation def
-      const isSystemType = (
-        SYSTEM_RELATION_TYPES as readonly string[]
-      ).includes(input.type);
+      // Validate type: must be a system/impact built-in OR a workspace-defined
+      // relation def. Impact built-ins (e.g. same_subject) need no workspace def
+      // so auto-connect can run on any workspace.
+      const isSystemType =
+        (SYSTEM_RELATION_TYPES as readonly string[]).includes(input.type) ||
+        (IMPACT_RELATION_TYPES as readonly string[]).includes(input.type);
       if (!isSystemType) {
         const database = await getDb();
         const relDefRepo = new RelationDefRepository(database);

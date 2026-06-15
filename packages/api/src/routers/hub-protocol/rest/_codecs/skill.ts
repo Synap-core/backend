@@ -29,7 +29,7 @@ export const WireSkillSchema = z
   .passthrough()
   .openapi("Skill");
 
-/** GET /skills/getSkills query. */
+/** GET /agent-skills/executable query (executable skills, skills table). */
 export const GetSkillsQuerySchema = z
   .object({
     userId: z.string().optional(),
@@ -38,7 +38,7 @@ export const GetSkillsQuerySchema = z
   })
   .openapi("GetSkillsQuery");
 
-/** GET /skills/getSkill query. */
+/** Legacy query codec (kept for back-compat; executable GET-by-id now uses a path param). */
 export const GetSkillQuerySchema = z
   .object({
     userId: z.string().optional(),
@@ -46,7 +46,7 @@ export const GetSkillQuerySchema = z
   })
   .openapi("GetSkillQuery");
 
-/** POST /skills/createSkill request body. */
+/** POST /agent-skills/executable request body (create an executable skill). */
 export const CreateSkillRequestSchema = z
   .object({
     userId: z.string(),

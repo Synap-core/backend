@@ -54,8 +54,9 @@ Ask yourself: _who does this knowledge serve?_ **There is no private AI scratchp
 > **Why this matters:** writing to the wrong lane degrades the graph. A gotcha you learned about the **current project** is **Work** (the active workspace — its domain). A best-practice that holds **everywhere** is **Global** (`--global`, pod-wide). A fact about **how the user works** is **User** (pod-wide, inferences proposed). `synap capture` echoes which lane + governance it used; check it.
 
 > **Read the write outcome — it guides your next move (it never blocks you).** Every write (`capture`, `observe`, `create entity`, `create relation`, `note`) reports one of two outcomes (and `--json` carries `"outcome"`):
+>
 > - **`stored`** → it's **live now**, recallable via `synap ask`.
-> - **`proposed`** → queued for the human's review, **like a git PR — not a failure, not a block.** Keep working: compose a whole graph of proposed changes in one session (reference the proposed entities, link them, add more) — they're staged together and go live when the human approves the batch. The only thing to remember: it's *under review*, so don't tell the user it's already applied. (Inferences about the user and writes to real workspaces are gated by design — expected, normal.)
+> - **`proposed`** → queued for the human's review, **like a git PR — not a failure, not a block.** Keep working: compose a whole graph of proposed changes in one session (reference the proposed entities, link them, add more) — they're staged together and go live when the human approves the batch. The only thing to remember: it's _under review_, so don't tell the user it's already applied. (Inferences about the user and writes to real workspaces are gated by design — expected, normal.)
 
 > **Substrate names (tables under the hood):** _semantic_ = `entities` (the `knowledge` profile, workspace-scoped = domain separation), _episodic_ = `knowledge_facts`, _procedural_ = `knowledge_keys` (pod-wide runbooks). `ask` queries across them so you never pick on read.
 

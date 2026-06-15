@@ -5,7 +5,19 @@
  * shared pod-wide across all agents. Routes use direct Drizzle — simple CRUD
  * on the agent_skills table.
  *
+ * TWO backing TABLES live behind this ONE route prefix (the tables stay
+ * separate — see WAVE4-ROUTES-REPORT.md):
+ *   - `agent_skills`  → doc-style know-how (slug/topics/body). Default routes.
+ *   - `skills`        → user-authored EXECUTABLE skills (kind=instruction|code,
+ *                       scope=pod|user|workspace, governed). Exposed under the
+ *                       `/agent-skills/executable*` sub-prefix (the `executable`
+ *                       discriminator). Replaces the legacy camelCase
+ *                       `/skills/getSkills|getSkill|createSkill` facade.
+ *
  * Routes (static before dynamic — Hono is first-match):
+ *   GET    /agent-skills/executable         — list executable skills (skills table)
+ *   GET    /agent-skills/executable/:id      — get one executable skill by id
+ *   POST   /agent-skills/executable         — create an executable skill
  *   GET    /agent-skills                    — list all skills
  *   GET    /agent-skills/search             — search by topics/query
  *   GET    /agent-skills/:id                — get a single skill by id
@@ -20,7 +32,12 @@ import { db, eq, and, agentSkills } from "@synap/database";
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  CreateSkillRequestSchema,
+  GetSkillsQuerySchema,
+  WireSkillSchema,
+} from "./_codecs/skill.js";
+import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -168,6 +185,143 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       200: { description: "Deleted" },
       403: { description: "Forbidden", schema: ErrorSchema },
     },
+  });
+
+  // ── OpenAPI metadata — executable skills (skills table) ──────────────────
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/agent-skills/executable",
+    tags: ["Agent Skills"],
+    summary: "List executable skills (skills table)",
+    request: { query: GetSkillsQuerySchema },
+    responses: {
+      200: {
+        description: "Executable skills",
+        schema: z.array(WireSkillSchema),
+      },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/agent-skills/executable/{id}",
+    tags: ["Agent Skills"],
+    summary: "Get one executable skill by id (skills table)",
+    request: {
+      params: z.object({ id: z.string() }),
+      query: z.object({ userId: z.string().optional() }),
+    },
+    responses: {
+      200: { description: "Executable skill", schema: WireSkillSchema },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/agent-skills/executable",
+    tags: ["Agent Skills"],
+    summary: "Create an executable skill (skills table)",
+    request: { body: CreateSkillRequestSchema },
+    responses: {
+      200: { description: "Created executable skill", schema: WireSkillSchema },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  // ── Executable skills (skills table) — static `/executable` prefix MUST be
+  //    registered before the dynamic `/agent-skills/:id` + `/:slug` routes so
+  //    Hono's first-match resolves the literal segment. ───────────────────────
+
+  /**
+   * GET /agent-skills/executable?userId=&workspaceId=&status=
+   * List executable skills (skills table) via the hub-protocol skills caller.
+   */
+  app.get("/agent-skills/executable", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Insufficient scope" }, 403);
+    }
+    const userId = c.req.query("userId") || (c.get("userId") as string);
+    const workspaceId = c.req.query("workspaceId");
+    const status = c.req.query("status");
+    try {
+      const caller = await getCaller(c);
+      const result = await caller.skills.getSkills({
+        userId,
+        workspaceId: workspaceId || undefined,
+        status: (status as "active" | "inactive" | "error" | "all") || "all",
+      });
+      return c.json(result);
+    } catch (err) {
+      logger.error({ err }, "agent-skills/executable list failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * GET /agent-skills/executable/:id?userId=
+   * Get a single executable skill (skills table) by id.
+   */
+  app.get("/agent-skills/executable/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Insufficient scope" }, 403);
+    }
+    const userId = c.req.query("userId") || (c.get("userId") as string);
+    const skillId = c.req.param("id");
+    if (!skillId) {
+      return c.json({ error: "id is required" }, 400);
+    }
+    try {
+      const caller = await getCaller(c);
+      const result = await caller.skills.getSkill({ userId, skillId });
+      return c.json(result);
+    } catch (err) {
+      logger.error({ err }, "agent-skills/executable get failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /agent-skills/executable
+   * Create an executable skill (skills table).
+   */
+  app.post("/agent-skills/executable", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Insufficient scope" }, 403);
+    }
+    const body = await c.req.json<{
+      userId: string;
+      name: string;
+      description?: string;
+      code: string;
+      parameters?: Record<string, unknown>;
+      category?: "action" | "context" | "utility" | "custom";
+      workspaceId?: string;
+    }>();
+    try {
+      const caller = await getCaller(c);
+      const result = await caller.skills.createSkill(body);
+      return c.json(result);
+    } catch (err) {
+      logger.error({ err }, "agent-skills/executable create failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
   });
 
   /**

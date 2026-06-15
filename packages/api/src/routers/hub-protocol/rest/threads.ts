@@ -1,5 +1,12 @@
 /**
- * Hub Protocol REST — threads (chat channels with thread/branch model)
+ * Hub Protocol REST — threads (a legacy-named facade over the `channels` table)
+ *
+ * A "thread" here IS a typed channel: every route below reads/writes the
+ * `channels` table (`channelType="thread"` and friends). The `/threads/*` wire
+ * paths and the `threadId` path params are KEPT for backward compatibility —
+ * browser, CLI, and IS clients depend on them, so renaming the wire surface to
+ * channel vocabulary is intentionally deferred (see WAVE4-ROUTES-REPORT.md).
+ * Internally the data is channel rows.
  *
  * Routes are wired via `app.openapi(routeDef, handler)` so request bodies /
  * params / query strings are validated against the per-route Zod schema BEFORE
@@ -126,7 +133,7 @@ export function registerThreadsRoutes(app: HubHono): void {
           )
         );
       }
-      const threads = await db
+      const channelRows = await db
         .select({
           id: channels.id,
           title: channels.title,
@@ -141,7 +148,7 @@ export function registerThreadsRoutes(app: HubHono): void {
         .where(whereClause)
         .orderBy(desc(channels.updatedAt))
         .limit(Math.min(limit, 200));
-      return c.json(threads, 200);
+      return c.json(channelRows, 200);
     } catch (err) {
       logger.error({ err, userId }, "listThreads failed");
       return c.json(

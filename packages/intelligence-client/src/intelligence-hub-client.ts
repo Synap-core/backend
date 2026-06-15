@@ -702,6 +702,10 @@ export class IntelligenceHubClient {
     }>;
     followUp: string | null;
     targetWorkspaceId?: string | null;
+    /** AI's reason for routing to `targetWorkspaceId` (provenance). */
+    targetWorkspaceReason?: string | null;
+    /** AI's confidence (0–1) in the `targetWorkspaceId` routing. */
+    targetWorkspaceConfidence?: number | null;
     /** Honesty markers when an input could not be fully extracted/structured. */
     degraded?: boolean;
     degradedReason?: string;

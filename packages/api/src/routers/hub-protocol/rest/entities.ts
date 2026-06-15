@@ -17,6 +17,7 @@ import { db, entities, profiles, eq, and, isNull } from "@synap/database";
 import { inArray } from "drizzle-orm";
 
 import { relationsRouter } from "../../relations.js";
+import { resolveEntityByName } from "../../../services/entity-resolution.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import {
   retrieve,
@@ -43,6 +44,172 @@ import {
   verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
+
+/** A single resolution suggestion / auto-connected facet (ids + names). */
+interface ResolutionSuggestion {
+  id: string;
+  name: string;
+  profileSlug: string;
+}
+
+/** The `resolution` block attached to a create response (additive). */
+interface CreateResolutionBlock {
+  /** SAME profile + SAME name → the agent should consider updating this instead. */
+  existingSameProfile?: ResolutionSuggestion;
+  /** DIFFERENT-profile facets we auto-connected the new entity to. */
+  autoConnected: Array<ResolutionSuggestion & { relation: string }>;
+  /** Everything worth a second look: the auto-connected facets (shallow). */
+  suggestions: ResolutionSuggestion[];
+}
+
+/**
+ * Run exact-name resolution around a just-created entity and (a) auto-connect
+ * cross-profile facets via a `same_subject` relation (governed by the SAME
+ * proposal/auto path as any relation write) and (b) return an advisory block.
+ *
+ * ADVISORY ONLY — every failure path returns `undefined`, never throws, so the
+ * underlying entity write is never blocked by resolution.
+ */
+async function buildCreateResolution(params: {
+  scopes: string[];
+  title: string;
+  profileSlug: string;
+  userId: string;
+  createdId?: string;
+  effectiveWorkspaceId: string | null;
+  resolvedAgentUserId?: string;
+  reasoning?: string;
+}): Promise<CreateResolutionBlock | undefined> {
+  try {
+    const { sameProfile, otherProfiles } = await resolveEntityByName({
+      name: params.title,
+      targetProfileSlug: params.profileSlug,
+      userId: params.userId,
+      excludeId: params.createdId,
+    });
+
+    if (!sameProfile && otherProfiles.length === 0) return undefined;
+
+    const autoConnected: CreateResolutionBlock["autoConnected"] = [];
+
+    // Auto-connect ONLY same-name + different-profile facets, and only when we
+    // have a concrete created entity id to connect FROM (proposed entities have
+    // no id yet — skip; the suggestion is still surfaced so the agent sees it).
+    if (params.createdId && otherProfiles.length > 0) {
+      const relCtx = await createHubProtocolCallerContext(
+        params.userId,
+        params.scopes,
+        params.effectiveWorkspaceId ?? undefined
+      );
+      const relCaller = relationsRouter.createCaller(
+        relCtx as Parameters<typeof relationsRouter.createCaller>[0]
+      );
+      for (const facet of otherProfiles) {
+        try {
+          await relCaller.create({
+            sourceEntityId: params.createdId,
+            targetEntityId: facet.id,
+            type: "same_subject",
+            ...(params.effectiveWorkspaceId
+              ? { workspaceId: params.effectiveWorkspaceId }
+              : {}),
+          });
+          autoConnected.push({
+            id: facet.id,
+            name: facet.name,
+            profileSlug: facet.profileSlug,
+            relation: "same_subject",
+          });
+        } catch (relErr) {
+          // A single auto-connect failure (e.g. cross-workspace facet, missing
+          // workspace) must not sink the whole resolution block.
+          logger.warn(
+            { relErr, facetId: facet.id, createdId: params.createdId },
+            "auto-connect same_subject failed"
+          );
+        }
+      }
+    }
+
+    // suggestions = the cross-profile facets worth a second look (shallow: the
+    // same set we auto-connected, surfaced explicitly for the agent).
+    const suggestions: ResolutionSuggestion[] = otherProfiles.map((e) => ({
+      id: e.id,
+      name: e.name,
+      profileSlug: e.profileSlug,
+    }));
+
+    return {
+      ...(sameProfile
+        ? {
+            existingSameProfile: {
+              id: sameProfile.id,
+              name: sameProfile.name,
+              profileSlug: sameProfile.profileSlug,
+            },
+          }
+        : {}),
+      autoConnected,
+      suggestions,
+    };
+  } catch (err) {
+    logger.warn({ err }, "buildCreateResolution failed (resolution omitted)");
+    return undefined;
+  }
+}
+
+/** The shallow `impact` block attached to an update response (additive). */
+interface UpdateImpactBlock {
+  /** Immediate relation neighbours of the updated entity (ids + names + relation). */
+  neighbors: Array<{
+    id: string;
+    name: string | null;
+    relation: string;
+  }>;
+  /** Total immediate neighbours (may exceed `neighbors.length` if capped). */
+  total: number;
+}
+
+/**
+ * Fetch the updated entity's IMMEDIATE relation neighbours (one hop) via the
+ * existing getConnections read — no new traversal. Returns `undefined` on any
+ * failure so the update is never blocked.
+ */
+async function buildUpdateImpact(params: {
+  scopes: string[];
+  userId: string;
+  workspaceId: string | null;
+  entityId: string;
+}): Promise<UpdateImpactBlock | undefined> {
+  try {
+    const ctx = await createHubProtocolCallerContext(
+      params.userId,
+      params.scopes,
+      params.workspaceId ?? undefined
+    );
+    const caller = relationsRouter.createCaller(
+      ctx as Parameters<typeof relationsRouter.createCaller>[0]
+    );
+    const result = await caller.getConnections({
+      entityId: params.entityId,
+      limit: 50,
+    });
+
+    const neighbors = result.connections.map((conn) => ({
+      id: conn.entityId,
+      name: (conn.entity?.title as string | null | undefined) ?? null,
+      relation: conn.relationType ?? conn.label,
+    }));
+
+    return { neighbors, total: result.counts.total };
+  } catch (err) {
+    logger.warn(
+      { err, entityId: params.entityId },
+      "buildUpdateImpact failed (impact omitted)"
+    );
+    return undefined;
+  }
+}
 
 export function registerEntitiesRoutes(app: HubHono): void {
   // ── GET /users/:userId/entities ─────────────────────────────────────────
@@ -610,7 +777,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
     path: "/entities/retrieve",
     tags: ["Entities"],
     summary: "Type-aware hybrid retrieval (Synap Retrieval Engine)",
+    deprecated: true,
     description:
+      "DEPRECATED — prefer POST /knowledge/ask, whose semantic lane calls the exact same retrieve() SRE. Still functional for existing integrations. " +
       "Infers entity type(s) + property hints from the query, fuses unscoped + " +
       "type-scoped recall (RRF), and returns ranked entities plus the inferred " +
       "understanding. Phase 1 of the SRE.",
@@ -848,10 +1017,34 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...(body.reasoning ? { reasoning: body.reasoning } : {}),
         ...(body.source ? { source: body.source } : {}),
       });
+
+      // ── Impact-aware writes (SHALLOW, exact-name) ─────────────────────────
+      // Turn the agent from a blind writer into a gardener: tell it what already
+      // exists under the same name, and auto-connect cross-profile facets.
+      // ADVISORY — any failure here must NOT break the write (the entity is
+      // already created above). The `resolution` block is purely additive.
+      const resolution = await buildCreateResolution({
+        scopes: c.get("scopes") as string[],
+        title: body.title,
+        profileSlug,
+        userId,
+        createdId: result.id,
+        effectiveWorkspaceId,
+        resolvedAgentUserId,
+        reasoning: body.reasoning,
+      });
+
       // Echo back the resolved workspace context so external callers can
       // confirm where the entity landed (especially useful when the body
       // omitted workspaceId and we resolved it from the profile's entityScope).
-      return c.json({ ...result, effectiveWorkspaceId }, 200);
+      return c.json(
+        {
+          ...result,
+          effectiveWorkspaceId,
+          ...(resolution ? { resolution } : {}),
+        },
+        200
+      );
     } catch (err) {
       logger.error({ err }, "createEntity failed");
       return c.json(
@@ -965,7 +1158,19 @@ export function registerEntitiesRoutes(app: HubHono): void {
           : {}),
         ...(body.reasoning ? { reasoning: body.reasoning } : {}),
       });
-      return c.json(result, 200);
+
+      // ── Impact-aware writes (SHALLOW) ─────────────────────────────────────
+      // Surface the entity's immediate relation neighbours so the AI sees what
+      // depends on what it just changed. Reuses the existing getConnections read
+      // (no new heavy traversal). ADVISORY — never blocks the update.
+      const impact = await buildUpdateImpact({
+        scopes: c.get("scopes") as string[],
+        userId,
+        workspaceId: effectiveWorkspaceId,
+        entityId,
+      });
+
+      return c.json({ ...result, ...(impact ? { impact } : {}) }, 200);
     } catch (err) {
       logger.error({ err, entityId }, "updateEntity failed");
       return c.json(

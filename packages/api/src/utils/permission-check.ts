@@ -92,6 +92,22 @@ export type PermissionResult =
   | { denied: true; reason: string };
 
 /**
+ * Before-snapshot of an entity captured at proposal-creation time for UPDATE
+ * proposals. Persisted on the proposal's stored `data` as `previousData` so the
+ * review layer renders a durable before→after diff. Mirrors the `previousData`
+ * field declared on RequestShapedProposalData in @synap-core/types — kept as a
+ * local shape so this compiles against the published types dist before it
+ * rebuilds with the new field.
+ */
+type EntityPreviousData = {
+  title?: string | null;
+  description?: string | null;
+  profileSlug?: string | null;
+  documentId?: string | null;
+  properties?: Record<string, unknown>;
+};
+
+/**
  * Base URL of the Synap Studio app where proposals are reviewed.
  * Override via `SYNAP_APP_URL` env var (e.g., self-hosted: `https://app.my-pod.com`).
  * Default: `https://studio.synap.live`.
@@ -1140,7 +1156,7 @@ async function captureEntityPreviousData(
   action: string,
   targetId: string,
   data: Record<string, unknown>
-): Promise<RequestShapedProposalData["previousData"] | undefined> {
+): Promise<EntityPreviousData | undefined> {
   const normalizedAction = action === "edit" ? "update" : action;
   if (subjectType !== "entity" || normalizedAction !== "update")
     return undefined;
@@ -1160,7 +1176,7 @@ async function captureEntityPreviousData(
       .limit(1);
     if (!entity) return undefined;
 
-    const snapshot: NonNullable<RequestShapedProposalData["previousData"]> = {};
+    const snapshot: EntityPreviousData = {};
     if (data.title !== undefined) snapshot.title = entity.title ?? null;
     if (data.description !== undefined)
       snapshot.description = entity.preview ?? null;
