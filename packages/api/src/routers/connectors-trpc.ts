@@ -38,6 +38,7 @@ import {
   getMessagingConnector,
   UnipileConnector,
 } from "../connectors/index.js";
+import { syncConnectionToImport } from "../services/connector-import-bridge.js";
 
 /** Env-based connector used for quick isConfigured() checks at startup. */
 const nango = new NangoConnector();
@@ -616,6 +617,66 @@ export const connectorsRouter = router({
       });
 
       return { success: true };
+    }),
+
+  /**
+   * On-demand "sync this connection now → proposal" (Universal Intake P4).
+   *
+   * Pulls records for a connected Nango source (connection + model) and routes
+   * them through the canonical import ENGINE so the sync lands as ONE governed
+   * `import.graph` proposal (review-gated), never a direct write. This is the
+   * connector→import bridge — the missing caller for `fetchRecords`.
+   *
+   * On-demand only; no scheduling (a later phase). Local-Nango only: requires a
+   * configured self-hosted Nango on this pod (same gate as the sibling
+   * connection procedures).
+   */
+  syncToImport: protectedProcedure
+    .input(
+      z.object({
+        connectionId: z.string().min(1),
+        model: z.string().min(1),
+        /** Workspace the resulting proposal is scoped to (defaults to primary). */
+        workspaceId: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const localNango = await getLocalNango();
+      if (!localNango) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Connector→import sync requires self-hosted Nango configured on this pod.",
+        });
+      }
+
+      let workspaceId = input.workspaceId ?? "";
+      if (!workspaceId) {
+        const database = await getDb();
+        const ws = await database.query.workspaces.findFirst({
+          columns: { id: true },
+        });
+        if (!ws?.id) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "No workspace found to scope the import proposal.",
+          });
+        }
+        workspaceId = ws.id;
+      }
+
+      const result = await syncConnectionToImport({
+        ctx: {
+          workspaceId,
+          userId: ctx.userId,
+          trpcCtx: ctx as unknown as Record<string, unknown>,
+        },
+        connectionId: input.connectionId,
+        model: input.model,
+        connector: localNango,
+      });
+
+      return result;
     }),
 
   /**

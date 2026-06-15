@@ -13,6 +13,8 @@ import { createLogger } from "@synap-core/core";
 import { ImportOrchestrator } from "../services/import-orchestrator.js";
 import { EventNames } from "@synap-core/types/events";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
+import { getBoss } from "@synap/jobs";
+import { IMPORT_CORPUS_QUEUE } from "@synap/jobs/workers/import-corpus-worker.js";
 
 const logger = createLogger({ module: "import-router" });
 
@@ -204,6 +206,44 @@ export const importRouter = router({
         relationType: input.relationType,
         aiStructure: input.aiStructure,
       });
+    }),
+
+  /**
+   * Background variant of `analyzeLarge`: enqueues the corpus onto the
+   * `import-corpus` pg-boss queue and returns immediately. The worker runs
+   * `ImportOrchestrator.analyzeLarge` server-side, producing ONE governed
+   * `import.graph` proposal — so very large imports no longer block the HTTP
+   * request. The handler that runs analyzeLarge is wired at api boot (IoC), so
+   * the jobs package never imports the orchestrator.
+   */
+  enqueueLargeImport: workspaceProcedure
+    .input(AnalyzeLargeImportSchema)
+    .mutation(async ({ ctx, input }) => {
+      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace ID required. Set X-Workspace-Id or pass workspaceId.",
+        });
+      }
+      const jobId = await getBoss().send(IMPORT_CORPUS_QUEUE, {
+        userId: ctx.userId as string,
+        workspaceId,
+        source: input.source,
+        items: input.items,
+      });
+      logger.info(
+        {
+          workspaceId,
+          userId: ctx.userId,
+          source: input.source,
+          itemCount: input.items.length,
+          jobId,
+        },
+        "Large import enqueued on import-corpus queue"
+      );
+      return { queued: true as const, jobId };
     }),
 
   /**

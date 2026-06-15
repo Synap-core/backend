@@ -24,6 +24,7 @@ export { hubRouter } from "./routers/hub.js";
 export { hubProtocolRestApp } from "./routers/hub-protocol-rest.js";
 export { AUTOMATION_SCHEMA } from "./routers/hub-protocol/rest/automation-schema-doc.js";
 export { apiKeyService } from "./services/api-keys.js";
+export { ImportOrchestrator } from "./services/import-orchestrator.js";
 export { hubProtocolRouter } from "./routers/hub-protocol/index.js";
 export { integrationsCapabilitiesApp } from "./routers/integrations-capabilities.js";
 export { syncReceiveApp } from "./routers/sync.js";

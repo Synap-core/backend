@@ -27,6 +27,7 @@ import {
   ProfileResolutionService,
   PropertyDefRepository,
   EntityUpsertService,
+  DocumentRepository,
   PropertyValidationError,
   workspaces,
   workspaceMembers,
@@ -768,6 +769,25 @@ export const captureRouter = router({
         /** User-selected workspace override — takes precedence over session default. */
         targetWorkspaceId: z.string().uuid().nullish(),
         /**
+         * Disposition (P3 — store-vs-extract). When true AND `file` is present,
+         * the ORIGINAL source blob is stored and linked to the primary created
+         * entity. Default (absent/false) = today's extract-and-discard behavior:
+         * the binary is dropped and only the extracted entities are kept.
+         */
+        keepRaw: z.boolean().optional(),
+        /**
+         * The original source blob the client re-sends so it can be preserved
+         * when `keepRaw` is true. ONE file per capture (top-level, not per
+         * entity). `content` is base64-encoded. Ignored unless `keepRaw`.
+         */
+        file: z
+          .object({
+            content: z.string(),
+            mimeType: z.string(),
+            filename: z.string().optional(),
+          })
+          .optional(),
+        /**
          * Client-stable idempotency namespace (U1). When supplied, a retry of
          * this execute with the SAME key links the entities it already created
          * (keyed by `${key}:${tempId}`) instead of duplicating them. Distinct
@@ -1003,6 +1023,78 @@ export const captureRouter = router({
         },
         "Capture execute completed"
       );
+
+      // P3 — Disposition (store-vs-extract). DEFAULT (no keepRaw / no file) is
+      // byte-identical to today: the binary is dropped, only entities survive.
+      // OPT-IN: when keepRaw && file, preserve the ORIGINAL source blob and link
+      // it to the PRIMARY created entity via entity.documentId (the canonical
+      // entity↔document link, same as materialize-document.ts). Best-effort —
+      // a storage hiccup NEVER fails the capture (the entities are already in).
+      if (input.keepRaw && input.file) {
+        // Primary = first freshly created (non-linked) entity, else first overall.
+        const primary =
+          created.find((c) => !c.linked) ?? created[0] ?? undefined;
+        if (primary?.entityId) {
+          try {
+            const { storage } = await import("@synap/storage");
+            const ext = (input.file.mimeType.split("/")[1] || "bin")
+              .split(";")[0]
+              .split("+")[0];
+            const buffer = Buffer.from(input.file.content, "base64");
+            const key = storage.buildPath(
+              userId,
+              "entity",
+              primary.entityId,
+              ext
+            );
+            const metadata = await storage.upload(key, buffer, {
+              contentType: input.file.mimeType,
+            });
+
+            // Map mimeType → document `type` (the only typed enum it accepts).
+            // Binary blobs are NOT given `content` (that's a text v1 snapshot).
+            const docType: "text" | "markdown" | "code" | "pdf" | "docx" =
+              input.file.mimeType === "application/pdf" ? "pdf" : "text";
+
+            const docRepo = new DocumentRepository(database, eventRepo);
+            const createdDocument = await docRepo.create(
+              {
+                title: input.file.filename || "Source file",
+                type: docType,
+                storageUrl: metadata.url,
+                storageKey: metadata.path,
+                size: metadata.size,
+                mimeType: input.file.mimeType,
+                userId,
+                workspaceId: workspaceId ?? undefined,
+              },
+              userId
+            );
+
+            // Link the stored blob to the primary entity (entity.documentId).
+            await entityRepo.update(
+              primary.entityId,
+              { documentId: createdDocument.id },
+              userId
+            );
+
+            logger.info(
+              {
+                userId,
+                entityId: primary.entityId,
+                documentId: createdDocument.id,
+              },
+              "P3: raw source blob stored and linked to primary entity"
+            );
+          } catch (err) {
+            // Never fail the capture on a storage hiccup — log and continue.
+            logger.warn(
+              { err, userId, entityId: primary.entityId },
+              "P3: raw source blob storage failed (capture preserved)"
+            );
+          }
+        }
+      }
 
       // Emit capture.complete event — enables automation triggers + event log audit trail
       if (created.length > 0) {

@@ -9,13 +9,19 @@
 import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, or, desc, type SQL } from "@synap/database";
+import { db, eq, and, or, desc, inArray, type SQL } from "@synap/database";
 import {
   skills,
   skillTriggers,
   automations,
+  tools,
   type FlowDefinition,
 } from "@synap/database/schema";
+import {
+  getLinksFor,
+  createLinks,
+  deleteLink,
+} from "../services/links/links-service.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { scopedDb, AccessContext } from "../access/index.js";
@@ -809,5 +815,75 @@ export const skillsRouter = router({
         .delete(skillTriggers)
         .where(eq(skillTriggers.id, input.triggerId));
       return { success: true };
+    }),
+
+  /**
+   * The tools a skill requires (`skill → requires → tool` edges) + the skill.
+   * Powers the skill detail page and the editor's tool-attach UI.
+   */
+  getRequiredTools: protectedProcedure
+    .input(z.object({ skillId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const skill = await db.query.skills.findFirst({
+        where: eq(skills.id, input.skillId),
+      });
+      if (!skill)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Skill not found" });
+      const edges = await getLinksFor(userId, "skill", input.skillId);
+      const toolIds = edges
+        .filter((e) => e.linkType === "requires" && e.toType === "tool")
+        .map((e) => e.toId);
+      const requiredTools = toolIds.length
+        ? await db.select().from(tools).where(inArray(tools.id, toolIds))
+        : [];
+      return { skill, tools: requiredTools };
+    }),
+
+  /**
+   * Replace the set of tools a skill requires. Diffs against existing `requires`
+   * edges — adds new, removes dropped. (One skill ↔ many tools.) Idempotent.
+   */
+  setRequiredTools: protectedProcedure
+    .input(
+      z.object({
+        skillId: z.string().uuid(),
+        toolIds: z.array(z.string().uuid()),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const skill = await db.query.skills.findFirst({
+        where: eq(skills.id, input.skillId),
+      });
+      if (!skill)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Skill not found" });
+
+      const edges = await getLinksFor(userId, "skill", input.skillId);
+      const existing = edges.filter(
+        (e) => e.linkType === "requires" && e.toType === "tool"
+      );
+      const existingIds = new Set(existing.map((e) => e.toId));
+      const wanted = new Set(input.toolIds);
+
+      // Remove edges no longer wanted.
+      for (const e of existing) {
+        if (!wanted.has(e.toId)) await deleteLink(e.id);
+      }
+      // Add new edges.
+      const toAdd = input.toolIds.filter((id) => !existingIds.has(id));
+      if (toAdd.length) {
+        await createLinks(
+          toAdd.map((toolId) => ({
+            workspaceId: skill.workspaceId ?? null,
+            fromType: "skill" as const,
+            fromId: input.skillId,
+            toType: "tool" as const,
+            toId: toolId,
+            linkType: "requires" as const,
+          }))
+        );
+      }
+      return { skillId: input.skillId, toolIds: input.toolIds };
     }),
 });

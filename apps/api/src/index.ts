@@ -1660,6 +1660,30 @@ try {
         try {
           await startBoss();
           await registerAllWorkers();
+
+          // IoC: fill the import-corpus handler slot owned by @synap/jobs with
+          // the orchestrator binding. jobs owns the queue + worker; api (which
+          // alone may import the orchestrator) fills the slot here at boot —
+          // respecting the one-way api → jobs dependency. analyzeLarge produces
+          // a governed import.graph PROPOSAL (never a direct write) and does not
+          // read trpcCtx, so the empty ctx below is safe.
+          {
+            const { registerImportCorpusHandler } =
+              await import("@synap/jobs/workers/import-corpus-worker.js");
+            const { ImportOrchestrator } = await import("@synap/api");
+            registerImportCorpusHandler(async (p) => {
+              await new ImportOrchestrator({
+                workspaceId: p.workspaceId,
+                userId: p.userId,
+                trpcCtx: {},
+              }).analyzeLarge({
+                source: p.source as never,
+                items: p.items,
+              });
+            });
+            apiLogger.info("Registered import-corpus handler (IoC)");
+          }
+
           await registerCronSchedules();
           apiLogger.info(
             "pg-boss job queue started with all workers registered"

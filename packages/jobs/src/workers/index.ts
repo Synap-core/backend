@@ -62,6 +62,10 @@ import {
   handleLinkedInBulkImport,
   LINKEDIN_BULK_IMPORT_QUEUE,
 } from "./linkedin-bulk-import.js";
+import {
+  handleImportCorpus,
+  IMPORT_CORPUS_QUEUE,
+} from "./import-corpus-worker.js";
 import { handleSyncPush, SYNC_PUSH_QUEUE } from "./sync-push.js";
 import { handleSyncPull, SYNC_PULL_QUEUE } from "./sync-pull.js";
 import {
@@ -138,6 +142,7 @@ const ALL_QUEUES = [
   FEED_SOURCE_EXECUTE_QUEUE,
   FEED_SOURCE_ITEMS_QUEUE,
   LINKEDIN_BULK_IMPORT_QUEUE,
+  IMPORT_CORPUS_QUEUE,
   SYNC_PUSH_QUEUE,
   SYNC_PULL_QUEUE,
   SYNC_PUSH_FILES_QUEUE,
@@ -359,6 +364,13 @@ export async function registerAllWorkers(): Promise<void> {
     handleLinkedInBulkImport(job)
   );
   logger.info("Registered worker: linkedin-bulk-import");
+
+  // Large corpus import (on-demand — heavy background analyzeLarge → governed
+  // import.graph proposal). Handler slot filled by the api layer at boot (IoC).
+  await boss.work(IMPORT_CORPUS_QUEUE, async ([job]: any[]) =>
+    handleImportCorpus(job)
+  );
+  logger.info("Registered worker: import-corpus");
 
   // Hydration summary post — Orchestrator's first proactive message after
   // import review (Gap 3 of onboarding). One attempt, swallow-on-fail.

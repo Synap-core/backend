@@ -28,6 +28,7 @@ import { sharingRouter } from "./routers/sharing.js";
 import { templatesRouter } from "./routers/templates.js";
 import { whiteboardsRouter } from "./routers/whiteboards.js";
 import { skillsRouter } from "./routers/skills.js";
+import { toolsRouter } from "./routers/tools.js";
 import { backgroundTasksRouter } from "./routers/background-tasks.js";
 import { messageLinksRouter } from "./routers/message-links.js";
 import { profilesRouter } from "./routers/profiles.js";
@@ -99,6 +100,7 @@ export const coreRouter = router({
   templates: templatesRouter,
   whiteboards: whiteboardsRouter,
   skills: skillsRouter,
+  tools: toolsRouter,
   backgroundTasks: backgroundTasksRouter,
   messageLinks: messageLinksRouter,
   // Dynamic Schema System
