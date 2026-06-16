@@ -1216,10 +1216,8 @@ export const entitiesRouter = router({
         }
       }
 
-      const placementWorkspaceId = input.global
-        ? null
-        : (input.targetWorkspaceId ?? existing.workspaceId ?? null);
-      const governanceWorkspaceId = placementWorkspaceId;
+      const placementWorkspaceId = input.global ? null : existing.workspaceId;
+      const governanceWorkspaceId = existing.workspaceId ?? null;
       const overlayWorkspaceId =
         input.targetWorkspaceId ??
         ctx.workspaceId ??
@@ -1319,8 +1317,10 @@ export const entitiesRouter = router({
         ctx.userId
       );
 
-      // 3b. Persist explicit placement changes after the content/property update.
-      if (input.global === true || input.targetWorkspaceId) {
+      // 3b. Persist explicit global placement changes after the content/property update.
+      // `targetWorkspaceId` is a validation/overlay lens for legacy callers, not an
+      // entity move operation. Moving between workspaces should stay explicit.
+      if (input.global === true && existing.workspaceId !== null) {
         await database
           .update(entities)
           .set({ workspaceId: placementWorkspaceId })
