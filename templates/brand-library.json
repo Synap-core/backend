@@ -412,6 +412,7 @@
   "layoutConfig": {
     "pinnedApps": ["data", "whiteboard", "brandLibrary"],
     "defaultView": "Brand Command Center",
+    "defaultApp": "brandLibrary",
     "sidebarItems": [
       {
         "kind": "app",

@@ -1,24 +1,18 @@
 /**
  * Hub Protocol REST — agent skills (knowledge base)
  *
- * Skills are structured knowledge packages stored as real tables (not entities),
- * shared pod-wide across all agents. Routes use direct Drizzle — simple CRUD
- * on the agent_skills table.
+ * Skills are structured knowledge packages stored in the unified `skills` table
+ * (formerly split across `agent_skills` + `skills` — merged in migration 0133).
  *
- * TWO backing TABLES live behind this ONE route prefix (the tables stay
- * separate — see WAVE4-ROUTES-REPORT.md):
- *   - `agent_skills`  → doc-style know-how (slug/topics/body). Default routes.
- *   - `skills`        → user-authored EXECUTABLE skills (kind=instruction|code,
- *                       scope=pod|user|workspace, governed). Exposed under the
- *                       `/agent-skills/executable*` sub-prefix (the `executable`
- *                       discriminator). Replaces the legacy camelCase
- *                       `/skills/getSkills|getSkill|createSkill` facade.
+ *   - doc-style skills → kind='instruction', body populated
+ *   - executable skills → kind='code', code populated
+ *   - Both share the same table, differentiated by `kind`.
  *
  * Routes (static before dynamic — Hono is first-match):
- *   GET    /agent-skills/executable         — list executable skills (skills table)
+ *   GET    /agent-skills/executable         — list executable skills (kind='code')
  *   GET    /agent-skills/executable/:id      — get one executable skill by id
  *   POST   /agent-skills/executable         — create an executable skill
- *   GET    /agent-skills                    — list all skills
+ *   GET    /agent-skills                    — list doc-style skills
  *   GET    /agent-skills/search             — search by topics/query
  *   GET    /agent-skills/:id                — get a single skill by id
  *   GET    /agent-skills/by-slug/:slug      — get a skill by slug
@@ -28,7 +22,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { db, eq, and, agentSkills } from "@synap/database";
+import { db, eq, and, skills } from "@synap/database";
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -47,7 +41,7 @@ const AgentSkillWireSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
   topics: z.array(z.string()),
-  body: z.string(),
+  body: z.string().nullable(),
   source: z.string().nullable(),
   author: z.string().nullable(),
   version: z.string().nullable(),
@@ -87,21 +81,27 @@ const AgentSkillsListSchema = z.object({
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function wireSkill(
-  row: typeof agentSkills.$inferSelect
+  row: typeof skills.$inferSelect
 ): z.infer<typeof AgentSkillWireSchema> {
   return {
     id: row.id,
-    slug: row.slug,
+    slug: row.slug ?? "",
     name: row.name,
     description: row.description,
     topics: row.topics ?? [],
-    body: row.body,
+    body: row.body ?? "",
     source: row.source,
     author: row.author,
     version: row.version,
     tags: row.tags ?? [],
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
+    createdAt:
+      row.createdAt instanceof Date
+        ? row.createdAt.toISOString()
+        : String(row.createdAt),
+    updatedAt:
+      row.updatedAt instanceof Date
+        ? row.updatedAt.toISOString()
+        : String(row.updatedAt),
   };
 }
 
@@ -341,26 +341,25 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       const conditions: SQL[] = [];
 
       if (topic) {
+        // topics is text[] — use array containment
         conditions.push(
-          drizzleSql`${agentSkills.topics} @> ARRAY[${topic}]::text[]`
+          drizzleSql`${skills.topics} @> ARRAY[${topic}]::text[]`
         );
       }
 
       if (tag) {
-        conditions.push(
-          drizzleSql`${agentSkills.tags} @> ARRAY[${tag}]::text[]`
-        );
+        conditions.push(drizzleSql`${skills.tags} @> ARRAY[${tag}]::text[]`);
       }
 
       const where = conditions.length > 0 ? and(...conditions) : undefined;
 
       const rows = await db
         .select()
-        .from(agentSkills)
+        .from(skills)
         .where(where)
         .limit(limit)
         .offset(offset)
-        .orderBy(agentSkills.name);
+        .orderBy(skills.name);
 
       if (q) {
         // Post-filter by string matching on name/description/topics
@@ -404,8 +403,8 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     try {
       const [row] = await db
         .select()
-        .from(agentSkills)
-        .where(eq(agentSkills.slug, slug))
+        .from(skills)
+        .where(eq(skills.slug, slug))
         .limit(1);
       if (!row) {
         return c.json({ error: "Skill not found" }, 404);
@@ -428,8 +427,8 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     try {
       const [row] = await db
         .select()
-        .from(agentSkills)
-        .where(eq(agentSkills.id, id))
+        .from(skills)
+        .where(eq(skills.id, id))
         .limit(1);
       if (!row) {
         return c.json({ error: "Skill not found" }, 404);
@@ -458,16 +457,16 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     try {
       // Check slug uniqueness
       const [existing] = await db
-        .select({ id: agentSkills.id })
-        .from(agentSkills)
-        .where(eq(agentSkills.slug, parsed.data.slug))
+        .select({ id: skills.id })
+        .from(skills)
+        .where(eq(skills.slug, parsed.data.slug))
         .limit(1);
       if (existing) {
         return c.json({ error: "Skill with this slug already exists" }, 409);
       }
 
       const [row] = await db
-        .insert(agentSkills)
+        .insert(skills)
         .values({
           slug: parsed.data.slug,
           name: parsed.data.name,
@@ -505,12 +504,12 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
 
     try {
       const [row] = await db
-        .update(agentSkills)
+        .update(skills)
         .set({
           ...parsed.data,
           updatedAt: new Date(),
         })
-        .where(eq(agentSkills.slug, slug))
+        .where(eq(skills.slug, slug))
         .returning();
 
       if (!row) {
@@ -533,7 +532,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     }
     const id = c.req.param("id");
     try {
-      await db.delete(agentSkills).where(eq(agentSkills.id, id));
+      await db.delete(skills).where(eq(skills.id, id));
       return c.json({ success: true }, 200);
     } catch (err) {
       logger.error({ err }, "delete agent skill failed");

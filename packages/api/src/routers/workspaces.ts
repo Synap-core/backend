@@ -398,10 +398,10 @@ export const workspacesRouter = router({
       }
 
       // Ensure default workspace setup (for existing workspaces created before these features)
-      // These are one-time operations per workspace - same pattern as whiteboard
+      // These are one-time operations per workspace.
+      // Default views are NOT auto-created — the frontend renders views ephemerally.
       const {
         ensureDefaultWhiteboard,
-        ensureDefaultViews,
         ensureDefaultCommands,
         ensureDefaultRelationDefs,
       } = await import("@synap/database");
@@ -421,26 +421,6 @@ export const workspacesRouter = router({
           whiteboardResult.message,
           whiteboardResult.error
         );
-      }
-
-      // Skip default views for template workspaces — template defines its own views
-      const isTemplateWorkspace = !!(
-        workspace.settings as Record<string, unknown> | null
-      )?.templateName;
-      if (!isTemplateWorkspace) {
-        const viewsResult = await ensureDefaultViews(input.id, ctx.userId);
-        console.log(
-          `[workspaces.get] ensureDefaultViews:`,
-          viewsResult.status,
-          viewsResult.message
-        );
-        if (viewsResult.status === "error") {
-          console.error(
-            `[workspaces.get] Failed to ensure default views:`,
-            viewsResult.message,
-            viewsResult.error
-          );
-        }
       }
 
       const commandsResult = await ensureDefaultCommands(input.id, ctx.userId);

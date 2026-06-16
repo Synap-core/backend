@@ -91,11 +91,15 @@ export {
   type EnsureSystemProfilesResult,
 } from "./utils/ensure-system-profiles.js";
 
-// Export ensureDefaultViews utility
-export {
-  ensureDefaultViews,
-  type EnsureDefaultViewsResult,
-} from "./utils/ensure-default-views.js";
+// DEPRECATED: ensureDefaultViews is no longer auto-called. The frontend
+// renders views ephemerally from profile data and persists them only when
+// explicitly saved. The ensure-default-views.ts module is kept for reference
+// but is no longer exported or called automatically.
+//
+// export {
+//   ensureDefaultViews,
+//   type EnsureDefaultViewsResult,
+// } from "./utils/ensure-default-views.js";
 
 // Export ensureDefaultCommands utility
 export {

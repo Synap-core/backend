@@ -165,8 +165,10 @@ export * from "./ai-provider-credentials.js";
 // NEW: Focus Sessions (goal-bound user work sessions — workflow side, not data side)
 export * from "./focus-sessions.js";
 
-// NEW: Agent Skills (knowledge base — platform infrastructure, not user-authored content)
-export * from "./agent-skills.js";
+// DEPRECATED: Agent Skills merged into skills table (migration 0130_merge_agent_skills.sql).
+// The agent-skills.ts table definition is kept for migration reference only.
+// All consumers should use `skills` from skills.ts.
+// export * from "./agent-skills.js";
 
 // NEW: Artifacts (artifact ledger — lifecycle + provenance on cell instances; Phase 1 of Desk system)
 export * from "./artifacts.js";

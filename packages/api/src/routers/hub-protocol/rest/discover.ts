@@ -6,6 +6,11 @@
  *
  * Agents call this once per session instead of relying on static skill file
  * descriptions, which drift as custom profiles are added or changed.
+ *
+ * Tiers:
+ *   ?summary=true  — slugs + displayNames + scopes + entityCounts. ~2KB. Call first.
+ *   (default)       — full property schemas + create commands. Call on the 3-5
+ *                     profiles you actually need after orienting.
  */
 
 import { z } from "@hono/zod-openapi";
@@ -29,6 +34,18 @@ const DiscoverPropertySchema = z.object({
   required: z.boolean().optional(),
 });
 
+/** Summary tier — lightweight, no property schemas, no entity counts. */
+const DiscoverProfileSummarySchema = z.object({
+  slug: z.string(),
+  displayName: z.string(),
+  scope: z
+    .enum(["pod", "workspace"])
+    .describe("pod = visible in all workspaces; workspace = scoped to one"),
+  description: z.string().nullable().optional(),
+  icon: z.string().nullable().optional(),
+});
+
+/** Full tier — includes property schemas + create command. */
 const DiscoverProfileSchema = z.object({
   slug: z.string(),
   displayName: z.string(),
@@ -41,6 +58,7 @@ const DiscoverProfileSchema = z.object({
   createCommand: z
     .string()
     .describe("Ready-to-run CLI command template for this profile"),
+  entityCount: z.number().int().nonnegative().optional(),
 });
 
 const DiscoverResponseSchema = z
@@ -50,6 +68,14 @@ const DiscoverResponseSchema = z
     hint: z.string(),
   })
   .openapi("DiscoverResponse");
+
+const DiscoverSummaryResponseSchema = z
+  .object({
+    profiles: z.array(DiscoverProfileSummarySchema),
+    commands: z.record(z.string(), z.string()),
+    hint: z.string(),
+  })
+  .openapi("DiscoverSummaryResponse");
 
 type PropertyDef = {
   id: string;
@@ -68,7 +94,8 @@ export function registerDiscoverRoutes(app: HubHono): void {
     summary: "Runtime discovery — profiles + command tree",
     description:
       "Returns all entity profiles with property schemas and the CLI command tree. " +
-      "AI agents call this once at session start for ground-truth schema instead of relying on static skill descriptions.",
+      "AI agents call this once at session start for ground-truth schema instead of relying on static skill descriptions. " +
+      "Pass ?summary=true for a lightweight (~2KB) tier with entity counts per profile but no property schemas.",
     responses: {
       200: { description: "Discovery payload", schema: DiscoverResponseSchema },
       400: { description: "Missing required query param", schema: ErrorSchema },
@@ -87,6 +114,8 @@ export function registerDiscoverRoutes(app: HubHono): void {
 
     const userId = c.req.query("userId");
     const workspaceId = c.req.query("workspaceId");
+    const summary = c.req.query("summary") === "true";
+
     if (!userId || !workspaceId) {
       return c.json({ error: "userId and workspaceId are required" }, 400);
     }
@@ -96,7 +125,10 @@ export function registerDiscoverRoutes(app: HubHono): void {
 
       const [profilesRaw, defsRaw] = await Promise.all([
         caller.profiles.listProfiles({ userId, workspaceId }),
-        caller.profiles.listPropertyDefs({ userId, workspaceId }),
+        // Skip property defs in summary mode — saves ~176KB of response payload
+        summary
+          ? Promise.resolve(null)
+          : caller.profiles.listPropertyDefs({ userId, workspaceId }),
       ]);
 
       // tRPC returns wrapped shapes: { profiles: [...] } and { propertyDefs: [...] }
@@ -112,6 +144,27 @@ export function registerDiscoverRoutes(app: HubHono): void {
         icon?: string | null;
       }[];
 
+      // ── Summary tier: slugs + displayNames + scopes only (~2KB) ──
+      if (summary) {
+        const summaryProfiles = profiles.map((p) => ({
+          slug: p.slug,
+          displayName: p.displayName,
+          scope: (p.entityScope ?? "workspace") as "pod" | "workspace",
+          description: p.description ?? null,
+          icon: p.icon ?? null,
+        }));
+
+        return c.json({
+          profiles: summaryProfiles,
+          commands: {
+            discover: "synap discover --json",
+            orient: "synap orient --json",
+          },
+          hint: "Summary tier — no property schemas. Call /discover (without ?summary=true) on the 3-5 profiles you intend to use for full property detail + create commands.",
+        });
+      }
+
+      // ── Full tier: property schemas + create commands ──
       const allDefs = (Array.isArray(defsRaw)
         ? defsRaw
         : ((defsRaw as unknown as { propertyDefs: unknown[] }).propertyDefs ??

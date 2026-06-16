@@ -1,13 +1,17 @@
 /**
  * Skills Schema
  *
- * User-created extensions that augment AI capabilities.
- * Two kinds — stored in the same table, differentiated by `kind`:
+ * The canonical skills table — merged from the (now-dropped) agent_skills table.
+ * Two kinds, differentiated by `kind`:
  *
- *   instruction — text injected into the agent system prompt (always-on knowledge/methodology)
- *   code        — JS function executed in the Intelligence Hub sandbox (callable tool)
+ *   instruction — text injected into the agent system prompt (always-on
+ *                 knowledge/methodology). Uses the `body` column (Markdown).
+ *   code        — JS/TS function executed in the Intelligence Hub sandbox
+ *                 (callable tool). Uses the `code` column.
  *
- * Both kinds are stored in the backend and read by intelligence services via Hub Protocol.
+ * Columns absorbed from agent_skills: slug, body, topics, source, author,
+ * version, tags. Doc-style skills set kind='instruction' with body populated;
+ * executable skills set kind='code' with code populated.
  */
 
 import {
@@ -18,6 +22,7 @@ import {
   jsonb,
   integer,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { workspaces } from "./workspaces.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
@@ -41,6 +46,11 @@ export const skills = pgTable(
     workspaceId: uuid("workspace_id").references(() => workspaces.id, {
       onDelete: "cascade",
     }),
+
+    // ── Identity (from agent_skills merge) ───────────────────────────────
+
+    /** Human-readable unique identifier (e.g. "gsap-react", "synap-ui"). Nullable for legacy rows. */
+    slug: text("slug"),
 
     // ── Classification ───────────────────────────────────────────────────
 
@@ -76,15 +86,37 @@ export const skills = pgTable(
     description: text("description"),
 
     /**
-     * For kind='instruction': the instruction text injected into the system prompt.
-     * For kind='code':        the JavaScript/TypeScript function body.
+     * For kind='instruction': the skill body (Markdown), stored for agent
+     * injection. Absorbed from agent_skills.body.
      */
-    code: text("code").notNull(),
+    body: text("body"),
+
+    /**
+     * For kind='code': the JavaScript/TypeScript function body.
+     * Nullable — doc-style skills (kind='instruction') have no code.
+     */
+    code: text("code"),
 
     /** Parameter schema (code skills only) — describes callable arguments */
     parameters: jsonb("parameters"),
 
     category: text("category"), // e.g. 'action', 'context', 'crm', 'research'
+
+    // ── Discoverability (from agent_skills merge) ─────────────────────────
+
+    /** Searchable keywords — "animation", "react", "timeline", etc. */
+    topics: text("topics").array().default([]),
+
+    // ── Provenance (from agent_skills merge) ──────────────────────────────
+
+    /** Source origin (e.g. "file://~/.claude/skills/gsap-react"). */
+    source: text("source"),
+    /** Original skill author or package name. */
+    author: text("author"),
+    /** Semver string. */
+    version: text("version"),
+    /** Free-form tags. */
+    tags: text("tags").array().default([]),
 
     // ── Execution (code skills only) ─────────────────────────────────────
 
@@ -110,7 +142,7 @@ export const skills = pgTable(
 
     /**
      * Free-form metadata:
-     * { executionCount, lastTestedAt, installedFromUrl, source, version, skillType (legacy) }
+     * { executionCount, lastTestedAt, installedFromUrl, skillType (legacy) }
      */
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()
@@ -127,11 +159,13 @@ export const skills = pgTable(
       .notNull(),
   },
   (table) => ({
+    slugIdx: uniqueIndex("idx_skills_slug").on(table.slug),
     userIdIdx: index("skills_user_id_idx").on(table.userId),
     workspaceIdIdx: index("skills_workspace_id_idx").on(table.workspaceId),
     statusIdx: index("skills_status_idx").on(table.status),
     kindIdx: index("skills_kind_idx").on(table.kind),
     nameIdx: index("skills_name_idx").on(table.name),
+    topicsIdx: index("idx_skills_topics").on(table.topics),
   })
 );
 

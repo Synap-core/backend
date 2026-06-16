@@ -3,11 +3,14 @@
  *
  * Creates default resources when a workspace is created:
  * - Default whiteboard
- * - Default views
  * - Default commands
  *
+ * Default views are NO LONGER auto-created — the frontend renders views
+ * ephemerally from profile data and persists them only when the user or
+ * AI explicitly saves a view. This avoids boilerplate view pollution.
+ *
  * Ported from Inngest executors: default-whiteboard-executor.ts,
- * default-views-executor.ts, default-commands-executor.ts
+ * default-commands-executor.ts.
  */
 
 import type PgBoss from "pg-boss";
@@ -32,7 +35,6 @@ export async function handleWorkspaceInit(
 
   const {
     ensureDefaultWhiteboard,
-    ensureDefaultViews,
     ensureDefaultCommands,
     ensureDefaultRelationDefs,
     ensureSystemProfiles,
@@ -47,7 +49,9 @@ export async function handleWorkspaceInit(
     logger.warn({ err }, "Failed to ensure system profiles (non-fatal)");
   }
 
-  // Whiteboard + commands + relation defs always run. Default views only for non-template/non-package workspaces.
+  // Whiteboard + commands + relation defs. Default views are NOT auto-created —
+  // the frontend renders views ephemerally from profile data and persists them
+  // only when the user or AI explicitly saves a view.
   const tasks: Array<{ name: string; promise: Promise<any> }> = [
     {
       name: "whiteboard",
@@ -59,14 +63,6 @@ export async function handleWorkspaceInit(
       promise: ensureDefaultRelationDefs(workspaceId, userId),
     },
   ];
-
-  // Always run ensureDefaultViews — it is idempotent and only creates what is missing.
-  // Template workspaces define their own views; ensureDefaultViews will skip those
-  // and only add the Home bento if the template didn't include one.
-  tasks.push({
-    name: "views",
-    promise: ensureDefaultViews(workspaceId, userId),
-  });
 
   const results = await Promise.allSettled(tasks.map((t) => t.promise));
 
