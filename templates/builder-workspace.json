@@ -1291,6 +1291,20 @@
     "defaultView": "Task Board",
     "sidebarItems": [
       {
+        "kind": "app",
+        "appId": "devplane",
+        "label": "DevPlane",
+        "icon": "rocket",
+        "surface": {
+          "kind": "app",
+          "appId": "devplane",
+          "rendererType": "native",
+          "placement": "main",
+          "displayMode": "full",
+          "title": "DevPlane"
+        }
+      },
+      {
         "kind": "view",
         "viewName": "Apps",
         "label": "Apps",

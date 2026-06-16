@@ -16,7 +16,9 @@ import {
   jsonb,
   timestamp,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 /** The kind of integration a Tool represents. */
@@ -61,6 +63,14 @@ export const tools = pgTable(
   (table) => ({
     workspaceIdIdx: index("idx_tools_workspace_id").on(table.workspaceId),
     kindIdx: index("idx_tools_kind").on(table.kind),
+    // Pod-wide provider tools are keyed by their nango:// credentialRef. This
+    // partial unique index makes the connection→tool materialization race-safe
+    // (concurrent syncToolRows for the same provider can't insert duplicates).
+    // Scoped to nango:// + workspace_id IS NULL so it never affects builtin or
+    // workspace-scoped tools (which legitimately share NULL credentialRefs).
+    providerCredIdx: uniqueIndex("idx_tools_provider_cred")
+      .on(table.credentialRef)
+      .where(sql`credential_ref LIKE 'nango://%' AND workspace_id IS NULL`),
   })
 );
 

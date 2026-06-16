@@ -145,3 +145,50 @@ export function detectJsonChatShape(obj: unknown): JsonChatShape | null {
   if (messages.length === 0) return null;
   return { messages };
 }
+
+/**
+ * Flatten a chat-shaped JSON object into a readable transcript string.
+ *
+ * Uses {@link detectJsonChatShape} to recognise the conversation, then renders
+ * "Speaker: text" one line per message, optionally prefixed by a title/date
+ * header drawn from common top-level fields. The result is fed into the SAME
+ * deep/prose structuring the markdown path uses, so the chat content yields an
+ * ENTITY GRAPH (entities + relations extracted from the conversation) rather
+ * than channels + messages.
+ *
+ * Returns null when the JSON is not chat-shaped — the caller then falls back to
+ * treating the raw JSON as plain text content for structuring.
+ */
+export function flattenChatTranscript(obj: unknown): {
+  title?: string;
+  transcript: string;
+} | null {
+  const shape = detectJsonChatShape(obj);
+  if (!shape || shape.messages.length === 0) return null;
+
+  // Pull a human title + date header from common top-level fields when present.
+  let title: string | undefined;
+  let date: string | undefined;
+  if (obj != null && typeof obj === "object" && !Array.isArray(obj)) {
+    const o = obj as Record<string, unknown>;
+    const t = o.title ?? o.name ?? o.subject ?? o.conversation_title;
+    if (typeof t === "string" && t.trim()) title = t.trim().slice(0, 200);
+    const d = o.date ?? o.created_at ?? o.createdAt ?? o.timestamp;
+    if (typeof d === "string" && d.trim()) date = d.trim().slice(0, 100);
+  }
+
+  const roleLabel = (role: string): string =>
+    role === "assistant" ? "Assistant" : role === "system" ? "System" : "User";
+
+  const lines: string[] = [];
+  if (title) lines.push(`# ${title}`);
+  if (date) lines.push(`Date: ${date}`);
+  if (lines.length > 0) lines.push("");
+  for (const msg of shape.messages) {
+    const text = msg.content.trim();
+    if (!text) continue;
+    lines.push(`${roleLabel(msg.role)}: ${text}`);
+  }
+
+  return { ...(title ? { title } : {}), transcript: lines.join("\n") };
+}

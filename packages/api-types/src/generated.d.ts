@@ -203,6 +203,29 @@ export interface InputOverride {
  * - Team (multiple users with roles)
  * - Enterprise (advanced features)
  */
+export type WorkspaceSidebarSurfacePlacement = "main" | "side" | "floating" | "modal" | "popover" | "embed";
+export type WorkspaceSidebarSurfaceDisplayMode = "compact" | "medium" | "full";
+export type WorkspaceSidebarAppRendererType = "native" | "external" | "iframe-srcdoc";
+export interface WorkspaceSidebarSurface {
+	kind: "cell" | "view" | "entity" | "document" | "channel" | "app" | "url";
+	cellKey?: string;
+	viewId?: string;
+	viewName?: string;
+	entityId?: string;
+	documentId?: string;
+	channelId?: string;
+	appId?: string;
+	url?: string;
+	srcdoc?: string;
+	rendererType?: WorkspaceSidebarAppRendererType;
+	external?: boolean;
+	placement?: WorkspaceSidebarSurfacePlacement;
+	displayMode?: WorkspaceSidebarSurfaceDisplayMode;
+	props?: Record<string, unknown>;
+	title?: string;
+	workspaceId?: string | null;
+	meta?: Record<string, unknown>;
+}
 export interface WorkspaceSidebarItem {
 	kind: "app" | "view" | "profile" | "external" | "cell";
 	/** App ID for kind='app' (e.g. 'dashboard', 'intelligence', 'data') */
@@ -223,6 +246,8 @@ export interface WorkspaceSidebarItem {
 	cellKey?: string;
 	/** Config props passed to the cell when opened as a panel */
 	cellProps?: Record<string, unknown>;
+	/** Canonical rich target. Legacy kind='cell' remains a side-panel shorthand. */
+	surface?: WorkspaceSidebarSurface;
 	/** Display label shown in the sidebar */
 	label?: string;
 	/** Lucide icon name override */
@@ -774,6 +799,24 @@ export interface WorkspaceSettings {
 		localTerminalEnabled?: boolean;
 	};
 }
+/**
+ * Skills Schema
+ *
+ * User-created extensions that augment AI capabilities.
+ * Two kinds — stored in the same table, differentiated by `kind`:
+ *
+ *   instruction — text injected into the agent system prompt (always-on knowledge/methodology)
+ *   code        — JS function executed in the Intelligence Hub sandbox (callable tool)
+ *
+ * Both kinds are stored in the backend and read by intelligence services via Hub Protocol.
+ */
+export type SkillKind = "instruction" | "code";
+/**
+ * pod       — visible to all users on the data pod (default)
+ * user      — visible only to the owning user
+ * workspace — visible to all members of the workspace
+ */
+export type SkillScope = "pod" | "user" | "workspace";
 declare const messageLinks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	name: "message_links";
 	schema: undefined;
@@ -1763,6 +1806,293 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	dialect: "pg";
 }>;
 export type FocusSession = typeof focusSessions.$inferSelect;
+/**
+ * Tools Schema — registered integrations the AI can use
+ *
+ * CONFIGURATION (not entity DATA). A Tool is a registered integration: an API,
+ * MCP server, data-source provider, a builtin IS tool, or an external (BYOA)
+ * tool. It owns the credential binding (an opaque vault:// ref) and an input
+ * schema. Skills `require` Tools; Playbooks `grant` Tools (see the `links`
+ * table). Part of the Playbooks & Capability Substrate
+ * (team/platform/playbooks-capability-substrate.mdx).
+ */
+/** The kind of integration a Tool represents. */
+export type ToolKind = "builtin" | "api" | "mcp" | "provider" | "external";
+/** Which "hands" run this Tool. Mirrors @synap/playbooks ExecutorRef. */
+export type ToolExecutorRef = "is-agent" | "external-agent" | "hybrid";
+declare const tools: import("drizzle-orm/pg-core").PgTableWithColumns<{
+	name: "tools";
+	schema: undefined;
+	columns: {
+		id: import("drizzle-orm/pg-core").PgColumn<{
+			name: "id";
+			tableName: "tools";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: true;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		workspaceId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "workspace_id";
+			tableName: "tools";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		createdBy: import("drizzle-orm/pg-core").PgColumn<{
+			name: "created_by";
+			tableName: "tools";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		name: import("drizzle-orm/pg-core").PgColumn<{
+			name: "name";
+			tableName: "tools";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		description: import("drizzle-orm/pg-core").PgColumn<{
+			name: "description";
+			tableName: "tools";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		kind: import("drizzle-orm/pg-core").PgColumn<{
+			name: "kind";
+			tableName: "tools";
+			dataType: "string";
+			columnType: "PgText";
+			data: ToolKind;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {
+			$type: ToolKind;
+		}>;
+		inputSchema: import("drizzle-orm/pg-core").PgColumn<{
+			name: "input_schema";
+			tableName: "tools";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		credentialRef: import("drizzle-orm/pg-core").PgColumn<{
+			name: "credential_ref";
+			tableName: "tools";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		executor: import("drizzle-orm/pg-core").PgColumn<{
+			name: "executor";
+			tableName: "tools";
+			dataType: "string";
+			columnType: "PgText";
+			data: ToolExecutorRef;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				"is-agent",
+				"external-agent",
+				"hybrid"
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {
+			$type: ToolExecutorRef;
+		}>;
+		config: import("drizzle-orm/pg-core").PgColumn<{
+			name: "config";
+			tableName: "tools";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		status: import("drizzle-orm/pg-core").PgColumn<{
+			name: "status";
+			tableName: "tools";
+			dataType: "string";
+			columnType: "PgText";
+			data: "active" | "inactive" | "error";
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				"active",
+				"inactive",
+				"error"
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		metadata: import("drizzle-orm/pg-core").PgColumn<{
+			name: "metadata";
+			tableName: "tools";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		createdAt: import("drizzle-orm/pg-core").PgColumn<{
+			name: "created_at";
+			tableName: "tools";
+			dataType: "date";
+			columnType: "PgTimestamp";
+			data: Date;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		updatedAt: import("drizzle-orm/pg-core").PgColumn<{
+			name: "updated_at";
+			tableName: "tools";
+			dataType: "date";
+			columnType: "PgTimestamp";
+			data: Date;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+	};
+	dialect: "pg";
+}>;
+export type Tool = typeof tools.$inferSelect;
 /**
  * Playbooks Schema — session templates (CONFIGURATION)
  *
@@ -2995,6 +3325,15 @@ export type PaginatedResponse<T> = {
 	};
 };
 export type ImportRevealSource = "obsidian" | "markdown" | "csv" | "bookmark";
+declare const IMPORT_SOURCE: "csv";
+export type SyncConnectionToImportResult = {
+	proposalId: string | null;
+	/** Number of records fetched from the connector. */
+	recordCount: number;
+	/** Number of items the orchestrator surfaced into the proposal. */
+	itemCount: number;
+	source: typeof IMPORT_SOURCE;
+};
 export interface EnrichmentResult {
 	source: string;
 	confidence: number;
@@ -3451,6 +3790,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					relationType: string;
 				}[];
 				targetWorkspaceId?: string | null | undefined;
+				keepRaw?: boolean | undefined;
+				file?: {
+					content: string;
+					mimeType: string;
+					filename?: string | undefined;
+				} | undefined;
 				idempotencyKey?: string | undefined;
 			};
 			output: {
@@ -11084,6 +11429,169 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		getRequiredTools: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				skillId: string;
+			};
+			output: {
+				skill: {
+					name: string;
+					userId: string;
+					workspaceId: string | null;
+					id: string;
+					errorMessage: string | null;
+					code: string;
+					updatedAt: Date;
+					createdAt: Date;
+					metadata: Record<string, unknown>;
+					status: "error" | "active" | "inactive";
+					description: string | null;
+					scope: SkillScope;
+					category: string | null;
+					kind: SkillKind;
+					agentTypes: string[] | null;
+					parameters: unknown;
+					executionMode: "sync" | "async";
+					timeoutSeconds: number | null;
+				};
+				tools: {
+					id: string;
+					workspaceId: string | null;
+					createdBy: string;
+					name: string;
+					description: string | null;
+					kind: ToolKind;
+					inputSchema: unknown;
+					credentialRef: string | null;
+					executor: ToolExecutorRef;
+					config: unknown;
+					status: "error" | "active" | "inactive";
+					metadata: unknown;
+					createdAt: Date;
+					updatedAt: Date;
+				}[];
+			};
+			meta: object;
+		}>;
+		setRequiredTools: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				skillId: string;
+				toolIds: string[];
+			};
+			output: {
+				skillId: string;
+				toolIds: string[];
+			};
+			meta: object;
+		}>;
+	}>>;
+	tools: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | undefined;
+				limit?: number | undefined;
+			} | undefined;
+			output: {
+				name: string;
+				workspaceId: string | null;
+				id: string;
+				updatedAt: Date;
+				createdAt: Date;
+				metadata: unknown;
+				status: "error" | "active" | "inactive";
+				description: string | null;
+				createdBy: string;
+				config: unknown;
+				kind: ToolKind;
+				inputSchema: unknown;
+				credentialRef: string | null;
+				executor: ToolExecutorRef;
+			}[];
+			meta: object;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				tool: Tool;
+				skills: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					kind: SkillKind;
+					scope: SkillScope;
+					agentTypes: string[] | null;
+					name: string;
+					description: string | null;
+					code: string;
+					parameters: unknown;
+					category: string | null;
+					executionMode: "sync" | "async";
+					timeoutSeconds: number | null;
+					status: "error" | "active" | "inactive";
+					errorMessage: string | null;
+					metadata: Record<string, unknown>;
+					createdAt: Date;
+					updatedAt: Date;
+				}[];
+			};
+			meta: object;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				name: string;
+				kind: "provider" | "external" | "builtin" | "api" | "mcp";
+				description?: string | undefined;
+				inputSchema?: Record<string, unknown> | undefined;
+				credentialRef?: string | undefined;
+				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
+				config?: Record<string, unknown> | undefined;
+				workspaceId?: string | undefined;
+				agentUserId?: string | undefined;
+				source?: string | undefined;
+				reasoning?: string | undefined;
+			};
+			output: {
+				tool: Tool | null;
+				status: "proposed";
+				proposalId: string;
+			} | {
+				tool: Tool;
+				status: "created";
+				proposalId: string | null;
+			};
+			meta: object;
+		}>;
+		update: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				name?: string | undefined;
+				description?: string | undefined;
+				credentialRef?: string | undefined;
+				config?: Record<string, unknown> | undefined;
+				status?: "error" | "active" | "inactive" | undefined;
+			};
+			output: {
+				tool: Tool | null;
+				status: "proposed";
+				proposalId: string;
+			} | {
+				tool: Tool;
+				status: "updated";
+				proposalId: string | null;
+			};
+			meta: object;
+		}>;
 	}>>;
 	backgroundTasks: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -13232,6 +13740,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		enqueueLargeImport: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				source: "markdown" | "obsidian" | "csv" | "bookmark";
+				items: {
+					path: string;
+					content: string;
+				}[];
+				workspaceId?: string | undefined;
+				relationType?: string | undefined;
+				aiStructure?: boolean | undefined;
+			};
+			output: {
+				queued: true;
+				jobId: string | null;
+			};
+			meta: object;
+		}>;
 		applyLarge: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				source: "markdown" | "obsidian" | "csv" | "bookmark";
@@ -13337,6 +13862,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				success: boolean;
 			};
+			meta: object;
+		}>;
+		syncToImport: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				connectionId: string;
+				model: string;
+				workspaceId?: string | undefined;
+			};
+			output: SyncConnectionToImportResult;
 			meta: object;
 		}>;
 		enrichmentProviders: import("@trpc/server").TRPCQueryProcedure<{

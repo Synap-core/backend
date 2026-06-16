@@ -85,7 +85,13 @@ export type SubmitBatchItem = {
   mimeType?: string;
 };
 
-export type ImportRevealSource = "obsidian" | "markdown" | "csv" | "bookmark";
+export type ImportRevealSource =
+  | "obsidian"
+  | "markdown"
+  | "csv"
+  | "bookmark"
+  | "json"
+  | "connector_sync";
 
 export type ImportAnalyzeInput = {
   source: ImportRevealSource;
@@ -461,7 +467,11 @@ export class ImportOrchestrator {
     // Structured rows (csv/bookmark) stay on the SHALLOW path (1 row = 1 entity,
     // which is correct for them). Deep is best-effort: if it yields nothing
     // (IS down, all timeouts), we fall back to shallow so an import never fails.
-    const isProse = source === "obsidian" || source === "markdown";
+    // Prose sources go through DEEP extraction (note/transcript → entity graph).
+    // JSON-chat imports are flattened to a transcript by the json adapter, so
+    // they belong here too — the conversation content yields entities+relations.
+    const isProse =
+      source === "obsidian" || source === "markdown" || source === "json";
     let operations: CompositeProposalOperation[] | undefined;
     let summary: string | undefined;
     let itemCount = items.length;
@@ -581,7 +591,12 @@ export class ImportOrchestrator {
     const items = adaptItems(input.source as ImportAdapterSource, input.items);
 
     let aiTyped = 0;
-    const isProse = input.source === "obsidian" || input.source === "markdown";
+    // JSON-chat (flattened to a transcript by the json adapter) joins the prose
+    // deep-extraction path so the conversation becomes an entity graph.
+    const isProse =
+      input.source === "obsidian" ||
+      input.source === "markdown" ||
+      input.source === "json";
     let operations: CompositeProposalOperation[] | undefined;
     let summary = "";
     let droppedReferences = 0;

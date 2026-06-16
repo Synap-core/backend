@@ -1,4 +1,7 @@
 import { randomUUID } from "crypto";
+import { db, proposals } from "@synap/database";
+import { ProposalStatus } from "@synap/database/schema";
+import { PROPOSAL_TTL_DAYS } from "@synap/governance-policy";
 import { auditLog } from "./audit-log.js";
 import { createPendingProposal } from "./permission-check.js";
 
@@ -74,6 +77,113 @@ export async function createEventBackedProposal(
   });
 
   return { proposal, requestedEvent, correlationId };
+}
+
+export interface CreateAutoApprovedProposalInput extends CreateEventBackedProposalInput {
+  /** The user who performed (and is implicitly approving) the already-done write. */
+  reviewedBy: string;
+}
+
+/**
+ * Record an ALREADY-DONE first-party write as a persistent `auto_approved`
+ * proposal row, for traceability + revert.
+ *
+ * Mirror of `createEventBackedProposal` (same `.requested` audit stamp + the
+ * same `{ ...data, correlationId, requestedEventId, summary }` payload shape),
+ * EXCEPT:
+ *   - it inserts the proposals row directly with `status: 'auto_approved'`
+ *     (createPendingProposal hardcodes PENDING + can't stamp reviewedBy/reviewedAt),
+ *   - it stamps `reviewedBy` + `reviewedAt: now`,
+ *   - it writes a SECOND `.completed` audit event so the timeline reads
+ *     requested → completed (the write already happened — there is no pending gap).
+ *
+ * This does NOT go through `checkPermissionOrPropose`: the write is a first-party
+ * human action that is already committed; we are RECORDING it, not asking
+ * permission. Callers should treat it as best-effort (a recording hiccup must
+ * never fail the underlying operation).
+ */
+export async function createAutoApprovedProposal(
+  input: CreateAutoApprovedProposalInput
+) {
+  const correlationId =
+    typeof input.data.correlationId === "string"
+      ? input.data.correlationId
+      : randomUUID();
+  const action = input.action ?? inferProposalAction(input.proposalType);
+
+  const requestedEvent = await auditLog({
+    subjectType: input.targetType,
+    action,
+    phase: "requested",
+    subjectId: input.targetId,
+    userId: input.userId,
+    workspaceId: input.workspaceId ?? undefined,
+    correlationId,
+    source: input.source ?? "api",
+    data: {
+      ...input.data,
+      proposalType: input.proposalType,
+      summary: input.summary,
+    },
+  });
+
+  const data = {
+    ...input.data,
+    ...(input.summary ? { summary: input.summary } : {}),
+    correlationId,
+    ...(requestedEvent?.id ? { requestedEventId: requestedEvent.id } : {}),
+  };
+
+  const reviewedAt = new Date();
+
+  const [proposal] = await db
+    .insert(proposals)
+    .values({
+      workspaceId: input.workspaceId ?? null,
+      targetType: input.targetType,
+      targetId: input.targetId,
+      proposalType: input.proposalType,
+      data,
+      status: ProposalStatus.AUTO_APPROVED,
+      createdBy: input.createdBy ?? input.agentUserId ?? input.userId,
+      reviewedBy: input.reviewedBy,
+      reviewedAt,
+      expiresAt:
+        input.expiresAt ??
+        new Date(Date.now() + PROPOSAL_TTL_DAYS * 24 * 60 * 60 * 1000),
+      ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
+      ...(input.threadId ? { threadId: input.threadId } : {}),
+      ...(input.commandRunId ? { commandRunId: input.commandRunId } : {}),
+      ...(input.sourceMessageId
+        ? { sourceMessageId: input.sourceMessageId }
+        : {}),
+      correlationId,
+      ...(requestedEvent?.id ? { requestedEventId: requestedEvent.id } : {}),
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    })
+    .returning();
+
+  // Second stamp: the write already happened, so the lifecycle is
+  // requested → completed (no pending review gap). Coherent timeline.
+  const completedEvent = await auditLog({
+    subjectType: input.targetType,
+    action,
+    phase: "completed",
+    subjectId: input.targetId,
+    userId: input.userId,
+    workspaceId: input.workspaceId ?? undefined,
+    correlationId,
+    source: input.source ?? "api",
+    data: {
+      ...input.data,
+      proposalType: input.proposalType,
+      summary: input.summary,
+      proposalId: proposal?.id,
+      autoApproved: true,
+    },
+  });
+
+  return { proposal, requestedEvent, completedEvent, correlationId };
 }
 
 function inferProposalAction(proposalType: string): string {

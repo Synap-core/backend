@@ -11,6 +11,42 @@ import { pgTable, uuid, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { users } from "./users.js";
 
+export type WorkspaceSidebarSurfacePlacement =
+  | "main"
+  | "side"
+  | "floating"
+  | "modal"
+  | "popover"
+  | "embed";
+
+export type WorkspaceSidebarSurfaceDisplayMode = "compact" | "medium" | "full";
+export type WorkspaceSidebarAppRendererType =
+  | "native"
+  | "external"
+  | "iframe-srcdoc";
+
+export interface WorkspaceSidebarSurface {
+  kind: "cell" | "view" | "entity" | "document" | "channel" | "app" | "url";
+  cellKey?: string;
+  viewId?: string;
+  /** Authoring-time fallback resolved by workspace importers once views exist. */
+  viewName?: string;
+  entityId?: string;
+  documentId?: string;
+  channelId?: string;
+  appId?: string;
+  url?: string;
+  srcdoc?: string;
+  rendererType?: WorkspaceSidebarAppRendererType;
+  external?: boolean;
+  placement?: WorkspaceSidebarSurfacePlacement;
+  displayMode?: WorkspaceSidebarSurfaceDisplayMode;
+  props?: Record<string, unknown>;
+  title?: string;
+  workspaceId?: string | null;
+  meta?: Record<string, unknown>;
+}
+
 export interface WorkspaceSidebarItem {
   kind: "app" | "view" | "profile" | "external" | "cell";
   /** App ID for kind='app' (e.g. 'dashboard', 'intelligence', 'data') */
@@ -31,6 +67,11 @@ export interface WorkspaceSidebarItem {
   cellKey?: string;
   /** Config props passed to the cell when opened as a panel */
   cellProps?: Record<string, unknown>;
+  /**
+   * Canonical rich target. When present, Browser opens this descriptor directly.
+   * Legacy kind='cell' remains a side-panel shorthand.
+   */
+  surface?: WorkspaceSidebarSurface;
   /** Display label shown in the sidebar */
   label?: string;
   /** Lucide icon name override */

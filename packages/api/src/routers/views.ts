@@ -26,6 +26,8 @@ import {
   sqlTemplate as sql,
   inArray,
   or,
+  isNull,
+  isNotNull,
   getTableColumns,
   asc,
   type SQL,
@@ -54,6 +56,63 @@ import { verifyPermission, getWorkspaceMembership } from "@synap/database";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { randomUUID } from "crypto";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
+import {
+  userVisibleWhere,
+  workspaceLensWhere,
+} from "../utils/user-visible-where.js";
+
+function viewVisibleWhere(userId: string) {
+  return or(
+    and(isNull(views.workspaceId), eq(views.userId, userId)),
+    and(
+      isNotNull(views.workspaceId),
+      userVisibleWhere(views.workspaceId, userId)
+    )
+  )!;
+}
+
+function viewLensWhere(
+  userId: string,
+  lens?: string | null,
+  opts?: { includePodWide?: boolean }
+) {
+  if (lens === undefined) return viewVisibleWhere(userId);
+  if (lens === null)
+    return and(isNull(views.workspaceId), eq(views.userId, userId))!;
+  const workspaceBranch = workspaceLensWhere(views.workspaceId, userId, lens);
+  if (!opts?.includePodWide) return workspaceBranch;
+  return or(
+    and(isNull(views.workspaceId), eq(views.userId, userId)),
+    workspaceBranch
+  )!;
+}
+
+function entityLensWhereForViews(
+  userId: string,
+  lens: string | null | undefined,
+  includePodWide: boolean
+) {
+  const userPodWide = and(
+    isNull(entities.workspaceId),
+    eq(entities.userId, userId)
+  );
+  if (lens === undefined) {
+    return or(
+      userPodWide,
+      and(
+        isNotNull(entities.workspaceId),
+        userVisibleWhere(entities.workspaceId, userId)
+      )
+    )!;
+  }
+  if (lens === null) return userPodWide!;
+  const workspaceBranch = workspaceLensWhere(
+    entities.workspaceId,
+    userId,
+    lens
+  );
+  return includePodWide ? or(userPodWide, workspaceBranch)! : workspaceBranch;
+}
 
 // Proper package imports
 import {
@@ -110,8 +169,8 @@ export const viewsRouter = router({
     .mutation(async ({ input, ctx }) => {
       const correlationId = randomUUID();
 
-      // Resolve workspace ID: prefer explicit input, fall back to context header
-      const effectiveWorkspaceId = input.workspaceId || ctx.workspaceId || "";
+      // Resolve placement: omitted workspace means an intentional pod-wide view.
+      const effectiveWorkspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
 
       // Emit .requested before the proposal gate so pending proposals are tied
       // to a real event-chain node.
@@ -207,7 +266,7 @@ export const viewsRouter = router({
       await ViewEvents.createRequested(ctx.userId, {
         type: input.type,
         name: input.name as string,
-        workspaceId: effectiveWorkspaceId,
+        workspaceId: effectiveWorkspaceId ?? undefined,
       });
 
       const { randomUUID: genId } = await import("crypto");
@@ -249,7 +308,7 @@ export const viewsRouter = router({
           .values({
             id: docId,
             userId: ctx.userId,
-            workspaceId: effectiveWorkspaceId,
+            workspaceId: effectiveWorkspaceId ?? undefined,
             type: input.type,
             title: input.name,
             storageUrl: uploadResult.url,
@@ -348,6 +407,10 @@ export const viewsRouter = router({
       paginatedInput.extend({
         /** Filter to one or more workspaces. Omit to return all user's views. */
         workspaceIds: z.array(z.string().uuid()).optional(),
+        /** Explicit lens. `null` returns pod-wide/user-owned views only. */
+        workspaceId: z.string().uuid().nullable().optional(),
+        /** Include current user's pod-wide views inside a focused workspace lens. */
+        includePodWide: z.boolean().optional().default(false),
         type: z
           .enum([
             "whiteboard",
@@ -371,12 +434,22 @@ export const viewsRouter = router({
     .query(async ({ input, ctx }) => {
       const workspaceCondition =
         input.workspaceIds && input.workspaceIds.length > 0
-          ? inArray(views.workspaceId, input.workspaceIds)
-          : undefined;
+          ? and(
+              inArray(views.workspaceId, input.workspaceIds),
+              viewVisibleWhere(ctx.userId)
+            )
+          : input.workspaceId !== undefined
+            ? viewLensWhere(ctx.userId, input.workspaceId, {
+                includePodWide: input.includePodWide,
+              })
+            : ctx.workspaceId
+              ? viewLensWhere(ctx.userId, ctx.workspaceId, {
+                  includePodWide: input.includePodWide,
+                })
+              : viewVisibleWhere(ctx.userId);
 
       const results = await db.query.views.findMany({
         where: and(
-          eq(views.userId, ctx.userId),
           workspaceCondition,
           input.type && input.type !== "all"
             ? eq(views.type, input.type)
@@ -463,24 +536,26 @@ export const viewsRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
 
-      if (!view.workspaceId) {
+      if (!view.workspaceId && view.userId !== ctx.userId) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "View must belong to a workspace",
+          message: "Insufficient permissions",
         });
       }
       // Check access
-      const permResult = await verifyPermission({
-        db,
-        userId: ctx.userId,
-        workspace: { id: view.workspaceId },
-        requiredPermission: "read", // or 'read' for requireViewer
-      });
-      if (!permResult.allowed)
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: permResult.reason || "Insufficient permissions",
+      if (view.workspaceId) {
+        const permResult = await verifyPermission({
+          db,
+          userId: ctx.userId,
+          workspace: { id: view.workspaceId },
+          requiredPermission: "read", // or 'read' for requireViewer
         });
+        if (!permResult.allowed)
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: permResult.reason || "Insufficient permissions",
+          });
+      }
 
       // Load content: whiteboards from MinIO (canonical), others from document_versions
       let content = {};
@@ -529,24 +604,26 @@ export const viewsRouter = router({
       if (!view) {
         throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
       }
-      if (!view.workspaceId) {
+      if (!view.workspaceId && view.userId !== ctx.userId) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "View must belong to a workspace",
+          message: "Insufficient permissions",
         });
       }
       // Check access
-      const permResult = await verifyPermission({
-        db,
-        userId: ctx.userId,
-        workspace: { id: view.workspaceId },
-        requiredPermission: "read", // or 'read' for requireViewer
-      });
-      if (!permResult.allowed)
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: permResult.reason || "Insufficient permissions",
+      if (view.workspaceId) {
+        const permResult = await verifyPermission({
+          db,
+          userId: ctx.userId,
+          workspace: { id: view.workspaceId },
+          requiredPermission: "read", // or 'read' for requireViewer
         });
+        if (!permResult.allowed)
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: permResult.reason || "Insufficient permissions",
+          });
+      }
 
       const category = getViewCategory(view.type);
 
@@ -591,10 +668,11 @@ export const viewsRouter = router({
 
       const conditions: any[] = [];
 
-      // Filter by workspace
-      if (view.workspaceId) {
-        conditions.push(eq(entities.workspaceId, view.workspaceId));
-      }
+      conditions.push(
+        view.workspaceId
+          ? entityLensWhereForViews(ctx.userId, view.workspaceId, false)
+          : entityLensWhereForViews(ctx.userId, null, false)
+      );
 
       // Filter by scope profiles (profileId FK)
       if (view.scopeProfileIds && view.scopeProfileIds.length > 0) {

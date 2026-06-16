@@ -173,9 +173,17 @@ function reportProposalOutcome(params: {
   sourceMessageId: string | null | undefined;
   agentUserId: string | null | undefined;
   targetType: string | null | undefined;
+  proposalType?: string | null | undefined;
+  source?: string | null | undefined;
+  rejectionReason?: string | null | undefined;
 }): void {
   const internalKey = process.env.INTELLIGENCE_HUB_INTERNAL_KEY;
-  if (!internalKey || !params.agentUserId) return; // only track AI proposals
+  // Fire for AI proposals (have an agentUserId) AND for capture proposals
+  // (no agentUserId, identified by proposalType 'capture.graph' or source 'capture')
+  // so rejected captures also feed the IS learning sink.
+  const isCaptureProposal =
+    params.proposalType === "capture.graph" || params.source === "capture";
+  if (!internalKey || (!params.agentUserId && !isCaptureProposal)) return;
 
   void (async () => {
     try {
@@ -204,6 +212,9 @@ function reportProposalOutcome(params: {
           proposalId: params.proposalId,
           outcome: params.outcome,
           targetType: params.targetType,
+          proposalType: params.proposalType,
+          source: params.source,
+          rejectionReason: params.rejectionReason,
         }),
         signal: AbortSignal.timeout(5_000),
       });
@@ -2000,6 +2011,10 @@ export const proposalsRouter = router({
         sourceMessageId: proposal.sourceMessageId,
         agentUserId: proposal.agentUserId,
         targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+        source: (proposal.data as Record<string, unknown> | null)?.source as
+          | string
+          | undefined,
       });
 
       emitProposalReviewed(
@@ -2032,6 +2047,8 @@ export const proposalsRouter = router({
           agentUserId: true,
           targetType: true,
           workspaceId: true,
+          proposalType: true,
+          data: true,
         },
       });
 
@@ -2054,6 +2071,11 @@ export const proposalsRouter = router({
           sourceMessageId: proposal.sourceMessageId,
           agentUserId: proposal.agentUserId,
           targetType: proposal.targetType,
+          proposalType: proposal.proposalType,
+          source: (proposal.data as Record<string, unknown> | null)?.source as
+            | string
+            | undefined,
+          rejectionReason: input.reason,
         });
         emitProposalReviewed(
           input.proposalId,

@@ -2244,17 +2244,75 @@ export const workspacesRouter = router({
                 theme: z.string().optional(),
                 sidebarItems: z
                   .array(
-                    z.object({
-                      // "profile" = navigate to profile bento view (new)
-                      // "external" = third-party URL (legacy)
-                      kind: z.enum(["app", "view", "profile", "external"]),
-                      appId: z.string().optional(),
-                      viewName: z.string().optional(),
-                      profileSlug: z.string().optional(),
-                      url: z.string().optional(),
-                      label: z.string().optional(),
-                      icon: z.string().optional(),
-                    })
+                    z
+                      .object({
+                        // "profile" = navigate to profile bento view (new)
+                        // "external" = third-party URL (legacy)
+                        // "cell" = legacy side-panel shorthand; rich targets use surface.
+                        kind: z.enum([
+                          "app",
+                          "view",
+                          "profile",
+                          "external",
+                          "cell",
+                        ]),
+                        appId: z.string().optional(),
+                        viewName: z.string().optional(),
+                        viewId: z.string().optional(),
+                        profileSlug: z.string().optional(),
+                        url: z.string().optional(),
+                        cellKey: z.string().optional(),
+                        cellProps: z.record(z.string(), z.unknown()).optional(),
+                        label: z.string().optional(),
+                        icon: z.string().optional(),
+                        section: z.string().optional(),
+                        matchUrls: z.array(z.string()).optional(),
+                        surface: z
+                          .object({
+                            kind: z.enum([
+                              "cell",
+                              "view",
+                              "entity",
+                              "document",
+                              "channel",
+                              "app",
+                              "url",
+                            ]),
+                            cellKey: z.string().optional(),
+                            viewId: z.string().optional(),
+                            viewName: z.string().optional(),
+                            entityId: z.string().optional(),
+                            documentId: z.string().optional(),
+                            channelId: z.string().optional(),
+                            appId: z.string().optional(),
+                            url: z.string().optional(),
+                            srcdoc: z.string().optional(),
+                            rendererType: z
+                              .enum(["native", "external", "iframe-srcdoc"])
+                              .optional(),
+                            external: z.boolean().optional(),
+                            placement: z
+                              .enum([
+                                "main",
+                                "side",
+                                "floating",
+                                "modal",
+                                "popover",
+                                "embed",
+                              ])
+                              .optional(),
+                            displayMode: z
+                              .enum(["compact", "medium", "full"])
+                              .optional(),
+                            props: z.record(z.string(), z.unknown()).optional(),
+                            title: z.string().optional(),
+                            workspaceId: z.string().nullable().optional(),
+                            meta: z.record(z.string(), z.unknown()).optional(),
+                          })
+                          .passthrough()
+                          .optional(),
+                      })
+                      .passthrough()
                   )
                   .optional(),
               })

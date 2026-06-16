@@ -27,11 +27,19 @@ import {
   getDb,
   db,
   eq,
+  and,
+  isNull,
   desc,
   entityExternalLinks,
   drizzleSql,
 } from "@synap/database";
-import { entities, workspaces } from "@synap/database/schema";
+import {
+  entities,
+  workspaces,
+  workspaceMembers,
+  tools,
+} from "@synap/database/schema";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { NangoConnector } from "../connectors/NangoConnector.js";
 import {
   enrichmentProviderRegistry,
@@ -444,6 +452,113 @@ export const connectorsRouter = router({
     }),
 
   /**
+   * Materialize the user's connected providers into canonical `tools` rows.
+   *
+   * A provider connection (Nango) IS a capability the AI/user can wield, so it
+   * belongs in the `tools` table like every other capability. This is the ONE
+   * place a Nango connection becomes a tool row.
+   *
+   * Idempotent upsert keyed on `credentialRef = nango://{provider}`:
+   *   - ONE pod-wide tool row per distinct provider (not per connection).
+   *   - Multiple connections of the same provider (e.g. 2 Gmail accounts) share
+   *     that single tool row; the per-user/per-account credential is resolved at
+   *     use time via listConnections(userId) → connectionId. The tool is the
+   *     capability; the connection is the routing.
+   *
+   * There is no Nango webhook, so the frontend calls this on the Capabilities
+   * mount and after returning from the external Connect flow.
+   *
+   * Intentionally NOT routed through checkPermissionOrPropose(): that gate exists
+   * for AI/agent mutations. This is an operator-triggered reconciliation that only
+   * materializes facts Nango already holds (the OAuth connection already happened),
+   * and it runs on every window-focus — gating it would spam proposals for a no-op.
+   * Races are made safe at the DB layer by the partial unique index on
+   * (credential_ref) WHERE credential_ref LIKE 'nango://%' (mig 0132), via
+   * onConflictDoNothing below — never by the check-then-insert alone.
+   */
+  syncToolRows: protectedProcedure
+    .input(cpUrlInput)
+    .mutation(async ({ ctx }) => {
+      const localNango = await getLocalNango();
+      if (!localNango) {
+        // CP-mode pods route connectors through the Control Plane and don't own a
+        // local Nango, so there's nothing to materialize here (no-op by design).
+        return { synced: 0, toolIds: [] as string[] };
+      }
+
+      const [connections, integrations] = await Promise.all([
+        localNango.listConnections(ctx.userId),
+        localNango.listIntegrations(),
+      ]);
+
+      const displayNameByProvider = new Map(
+        integrations.map((i) => [i.uniqueKey, i.displayName])
+      );
+      const connectedProviders = Array.from(
+        new Set(connections.map((c) => c.provider))
+      );
+
+      const toolIds: string[] = [];
+      for (const provider of connectedProviders) {
+        const credentialRef = `nango://${provider}`;
+        const displayName = displayNameByProvider.get(provider) ?? provider;
+
+        const existing = await db
+          .select({ id: tools.id })
+          .from(tools)
+          .where(
+            and(
+              eq(tools.credentialRef, credentialRef),
+              isNull(tools.workspaceId)
+            )
+          )
+          .limit(1);
+
+        if (existing[0]) {
+          toolIds.push(existing[0].id);
+          continue;
+        }
+
+        const inserted = await db
+          .insert(tools)
+          .values({
+            workspaceId: null, // pod-wide: a connected provider is available everywhere
+            createdBy: ctx.userId,
+            name: displayName,
+            description: `${displayName} connection — credentials routed per account at use time.`,
+            kind: "provider",
+            credentialRef,
+            executor: "is-agent",
+            config: { providerConfigKey: provider },
+          })
+          // Race backstop: if a concurrent sync inserted this provider first, the
+          // partial unique index (mig 0132) makes this a no-op instead of a dup.
+          .onConflictDoNothing()
+          .returning({ id: tools.id });
+
+        if (inserted[0]) {
+          toolIds.push(inserted[0].id);
+        } else {
+          // Lost the race — the row exists now; pick it up so the caller still
+          // gets its id (and the next sync/refetch surfaces it).
+          const found = await db
+            .select({ id: tools.id })
+            .from(tools)
+            .where(
+              and(
+                eq(tools.credentialRef, credentialRef),
+                isNull(tools.workspaceId)
+              )
+            )
+            .limit(1);
+          if (found[0]) toolIds.push(found[0].id);
+        }
+      }
+
+      return { synced: toolIds.length, toolIds };
+    }),
+
+  /**
    * Get a Nango Connect session token for the OAuth UI.
    *
    * Local mode: creates session directly on self-hosted Nango — no CP needed.
@@ -650,19 +765,32 @@ export const connectorsRouter = router({
         });
       }
 
-      let workspaceId = input.workspaceId ?? "";
-      if (!workspaceId) {
-        const database = await getDb();
-        const ws = await database.query.workspaces.findFirst({
-          columns: { id: true },
+      const database = await getDb();
+
+      let workspaceId: string;
+      if (input.workspaceId) {
+        // SECURITY: never trust a client-supplied workspaceId as a write scope.
+        // Assert the caller is an editor+ member of THAT workspace before the
+        // proposal can be landed there — otherwise this is a cross-workspace
+        // write-leak (proposal lands in a workspace the caller doesn't belong to).
+        await assertWorkspaceWrite(database, ctx.userId, {
+          workspaceId: input.workspaceId,
         });
-        if (!ws?.id) {
+        workspaceId = input.workspaceId;
+      } else {
+        // No workspace named → resolve the USER'S OWN workspace (a workspace
+        // they are a member of), never an arbitrary pod workspace.
+        const membership = await database.query.workspaceMembers.findFirst({
+          where: eq(workspaceMembers.userId, ctx.userId),
+          columns: { workspaceId: true },
+        });
+        if (!membership?.workspaceId) {
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "No workspace found to scope the import proposal.",
           });
         }
-        workspaceId = ws.id;
+        workspaceId = membership.workspaceId;
       }
 
       const result = await syncConnectionToImport({

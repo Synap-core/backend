@@ -13,7 +13,16 @@
  */
 
 import { createRoute, z } from "@hono/zod-openapi";
-import { db, entities, profiles, eq, and, isNull } from "@synap/database";
+import {
+  db,
+  entities,
+  profiles,
+  eq,
+  and,
+  or,
+  isNull,
+  isNotNull,
+} from "@synap/database";
 import { inArray } from "drizzle-orm";
 
 import { relationsRouter } from "../../relations.js";
@@ -631,7 +640,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const userId = isServiceKey ? (query.userId ?? authUserId) : authUserId;
     try {
       const result = await db.query.entities.findFirst({
-        where: and(eq(entities.id, entityId), isNull(entities.deletedAt)),
+        where: and(
+          eq(entities.id, entityId),
+          isNull(entities.deletedAt),
+          or(
+            and(isNull(entities.workspaceId), eq(entities.userId, userId)),
+            isNotNull(entities.workspaceId)
+          )
+        ),
       });
       if (!result) return c.body(null, 404);
       if (result.workspaceId) {
@@ -1100,35 +1116,44 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const { entityId } = c.req.valid("param");
     const body = c.req.valid("json");
 
-    // Bind the acting identity to the authenticated principal (closes the IDOR).
-    // When body.workspaceId is given, resolveActingContext also membership-checks
-    // it for the resolved user; when omitted, the update targets a pod-wide
-    // entity (workspace = null) — keep that behavior without forcing resolution.
-    let userId: string;
-    let effectiveWorkspaceId: string | null;
-    if (!body.workspaceId) {
-      const authUserId = c.get("userId") as string | undefined;
-      if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-      const isServiceKey = !!c.get("apiKeyId");
-      if (!isServiceKey && body.userId && body.userId !== authUserId) {
-        return c.json(
-          { error: "userId does not match the authenticated session" },
-          403
-        );
-      }
-      userId = isServiceKey ? (body.userId ?? authUserId) : authUserId;
-      effectiveWorkspaceId = null;
-    } else {
-      const acting = await resolveActingContext(c, {
-        userId: body.userId,
-        workspaceId: body.workspaceId ?? undefined,
-      });
-      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      userId = acting.userId;
-      effectiveWorkspaceId = acting.workspaceId;
+    const authUserId = c.get("userId") as string | undefined;
+    if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
+    const isServiceKey = !!c.get("apiKeyId");
+    if (!isServiceKey && body.userId && body.userId !== authUserId) {
+      return c.json(
+        { error: "userId does not match the authenticated session" },
+        403
+      );
     }
+    const userId = isServiceKey ? (body.userId ?? authUserId) : authUserId;
 
     try {
+      const target = await db.query.entities.findFirst({
+        where: and(
+          eq(entities.id, entityId),
+          isNull(entities.deletedAt),
+          or(
+            and(isNull(entities.workspaceId), eq(entities.userId, userId)),
+            isNotNull(entities.workspaceId)
+          )
+        ),
+        columns: { id: true, workspaceId: true },
+      });
+      if (!target) return c.body(null, 404);
+      const effectiveWorkspaceId = target.workspaceId ?? null;
+      if (body.workspaceId && body.workspaceId !== effectiveWorkspaceId) {
+        return c.json(
+          { error: "workspaceId does not match the entity's workspace" },
+          400
+        );
+      }
+      if (
+        effectiveWorkspaceId &&
+        !(await verifyWorkspaceReadAccess(userId, effectiveWorkspaceId))
+      ) {
+        return c.json({ error: "Access denied to entity's workspace" }, 403);
+      }
+
       // body.agentUserId wins; fall back to the auto-injected context value so
       // agents using their own API key get proposal attribution without passing it.
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
@@ -1231,33 +1256,44 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const { entityId } = c.req.valid("param");
     const q = c.req.valid("query");
 
-    // Bind acting identity to the principal (closes the IDOR), mirroring PATCH:
-    // a missing workspace targets a pod-wide entity (workspace = null).
-    let userId: string;
-    let effectiveWorkspaceId: string | null;
-    if (!q.workspaceId) {
-      const authUserId = c.get("userId") as string | undefined;
-      if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-      const isServiceKey = !!c.get("apiKeyId");
-      if (!isServiceKey && q.userId && q.userId !== authUserId) {
-        return c.json(
-          { error: "userId does not match the authenticated session" },
-          403
-        );
-      }
-      userId = isServiceKey ? (q.userId ?? authUserId) : authUserId;
-      effectiveWorkspaceId = null;
-    } else {
-      const acting = await resolveActingContext(c, {
-        userId: q.userId,
-        workspaceId: q.workspaceId,
-      });
-      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      userId = acting.userId;
-      effectiveWorkspaceId = acting.workspaceId;
+    const authUserId = c.get("userId") as string | undefined;
+    if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
+    const isServiceKey = !!c.get("apiKeyId");
+    if (!isServiceKey && q.userId && q.userId !== authUserId) {
+      return c.json(
+        { error: "userId does not match the authenticated session" },
+        403
+      );
     }
+    const userId = isServiceKey ? (q.userId ?? authUserId) : authUserId;
 
     try {
+      const target = await db.query.entities.findFirst({
+        where: and(
+          eq(entities.id, entityId),
+          isNull(entities.deletedAt),
+          or(
+            and(isNull(entities.workspaceId), eq(entities.userId, userId)),
+            isNotNull(entities.workspaceId)
+          )
+        ),
+        columns: { id: true, workspaceId: true },
+      });
+      if (!target) return c.body(null, 404);
+      const effectiveWorkspaceId = target.workspaceId ?? null;
+      if (q.workspaceId && q.workspaceId !== effectiveWorkspaceId) {
+        return c.json(
+          { error: "workspaceId does not match the entity's workspace" },
+          400
+        );
+      }
+      if (
+        effectiveWorkspaceId &&
+        !(await verifyWorkspaceReadAccess(userId, effectiveWorkspaceId))
+      ) {
+        return c.json({ error: "Access denied to entity's workspace" }, 403);
+      }
+
       // agentUserId drives proposal attribution; fall back to the auto-injected
       // context value so agents using their own API key get attribution for free.
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;

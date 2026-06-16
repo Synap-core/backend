@@ -308,16 +308,30 @@ export const systemRouter = router({
       });
 
       return {
-        events: events.map((event) => ({
-          id: event.id,
-          type: event.eventType,
-          userId: event.userId,
-          timestamp: event.timestamp.toISOString(),
-          correlationId: event.correlationId,
-          isError:
-            event.eventType.toLowerCase().includes("error") ||
-            event.eventType.toLowerCase().includes("failed"),
-        })),
+        events: events.map((event) => {
+          // `{subject}.{action}.{phase}` — surface the subject + phase so the
+          // client can PACKAGE a lifecycle (requested→validated→completed) for
+          // the SAME subject into one card instead of three loose rows.
+          const parts = event.eventType.split(".");
+          const phase = parts.length >= 3 ? parts[parts.length - 1] : null;
+          return {
+            id: event.id,
+            type: event.eventType,
+            userId: event.userId,
+            timestamp: event.timestamp.toISOString(),
+            correlationId: event.correlationId,
+            // subject = the thing the event is about; used to group a lifecycle.
+            // actor fields resolve the "Someone" label on event cards.
+            subjectId: event.subjectId ?? null,
+            subjectType: event.subjectType ?? null,
+            phase,
+            isAgent: event.isAgent ?? false,
+            agentUserId: event.agentUserId ?? null,
+            isError:
+              event.eventType.toLowerCase().includes("error") ||
+              event.eventType.toLowerCase().includes("failed"),
+          };
+        }),
         total: events.length,
         timestamp: new Date().toISOString(),
       };
@@ -1565,7 +1579,7 @@ export const systemRouter = router({
       // currently a pod admin themselves — deleting a non-admin can never
       // affect the admin headcount.
       const podAdminWorkspace = await db.query.workspaces.findFirst({
-        where: eq(workspaces.systemSlug, 'pod-admin'),
+        where: eq(workspaces.systemSlug, "pod-admin"),
         columns: { id: true },
       });
 

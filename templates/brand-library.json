@@ -414,6 +414,20 @@
     "defaultView": "Brand Command Center",
     "sidebarItems": [
       {
+        "kind": "app",
+        "appId": "brandLibrary",
+        "label": "Brand Library",
+        "icon": "palette",
+        "surface": {
+          "kind": "app",
+          "appId": "brandLibrary",
+          "rendererType": "native",
+          "placement": "main",
+          "displayMode": "full",
+          "title": "Brand Library"
+        }
+      },
+      {
         "kind": "view",
         "viewName": "Brand Command Center",
         "label": "Command Center",

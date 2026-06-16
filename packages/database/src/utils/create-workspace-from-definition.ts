@@ -253,13 +253,51 @@ export interface WorkspaceDefinitionInput {
     defaultView?: string;
     theme?: string;
     sidebarItems?: Array<{
-      kind: "app" | "view" | "profile" | "external";
+      kind: "app" | "view" | "profile" | "external" | "cell";
       appId?: string;
       viewName?: string;
+      viewId?: string;
       profileSlug?: string;
       url?: string;
+      cellKey?: string;
+      cellProps?: Record<string, unknown>;
+      surface?: {
+        kind:
+          | "cell"
+          | "view"
+          | "entity"
+          | "document"
+          | "channel"
+          | "app"
+          | "url";
+        cellKey?: string;
+        viewId?: string;
+        viewName?: string;
+        entityId?: string;
+        documentId?: string;
+        channelId?: string;
+        appId?: string;
+        url?: string;
+        srcdoc?: string;
+        rendererType?: "native" | "external" | "iframe-srcdoc";
+        external?: boolean;
+        placement?:
+          | "main"
+          | "side"
+          | "floating"
+          | "modal"
+          | "popover"
+          | "embed";
+        displayMode?: "compact" | "medium" | "full";
+        props?: Record<string, unknown>;
+        title?: string;
+        workspaceId?: string | null;
+        meta?: Record<string, unknown>;
+      };
       label?: string;
       icon?: string;
+      section?: string;
+      matchUrls?: string[];
     }>;
   };
   /**
@@ -1528,13 +1566,20 @@ export async function createWorkspaceFromDefinition(
     resolvedLayout = { ...settings.layout, sidebarItems: patchedItems };
   }
 
-  // Also resolve surface.viewId from viewName for items using the surface field
+  // Also resolve nested surface.viewName → surface.viewId for rich sidebar targets.
   const patchedSurfaceItems = (
     resolvedLayout ?? settings.layout
-  )?.sidebarItems?.map((item: any) => {
-    if (item.surface?.kind !== "view" || !item.surface.viewId) return item;
-    const resolvedId = viewMap[item.surface.viewId];
-    if (!resolvedId) return item;
+  )?.sidebarItems?.map((item) => {
+    if (item.surface?.kind !== "view" || item.surface.viewId) return item;
+    if (!item.surface.viewName) return item;
+    const resolvedId = viewMap[item.surface.viewName];
+    if (!resolvedId) {
+      logger.warn(
+        { viewName: item.surface.viewName, workspaceId },
+        "sidebarItem surface references unknown view — keeping viewName for debug"
+      );
+      return item;
+    }
     return { ...item, surface: { ...item.surface, viewId: resolvedId } };
   });
   if (patchedSurfaceItems) {

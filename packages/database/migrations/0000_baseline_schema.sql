@@ -3335,6 +3335,8 @@ CREATE TABLE IF NOT EXISTS "tools" (
 );
 CREATE INDEX IF NOT EXISTS "idx_tools_workspace_id" ON "tools" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_tools_kind"         ON "tools" ("kind");
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_tools_provider_cred" ON "tools" ("credential_ref")
+  WHERE credential_ref LIKE 'nango://%' AND workspace_id IS NULL;
 
 CREATE TABLE IF NOT EXISTS "playbooks" (
   "id"               uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,

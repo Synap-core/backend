@@ -12,6 +12,7 @@ import {
   parseMarkdown,
   parseCsv,
   parseBookmarksHtml,
+  flattenChatTranscript,
 } from "./import-parsers.js";
 import type { ImportItem, ImportLink } from "./import-items.js";
 
@@ -180,9 +181,127 @@ export function bookmarksFileToImportItems(content: string): ImportItem[] {
   }));
 }
 
+// ── JSON chat adapter ─────────────────────────────────────────────────────────
+
+/**
+ * One JSON file → ONE ImportItem whose body is a readable chat transcript.
+ *
+ * PRODUCT DECISION: a JSON chat-export is NOT imported as channels + messages —
+ * it is flattened to a "Speaker: text" transcript and routed through the SAME
+ * deep/prose structuring the markdown path uses, so the conversation yields an
+ * ENTITY GRAPH (entities + relations extracted from the content).
+ *
+ * If the JSON is chat-shaped → transcript body. Otherwise → fall back to the raw
+ * JSON text as the body so it is still structurable as prose. Either way the
+ * orchestrator's prose/deep path turns it into an entity-graph proposal.
+ */
+export function jsonFileToImportItem(
+  path: string,
+  content: string
+): ImportItem {
+  const segments = path.split("/").filter(Boolean);
+  const file = segments.pop() ?? path;
+  const fileTitle = file.replace(/\.json$/i, "");
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    // Not valid JSON — treat the raw text as the body for structuring.
+    return {
+      title: fileTitle || "Imported JSON",
+      path: segments,
+      metadata: {},
+      body: content,
+      links: [],
+      labels: [],
+    };
+  }
+
+  const flat = flattenChatTranscript(parsed);
+  if (flat) {
+    return {
+      title: flat.title || fileTitle || "Imported chat",
+      path: segments,
+      metadata: {},
+      body: flat.transcript,
+      links: [],
+      labels: [],
+    };
+  }
+
+  // Not chat-shaped → fall back to the raw JSON text as structurable content.
+  return {
+    title: fileTitle || "Imported JSON",
+    path: segments,
+    metadata: {},
+    body: content,
+    links: [],
+    labels: [],
+  };
+}
+
+// ── Connector-sync adapter ────────────────────────────────────────────────────
+
+/**
+ * One connector record → ONE ImportItem (1 record → 1 entity-candidate).
+ *
+ * A synced connector record is flat structured data, so it maps DIRECTLY: the
+ * record's natural title (first name-ish field, else the synthetic path) becomes
+ * the title, every primitive field becomes metadata, and a readable "key: value"
+ * text block becomes the body (so the structuring model has prose to read). This
+ * replaces the old CSV-aggregation stopgap (N records → one CSV blob → re-parse).
+ */
+export function connectorRecordToImportItem(
+  path: string,
+  record: Record<string, unknown>
+): ImportItem {
+  const entries = Object.entries(record).filter(
+    ([, v]) => v !== null && v !== undefined && v !== ""
+  );
+
+  // Natural title: first name-ish field, else the synthetic path's basename.
+  const titleKey = Object.keys(record).find((k) =>
+    /^(title|name|subject|label|full_?name)$/i.test(k)
+  );
+  const rawTitle = titleKey ? record[titleKey] : undefined;
+  const fallback = path.split("/").pop() ?? path;
+  const title = (
+    typeof rawTitle === "string" || typeof rawTitle === "number"
+      ? String(rawTitle)
+      : fallback
+  ).slice(0, 500);
+
+  const metadata: Record<string, unknown> = {};
+  const bodyLines: string[] = [];
+  for (const [k, v] of entries) {
+    metadata[k] = v;
+    const display =
+      typeof v === "string" || typeof v === "number" || typeof v === "boolean"
+        ? String(v)
+        : JSON.stringify(v);
+    bodyLines.push(`${k}: ${display}`);
+  }
+
+  return {
+    title: title || "Untitled record",
+    path: [],
+    metadata,
+    body: bodyLines.join("\n"),
+    links: [],
+    labels: [],
+  };
+}
+
 // ── Adapter registry ───────────────────────────────────────────────────────────
 
-export type ImportSource = "obsidian" | "markdown" | "csv" | "bookmark";
+export type ImportSource =
+  | "obsidian"
+  | "markdown"
+  | "csv"
+  | "bookmark"
+  | "json"
+  | "connector_sync";
 
 /**
  * Resolve a batch of raw `{ path, content }` records to ImportItems for a given
@@ -204,6 +323,24 @@ export function adaptItems(
       return raw.flatMap((r) => csvFileToImportItems(r.content));
     case "bookmark":
       return raw.flatMap((r) => bookmarksFileToImportItems(r.content));
+    case "json":
+      return raw.map((r) => jsonFileToImportItem(r.path, r.content));
+    case "connector_sync":
+      // Each raw item's `content` is ONE record serialized as JSON (1:1, set by
+      // the connector→import bridge). Parse it back to the record object.
+      return raw.map((r) => {
+        let record: Record<string, unknown> = {};
+        try {
+          const parsed = JSON.parse(r.content);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            record = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // Non-JSON content — keep the raw text as a single field.
+          record = { value: r.content };
+        }
+        return connectorRecordToImportItem(r.path, record);
+      });
     default:
       // Exhaustive: TS errors here if a new ImportSource is added without a case.
       return ((_: never) => [])(source);

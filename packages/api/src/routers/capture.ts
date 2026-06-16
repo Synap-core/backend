@@ -782,7 +782,11 @@ export const captureRouter = router({
          */
         file: z
           .object({
-            content: z.string(),
+            // ≈5MB binary as base64 (base64 inflates ~1.37×). Caps the raw
+            // blob so an oversized payload can't OOM the pod (DoS guard).
+            content: z
+              .string()
+              .max(7_000_000, "file.content too large (max ~5MB)"),
             mimeType: z.string(),
             filename: z.string().optional(),
           })
@@ -1024,6 +1028,45 @@ export const captureRouter = router({
         "Capture execute completed"
       );
 
+      // Track 3 — record-and-materialize. The write above is an already-done
+      // first-party capture; record it as a persistent `auto_approved` proposal
+      // so the capture is traceable, shows in the Proposals app, and can be
+      // reverted (revert reads `data.materialized.entityIds`). BEST-EFFORT: a
+      // recording hiccup must NEVER fail the capture (same discipline as the
+      // keepRaw block below). NOT routed through checkPermissionOrPropose — this
+      // RECORDS an already-committed first-party write, it does not ask permission.
+      if (created.length > 0) {
+        try {
+          const { createAutoApprovedProposal } =
+            await import("../utils/event-backed-proposal.js");
+          const materializedEntityIds = created
+            .filter((c) => !c.linked)
+            .map((c) => c.entityId);
+          const createdCount = materializedEntityIds.length;
+          await createAutoApprovedProposal({
+            userId,
+            reviewedBy: userId,
+            workspaceId: workspaceId ?? null,
+            targetType: "entity",
+            targetId: randomUUID(),
+            proposalType: "capture.graph",
+            action: "graph",
+            source: "capture",
+            summary: `Captured ${createdCount} thing${createdCount === 1 ? "" : "s"}`,
+            data: {
+              operations,
+              source: "capture",
+              materialized: { entityIds: materializedEntityIds },
+            },
+          });
+        } catch (err) {
+          logger.warn(
+            { err, userId },
+            "Track 3: capture proposal record failed (capture preserved)"
+          );
+        }
+      }
+
       // P3 — Disposition (store-vs-extract). DEFAULT (no keepRaw / no file) is
       // byte-identical to today: the binary is dropped, only entities survive.
       // OPT-IN: when keepRaw && file, preserve the ORIGINAL source blob and link
@@ -1071,10 +1114,22 @@ export const captureRouter = router({
               userId
             );
 
-            // Link the stored blob to the primary entity (entity.documentId).
+            // Record the raw source blob as PROVENANCE on the primary entity
+            // WITHOUT clobbering entity.documentId. The primary may already
+            // carry an extracted-content document (set by entityCaller.create
+            // via resolveContentTarget → materializeContentDocument); overwriting
+            // documentId here would orphan that long-form note body. Instead we
+            // merge two properties — entityRepo.update MERGES properties (it does
+            // NOT replace), and unknown property keys are preserved by the
+            // validation service — so the extracted documentId stays intact.
             await entityRepo.update(
               primary.entityId,
-              { documentId: createdDocument.id },
+              {
+                properties: {
+                  sourceFileDocumentId: createdDocument.id,
+                  sourceFileUrl: metadata.url,
+                },
+              },
               userId
             );
 
@@ -1082,9 +1137,9 @@ export const captureRouter = router({
               {
                 userId,
                 entityId: primary.entityId,
-                documentId: createdDocument.id,
+                sourceFileDocumentId: createdDocument.id,
               },
-              "P3: raw source blob stored and linked to primary entity"
+              "P3: raw source blob stored and recorded as provenance on primary entity"
             );
           } catch (err) {
             // Never fail the capture on a storage hiccup — log and continue.

@@ -11,13 +11,11 @@
  * NAMED DEFAULT: on-demand only ("sync this connection now → proposal"). No cron
  * scheduling here — that is a later phase.
  *
- * KNOWN GAP (flagged for the import-orchestrator owner): the orchestrator's
- * `ImportRevealSource` union is `"obsidian" | "markdown" | "csv" | "bookmark"`
- * and does NOT yet include `"connector_sync"`. A connector record is flat
- * structured data (1 record → 1 entity), which is exactly the CSV adapter's
- * shape, so we map to `source: "csv"` (the closest accepted value) rather than
- * editing the orchestrator. When the owner adds a first-class `connector_sync`
- * source + adapter, switch the `IMPORT_SOURCE` constant below.
+ * Each synced record maps 1:1 to ONE import item via the first-class
+ * `connector_sync` source + adapter (a flat structured record → one
+ * entity-candidate). This replaced the earlier CSV-aggregation stopgap (N
+ * records → one CSV blob → re-parse) now that the orchestrator accepts the
+ * `connector_sync` source directly.
  */
 
 import { createLogger } from "@synap-core/core";
@@ -27,11 +25,11 @@ import { ImportOrchestrator } from "./import-orchestrator.js";
 const logger = createLogger({ module: "connector-import-bridge" });
 
 /**
- * Closest accepted `ImportRevealSource`. Connector records are flat structured
- * rows → 1 entity each, matching the CSV adapter's shallow path. See KNOWN GAP
- * above — replace with `"connector_sync"` once the orchestrator accepts it.
+ * First-class connector source. The `connector_sync` adapter maps one record →
+ * one entity-candidate (title + metadata + readable key:value body) on the
+ * orchestrator's shallow path — correct for flat structured records.
  */
-const IMPORT_SOURCE = "csv" as const;
+const IMPORT_SOURCE = "connector_sync" as const;
 
 export type SyncConnectionToImportInput = {
   ctx: {
@@ -92,11 +90,15 @@ export async function syncConnectionToImport(
 
   // Provider = 3rd segment of `{userId}:{podId}:{provider}`; fall back to the
   // model when the id isn't in that shape. Used only to build a stable, human
-  // readable synthetic path per record.
+  // readable synthetic per-record path.
   const provider = connectionId.split(":")[2] || model || "connector";
 
-  const items = records.map((r) => ({
-    path: `${provider}/${r.externalId}`,
+  // Map each record 1:1 to ONE import item: `content` is the record serialized
+  // as JSON (the connector_sync adapter parses it back to build the entity), and
+  // `path` is a synthetic per-record key. This is the first-class connector path
+  // (replaced the CSV-aggregation stopgap).
+  const items = records.map((r, i) => ({
+    path: `${provider}/${model}/${i}.json`,
     content: JSON.stringify(r.data),
   }));
 
@@ -106,6 +108,15 @@ export async function syncConnectionToImport(
     items,
   });
 
+  // Real item count comes from the orchestrator AFTER the adapter ran (one per
+  // record). `stats` is typed `Record<string, unknown>`, so narrow before use;
+  // the connector_sync adapter produces one item per record, so `records.length`
+  // is the right fallback.
+  const statsItemCount = (result.stats as { itemCount?: unknown } | undefined)
+    ?.itemCount;
+  const itemCount =
+    typeof statsItemCount === "number" ? statsItemCount : records.length;
+
   logger.info(
     {
       connectionId,
@@ -114,6 +125,7 @@ export async function syncConnectionToImport(
       userId: ctx.userId,
       workspaceId: ctx.workspaceId,
       recordCount: records.length,
+      itemCount,
       proposalId: result.proposalId,
     },
     "connector sync → import proposal created"
@@ -122,7 +134,7 @@ export async function syncConnectionToImport(
   return {
     proposalId: result.proposalId,
     recordCount: records.length,
-    itemCount: items.length,
+    itemCount,
     source: IMPORT_SOURCE,
   };
 }

@@ -24,6 +24,7 @@ import {
   and,
   or,
   isNull,
+  isNotNull,
   inArray,
   getDb,
   ProfileResolutionService,
@@ -53,11 +54,45 @@ import { randomUUID } from "crypto";
 import { syncPropertyToRelations } from "../utils/property-relation-sync.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { dispatchWebhooksForEvent } from "../utils/webhook-delivery.js";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
+import {
+  userVisibleWhere,
+  workspaceLensWhere,
+} from "../utils/user-visible-where.js";
 import { resolveContentTarget } from "../import/materialize-document.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "entities-router" });
+
+function entityVisibleWhere(userId: string) {
+  return or(
+    and(isNull(entities.workspaceId), eq(entities.userId, userId)),
+    and(
+      isNotNull(entities.workspaceId),
+      userVisibleWhere(entities.workspaceId, userId)
+    )
+  )!;
+}
+
+function entityLensWhere(
+  userId: string,
+  lens?: string | null,
+  opts?: { includePodWide?: boolean }
+) {
+  if (lens === undefined) return entityVisibleWhere(userId);
+  if (lens === null) {
+    return and(isNull(entities.workspaceId), eq(entities.userId, userId))!;
+  }
+  const workspaceBranch = workspaceLensWhere(
+    entities.workspaceId,
+    userId,
+    lens
+  );
+  if (!opts?.includePodWide) return workspaceBranch;
+  return or(
+    and(isNull(entities.workspaceId), eq(entities.userId, userId)),
+    workspaceBranch
+  )!;
+}
 
 /**
  * Standard entity shape for API responses.
@@ -658,6 +693,11 @@ export const entitiesRouter = router({
          * already return pod-wide-only).
          */
         includePodWide: z.boolean().optional().default(false),
+        /**
+         * Explicit list lens. `undefined` falls back to ctx.workspaceId for
+         * backwards compatibility; `null` returns the caller's pod-wide rows.
+         */
+        workspaceId: z.string().uuid().nullable().optional(),
         /** Filter to entities materialized from a specific proposal (provenance). */
         sourceProposalId: z.string().uuid().optional(),
       })
@@ -667,15 +707,14 @@ export const entitiesRouter = router({
       // return ONLY that workspace's rows. includePodWide=true restores the
       // legacy "workspace OR pod-wide globals" union. globalOnly / workspace-less
       // callers are unaffected (they already resolve to pod-wide-only below).
+      const lensWorkspaceId =
+        input.workspaceId !== undefined ? input.workspaceId : ctx.workspaceId;
       const workspaceScopeCondition =
-        input.globalOnly || !ctx.workspaceId
-          ? isNull(entities.workspaceId)
-          : input.includePodWide
-            ? or(
-                eq(entities.workspaceId, ctx.workspaceId),
-                isNull(entities.workspaceId)
-              )
-            : eq(entities.workspaceId, ctx.workspaceId);
+        input.globalOnly || !lensWorkspaceId
+          ? entityLensWhere(ctx.userId, null)
+          : entityLensWhere(ctx.userId, lensWorkspaceId, {
+              includePodWide: input.includePodWide,
+            });
       // Visibility is gated by workspace membership (workspaceProcedure).
       // userId is attribution only — all workspace members see all workspace entities.
       const conditions: any[] = [isNull(entities.deletedAt)];
@@ -760,7 +799,7 @@ export const entitiesRouter = router({
     .query(async ({ input, ctx }) => {
       const conditions: any[] = [
         isNull(entities.deletedAt),
-        userVisibleWhere(entities.workspaceId, ctx.userId),
+        entityVisibleWhere(ctx.userId),
       ];
 
       if (input.profileSlug) {
@@ -912,11 +951,8 @@ export const entitiesRouter = router({
     )
     .query(async ({ ctx }) => {
       const workspaceFilter = ctx.workspaceId
-        ? or(
-            eq(entities.workspaceId, ctx.workspaceId),
-            isNull(entities.workspaceId)
-          )
-        : userVisibleWhere(entities.workspaceId, ctx.userId);
+        ? entityLensWhere(ctx.userId, ctx.workspaceId, { includePodWide: true })
+        : entityVisibleWhere(ctx.userId);
       const rows = await db
         .select({
           id: entities.id,
@@ -1054,7 +1090,7 @@ export const entitiesRouter = router({
         where: and(
           eq(entities.id, input.id),
           isNull(entities.deletedAt),
-          userVisibleWhere(entities.workspaceId, ctx.userId)
+          entityVisibleWhere(ctx.userId)
         ),
       });
 
@@ -1145,8 +1181,26 @@ export const entitiesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const correlationId = randomUUID();
-      const governanceWorkspaceId =
-        input.targetWorkspaceId ?? ctx.workspaceId ?? null;
+
+      // PROPOSE-TIME VALIDATION: reject an update against a NONEXISTENT entity
+      // up front. Previously a missing target sailed past the gate and only blew
+      // up at approval with a raw 500 "Entity not found" — a proposal that can
+      // never materialize. Check existence BEFORE checkPermissionOrPropose so the
+      // caller gets an immediate NOT_FOUND instead of a doomed proposal.
+      const existing = await db.query.entities.findFirst({
+        where: and(
+          eq(entities.id, input.id),
+          isNull(entities.deletedAt),
+          entityVisibleWhere(ctx.userId)
+        ),
+        columns: { id: true, workspaceId: true },
+      });
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Entity not found: ${input.id}`,
+        });
+      }
 
       if (input.targetWorkspaceId) {
         const { validateWorkspaceAccess } =
@@ -1162,30 +1216,22 @@ export const entitiesRouter = router({
         }
       }
 
-      // PROPOSE-TIME VALIDATION: reject an update against a NONEXISTENT entity
-      // up front. Previously a missing target sailed past the gate and only blew
-      // up at approval with a raw 500 "Entity not found" — a proposal that can
-      // never materialize. Check existence BEFORE checkPermissionOrPropose so the
-      // caller gets an immediate NOT_FOUND instead of a doomed proposal.
-      {
-        const existing = await db.query.entities.findFirst({
-          where: and(eq(entities.id, input.id), isNull(entities.deletedAt)),
-          columns: { id: true },
-        });
-        if (!existing) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: `Entity not found: ${input.id}`,
-          });
-        }
-      }
+      const placementWorkspaceId = input.global
+        ? null
+        : (input.targetWorkspaceId ?? existing.workspaceId ?? null);
+      const governanceWorkspaceId = placementWorkspaceId;
+      const overlayWorkspaceId =
+        input.targetWorkspaceId ??
+        ctx.workspaceId ??
+        existing.workspaceId ??
+        null;
 
       // Resolve framed-view trust SERVER-SIDE (never from the request body).
       const issuer = input.viewContext
         ? await resolveViewTrust(
             input.viewContext,
             ctx.userId,
-            governanceWorkspaceId
+            overlayWorkspaceId
           )
         : undefined;
 
@@ -1268,16 +1314,16 @@ export const entitiesRouter = router({
           deleteProperties: input.deleteProperties,
           profileSlug: input.profileSlug || undefined,
           // Thread the workspace lens so overlay props validate/index correctly
-          workspaceId: governanceWorkspaceId,
+          workspaceId: overlayWorkspaceId,
         },
         ctx.userId
       );
 
-      // 3b. If global flag is set, remove workspace scoping (pod-wide visibility)
-      if (input.global === true) {
+      // 3b. Persist explicit placement changes after the content/property update.
+      if (input.global === true || input.targetWorkspaceId) {
         await database
           .update(entities)
-          .set({ workspaceId: null })
+          .set({ workspaceId: placementWorkspaceId })
           .where(eq(entities.id, input.id));
       }
 
@@ -1422,18 +1468,21 @@ export const entitiesRouter = router({
       // PROPOSE-TIME VALIDATION: reject a delete against a NONEXISTENT (or
       // already-deleted) entity up front, so an agent never files a proposal that
       // can only fail at approval with a raw 500.
-      {
-        const existing = await db.query.entities.findFirst({
-          where: and(eq(entities.id, input.id), isNull(entities.deletedAt)),
-          columns: { id: true },
+      const existing = await db.query.entities.findFirst({
+        where: and(
+          eq(entities.id, input.id),
+          isNull(entities.deletedAt),
+          entityVisibleWhere(ctx.userId)
+        ),
+        columns: { id: true, workspaceId: true },
+      });
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Entity not found: ${input.id}`,
         });
-        if (!existing) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: `Entity not found: ${input.id}`,
-          });
-        }
       }
+      const governanceWorkspaceId = existing.workspaceId ?? null;
 
       // 1. Emit .requested event
       const requestedEvent = await auditLog({
@@ -1442,7 +1491,7 @@ export const entitiesRouter = router({
         phase: "requested",
         subjectId: input.id,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: governanceWorkspaceId,
         correlationId,
         data: { id: input.id },
       });
@@ -1451,7 +1500,7 @@ export const entitiesRouter = router({
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: governanceWorkspaceId,
         subjectType: "entity",
         action: "delete",
         source: input.source,
@@ -1531,7 +1580,7 @@ export const entitiesRouter = router({
         phase: "completed",
         subjectId: input.id,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: governanceWorkspaceId,
         correlationId,
       });
 
@@ -1540,7 +1589,7 @@ export const entitiesRouter = router({
         action: "delete",
         subjectId: input.id,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: governanceWorkspaceId,
         data: { profileSlug: deletedEntityRow?.type ?? undefined },
       });
 
