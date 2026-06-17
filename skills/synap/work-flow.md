@@ -106,8 +106,8 @@ User: _"I'm trying to figure out whether we should build our own orchestrator or
 
 Don't interrupt the conversation to ask "should I log this as a question?" — just do it and add a one-line trailer at the end of your response:
 
-> (Logged as question on Project Eve. Review: https://studio.synap.live/proposals/…)
+> (Logged as question on Project Eve. Review: synap://open/proposal/…)
 
 If the creation was auto-approved (entity.create is on the whitelist), there's no proposal; just show a link to the entity:
 
-> (Logged as question → https://studio.synap.live/entities/ent_question_1)
+> (Logged as question → synap://open/entity/ent_question_1)

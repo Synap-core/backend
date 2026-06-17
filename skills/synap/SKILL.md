@@ -273,6 +273,19 @@ synap ask "hono routing gotcha" --json
 `synap capture --type` writes a typed **`knowledge`** entity in the **active workspace** (the Work lane); `ek_type` (gotcha|lesson|decision|reference) discriminates the kind — **one store, type tags, not a residual dump**. It's workspace-scoped, so the active workspace supplies the domain — a Builder gotcha ≠ a marketing one (there is no `engineering_knowledge`). Add **`--global`** to write a pod-wide cross-cutting runbook to `knowledge_keys` instead. A formal **decision RECORD** (rationale, alternatives, superseded-by lifecycle) is a different artifact — use smart `synap capture "<free text>"` or `synap create entity --profile=decision`. Retrieve everything with `synap ask`.
 Use `capture` for anything worth remembering across sessions and projects.
 
+**Open (the one display door):**
+
+```bash
+synap open <id>                               # resolves type automatically, opens in browser
+synap open entity <id>                        # open entity detail
+synap open proposal <id>                      # open proposal review
+synap open view <id>                          # open a view
+synap open cell <typeKey>                     # open a registered cell by typeKey
+synap open document <id>                      # open a document
+```
+
+The bare-ID form calls `GET /api/hub/resolve/:id` to determine the type before dispatching. Use this when you don't know what type a UUID is — `synap open <id>` always works.
+
 **Write:**
 
 ```bash
@@ -417,11 +430,11 @@ User: _"I'm trying to figure out whether we should build our own orchestrator or
 
 Don't interrupt the conversation to ask "should I log this as a question?" — just do it and add a one-line trailer at the end of your response:
 
-> (Logged as question on Project Eve. Review: https://studio.synap.live/proposals/…)
+> (Logged as question on Project Eve. Review: synap://open/proposal/…)
 
 If the creation was auto-approved (entity.create is on the whitelist), there's no proposal; just show a link to the entity:
 
-> (Logged as question → https://studio.synap.live/entities/ent_question_1)
+> (Logged as question → synap://open/entity/ent_question_1)
 
 ---
 
@@ -524,7 +537,7 @@ Rules:
 
 Example response to the user:
 
-> I queued **Delete task "Q2 plan review"** for your review. Destructive actions need your approval. Open it: https://studio.synap.live/proposals/prp_abc
+> I queued **Delete task "Q2 plan review"** for your review. Destructive actions need your approval. Open it: synap://open/proposal/prp_abc
 
 Auto-approved by default (for agent API keys): `entity.create`, `entity.update`, `document.create`, `relation.create`, `view.create`, `profile.create`, `property_def.create`, `channel.create`, `memory.*`, all reads. Destructive actions (`delete`, `archive`, `purge`) always propose in agent-owned workspaces.
 

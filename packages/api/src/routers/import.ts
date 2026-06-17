@@ -7,7 +7,12 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure, protectedProcedure } from "../trpc.js";
+import {
+  router,
+  workspaceProcedure,
+  protectedProcedure,
+  podProcedure,
+} from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { ImportOrchestrator } from "../services/import-orchestrator.js";
@@ -124,17 +129,10 @@ export const importRouter = router({
    * composite operations (so the client renders the CompositeProposalGraph
    * reveal inline) plus a governed `import.graph` proposal id. Pair with `apply`.
    */
-  analyze: workspaceProcedure
+  analyze: podProcedure
     .input(AnalyzeImportSchema)
     .mutation(async ({ ctx, input }) => {
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
-      if (!workspaceId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "Workspace ID required. Set X-Workspace-Id or pass workspaceId.",
-        });
-      }
       const orchestrator = new ImportOrchestrator({
         workspaceId,
         userId: ctx.userId as string,
@@ -155,17 +153,10 @@ export const importRouter = router({
    */
   // NOTE: must NOT be named `apply` — tRPC v11.17+ rejects reserved words
   // (Function.prototype.apply) as procedure keys and refuses to build the router.
-  applyImport: workspaceProcedure
+  applyImport: podProcedure
     .input(ApplyImportSchema)
     .mutation(async ({ ctx, input }) => {
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
-      if (!workspaceId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "Workspace ID required. Set X-Workspace-Id or pass workspaceId.",
-        });
-      }
       const orchestrator = new ImportOrchestrator({
         workspaceId,
         userId: ctx.userId as string,
@@ -184,17 +175,10 @@ export const importRouter = router({
    * import produces ONE governed `import.graph` proposal without hitting the
    * per-call deep ceiling. Returns the same shape family as `analyze`.
    */
-  analyzeLarge: workspaceProcedure
+  analyzeLarge: podProcedure
     .input(AnalyzeLargeImportSchema)
     .mutation(async ({ ctx, input }) => {
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
-      if (!workspaceId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "Workspace ID required. Set X-Workspace-Id or pass workspaceId.",
-        });
-      }
       const orchestrator = new ImportOrchestrator({
         workspaceId,
         userId: ctx.userId as string,
@@ -216,17 +200,10 @@ export const importRouter = router({
    * request. The handler that runs analyzeLarge is wired at api boot (IoC), so
    * the jobs package never imports the orchestrator.
    */
-  enqueueLargeImport: workspaceProcedure
+  enqueueLargeImport: podProcedure
     .input(AnalyzeLargeImportSchema)
     .mutation(async ({ ctx, input }) => {
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
-      if (!workspaceId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "Workspace ID required. Set X-Workspace-Id or pass workspaceId.",
-        });
-      }
       const jobId = await getBoss().send(IMPORT_CORPUS_QUEUE, {
         userId: ctx.userId as string,
         workspaceId,
@@ -252,17 +229,10 @@ export const importRouter = router({
    * resolve) and materializes them workspace-scoped. Same auth/workspace pattern
    * as `applyImport`.
    */
-  applyLarge: workspaceProcedure
+  applyLarge: podProcedure
     .input(ApplyLargeImportSchema)
     .mutation(async ({ ctx, input }) => {
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
-      if (!workspaceId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "Workspace ID required. Set X-Workspace-Id or pass workspaceId.",
-        });
-      }
       const orchestrator = new ImportOrchestrator({
         workspaceId,
         userId: ctx.userId as string,

@@ -78,6 +78,7 @@ import {
   registerUiRoutes,
   registerArtifactsRoutes,
   registerRunsRoutes,
+  registerResolveRoutes,
 } from "./hub-protocol/rest/index.js";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
@@ -440,6 +441,7 @@ registerAgentSkillsRoutes(app); // /agent-skills*
 registerUiRoutes(app); // /ui/focus
 registerArtifactsRoutes(app); // /artifacts*
 registerRunsRoutes(app); // /runs/:runId/capture (playbook run capture-back)
+registerResolveRoutes(app); // /resolve/:id — universal ID resolver
 
 // ── OpenAPI stubs for routes not yet annotated inline ──────────────────────
 //

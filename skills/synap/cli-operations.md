@@ -73,6 +73,19 @@ synap ask "hono routing gotcha" --json
 `synap capture --type` writes a typed **`knowledge`** entity in the **active workspace** (the Work lane); `ek_type` (gotcha|lesson|decision|reference) discriminates the kind — **one store, type tags, not a residual dump**. It's workspace-scoped, so the active workspace supplies the domain — a Builder gotcha ≠ a marketing one (there is no `engineering_knowledge`). Add **`--global`** to write a pod-wide cross-cutting runbook to `knowledge_keys` instead. A formal **decision RECORD** (rationale, alternatives, superseded-by lifecycle) is a different artifact — use smart `synap capture "<free text>"` or `synap create entity --profile=decision`. Retrieve everything with `synap ask`.
 Use `capture` for anything worth remembering across sessions and projects.
 
+**Open (the one display door):**
+
+```bash
+synap open <id>                               # resolves type automatically, opens in browser
+synap open entity <id>                        # open entity detail
+synap open proposal <id>                      # open proposal review
+synap open view <id>                          # open a view
+synap open cell <typeKey>                     # open a registered cell by typeKey
+synap open document <id>                      # open a document
+```
+
+The bare-ID form calls `GET /api/hub/resolve/:id` to determine the type before dispatching. Use this when you don't know what type a UUID is — `synap open <id>` always works.
+
 **Write:**
 
 ```bash

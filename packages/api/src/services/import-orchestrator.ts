@@ -74,7 +74,7 @@ const EXT_TRANSFORM: Record<string, string> = {
 };
 
 type OrchestratorContext = {
-  workspaceId: string;
+  workspaceId: string | null;
   userId: string;
   trpcCtx: Record<string, unknown>;
 };
@@ -236,7 +236,7 @@ export class ImportOrchestrator {
         const storageKey = `imports/${userId}/${batchId}/${path}`;
         await storage.upload(storageKey, Buffer.from(content, "utf-8"), {
           contentType: mimeType,
-          metadata: { batchId, workspaceId },
+          metadata: { batchId, workspaceId: workspaceId ?? "" },
         });
 
         if (!canTransform) {
@@ -456,6 +456,10 @@ export class ImportOrchestrator {
     }
   ): Promise<{ proposalId: string | null; itemCount: number }> {
     const { workspaceId, userId } = this.ctx;
+    // IS routing + the live-search resolver take an optional workspaceId; a
+    // pod-wide import (null) resolves the user-default service and an
+    // unscoped search.
+    const wsId = workspaceId ?? undefined;
     const items = adaptItems(source, raw);
     if (items.length === 0) return { proposalId: null, itemCount: 0 };
 
@@ -480,7 +484,7 @@ export class ImportOrchestrator {
       try {
         const { client } = await resolveIntelligenceService({
           userId,
-          workspaceId,
+          workspaceId: wsId,
           capability: "default",
         });
         const deep = await deepStructureImportItems(
@@ -492,7 +496,7 @@ export class ImportOrchestrator {
             availableWorkspaces,
             resolveExisting: makeGraphResolver(searchService, {
               userId,
-              workspaceId,
+              workspaceId: wsId,
             }),
           },
           { logger }
@@ -529,7 +533,7 @@ export class ImportOrchestrator {
       try {
         const { client } = await resolveIntelligenceService({
           userId,
-          workspaceId,
+          workspaceId: wsId,
           capability: "default",
         });
         await aiEnrichImportItems(
@@ -586,6 +590,9 @@ export class ImportOrchestrator {
    */
   async analyze(input: ImportAnalyzeInput) {
     const { workspaceId, userId } = this.ctx;
+    // Optional workspaceId for IS routing + the live-search resolver — a pod-wide
+    // analyze (null) resolves the user-default service and an unscoped search.
+    const wsId = workspaceId ?? undefined;
     const { availableProfiles, validSlugs, availableWorkspaces } =
       await this.resolveProfileHints();
     const items = adaptItems(input.source as ImportAdapterSource, input.items);
@@ -607,7 +614,7 @@ export class ImportOrchestrator {
       try {
         const { client } = await resolveIntelligenceService({
           userId,
-          workspaceId,
+          workspaceId: wsId,
           capability: "default",
         });
         const deep = await deepStructureImportItems(
@@ -619,7 +626,7 @@ export class ImportOrchestrator {
             availableWorkspaces,
             resolveExisting: makeGraphResolver(searchService, {
               userId,
-              workspaceId,
+              workspaceId: wsId,
             }),
           },
           { logger }
@@ -645,7 +652,7 @@ export class ImportOrchestrator {
         try {
           const { client } = await resolveIntelligenceService({
             userId,
-            workspaceId,
+            workspaceId: wsId,
             capability: "default",
           });
           const enriched = await aiEnrichImportItems(
@@ -740,7 +747,10 @@ export class ImportOrchestrator {
       (err, type) =>
         logger.warn({ err, type }, "import.apply: relation create failed"),
       {
-        workspaceScoped: true,
+        // !!workspaceId: an active workspace pins entities to it; a pod-wide
+        // apply (null) lets each profile land in its natural scope (pod-default
+        // NULL), mirroring capture.
+        workspaceScoped: !!workspaceId,
         // U1: when the caller supplies a stable key, retries link instead of
         // duplicating. Absent → no idempotency (unchanged).
         ...(input.idempotencyKey
@@ -783,6 +793,9 @@ export class ImportOrchestrator {
    */
   async analyzeLarge(input: ImportAnalyzeInput, opts?: LargeImportOpts) {
     const { workspaceId, userId } = this.ctx;
+    // Optional workspaceId for IS routing + the live-search resolver — a pod-wide
+    // analyze (null) resolves the user-default service and an unscoped search.
+    const wsId = workspaceId ?? undefined;
     const chunkSize = Math.max(1, opts?.analyzeChunkSize ?? ANALYZE_CHUNK_SIZE);
     const { availableProfiles, validSlugs, availableWorkspaces } =
       await this.resolveProfileHints();
@@ -790,14 +803,14 @@ export class ImportOrchestrator {
 
     const { client } = await resolveIntelligenceService({
       userId,
-      workspaceId,
+      workspaceId: wsId,
       capability: "default",
     });
 
     // ONE shared resolver across all chunks — wraps the live-search resolver and
     // adds earlier-chunk-created + memoized state (cross-chunk dedup).
     const shared = new SharedGraphResolver(
-      makeGraphResolver(searchService, { userId, workspaceId })
+      makeGraphResolver(searchService, { userId, workspaceId: wsId })
     );
 
     const batchId = randomUUID();
@@ -1020,7 +1033,8 @@ export class ImportOrchestrator {
             "import.applyLarge: relation create failed"
           ),
         {
-          workspaceScoped: true,
+          // !!workspaceId: pin to active workspace, else pod-wide (NULL) — see apply().
+          workspaceScoped: !!workspaceId,
           seedRefToRealId: refToRealId,
           ...(idempotency ? { idempotency } : {}),
           ...(idemSeen ? { idemSeen } : {}),
@@ -1064,6 +1078,15 @@ export class ImportOrchestrator {
   }
 
   async queueLinkedInContacts(contacts: LinkedInContactPayload[]) {
+    // LinkedIn contacts import is workspace-bound (the router uses
+    // workspaceProcedure) — unlike the reveal path it requires an active
+    // workspace, so reject a pod-wide call rather than queue a null workspace.
+    if (!this.ctx.workspaceId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Workspace ID required for LinkedIn contacts import.",
+      });
+    }
     const jobId = await getBoss().send(LINKEDIN_BULK_IMPORT_QUEUE, {
       workspaceId: this.ctx.workspaceId,
       userId: this.ctx.userId,

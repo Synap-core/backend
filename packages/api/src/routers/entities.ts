@@ -760,14 +760,22 @@ export const entitiesRouter = router({
         offset: input.offset,
       });
 
+      const totalRow = await db
+        .select({ count: drizzleSql<number>`count(*)::int` })
+        .from(entities)
+        .where(and(...conditions));
+      const total = totalRow[0]?.count ?? 0;
+
       const { items, pagination } = buildPaginatedResponse(
         results.map(toApiEntity),
-        input
+        input,
+        total
       );
 
       return {
         items,
         pagination,
+        total,
         /** @deprecated Use `items` instead */
         entities: items,
         /** @deprecated Use `pagination.hasMore` instead */
@@ -827,14 +835,22 @@ export const entitiesRouter = router({
         offset: input.offset,
       });
 
+      const totalRow = await db
+        .select({ count: drizzleSql<number>`count(*)::int` })
+        .from(entities)
+        .where(and(...conditions));
+      const total = totalRow[0]?.count ?? 0;
+
       const { items, pagination } = buildPaginatedResponse(
         results.map(toApiEntity),
-        input
+        input,
+        total
       );
 
       return {
         items,
         pagination,
+        total,
         /** @deprecated Use `items` instead */
         entities: items,
         /** @deprecated Use `pagination.hasMore` instead */

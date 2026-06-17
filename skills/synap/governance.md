@@ -16,7 +16,7 @@ Every write endpoint returns a `status` field. Handle all three.
   "summary":    "Delete task \"Q2 plan review\"",
   "reasoning":  "Destructive actions require your approval",
   "reviewPath": "/proposals/prp_…",
-  "reviewUrl":  "https://studio.synap.live/proposals/prp_…",
+  "reviewUrl":  "synap://open/proposal/prp_…",
   "message":    "…"
 }
   → Queued for user review. Surface `summary` + `reviewUrl` to the user; do not retry.
@@ -145,15 +145,15 @@ When a write is proposed, surface three things to the user: what was queued, why
 ```
 good: "I queued **Delete task \"Q2 plan review\"** for your review.
        Destructive actions need your approval.
-       https://studio.synap.live/proposals/prp_abc"
+       synap://open/proposal/prp_abc"
 
 good: "I queued **Create entity \"Acme Corp\"** for your review.
-       https://studio.synap.live/proposals/prp_def"
+       synap://open/proposal/prp_def"
 
 good: "Queued 3 changes for your review — I'll post the links after each:
-       1. https://studio.synap.live/proposals/prp_1 — Delete task "X"
-       2. https://studio.synap.live/proposals/prp_2 — Delete task "Y"
-       3. https://studio.synap.live/proposals/prp_3 — Delete task "Z""
+       1. synap://open/proposal/prp_1 — Delete task "X"
+       2. synap://open/proposal/prp_2 — Delete task "Y"
+       3. synap://open/proposal/prp_3 — Delete task "Z""
 
 bad:  "Error: write was not approved."
 bad:  "Something needs your attention in Synap."        ← too vague

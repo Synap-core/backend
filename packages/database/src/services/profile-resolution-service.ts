@@ -4,12 +4,13 @@
  * Resolves profiles and their effective property sets (with inheritance).
  */
 
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 
 import { ProfileRepository } from "../repositories/profile-repository.js";
 import { ProfilePropertyRepository } from "../repositories/profile-property-repository.js";
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
 import { workspaces } from "../schema/workspaces.js";
+import { profiles } from "../schema/profiles.js";
 import type { Profile, PropertyDef } from "../schema/index.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
@@ -371,9 +372,46 @@ export class ProfileResolutionService {
       }
     }
 
-    return Array.from(propertyMap.values()).sort(
+    const result = Array.from(propertyMap.values()).sort(
       (a, b) => a.displayOrder - b.displayOrder
     );
+
+    // Resolve entity-link targets → uiHints.linkedProfileSlug so the entity
+    // picker constrains its search to the target profile (e.g. "question",
+    // "project") instead of listing every entity. The target is stored as
+    // `targetProfileId` (uuid); the picker needs a slug. Resolve once, batched.
+    // Read-time resolution covers ALL defs (legacy + new) at one canonical seam.
+    await this.resolveLinkTargets(result);
+
+    return result;
+  }
+
+  /**
+   * Populate `uiHints.linkedProfileSlug` from `targetProfileId` for entity-link
+   * properties that don't already carry it. Mutates the passed properties in
+   * place. Single batched profiles lookup; no-op when nothing to resolve.
+   */
+  private async resolveLinkTargets(props: EffectiveProperty[]): Promise<void> {
+    const pending = props.filter(
+      (p) => p.targetProfileId && !p.uiHints?.linkedProfileSlug
+    );
+    if (pending.length === 0) return;
+
+    const targetIds = [
+      ...new Set(pending.map((p) => p.targetProfileId as string)),
+    ];
+    const targets = await this._db.query.profiles.findMany({
+      where: inArray(profiles.id, targetIds),
+      columns: { id: true, slug: true },
+    });
+    const slugById = new Map(targets.map((t) => [t.id, t.slug]));
+
+    for (const p of pending) {
+      const slug = slugById.get(p.targetProfileId as string);
+      if (slug) {
+        p.uiHints = { ...(p.uiHints ?? {}), linkedProfileSlug: slug };
+      }
+    }
   }
 
   /**
