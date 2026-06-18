@@ -318,10 +318,19 @@ export const entitiesRouter = router({
             typeKey: z.string().optional(),
           })
           .optional(),
+        /**
+         * Stable entity ID assigned at propose-time so AI agents can reference
+         * this entity in cross-write proposal graphs before its proposal is
+         * approved. When set, the approval handler reuses this ID instead of
+         * generating a fresh one. Ignored on the non-proposed (direct write)
+         * path since a UUID is already generated inline — this input param is
+         * for the proposal approval round-trip only.
+         */
+        proposedEntityId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const entityId = randomUUID();
+      const entityId = input.proposedEntityId ?? randomUUID();
       const correlationId = randomUUID();
       const governanceWorkspaceId =
         input.targetWorkspaceId ?? ctx.workspaceId ?? null;
@@ -433,12 +442,15 @@ export const entitiesRouter = router({
         // top-level `id` that looks like a materialized entity id — nothing was
         // created yet, and downstream callers were treating that phantom id as a
         // real entity. Carry only `proposalId` (the reviewable handle). `entity`
-        // stays null to signal "no materialized row".
+        // stays null to signal "no materialized row". However, we DO expose the
+        // stable `proposedEntityId` (pre-generated at the top of this handler) so
+        // AI agents can reference this entity in cross-write proposal graphs.
         return {
           status: "proposed",
           message: "Entity creation proposed for review",
           entity: null as Record<string, unknown> | null,
           proposalId: perm.proposalId,
+          proposedEntityId: entityId,
         };
       }
 

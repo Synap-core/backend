@@ -182,6 +182,9 @@ export const entitiesRouter = router({
         message: result.message,
         id: result.id,
         proposalId: result.proposalId,
+        // Stable entity ID exposed at propose-time for cross-write proposal
+        // graphs. Only populated when the action was proposal-gated.
+        proposedEntityId: result.proposedEntityId as string | undefined,
         // Echo the workspace lens we resolved for the caller — useful when
         // the request omitted workspaceId and we picked the user's first
         // accessible workspace, or when entityScope='pod' (workspaceId=null).
