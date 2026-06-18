@@ -50,6 +50,7 @@ import {
   registerProposalsRoutes,
   registerRelationsRoutes,
   registerLinksRoutes,
+  registerRoutingRoutes,
   registerRelationDefsRoutes,
   registerSearchRoutes,
   registerSessionsRoutes,
@@ -411,6 +412,7 @@ registerViewsRoutes(app); // /views*
 registerProfilesRoutes(app); // /profiles*, /property-defs*
 registerRelationsRoutes(app); // /relations*
 registerLinksRoutes(app); // /links (config/runtime graph; knowledge↔config bridge)
+registerRoutingRoutes(app); // /routing (centralised knowledge-routing SSoT — P7b)
 registerRelationDefsRoutes(app); // /relation-defs*
 registerSessionsRoutes(app); // /sessions*, /compacted-states*
 registerWidgetDefinitionsRoutes(app); // /widget-definitions

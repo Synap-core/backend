@@ -65,7 +65,8 @@ export type AutomationNodeType =
   | "fetch"
   | "switch"
   | "skill"
-  | "sub_automation";
+  | "sub_automation"
+  | "playbook_run";
 
 export type AutomationOutputType =
   | "notification"

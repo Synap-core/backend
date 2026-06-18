@@ -17,7 +17,14 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { getLinksFor } from "../services/links/links-service.js";
 import { emitSideEffects } from "@synap/events";
 
-const TOOL_KINDS = ["builtin", "api", "mcp", "provider", "external"] as const;
+const TOOL_KINDS = [
+  "builtin",
+  "api",
+  "mcp",
+  "provider",
+  "external",
+  "script",
+] as const;
 const EXECUTORS = ["is-agent", "external-agent", "hybrid"] as const;
 
 export const toolsRouter = router({

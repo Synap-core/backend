@@ -82,14 +82,15 @@ export function registerRunsRoutes(app: HubHono): void {
     }
 
     const runId = c.req.param("runId");
-    const body = (await c.req.json().catch(() => ({}))) as {
-      summary?: string;
-      status?: "running" | "completed" | "failed" | "proposed";
-      error?: string;
-      producedEntityIds?: string[];
-      usedCapabilities?: { kind: "tool" | "skill" | "command"; id: string }[];
-      agentUserId?: string;
-    };
+    const raw = await c.req.json().catch(() => null);
+    const parsed = CaptureRequestSchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.flatten() },
+        400
+      );
+    }
+    const body = parsed.data;
 
     try {
       // Load the run by id ONLY, then bind the acting identity to its workspace.

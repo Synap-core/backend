@@ -1825,7 +1825,7 @@ export type FocusSession = typeof focusSessions.$inferSelect;
  * (team/platform/playbooks-capability-substrate.mdx).
  */
 /** The kind of integration a Tool represents. */
-export type ToolKind = "builtin" | "api" | "mcp" | "provider" | "external";
+export type ToolKind = "builtin" | "api" | "mcp" | "provider" | "external" | "script";
 /** Which "hands" run this Tool. Mirrors @synap/playbooks ExecutorRef. */
 export type ToolExecutorRef = "is-agent" | "external-agent" | "hybrid";
 declare const tools: import("drizzle-orm/pg-core").PgTableWithColumns<{
@@ -3934,12 +3934,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					viewId?: string | undefined;
 					typeKey?: string | undefined;
 				} | undefined;
+				proposedEntityId?: string | undefined;
 			};
 			output: {
 				status: string;
 				message: string;
 				entity: Record<string, unknown> | null;
 				proposalId: string;
+				proposedEntityId: string;
 				id?: undefined;
 			} | {
 				status: string;
@@ -3967,6 +3969,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					systemData?: Record<string, unknown> | undefined;
 				};
 				proposalId?: undefined;
+				proposedEntityId?: undefined;
 			};
 			meta: object;
 		}>;
@@ -5554,8 +5557,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				primaryId: string;
 				created: number;
 				linked: number;
+				dispatched?: undefined;
 			} | {
 				success: boolean;
+				primaryId?: undefined;
+				created?: undefined;
+				linked?: undefined;
+				dispatched?: undefined;
+			} | {
+				success: boolean;
+				dispatched: Record<string, unknown> | undefined;
 				primaryId?: undefined;
 				created?: undefined;
 				linked?: undefined;
@@ -11634,7 +11645,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				name: string;
-				kind: "provider" | "external" | "builtin" | "api" | "mcp";
+				kind: "provider" | "external" | "builtin" | "api" | "mcp" | "script";
 				description?: string | undefined;
 				inputSchema?: Record<string, unknown> | undefined;
 				credentialRef?: string | undefined;

@@ -33,6 +33,12 @@ interface TriggerMatchPayload {
     rootRunId?: string;
     chainAutomationIds?: string[];
   };
+  /**
+   * Focus session that produced this event. When set, the matcher resolves the
+   * session's playbook and ALSO selects automations linked to that playbook, so
+   * playbook-scoped automations fire for entities produced by their session.
+   */
+  sessionId?: string | null;
 }
 
 /**
@@ -246,11 +252,67 @@ export async function handleAutomationTriggerMatch(job: {
       )
     );
 
-  if (activeAutomations.length === 0) return;
+  // ── Playbook-scoped automations (sessionId → playbook → linked automations) ──
+  // When the event carries a sessionId, resolve its playbook and ALSO select
+  // automations linked to that playbook (e.g. `automation --member_of--> playbook`).
+  // These fire FOR the active workspace-scoped automations above — they supplement,
+  // not replace.
+  let playbookAutomations: typeof activeAutomations = [];
+  if (job.data.sessionId) {
+    try {
+      const { links } = await import("@synap/database");
+      const { focusSessions } = await import("@synap/database/schema");
+      const session = await db.query.focusSessions.findFirst({
+        where: (fields, { eq }) => eq(fields.id, job.data.sessionId as string),
+        columns: { playbookId: true },
+      });
+      if (session?.playbookId) {
+        const linkRows = await db.query.links.findMany({
+          where: (fields, { and, eq }) =>
+            and(
+              eq(fields.fromType as any, "automation"),
+              eq(fields.linkType as any, "member_of"),
+              eq(fields.toType as any, "playbook"),
+              eq(fields.toId, session.playbookId)
+            ),
+          columns: { fromId: true },
+        });
+        const playbookAutoIds = linkRows.map((l) => l.fromId);
+        if (playbookAutoIds.length > 0) {
+          const { inArray } = await import("@synap/database");
+          playbookAutomations = await db
+            .select({
+              id: automations.id,
+              triggerConfig: automations.triggerConfig,
+              workspaceId: automations.workspaceId,
+            })
+            .from(automations)
+            .where(
+              and(
+                // @ts-expect-error — inArray accepts string[] at runtime
+                inArray(automations.id, playbookAutoIds),
+                eq(automations.status, "active"),
+                eq(automations.triggerType, "event")
+              )
+            );
+        }
+      }
+    } catch (err) {
+      // Best-effort: playbook-scoped automations are a supplement. If the
+      // resolution fails, workspace-wide automations still fire.
+      logger.warn(
+        { err, sessionId: job.data.sessionId },
+        "Failed to resolve playbook-scoped automations — proceeding with workspace-wide only"
+      );
+    }
+  }
+
+  const allAutomations = [...activeAutomations, ...playbookAutomations];
+  if (allAutomations.length === 0) return;
 
   const boss = getBoss();
 
-  for (const automation of activeAutomations) {
+  for (const automation of allAutomations) {
     // ── Cycle detection ────────────────────────────────────────────────
     if (chainIds.has(automation.id)) {
       logger.info(

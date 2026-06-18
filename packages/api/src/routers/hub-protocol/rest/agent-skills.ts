@@ -455,6 +455,8 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     }
 
     try {
+      const authUserId = (c.get("userId") as string) ?? "system";
+
       // Check slug uniqueness
       const [existing] = await db
         .select({ id: skills.id })
@@ -468,14 +470,15 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       const [row] = await db
         .insert(skills)
         .values({
+          userId: authUserId,
           slug: parsed.data.slug,
+          kind: "instruction",
           name: parsed.data.name,
           description: parsed.data.description ?? null,
           topics: parsed.data.topics ?? [],
           body: parsed.data.body,
           source: parsed.data.source ?? null,
           author: parsed.data.author ?? null,
-          version: parsed.data.version ?? null,
           tags: parsed.data.tags ?? [],
         })
         .returning();

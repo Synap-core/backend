@@ -1112,7 +1112,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
     },
   });
 
-  app.openapi(updateEntityRoute, async (c) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  app.openapi(updateEntityRoute, async (c): Promise<any> => {
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
@@ -1263,7 +1264,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
     },
   });
 
-  app.openapi(deleteEntityRoute, async (c) => {
+  app.openapi(deleteEntityRoute, async (c): Promise<any> => {
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }

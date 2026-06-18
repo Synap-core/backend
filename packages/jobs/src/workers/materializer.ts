@@ -191,6 +191,23 @@ export async function handleMaterialize(
       correlationId: completedEvent.correlationId,
     });
 
+    // Resolve the session that produced this entity (when applicable) so the
+    // side-effect chain carries `sessionId` → the automation matcher can select
+    // playbook-scoped automations. Best-effort: a miss keeps the bare workspace
+    // event (workspace-wide automations still fire).
+    let resolvedSessionId: string | null = null;
+    if (subjectType === "entity" && data.sourceProposalId) {
+      try {
+        const p = await sharedDb.query.proposals.findFirst({
+          where: eq(proposals.id, data.sourceProposalId as string),
+          columns: { sessionId: true },
+        });
+        resolvedSessionId = p?.sessionId ?? null;
+      } catch {
+        // Non-fatal — side-effects fire without session scope.
+      }
+    }
+
     // Emit side-effects (search indexing, embedding, webhooks)
     await emitSideEffects({
       subjectType,
@@ -199,6 +216,7 @@ export async function handleMaterialize(
       userId,
       workspaceId,
       data,
+      sessionId: resolvedSessionId,
     });
 
     logger.info(

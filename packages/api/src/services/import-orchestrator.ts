@@ -57,6 +57,28 @@ import { emitImportFileProgress } from "../utils/event-emit.js";
 
 const logger = createLogger({ module: "import-orchestrator" });
 
+/**
+ * Build a human-readable proposal summary from composite import operations by
+ * extracting entity titles — the same pattern as `buildCaptureSummary` in
+ * capture.ts. Centralised, extendable: any new importer feeds the same helper.
+ */
+export function buildImportSummary(
+  operations: ReadonlyArray<{ op?: unknown; title?: unknown }>,
+  source?: string
+): string {
+  const titles: string[] = [];
+  for (const op of operations) {
+    if (op.op === "create_entity" && typeof op.title === "string") {
+      titles.push(op.title);
+    }
+  }
+  const prefix = source ? `${source} import` : "Import";
+  if (titles.length === 0) return prefix;
+  if (titles.length === 1) return `${prefix}: ${titles[0]}`;
+  if (titles.length === 2) return `${prefix}: ${titles[0]}, ${titles[1]}`;
+  return `${prefix}: ${titles[0]}, ${titles[1]}, +${titles.length - 2} more`;
+}
+
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
 const MAX_BATCH_FILES = 50;
 const MAX_BATCH_BYTES = 20 * 1024 * 1024;
@@ -88,6 +110,12 @@ type OrchestratorContext = {
    * → a session-agnostic import (unchanged behavior).
    */
   sessionId?: string | null;
+  /**
+   * Playbook to instantiate the import session from. When present,
+   * `resolveImportSession` calls `instantiateSession({playbookId,...})` instead
+   * of a bare session create. Threaded from `ImportAnalyzeInput.playbookId`.
+   */
+  playbookId?: string | null;
 };
 
 export type SubmitBatchItem = {
@@ -115,6 +143,16 @@ export type ImportAnalyzeInput = {
    * returns its id so the client can thread it into applyImport.
    */
   sessionId?: string | null;
+  /**
+   * Playbook to template the import session from. When present, `analyze()`
+   * instantiates a session FROM the playbook (goal, expectedOutputs, playbookId
+   * FK, instantiated_from link) instead of a bare Import session. The playbook's
+   * `expectedOutputs[0].kind` overrides the inferred CSV profileSlug so the
+   * playbook is the single source of truth for entity typing.
+   */
+  playbookId?: string | null;
+  /** Params to resolve the playbook's goalTemplate against (e.g. {source:"CSV"}). */
+  playbookParams?: Record<string, string>;
 };
 
 export type ImportApplyInput = {
@@ -604,11 +642,7 @@ export class ImportOrchestrator {
         if (deep.stats.entityCount > 0) {
           operations = deep.operations;
           itemCount = deep.stats.itemsProcessed;
-          const typeCount = Object.keys(deep.stats.byType).length;
-          const linkedNote = deep.stats.linkedToExisting
-            ? `, ${deep.stats.linkedToExisting} linked to existing`
-            : "";
-          summary = `Deep import ${deep.stats.itemsProcessed} ${source} note(s) → ${deep.stats.entityCount} entit${deep.stats.entityCount === 1 ? "y" : "ies"} (${typeCount} type${typeCount === 1 ? "" : "s"}), ${deep.stats.relationCount} relation(s)${linkedNote}`;
+          summary = buildImportSummary(deep.operations, source);
           logger.info(
             { ...deep.stats, userId, source },
             "deep import structured"
@@ -651,8 +685,7 @@ export class ImportOrchestrator {
       const proposal = buildImportProposal(items, "references", validSlugs);
       operations = importProposalToComposite(proposal).operations;
       itemCount = proposal.stats.itemCount;
-      const linkCount = operations.length - proposal.stats.itemCount;
-      summary = `Import ${proposal.stats.itemCount} ${source} item(s) → ${proposal.stats.typeCount} type(s), ${linkCount} link(s)`;
+      summary = buildImportSummary(operations, source);
     }
 
     const targetId = randomUUID();
@@ -713,6 +746,21 @@ export class ImportOrchestrator {
         validSlugs,
         availableProfiles
       );
+
+      // When a playbook templates this import, its `expectedOutputs[0].kind`
+      // OVERRIDES the inferred CSV profileSlug — the playbook is the single
+      // source of truth for entity typing.
+      if (tablePlan && (input.playbookId || this.ctx.playbookId)) {
+        const playbookId = (input.playbookId ?? this.ctx.playbookId) as string;
+        try {
+          const playbook = await this.resolvePlaybookOutputKind(playbookId);
+          if (playbook && validSlugs.has(playbook.profileSlug)) {
+            tablePlan = { ...tablePlan, profileSlug: playbook.profileSlug };
+          }
+        } catch {
+          // Best-effort override — keep the inferred slug if lookup fails.
+        }
+      }
     }
     if (tablePlan) {
       items = [];
@@ -763,8 +811,7 @@ export class ImportOrchestrator {
           aiTyped = deep.stats.entityCount;
           mode = "deep";
           stats = { ...deep.stats };
-          const typeCount = Object.keys(deep.stats.byType).length;
-          summary = `Deep import ${deep.stats.itemsProcessed} ${input.source} note(s) → ${deep.stats.entityCount} entities (${typeCount} types), ${deep.stats.relationCount} relations`;
+          summary = buildImportSummary(deep.operations, input.source);
         }
       } catch (e) {
         logger.warn(
@@ -808,7 +855,7 @@ export class ImportOrchestrator {
       operations = composite.operations;
       droppedReferences = composite.droppedReferences;
       stats = { ...proposal.stats };
-      summary = `Import ${proposal.stats.itemCount} ${input.source} item(s) → ${proposal.stats.typeCount} type(s), ${operations.length - proposal.stats.itemCount} link(s)`;
+      summary = buildImportSummary(composite.operations, input.source);
     }
 
     const ops = operations ?? [];
@@ -867,16 +914,73 @@ export class ImportOrchestrator {
   }
 
   /**
-   * Resolve the session this import attaches to: the caller-supplied one, or
-   * null if no session context was provided. The UI is responsible for managing
-   * session context — the backend never invents one.
+   * Resolve the session this import attaches to:
+   * 1. Caller-supplied sessionId (e.g. from a prior analyze call).
+   * 2. When `input.playbookId` is present, instantiate a NEW session FROM the
+   *    playbook — goal resolved from goalTemplate, expectedOutputs from the
+   *    playbook, `playbookId` FK + `instantiated_from` link written. This makes
+   *    the import a first-class playbook-templated session.
+   * 3. When `input.sessionId` is set and no playbook, use it directly.
+   * 4. Otherwise null — session-agnostic import (e.g. pod-wide).
+   *
+   * The playbook is the single source of truth for a session's goal/outputs;
+   * when present, the caller MUST NOT also pass a bare sessionId.
    */
   private async resolveImportSession(
     input: ImportAnalyzeInput,
     _tablePlan: CsvTablePlan | null
   ): Promise<string | null> {
+    // Existing session — pass through unchanged.
     if (input.sessionId) return input.sessionId;
+
+    // Playbook-templated session: instantiate FROM the playbook, which sets
+    // goal (resolved), expectedOutputs, playbookId FK, and the
+    // instantiated_from link.
+    if (input.playbookId && this.ctx.workspaceId) {
+      const { instantiateSession } =
+        await import("../services/playbooks/playbook-lifecycle.js");
+      try {
+        const session = await instantiateSession({
+          playbookId: input.playbookId,
+          workspaceId: this.ctx.workspaceId,
+          userId: this.ctx.userId,
+          params: input.playbookParams,
+        });
+        return session.id;
+      } catch (err) {
+        // Session instantiation is best-effort — an import must not fail
+        // because a playbook instantiation hiccupped. Log and return null
+        // (the import still completes; it just won't be session-attached).
+        logger.warn(
+          { err, playbookId: input.playbookId },
+          "import: playbook session instantiation failed (import preserved)"
+        );
+        return null;
+      }
+    }
+
     return null;
+  }
+
+  /**
+   * Resolve a playbook's target profileSlug from its `expectedOutputs[0].kind`,
+   * so the playbook is the single source of truth for entity typing (overriding
+   * the IS-inferred slug). Returns null when the playbook has no declared output
+   * kind or is not found.
+   */
+  private async resolvePlaybookOutputKind(
+    playbookId: string
+  ): Promise<{ profileSlug: string } | null> {
+    await import("@synap/database/schema");
+    const { db: db2 } = await import("@synap/database");
+    const row = await db2.query.playbooks.findFirst({
+      where: (fields, { eq }) => eq(fields.id, playbookId),
+      columns: { expectedOutputs: true },
+    });
+    if (!row) return null;
+    const outputs = row.expectedOutputs as Array<{ kind?: string }> | null;
+    const kind = outputs?.[0]?.kind;
+    return kind ? { profileSlug: kind } : null;
   }
 
   /**
@@ -1059,8 +1163,7 @@ export class ImportOrchestrator {
       ).catch(() => {});
     }
 
-    const typeCount = Object.keys(byType).length;
-    const summary = `Deep import ${itemsProcessed} ${input.source} note(s) → ${entityCount} entit${entityCount === 1 ? "y" : "ies"} (${typeCount} type${typeCount === 1 ? "" : "s"}), ${relationCount} relation(s)${linkedToExisting ? `, ${linkedToExisting} linked to existing` : ""}`;
+    const summary = buildImportSummary(operations, input.source);
 
     const stats = {
       itemsProcessed,

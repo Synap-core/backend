@@ -35,7 +35,7 @@ const DiscoverPropertySchema = z.object({
 });
 
 /** Summary tier — lightweight, no property schemas, no entity counts. */
-const DiscoverProfileSummarySchema = z.object({
+export const DiscoverProfileSummarySchema = z.object({
   slug: z.string(),
   displayName: z.string(),
   scope: z
@@ -69,7 +69,7 @@ const DiscoverResponseSchema = z
   })
   .openapi("DiscoverResponse");
 
-const DiscoverSummaryResponseSchema = z
+export const DiscoverSummaryResponseSchema = z
   .object({
     profiles: z.array(DiscoverProfileSummarySchema),
     commands: z.record(z.string(), z.string()),

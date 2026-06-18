@@ -28,6 +28,13 @@ export interface SideEffectPayload {
     rootRunId?: string;
     chainAutomationIds?: string[];
   };
+  /**
+   * Focus session that produced this event. When set, the automation-trigger
+   * matcher resolves the session's playbook and ALSO selects automations linked
+   * to that playbook, so playbook-scoped automations fire for entities produced
+   * by their session. Threaded from the materialize chokepoint.
+   */
+  sessionId?: string | null;
 }
 
 /**
@@ -107,6 +114,7 @@ export async function emitSideEffects(
         workspaceId: payload.workspaceId,
         data: payload.data,
         automationContext: payload.automationContext,
+        sessionId: payload.sessionId ?? null,
       });
     }
 

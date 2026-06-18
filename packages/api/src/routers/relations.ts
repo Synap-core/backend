@@ -86,6 +86,19 @@ const DirectionSchema = z.enum(["source", "target", "both"]).default("both");
  */
 export const IMPACT_RELATION_TYPES = ["same_subject"] as const;
 
+/**
+ * Build a human-readable label from a relation's endpoints so a proposal inbox
+ * card shows e.g. "Create relation" with entity context, not a bare action name.
+ * Paralleling the `POST /links` title pattern.
+ */
+function buildRelationTitle(
+  sourceId: string,
+  targetId: string,
+  type: string
+): string {
+  return `${sourceId.slice(0, 8)} --${type}--> ${targetId.slice(0, 8)}`;
+}
+
 export const relationsRouter = router({
   /**
    * List all semantic relations in the current workspace.
@@ -405,6 +418,11 @@ export const relationsRouter = router({
         action: "create",
         data: {
           id,
+          title: buildRelationTitle(
+            input.sourceEntityId,
+            input.targetEntityId,
+            input.type
+          ),
           sourceEntityId: input.sourceEntityId,
           targetEntityId: input.targetEntityId,
           type: input.type,

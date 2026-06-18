@@ -126,3 +126,24 @@ export async function deleteLink(id: string): Promise<void> {
   const db = await getDb();
   await db.delete(links).where(eq(links.id, id));
 }
+
+/**
+ * Extract capability refs from a set of links. Shared helper used by
+ * playbook-lifecycle (promoteSessionToPlaybook) and run-playbook (runPlaybook)
+ * to convert link edges into typed CapabilityRef arrays, filtering to the
+ * grantable kinds (tool, skill, command).
+ */
+export function extractCapabilities(
+  links: { linkType: string; fromType: string; toType: string; toId: string }[],
+  opts: { linkType: string; fromType: string }
+): { kind: "tool" | "skill" | "command"; id: string }[] {
+  return links
+    .filter((l) => l.linkType === opts.linkType && l.fromType === opts.fromType)
+    .map((l) => ({
+      kind: l.toType as "tool" | "skill" | "command",
+      id: l.toId,
+    }))
+    .filter(
+      (c) => c.kind === "tool" || c.kind === "skill" || c.kind === "command"
+    );
+}

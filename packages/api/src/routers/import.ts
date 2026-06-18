@@ -7,16 +7,10 @@
  */
 
 import { z } from "zod";
-import {
-  router,
-  workspaceProcedure,
-  protectedProcedure,
-  podProcedure,
-} from "../trpc.js";
+import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { ImportOrchestrator } from "../services/import-orchestrator.js";
-import { EventNames } from "@synap-core/types/events";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { getBoss } from "@synap/jobs";
 import { IMPORT_CORPUS_QUEUE } from "@synap/jobs/workers/import-corpus-worker.js";
@@ -57,6 +51,11 @@ const AnalyzeImportSchema = z.object({
   // Pre-existing focus session to attach this import's proposals to. Omitted →
   // analyze creates an `Import …` session (workspace-scoped) and returns its id.
   sessionId: z.string().uuid().optional(),
+  // Playbook to template the import session from. When present, analyze()
+  // instantiates a playbook-templated session (goal, expectedOutputs, playbookId
+  // FK, instantiated_from link) instead of a bare Import session.
+  playbookId: z.string().uuid().optional(),
+  playbookParams: z.record(z.string(), z.string()).optional(),
 });
 
 const ApplyImportSchema = z.object({
@@ -111,25 +110,6 @@ const ApplyLargeImportSchema = ApplyImportSchema.extend({
 // ─── Router ─────────────────────────────────────────────────────────────────
 
 export const importRouter = router({
-  submitBatch: workspaceProcedure
-    .input(SubmitBatchSchema)
-    .mutation(async ({ ctx, input }) => {
-      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
-      if (!workspaceId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "Workspace ID required. Set X-Workspace-Id or pass workspaceId.",
-        });
-      }
-      const orchestrator = new ImportOrchestrator({
-        workspaceId,
-        userId: ctx.userId as string,
-        trpcCtx: ctx as unknown as Record<string, unknown>,
-      });
-      return orchestrator.submitBatch(input.items);
-    }),
-
   /**
    * Preview the structured import graph WITHOUT writing entities. Returns the
    * composite operations (so the client renders the CompositeProposalGraph
@@ -144,6 +124,7 @@ export const importRouter = router({
         userId: ctx.userId as string,
         trpcCtx: ctx as unknown as Record<string, unknown>,
         sessionId: input.sessionId ?? null,
+        playbookId: input.playbookId ?? null,
       });
       return orchestrator.analyze({
         source: input.source,
@@ -151,6 +132,8 @@ export const importRouter = router({
         relationType: input.relationType,
         aiStructure: input.aiStructure,
         sessionId: input.sessionId ?? null,
+        playbookId: input.playbookId ?? null,
+        playbookParams: input.playbookParams,
       });
     }),
 
@@ -328,23 +311,4 @@ export const importRouter = router({
       });
       return orchestrator.previewModeling(input.sampleRows, input.source);
     }),
-
-  /**
-   * Returns the Socket.IO event name and room descriptor for import batch
-   * progress events. No DB access — pure contract documentation for clients.
-   *
-   * Usage pattern:
-   *   1. Call `trpc.import.batchProgressRoom()` to get the event name + room.
-   *   2. Subscribe to `socket.on(event, handler)` filtered by your `batchId`.
-   *   3. Call `trpc.import.submitBatch({ items })` — the returned `batchId`
-   *      matches what arrives in each progress event payload.
-   *
-   * Events arrive in the caller's user room automatically; no extra join needed.
-   */
-  batchProgressRoom: protectedProcedure.query(({ ctx }) => ({
-    event: EventNames.IMPORT_FILE_PROGRESS,
-    room: `user:${ctx.userId}`,
-    description:
-      "Listen to this Socket.IO event on your user room. Filter by batchId from submitBatch.",
-  })),
 });

@@ -20,7 +20,13 @@
 export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
 
 // ── Tool — a registered integration the AI can use ───────────────────────────
-export type ToolKind = "builtin" | "api" | "mcp" | "provider" | "external";
+export type ToolKind =
+  | "builtin"
+  | "api"
+  | "mcp"
+  | "provider"
+  | "external"
+  | "script";
 
 /** A credential a Tool/Skill needs at run time — mirrors the vault taxonomy. */
 export interface CredentialRequirement {

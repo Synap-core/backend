@@ -33,6 +33,9 @@ export interface A2AIResponseTriggerData {
   workspaceId: string;
   agentType: string;
   sourceAgentUserId: string;
+  /** Active focus session ID — forwarded to the IS so the agent runs
+   *  session-aware and tags all hub calls with X-Session-Id. */
+  focusSessionId?: string | null;
   /** Pre-resolved intelligence service URL */
   serviceUrl: string;
   /** Pre-resolved API key (decrypted) for the intelligence service */
@@ -67,6 +70,7 @@ async function callIntelligenceHub(
     workspaceId: string;
     agentType: string;
     sourceMessageId: string;
+    focusSessionId?: string | null;
     agentUserId?: string;
   },
   onChunk: (chunk: string) => void
@@ -79,6 +83,7 @@ async function callIntelligenceHub(
     agentId: "orchestrator",
     agentType: payload.agentType,
     sourceMessageId: payload.sourceMessageId,
+    focusSessionId: payload.focusSessionId,
     agentUserId: payload.agentUserId,
   });
 
@@ -165,6 +170,7 @@ export async function handleA2AIResponseTrigger(
         workspaceId,
         agentType,
         sourceMessageId: userMessageId,
+        focusSessionId: job.data.focusSessionId,
         agentUserId,
       },
       (_chunk) => {

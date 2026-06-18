@@ -103,7 +103,8 @@ export interface AutomationNodeBase {
     | "query"
     | "switch"
     | "skill"
-    | "sub_automation";
+    | "sub_automation"
+    | "playbook_run";
   position: { x: number; y: number };
 }
 
@@ -254,6 +255,18 @@ export interface SubAutomationNodeDef extends AutomationNodeBase {
   };
 }
 
+export interface PlaybookRunNodeDef extends AutomationNodeBase {
+  type: "playbook_run";
+  data: {
+    label: string;
+    playbookId: string;
+    playbookName?: string;
+    /** Maps automation step outputs to playbook params */
+    paramsMapping?: Record<string, string>;
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
 export type AutomationNode =
   | TriggerNodeDef
   | CommandNodeDef
@@ -266,7 +279,8 @@ export type AutomationNode =
   | QueryNodeDef
   | SwitchNodeDef
   | SkillNodeDef
-  | SubAutomationNodeDef;
+  | SubAutomationNodeDef
+  | PlaybookRunNodeDef;
 
 export interface AutomationEdge {
   id: string;

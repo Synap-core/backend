@@ -37,6 +37,9 @@ import {
   messages,
   channels,
   notifications,
+  focusSessions,
+  playbooks,
+  playbookRuns,
   drizzleSql,
   EntityRepository,
   eventRepository,
@@ -46,6 +49,7 @@ import {
   ChannelScope,
   FeedScope,
   ChannelStatus,
+  MessageRole,
 } from "@synap/database/schema";
 import type {
   FlowDefinition,
@@ -61,7 +65,13 @@ import {
   isVaultReference,
 } from "../utils/vault-resolver.js";
 import { checkAutomationWriteOrPropose } from "../utils/automation-governance.js";
+import { resolveIntelligenceService } from "@synap/intelligence-client";
 import { createLogger } from "@synap-core/core";
+import {
+  A2AI_TRIGGER_QUEUE,
+  A2AI_TRIGGER_JOB_OPTIONS,
+  type A2AIResponseTriggerData,
+} from "./a2ai-response-trigger.js";
 
 const logger = createLogger({ module: "automation-executor" });
 
@@ -870,6 +880,149 @@ async function executeQueryStep(
   return { entities: results, count: results.length };
 }
 
+/**
+ * Execute a playbook_run step: instantiate a playbook, create a channel + session,
+ * dispatch the goal to the Intelligence Hub, and return the run/session IDs.
+ *
+ * Follows the same lifecycle as runPlaybook (@synap/api) but implemented locally
+ * to avoid the jobs → api circular dependency.
+ */
+async function executePlaybookRun(
+  data: {
+    playbookId: string;
+    paramsMapping?: Record<string, string>;
+  },
+  context: StepContext,
+  workspaceId: string,
+  ownerId: string
+): Promise<Record<string, unknown>> {
+  // 1. Load the playbook definition
+  const playbook = await db.query.playbooks.findFirst({
+    where: eq(playbooks.id, data.playbookId),
+  });
+  if (!playbook) {
+    throw new Error(`Playbook ${data.playbookId} not found`);
+  }
+
+  // 2. Resolve params from the automation context (prior step outputs, trigger payload)
+  const resolvedParams = data.paramsMapping
+    ? resolveInputMapping(data.paramsMapping, context)
+    : {};
+
+  // 3. Resolve the goal template against automation context
+  const goal =
+    resolveTemplate(playbook.goalTemplate, context) || playbook.goalTemplate;
+
+  // 4. Create a focus session for this playbook run
+  const [session] = await db
+    .insert(focusSessions)
+    .values({
+      workspaceId,
+      userId: ownerId,
+      goal,
+      playbookId: playbook.id,
+      status: "active",
+      expectedOutputs: (playbook.expectedOutputs ?? []) as any[],
+      agentIds: [],
+    })
+    .returning();
+
+  // 5. Create a THREAD channel as the run's room
+  const [channel] = await db
+    .insert(channels)
+    .values({
+      userId: ownerId,
+      workspaceId,
+      channelType: ChannelType.THREAD,
+      scope: ChannelScope.WORKSPACE,
+      status: ChannelStatus.ACTIVE,
+      title: playbook.name,
+      contextObjectType: "playbook",
+      contextObjectId: data.playbookId,
+      metadata: {
+        origin: "automation-playbook-run",
+        playbookId: data.playbookId,
+      },
+    })
+    .returning();
+
+  // 6. Wire session.channelId
+  await db
+    .update(focusSessions)
+    .set({ channelId: channel.id })
+    .where(eq(focusSessions.id, session.id));
+
+  // 7. Insert a playbook_runs ledger row
+  const [run] = await db
+    .insert(playbookRuns)
+    .values({
+      workspaceId,
+      playbookId: playbook.id,
+      sessionId: session.id,
+      executor: (playbook.executor ?? "is-agent") as any,
+      status: "running",
+      input: resolvedParams,
+      createdBy: ownerId,
+    })
+    .returning();
+
+  // 8. Insert a USER kickoff message into the channel
+  const messageId = randomUUID();
+  const { createHash } = await import("crypto");
+  const hash = createHash("sha256").update(`${messageId}${goal}`).digest("hex");
+
+  await db.insert(messages).values({
+    id: messageId,
+    channelId: channel.id,
+    role: MessageRole.USER,
+    content: goal,
+    userId: ownerId,
+    previousHash: "",
+    hash,
+  });
+
+  // 9. Trigger the Intelligence Hub via A2AI_TRIGGER job so it picks up the
+  //    kickoff message and starts processing in the session channel.
+  try {
+    const resolvedService = await resolveIntelligenceService({
+      userId: ownerId,
+      workspaceId,
+      capability: "chat",
+    });
+
+    const boss = getBoss();
+    await boss.send(
+      A2AI_TRIGGER_QUEUE,
+      {
+        channelId: channel.id,
+        userMessageId: messageId,
+        content: goal,
+        userId: ownerId,
+        workspaceId,
+        agentType: "meta",
+        sourceAgentUserId: ownerId,
+        focusSessionId: session.id,
+        serviceUrl: resolvedService.endpoint,
+        serviceApiKey: resolvedService.serviceApiKey,
+        serviceId: resolvedService.serviceId,
+        agentUserId: resolvedService.agentUserId ?? undefined,
+      } satisfies A2AIResponseTriggerData,
+      A2AI_TRIGGER_JOB_OPTIONS
+    );
+  } catch (err) {
+    logger.warn(
+      { err, playbookId: data.playbookId },
+      "Failed to trigger IS for playbook run — run created but agent not dispatched"
+    );
+  }
+
+  return {
+    runId: run.id,
+    sessionId: session.id,
+    status: "running",
+  };
+}
+
 // ── Main Executor ───────────────────────────────────────────────────────────
 
 /**
@@ -1460,6 +1613,28 @@ async function executeAutomationFlow(params: {
               automationId: targetId,
               runId: childRunId,
             };
+            break;
+          }
+
+          case "playbook_run": {
+            const data = node.data as {
+              playbookId: string;
+              paramsMapping?: Record<string, string>;
+            };
+
+            const playbookId = data.playbookId;
+            if (!playbookId)
+              throw new Error("playbook_run node has no playbookId");
+
+            output = await executePlaybookRun(
+              {
+                playbookId,
+                paramsMapping: data.paramsMapping,
+              },
+              context,
+              workspaceId,
+              ownerId
+            );
             break;
           }
         }

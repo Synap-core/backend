@@ -2157,7 +2157,7 @@ export const proposalsRouter = router({
         await db
           .update(proposals)
           .set({
-            status: ProposalStatus.PENDING,
+            status: ProposalStatus.APPROVAL_FAILED,
             data: {
               ...existingData,
               dispatchError: dispatchResult.result?.error ?? "Unknown error",

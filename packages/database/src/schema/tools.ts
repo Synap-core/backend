@@ -22,7 +22,13 @@ import { sql } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 /** The kind of integration a Tool represents. */
-export type ToolKind = "builtin" | "api" | "mcp" | "provider" | "external";
+export type ToolKind =
+  | "builtin"
+  | "api"
+  | "mcp"
+  | "provider"
+  | "external"
+  | "script";
 /** Which "hands" run this Tool. Mirrors @synap/playbooks ExecutorRef. */
 export type ToolExecutorRef = "is-agent" | "external-agent" | "hybrid";
 

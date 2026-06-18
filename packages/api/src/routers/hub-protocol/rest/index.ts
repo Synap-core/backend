@@ -27,6 +27,7 @@ export { registerViewsRoutes } from "./views.js";
 export { registerProfilesRoutes } from "./profiles.js";
 export { registerRelationsRoutes } from "./relations.js";
 export { registerLinksRoutes } from "./links.js";
+export { registerRoutingRoutes } from "./routing.js";
 export { registerRelationDefsRoutes } from "./relation-defs.js";
 export { registerSessionsRoutes } from "./sessions.js";
 export { registerWidgetDefinitionsRoutes } from "./widget-definitions.js";

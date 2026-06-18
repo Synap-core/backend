@@ -14,7 +14,6 @@
  *   the channel owner's account.
  */
 
-import { createHash } from "crypto";
 import { createRoute, z } from "@hono/zod-openapi";
 import { sql as drizzleSql, desc } from "drizzle-orm";
 import {
@@ -23,17 +22,14 @@ import {
   and,
   messagingAccounts,
   channels,
-  messages,
   ChannelType,
   ChannelScope,
-  MessageRole,
-  MessageAuthorType,
-  MessageCategory,
 } from "@synap/database";
 import type { MessagingAccount as DbMessagingAccount } from "@synap/database";
 
 import { getServiceSecret, upsertServiceSecret } from "@synap/database";
 import { getMessagingConnector } from "../../../connectors/index.js";
+import { sendExternalMessage } from "../../../connectors/external-dispatch.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { logger, type HubHono } from "./_shared.js";
 
@@ -1316,28 +1312,16 @@ export function registerMessagingRoutes(app: HubHono): void {
       if (!connector)
         return c.json({ error: "Messaging connector not configured" }, 503);
       try {
-        await connector.sendMessage(accountId, threadId, body);
-
-        // Mirror the outbound message into the messages table so the DB inbox
-        // shows a complete conversation history (inbound + outbound).
-        if (linkedChannel) {
-          const msgHash = createHash("sha256")
-            .update(`outbound:${threadId}:${Date.now()}:${body}`)
-            .digest("hex");
-          await db
-            .insert(messages)
-            .values({
-              channelId: linkedChannel.id,
-              userId,
-              role: MessageRole.USER,
-              authorType: MessageAuthorType.HUMAN,
-              messageCategory: MessageCategory.CHAT,
-              content: body,
-              hash: msgHash,
-            })
-            .onConflictDoNothing();
-        }
-
+        // Delegated to the shared dispatcher — one implementation, two doors
+        // (human-direct here, agent-approved via proposals.ts).
+        const { success } = await sendExternalMessage({
+          threadId,
+          accountId,
+          body,
+          userId,
+        });
+        if (!success)
+          return c.json({ error: "Messaging connector not configured" }, 503);
         return c.json({ success: true }, 200);
       } catch (err) {
         logger.error({ err, threadId, accountId }, "POST send failed");

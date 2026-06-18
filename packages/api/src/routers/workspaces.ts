@@ -40,6 +40,7 @@ import {
   sql,
   users,
   createWorkspaceFromDefinition,
+  playbooks,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
 import { verifyCpJwt } from "../utils/jwks-client.js";
@@ -66,6 +67,7 @@ import {
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { withWorkspaceProposalIdLock } from "../services/workspace-creation-service.js";
 import { resolveWorkspaceExtends } from "../services/workspace-composition.js";
+import { createLinks } from "../services/links/links-service.js";
 
 const logger = createLogger({ module: "workspaces" });
 
@@ -2345,6 +2347,85 @@ export const workspacesRouter = router({
                 })
               )
               .optional(),
+            /** Playbook templates (session templates with goal + capabilities) */
+            playbooks: z
+              .array(
+                z.object({
+                  name: z.string().min(1).max(500),
+                  goalTemplate: z.string().min(1).max(5000),
+                  description: z.string().optional(),
+                  params: z
+                    .array(
+                      z.object({
+                        name: z.string(),
+                        type: z.enum(["string", "number", "boolean"]),
+                        default: z
+                          .union([z.string(), z.number(), z.boolean()])
+                          .optional(),
+                        description: z.string().optional(),
+                      })
+                    )
+                    .optional(),
+                  executor: z
+                    .enum(["is-agent", "external-agent", "hybrid"])
+                    .optional(),
+                  grants: z
+                    .array(
+                      z.object({
+                        kind: z.enum(["tool", "skill", "command"]),
+                        ref: z.string(),
+                      })
+                    )
+                    .optional(),
+                  expectedOutputs: z
+                    .array(
+                      z.object({
+                        description: z.string(),
+                        type: z.enum(["document", "entities", "csv", "report"]),
+                      })
+                    )
+                    .optional(),
+                })
+              )
+              .optional(),
+            /** Automation templates (event/cron/manual triggers for playbook runs) */
+            automations: z
+              .array(
+                z.object({
+                  name: z.string().min(1),
+                  description: z.string().optional(),
+                  trigger: z.object({
+                    type: z.enum(["cron", "event", "manual"]),
+                    cron: z.string().optional(),
+                    eventType: z.string().optional(),
+                  }),
+                  action: z.object({
+                    type: z.literal("playbook_run"),
+                    playbookSlug: z.string(),
+                    params: z.record(z.string(), z.unknown()).optional(),
+                  }),
+                })
+              )
+              .optional(),
+            /** Tool templates (registered integrations available to AI agents) */
+            tools: z
+              .array(
+                z.object({
+                  name: z.string().min(1),
+                  kind: z.enum([
+                    "api",
+                    "mcp",
+                    "provider",
+                    "external",
+                    "script",
+                    "builtin",
+                  ]),
+                  description: z.string().optional(),
+                  credentialRequired: z.boolean().optional(),
+                  inputSchema: z.record(z.string(), z.unknown()).optional(),
+                })
+              )
+              .optional(),
           })
           .passthrough(),
         packageSlug: z.string().optional(),
@@ -2804,6 +2885,76 @@ export const workspacesRouter = router({
               }
             }
           }
+
+          // ── Materialize playbook templates ──────────────────────────────────────
+          const playbookDefs = input.definition.playbooks;
+          if (playbookDefs && playbookDefs.length > 0) {
+            try {
+              for (const pb of playbookDefs) {
+                const [created] = await db
+                  .insert(playbooks)
+                  .values({
+                    workspaceId: result.workspaceId,
+                    createdBy: ctx.userId,
+                    name: pb.name,
+                    description: pb.description,
+                    goalTemplate: pb.goalTemplate,
+                    params: (pb.params ?? []) as unknown as Record<
+                      string,
+                      unknown
+                    >[],
+                    executor: (pb.executor ?? "is-agent") as
+                      | "is-agent"
+                      | "external-agent"
+                      | "hybrid",
+                    expectedOutputs: (pb.expectedOutputs ??
+                      []) as unknown as Record<string, unknown>[],
+                    status: "draft",
+                  })
+                  .returning({ id: playbooks.id });
+
+                const playbookId = created?.id;
+                if (playbookId && pb.grants && pb.grants.length > 0) {
+                  await createLinks(
+                    pb.grants.map((g) => ({
+                      workspaceId: result.workspaceId,
+                      fromType: "playbook" as const,
+                      fromId: playbookId,
+                      toType: g.kind as "tool" | "skill" | "command",
+                      toId: g.ref,
+                      linkType: "grants" as const,
+                      metadata: {},
+                    }))
+                  );
+                }
+
+                logger.info(
+                  {
+                    workspaceId: result.workspaceId,
+                    playbookName: pb.name,
+                    playbookId,
+                  },
+                  "createFromDefinition: materialized playbook"
+                );
+              }
+            } catch (err) {
+              logger.warn(
+                { err, workspaceId: result.workspaceId },
+                "Failed to materialize playbooks (non-fatal)"
+              );
+            }
+          }
+
+          // TODO: Materialize automations (definition.automations) — insert rows into
+          // the automations table with a playbook_run action node, linked to the
+          // materialized playbook by slug. Blocked on: resolving playbookId from slug
+          // after materialization, and writing the flowDefinition JSON for a single-node
+          // "playbook_run" action.
+
+          // TODO: Materialize tool templates (definition.tools) — insert rows into the
+          // tools table using the same schema as ToolTemplate (name, kind, description,
+          // credentialRequired → credentialRef, inputSchema). Pod-wide (workspaceId null)
+          // by default since tools are capability integrations, not workspace-scoped.
 
           // Enqueue workspace-init for default whiteboard/commands
           // (skips default views when packageSlug is set)

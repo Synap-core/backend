@@ -13,8 +13,8 @@
  * logged and swallowed. Returns true iff the job was enqueued.
  */
 
-import { db, eq } from "@synap/database";
-import { channels, ChannelType } from "@synap/database/schema";
+import { db, eq, and } from "@synap/database";
+import { channels, ChannelType, focusSessions } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "trigger-auto-respond" });
@@ -25,6 +25,9 @@ export async function triggerAutoRespond(params: {
   content: string;
   /** The principal whose message triggered the response (sourceAgentUserId). */
   sourceUserId?: string | null;
+  /** Active focus session ID for this channel — forwarded so the IS wakes up
+   *  session-aware and tags all hub calls with X-Session-Id automatically. */
+  focusSessionId?: string | null;
 }): Promise<boolean> {
   const channel = await db.query.channels.findFirst({
     where: eq(channels.id, params.channelId),
@@ -39,6 +42,20 @@ export async function triggerAutoRespond(params: {
     return false;
   }
   try {
+    // Resolve active focus session if not provided by the caller — the channel
+    // may have an explicit user-visible session that the IS needs to know about.
+    const resolvedFocusSessionId =
+      params.focusSessionId ??
+      (
+        await db.query.focusSessions.findFirst({
+          where: and(
+            eq(focusSessions.channelId, params.channelId),
+            eq(focusSessions.status, "active")
+          ),
+          columns: { id: true },
+          orderBy: (fs, { desc }) => [desc(fs.startedAt)],
+        })
+      )?.id;
     const { resolveIntelligenceService } =
       await import("./intelligence-routing.js");
     const { getBoss, A2AI_TRIGGER_QUEUE, A2AI_TRIGGER_JOB_OPTIONS } =
@@ -58,6 +75,7 @@ export async function triggerAutoRespond(params: {
         workspaceId: channel.workspaceId,
         agentType: "meta",
         sourceAgentUserId: params.sourceUserId ?? null,
+        focusSessionId: resolvedFocusSessionId,
         serviceUrl: resolvedService.endpoint,
         serviceApiKey: resolvedService.serviceApiKey,
         serviceId: resolvedService.serviceId,

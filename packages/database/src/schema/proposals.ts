@@ -23,6 +23,8 @@ export const ProposalStatus = {
   AUTO_APPROVED: "auto_approved",
   /** An applied (approved/auto-approved) proposal whose materialized rows were undone via `proposals.revert`. */
   REVERTED: "reverted",
+  /** An external-action proposal whose dispatch call failed — proposal NOT approved. */
+  APPROVAL_FAILED: "approval_failed",
 } as const;
 export type ProposalStatus =
   (typeof ProposalStatus)[keyof typeof ProposalStatus];
@@ -57,6 +59,7 @@ export const proposals = pgTable(
         ProposalStatus.REJECTED,
         ProposalStatus.AUTO_APPROVED,
         ProposalStatus.REVERTED,
+        ProposalStatus.APPROVAL_FAILED,
       ],
     })
       .notNull()

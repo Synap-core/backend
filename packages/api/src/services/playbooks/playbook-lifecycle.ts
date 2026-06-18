@@ -23,14 +23,13 @@
 
 import { getDb, eq, focusSessions, playbooks } from "@synap/database";
 import type { Playbook, FocusSession } from "@synap/database/schema";
-import type {
-  CapabilityRef,
-  ExpectedOutput,
-  GrantableKind,
-  LinkInput,
-} from "@synap/playbooks";
+import type { ExpectedOutput, LinkInput } from "@synap/playbooks";
 import { parseCommandTemplate } from "../../utils/command-template.js";
-import { createLinks, getLinksFor } from "../links/links-service.js";
+import {
+  createLinks,
+  extractCapabilities,
+  getLinksFor,
+} from "../links/links-service.js";
 
 /** Resolve a playbook's goalTemplate against caller-supplied param values. */
 function resolveGoal(
@@ -129,12 +128,10 @@ export async function promoteSessionToPlaybook(
 
   // Capabilities the session USED → re-grant them on the new playbook.
   const sessionLinks = await getLinksFor(input.userId, "session", session.id);
-  const grantedCaps: CapabilityRef[] = sessionLinks
-    .filter((l) => l.linkType === "used" && l.fromType === "session")
-    .map((l) => ({ kind: l.toType as GrantableKind, id: l.toId }))
-    .filter(
-      (c) => c.kind === "tool" || c.kind === "skill" || c.kind === "command"
-    );
+  const grantedCaps = extractCapabilities(sessionLinks, {
+    linkType: "used",
+    fromType: "session",
+  });
 
   const [playbook] = await db
     .insert(playbooks)

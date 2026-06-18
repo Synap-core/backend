@@ -38,16 +38,13 @@ import {
   ChannelScope,
   ChannelStatus,
 } from "@synap/database/schema";
-import type {
-  CapabilityRef,
-  ChannelSpec,
-  GrantableKind,
-  RunResult,
-} from "@synap/playbooks";
+import type { ChannelSpec, RunResult } from "@synap/playbooks";
 import { instantiateSession } from "./playbook-lifecycle.js";
-import { getLinksFor } from "../links/links-service.js";
+import { extractCapabilities, getLinksFor } from "../links/links-service.js";
 import { resolveExecutor } from "./executors/registry.js";
+import { createLogger } from "@synap-core/core";
 
+const logger = createLogger({ module: "run-playbook" });
 export interface RunPlaybookInput {
   playbookId: string;
   workspaceId: string;
@@ -153,12 +150,10 @@ export async function runPlaybook(
     "playbook",
     input.playbookId
   );
-  const capabilities: CapabilityRef[] = playbookLinks
-    .filter((l) => l.linkType === "grants" && l.fromType === "playbook")
-    .map((l) => ({ kind: l.toType as GrantableKind, id: l.toId }))
-    .filter(
-      (c) => c.kind === "tool" || c.kind === "skill" || c.kind === "command"
-    );
+  const capabilities = extractCapabilities(playbookLinks, {
+    linkType: "grants",
+    fromType: "playbook",
+  });
 
   let result: RunResult;
   try {
@@ -174,6 +169,11 @@ export async function runPlaybook(
       capabilities,
     });
   } catch (err) {
+    logger.error(
+      { err, sessionId: session.id, channelId: channel.id },
+      "Executor run failed"
+    );
+
     result = {
       status: "failed",
       error: err instanceof Error ? err.message : "Executor threw",

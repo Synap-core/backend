@@ -15,7 +15,14 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { db, eq, and, desc, focusSessions } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  desc,
+  focusSessions,
+  playbookRuns,
+} from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { createLinks } from "../../../services/links/links-service.js";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
@@ -87,6 +94,11 @@ const UpdateBodySchema = z.object({
   verificationReport: z.unknown().optional(),
   agentUserId: z.string().uuid().optional(),
   reasoning: z.string().optional(),
+});
+
+const UsedCapabilityBodySchema = z.object({
+  capabilityKind: z.enum(["tool", "skill", "command"]),
+  capabilityId: z.string().min(1),
 });
 
 // ── Registration ───────────────────────────────────────────────────────────
@@ -549,22 +561,15 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = c.req.param("id");
-    const body = (await c.req.json().catch(() => null)) as {
-      capabilityKind?: "tool" | "skill" | "command";
-      capabilityId?: string;
-    } | null;
-    if (
-      !body?.capabilityId ||
-      !["tool", "skill", "command"].includes(body.capabilityKind ?? "")
-    ) {
+    const raw = await c.req.json().catch(() => null);
+    const parsed = UsedCapabilityBodySchema.safeParse(raw);
+    if (!parsed.success) {
       return c.json(
-        {
-          error:
-            "`capabilityKind` (tool|skill|command) and `capabilityId` are required",
-        },
+        { error: "Invalid request body", details: parsed.error.flatten() },
         400
       );
     }
+    const { capabilityKind, capabilityId } = parsed.data;
     try {
       // Load by id, bind to the row's workspace (membership check).
       const session = await db.query.focusSessions.findFirst({
@@ -582,8 +587,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           workspaceId: session.workspaceId,
           fromType: "session",
           fromId: session.id,
-          toType: body.capabilityKind as "tool" | "skill" | "command",
-          toId: body.capabilityId,
+          toType: capabilityKind,
+          toId: capabilityId,
           linkType: "used",
           metadata: { usedAt: new Date().toISOString() },
         },
@@ -591,6 +596,66 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({ status: "recorded" as const });
     } catch (err) {
       logger.error({ err, id }, "focus-sessions.used failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /focus-sessions/:sessionId/complete-run
+   *
+   * Fire-and-forget provenance: when an IS agent finishes working on a
+   * session-scoped channel, it calls this to close any running playbook_run
+   * for that session. Best-effort — if there's no running run, that's fine.
+   */
+  app.post("/focus-sessions/:sessionId/complete-run", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+
+    const sessionId = c.req.param("sessionId");
+
+    try {
+      // Load the session to resolve the acting context (membership check).
+      const session = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, sessionId),
+      });
+      if (!session) {
+        return c.json({ error: `Focus session ${sessionId} not found` }, 404);
+      }
+
+      const acting = await resolveActingContext(c, {
+        workspaceId: session.workspaceId,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      // Find the running playbook_run for this session.
+      const [run] = await db
+        .select()
+        .from(playbookRuns)
+        .where(
+          and(
+            eq(playbookRuns.sessionId, sessionId),
+            eq(playbookRuns.status, "running")
+          )
+        )
+        .limit(1);
+
+      if (!run) {
+        return c.json({ status: "no-running-run" as const });
+      }
+
+      // Mark as completed.
+      await db
+        .update(playbookRuns)
+        .set({ status: "completed", completedAt: new Date() })
+        .where(eq(playbookRuns.id, run.id));
+
+      return c.json({ status: "completed" as const });
+    } catch (err) {
+      logger.error({ err, sessionId }, "focus-sessions.complete-run failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

@@ -112,6 +112,26 @@ export function buildAvailableProfiles(profiles: AccessibleProfileLike[]) {
     }));
 }
 
+/**
+ * Build a human-readable summary from composite capture operations by extracting
+ * entity titles from `create_entity` ops. Shows up to 2 titles plus a "+N more"
+ * suffix so the proposal inbox carries real entity names instead of a bare count.
+ */
+export function buildCaptureSummary(
+  operations: ReadonlyArray<{ op?: unknown; title?: unknown }>
+): string {
+  const titles: string[] = [];
+  for (const op of operations) {
+    if (op.op === "create_entity" && typeof op.title === "string") {
+      titles.push(op.title);
+    }
+  }
+  if (titles.length === 0) return "Capture";
+  if (titles.length === 1) return `Captured: ${titles[0]}`;
+  if (titles.length === 2) return `Captured: ${titles[0]}, ${titles[1]}`;
+  return `Captured: ${titles[0]}, ${titles[1]}, +${titles.length - 2} more`;
+}
+
 export const captureRouter = router({
   // ── thought (legacy single-entity) ─────────────────────────────────────
 
@@ -1042,7 +1062,6 @@ export const captureRouter = router({
           const materializedEntityIds = created
             .filter((c) => !c.linked)
             .map((c) => c.entityId);
-          const createdCount = materializedEntityIds.length;
           await createAutoApprovedProposal({
             userId,
             reviewedBy: userId,
@@ -1052,7 +1071,7 @@ export const captureRouter = router({
             proposalType: "capture.graph",
             action: "graph",
             source: "capture",
-            summary: `Captured ${createdCount} thing${createdCount === 1 ? "" : "s"}`,
+            summary: buildCaptureSummary(operations),
             data: {
               operations,
               source: "capture",
