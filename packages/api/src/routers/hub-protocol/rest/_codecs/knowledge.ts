@@ -31,6 +31,7 @@ export const CreateKnowledgeRequestSchema = z
     namespace: z.string().optional(),
     slug: z.string().optional(),
     status: z.string().optional(),
+    workspaceId: z.string().uuid().nullable().optional(),
     author: z.string().optional(),
   })
   .openapi("CreateKnowledgeRequest");

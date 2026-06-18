@@ -335,6 +335,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         namespace: body.namespace,
         slug: body.slug,
         status: body.status ?? "active",
+        workspaceId: body.workspaceId ?? undefined,
         author: body.author ?? authUserId,
       });
 
