@@ -200,6 +200,52 @@ export class NangoConnector implements SyncConnector {
     }));
   }
 
+  /**
+   * Proxy a generic request through Nango's proxy endpoint.
+   *
+   * Forwards the given HTTP method + path through Nango, setting the
+   * Connection-Id and Provider-Config-Key headers so Nango resolves the
+   * credential and forwards the request to the underlying provider API.
+   *
+   * Returns the raw response status, headers, and parsed body.
+   */
+  async proxyRequest(params: {
+    connectionId: string;
+    providerConfigKey: string;
+    method: string;
+    path: string;
+    body?: unknown;
+  }): Promise<{
+    status: number;
+    headers: Record<string, string>;
+    body: unknown;
+  }> {
+    const res = await fetch(`${this.host}/proxy${params.path}`, {
+      method: params.method.toUpperCase(),
+      headers: {
+        ...this.authHeaders(),
+        "Connection-Id": params.connectionId,
+        "Provider-Config-Key": params.providerConfigKey,
+      },
+      body: params.body ? JSON.stringify(params.body) : undefined,
+    });
+
+    const raw = await res.text();
+    let parsed: unknown = raw;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      // Keep as text if not JSON
+    }
+
+    const headers: Record<string, string> = {};
+    res.headers.forEach((v, k) => {
+      headers[k] = v;
+    });
+
+    return { status: res.status, headers, body: parsed };
+  }
+
   async probe(): Promise<{
     reachable: boolean;
     authenticated: boolean;
