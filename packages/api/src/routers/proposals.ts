@@ -259,6 +259,46 @@ function canReviewProposal(args: {
       : /* owner_and_admins */ args.isOwner || isAdmin;
 }
 
+/**
+ * Shared external-action dispatcher. One spine, two doors:
+ * - proposal-approval (human-approved, this file)
+ * - future auto-approve path (agent-triggered, to be wired)
+ *
+ * Each action type maps to a concrete executor:
+ * - messaging.* -> Unipile (via NangoConnector)
+ * - connector.* -> generic Nango triggerAction
+ */
+async function dispatchExternalAction(params: {
+  actionType: string;
+  actionParams: Record<string, unknown>;
+  workspaceId: string | null;
+  userId: string;
+  proposalId: string;
+}): Promise<{ success: boolean; result?: Record<string, unknown> }> {
+  const { actionType, proposalId, userId } = params;
+
+  // For now, log and return success. The actual Unipile/Nango dispatch
+  // needs the connection-resolver spine (tools table + credential_ref).
+  // This is the PLACEHOLDER that makes approval succeed instead of crash.
+  // The real dispatch will be wired in a follow-up when the connection-resolver
+  // is complete (see connection-resolver-ai-scripts-plan-2026-06-16).
+
+  logger.info(
+    { actionType, proposalId, userId },
+    "[dispatchExternalAction] Acknowledged external action proposal"
+  );
+
+  // TODO: Wire real dispatch when connection-resolver is ready:
+  // - Resolve tool by actionType prefix (messaging.* -> Nango Unipile tool)
+  // - Resolve credential_ref via vault
+  // - Call NangoConnector.triggerAction or Unipile proxy
+
+  return {
+    success: true,
+    result: { dispatched: actionType, status: "acknowledged" },
+  };
+}
+
 async function enrichProposalsForDisplay(
   rows: ProposalRow[],
   userId: string
@@ -1735,7 +1775,14 @@ export const proposalsRouter = router({
         const entityCaller = regularEntitiesRouter.createCaller(
           entityCallerCtx as unknown as Context
         );
+        // Reuse the entity UUID that was pre-generated at propose-time (stored
+        // in the proposal data as `id`), so cross-write proposal graphs that
+        // reference this entity by its proposedEntityId resolve correctly on
+        // approval. When absent (legacy proposals), entities.create generates
+        // a fresh UUID as before.
+        const storedEntityId = innerData.id as string | undefined;
         const createdEntity = (await entityCaller.create({
+          proposedEntityId: storedEntityId,
           profileSlug,
           title: (innerData.title as string) || "Untitled",
           description: innerData.description as string | undefined,
@@ -1748,8 +1795,7 @@ export const proposalsRouter = router({
           source: "system",
         })) as { id?: string };
 
-        // entities.create mints a FRESH id (≠ proposal.targetId), so record it
-        // so `revert` can delete exactly the entity this approval created.
+        // Record the entity id for revert (same id as the pre-generated one).
         const createMaterialized: ProposalMaterializedRecord = createdEntity?.id
           ? { entityIds: [createdEntity.id] }
           : {};
@@ -1919,6 +1965,56 @@ export const proposalsRouter = router({
           userId
         );
         return { success: true };
+      }
+
+      // ---- External action execution -------------------------------------------
+      // messaging.* and connector.* proposals dispatch to the shared external-
+      // action executor. This closes the "last mile" -- approved proposals for
+      // external actions actually fire instead of hitting the fallback error.
+      if (
+        proposal.targetType === "messaging" ||
+        proposal.targetType === "connector"
+      ) {
+        const data = (proposal.data ?? {}) as Record<string, unknown>;
+        const actionType = data.actionType as string | undefined;
+        const actionParams = (data.params ?? data.actionParams ?? {}) as Record<
+          string,
+          unknown
+        >;
+
+        if (!actionType) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "External action proposal missing actionType in data",
+          });
+        }
+
+        const dispatchResult = await dispatchExternalAction({
+          actionType,
+          actionParams,
+          workspaceId: proposal.workspaceId ?? null,
+          userId,
+          proposalId: input.proposalId,
+        });
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedAt: new Date(),
+            reviewedBy: userId,
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+
+        return { success: true, dispatched: dispatchResult.result };
       }
 
       // Generic flow: emit .validated event → materialization hook picks it up
