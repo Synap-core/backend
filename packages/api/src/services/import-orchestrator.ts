@@ -43,7 +43,6 @@ import { materializeCompositeGraph } from "../utils/materialize-composite.js";
 import { makeExternalLinkIdempotency } from "../utils/entity-link-idempotency.js";
 import { entitiesRouter as regularEntitiesRouter } from "../routers/entities.js";
 import { relationsRouter } from "../routers/relations.js";
-import { focusSessionsRouter } from "../routers/focus-sessions.js";
 import { getBoss } from "@synap/jobs";
 import {
   LINKEDIN_BULK_IMPORT_QUEUE,
@@ -868,43 +867,16 @@ export class ImportOrchestrator {
   }
 
   /**
-   * Resolve the session this import attaches to: the caller-supplied one, else a
-   * freshly-created `Import …` focus session whose goal names the source and
-   * whose expectedOutputs hints at the produced profile. Session creation needs
-   * a real workspaceId (focusSessions.create), so a pod-wide import (null) with
-   * no supplied session stays session-agnostic. Best-effort → null on failure.
+   * Resolve the session this import attaches to: the caller-supplied one, or
+   * null if no session context was provided. The UI is responsible for managing
+   * session context — the backend never invents one.
    */
   private async resolveImportSession(
     input: ImportAnalyzeInput,
-    tablePlan: CsvTablePlan | null
+    _tablePlan: CsvTablePlan | null
   ): Promise<string | null> {
     if (input.sessionId) return input.sessionId;
-    const { workspaceId, userId, trpcCtx } = this.ctx;
-    if (!workspaceId) return null;
-    try {
-      const sourceLabel =
-        input.source.charAt(0).toUpperCase() + input.source.slice(1);
-      const profileSlug = tablePlan?.profileSlug;
-      const caller = focusSessionsRouter.createCaller({
-        ...trpcCtx,
-        workspaceId,
-        userId,
-      } as never);
-      const session = await caller.create({
-        workspaceId,
-        goal: `Import ${sourceLabel}`,
-        expectedOutputs: profileSlug
-          ? [{ kind: profileSlug, label: `Imported ${profileSlug} entities` }]
-          : [],
-      });
-      return (session as { id?: string })?.id ?? null;
-    } catch (e) {
-      logger.warn(
-        { e, userId, workspaceId },
-        "import.analyze: session create failed — proceeding session-agnostic"
-      );
-      return null;
-    }
+    return null;
   }
 
   /**
