@@ -64,6 +64,10 @@ import type {
   CompositeCreateRelationOp,
 } from "@synap-core/types/proposals";
 import { storage } from "@synap/storage";
+import {
+  sendExternalMessage,
+  triggerConnectorAction,
+} from "../connectors/external-dispatch.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { auditLog } from "../utils/audit-log.js";
@@ -275,28 +279,127 @@ async function dispatchExternalAction(params: {
   userId: string;
   proposalId: string;
 }): Promise<{ success: boolean; result?: Record<string, unknown> }> {
-  const { actionType, proposalId, userId } = params;
+  const { actionType, actionParams, proposalId, userId } = params;
 
-  // For now, log and return success. The actual Unipile/Nango dispatch
-  // needs the connection-resolver spine (tools table + credential_ref).
-  // This is the PLACEHOLDER that makes approval succeed instead of crash.
-  // The real dispatch will be wired in a follow-up when the connection-resolver
-  // is complete (see connection-resolver-ai-scripts-plan-2026-06-16).
+  // Resolve the provider from the action type + params
+  const provider = resolveProviderFromAction(actionType, actionParams);
 
-  logger.info(
-    { actionType, proposalId, userId },
-    "[dispatchExternalAction] Acknowledged external action proposal"
-  );
+  if (!provider) {
+    logger.warn(
+      { actionType, proposalId },
+      "[dispatchExternalAction] No provider resolved — acknowledging only"
+    );
+    return {
+      success: true,
+      result: { dispatched: actionType, status: "acknowledged (no provider)" },
+    };
+  }
 
-  // TODO: Wire real dispatch when connection-resolver is ready:
-  // - Resolve tool by actionType prefix (messaging.* -> Nango Unipile tool)
-  // - Resolve credential_ref via vault
-  // - Call NangoConnector.triggerAction or Unipile proxy
+  try {
+    // Call the agnostic tool-execute endpoint
+    const toolResult = await executeToolCall({
+      provider,
+      method: (actionParams.method as string) ?? "POST",
+      path: (actionParams.path as string) ?? "/",
+      body:
+        (actionParams.body as Record<string, unknown> | undefined) ??
+        actionParams,
+      userId,
+    });
 
-  return {
-    success: true,
-    result: { dispatched: actionType, status: "acknowledged" },
-  };
+    logger.info(
+      { actionType, proposalId, provider, status: toolResult.status },
+      "[dispatchExternalAction] Executed"
+    );
+
+    return {
+      success: true,
+      result: toolResult as unknown as Record<string, unknown>,
+    };
+  } catch (err) {
+    logger.error(
+      { err, actionType, proposalId, provider },
+      "[dispatchExternalAction] Execution failed"
+    );
+    // Don't crash the approval flow — surface the error in the result
+    return {
+      success: false,
+      result: {
+        dispatched: actionType,
+        status: "failed",
+        error: err instanceof Error ? err.message : String(err),
+      },
+    };
+  }
+}
+
+/**
+ * Resolve a provider credentialRef from an actionType + params.
+ * Prefix-based: messaging.* -> nango://unipile, connector.* -> from params.provider.
+ * This is intentionally SIMPLE. When skills/tools linking is complete,
+ * resolution will go through the links table instead of prefix matching.
+ */
+function resolveProviderFromAction(
+  actionType: string,
+  params: Record<string, unknown>
+): string | null {
+  // Explicit provider in params takes precedence
+  if (typeof params.provider === "string" && params.provider)
+    return params.provider;
+
+  // Prefix-based mapping
+  if (actionType.startsWith("messaging.")) return "nango://unipile";
+  if (actionType.startsWith("gmail.")) return "nango://gmail";
+  if (actionType.startsWith("connector.")) {
+    // connector.trigger actions carry the provider in the data
+    return (params.credentialRef as string) ?? null;
+  }
+
+  return null;
+}
+
+/**
+ * Execute a provider tool call through the agnostic tool-execute endpoint.
+ * This is the SINGLE dispatch point — it calls the Hub REST route that
+ * resolves credentials, picks the connection, and proxies the call.
+ */
+async function executeToolCall(params: {
+  provider: string;
+  method: string;
+  path: string;
+  body?: Record<string, unknown>;
+  userId: string;
+}): Promise<{
+  status: number;
+  headers: Record<string, string>;
+  body: unknown;
+}> {
+  const { provider, method, path, body, userId } = params;
+
+  // Call our own Hub REST endpoint (same pod, internal loopback)
+  const hubUrl = process.env.SYNAP_POD_URL ?? "http://localhost:4000";
+  const response = await fetch(`${hubUrl}/api/hub/connectors/tool-execute`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Synap-User-Id": userId,
+      "X-Synap-System-Call": "true", // Internal dispatch marker
+    },
+    body: JSON.stringify({ provider, method, path, body }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => "");
+    throw new Error(
+      `Tool execute returned ${response.status}: ${errorBody.slice(0, 200)}`
+    );
+  }
+
+  return response.json() as Promise<{
+    status: number;
+    headers: Record<string, string>;
+    body: unknown;
+  }>;
 }
 
 async function enrichProposalsForDisplay(
@@ -738,6 +841,31 @@ function valueTypeOf(value: unknown): string {
   if (value === null) return "null";
   if (Array.isArray(value)) return "array";
   return typeof value;
+}
+
+/**
+ * Resolve the user's messaging account for a given platform (linkedin / gmail /
+ * whatsapp / telegram / slack). Reads the `messaging_accounts` table. Returns
+ * null when no account is connected for that platform.
+ */
+async function resolveMessagingAccountForPlatform(
+  database: typeof db,
+  userId: string,
+  platform?: string
+): Promise<{ id: string } | null> {
+  if (!platform) return null;
+  await import("@synap/database/schema");
+  const acct = await database.query.messagingAccounts.findFirst({
+    where: (fields, { and, eq }) =>
+      and(
+        eq(fields.userId, userId),
+        // The column is 'provider' (e.g. 'linkedin', 'gmail'); we resolve from
+        // the proposal's `data.platform` which matches the same value.
+        eq(fields.provider, platform)
+      ),
+    columns: { id: true },
+  });
+  return acct ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -2015,6 +2143,165 @@ export const proposalsRouter = router({
         );
 
         return { success: true, dispatched: dispatchResult.result };
+      }
+
+      // ── External-action proposals ──────────────────────────────────────────
+      // These are created by IS tools (send_message_external, nango_action) which
+      // structurally refuse to send directly and instead file a governed proposal.
+      // Approving them dispatches the external send / Nango action through the
+      // SAME shared helper the human-direct REST paths use. Idempotency: status
+      // is flipped conditionally; if already APPROVED the send is skipped.
+
+      // Messaging: send an external message (LinkedIn/WhatsApp/Gmail/… via
+      // Unipile or Stalwart) that an AI proposed.
+      if (proposal.proposalType === "messaging.external.send") {
+        const data = (proposal.data ?? {}) as Record<string, unknown>;
+        const threadId = data.threadId as string | undefined;
+        const body = data.body as string | undefined;
+        const platform = data.platform as string | undefined;
+
+        if (!threadId || !body) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "External message send requires threadId and body in proposal data",
+          });
+        }
+
+        const msgAccount = await resolveMessagingAccountForPlatform(
+          db,
+          userId,
+          platform
+        );
+        if (!msgAccount) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "No messaging account found for this platform — connect one first",
+          });
+        }
+
+        // Guard: only execute if not already approved (external sends are irreversible).
+        const [alreadyDone] = await db
+          .select({ status: proposals.status })
+          .from(proposals)
+          .where(eq(proposals.id, input.proposalId));
+        if (alreadyDone?.status === ProposalStatus.APPROVED) {
+          return { success: true, alreadyApproved: true };
+        }
+
+        const { success: sent } = await sendExternalMessage({
+          threadId,
+          accountId: msgAccount.id,
+          body,
+          userId,
+        });
+
+        if (!sent) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message:
+              "Failed to send external message — messaging connector not configured",
+          });
+        }
+
+        // Record the send so a retry is a no-op. The result goes directly on
+        // the data payload (ProposalMaterializedRecord only accepts entityIds).
+        const materializedPayload = {
+          ...payload,
+          sentResult: { sentAt: new Date().toISOString(), threadId, platform },
+        } as unknown as typeof payload;
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            data: materializedPayload,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return { success: true };
+      }
+
+      // Connector action: trigger a pre-defined Nango action on a connected
+      // integration (e.g. "send LinkedIn connection request").
+      if (proposal.proposalType === "connector.action.trigger") {
+        const data = (proposal.data ?? {}) as Record<string, unknown>;
+        const connectionId = data.connectionId as string | undefined;
+        const providerConfigKey = data.providerConfigKey as string | undefined;
+        const actionName = data.actionName as string | undefined;
+
+        if (!connectionId || !providerConfigKey || !actionName) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Connector action trigger requires connectionId, providerConfigKey, and actionName",
+          });
+        }
+
+        // Guard: only execute once.
+        const [alreadyDone] = await db
+          .select({ status: proposals.status })
+          .from(proposals)
+          .where(eq(proposals.id, input.proposalId));
+        if (alreadyDone?.status === ProposalStatus.APPROVED) {
+          return { success: true, alreadyApproved: true };
+        }
+
+        const { success: triggered, result: actionResult } =
+          await triggerConnectorAction({
+            connectionId,
+            providerConfigKey,
+            actionName,
+            input: (data.input ?? data.payload) as
+              | Record<string, unknown>
+              | undefined,
+          });
+
+        if (!triggered) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message:
+              "Failed to trigger connector action — Nango not configured",
+          });
+        }
+
+        const materializedPayload = {
+          ...payload,
+          triggeredResult: {
+            triggeredAt: new Date().toISOString(),
+            actionName,
+            result: actionResult,
+          },
+        } as unknown as typeof payload;
+
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            data: materializedPayload,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return { success: true };
       }
 
       // Generic flow: emit .validated event → materialization hook picks it up
