@@ -52,6 +52,12 @@ export function registerConnectorsRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+        return c.json(
+          { error: "Insufficient scope: hub-protocol.read required" },
+          403
+        );
+      }
       const connector = syncConnectorRegistry.get("nango") as
         | NangoConnector
         | undefined;
@@ -127,6 +133,12 @@ export function registerConnectorsRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+        return c.json(
+          { error: "Insufficient scope: hub-protocol.write required" },
+          403
+        );
+      }
       const connector = syncConnectorRegistry.get("nango") as
         | NangoConnector
         | undefined;
@@ -219,6 +231,12 @@ export function registerConnectorsRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+        return c.json(
+          { error: "Insufficient scope: hub-protocol.write required" },
+          403
+        );
+      }
       const connector = syncConnectorRegistry.get("nango") as
         | NangoConnector
         | undefined;
@@ -239,71 +257,6 @@ export function registerConnectorsRoutes(app: HubHono): void {
           500
         );
       }
-    }
-  );
-
-  // ── GET /connectors/schema ───────────────────────────────────────────────
-  app.openapi(
-    createRoute({
-      method: "get",
-      path: "/connectors/schema",
-      tags: ["Connectors"],
-      summary:
-        "Return available connector providers with their actions for agent context",
-      responses: {
-        200: {
-          description: "Connector schema",
-          content: {
-            "application/json": {
-              schema: z
-                .object({
-                  providers: z.array(
-                    z.object({
-                      id: z.string(),
-                      provider: z.string(),
-                      displayName: z.string().optional(),
-                      connected: z.boolean(),
-                      connectionId: z.string().optional(),
-                    })
-                  ),
-                })
-                .openapi("ConnectorSchema"),
-            },
-          },
-        },
-        503: {
-          description: "Not configured",
-          content: { "application/json": { schema: ErrorSchema } },
-        },
-      },
-    }),
-    async (c) => {
-      const connector = syncConnectorRegistry.get("nango") as
-        | NangoConnector
-        | undefined;
-      if (!connector || !connector.isConfigured()) {
-        return c.json({ error: "Nango not configured" }, 503);
-      }
-      const userId = c.get("userId") as string;
-      const [integrations, connections] = await Promise.all([
-        connector.listIntegrations(),
-        connector.listConnections(userId),
-      ]);
-      const connMap = new Map(
-        connections.map((conn) => [conn.provider, conn.connectionId])
-      );
-      return c.json(
-        {
-          providers: integrations.map((i) => ({
-            id: i.uniqueKey,
-            provider: i.provider,
-            displayName: i.displayName,
-            connected: connMap.has(i.uniqueKey),
-            connectionId: connMap.get(i.uniqueKey),
-          })),
-        },
-        200
-      );
     }
   );
 
@@ -351,6 +304,12 @@ export function registerConnectorsRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+        return c.json(
+          { error: "Insufficient scope: hub-protocol.write required" },
+          403
+        );
+      }
       const connector = syncConnectorRegistry.get("nango") as
         | NangoConnector
         | undefined;
@@ -419,6 +378,12 @@ export function registerConnectorsRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+        return c.json(
+          { error: "Insufficient scope: hub-protocol.write required" },
+          403
+        );
+      }
       const { connectionId, providerConfigKey, actionName, input } =
         c.req.valid("json");
       try {

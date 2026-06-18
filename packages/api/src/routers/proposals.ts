@@ -378,12 +378,18 @@ async function executeToolCall(params: {
 
   // Call our own Hub REST endpoint (same pod, internal loopback)
   const hubUrl = process.env.SYNAP_POD_URL ?? "http://localhost:4000";
+  const apiKey = process.env.HUB_PROTOCOL_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "HUB_PROTOCOL_API_KEY is not configured — cannot execute tool calls"
+    );
+  }
   const response = await fetch(`${hubUrl}/api/hub/connectors/tool-execute`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
       "X-Synap-User-Id": userId,
-      "X-Synap-System-Call": "true", // Internal dispatch marker
     },
     body: JSON.stringify({ provider, method, path, body }),
   });
@@ -2125,24 +2131,42 @@ export const proposalsRouter = router({
           proposalId: input.proposalId,
         });
 
+        if (dispatchResult.success) {
+          await db
+            .update(proposals)
+            .set({
+              status: ProposalStatus.APPROVED,
+              reviewedAt: new Date(),
+              reviewedBy: userId,
+              updatedAt: new Date(),
+            })
+            .where(eq(proposals.id, input.proposalId));
+
+          emitProposalReviewed(
+            input.proposalId,
+            proposal.workspaceId,
+            "approved",
+            userId
+          );
+
+          return { success: true, dispatched: dispatchResult.result };
+        }
+
+        // Dispatch failed — do NOT approve the proposal
+        const existingData = (proposal.data ?? {}) as Record<string, unknown>;
         await db
           .update(proposals)
           .set({
-            status: ProposalStatus.APPROVED,
-            reviewedAt: new Date(),
-            reviewedBy: userId,
+            status: ProposalStatus.PENDING,
+            data: {
+              ...existingData,
+              dispatchError: dispatchResult.result?.error ?? "Unknown error",
+            },
             updatedAt: new Date(),
           })
           .where(eq(proposals.id, input.proposalId));
 
-        emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
-
-        return { success: true, dispatched: dispatchResult.result };
+        return { success: false, dispatched: dispatchResult.result };
       }
 
       // ── External-action proposals ──────────────────────────────────────────
