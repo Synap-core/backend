@@ -153,6 +153,7 @@ export const entitiesRouter = router({
         title: input.title,
         description: input.description,
         properties: input.properties,
+        ...(authWorkspaceId ? { targetWorkspaceId: authWorkspaceId } : {}),
         // Agent's own rationale for the proposal inbox. Top-level `reasoning`
         // wins; fall back to the legacy `aiMetadata.reasoning` alias.
         reasoning: input.reasoning ?? input.aiMetadata?.reasoning,

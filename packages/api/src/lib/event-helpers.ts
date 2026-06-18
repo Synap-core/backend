@@ -176,7 +176,7 @@ export const WorkspaceMemberEvents = {
 export const ViewEvents = {
   createRequested: (
     userId: string,
-    data: { type: string; name: string; workspaceId: string }
+    data: { type: string; name: string; workspaceId?: string }
   ) =>
     logEvent(userId, "view.create.requested", data, {
       subjectType: "view",

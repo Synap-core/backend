@@ -61,9 +61,24 @@ export function registerResolveRoutes(app: HubHono): void {
       return c.json({ error: "id is required" }, 400);
     }
 
-    try {
-      // 1. Probe proposals first (fastest — proposals are usually the freshest)
-      const [proposal] = await db
+    async function probe<T>(
+      label: string,
+      fn: () => Promise<T | undefined>
+    ): Promise<T | undefined> {
+      try {
+        return await fn();
+      } catch (err) {
+        logger.warn(
+          { err, id, table: label },
+          "resolve probe failed (continuing)"
+        );
+        return undefined;
+      }
+    }
+
+    // 1. Probe proposals first
+    const proposal = await probe("proposals", async () => {
+      const [row] = await db
         .select({
           id: proposals.id,
           targetType: proposals.targetType,
@@ -73,40 +88,44 @@ export function registerResolveRoutes(app: HubHono): void {
         .from(proposals)
         .where(eq(proposals.id, id))
         .limit(1);
+      return row;
+    });
+    if (proposal) {
+      return c.json({
+        type: "proposal",
+        id: proposal.id,
+        displayName: `Proposal (${proposal.targetType}:${proposal.targetId.slice(0, 8)}…)`,
+        workspaceId: proposal.workspaceId,
+      });
+    }
 
-      if (proposal) {
-        return c.json({
-          type: "proposal",
-          id: proposal.id,
-          displayName: `Proposal (${proposal.targetType}:${proposal.targetId.slice(0, 8)}…)`,
-          workspaceId: proposal.workspaceId,
-        });
-      }
-
-      // 2. Probe entities
-      const [entity] = await db
+    // 2. Probe entities (type column = profile slug)
+    const entity = await probe("entities", async () => {
+      const [row] = await db
         .select({
           id: entities.id,
           title: entities.title,
           workspaceId: entities.workspaceId,
-          profileSlug: entities.profileSlug,
+          type: entities.type,
         })
         .from(entities)
         .where(eq(entities.id, id))
         .limit(1);
+      return row;
+    });
+    if (entity) {
+      return c.json({
+        type: "entity",
+        id: entity.id,
+        displayName: entity.title,
+        workspaceId: entity.workspaceId,
+        profileSlug: entity.type,
+      });
+    }
 
-      if (entity) {
-        return c.json({
-          type: "entity",
-          id: entity.id,
-          displayName: entity.title,
-          workspaceId: entity.workspaceId,
-          profileSlug: entity.profileSlug,
-        });
-      }
-
-      // 3. Probe views
-      const [view] = await db
+    // 3. Probe views
+    const view = await probe("views", async () => {
+      const [row] = await db
         .select({
           id: views.id,
           name: views.name,
@@ -115,18 +134,20 @@ export function registerResolveRoutes(app: HubHono): void {
         .from(views)
         .where(eq(views.id, id))
         .limit(1);
+      return row;
+    });
+    if (view) {
+      return c.json({
+        type: "view",
+        id: view.id,
+        displayName: view.name,
+        workspaceId: view.workspaceId,
+      });
+    }
 
-      if (view) {
-        return c.json({
-          type: "view",
-          id: view.id,
-          displayName: view.name,
-          workspaceId: view.workspaceId,
-        });
-      }
-
-      // 4. Probe documents
-      const [doc] = await db
+    // 4. Probe documents
+    const doc = await probe("documents", async () => {
+      const [row] = await db
         .select({
           id: documents.id,
           title: documents.title,
@@ -135,29 +156,23 @@ export function registerResolveRoutes(app: HubHono): void {
         .from(documents)
         .where(eq(documents.id, id))
         .limit(1);
-
-      if (doc) {
-        return c.json({
-          type: "document",
-          id: doc.id,
-          displayName: doc.title,
-          workspaceId: doc.workspaceId,
-        });
-      }
-
-      // 5. Not found
+      return row;
+    });
+    if (doc) {
       return c.json({
-        type: "unknown",
-        id,
-        displayName: null,
-        workspaceId: null,
+        type: "document",
+        id: doc.id,
+        displayName: doc.title,
+        workspaceId: doc.workspaceId,
       });
-    } catch (err) {
-      logger.error({ err, id }, "resolve failed");
-      return c.json(
-        { error: err instanceof Error ? err.message : "Unknown error" },
-        500
-      );
     }
+
+    // 5. Not found
+    return c.json({
+      type: "unknown",
+      id,
+      displayName: null,
+      workspaceId: null,
+    });
   });
 }

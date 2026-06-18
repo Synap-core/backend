@@ -158,6 +158,137 @@ export function csvFileToImportItems(content: string): ImportItem[] {
   });
 }
 
+// ── CSV table-aware ingestion ─────────────────────────────────────────────────
+//
+// A CSV is a TABLE, not a pile of prose: every row shares ONE schema. The
+// shallow row→ImportItem path above keeps each cell as raw, untyped metadata and
+// has no signal to type the rows, so they all fall through to `note`. The
+// table-aware path instead infers ONE profile for the whole table + a
+// column→property routing plan (via the IS `analyze-bulk-mapping` capability),
+// then builds TYPED ImportItems whose values are coerced to the planned types.
+//
+// These two helpers are the seam: `parseCsvTable` exposes the raw headers +
+// sample rows the planner needs; `csvRowsToTypedImportItems` applies a resolved
+// plan to every row. The orchestrator owns the IS call between them.
+
+/** A column→property routing decision for ONE CSV header. Mirrors the IS plan's
+ *  `ColumnMappingProposal` but only the fields ingestion needs. */
+export interface CsvColumnPlan {
+  /** Source CSV header. */
+  header: string;
+  /** Target property slug (already validated/normalized by the planner). */
+  slug: string;
+  /** Type to coerce the cell value to before storing. */
+  valueType: "string" | "number" | "date" | "boolean";
+  /** "skip" columns are dropped; everything else lands on the row entity. */
+  scope: "primary" | "companion" | "context" | "skip";
+}
+
+/** Resolved table-ingestion plan: ONE profile for all rows + per-column routing
+ *  + which header supplies the title. */
+export interface CsvTablePlan {
+  /** Profile slug applied to EVERY row entity (already gated against validSlugs). */
+  profileSlug: string;
+  /** Header whose cell becomes the entity title (null → synthetic "Untitled"). */
+  titleColumn: string | null;
+  /** Per-column routing. Headers absent here are dropped. */
+  columns: CsvColumnPlan[];
+}
+
+/** Parse a CSV into the raw shape the bulk-mapping planner consumes:
+ *  the header list + the first `sampleLimit` rows as ordered string arrays. */
+export function parseCsvTable(
+  content: string,
+  sampleLimit = 20
+): {
+  headers: string[];
+  sampleRows: string[][];
+  rows: Record<string, string>[];
+} {
+  const { headers, rows } = parseCsv(content);
+  const sampleRows = rows
+    .slice(0, sampleLimit)
+    .map((row) => headers.map((h) => String(row[h] ?? "")));
+  return { headers, sampleRows, rows };
+}
+
+/** Coerce a raw CSV cell string to the planned value type. Unparseable values
+ *  fall back to the trimmed string (faithful — never drop data on a bad guess). */
+function coerceCellValue(
+  raw: string,
+  valueType: CsvColumnPlan["valueType"]
+): unknown {
+  const v = raw.trim();
+  if (v === "") return undefined;
+  switch (valueType) {
+    case "number": {
+      const n = Number(v.replace(/[, ]/g, ""));
+      return Number.isFinite(n) ? n : v;
+    }
+    case "boolean": {
+      if (/^(true|yes|y|1)$/i.test(v)) return true;
+      if (/^(false|no|n|0)$/i.test(v)) return false;
+      return v;
+    }
+    case "date": {
+      const t = Date.parse(v);
+      return Number.isNaN(t) ? v : new Date(t).toISOString();
+    }
+    default:
+      return v;
+  }
+}
+
+/**
+ * Apply a resolved `CsvTablePlan` to every parsed CSV row, producing TYPED
+ * ImportItems: each row → one item typed as `plan.profileSlug` (via `typeHint`),
+ * with mapped, type-coerced properties keyed by their planned slug. The enrich
+ * body is a readable "Header: value" block (real signal for any AI step), built
+ * the same way `connectorRecordToImportItem` does.
+ *
+ * EMPTY-ROW HYGIENE: a row whose title resolves to "Untitled" with zero mapped
+ * fields (blank/separator lines) is dropped so it never becomes an empty note.
+ */
+export function csvRowsToTypedImportItems(
+  rows: Record<string, string>[],
+  plan: CsvTablePlan
+): ImportItem[] {
+  const kept = plan.columns.filter((c) => c.scope !== "skip");
+  const items: ImportItem[] = [];
+  for (const row of rows) {
+    const metadata: Record<string, unknown> = {};
+    const bodyLines: string[] = [];
+    for (const col of kept) {
+      const raw = row[col.header];
+      if (raw === undefined) continue;
+      const value = coerceCellValue(String(raw), col.valueType);
+      if (value === undefined) continue;
+      metadata[col.slug] = value;
+      bodyLines.push(`${col.header}: ${String(raw).trim()}`);
+    }
+
+    const rawTitle = plan.titleColumn ? row[plan.titleColumn] : undefined;
+    const title =
+      String(rawTitle ?? "Untitled")
+        .trim()
+        .slice(0, 500) || "Untitled";
+
+    // Drop blank/separator rows: no title signal AND no mapped data.
+    if (title === "Untitled" && Object.keys(metadata).length === 0) continue;
+
+    items.push({
+      title,
+      path: [],
+      metadata,
+      body: bodyLines.join("\n"),
+      links: [],
+      labels: [],
+      typeHint: plan.profileSlug,
+    });
+  }
+  return items;
+}
+
 // ── Bookmark (Netscape HTML) adapter ──────────────────────────────────────────
 
 /**

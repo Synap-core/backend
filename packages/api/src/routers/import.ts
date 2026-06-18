@@ -54,6 +54,9 @@ const AnalyzeImportSchema = z.object({
     .max(2000),
   relationType: z.string().min(1).max(64).optional(),
   aiStructure: z.boolean().optional().default(true),
+  // Pre-existing focus session to attach this import's proposals to. Omitted →
+  // analyze creates an `Import …` session (workspace-scoped) and returns its id.
+  sessionId: z.string().uuid().optional(),
 });
 
 const ApplyImportSchema = z.object({
@@ -66,6 +69,9 @@ const ApplyImportSchema = z.object({
   // proposalId), a retry of this apply with the SAME key links the entities it
   // already created instead of duplicating them. Absent → unchanged behavior.
   idempotencyKey: z.string().max(200).optional(),
+  // Session this apply's writes belong to (the id returned by analyze). Threaded
+  // onto the orchestrator so the import groups under its session. Optional.
+  sessionId: z.string().uuid().optional(),
 });
 
 // Large (chunked) variants — same shape as analyze/apply with raised ceilings.
@@ -137,12 +143,14 @@ export const importRouter = router({
         workspaceId,
         userId: ctx.userId as string,
         trpcCtx: ctx as unknown as Record<string, unknown>,
+        sessionId: input.sessionId ?? null,
       });
       return orchestrator.analyze({
         source: input.source,
         items: input.items,
         relationType: input.relationType,
         aiStructure: input.aiStructure,
+        sessionId: input.sessionId ?? null,
       });
     }),
 
@@ -161,6 +169,7 @@ export const importRouter = router({
         workspaceId,
         userId: ctx.userId as string,
         trpcCtx: ctx as unknown as Record<string, unknown>,
+        sessionId: input.sessionId ?? null,
       });
       return orchestrator.apply({
         source: input.source,
@@ -183,12 +192,14 @@ export const importRouter = router({
         workspaceId,
         userId: ctx.userId as string,
         trpcCtx: ctx as unknown as Record<string, unknown>,
+        sessionId: input.sessionId ?? null,
       });
       return orchestrator.analyzeLarge({
         source: input.source,
         items: input.items,
         relationType: input.relationType,
         aiStructure: input.aiStructure,
+        sessionId: input.sessionId ?? null,
       });
     }),
 
@@ -237,6 +248,7 @@ export const importRouter = router({
         workspaceId,
         userId: ctx.userId as string,
         trpcCtx: ctx as unknown as Record<string, unknown>,
+        sessionId: input.sessionId ?? null,
       });
       return orchestrator.applyLarge({
         source: input.source,

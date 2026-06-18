@@ -6,11 +6,15 @@ import { createLogger } from "@synap-core/core";
 import { detectJsonChatShape } from "../import/import-parsers.js";
 import {
   adaptItems,
+  parseCsvTable,
+  csvRowsToTypedImportItems,
   type ImportSource as ImportAdapterSource,
+  type CsvTablePlan,
 } from "../import/import-adapters.js";
 import {
   buildImportProposal,
   importProposalToComposite,
+  type ImportItem,
 } from "../import/import-items.js";
 import { aiEnrichImportItems } from "../import/import-ai.js";
 import {
@@ -39,6 +43,7 @@ import { materializeCompositeGraph } from "../utils/materialize-composite.js";
 import { makeExternalLinkIdempotency } from "../utils/entity-link-idempotency.js";
 import { entitiesRouter as regularEntitiesRouter } from "../routers/entities.js";
 import { relationsRouter } from "../routers/relations.js";
+import { focusSessionsRouter } from "../routers/focus-sessions.js";
 import { getBoss } from "@synap/jobs";
 import {
   LINKEDIN_BULK_IMPORT_QUEUE,
@@ -77,6 +82,13 @@ type OrchestratorContext = {
   workspaceId: string | null;
   userId: string;
   trpcCtx: Record<string, unknown>;
+  /**
+   * Active focus session this import belongs to. When set, every `import.graph`
+   * proposal is stamped with it (via createEventBackedProposal), so the
+   * session→produced-entity links + `proposals.list({sessionId})` light up. Null
+   * → a session-agnostic import (unchanged behavior).
+   */
+  sessionId?: string | null;
 };
 
 export type SubmitBatchItem = {
@@ -98,6 +110,12 @@ export type ImportAnalyzeInput = {
   items: Array<{ path: string; content: string }>;
   relationType?: string;
   aiStructure?: boolean;
+  /**
+   * Pre-existing session to attach this import's proposals to. When omitted on a
+   * workspace-scoped analyze, `analyze()` creates a fresh `Import …` session and
+   * returns its id so the client can thread it into applyImport.
+   */
+  sessionId?: string | null;
 };
 
 export type ImportApplyInput = {
@@ -432,6 +450,68 @@ export class ImportOrchestrator {
   }
 
   /**
+   * Derive a TABLE-aware plan for a CSV import: ONE profile for the whole table
+   * + a column→property routing plan, via the IS `analyze-bulk-mapping`
+   * capability (the SAME endpoint capture.analyzeBulkMapping drives). The
+   * inferred profile is gated against the workspace's real `validSlugs` so a
+   * recognized profile (e.g. `person`) sticks and an unknown one falls back to
+   * `note`. Returns null when the IS is unreachable / returns no plan — the
+   * caller then keeps the existing shallow CSV behavior.
+   *
+   * Best-effort + non-destructive: a CSV import never fails because the planner
+   * is down; it degrades to the prior shallow path.
+   */
+  private async buildCsvTablePlan(
+    rawCsv: string,
+    validSlugs: Set<string>,
+    availableProfiles: ReturnType<typeof buildAvailableProfiles>
+  ): Promise<CsvTablePlan | null> {
+    const { headers, sampleRows } = parseCsvTable(rawCsv);
+    if (headers.length === 0 || sampleRows.length === 0) return null;
+
+    const { workspaceId, userId } = this.ctx;
+    const wsId = workspaceId ?? undefined;
+    try {
+      const { client } = await resolveIntelligenceService({
+        userId,
+        workspaceId: wsId,
+        capability: "default",
+      });
+      const plan = await client.analyzeBulkMapping({
+        headers,
+        sampleRows,
+        intent:
+          "Import this CSV table as typed entities (one row = one entity).",
+        availableProfiles,
+      });
+      if (!plan) return null;
+
+      // Gate the inferred profile against the workspace's real slugs — an
+      // unknown slug would fail profile validation on create and dump the row
+      // back to a bare note, dropping its properties. Fall back to `note`.
+      const inferred = (plan.rowEntityType ?? "").trim().toLowerCase();
+      const profileSlug = validSlugs.has(inferred) ? inferred : "note";
+
+      return {
+        profileSlug,
+        titleColumn: plan.titleColumn ?? null,
+        columns: plan.columnMappings.map((c) => ({
+          header: c.header,
+          slug: c.slug,
+          valueType: c.valueType,
+          scope: c.scope,
+        })),
+      };
+    } catch (e) {
+      logger.warn(
+        { e, userId, workspaceId },
+        "import buildCsvTablePlan failed — falling back to shallow CSV"
+      );
+      return null;
+    }
+  }
+
+  /**
    * Route a parsed source through the canonical import ENGINE: adapt raw records
    * → ImportItems → (best-effort AI structuring) → buildImportProposal →
    * importProposalToComposite → ONE governed `import.graph` composite proposal.
@@ -460,11 +540,32 @@ export class ImportOrchestrator {
     // pod-wide import (null) resolves the user-default service and an
     // unscoped search.
     const wsId = workspaceId ?? undefined;
-    const items = adaptItems(source, raw);
-    if (items.length === 0) return { proposalId: null, itemCount: 0 };
 
     const { availableProfiles, validSlugs, availableWorkspaces } =
       await this.resolveProfileHints();
+
+    // CSV is a TABLE: infer ONE profile + column→property mapping for the whole
+    // file and build TYPED items, instead of the shallow row→untyped-note path.
+    // Best-effort — if the planner is unavailable, `items` stays empty here and
+    // we fall through to the shallow adapter below.
+    let items: ImportItem[] = [];
+    if (source === "csv" && raw.length > 0) {
+      // Infer the plan from the first file (submitBatch sends one CSV per call);
+      // apply it to every file's rows.
+      const plan = await this.buildCsvTablePlan(
+        raw[0].content,
+        validSlugs,
+        availableProfiles
+      );
+      if (plan) {
+        for (const r of raw) {
+          const { rows } = parseCsvTable(r.content);
+          items.push(...csvRowsToTypedImportItems(rows, plan));
+        }
+      }
+    }
+    if (items.length === 0) items = adaptItems(source, raw);
+    if (items.length === 0) return { proposalId: null, itemCount: 0 };
 
     // Prose (markdown/obsidian) → DEEP extraction: decompose each note into
     // multiple typed entities + relations, merged + deduplicated across notes.
@@ -565,6 +666,7 @@ export class ImportOrchestrator {
       action: "create",
       source: "intelligence",
       summary,
+      sessionId: this.ctx.sessionId ?? null,
       data: buildImportGraphProposalData({
         operations,
         source,
@@ -595,7 +697,33 @@ export class ImportOrchestrator {
     const wsId = workspaceId ?? undefined;
     const { availableProfiles, validSlugs, availableWorkspaces } =
       await this.resolveProfileHints();
-    const items = adaptItems(input.source as ImportAdapterSource, input.items);
+
+    // CSV is a TABLE: infer ONE profile + a column→property routing plan for the
+    // whole file (so a CSV of people → `person` entities, not flat `note`s), and
+    // build TYPED items. `tablePlan` is returned so the client can show + later
+    // override the mapping. Best-effort: a null plan keeps the shallow path.
+    let tablePlan: CsvTablePlan | null = null;
+    let items: ImportItem[];
+    if (
+      input.source === "csv" &&
+      input.aiStructure !== false &&
+      input.items[0]
+    ) {
+      tablePlan = await this.buildCsvTablePlan(
+        input.items[0].content,
+        validSlugs,
+        availableProfiles
+      );
+    }
+    if (tablePlan) {
+      items = [];
+      for (const it of input.items) {
+        const { rows } = parseCsvTable(it.content);
+        items.push(...csvRowsToTypedImportItems(rows, tablePlan));
+      }
+    } else {
+      items = adaptItems(input.source as ImportAdapterSource, input.items);
+    }
 
     let aiTyped = 0;
     // JSON-chat (flattened to a transcript by the json adapter) joins the prose
@@ -648,7 +776,10 @@ export class ImportOrchestrator {
     }
 
     if (mode === "shallow") {
-      if (input.aiStructure !== false) {
+      // CSV with a table plan is ALREADY typed per-column (the plan is the
+      // typing) — skip the per-row enrich that would re-call the IS and clobber
+      // the table-wide profile. Other shallow sources still get per-item enrich.
+      if (input.aiStructure !== false && !tablePlan) {
         try {
           const { client } = await resolveIntelligenceService({
             userId,
@@ -682,6 +813,13 @@ export class ImportOrchestrator {
     }
 
     const ops = operations ?? [];
+
+    // Attach to a session so this import's proposals + produced entities group
+    // under one goal. Reuse the supplied session, else (workspace-scoped only —
+    // focusSessions.create requires a workspaceId) create an `Import …` session.
+    // Best-effort: a session hiccup must never fail the import.
+    const sessionId = await this.resolveImportSession(input, tablePlan);
+
     const targetId = randomUUID();
     const { proposal: created } = await createEventBackedProposal({
       userId,
@@ -692,6 +830,7 @@ export class ImportOrchestrator {
       action: "create",
       source: "intelligence",
       summary,
+      sessionId: sessionId ?? null,
       data: buildImportGraphProposalData({
         operations: ops,
         source: input.source,
@@ -706,6 +845,7 @@ export class ImportOrchestrator {
         source: input.source,
         mode,
         proposalId: (created as { id?: string })?.id,
+        sessionId,
         droppedReferences,
         aiTyped,
         ...stats,
@@ -717,12 +857,54 @@ export class ImportOrchestrator {
       source: input.source,
       mode,
       proposalId: (created as { id?: string })?.id ?? null,
+      sessionId: sessionId ?? null,
+      tablePlan,
       operations: ops,
       summary,
       stats,
       droppedReferences,
       aiTyped,
     };
+  }
+
+  /**
+   * Resolve the session this import attaches to: the caller-supplied one, else a
+   * freshly-created `Import …` focus session whose goal names the source and
+   * whose expectedOutputs hints at the produced profile. Session creation needs
+   * a real workspaceId (focusSessions.create), so a pod-wide import (null) with
+   * no supplied session stays session-agnostic. Best-effort → null on failure.
+   */
+  private async resolveImportSession(
+    input: ImportAnalyzeInput,
+    tablePlan: CsvTablePlan | null
+  ): Promise<string | null> {
+    if (input.sessionId) return input.sessionId;
+    const { workspaceId, userId, trpcCtx } = this.ctx;
+    if (!workspaceId) return null;
+    try {
+      const sourceLabel =
+        input.source.charAt(0).toUpperCase() + input.source.slice(1);
+      const profileSlug = tablePlan?.profileSlug;
+      const caller = focusSessionsRouter.createCaller({
+        ...trpcCtx,
+        workspaceId,
+        userId,
+      } as never);
+      const session = await caller.create({
+        workspaceId,
+        goal: `Import ${sourceLabel}`,
+        expectedOutputs: profileSlug
+          ? [{ kind: profileSlug, label: `Imported ${profileSlug} entities` }]
+          : [],
+      });
+      return (session as { id?: string })?.id ?? null;
+    } catch (e) {
+      logger.warn(
+        { e, userId, workspaceId },
+        "import.analyze: session create failed — proceeding session-agnostic"
+      );
+      return null;
+    }
   }
 
   /**
@@ -932,6 +1114,7 @@ export class ImportOrchestrator {
       action: "create",
       source: "intelligence",
       summary,
+      sessionId: input.sessionId ?? this.ctx.sessionId ?? null,
       data: buildImportGraphProposalData({
         operations,
         source: input.source,
@@ -946,6 +1129,7 @@ export class ImportOrchestrator {
         source: input.source,
         mode: "deep",
         proposalId: (created as { id?: string })?.id,
+        sessionId: input.sessionId ?? this.ctx.sessionId ?? null,
         ...stats,
       },
       "import.analyzeLarge"
@@ -956,6 +1140,7 @@ export class ImportOrchestrator {
       source: input.source,
       mode: "deep" as const,
       proposalId: (created as { id?: string })?.id ?? null,
+      sessionId: input.sessionId ?? this.ctx.sessionId ?? null,
       operations,
       summary,
       stats,

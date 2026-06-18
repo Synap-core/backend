@@ -1027,6 +1027,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
         title: body.title,
         description: body.description,
         properties: body.properties,
+        ...(effectiveWorkspaceId
+          ? { targetWorkspaceId: effectiveWorkspaceId }
+          : {}),
         // Long-form body → linked document (versioned). Must be forwarded here
         // or it's silently dropped before the entity-create document flow.
         ...(body.content ? { content: body.content } : {}),
@@ -1140,8 +1143,18 @@ export function registerEntitiesRoutes(app: HubHono): void {
         columns: { id: true, workspaceId: true },
       });
       if (!target) return c.body(null, 404);
-      const effectiveWorkspaceId = target.workspaceId ?? null;
-      if (body.workspaceId && body.workspaceId !== effectiveWorkspaceId) {
+      if (body.workspaceId) {
+        if (!(await verifyWorkspaceReadAccess(userId, body.workspaceId))) {
+          return c.json({ error: "Access denied to requested workspace" }, 403);
+        }
+      }
+      const effectiveWorkspaceId =
+        target.workspaceId ?? body.workspaceId ?? null;
+      if (
+        body.workspaceId &&
+        target.workspaceId &&
+        body.workspaceId !== target.workspaceId
+      ) {
         return c.json(
           { error: "workspaceId does not match the entity's workspace" },
           400
@@ -1178,6 +1191,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         title: body.title,
         preview: body.preview,
         metadata: body.metadata,
+        ...(body.workspaceId ? { targetWorkspaceId: body.workspaceId } : {}),
         ...(body.deleteProperties
           ? { deleteProperties: body.deleteProperties }
           : {}),

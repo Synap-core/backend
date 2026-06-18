@@ -954,6 +954,13 @@ export const entitiesRouter = router({
    * Returns a slim payload — no full property values, just what the index needs.
    */
   listSavedUrls: podProcedure
+    .input(
+      z
+        .object({
+          workspaceId: z.string().uuid().optional(),
+        })
+        .optional()
+    )
     .output(
       z.array(
         z.object({
@@ -965,9 +972,10 @@ export const entitiesRouter = router({
         })
       )
     )
-    .query(async ({ ctx }) => {
-      const workspaceFilter = ctx.workspaceId
-        ? entityLensWhere(ctx.userId, ctx.workspaceId, { includePodWide: true })
+    .query(async ({ input, ctx }) => {
+      const lensWorkspaceId = input?.workspaceId ?? ctx.workspaceId ?? null;
+      const workspaceFilter = lensWorkspaceId
+        ? entityLensWhere(ctx.userId, lensWorkspaceId, { includePodWide: true })
         : entityVisibleWhere(ctx.userId);
       const rows = await db
         .select({
@@ -1082,6 +1090,12 @@ export const entitiesRouter = router({
       z.object({
         id: z.string().uuid(),
         includeProfile: z.boolean().optional().default(false),
+        /**
+         * Rendering/property lens. Object access is still by entity id, but
+         * profile overlays are workspace-sensitive and must be cache-keyed by
+         * callers that request `includeProfile`.
+         */
+        workspaceId: z.string().uuid().nullable().optional(),
       })
     )
     .output(
@@ -1134,12 +1148,31 @@ export const entitiesRouter = router({
         return { entity: typedEntity, externalLinks };
       }
 
+      const lensWorkspaceId =
+        input.workspaceId !== undefined
+          ? input.workspaceId
+          : (entity.workspaceId ?? ctx.workspaceId ?? null);
+
+      if (lensWorkspaceId) {
+        const { validateWorkspaceAccess } =
+          await import("../utils/workspace-membership.js");
+        const allowedWorkspaceIds = await validateWorkspaceAccess(ctx.userId, [
+          lensWorkspaceId,
+        ]);
+        if (!allowedWorkspaceIds.includes(lensWorkspaceId)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Access denied to workspace lens",
+          });
+        }
+      }
+
       const database = await getDb();
       const resolutionService = new ProfileResolutionService(database);
       const profile = await resolutionService.resolveProfile(
         entity.type,
         ctx.userId,
-        ctx.workspaceId
+        lensWorkspaceId
       );
 
       if (!profile) return { entity: typedEntity, externalLinks };
@@ -1147,7 +1180,7 @@ export const entitiesRouter = router({
       const effectiveProperties =
         await resolutionService.getEffectiveProperties(
           profile.id,
-          ctx.workspaceId
+          lensWorkspaceId
         );
 
       return {
@@ -1233,12 +1266,12 @@ export const entitiesRouter = router({
       }
 
       const placementWorkspaceId = input.global ? null : existing.workspaceId;
-      const governanceWorkspaceId = existing.workspaceId ?? null;
       const overlayWorkspaceId =
         input.targetWorkspaceId ??
         ctx.workspaceId ??
         existing.workspaceId ??
         null;
+      const governanceWorkspaceId = existing.workspaceId ?? overlayWorkspaceId;
 
       // Resolve framed-view trust SERVER-SIDE (never from the request body).
       const issuer = input.viewContext
@@ -1584,10 +1617,14 @@ export const entitiesRouter = router({
         .where(eq(entities.id, input.id))
         .limit(1);
 
-      // Permission is already verified above — delete by id only, no userId filter.
-      // entityRepo.delete() restricts to creator (user_id=$userId) which would
-      // silently no-op for workspace admins deleting others' entities.
-      await database.delete(entities).where(eq(entities.id, input.id));
+      // Permission is already verified above — soft-delete by id only, no userId
+      // filter. entityRepo.delete() restricts to creator (user_id=$userId) which
+      // would silently no-op for workspace admins deleting others' entities.
+      // Keeping deleted rows preserves audit/proposal reversibility.
+      await database
+        .update(entities)
+        .set({ deletedAt: new Date(), updatedAt: new Date() })
+        .where(eq(entities.id, input.id));
 
       // 4. Emit .completed event + side-effects
       auditLog({

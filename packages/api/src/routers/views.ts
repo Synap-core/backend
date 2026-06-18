@@ -405,11 +405,11 @@ export const viewsRouter = router({
   list: protectedProcedure
     .input(
       paginatedInput.extend({
-        /** Filter to one or more workspaces. Omit to return all user's views. */
+        /** Strict workspace lens. Pod-wide views are excluded by default. */
         workspaceIds: z.array(z.string().uuid()).optional(),
         /** Explicit lens. `null` returns pod-wide/user-owned views only. */
         workspaceId: z.string().uuid().nullable().optional(),
-        /** Include current user's pod-wide views inside a focused workspace lens. */
+        /** Compatibility escape hatch. Keep false for clean workspace lenses. */
         includePodWide: z.boolean().optional().default(false),
         type: z
           .enum([
@@ -668,9 +668,10 @@ export const viewsRouter = router({
 
       const conditions: any[] = [];
 
+      const lensWorkspaceId = view.workspaceId ?? null;
       conditions.push(
-        view.workspaceId
-          ? entityLensWhereForViews(ctx.userId, view.workspaceId, false)
+        lensWorkspaceId
+          ? entityLensWhereForViews(ctx.userId, lensWorkspaceId, false)
           : entityLensWhereForViews(ctx.userId, null, false)
       );
 
@@ -688,7 +689,7 @@ export const viewsRouter = router({
         await propertyMerging.mergePropertiesFromProfiles(
           view.scopeProfileIds,
           dbInstance,
-          ctx.workspaceId
+          lensWorkspaceId
         );
 
       // Build property metadata map (def IDs + indexed flag) for the
