@@ -1,7 +1,13 @@
 import { randomUUID, createHash } from "crypto";
 import { TRPCError } from "@trpc/server";
 import { storage } from "@synap/storage";
-import { db, messages, MessageRole, MessageAuthorType } from "@synap/database";
+import {
+  db,
+  messages,
+  MessageRole,
+  MessageAuthorType,
+  linkEntityToProject,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { detectJsonChatShape } from "../import/import-parsers.js";
 import {
@@ -111,6 +117,12 @@ type OrchestratorContext = {
    */
   sessionId?: string | null;
   /**
+   * Active project lens (or surface override). When set, every imported entity
+   * is filed into this project (`belongs_to_project`) — the project mirror of
+   * `workspaceId`. Threaded from the import input.
+   */
+  projectId?: string | null;
+  /**
    * Playbook to instantiate the import session from. When present,
    * `resolveImportSession` calls `instantiateSession({playbookId,...})` instead
    * of a bare session create. Threaded from `ImportAnalyzeInput.playbookId`.
@@ -143,6 +155,8 @@ export type ImportAnalyzeInput = {
    * returns its id so the client can thread it into applyImport.
    */
   sessionId?: string | null;
+  /** Active project lens → threaded onto the orchestrator ctx + import proposals. */
+  projectId?: string | null;
   /**
    * Playbook to template the import session from. When present, `analyze()`
    * instantiates a session FROM the playbook (goal, expectedOutputs, playbookId
@@ -699,6 +713,7 @@ export class ImportOrchestrator {
       source: "intelligence",
       summary,
       sessionId: this.ctx.sessionId ?? null,
+      projectId: this.ctx.projectId ?? null,
       data: buildImportGraphProposalData({
         operations,
         source,
@@ -984,6 +999,27 @@ export class ImportOrchestrator {
   }
 
   /**
+   * File freshly-materialized entities into the active project (`belongs_to_project`)
+   * when a project lens is set. The single membership write for both import paths
+   * (apply + applyLarge); the `linkEntityToProject` helper is idempotent.
+   */
+  private async stampProjectMembership(
+    entities: { entityId: string; linked?: boolean }[]
+  ): Promise<void> {
+    const projectId = this.ctx.projectId;
+    if (!projectId) return;
+    for (const e of entities) {
+      if (e.linked) continue;
+      await linkEntityToProject(db, {
+        entityId: e.entityId,
+        projectId,
+        userId: this.ctx.userId,
+        workspaceId: this.ctx.workspaceId,
+      });
+    }
+  }
+
+  /**
    * Materialize the EXACT operations the user previewed in `analyze()` — N
    * entities + linked documents + M relations, workspace-scoped (pinned to this
    * workspace, purged with it). This is a user-confirmed direct write of their
@@ -998,7 +1034,11 @@ export class ImportOrchestrator {
     const entityCaller = regularEntitiesRouter.createCaller(callerCtx as never);
     const relationCaller = relationsRouter.createCaller(callerCtx as never);
 
-    const { created, linked } = await materializeCompositeGraph(
+    const {
+      created,
+      linked,
+      entities: materialized,
+    } = await materializeCompositeGraph(
       input.operations,
       entityCaller,
       relationCaller,
@@ -1024,6 +1064,11 @@ export class ImportOrchestrator {
           : {}),
       }
     );
+
+    // Project membership (lens-context): file imported entities into the active
+    // project. Import materializes directly (the proposal is a record), so the
+    // membership write lands here — the project mirror of `workspaceScoped`.
+    await this.stampProjectMembership(materialized);
 
     logger.info(
       { userId, workspaceId, source: input.source, created, linked },
@@ -1304,6 +1349,8 @@ export class ImportOrchestrator {
       Object.assign(refToRealId, res.refToRealId);
       created += res.created;
       linked += res.linked;
+      // Project membership (lens-context) per chunk — same as apply().
+      await this.stampProjectMembership(res.entities);
 
       void emitImportFileProgress(
         {

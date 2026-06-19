@@ -149,6 +149,16 @@ export async function promoteSessionToPlaybook(
     throw new Error(`Session ${input.sessionId} not found`);
   }
 
+  // Guard the latent project-scope hole: playbooks.workspaceId is NOT NULL, so a
+  // project-scoped session (null workspace) would fail the insert at the DB. No
+  // path creates such a session today (P4b) — fail with a clear message rather
+  // than a raw constraint violation.
+  if (!session.workspaceId) {
+    throw new Error(
+      "Project-scoped sessions (no workspace) cannot be promoted to a playbook yet."
+    );
+  }
+
   // Capabilities the session USED → re-grant them on the new playbook.
   const sessionLinks = await getLinksFor(input.userId, "session", session.id);
   const grantedCaps = extractCapabilities(sessionLinks, {

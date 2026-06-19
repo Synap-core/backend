@@ -12,6 +12,33 @@
 -- Design doc: synap-app/synap-team-docs/content/team/platform/project-centric-scope.mdx
 -- Phase: project-centric-scope Phase 0
 
+-- Step 0: ensure the table exists before repointing it.
+-- `project_members` is created in 0000_baseline_schema.sql, but that catch-up
+-- file only runs on FIRST boot. A pod provisioned BEFORE the table entered the
+-- baseline has 0000 already marked applied — so the table is never created and
+-- the repoint steps below fail with "relation does not exist" (PG 42P01).
+-- Defensive-migration rule: never assume a table exists. Create it IF NOT EXISTS
+-- here (verbatim from baseline, FK already to entities) so this migration is
+-- self-sufficient on every pod. Fresh/baseline pod → no-op. Legacy pod (FK to
+-- projects) → table exists already and Steps B/C repoint it.
+CREATE TABLE IF NOT EXISTS "project_members" (
+  "id"          uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "project_id"  uuid        NOT NULL CONSTRAINT "project_members_project_id_entities_id_fk"
+                              REFERENCES "entities"("id") ON DELETE CASCADE,
+  "user_id"     text        NOT NULL,
+  "role"        text        NOT NULL DEFAULT 'viewer',
+  "invited_by"  text,
+  "invited_at"  timestamptz NOT NULL DEFAULT now(),
+  "created_at"  timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "project_user_unique" UNIQUE ("project_id", "user_id")
+);
+CREATE INDEX IF NOT EXISTS "idx_project_members_project"
+  ON "project_members" ("project_id");
+CREATE INDEX IF NOT EXISTS "idx_project_members_user"
+  ON "project_members" ("user_id");
+CREATE INDEX IF NOT EXISTS "idx_project_members_user_project"
+  ON "project_members" ("user_id", "project_id");
+
 -- Step A: remove orphaned rows that cannot satisfy the new FK.
 -- These are rows whose project_id exists in the legacy projects table but has
 -- no corresponding entity row (projects migrated to entities get a matching id).

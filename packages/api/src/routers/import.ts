@@ -39,6 +39,7 @@ const AnalyzeImportSchema = z.object({
   // Pre-existing focus session to attach this import's proposals to. Omitted →
   // analyze creates an `Import …` session (workspace-scoped) and returns its id.
   sessionId: z.string().uuid().optional(),
+  projectId: z.string().uuid().nullish(),
   // Playbook to template the import session from. When present, analyze()
   // instantiates a playbook-templated session (goal, expectedOutputs, playbookId
   // FK, instantiated_from link) instead of a bare Import session.
@@ -59,6 +60,7 @@ const ApplyImportSchema = z.object({
   // Session this apply's writes belong to (the id returned by analyze). Threaded
   // onto the orchestrator so the import groups under its session. Optional.
   sessionId: z.string().uuid().optional(),
+  projectId: z.string().uuid().nullish(),
 });
 
 // Large (chunked) variants — same shape as analyze/apply with raised ceilings.
@@ -112,6 +114,7 @@ export const importRouter = router({
         userId: ctx.userId as string,
         trpcCtx: ctx as unknown as Record<string, unknown>,
         sessionId: input.sessionId ?? null,
+        projectId: input.projectId ?? null,
         playbookId: input.playbookId ?? null,
       });
       return orchestrator.analyze({
@@ -120,6 +123,7 @@ export const importRouter = router({
         relationType: input.relationType,
         aiStructure: input.aiStructure,
         sessionId: input.sessionId ?? null,
+        projectId: input.projectId ?? null,
         playbookId: input.playbookId ?? null,
         playbookParams: input.playbookParams,
       });
@@ -141,6 +145,7 @@ export const importRouter = router({
         userId: ctx.userId as string,
         trpcCtx: ctx as unknown as Record<string, unknown>,
         sessionId: input.sessionId ?? null,
+        projectId: input.projectId ?? null,
       });
       return orchestrator.apply({
         source: input.source,
@@ -164,6 +169,7 @@ export const importRouter = router({
         userId: ctx.userId as string,
         trpcCtx: ctx as unknown as Record<string, unknown>,
         sessionId: input.sessionId ?? null,
+        projectId: input.projectId ?? null,
       });
       return orchestrator.analyzeLarge({
         source: input.source,
@@ -171,6 +177,7 @@ export const importRouter = router({
         relationType: input.relationType,
         aiStructure: input.aiStructure,
         sessionId: input.sessionId ?? null,
+        projectId: input.projectId ?? null,
       });
     }),
 
@@ -220,6 +227,7 @@ export const importRouter = router({
         userId: ctx.userId as string,
         trpcCtx: ctx as unknown as Record<string, unknown>,
         sessionId: input.sessionId ?? null,
+        projectId: input.projectId ?? null,
       });
       return orchestrator.applyLarge({
         source: input.source,
