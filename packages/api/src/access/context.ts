@@ -43,7 +43,19 @@ export class AccessContext {
      * (see `workspaceLensWhere`). 3-state: `undefined` = all my workspaces +
      * globals · `null` = globals only · `"<id>"` = that workspace + globals.
      */
-    readonly workspaceLens: string | null | undefined = undefined
+    readonly workspaceLens: string | null | undefined = undefined,
+    /**
+     * The active project LENS — the cross-cutting data scope, orthogonal to the
+     * workspace lens. Same 3-state contract: `undefined` = no project narrowing
+     * (all projects the user can access) · `"<projectEntityId>"` = narrow to
+     * that project. Like the workspace lens, it ONLY narrows — it is intersected
+     * with the user-access floor, so a stale/forged project id can never widen
+     * access. Sourced from `X-Project-Id` / an explicit request param. The floor
+     * itself already grants project members access (project-membership is the
+     * third access source); this lens is the optional narrowing on top.
+     * See `projectLensWhere` / the project-centric-scope design doc.
+     */
+    readonly projectLens: string | null | undefined = undefined
   ) {}
 
   /** Operator/UI boundary — built from the tRPC context (Kratos cookie). */
@@ -104,7 +116,25 @@ export class AccessContext {
       this.userId,
       this.agentUserId,
       this.actor,
-      workspaceLens
+      workspaceLens,
+      this.projectLens
+    );
+  }
+
+  /**
+   * Return a copy narrowed to a project lens (from `X-Project-Id` / an explicit
+   * request param). Orthogonal to `withLens`: both lenses compose (AND), each
+   * only narrows, the user floor is always applied. Opt-in — a context with no
+   * project lens stays project-wide, so existing consumers are unchanged. Pass
+   * `undefined` for no project narrowing, a project entity id to narrow to it.
+   */
+  withProjectLens(projectLens: string | null | undefined): AccessContext {
+    return new AccessContext(
+      this.userId,
+      this.agentUserId,
+      this.actor,
+      this.workspaceLens,
+      projectLens
     );
   }
 

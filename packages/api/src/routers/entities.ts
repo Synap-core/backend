@@ -58,6 +58,7 @@ import {
   userVisibleWhere,
   workspaceLensWhere,
 } from "../utils/user-visible-where.js";
+import { projectMemberWhere } from "../utils/project-scope.js";
 import { resolveContentTarget } from "../import/materialize-document.js";
 import { createLogger } from "@synap-core/core";
 
@@ -69,7 +70,11 @@ function entityVisibleWhere(userId: string) {
     and(
       isNotNull(entities.workspaceId),
       userVisibleWhere(entities.workspaceId, userId)
-    )
+    ),
+    // Project-membership access (project-centric-scope): a project member sees
+    // their project's entities ACROSS workspaces — even ones they aren't a member
+    // of — and nothing else there. The third access source in the user floor.
+    projectMemberWhere(entities.id, userId)
   )!;
 }
 

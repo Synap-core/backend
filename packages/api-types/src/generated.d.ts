@@ -2030,7 +2030,7 @@ declare const tools: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "tools";
 			dataType: "string";
 			columnType: "PgText";
-			data: "error" | "active" | "inactive";
+			data: "active" | "error" | "inactive";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -2456,7 +2456,7 @@ export type Playbook = typeof playbooks.$inferSelect;
  * The kind of object on either end of a link edge.
  * `participant` = a user-id OR agent-user-id (both live in the `users` table).
  */
-export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant";
+export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation";
 /** The relationship an edge expresses. */
 export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "targets" | "produced" | "member_of" | "feeds" | "promoted_to" | "provided_by" | "about" | "documents" | "concerns";
 /**
@@ -5456,7 +5456,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					correlationId: string | null;
 					agentUserId: string | null;
-					status: "approved" | "pending" | "rejected" | "auto_approved" | "reverted";
+					status: "approved" | "pending" | "rejected" | "auto_approved" | "reverted" | "approval_failed";
 					expiresAt: Date | null;
 					createdBy: string | null;
 					threadId: string | null;
@@ -5492,7 +5492,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					correlationId: string | null;
 					agentUserId: string | null;
-					status: "approved" | "pending" | "rejected" | "auto_approved" | "reverted";
+					status: "approved" | "pending" | "rejected" | "auto_approved" | "reverted" | "approval_failed";
 					expiresAt: Date | null;
 					createdBy: string | null;
 					threadId: string | null;
@@ -5527,7 +5527,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				correlationId: string | null;
 				agentUserId: string | null;
-				status: "approved" | "pending" | "rejected" | "auto_approved" | "reverted";
+				status: "approved" | "pending" | "rejected" | "auto_approved" | "reverted" | "approval_failed";
 				expiresAt: Date | null;
 				createdBy: string | null;
 				threadId: string | null;
@@ -5557,16 +5557,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				primaryId: string;
 				created: number;
 				linked: number;
-				dispatched?: undefined;
+				alreadyApproved?: undefined;
 			} | {
 				success: boolean;
 				primaryId?: undefined;
 				created?: undefined;
 				linked?: undefined;
-				dispatched?: undefined;
+				alreadyApproved?: undefined;
 			} | {
 				success: boolean;
-				dispatched: Record<string, unknown> | undefined;
+				alreadyApproved: boolean;
 				primaryId?: undefined;
 				created?: undefined;
 				linked?: undefined;
@@ -9764,6 +9764,47 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: string;
 						label?: string | undefined;
 					}[] | undefined;
+					playbooks?: {
+						name: string;
+						goalTemplate: string;
+						description?: string | undefined;
+						params?: {
+							name: string;
+							type: "string" | "number" | "boolean";
+							default?: string | number | boolean | undefined;
+							description?: string | undefined;
+						}[] | undefined;
+						executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
+						grants?: {
+							kind: "command" | "tool" | "skill";
+							ref: string;
+						}[] | undefined;
+						expectedOutputs?: {
+							description: string;
+							type: "entities" | "document" | "csv" | "report";
+						}[] | undefined;
+					}[] | undefined;
+					automations?: {
+						name: string;
+						trigger: {
+							type: "cron" | "manual" | "event";
+							cron?: string | undefined;
+							eventType?: string | undefined;
+						};
+						action: {
+							type: "playbook_run";
+							playbookSlug: string;
+							params?: Record<string, unknown> | undefined;
+						};
+						description?: string | undefined;
+					}[] | undefined;
+					tools?: {
+						name: string;
+						kind: "provider" | "external" | "builtin" | "api" | "mcp" | "script";
+						description?: string | undefined;
+						credentialRequired?: boolean | undefined;
+						inputSchema?: Record<string, unknown> | undefined;
+					}[] | undefined;
 				};
 				packageSlug?: string | undefined;
 				packageVersion?: string | undefined;
@@ -13735,31 +13776,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
-		submitBatch: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				items: {
-					path: string;
-					contentBase64: string;
-					mimeType?: string | undefined;
-				}[];
-				workspaceId?: string | undefined;
-			};
-			output: {
-				filesReceived: number;
-				entitiesCreated: number;
-				proposalsCreated: number;
-				documentsCreated: number;
-				channelsCreated: number;
-				messagesCreated: number;
-				filesStoredOnly: number;
-				errors: {
-					path: string;
-					message: string;
-				}[];
-				batchId: `${string}-${string}-${string}-${string}-${string}`;
-			};
-			meta: object;
-		}>;
 		analyze: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				source: "markdown" | "obsidian" | "csv" | "bookmark";
@@ -13771,6 +13787,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				relationType?: string | undefined;
 				aiStructure?: boolean | undefined;
 				sessionId?: string | undefined;
+				playbookId?: string | undefined;
+				playbookParams?: Record<string, string> | undefined;
 			};
 			output: {
 				workspaceId: string | null;
@@ -13814,6 +13832,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				relationType?: string | undefined;
 				aiStructure?: boolean | undefined;
 				sessionId?: string | undefined;
+				playbookId?: string | undefined;
+				playbookParams?: Record<string, string> | undefined;
 			};
 			output: {
 				workspaceId: string | null;
@@ -13852,6 +13872,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				relationType?: string | undefined;
 				aiStructure?: boolean | undefined;
 				sessionId?: string | undefined;
+				playbookId?: string | undefined;
+				playbookParams?: Record<string, string> | undefined;
 			};
 			output: {
 				queued: true;
@@ -13903,15 +13925,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				source: "json" | "markdown" | "csv" | "bookmarks_html" | "contacts_device" | "telegram_archive" | "linkedin_archive" | "connector_sync" | "local_migration";
 				analyzedRows: number;
 				suggestions: ImportModelingSuggestion[];
-			};
-			meta: object;
-		}>;
-		batchProgressRoom: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
-			output: {
-				event: "import:file:progress";
-				room: string;
-				description: string;
 			};
 			meta: object;
 		}>;
@@ -14086,7 +14099,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		enrich: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				provider: "apify" | "apollo";
-				capability: "leads" | "company" | "person";
+				capability: "leads" | "person" | "company";
 				input: Record<string, unknown>;
 			};
 			output: {
@@ -14448,7 +14461,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		addPeer: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				peerPodUrl: string;
-				direction: "push" | "bidirectional" | "pull" | "inbound";
+				direction: "push" | "bidirectional" | "inbound" | "pull";
 				label?: string | undefined;
 				authToken?: string | undefined;
 				workspaceIds?: string[] | undefined;

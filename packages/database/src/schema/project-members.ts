@@ -3,6 +3,9 @@
  *
  * Provides project-level access control within workspaces.
  * A user can be in a workspace but only have access to specific projects.
+ *
+ * project_id references entities(id) — projects are entities (profileSlug='project').
+ * The legacy `projects` table FK was repointed in migration 0134.
  */
 
 import {
@@ -13,7 +16,7 @@ import {
   index,
   unique,
 } from "drizzle-orm/pg-core";
-import { projects } from "./projects.js";
+import { entities } from "./entities.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 export const projectMembers = pgTable(
@@ -24,7 +27,7 @@ export const projectMembers = pgTable(
     // Relationships
     projectId: uuid("project_id")
       .notNull()
-      .references(() => projects.id, { onDelete: "cascade" }),
+      .references(() => entities.id, { onDelete: "cascade" }),
     userId: text("user_id").notNull(),
 
     // Role in this specific project

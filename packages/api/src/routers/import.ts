@@ -8,7 +8,6 @@
 
 import { z } from "zod";
 import { router, workspaceProcedure, podProcedure } from "../trpc.js";
-import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { ImportOrchestrator } from "../services/import-orchestrator.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
@@ -18,17 +17,6 @@ import { IMPORT_CORPUS_QUEUE } from "@synap/jobs/workers/import-corpus-worker.js
 const logger = createLogger({ module: "import-router" });
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
-const ImportItemSchema = z.object({
-  path: z.string().min(1).max(512),
-  contentBase64: z.string(),
-  mimeType: z.string().optional(),
-});
-
-const SubmitBatchSchema = z.object({
-  workspaceId: z.string().uuid().optional(),
-  items: z.array(ImportItemSchema).min(1).max(50),
-});
-
 // Preview-before-apply (the in-app import "reveal"). Raw text items (not base64)
 // — markdown/obsidian/csv/bookmark — structured into a composite graph the user
 // reviews inline, then materializes by echoing back the SAME operations.

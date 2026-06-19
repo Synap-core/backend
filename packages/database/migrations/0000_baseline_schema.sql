@@ -3408,3 +3408,27 @@ CREATE INDEX IF NOT EXISTS "idx_playbook_runs_session_id"
   WHERE "session_id" IS NOT NULL;
 CREATE INDEX IF NOT EXISTS "idx_playbook_runs_workspace_status"
   ON "playbook_runs" ("workspace_id", "status");
+
+-- ── Project Members (project-centric-scope, 0134 catch-up) ────────────────────
+-- Project-level access control. `project_id` references ENTITIES (projects are
+-- entities, profileSlug='project') — see migration 0134. This table predates the
+-- single-directory migration discipline (it was created via drizzle-kit push and
+-- never captured in a numbered migration), so it is materialised here so a fresh
+-- pod boots with it directly; 0134 then no-ops on the already-correct FK.
+CREATE TABLE IF NOT EXISTS "project_members" (
+  "id"          uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "project_id"  uuid        NOT NULL CONSTRAINT "project_members_project_id_entities_id_fk"
+                              REFERENCES "entities"("id") ON DELETE CASCADE,
+  "user_id"     text        NOT NULL,
+  "role"        text        NOT NULL DEFAULT 'viewer',
+  "invited_by"  text,
+  "invited_at"  timestamptz NOT NULL DEFAULT now(),
+  "created_at"  timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "project_user_unique" UNIQUE ("project_id", "user_id")
+);
+CREATE INDEX IF NOT EXISTS "idx_project_members_project"
+  ON "project_members" ("project_id");
+CREATE INDEX IF NOT EXISTS "idx_project_members_user"
+  ON "project_members" ("user_id");
+CREATE INDEX IF NOT EXISTS "idx_project_members_user_project"
+  ON "project_members" ("user_id", "project_id");

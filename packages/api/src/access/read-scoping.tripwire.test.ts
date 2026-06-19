@@ -52,6 +52,11 @@ const SCOPING_HELPERS = [
   "scopedDb",
   "AccessContext",
   "userVisibleWhere",
+  // Thin entity/workspace wrappers OVER userVisibleWhere — equally legitimate
+  // scoping (the entities/views routers self-scope through these).
+  "entityVisibleWhere",
+  "entityLensWhere",
+  "workspaceLensWhere",
   "validateWorkspaceAccess",
   "verifyPermission",
   "getWorkspaceRole",
@@ -62,6 +67,12 @@ const SCOPING_HELPERS = [
   "assertWorkspaceMember",
   "assertWorkspaceWrite",
   "checkPermissionOrPropose",
+  // Project axis (project-centric-scope) — a procedure routing through the
+  // unified seam or the project predicates is deliberately scoped.
+  "accessScopeWhere",
+  "projectMemberWhere",
+  "projectLensWhere",
+  "projectLens",
 ];
 
 // Per-user scoping: the row's userId pinned to the caller — `eq(t.userId,
