@@ -60,6 +60,10 @@ import {
   userVisibleWhere,
   workspaceLensWhere,
 } from "../utils/user-visible-where.js";
+import {
+  projectMemberWhere,
+  projectLensWhere,
+} from "../utils/project-scope.js";
 
 function viewVisibleWhere(userId: string) {
   return or(
@@ -96,22 +100,30 @@ function entityLensWhereForViews(
     isNull(entities.workspaceId),
     eq(entities.userId, userId)
   );
+  // Project-membership is the 3rd access source in the user floor (mirrors
+  // entityVisibleWhere in entities.ts): a project member sees their project's
+  // entities ACROSS workspaces, regardless of the active workspace lens — so it
+  // is OR'd into the floor in every lens state, never gated by `lens`.
+  const projectFloor = projectMemberWhere(entities.id, userId);
   if (lens === undefined) {
     return or(
       userPodWide,
       and(
         isNotNull(entities.workspaceId),
         userVisibleWhere(entities.workspaceId, userId)
-      )
+      ),
+      projectFloor
     )!;
   }
-  if (lens === null) return userPodWide!;
+  if (lens === null) return or(userPodWide, projectFloor)!;
   const workspaceBranch = workspaceLensWhere(
     entities.workspaceId,
     userId,
     lens
   );
-  return includePodWide ? or(userPodWide, workspaceBranch)! : workspaceBranch;
+  return includePodWide
+    ? or(userPodWide, workspaceBranch, projectFloor)!
+    : or(workspaceBranch, projectFloor)!;
 }
 
 // Proper package imports
@@ -595,7 +607,12 @@ export const viewsRouter = router({
    * Execute view query and return entities
    */
   execute: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        projectId: z.string().uuid().optional(),
+      })
+    )
     .query(async ({ input, ctx }) => {
       const view = await db.query.views.findFirst({
         where: eq(views.id, input.id),
@@ -674,6 +691,11 @@ export const viewsRouter = router({
           ? entityLensWhereForViews(ctx.userId, lensWorkspaceId, false)
           : entityLensWhereForViews(ctx.userId, null, false)
       );
+
+      // Project lens — narrow to a single project when set (mirrors entities.list pattern)
+      if (input.projectId) {
+        conditions.push(projectLensWhere(entities.id, input.projectId));
+      }
 
       // Filter by scope profiles (profileId FK)
       if (view.scopeProfileIds && view.scopeProfileIds.length > 0) {

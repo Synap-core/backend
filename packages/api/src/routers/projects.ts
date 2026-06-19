@@ -24,6 +24,7 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
+import { accessScopeWhere } from "../utils/project-scope.js";
 
 export const projectsRouter = router({
   /**
@@ -59,7 +60,12 @@ export const projectsRouter = router({
       const offset = input?.offset ?? 0;
 
       const conditions: any[] = [
-        eq(entities.workspaceId, ctx.workspaceId),
+        accessScopeWhere({
+          workspaceIdColumn: entities.workspaceId,
+          entityIdColumn: entities.id,
+          ownerColumn: entities.userId,
+          userId: ctx.userId,
+        }),
         eq(entities.profileId, projectProfile.id),
       ];
 
@@ -139,7 +145,12 @@ export const projectsRouter = router({
       const entity = await db.query.entities.findFirst({
         where: and(
           eq(entities.id, input.id),
-          eq(entities.workspaceId, ctx.workspaceId),
+          accessScopeWhere({
+            workspaceIdColumn: entities.workspaceId,
+            entityIdColumn: entities.id,
+            ownerColumn: entities.userId,
+            userId: ctx.userId,
+          }),
           eq(entities.profileId, projectProfile.id)
         ),
       });
@@ -302,7 +313,12 @@ export const projectsRouter = router({
         where: and(
           eq(entities.id, input.id),
           eq(entities.userId, ctx.userId),
-          eq(entities.workspaceId, ctx.workspaceId),
+          accessScopeWhere({
+            workspaceIdColumn: entities.workspaceId,
+            entityIdColumn: entities.id,
+            ownerColumn: entities.userId,
+            userId: ctx.userId,
+          }),
           eq(entities.profileId, projectProfile.id)
         ),
       });

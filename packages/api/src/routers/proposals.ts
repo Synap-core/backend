@@ -36,9 +36,14 @@ import {
   links,
   type LinkEndpointType,
   type LinkType,
+  linkEntityToProject,
 } from "@synap/database";
 import type { EventRecord } from "@synap/database";
-import { ProposalStatus, workspaces } from "@synap/database/schema";
+import {
+  ProposalStatus,
+  workspaces,
+  focusSessions,
+} from "@synap/database/schema";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import type {
   ProposalReviewChange,
@@ -111,6 +116,43 @@ function markProposalNotificationActioned(proposalId: string): void {
         "Failed to mark proposal notification as actioned (non-fatal)"
       );
     });
+}
+
+/**
+ * Stamp `entity --belongs_to_project--> project` membership for entities created
+ * on the synchronous approve path (the worker hook does the same for the async
+ * path). Resolves the project with the lens-context priority: the proposal's
+ * explicit `projectId` first, then the producing session's `projectId`.
+ *
+ * No-op when the proposal carries neither. Idempotent (relations unique index).
+ */
+async function stampProjectMembership(
+  proposal: {
+    projectId: string | null;
+    sessionId: string | null;
+    workspaceId: string | null;
+  },
+  entityIds: string[],
+  userId: string
+): Promise<void> {
+  if (entityIds.length === 0) return;
+  let projectId = proposal.projectId ?? null;
+  if (!projectId && proposal.sessionId) {
+    const session = await db.query.focusSessions.findFirst({
+      where: eq(focusSessions.id, proposal.sessionId),
+      columns: { projectId: true },
+    });
+    projectId = session?.projectId ?? null;
+  }
+  if (!projectId) return;
+  for (const entityId of entityIds) {
+    await linkEntityToProject(db, {
+      entityId,
+      projectId,
+      userId,
+      workspaceId: proposal.workspaceId ?? null,
+    });
+  }
 }
 
 /**
@@ -1327,6 +1369,8 @@ export const proposalsRouter = router({
             )
             .onConflictDoNothing();
         }
+        // Membership: project lens (entity → belongs_to_project → project).
+        await stampProjectMembership(proposal, producedEntityIds, userId);
 
         await db
           .update(proposals)
@@ -1810,6 +1854,10 @@ export const proposalsRouter = router({
               metadata: {},
             })
             .onConflictDoNothing();
+        }
+        // Membership: project lens (entity → belongs_to_project → project).
+        if (createdEntity?.id) {
+          await stampProjectMembership(proposal, [createdEntity.id], userId);
         }
 
         await db

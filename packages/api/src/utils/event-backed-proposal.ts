@@ -21,6 +21,9 @@ export interface CreateEventBackedProposalInput {
   commandRunId?: string | null;
   sourceMessageId?: string | null;
   sessionId?: string | null;
+  /** Active project lens (or surface override) → proposals.project_id. At
+   *  materialization this stamps `entity --belongs_to_project--> project`. */
+  projectId?: string | null;
   expiresAt?: Date | null;
 }
 
@@ -72,6 +75,7 @@ export async function createEventBackedProposal(
     commandRunId: input.commandRunId,
     sourceMessageId: input.sourceMessageId,
     sessionId: input.sessionId ?? null,
+    projectId: input.projectId ?? null,
     expiresAt: input.expiresAt,
     notificationDescription: input.summary,
   });
@@ -160,6 +164,7 @@ export async function createAutoApprovedProposal(
       correlationId,
       ...(requestedEvent?.id ? { requestedEventId: requestedEvent.id } : {}),
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
     })
     .returning();
 

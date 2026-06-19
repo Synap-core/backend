@@ -39,7 +39,7 @@ import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
 import { markServiceCredentialError } from "../utils/credential-auto-repair.js";
 import { emitSideEffects } from "@synap/events";
-import { eventRepository } from "@synap/database";
+import { eventRepository, linkEntityToProject } from "@synap/database";
 import { resolveContentTarget } from "../import/materialize-document.js";
 import {
   materializeCompositeGraph,
@@ -819,6 +819,12 @@ export const captureRouter = router({
          * Optional / back-compat — absent = unchanged behavior.
          */
         idempotencyKey: z.string().max(200).optional(),
+        /**
+         * Active project lens (or a surface/cell-renderer override) at capture
+         * time. When set, every created entity is filed into this project
+         * (`belongs_to_project`) — the project mirror of the active workspace.
+         */
+        projectId: z.string().uuid().nullish(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1038,6 +1044,24 @@ export const captureRouter = router({
         relationType: r.type,
       }));
 
+      // Project membership (lens-context): file the captured entities into the
+      // active project. Capture materializes directly (not via proposal
+      // approval), so the membership write lands here — the project mirror of
+      // how `workspaceId` is stamped on the entity. Idempotent, best-effort.
+      if (input.projectId) {
+        const newEntityIds = created
+          .filter((c) => !c.linked)
+          .map((c) => c.entityId);
+        for (const entityId of newEntityIds) {
+          await linkEntityToProject(database, {
+            entityId,
+            projectId: input.projectId,
+            userId,
+            workspaceId: workspaceId ?? null,
+          });
+        }
+      }
+
       logger.info(
         {
           userId,
@@ -1066,6 +1090,7 @@ export const captureRouter = router({
             userId,
             reviewedBy: userId,
             workspaceId: workspaceId ?? null,
+            projectId: input.projectId ?? null,
             targetType: "entity",
             targetId: randomUUID(),
             proposalType: "capture.graph",

@@ -58,7 +58,10 @@ import {
   userVisibleWhere,
   workspaceLensWhere,
 } from "../utils/user-visible-where.js";
-import { projectMemberWhere } from "../utils/project-scope.js";
+import {
+  projectMemberWhere,
+  projectLensWhere,
+} from "../utils/project-scope.js";
 import { resolveContentTarget } from "../import/materialize-document.js";
 import { createLogger } from "@synap-core/core";
 
@@ -715,6 +718,14 @@ export const entitiesRouter = router({
          * backwards compatibility; `null` returns the caller's pod-wide rows.
          */
         workspaceId: z.string().uuid().nullable().optional(),
+        /**
+         * Project LENS (project-centric-scope) — narrow to one project's data.
+         * In the INPUT (not a header) so it lands in the React Query key and the
+         * cache separates per project. A lens only narrows: access is enforced by
+         * the floor (`entityVisibleWhere`, which already grants project members);
+         * a forged id can never widen.
+         */
+        projectId: z.string().uuid().optional(),
         /** Filter to entities materialized from a specific proposal (provenance). */
         sourceProposalId: z.string().uuid().optional(),
       })
@@ -726,14 +737,25 @@ export const entitiesRouter = router({
       // callers are unaffected (they already resolve to pod-wide-only below).
       const lensWorkspaceId =
         input.workspaceId !== undefined ? input.workspaceId : ctx.workspaceId;
-      const workspaceScopeCondition =
-        input.globalOnly || !lensWorkspaceId
+      // When a PROJECT lens is selected it becomes the primary scope: use the full
+      // user floor (`entityVisibleWhere`, which includes the project-membership
+      // branch) instead of the workspace-only lens, so a project member sees the
+      // project's data ACROSS workspaces — even ones they aren't a member of. The
+      // `projectLensWhere` narrow below then restricts to that project. (Parity
+      // with `listAll`, which already uses the project-aware floor.) Without a
+      // project, the normal workspace lens applies.
+      const workspaceScopeCondition = input.projectId
+        ? entityVisibleWhere(ctx.userId)
+        : input.globalOnly || !lensWorkspaceId
           ? entityLensWhere(ctx.userId, null)
           : entityLensWhere(ctx.userId, lensWorkspaceId, {
               includePodWide: input.includePodWide,
             });
-      // Visibility is gated by workspace membership (workspaceProcedure).
-      // userId is attribution only — all workspace members see all workspace entities.
+      // Visibility is enforced at QUERY level — `list` is a `podProcedure`, so there
+      // is NO procedure-level workspace gate. `workspaceScopeCondition` delegates to
+      // `entityLensWhere`/`entityVisibleWhere`, which restrict rows to the user floor
+      // (workspace membership + pod-personal + project membership). `userId` is a
+      // security predicate there, not mere attribution.
       const conditions: any[] = [isNull(entities.deletedAt)];
 
       if (input.sourceProposalId) {
@@ -768,6 +790,13 @@ export const entitiesRouter = router({
       } else {
         // No profile filter — same workspace scoping.
         conditions.push(workspaceScopeCondition);
+      }
+
+      // Project lens (project-centric-scope): narrow to the selected project's
+      // data on top of the workspace scope. ANDed with the floor above, so it
+      // can only narrow — never widen. Omitted when no project is selected.
+      if (input.projectId) {
+        conditions.push(projectLensWhere(entities.id, input.projectId));
       }
 
       const results = await db.query.entities.findMany({
@@ -819,6 +848,12 @@ export const entitiesRouter = router({
         profileSlug: z.string().optional(),
         /** When true and profileSlug is set, also return entities of child profiles. */
         includeDescendants: z.boolean().optional().default(false),
+        /**
+         * Project LENS (project-centric-scope) — narrow the user-wide list to one
+         * project. In the INPUT so it keys the cache; only narrows (the floor
+         * `entityVisibleWhere` enforces access).
+         */
+        projectId: z.string().uuid().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -826,6 +861,9 @@ export const entitiesRouter = router({
         isNull(entities.deletedAt),
         entityVisibleWhere(ctx.userId),
       ];
+      if (input.projectId) {
+        conditions.push(projectLensWhere(entities.id, input.projectId));
+      }
 
       if (input.profileSlug) {
         const database = await getDb();

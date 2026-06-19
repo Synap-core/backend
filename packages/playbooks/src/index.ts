@@ -112,7 +112,11 @@ export type LinkEndpointType =
   | "source"
   | "entity"
   | "channel"
-  | "participant";
+  | "participant"
+  | "automation"
+  // A project entity (profileSlug='project'). Sessions may target a project
+  // (project-centric-scope Phase 4): `session --targets--> project`.
+  | "project";
 export type LinkType =
   | "grants"
   | "requires"

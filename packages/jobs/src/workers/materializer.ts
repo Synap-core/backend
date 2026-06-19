@@ -38,6 +38,7 @@ import {
   links,
   type LinkEndpointType,
   type LinkType,
+  linkEntityToProject,
 } from "@synap/database";
 import {
   entities,
@@ -49,6 +50,7 @@ import {
   workspaceMembers,
   users,
   proposals,
+  focusSessions,
 } from "@synap/database/schema";
 import {
   createUnifiedEvent,
@@ -350,7 +352,8 @@ async function materializeEntity(
       database,
       data.sourceProposalId as string | undefined,
       subjectId,
-      entityWorkspaceId
+      entityWorkspaceId,
+      userId
     );
   } else if (action === "update") {
     const entityId = (data.id as string) || subjectId;
@@ -728,44 +731,78 @@ async function materializeCell(
  * onConflictDoNothing) so a retried job can't error or duplicate.
  */
 /**
- * Write a `session --produced--> entity` provenance edge when an entity was
- * materialized from a proposal that belongs to a focus session. Resolves the
- * session from the proposal's `session_id` FK (the canonical link, mig 0119).
+ * Stamp the two scope facts a materialized entity inherits from its proposal:
  *
- * No-op when the proposal has no session (the common non-session write).
- * Idempotent via the links unique-edge index + onConflictDoNothing, so a
- * pg-boss retry can neither error nor duplicate. This is the in-channel
- * counterpart to the explicit BYOA capture-back (POST /runs/:runId/capture);
- * together they make the Deliverable surface complete for every session.
+ *  1. PROVENANCE — `session --produced--> entity` (links table) when the proposal
+ *     belongs to a focus session. Powers the session room's Deliverable surface.
+ *  2. MEMBERSHIP — `entity --belongs_to_project--> project` (relations table) so
+ *     the project lens (`projectLensWhere`) is not hollow. The project is resolved
+ *     with the same priority the lens-context is written: the proposal's explicit
+ *     `project_id` (active lens / surface override) first, then the producing
+ *     session's `projectId` (provenance fallback).
+ *
+ * This is the WRITE seam that mirrors how `workspace_id` is stamped on the entity
+ * row — membership is a graph edge, so it is stamped here instead of as a column.
+ * No-op when neither a session nor a project is present (the common case).
+ * Idempotent (links unique-edge index + relations_belongs_to_project_unique +
+ * onConflictDoNothing), so a pg-boss retry can neither error nor duplicate.
  */
 async function linkSessionProduced(
   db: Awaited<ReturnType<typeof getDb>>,
   sourceProposalId: string | undefined,
   entityId: string,
-  workspaceId: string | null | undefined
+  workspaceId: string | null | undefined,
+  userId: string
 ): Promise<void> {
   if (!sourceProposalId) return;
   const proposal = await sharedDb.query.proposals.findFirst({
     where: eq(proposals.id, sourceProposalId),
-    columns: { sessionId: true },
+    columns: { sessionId: true, projectId: true },
   });
-  if (!proposal?.sessionId) return;
-  await db
-    .insert(links)
-    .values({
+  if (!proposal) return;
+
+  // 1. Provenance link (session → produced → entity).
+  if (proposal.sessionId) {
+    await db
+      .insert(links)
+      .values({
+        workspaceId: workspaceId ?? null,
+        fromType: "session" as LinkEndpointType,
+        fromId: proposal.sessionId,
+        toType: "entity" as LinkEndpointType,
+        toId: entityId,
+        linkType: "produced" as LinkType,
+        metadata: {},
+      })
+      .onConflictDoNothing();
+    logger.info(
+      { sessionId: proposal.sessionId, entityId },
+      "Linked session --produced--> entity"
+    );
+  }
+
+  // 2. Project membership (entity → belongs_to_project → project). Priority:
+  //    explicit proposal.projectId (lens-context) > producing session's project.
+  let projectId = proposal.projectId ?? null;
+  if (!projectId && proposal.sessionId) {
+    const session = await sharedDb.query.focusSessions.findFirst({
+      where: eq(focusSessions.id, proposal.sessionId),
+      columns: { projectId: true },
+    });
+    projectId = session?.projectId ?? null;
+  }
+  if (projectId) {
+    await linkEntityToProject(db, {
+      entityId,
+      projectId,
+      userId,
       workspaceId: workspaceId ?? null,
-      fromType: "session" as LinkEndpointType,
-      fromId: proposal.sessionId,
-      toType: "entity" as LinkEndpointType,
-      toId: entityId,
-      linkType: "produced" as LinkType,
-      metadata: {},
-    })
-    .onConflictDoNothing();
-  logger.info(
-    { sessionId: proposal.sessionId, entityId },
-    "Linked session --produced--> entity"
-  );
+    });
+    logger.info(
+      { projectId, entityId },
+      "Linked entity --belongs_to_project--> project"
+    );
+  }
 }
 
 async function materializeLink(

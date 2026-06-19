@@ -57,7 +57,10 @@ export type LinkEndpointType =
   // An automation scoped to a playbook: `automation --member_of--> playbook`.
   // The matcher resolves a produced entity's session → playbook → these
   // automations, so playbook automations fire for their session's entities.
-  | "automation";
+  | "automation"
+  // A project entity (profileSlug='project'). Sessions may be scoped to a
+  // project (project-centric-scope Phase 4): `session --targets--> project`.
+  | "project";
 
 /** The relationship an edge expresses. */
 export type LinkType =

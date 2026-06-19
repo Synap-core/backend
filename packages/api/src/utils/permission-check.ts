@@ -741,6 +741,7 @@ export interface CreatePendingProposalInput {
   correlationId?: string | null;
   requestedEventId?: string | null;
   sessionId?: string | null;
+  projectId?: string | null;
   expiresAt?: Date | null;
   notificationDescription?: string;
 }
@@ -859,6 +860,7 @@ export async function createPendingProposal(
         ? { requestedEventId: input.requestedEventId }
         : {}),
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
     })
     .returning();
 

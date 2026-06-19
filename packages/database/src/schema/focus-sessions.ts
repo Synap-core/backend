@@ -34,8 +34,21 @@ export const focusSessions = pgTable(
   "focus_sessions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    /** Which workspace this session is scoped to. */
-    workspaceId: text("workspace_id").notNull(),
+    /**
+     * Which workspace this session is scoped to.
+     * Nullable since Phase 4: a project-scoped session spans workspaces and
+     * is anchored by projectId instead. Workspace-scoped sessions keep this
+     * non-null (enforced at the application layer, not DB).
+     */
+    workspaceId: text("workspace_id"),
+    /**
+     * Project this session is scoped to (project-centric-scope Phase 4).
+     * When set, the session belongs to a project and may span multiple
+     * workspaces. Mutually exclusive with a workspace-only scope: at least one
+     * of workspaceId / projectId should be non-null (enforced by the caller).
+     * FK to entities.id (projects are entities with profileSlug='project').
+     */
+    projectId: uuid("project_id"),
     /** Owner — the human who started it. */
     userId: text("user_id").notNull(),
     /**
@@ -104,6 +117,7 @@ export const focusSessions = pgTable(
     userIdIdx: index("idx_focus_sessions_user_id").on(table.userId),
     statusIdx: index("idx_focus_sessions_status").on(table.status),
     playbookIdIdx: index("idx_focus_sessions_playbook_id").on(table.playbookId),
+    projectIdIdx: index("idx_focus_sessions_project_id").on(table.projectId),
     // Partial unique index: one active session per channel.
     // Also serves as the covering index for channels.ts per-message lookup
     // (WHERE channel_id = ? AND status = 'active'). NULL channel_id excluded

@@ -452,8 +452,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       }
 
       // Step 2: verify the caller's membership in the row's workspace.
+      // workspaceId is nullable since Phase 4 (project-scoped sessions). Pass
+      // undefined when null so resolveActingContext falls back to pod-level auth.
       const acting = await resolveActingContext(c, {
-        workspaceId: existing.workspaceId,
+        workspaceId: existing.workspaceId ?? undefined,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const { userId, workspaceId } = acting;
@@ -627,7 +629,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       }
 
       const acting = await resolveActingContext(c, {
-        workspaceId: session.workspaceId,
+        workspaceId: session.workspaceId ?? undefined,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 

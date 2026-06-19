@@ -37,6 +37,7 @@ export * from "./errors/index.js";
 // Utilities
 export * from "./utils/preferences.js";
 export * from "./utils/document-version-storage.js";
+export * from "./utils/entity-project-membership.js";
 
 // Server-side vault encryption
 export {

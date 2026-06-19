@@ -303,6 +303,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
   },
   {
     table: "proposals",
+    column: "project_id",
+    addedBy: "0138_proposals_project_id.sql",
+  },
+  {
+    table: "proposals",
     column: "thread_id",
     addedBy: "0037_proposals_thread_linkage.sql (custom)",
   },
@@ -378,6 +383,13 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "focus_sessions",
     column: "status",
     addedBy: "0114_focus_sessions.sql",
+  },
+
+  // focus_sessions — project-centric-scope Phase 4 (0136)
+  {
+    table: "focus_sessions",
+    column: "project_id",
+    addedBy: "0136_focus_sessions_project.sql",
   },
 
   // channel_context_items

@@ -92,6 +92,11 @@ export const proposals = pgTable(
     correlationId: uuid("correlation_id"),
     requestedEventId: uuid("requested_event_id"),
     sessionId: uuid("session_id"),
+    // Project lens-context (project-centric-scope): the active project (or a
+    // surface override) at proposal time. At materialization the worker stamps
+    // `entity --belongs_to_project--> project` from this (falling back to the
+    // producing session's projectId). Nullable — most proposals have no project.
+    projectId: uuid("project_id"),
 
     // Expiry: proposals older than this are treated as expired
     expiresAt: timestamp("expires_at", { withTimezone: true }),
@@ -143,6 +148,7 @@ export const proposals = pgTable(
       table.correlationId
     ),
     sessionIdIdx: index("proposals_session_id_idx").on(table.sessionId),
+    projectIdIdx: index("proposals_project_id_idx").on(table.projectId),
   })
 );
 

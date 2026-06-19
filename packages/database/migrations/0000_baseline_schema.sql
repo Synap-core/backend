@@ -799,6 +799,13 @@ CREATE INDEX IF NOT EXISTS "relations_workspace_id_idx"
 CREATE INDEX IF NOT EXISTS "relations_type_idx"
   ON "relations" ("type");
 
+-- 0137: belongs_to_project idempotency — the ON CONFLICT target for linkEntityToProject.
+CREATE UNIQUE INDEX IF NOT EXISTS "relations_belongs_to_project_unique"
+  ON "relations" ("source_entity_id", "target_entity_id")
+  WHERE "type" = 'belongs_to_project'
+    AND "source_entity_id" IS NOT NULL
+    AND "target_entity_id" IS NOT NULL;
+
 -- ─── 16b. cell_instances (0041) ──────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS "cell_instances" (
@@ -1551,6 +1558,7 @@ ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "correlation_id" uuid;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "requested_event_id" uuid;
 -- (proposals.session_id REFERENCES focus_sessions — added after the
 --  focus_sessions section below; FK target is created later in this file.)
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "project_id" uuid;  -- 0138 (project lens-context)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_by" text;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reviewed_at" timestamp with time zone;
@@ -1573,6 +1581,9 @@ CREATE INDEX IF NOT EXISTS "idx_proposals_command_run_id"
 
 CREATE INDEX IF NOT EXISTS "idx_proposals_source_message_id"
   ON "proposals" ("source_message_id");
+
+CREATE INDEX IF NOT EXISTS "proposals_project_id_idx"
+  ON "proposals" ("project_id");
 
 CREATE INDEX IF NOT EXISTS "idx_proposals_created_by"
   ON "proposals" ("created_by");
@@ -3221,7 +3232,8 @@ ON CONFLICT ("filename") DO NOTHING;
 -- ── Focus Sessions (0114_focus_sessions.sql catch-up) ────────────────────────
 CREATE TABLE IF NOT EXISTS "focus_sessions" (
   "id"               uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-  "workspace_id"     text        NOT NULL,
+  -- Nullable since 0136: project-scoped sessions span workspaces (projectId anchors them).
+  "workspace_id"     text,
   "user_id"          text        NOT NULL,
   "correlation_id"   text,
   "goal"             text        NOT NULL,
@@ -3232,6 +3244,8 @@ CREATE TABLE IF NOT EXISTS "focus_sessions" (
   "progress"         integer,
   "agent_ids"        text[]      NOT NULL DEFAULT ARRAY[]::text[],
   "closed_at"        timestamptz,
+  -- Project scope (0136): FK to entities.id (projects are entities).
+  "project_id"       uuid,
   "started_at"       timestamptz NOT NULL DEFAULT now(),
   "created_at"       timestamptz NOT NULL DEFAULT now(),
   "updated_at"       timestamptz NOT NULL DEFAULT now()
@@ -3242,6 +3256,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS "idx_focus_sessions_correlation_id"
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_workspace_id" ON "focus_sessions" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_user_id"      ON "focus_sessions" ("user_id");
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_status"       ON "focus_sessions" ("status");
+-- Project-scoped session lookup (0136)
+CREATE INDEX IF NOT EXISTS idx_focus_sessions_project_id ON "focus_sessions" ("project_id");
 -- One active session per channel + covering index for per-message lookup (0121)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_focus_sessions_active_channel
   ON focus_sessions (channel_id)

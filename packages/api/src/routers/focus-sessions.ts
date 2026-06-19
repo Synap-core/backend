@@ -340,6 +340,19 @@ export const focusSessionsRouter = router({
         });
       }
 
+      // Guard the latent project-scope hole: a session with a null workspace
+      // would make checkPermissionOrPropose treat the grant as a personal
+      // resource and AUTO-GRANT it, skipping workspace governance. No path
+      // creates such a session today (P4b), so fail loud rather than silently
+      // bypass — cross-workspace grant governance is not yet defined.
+      if (!session.workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Project-scoped sessions (no workspace) cannot grant capabilities yet.",
+        });
+      }
+
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,

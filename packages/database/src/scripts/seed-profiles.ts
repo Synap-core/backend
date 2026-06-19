@@ -489,6 +489,10 @@ async function seedProfiles() {
       {
         slug: "project",
         displayName: "Project",
+        // Pod-wide: a project is the cross-cutting container; it lives above any
+        // single workspace (project-centric-scope). Matches POD_WIDE_SLUGS in
+        // ensure-system-profiles.ts.
+        entityScope: "pod",
         uiHints: { icon: "folder", color: "#8B5CF6" },
       },
       {

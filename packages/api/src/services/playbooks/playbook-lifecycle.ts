@@ -52,6 +52,14 @@ export interface InstantiateInput {
   params?: Record<string, unknown>;
   channelId?: string | null;
   agentIds?: string[];
+  /**
+   * Project this session is scoped to (project-centric-scope Phase 4).
+   * When provided, the session is anchored to a project (entity with
+   * profileSlug='project') and a `session --targets--> project` link is
+   * written. workspaceId is still required for the channel / workspace
+   * membership context even when projectId is set.
+   */
+  projectId?: string | null;
 }
 
 /**
@@ -81,6 +89,7 @@ export async function instantiateSession(
       userId: input.userId,
       goal,
       playbookId: playbook.id,
+      projectId: input.projectId ?? null,
       expectedOutputs,
       channelId: input.channelId ?? null,
       agentIds: input.agentIds ?? [],
@@ -88,8 +97,8 @@ export async function instantiateSession(
     })
     .returning();
 
-  // Provenance: session → instantiated_from → playbook.
-  await createLinks([
+  // Provenance edges.
+  const edges: LinkInput[] = [
     {
       workspaceId: input.workspaceId,
       fromType: "session",
@@ -98,7 +107,21 @@ export async function instantiateSession(
       toId: playbook.id,
       linkType: "instantiated_from",
     },
-  ]);
+  ];
+
+  // Project scope: session → targets → project (additive; only when provided).
+  if (input.projectId) {
+    edges.push({
+      workspaceId: input.workspaceId,
+      fromType: "session",
+      fromId: session.id,
+      toType: "project",
+      toId: input.projectId,
+      linkType: "targets",
+    });
+  }
+
+  await createLinks(edges);
 
   return session as FocusSession;
 }
