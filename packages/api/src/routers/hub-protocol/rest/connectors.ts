@@ -51,7 +51,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         },
       },
     }),
-    async (c) => {
+    async (c): Promise<any> => {
       if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
         return c.json(
           { error: "Insufficient scope: hub-protocol.read required" },
@@ -132,7 +132,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         },
       },
     }),
-    async (c) => {
+    async (c): Promise<any> => {
       if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
         return c.json(
           { error: "Insufficient scope: hub-protocol.write required" },
@@ -230,7 +230,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         },
       },
     }),
-    async (c) => {
+    async (c): Promise<any> => {
       if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
         return c.json(
           { error: "Insufficient scope: hub-protocol.write required" },
@@ -303,7 +303,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         },
       },
     }),
-    async (c) => {
+    async (c): Promise<any> => {
       if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
         return c.json(
           { error: "Insufficient scope: hub-protocol.write required" },
@@ -377,7 +377,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         },
       },
     }),
-    async (c) => {
+    async (c): Promise<any> => {
       if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
         return c.json(
           { error: "Insufficient scope: hub-protocol.write required" },
@@ -453,7 +453,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         },
       },
     }),
-    async (c) => {
+    async (c): Promise<any> => {
       if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
         return c.json(
           { error: "Insufficient scope: hub-protocol.read required" },
@@ -568,7 +568,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         },
       },
     }),
-    async (c) => {
+    async (c): Promise<any> => {
       if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
         return c.json(
           { error: "Insufficient scope: hub-protocol.write required" },
