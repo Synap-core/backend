@@ -53,7 +53,11 @@ export type LinkEndpointType =
   | "source"
   | "entity"
   | "channel"
-  | "participant";
+  | "participant"
+  // An automation scoped to a playbook: `automation --member_of--> playbook`.
+  // The matcher resolves a produced entity's session → playbook → these
+  // automations, so playbook automations fire for their session's entities.
+  | "automation";
 
 /** The relationship an edge expresses. */
 export type LinkType =

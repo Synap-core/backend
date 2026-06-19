@@ -260,20 +260,20 @@ export async function handleAutomationTriggerMatch(job: {
   let playbookAutomations: typeof activeAutomations = [];
   if (job.data.sessionId) {
     try {
-      const { links } = await import("@synap/database");
-      const { focusSessions } = await import("@synap/database/schema");
+      const sessionId = job.data.sessionId;
       const session = await db.query.focusSessions.findFirst({
-        where: (fields, { eq }) => eq(fields.id, job.data.sessionId as string),
+        where: (fields, { eq }) => eq(fields.id, sessionId),
         columns: { playbookId: true },
       });
-      if (session?.playbookId) {
+      const playbookId = session?.playbookId;
+      if (playbookId) {
         const linkRows = await db.query.links.findMany({
           where: (fields, { and, eq }) =>
             and(
-              eq(fields.fromType as any, "automation"),
-              eq(fields.linkType as any, "member_of"),
-              eq(fields.toType as any, "playbook"),
-              eq(fields.toId, session.playbookId)
+              eq(fields.fromType, "automation"),
+              eq(fields.linkType, "member_of"),
+              eq(fields.toType, "playbook"),
+              eq(fields.toId, playbookId)
             ),
           columns: { fromId: true },
         });
@@ -289,7 +289,6 @@ export async function handleAutomationTriggerMatch(job: {
             .from(automations)
             .where(
               and(
-                // @ts-expect-error — inArray accepts string[] at runtime
                 inArray(automations.id, playbookAutoIds),
                 eq(automations.status, "active"),
                 eq(automations.triggerType, "event")
