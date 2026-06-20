@@ -67,6 +67,7 @@ import {
   registerWhiteboardsRoutes,
   registerWorkspacesRoutes,
   registerMessagingRoutes,
+  registerDiscordRoutes,
   registerConnectorsRoutes,
   registerWebhooksRoutes,
   registerSubscriptionsRoutes,
@@ -431,6 +432,7 @@ registerEntityShareRoutes(app); // /entity-share/deliver (CP JWT auth)
 registerSetupRoutes(app); // /setup/agent (provisioning auth)
 registerAgentsRoutes(app); // /agents/sync
 registerMessagingRoutes(app); // /messaging/*
+registerDiscordRoutes(app); // /discord/agent-turn
 registerConnectorsRoutes(app); // /connectors/*
 registerWebhooksRoutes(app); // /webhooks
 registerSubscriptionsRoutes(app); // /subscriptions*, /webhooks/:id/deliveries

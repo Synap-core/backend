@@ -15,7 +15,6 @@ import {
   EventRepository,
   proposals,
   documents,
-  documentVersions,
   eq,
   and,
   or,
@@ -28,10 +27,8 @@ import {
   entities,
   users,
   getWorkspaceMembership,
-  normalizeDocumentType,
   storedVersionValues,
   uploadDocumentVersionSnapshot,
-  ProfileResolutionService,
   sql,
   links,
   type LinkEndpointType,
@@ -70,9 +67,10 @@ import type {
 } from "@synap-core/types/proposals";
 import { storage } from "@synap/storage";
 import {
-  sendExternalMessage,
-  triggerConnectorAction,
-} from "../connectors/external-dispatch.js";
+  proposalExecRegistry,
+  type ProposalExecutorDeps,
+} from "./proposals/execution-registry.js";
+import { registerApproveExecutors } from "./proposals/approve-executors.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { auditLog } from "../utils/audit-log.js";
@@ -80,7 +78,6 @@ import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../utils/materialize-composite.js";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
-import { channelsRouter } from "./channels.js";
 import { entitiesRouter as regularEntitiesRouter } from "./entities.js";
 import { relationsRouter } from "./relations.js";
 import { documentsRouter } from "./documents.js";
@@ -91,6 +88,10 @@ import { notifications } from "@synap/database/schema";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
 const logger = createLogger({ module: "proposals" });
+
+// Register every approve executor against the proposal-execution registry.
+// Idempotent — the dispatch table the approve mutation resolves against.
+registerApproveExecutors();
 
 /**
  * Fire-and-forget: mark the corresponding notification row as 'actioned'
@@ -1468,804 +1469,48 @@ export const proposalsRouter = router({
         return { success: true };
       }
 
-      // Document creation proposal: AI proposed a new document (content stored in JSONB).
-      // Upload content to MinIO and insert DB row now that the user approved.
-      if (
-        proposal.targetType === "document" &&
-        proposal.proposalType === "create"
-      ) {
-        const data = (proposal.data ?? {}) as Record<string, unknown>;
-        const documentId = proposal.targetId;
-        const docType = normalizeDocumentType(
-          (data.type as string) || "markdown",
-          "markdown"
-        );
-        const extension = docType === "markdown" ? "md" : docType;
-        const content = (data.content as string) || "";
-        const docUserId = (data.userId as string) || userId;
-        const storageKey = storage.buildPath(
-          docUserId,
-          "document",
-          documentId,
-          extension
-        );
-        const mimeType =
-          docType === "html"
-            ? "text/html"
-            : docType === "code"
-              ? "text/plain"
-              : "text/markdown";
-        const metadata = await storage.upload(storageKey, content, {
-          contentType: mimeType,
-        });
-        const versionId = randomUUID();
-        const snapshot = await uploadDocumentVersionSnapshot({
-          userId: docUserId,
-          documentId,
-          versionId,
-          documentType: docType,
-          mimeType: "text/markdown",
-          content,
-        });
+      // ── Registry dispatch ──────────────────────────────────────────────────
+      // Composite (above) and document-content (B3 above) stay inline because
+      // they key off PAYLOAD SHAPE, not a type string. Everything else resolves
+      // through the proposal-execution registry: exact `${targetType}/${proposalType}`
+      // first (e.g. "entity/create", "document/create"), then proposalType-only
+      // (e.g. "messaging.external.send", "provider.action"), then the `*/*`
+      // catch-all (the generic request-shaped `.validated`-emit path). Each
+      // executor's body is the verbatim former branch — same callers, same db
+      // updates, same emitProposalReviewed/reportProposalOutcome calls, same
+      // returns and idempotency guards. NOT_IMPLEMENTED now fires ONLY for a
+      // truly-unregistered key (the catch-all itself throws for non-request-shaped
+      // payloads), eliminating the silent forgotten-branch failure mode.
+      const approveDeps: ProposalExecutorDeps = {
+        db,
+        emitProposalReviewed,
+        reportProposalOutcome,
+        stampProjectMembership,
+        resolveMessagingAccountForPlatform: (uid, platform) =>
+          resolveMessagingAccountForPlatform(db, uid, platform),
+        isRequestShapedProposalData,
+      };
 
-        await db.insert(documents).values({
-          id: documentId,
-          title: (data.title as string) || "Untitled",
-          type: docType,
-          storageUrl: metadata.url,
-          storageKey: metadata.path,
-          size: metadata.size,
-          mimeType: "text/markdown",
-          userId: docUserId,
-          workspaceId: proposal.workspaceId,
-          currentVersion: 1,
-          lastSavedVersion: 1,
-        });
+      const executor = proposalExecRegistry.resolve(
+        `${proposal.targetType}/${proposal.proposalType}`,
+        proposal.proposalType ?? ""
+      );
 
-        await db.insert(documentVersions).values({
-          id: versionId,
-          documentId,
-          version: 1,
-          ...storedVersionValues(snapshot),
-          author: "user",
-          authorId: userId,
-          message: "Initial version",
-        });
-
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-
-        emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
-        return { success: true };
-      }
-
-      // Branch creation proposal: AI proposed creating a branch.
-      // Execute via channelsRouter now that the user approved.
-      if (
-        proposal.targetType === "channel" &&
-        proposal.proposalType === "create_branch"
-      ) {
-        const data = (proposal.data ?? {}) as Record<string, unknown>;
-        const branchWorkspaceId = proposal.workspaceId || null;
-        if (!branchWorkspaceId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Proposal is missing a valid workspaceId",
-          });
-        }
-        const membership = await getWorkspaceMembership(
-          db,
-          branchWorkspaceId,
-          userId
-        );
-        if (!membership) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "No workspace access",
-          });
-        }
-        const branchCallerCtx = {
-          db,
-          authenticated: true as const,
-          userId,
-          workspaceId: branchWorkspaceId,
-          workspaceRole: membership.role,
-        };
-        const caller = channelsRouter.createCaller(branchCallerCtx);
-        await caller.createChannel({
-          parentChannelId: data.parentChannelId as string,
-          branchPurpose: data.branchPurpose as string,
-          agentId: data.agentId as string | undefined,
-          agentConfig: data.agentConfig as Record<string, unknown> | undefined,
-          inheritContext: (data.inheritContext as boolean) ?? true,
-        });
-
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-
-        emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
-        return { success: true };
-      }
-
-      // Branch merge proposal: AI proposed merging a branch.
-      // The user must always validate a merge — execute now that they approved.
-      if (
-        proposal.targetType === "channel" &&
-        proposal.proposalType === "merge_branch"
-      ) {
-        const data = (proposal.data ?? {}) as Record<string, unknown>;
-        const mergeWorkspaceId = proposal.workspaceId || null;
-        if (!mergeWorkspaceId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Proposal is missing a valid workspaceId",
-          });
-        }
-        const membership = await getWorkspaceMembership(
-          db,
-          mergeWorkspaceId,
-          userId
-        );
-        if (!membership) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "No workspace access",
-          });
-        }
-        const mergeCallerCtx = {
-          db,
-          authenticated: true as const,
-          userId,
-          workspaceId: mergeWorkspaceId,
-          workspaceRole: membership.role,
-        };
-        const caller = channelsRouter.createCaller(mergeCallerCtx);
-        await caller.mergeBranch({
-          branchId: data.branchId as string,
-          summary: data.summary as string | undefined,
-        });
-
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-
-        emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
-        return { success: true };
-      }
-
-      // External channel import proposal: AI (e.g. OpenClaw) wants to import a
-      // WhatsApp/Slack/Telegram conversation as a Synap channel.
-      // Execute createExternalChannel now that the user approved.
-      if (
-        proposal.targetType === "channel" &&
-        proposal.proposalType === "create_external"
-      ) {
-        const data = (proposal.data ?? {}) as Record<string, unknown>;
-        const extWorkspaceId = proposal.workspaceId || null;
-        if (!extWorkspaceId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Proposal is missing a valid workspaceId",
-          });
-        }
-        const membership = await getWorkspaceMembership(
-          db,
-          extWorkspaceId,
-          userId
-        );
-        if (!membership) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "No workspace access",
-          });
-        }
-        const extCallerCtx = {
-          db,
-          authenticated: true as const,
-          userId,
-          workspaceId: extWorkspaceId,
-          workspaceRole: membership.role,
-        };
-        const caller = channelsRouter.createCaller(extCallerCtx);
-        await caller.createExternalChannel({
-          externalSource: data.externalSource as string,
-          externalChannelId: data.externalChannelId as string,
-          title: data.title as string,
-          externalParticipants: data.externalParticipants as
-            | string[]
-            | undefined,
-          initialMessage: data.initialMessage as string | undefined,
-          metadata: data.metadata as Record<string, unknown> | undefined,
-        });
-
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-
-        emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
-        return { success: true };
-      }
-
-      // Entity creation proposal: AI proposed a new entity.
-      // Execute inline via entitiesRouter (human approver context bypasses governance).
-      if (
-        proposal.targetType === "entity" &&
-        proposal.proposalType === "create"
-      ) {
-        const innerData = ((proposal.data as Record<string, unknown>)?.data ??
-          {}) as Record<string, unknown>;
-        const profileSlug = innerData.profileSlug as string | undefined;
-        if (!profileSlug) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Entity proposal is missing profileSlug",
-          });
-        }
-
-        const proposalWorkspaceId = proposal.workspaceId || null;
-
-        // Check whether this profile is pod-wide or workspace-scoped.
-        // Pod-wide entities (task, event, note, project, …) can be created without
-        // a workspace context — the membership check is skipped and the entity is
-        // stored with workspaceId = null.
-        const profileService = new ProfileResolutionService(db);
-        const entityScope = await profileService.getEntityScope(
-          profileSlug,
-          proposalWorkspaceId
-        );
-        const isPodWide = entityScope === "pod";
-
-        let entityCallerCtx: {
-          db: typeof db;
-          authenticated: true;
-          userId: string;
-          workspaceId: string | null;
-          workspaceRole: string;
-        };
-
-        if (isPodWide) {
-          entityCallerCtx = {
-            db,
-            authenticated: true as const,
-            userId,
-            workspaceId: null,
-            workspaceRole: "owner",
-          };
-        } else {
-          if (!proposalWorkspaceId) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message:
-                "Entity creation proposal for a workspace-scoped profile is missing a valid workspaceId",
-            });
-          }
-          const membership = await getWorkspaceMembership(
-            db,
-            proposalWorkspaceId,
-            userId
-          );
-          if (!membership) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "No workspace access",
-            });
-          }
-          entityCallerCtx = {
-            db,
-            authenticated: true as const,
-            userId,
-            workspaceId: proposalWorkspaceId,
-            workspaceRole: membership.role,
-          };
-        }
-
-        const entityCaller = regularEntitiesRouter.createCaller(
-          entityCallerCtx as unknown as Context
-        );
-        // Reuse the entity UUID that was pre-generated at propose-time (stored
-        // in the proposal data as `id`), so cross-write proposal graphs that
-        // reference this entity by its proposedEntityId resolve correctly on
-        // approval. When absent (legacy proposals), entities.create generates
-        // a fresh UUID as before.
-        const storedEntityId = innerData.id as string | undefined;
-        const createdEntity = (await entityCaller.create({
-          proposedEntityId: storedEntityId,
-          profileSlug,
-          title: (innerData.title as string) || "Untitled",
-          description: innerData.description as string | undefined,
-          properties: innerData.properties as
-            | Record<string, unknown>
-            | undefined,
-          // Long-form body (e.g. imported markdown) → materialized as a linked
-          // document with versioning, not stuffed into a content property.
-          content: innerData.content as string | undefined,
-          source: "system",
-        })) as { id?: string };
-
-        // Record the entity id for revert (same id as the pre-generated one).
-        const createMaterialized: ProposalMaterializedRecord = createdEntity?.id
-          ? { entityIds: [createdEntity.id] }
-          : {};
-        const createPayload: StoredProposalData = {
-          ...(payload as StoredProposalData),
-          materialized: createMaterialized,
-        };
-
-        // Provenance: record `session --produced--> entity` for this single-entity
-        // create too (mirrors the composite path + the worker hook). Without this
-        // the most common AI-single-create case would silently miss the session
-        // room's Deliverable surface. Idempotent via the links unique-edge index.
-        if (proposal.sessionId && createdEntity?.id) {
-          await db
-            .insert(links)
-            .values({
-              workspaceId: proposal.workspaceId ?? null,
-              fromType: "session" as LinkEndpointType,
-              fromId: proposal.sessionId,
-              toType: "entity" as LinkEndpointType,
-              toId: createdEntity.id,
-              linkType: "produced" as LinkType,
-              metadata: {},
-            })
-            .onConflictDoNothing();
-        }
-        // Membership: project lens (entity → belongs_to_project → project).
-        if (createdEntity?.id) {
-          await stampProjectMembership(proposal, [createdEntity.id], userId);
-        }
-
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
-            data: createPayload,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-
-        emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
-        return { success: true };
-      }
-
-      // Entity update proposal: AI proposed changes to an existing entity.
-      // Execute inline via entitiesRouter (human approver context bypasses governance).
-      if (
-        proposal.targetType === "entity" &&
-        proposal.proposalType === "update"
-      ) {
-        const innerData = ((proposal.data as Record<string, unknown>)?.data ??
-          {}) as Record<string, unknown>;
-        const entityId = (innerData.id as string) || proposal.targetId;
-        const membership = await getWorkspaceMembership(
-          db,
-          proposal.workspaceId!,
-          userId
-        );
-        if (!membership) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "No workspace access",
-          });
-        }
-        const entityCallerCtx = {
-          db,
-          authenticated: true as const,
-          userId,
-          workspaceId: proposal.workspaceId!,
-          workspaceRole: membership.role,
-        };
-        const entityCaller = regularEntitiesRouter.createCaller(
-          entityCallerCtx as unknown as Context
-        );
-        await entityCaller.update({
-          id: entityId,
-          title: innerData.title as string | undefined,
-          description: innerData.description as string | undefined,
-          properties: innerData.properties as
-            | Record<string, unknown>
-            | undefined,
-          deleteProperties: innerData.deleteProperties as string[] | undefined,
-          source: "system",
-        });
-
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-
-        emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
-        return { success: true };
-      }
-
-      // Workspace-join proposal (PRODUCT DECISION "agent asks to join"): an agent
-      // filed this because it was not a workspace member. Approval emits a
-      // `workspace.join.validated` event → the materialization hook enqueues a job
-      // → the materializer's `workspace` case inserts the workspace_members row
-      // idempotently. This mirrors the generic `.validated` path but does not
-      // require request-shaped data (the join payload is a small {role,...} object,
-      // and targetType "workspace" / action "join" fall outside UpdateRequest's
-      // closed unions).
-      if (
-        proposal.targetType === "workspace" &&
-        proposal.proposalType === "join"
-      ) {
-        const joinData = (proposal.data ?? {}) as Record<string, unknown>;
-        const validatedEvent = await auditLog({
-          subjectType: "workspace",
-          action: "join",
-          phase: "validated",
-          // Governance-critical: a failed `.validated` append must NOT leave the
-          // proposal APPROVED-but-unmaterialized.
-          throwOnError: true,
-          subjectId: proposal.targetId,
-          userId,
-          workspaceId: proposal.workspaceId ?? undefined,
-          correlationId:
-            typeof joinData.correlationId === "string"
-              ? joinData.correlationId
-              : undefined,
-          data: {
-            role: typeof joinData.role === "string" ? joinData.role : "editor",
-            agentUserId: proposal.agentUserId ?? joinData.agentUserId,
-            workspaceId: proposal.workspaceId,
-            approvedBy: userId,
-            approvedAt: new Date().toISOString(),
-            approvalComment: input.comment,
-            sourceProposalId: input.proposalId,
-          },
-          source: "api",
-        });
-
-        const joinUpdatedData = {
-          ...joinData,
-          ...(validatedEvent ? { validatedEventId: validatedEvent.id } : {}),
-        };
-
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
-            data: joinUpdatedData,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-
-        emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
-        return { success: true };
-      }
-
-      // ── External-action proposals ──────────────────────────────────────────
-      // These are created by IS tools (send_message_external, nango_action) which
-      // structurally refuse to send directly and instead file a governed proposal.
-      // Approving them dispatches the external send / Nango action through the
-      // SAME shared helper the human-direct REST paths use. Idempotency: status
-      // is flipped conditionally; if already APPROVED the send is skipped.
-
-      // Messaging: send an external message (LinkedIn/WhatsApp/Gmail/… via
-      // Unipile or Stalwart) that an AI proposed.
-      if (proposal.proposalType === "messaging.external.send") {
-        const data = (proposal.data ?? {}) as Record<string, unknown>;
-        const threadId = data.threadId as string | undefined;
-        const body = data.body as string | undefined;
-        const platform = data.platform as string | undefined;
-
-        if (!threadId || !body) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message:
-              "External message send requires threadId and body in proposal data",
-          });
-        }
-
-        const msgAccount = await resolveMessagingAccountForPlatform(
-          db,
-          userId,
-          platform
-        );
-        if (!msgAccount) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message:
-              "No messaging account found for this platform — connect one first",
-          });
-        }
-
-        // Guard: only execute if not already approved (external sends are irreversible).
-        const [alreadyDone] = await db
-          .select({ status: proposals.status })
-          .from(proposals)
-          .where(eq(proposals.id, input.proposalId));
-        if (alreadyDone?.status === ProposalStatus.APPROVED) {
-          return { success: true, alreadyApproved: true };
-        }
-
-        const { success: sent } = await sendExternalMessage({
-          threadId,
-          accountId: msgAccount.id,
-          body,
-          userId,
-        });
-
-        if (!sent) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message:
-              "Failed to send external message — messaging connector not configured",
-          });
-        }
-
-        // Record the send so a retry is a no-op. The result goes directly on
-        // the data payload (ProposalMaterializedRecord only accepts entityIds).
-        const materializedPayload = {
-          ...payload,
-          sentResult: { sentAt: new Date().toISOString(), threadId, platform },
-        } as unknown as typeof payload;
-
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
-            data: materializedPayload,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-
-        emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
-        return { success: true };
-      }
-
-      // Connector action: trigger a pre-defined Nango action on a connected
-      // integration (e.g. "send LinkedIn connection request").
-      if (proposal.proposalType === "connector.action.trigger") {
-        const data = (proposal.data ?? {}) as Record<string, unknown>;
-        const connectionId = data.connectionId as string | undefined;
-        const providerConfigKey = data.providerConfigKey as string | undefined;
-        const actionName = data.actionName as string | undefined;
-
-        if (!connectionId || !providerConfigKey || !actionName) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message:
-              "Connector action trigger requires connectionId, providerConfigKey, and actionName",
-          });
-        }
-
-        // Guard: only execute once.
-        const [alreadyDone] = await db
-          .select({ status: proposals.status })
-          .from(proposals)
-          .where(eq(proposals.id, input.proposalId));
-        if (alreadyDone?.status === ProposalStatus.APPROVED) {
-          return { success: true, alreadyApproved: true };
-        }
-
-        const { success: triggered, result: actionResult } =
-          await triggerConnectorAction({
-            connectionId,
-            providerConfigKey,
-            actionName,
-            input: (data.input ?? data.payload) as
-              | Record<string, unknown>
-              | undefined,
-          });
-
-        if (!triggered) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message:
-              "Failed to trigger connector action — Nango not configured",
-          });
-        }
-
-        const materializedPayload = {
-          ...payload,
-          triggeredResult: {
-            triggeredAt: new Date().toISOString(),
-            actionName,
-            result: actionResult,
-          },
-        } as unknown as typeof payload;
-
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
-            data: materializedPayload,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-
-        emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
-        return { success: true };
-      }
-
-      // Generic flow: emit .validated event → materialization hook picks it up
-      if (isRequestShapedProposalData(payload)) {
-        const {
-          targetType,
-          changeType,
-          data: requestData,
-          correlationId: proposalCorrelationId,
-        } = payload as typeof payload & { correlationId?: string };
-
-        const eventPayload =
-          typeof requestData === "object" && requestData !== null
-            ? { ...requestData }
-            : {};
-
-        // Normalize entity payload fields
-        if (targetType === "entity") {
-          if (
-            changeType === "update" &&
-            eventPayload.entityId != null &&
-            eventPayload.id == null
-          ) {
-            eventPayload.id = eventPayload.entityId;
-          }
-          if (
-            changeType === "create" &&
-            eventPayload.description != null &&
-            eventPayload.preview == null
-          ) {
-            eventPayload.preview = eventPayload.description;
-          }
-        }
-
-        const subjectId = (eventPayload.id as string) || proposal.targetId;
-
-        // Emit .validated event with the same correlationId as the .requested event.
-        // The materialization hook (setup-event-broadcasting.ts) will pick this up
-        // and enqueue it to the materializer worker via pg-boss.
-        const validatedEvent = await auditLog({
-          subjectType: targetType,
-          action: changeType,
-          phase: "validated",
-          // Governance-critical: a failed `.validated` append must NOT leave the
-          // proposal flipped to APPROVED-but-unmaterialized — surface it so the
-          // status flip below is skipped and the approval can be retried.
-          throwOnError: true,
-          subjectId,
-          userId,
-          workspaceId: proposal.workspaceId ?? undefined,
-          correlationId: proposalCorrelationId,
-          data: {
-            ...eventPayload,
-            workspaceId: proposal.workspaceId,
-            approvedBy: userId,
-            approvedAt: new Date().toISOString(),
-            approvalComment: input.comment,
-            sourceProposalId: input.proposalId,
-          },
-          source: "api",
-        });
-
-        if (validatedEvent) {
-          payload.validatedEventId = validatedEvent.id;
-        }
-      } else {
-        // Payload doesn't match any known request shape and targetType was not
-        // handled by a specific branch above — throw rather than silently succeed.
+      if (!executor) {
         throw new TRPCError({
           code: "NOT_IMPLEMENTED",
           message: `Proposal approval for type '${proposal.targetType}' is not yet implemented`,
         });
       }
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
-          ...(isRequestShapedProposalData(payload) ? { data: payload } : {}),
-          reviewedBy: userId,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
-
-      // Report to IS telemetry (fire-and-forget — never blocks)
-      reportProposalOutcome({
-        proposalId: input.proposalId,
-        outcome: "approved",
-        sourceMessageId: proposal.sourceMessageId,
-        agentUserId: proposal.agentUserId,
-        targetType: proposal.targetType,
-        proposalType: proposal.proposalType,
-        source: (proposal.data as Record<string, unknown> | null)?.source as
-          | string
-          | undefined,
+      return executor.execute({
+        proposal: proposal as never,
+        payload,
+        userId,
+        input,
+        ctx,
+        deps: approveDeps,
       });
-
-      emitProposalReviewed(
-        input.proposalId,
-        proposal.workspaceId,
-        "approved",
-        userId
-      );
-      return { success: true };
     }),
 
   /**

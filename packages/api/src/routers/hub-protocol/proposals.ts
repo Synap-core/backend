@@ -30,6 +30,10 @@ export const proposalsRouter = router({
         status: z
           .enum(["pending", "approved", "rejected", "all"])
           .default("pending"),
+        // Filter to a single focus session's proposals — the REST mirror of the
+        // tRPC `proposals.list` sessionId filter, so external/BYOA agents can ask
+        // "what has the AI proposed inside this session" without a tRPC client.
+        sessionId: z.string().uuid().optional(),
         limit: z.number().default(50),
       })
     )
@@ -46,6 +50,9 @@ export const proposalsRouter = router({
       }
       if (input.targetType) {
         conditions.push(eq(proposals.targetType, input.targetType));
+      }
+      if (input.sessionId) {
+        conditions.push(eq(proposals.sessionId, input.sessionId));
       }
       if (input.status !== "all") {
         const statusMap = {

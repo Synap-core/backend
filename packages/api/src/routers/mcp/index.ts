@@ -29,9 +29,25 @@ import { prompts } from "./prompts/index.js";
  *   but didn't receive one explicitly. This lets the CLI register a
  *   workspace-scoped MCP URL so Claude Code stays focused on one workspace.
  */
+/**
+ * Static cueing — the ambient-presence proactivity lever. This text is part of
+ * the MCP `instructions` field, so it sits in the model's context for EVERY
+ * session by construction (no skill to launch, no CLAUDE.md to inject). It tells
+ * the connected AI that a sovereign second brain is available and WHEN to reach
+ * for it by reflex.
+ */
+const SYNAP_INSTRUCTIONS = `You are connected to the user's Synap pod — their sovereign personal data brain (the source of truth about their life, work, projects, people, and preferences).
+
+Two reflexes, on every session:
+- BEFORE any non-trivial task, or before answering anything about the user's own world, call \`synap_ask\` to recall what the pod already knows. Prefer it over your own assumptions. Also ask before creating, to avoid duplicates.
+- AFTER you learn something durable (a fact, a decision, a new person/company/task, a stated preference), call \`synap_capture\` to write it back. Don't wait to be asked — this is how the second brain grows.
+
+Use \`synap_orient\` once to see the available workspaces and entity types. Writes are governed: a 'proposed' response is normal (awaiting the user's review), never an error.`;
+
 export function createMCPServer(
   defaultWorkspaceId?: string,
-  sessionUserId?: string
+  sessionUserId?: string,
+  grounding?: string
 ) {
   const server = new Server(
     {
@@ -44,6 +60,12 @@ export function createMCPServer(
         tools: {},
         prompts: {},
       },
+      // Auto-grounding: the static reflexes + (when the HTTP handler resolved the
+      // authed user) a live one-line snapshot of their pod, so the model is
+      // grounded without having to call anything first.
+      instructions: grounding
+        ? `${SYNAP_INSTRUCTIONS}\n\n${grounding}`
+        : SYNAP_INSTRUCTIONS,
     }
   );
 

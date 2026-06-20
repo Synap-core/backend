@@ -10,6 +10,8 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { hubProtocolRouter } from "../hub-protocol/index.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "../hub-protocol/utils.js";
+import { ask } from "../../services/knowledge/ask.js";
+import { type ProfileCatalogEntry } from "../../services/retrieval/index.js";
 import { getDb } from "@synap/database";
 import {
   db,
@@ -100,31 +102,40 @@ export async function executeMCPToolViaHubProtocol(
   const caller = await createHubProtocolCaller(userId, apiKeyScopes);
 
   switch (toolName) {
-    // ── Read tools ──────────────────────────────────────────────────────────
-    case "synap_search": {
+    // ── Recall: THE one door ──────────────────────────────────────────────────
+    // `synap_ask` is the unified recall verb — it replaces the old fragmented
+    // search / search_entities / recall_facts / get_knowledge / list_knowledge
+    // tools. It routes by query intent across all three substrates (semantic
+    // entities, procedural knowledge_keys, episodic facts) and returns ONE
+    // provenance-tagged answer. Fewer tools = better selection = the AI actually
+    // reaches for recall before acting.
+    case "synap_ask": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
-      const result = await caller.search.search({
-        userId,
+      const workspaceId = args.workspaceId as string | undefined;
+      // The semantic engine's catalog (type inference) needs a concrete
+      // workspace; resolve the user's first accessible one when no lens is
+      // pinned. Recall itself keeps the caller's lens (undefined = pod-wide).
+      let catalogWs = workspaceId;
+      if (!catalogWs) {
+        const wsIds = await getUserWorkspaceIds(userId);
+        catalogWs = wsIds[0];
+      }
+      let catalog: ProfileCatalogEntry[] = [];
+      if (catalogWs) {
+        const { profiles: profileRows } = await caller.profiles.listProfiles({
+          userId,
+          workspaceId: catalogWs,
+        });
+        catalog = profileRows.flatMap((p) =>
+          p.slug ? [{ slug: p.slug, displayName: p.displayName ?? p.slug }] : []
+        );
+      }
+      const result = await ask({
         query: args.query as string,
-        workspaceId: args.workspaceId as string | undefined,
-        limit: (args.limit as number) || 20,
-      });
-      return ok(result);
-    }
-
-    case "synap_search_entities": {
-      requireScope(apiKeyScopes, "mcp.read", toolName);
-      const slug =
-        (args.profileSlug as string | undefined) ||
-        (args.type as string | undefined);
-      const result = await caller.search.searchEntities({
         userId,
-        query: args.query as string,
-        ...(slug ? { profileSlug: slug } : {}),
-        ...(args.workspaceId
-          ? { workspaceId: args.workspaceId as string }
-          : {}),
-        limit: (args.limit as number) || 20,
+        workspaceId: workspaceId ?? null,
+        limit: (args.limit as number) || undefined,
+        catalog,
       });
       return ok(result);
     }
@@ -152,19 +163,6 @@ export async function executeMCPToolViaHubProtocol(
         documentId: args.documentId as string,
       });
       return ok(result);
-    }
-
-    case "synap_recall_facts": {
-      requireScope(apiKeyScopes, "mcp.read", toolName);
-      // Keyword-based fact search (no embedding needed).
-      // SECURITY: pin to the authenticated `userId` — never `args.userId`
-      // (that let a caller recall another user's facts), matching synap_search.
-      const facts = await knowledgeRepository.searchFacts({
-        userId,
-        query: args.query as string,
-        limit: (args.limit as number) || 10,
-      });
-      return ok(facts);
     }
 
     case "synap_get_thread_context": {
@@ -353,51 +351,9 @@ export async function executeMCPToolViaHubProtocol(
       return ok(result);
     }
 
-    case "synap_get_knowledge": {
-      requireScope(apiKeyScopes, "mcp.read", toolName);
-      const wsId = args.workspaceId as string | undefined;
-      // Knowledge keys live in Hub Protocol REST (not tRPC). Call the
-      // repository directly — same data path as POST/GET /api/hub/knowledge.
-      const result = await knowledgeKeysRepository.getByKey(
-        args.key as string,
-        wsId
-      );
-      return ok(result);
-    }
-
-    case "synap_list_knowledge": {
-      requireScope(apiKeyScopes, "mcp.read", toolName);
-      const wsId = args.workspaceId as string | undefined;
-      const statusFilter =
-        (args.status as string | undefined) === "active" ? "active" : undefined;
-      // Knowledge keys live in Hub Protocol REST (not tRPC). Call the
-      // repository directly — same data path as GET /api/hub/knowledge.
-      const result = await knowledgeKeysRepository.list({
-        namespace: args.namespace as string | undefined,
-        workspaceId: wsId,
-        status: statusFilter,
-      });
-      return ok(result);
-    }
-
-    case "synap_send_message": {
-      requireScope(apiKeyScopes, "mcp.write", toolName);
-      const content = args.content as string;
-      const channelId = args.channelId as string;
-      const hash = createHash("sha256")
-        .update(JSON.stringify({ channelId, content, role: "assistant" }))
-        .digest("hex");
-      await db.insert(messages).values({
-        id: randomUUID(),
-        channelId,
-        role: MessageRole.ASSISTANT,
-        content,
-        userId,
-        hash,
-        previousHash: "",
-      });
-      return ok({ success: true, channelId });
-    }
+    // (synap_send_message removed — synap_post_message supersedes it: it handles
+    // thread creation from a channelId and can trigger an AI response. One
+    // messaging tool, not two.)
 
     // ── Session bootstrap & governance ──────────────────────────────────────
     case "synap_orient": {
@@ -478,13 +434,38 @@ export async function executeMCPToolViaHubProtocol(
       const captureCaller = captureRouter.createCaller(
         captureCtx as Parameters<typeof captureRouter.createCaller>[0]
       );
-      const result = await captureCaller.structure({
+      // Step 1 — structure the free text into entity proposals.
+      const structured = await captureCaller.structure({
         text: args.text as string,
         context: args.profileSlug
           ? `Hint: profile is ${args.profileSlug}`
           : undefined,
       });
-      return ok(result);
+      // Step 2 — ACTUALLY WRITE. structure() only previews; without execute()
+      // the capture tool returns proposals that are never materialized — the
+      // "write door" wrote nothing. Mirror the CLI's smart-capture (structure →
+      // execute). First-party capture writes DIRECTLY and records an
+      // auto-approved, revertible proposal — it does NOT return 'proposed' /
+      // wait for review. The materialized entities come back in the result.
+      const captureProposals =
+        (structured as { proposals?: unknown[] }).proposals ?? [];
+      if (captureProposals.length === 0) {
+        return ok({
+          ...structured,
+          executed: false,
+          note: "Nothing to capture.",
+        });
+      }
+      const executed = await captureCaller.execute({
+        entities: captureProposals as Parameters<
+          typeof captureCaller.execute
+        >[0]["entities"],
+        relations:
+          ((structured as { relations?: unknown[] }).relations as Parameters<
+            typeof captureCaller.execute
+          >[0]["relations"]) ?? [],
+      });
+      return ok({ structured, executed });
     }
 
     // ── Workspace & view creation ─────────────────────────────────────────────

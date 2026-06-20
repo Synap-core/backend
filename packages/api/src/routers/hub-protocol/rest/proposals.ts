@@ -177,6 +177,7 @@ export function registerProposalsRoutes(app: HubHono): void {
     }
     const userId = c.req.query("userId") || (c.get("userId") as string);
     const workspaceId = c.req.query("workspaceId");
+    const sessionId = c.req.query("sessionId");
     const status =
       (c.req.query("status") as "pending" | "approved" | "rejected" | "all") ||
       "pending";
@@ -190,6 +191,7 @@ export function registerProposalsRoutes(app: HubHono): void {
         userId,
         workspaceId: effectiveWsId,
         status,
+        ...(sessionId ? { sessionId } : {}),
       });
       return c.json(result);
     } catch (err) {

@@ -8,11 +8,12 @@
  */
 
 import { createRoute, z } from "@hono/zod-openapi";
-import { db, eq, and, isNull } from "@synap/database";
-import { tools } from "@synap/database";
 import { syncConnectorRegistry } from "../../../connectors/index.js";
 import type { NangoConnector } from "../../../connectors/NangoConnector.js";
-import { triggerConnectorAction } from "../../../connectors/external-dispatch.js";
+import {
+  triggerConnectorAction,
+  triggerProviderAction,
+} from "../../../connectors/external-dispatch.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { hasScope, logger, type HubHono } from "./_shared.js";
 
@@ -499,14 +500,14 @@ export function registerConnectorsRoutes(app: HubHono): void {
 
   // ── POST /connectors/tool-execute ───────────────────────────────────────
   //
-  // Agnostic connector execution endpoint. Serves TWO consumers:
-  //   1. dispatchExternalAction() in proposals.ts (proposal-approved actions)
-  //   2. callProvider() bridge in skills-executor (AI-written code in isolated-vm)
-  //
-  // The single dispatch point — no per-provider branches in the caller.
+  // Agnostic connector execution endpoint. Thin HTTP door over the shared
+  // `triggerProviderAction()` dispatcher in connectors/external-dispatch.ts.
+  // The SAME dispatcher backs the proposals.ts `provider.action` executor, so
+  // the human/AI-bridge REST path and the proposal-approval path run identical
+  // connector code (one impl, two doors — like sendExternalMessage).
   // Supported provider schemes:
   //   - nango:// → resolved via Nango proxy with Connection-Id + Provider-Config-Key
-  //   - vault:// → credential resolved but execution not yet implemented
+  //   - vault:// → credential resolved but execution not yet implemented (501)
   app.openapi(
     createRoute({
       method: "post",
@@ -579,97 +580,19 @@ export function registerConnectorsRoutes(app: HubHono): void {
       const userId = c.get("userId") as string;
       const { provider, method, path, body, accountHint } = c.req.valid("json");
 
-      // ── Validate provider scheme ─────────────────────────────────────────
-      if (
-        !provider.startsWith("nango://") &&
-        !provider.startsWith("vault://")
-      ) {
-        return c.json(
-          {
-            error: `Unsupported provider scheme. Supported: nango://, vault://. Got: ${provider.split("://")[0]}://`,
-          },
-          400
-        );
-      }
-
       try {
-        // ── Look up the tool row ──────────────────────────────────────────
-        const [tool] = await db
-          .select()
-          .from(tools)
-          .where(
-            and(eq(tools.credentialRef, provider), isNull(tools.workspaceId))
-          )
-          .limit(1);
+        // ONE impl, two doors: the same dispatcher the proposals.ts
+        // `provider.action` executor calls. No inline proxy logic here.
+        const result = await triggerProviderAction({
+          userId,
+          provider,
+          method,
+          path,
+          body,
+          accountHint,
+        });
 
-        if (!tool) {
-          return c.json(
-            { error: `Tool not found for provider: ${provider}` },
-            404
-          );
-        }
-
-        if (tool.kind !== "provider" && tool.kind !== "external") {
-          return c.json(
-            {
-              error: `Tool kind "${tool.kind}" is not executable via this endpoint. Expected "provider" or "external".`,
-            },
-            400
-          );
-        }
-
-        // ── Route by provider scheme ──────────────────────────────────────
-        if (provider.startsWith("nango://")) {
-          const connector = syncConnectorRegistry.get("nango") as
-            | NangoConnector
-            | undefined;
-          if (!connector || !connector.isConfigured()) {
-            return c.json({ error: "Nango not configured" }, 503);
-          }
-
-          // Resolve provider config key from the tool row
-          const toolConfig = (tool.config ?? {}) as Record<string, unknown>;
-          const providerConfigKey =
-            (toolConfig.providerConfigKey as string) ??
-            tool.credentialRef!.replace(/^nango:\/\//, "");
-
-          // Resolve user's connection for this provider
-          const connections = await connector.listConnections(userId);
-          const matchingConnections = connections.filter(
-            (conn) => conn.provider === providerConfigKey
-          );
-
-          if (matchingConnections.length === 0) {
-            return c.json(
-              {
-                error: `No connection found for provider "${providerConfigKey}". Connect it via Settings → Connectors first.`,
-              },
-              404
-            );
-          }
-
-          // Pick by accountHint (match connectionId prefix) or default to most recent
-          let connection = matchingConnections[0]!;
-          if (accountHint) {
-            const hinted = matchingConnections.find((c) =>
-              c.connectionId.includes(accountHint)
-            );
-            if (hinted) connection = hinted;
-          } else {
-            // Most recently created (latest first from Nango)
-            connection = matchingConnections.sort(
-              (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
-            )[0]!;
-          }
-
-          const result = await connector.proxyRequest({
-            connectionId: connection.connectionId,
-            providerConfigKey,
-            method,
-            path,
-            body,
-          });
-
+        if (result.success) {
           return c.json(
             {
               status: result.status,
@@ -680,19 +603,21 @@ export function registerConnectorsRoutes(app: HubHono): void {
           );
         }
 
-        // vault:// — credential resolution exists, generic HTTP proxy does not
-        return c.json(
-          {
-            status: "not_implemented",
-            provider: "vault://",
-            detail:
-              "TODO: vault:// provider execution is not yet implemented. " +
-              "The credential is stored in the vault but there is no generic HTTP proxy " +
-              "for vault-resolved secrets yet. Implement a bridge that uses the resolved " +
-              "credential (e.g. API key) to make the HTTP call directly.",
-          },
-          501
-        );
+        // Map the structured failure onto the endpoint's response codes,
+        // preserving the prior status codes (400 / 404 / 501 / 503).
+        if (result.status === 501) {
+          return c.json(
+            {
+              status: "not_implemented",
+              provider: "vault://",
+              detail: result.error,
+            },
+            501
+          );
+        }
+        const code =
+          result.status === 404 ? 404 : result.status === 503 ? 503 : 400;
+        return c.json({ error: result.error ?? "Unknown error" }, code);
       } catch (err) {
         logger.error(
           { err, userId, provider, method, path },

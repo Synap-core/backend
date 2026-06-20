@@ -5,6 +5,7 @@ import { ApifyProvider } from "./ApifyProvider.js";
 import { ApolloProvider } from "./ApolloProvider.js";
 import { UnipileConnector } from "./UnipileConnector.js";
 import { StalwartConnector } from "./StalwartConnector.js";
+import { DiscordConnector } from "./DiscordConnector.js";
 import type { MessagingConnector } from "./MessagingConnector.js";
 import { db, getServiceSecret } from "@synap/database";
 
@@ -44,6 +45,13 @@ export async function getMessagingConnector(
         bearerToken: cfg.bearerToken,
         accountEmail: cfg.accountEmail,
       });
+    }
+
+    if (provider === "discord") {
+      // Discord is outbound-only and server-managed: the bot token lives in
+      // DISCORD_BOT_TOKEN. Return null when unconfigured so callers no-op.
+      const discord = new DiscordConnector();
+      return discord.isConfigured() ? discord : null;
     }
 
     if (ws?.ownerId) {
@@ -105,3 +113,4 @@ export type {
 export { UnipileConnector } from "./UnipileConnector.js";
 export { StalwartConnector } from "./StalwartConnector.js";
 export type { StalwartConnectorConfig } from "./StalwartConnector.js";
+export { DiscordConnector } from "./DiscordConnector.js";

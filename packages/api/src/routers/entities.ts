@@ -35,6 +35,7 @@ import {
   links,
   type LinkEndpointType,
   type LinkType,
+  linkEntityToProject,
 } from "@synap/database";
 import {
   entities,
@@ -335,6 +336,13 @@ export const entitiesRouter = router({
          * for the proposal approval round-trip only.
          */
         proposedEntityId: z.string().uuid().optional(),
+        /**
+         * Active project lens (or surface override). When set, the created entity
+         * is filed into this project (`belongs_to_project`) — the project mirror
+         * of `workspaceId`. On the proposal path it rides `proposals.project_id`;
+         * on the granted inline path it is stamped directly below.
+         */
+        projectId: z.string().uuid().nullish(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -430,6 +438,7 @@ export const entitiesRouter = router({
         requestedEventId: requestedEvent?.id,
         sourceMessageId: ctx.sourceMessageId ?? undefined,
         sessionId: ctx.sessionId ?? undefined,
+        projectId: input.projectId ?? undefined,
         data: {
           id: entityId,
           profileSlug,
@@ -607,6 +616,19 @@ export const entitiesRouter = router({
             metadata: {},
           })
           .onConflictDoNothing();
+      }
+
+      // Membership: file the entity into the active project lens (the project
+      // mirror of workspaceId) on the granted inline path. The proposal path is
+      // covered by checkPermissionOrPropose threading projectId → the materializer.
+      // Idempotent via relations_belongs_to_project_unique.
+      if (input.projectId && createdEntity?.id) {
+        await linkEntityToProject(database, {
+          entityId: createdEntity.id,
+          projectId: input.projectId,
+          userId: ctx.userId,
+          workspaceId: entityWorkspaceId ?? null,
+        });
       }
 
       // 3b. Auto-sync entity_id properties → relations (non-blocking)

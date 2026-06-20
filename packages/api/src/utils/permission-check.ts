@@ -339,6 +339,8 @@ export interface PermissionCheckOpts {
   sourceMessageId?: string;
   /** Session ID to link proposals to the active focus session */
   sessionId?: string;
+  /** Active project lens → proposals.project_id → belongs_to_project at materialize */
+  projectId?: string | null;
 }
 
 /**
@@ -375,6 +377,7 @@ export async function checkPermissionOrPropose(
     commandRunId,
     sourceMessageId,
     sessionId,
+    projectId,
     channelCapabilities,
   } = opts;
 
@@ -477,6 +480,7 @@ export async function checkPermissionOrPropose(
         commandRunId,
         sourceMessageId,
         sessionId,
+        projectId,
       });
     }
 
@@ -580,6 +584,7 @@ export async function checkPermissionOrPropose(
             commandRunId,
             sourceMessageId,
             sessionId,
+            projectId,
           });
         }
 
@@ -659,6 +664,7 @@ export async function checkPermissionOrPropose(
           commandRunId,
           sourceMessageId,
           sessionId,
+          projectId,
         });
       }
     }
@@ -891,6 +897,7 @@ async function createProposal(opts: {
   commandRunId?: string;
   sourceMessageId?: string;
   sessionId?: string;
+  projectId?: string | null;
 }): Promise<{
   granted: false;
   proposalId: string;
@@ -914,6 +921,7 @@ async function createProposal(opts: {
     commandRunId,
     sourceMessageId,
     sessionId,
+    projectId,
   } = opts;
 
   const targetId = (data.documentId ||
@@ -1010,6 +1018,7 @@ async function createProposal(opts: {
       commandRunId: commandRunId ?? null,
       sourceMessageId: sourceMessageId ?? null,
       sessionId: sessionId ?? null,
+      projectId: projectId ?? null,
       correlationId: resolvedCorrelationId,
       requestedEventId: reqEventId ?? null,
       notificationDescription: reasoning ?? `${action} ${singularType}`,

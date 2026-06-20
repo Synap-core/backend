@@ -18,6 +18,16 @@
       "outputs": ["dist/**", ".tsbuildinfo"],
       "outputLogs": "errors-only"
     },
+    "typecheck": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "src/**/*.ts",
+        "src/**/*.tsx",
+        "tsconfig.json",
+        "tsconfig.types.json"
+      ],
+      "cache": true
+    },
     "dev": {
       "cache": false,
       "persistent": true

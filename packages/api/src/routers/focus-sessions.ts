@@ -192,6 +192,9 @@ export const focusSessionsRouter = router({
         expectedOutputs: z.array(expectedOutputItemSchema).default([]),
         channelId: z.string().uuid().optional(),
         agentIds: z.array(z.string()).default([]),
+        // Project this session belongs to (project-centric-scope). A session
+        // implies its project on the FE lens; persisted here so it survives.
+        projectId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -205,6 +208,7 @@ export const focusSessionsRouter = router({
           expectedOutputs: input.expectedOutputs,
           channelId: input.channelId ?? null,
           agentIds: input.agentIds,
+          projectId: input.projectId ?? null,
           status: "active",
         })
         .returning();

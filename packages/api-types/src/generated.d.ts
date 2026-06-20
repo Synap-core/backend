@@ -2986,6 +2986,14 @@ export type BranchTreeNode = {
 	channel: Channel;
 	children: BranchTreeNode[];
 };
+/** The shape every approve branch returns today (superset — branches set a subset). */
+export interface ProposalExecutorResult {
+	success: boolean;
+	alreadyApproved?: boolean;
+	primaryId?: string;
+	created?: number;
+	linked?: number;
+}
 declare const SystemEventTypes: {
 	readonly WEBHOOK_DELIVERY: "webhooks.deliver.requested";
 };
@@ -3953,6 +3961,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					typeKey?: string | undefined;
 				} | undefined;
 				proposedEntityId?: string | undefined;
+				projectId?: string | null | undefined;
 			};
 			output: {
 				status: string;
@@ -5575,25 +5584,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId: string;
 				comment?: string | undefined;
 			};
-			output: {
-				success: boolean;
-				primaryId: string;
-				created: number;
-				linked: number;
-				alreadyApproved?: undefined;
-			} | {
-				success: boolean;
-				primaryId?: undefined;
-				created?: undefined;
-				linked?: undefined;
-				alreadyApproved?: undefined;
-			} | {
-				success: boolean;
-				alreadyApproved: boolean;
-				primaryId?: undefined;
-				created?: undefined;
-				linked?: undefined;
-			};
+			output: ProposalExecutorResult;
 			meta: object;
 		}>;
 		reject: import("@trpc/server").TRPCMutationProcedure<{
@@ -13811,6 +13802,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				relationType?: string | undefined;
 				aiStructure?: boolean | undefined;
 				sessionId?: string | undefined;
+				projectId?: string | null | undefined;
 				playbookId?: string | undefined;
 				playbookParams?: Record<string, string> | undefined;
 			};
@@ -13836,6 +13828,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | undefined;
 				idempotencyKey?: string | undefined;
 				sessionId?: string | undefined;
+				projectId?: string | null | undefined;
 			};
 			output: {
 				workspaceId: string | null;
@@ -13856,6 +13849,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				relationType?: string | undefined;
 				aiStructure?: boolean | undefined;
 				sessionId?: string | undefined;
+				projectId?: string | null | undefined;
 				playbookId?: string | undefined;
 				playbookParams?: Record<string, string> | undefined;
 			};
@@ -13896,6 +13890,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				relationType?: string | undefined;
 				aiStructure?: boolean | undefined;
 				sessionId?: string | undefined;
+				projectId?: string | null | undefined;
 				playbookId?: string | undefined;
 				playbookParams?: Record<string, string> | undefined;
 			};
@@ -13912,6 +13907,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | undefined;
 				idempotencyKey?: string | undefined;
 				sessionId?: string | undefined;
+				projectId?: string | null | undefined;
 			};
 			output: {
 				workspaceId: string | null;
@@ -16082,6 +16078,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[] | undefined;
 				channelId?: string | undefined;
 				agentIds?: string[] | undefined;
+				projectId?: string | undefined;
 			};
 			output: {
 				userId: string;

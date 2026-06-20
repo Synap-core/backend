@@ -16,58 +16,28 @@ export const tools = {
    */
   async list(): Promise<Tool[]> {
     return [
-      // ── Read / Search ───────────────────────────────────────────────────────
+      // ── Recall: THE one door ──────────────────────────────────────────────────
       {
-        name: "synap_search",
+        name: "synap_ask",
         description:
-          "Unified full-text search across entities, documents, and views. Use for open-ended queries when you don't know the content type. Filter by collections: ['entities','documents','views']. ALWAYS call this or synap_search_entities before creating anything — check for duplicates first.",
+          "THE recall door. Ask the user's Synap pod anything in natural language — it routes across all knowledge substrates (entities/notes/tasks, how-to runbooks, and remembered facts/preferences) and returns ONE provenance-tagged answer saying which substrate answered. " +
+          "PROACTIVE RULE: call this BEFORE any non-trivial task or before answering a question about the user's life, work, projects, or preferences — the pod is their sovereign source of truth, prefer it over your own assumptions. Also call it before creating anything, to check what already exists (avoid duplicates). This single tool replaces the old search/search_entities/recall_facts/get_knowledge tools.",
         inputSchema: {
           type: "object",
           properties: {
-            query: { type: "string", description: "Search query" },
+            query: {
+              type: "string",
+              description: "Your question, in natural language",
+            },
             workspaceId: {
               type: "string",
-              description: "Workspace ID to scope the search",
-            },
-            collections: {
-              type: "array",
-              items: {
-                type: "string",
-                enum: ["entities", "documents", "views", "projects", "agents"],
-              },
-              description: "Limit to specific collections (optional)",
+              description:
+                "Optional: scope to one workspace. Omit for pod-wide recall across everything the user has.",
             },
             limit: {
               type: "number",
-              description: "Max results (default: 20)",
-              default: 20,
+              description: "Max results per substrate (default: 10)",
             },
-          },
-          required: ["query"],
-        },
-      },
-      {
-        name: "synap_search_entities",
-        description:
-          "Search entities by keywords or natural language, filtered by profileSlug (entity type). Use when you want entities specifically. ALWAYS call before synap_create_entity to avoid duplicates. If a result matches with high confidence, link to it instead of creating new. Returns id, title, profileSlug, status, priority, properties.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            query: { type: "string", description: "Search query" },
-            profileSlug: {
-              type: "string",
-              description:
-                "Profile slug to filter by (e.g. note, task, bookmark, or a custom profile). Prefer this over `type`.",
-            },
-            type: {
-              type: "string",
-              description: "Deprecated alias for profileSlug — same meaning.",
-            },
-            workspaceId: {
-              type: "string",
-              description: "Workspace ID (optional)",
-            },
-            limit: { type: "number", default: 20 },
           },
           required: ["query"],
         },
@@ -75,7 +45,7 @@ export const tools = {
       {
         name: "synap_get_entities",
         description:
-          "List entities for a user filtered by profileSlug. Use to browse all entities of a type (all tasks, all projects). For content search use synap_search_entities. Supports limit (default 50).",
+          "List entities for a user filtered by profileSlug. Use to browse all entities of a type (all tasks, all projects). For content/semantic recall use synap_ask. Supports limit (default 50).",
         inputSchema: {
           type: "object",
           properties: {
@@ -110,28 +80,9 @@ export const tools = {
         },
       },
       {
-        name: "synap_recall_facts",
-        description:
-          "Search memory facts by keyword. Memory stores loose atomic knowledge: preferences, context, facts that don't fit structured entities. Use for 'user prefers X', 'standup is 10am'. For meaning-based search call POST /api/hub/memory/search. Complement with synap_search_entities for structured data. userId is auto-injected from the API key if not provided.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            query: { type: "string", description: "What to recall" },
-            userId: {
-              type: "string",
-              description:
-                "User ID to recall for (optional, auto-injected from API key if not provided)",
-            },
-            workspaceId: { type: "string" },
-            limit: { type: "number", default: 10 },
-          },
-          required: ["query"],
-        },
-      },
-      {
         name: "synap_get_thread_context",
         description:
-          "Get full context for a thread: all messages plus linked entities and documents. Call before sending a message to orient yourself with conversation history and in-scope data. threadId from synap_send_message or the user's personal channel.",
+          "Get full context for a thread: all messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel.",
         inputSchema: {
           type: "object",
           properties: {
@@ -166,7 +117,7 @@ export const tools = {
       {
         name: "synap_get_entity",
         description:
-          "Get a single entity by ID with full details: all properties and metadata. Use after synap_search_entities to get complete data on a result. The id comes from search results or synap_create_entity responses.",
+          "Get a single entity by ID with full details: all properties and metadata. Use after synap_ask to get complete data on a result. The id comes from synap_ask results or synap_create_entity responses.",
         inputSchema: {
           type: "object",
           properties: {
@@ -213,60 +164,16 @@ export const tools = {
           required: ["entityId"],
         },
       },
-      {
-        name: "synap_get_knowledge",
-        description:
-          "Get a single knowledge key by its namespace:slug identifier (e.g. 'deploy:backend'). Knowledge keys are pod-wide procedural docs — deploy guides, build instructions, operational runbooks, architecture decisions. Use when the user asks 'how do we deploy', 'how does auth work', 'what's our backup strategy', 'how to fix X'. Always search first with synap_list_knowledge to discover available keys.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            key: {
-              type: "string",
-              description:
-                "Knowledge key in namespace:slug format (e.g., 'deploy:backend')",
-            },
-            workspaceId: {
-              type: "string",
-              description:
-                "Workspace ID (optional, defaults to auth user's workspace)",
-            },
-          },
-          required: ["key"],
-        },
-      },
-      {
-        name: "synap_list_knowledge",
-        description:
-          "List all available knowledge keys, optionally filtered by namespace. Returns namespace, slug, key, title, and last updated date. Use before synap_get_knowledge to discover what procedural docs are available. Example namespaces: deploy, build, ops, architecture, security, runbooks.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            namespace: {
-              type: "string",
-              description:
-                "Filter by namespace (e.g., 'deploy', 'build', 'ops')",
-            },
-            workspaceId: {
-              type: "string",
-              description:
-                "Workspace ID (optional, defaults to auth user's workspace)",
-            },
-            status: {
-              type: "string",
-              description: "Filter by status: 'active' (default) or all",
-              enum: ["active", "all"],
-              default: "active",
-            },
-          },
-          required: [],
-        },
-      },
+      // (Procedural how-to recall — "how do we deploy", "how does auth work" —
+      // is now served by `synap_ask`, which routes to the knowledge_keys
+      // substrate. The standalone get_knowledge/list_knowledge tools were folded
+      // into it so there is ONE recall door.)
 
       // ── Writes (governed — may create proposals) ───────────────────────────
       {
         name: "synap_create_entity",
         description:
-          "Create a new entity. Use synap_list_profiles to discover available profileSlugs first. ALWAYS call synap_search_entities before creating to avoid duplicates. Response may be 'approved' (entity created, id returned) or 'proposed' (awaiting human review, proposalId returned). NEVER treat 'proposed' as an error — store proposalId and tell the user to review it in Synap.",
+          "Create a typed entity directly when you already know the exact profileSlug + fields (the precise sibling of synap_capture, which structures free text). Use synap_list_profiles to discover profileSlugs. ALWAYS call synap_ask first to avoid duplicates. Response may be 'approved' (created, id returned) or 'proposed' (awaiting human review, proposalId returned). NEVER treat 'proposed' as an error — store proposalId and tell the user to review it in Synap.",
         inputSchema: {
           type: "object",
           properties: {
@@ -342,23 +249,6 @@ export const tools = {
         },
       },
       {
-        name: "synap_send_message",
-        description:
-          "Send a message to a Synap channel/thread. Omit channelId to post to the user's personal AI thread. Set autoRespond: true to trigger AI response. Use for summaries, channel discussions, and content the user wants to find in Synap chat. Pass the real user's ID — not the API key owner's.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            channelId: {
-              type: "string",
-              description: "Channel/thread UUID to send to",
-            },
-            content: { type: "string", description: "Message content" },
-            workspaceId: { type: "string" },
-          },
-          required: ["channelId", "content"],
-        },
-      },
-      {
         name: "synap_link_entities",
         description:
           "Create a typed relation between two entities. Type is a free string — use conventions: 'related_to', 'parent_of', 'child_of', 'belongs_to', 'authored_by', 'depends_on', 'references', 'mentions'. Check synap_get_relations first to avoid duplicates. May return 'proposed'. Builds the knowledge graph.",
@@ -416,7 +306,8 @@ export const tools = {
       {
         name: "synap_capture",
         description:
-          "Parse unstructured text into structured entity proposals via the AI capture pipeline. Returns proposed entities ready to inspect or materialize. Optionally hint a profileSlug to guide extraction.",
+          "THE write door. Hand it any free text — a fact you learned, a decision, a person/company/task mentioned, something worth remembering — and the AI capture pipeline structures it into the right entities and files them in the pod. " +
+          "PROACTIVE RULE: call this AFTER you learn something durable about the user, their work, or their preferences, or whenever the user says something worth keeping (\"remember that…\", a new contact, a decision made). Don't wait to be asked — capturing is how the user's second brain grows. It writes directly (no approval wait) and records an auto-approved, revertible proposal; the created entities come back in the result. Optionally hint a profileSlug to guide extraction.",
         inputSchema: {
           type: "object",
           properties: {
@@ -521,7 +412,7 @@ export const tools = {
       {
         name: "synap_post_message",
         description:
-          "Post a message to a Synap channel or thread with optional AI triggering. Unlike synap_send_message, this handles thread creation from a channelId and can trigger an AI response.",
+          "Post a message to a Synap channel or thread with optional AI triggering. Handles thread creation from a channelId and can trigger an AI response. Pass role (default assistant) and triggerAI to start an agent turn.",
         inputSchema: {
           type: "object",
           properties: {
@@ -575,7 +466,6 @@ export const tools = {
               type: "string",
               description: "Document content (markdown)",
             },
-            namespace: { type: "string" },
             workspaceId: { type: "string" },
           },
           required: ["key", "content"],

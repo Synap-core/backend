@@ -24,6 +24,35 @@ import { apiKeyService } from "../../services/api-keys.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { tools } from "./tools/index.js";
 import { createMCPServer } from "./index.js";
+import { db, workspaceMembers, workspaces, eq, inArray } from "@synap/database";
+
+/**
+ * Build a one-line LIVE grounding snapshot for the authed user — the workspaces
+ * they can see — so the MCP `instructions` arrive pre-grounded (the model knows
+ * the user's pod shape without calling synap_orient first). Cheap (one join);
+ * never throws (grounding is best-effort — a hiccup must not block the session).
+ */
+async function buildGrounding(userId: string): Promise<string | undefined> {
+  try {
+    const memberRows = await db
+      .select({ workspaceId: workspaceMembers.workspaceId })
+      .from(workspaceMembers)
+      .where(eq(workspaceMembers.userId, userId));
+    const wsIds = memberRows.map((r) => r.workspaceId);
+    if (wsIds.length === 0) return undefined;
+    const wsRows = await db
+      .select({ name: workspaces.name })
+      .from(workspaces)
+      .where(inArray(workspaces.id, wsIds));
+    const names = wsRows.map((w) => w.name).filter(Boolean);
+    if (names.length === 0) return undefined;
+    return names.length === 1
+      ? `This pod has one workspace: ${names[0]}. Tools default to it.`
+      : `This pod has ${names.length} workspaces: ${names.join(", ")}. Omit workspaceId for pod-wide recall, or pass one to scope.`;
+  } catch {
+    return undefined;
+  }
+}
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 
@@ -133,11 +162,6 @@ mcpHttpApp.post("/", async (c) => {
     enableJsonResponse: false, // prefer SSE when client accepts it
   });
 
-  // Optional workspace scoping: ?workspaceId= narrows all tool calls to one workspace.
-  const defaultWorkspaceId = c.req.query("workspaceId") ?? undefined;
-  const server = createMCPServer(defaultWorkspaceId, keyRecord.userId);
-  await server.connect(transport);
-
   // Pre-parse body so the transport doesn't have to consume the stream twice.
   let parsedBody: unknown;
   try {
@@ -152,6 +176,24 @@ mcpHttpApp.post("/", async (c) => {
       { status: 400 }
     );
   }
+
+  // Optional workspace scoping: ?workspaceId= narrows all tool calls to one workspace.
+  const defaultWorkspaceId = c.req.query("workspaceId") ?? undefined;
+  // Live grounding is only consumed by the client at the `initialize` handshake
+  // (it lands in the server's `instructions`). Fetch it ONLY for initialize — a
+  // tools/call request would otherwise pay 2 DB queries for instructions no one
+  // re-reads. (Stateless mode rebuilds the server per request, hence the gate.)
+  const isInitialize =
+    (parsedBody as { method?: string } | null)?.method === "initialize";
+  const grounding = isInitialize
+    ? await buildGrounding(keyRecord.userId)
+    : undefined;
+  const server = createMCPServer(
+    defaultWorkspaceId,
+    keyRecord.userId,
+    grounding
+  );
+  await server.connect(transport);
 
   return transport.handleRequest(c.req.raw, { parsedBody });
 });
