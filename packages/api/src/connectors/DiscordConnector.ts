@@ -41,6 +41,15 @@ export class DiscordConnector implements MessagingConnector {
     return !!this.botToken;
   }
 
+  /**
+   * Discord is server-managed (single shared bot token), so it needs no per-user
+   * messaging account. The send target is the bound EXTERNAL channel; `sendMessage`
+   * ignores its accountId argument.
+   */
+  requiresAccount(): boolean {
+    return false;
+  }
+
   private headers(): Record<string, string> {
     return {
       Authorization: `Bot ${this.botToken}`,

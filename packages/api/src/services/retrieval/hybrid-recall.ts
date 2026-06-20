@@ -8,7 +8,14 @@
  * of drifting copies.
  */
 
-import { db, entityVectors, eq, and, drizzleSql } from "@synap/database";
+import {
+  db,
+  entityVectors,
+  eq,
+  and,
+  inArray,
+  drizzleSql,
+} from "@synap/database";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
@@ -58,6 +65,14 @@ export interface HybridRecallParams {
   workspaceId?: string | null;
   /** Scope BOTH halves to one profile type. */
   profileSlug?: string;
+  /**
+   * Project focus lens — the set of entity ids belonging to the active project
+   * (the project entity + its `belongs_to_project` members), precomputed once by
+   * the caller. When present, BOTH recall halves are constrained to this set at
+   * QUERY time (not post-filtered) so the recall budget fills with project rows
+   * instead of being starved by unscoped matches. Empty set → no project rows.
+   */
+  projectIds?: Set<string>;
   limit: number;
   /**
    * Precomputed query embedding. Pass it to reuse one embedding across several
@@ -75,8 +90,14 @@ export interface HybridRecallResult {
 export async function hybridRecall(
   params: HybridRecallParams
 ): Promise<HybridRecallResult> {
-  const { query, userId, workspaceId, profileSlug, limit } = params;
-  const widen = limit * 2;
+  const { query, userId, workspaceId, profileSlug, projectIds, limit } = params;
+  // When a project lens is active, widen the recall budget so the project rows
+  // aren't crowded out before the in-query filter applies (esp. the Typesense
+  // half, which filters its hit list rather than constraining the index query).
+  const widen = projectIds ? limit * 6 : limit * 2;
+  // Empty project set = nothing belongs to the project → no rows, short-circuit.
+  if (projectIds && projectIds.size === 0)
+    return { ids: [], usedVector: false };
 
   // ── pgvector (semantic) ─────────────────────────────────────────────────
   let vectorIds: string[] = [];
@@ -86,12 +107,14 @@ export async function hybridRecall(
   if (embedding) {
     try {
       const vecLiteral = `[${embedding.join(",")}]`;
-      const where = profileSlug
-        ? and(
-            drizzleSql`${entityVectors.userId} = ${userId}`,
-            eq(entityVectors.entityType, profileSlug)
-          )
-        : drizzleSql`${entityVectors.userId} = ${userId}`;
+      // AND the project lens onto the vector query so the nearest-neighbour scan
+      // returns project rows directly (no post-filter starvation). inArray over
+      // OUR table is bounded by the project size.
+      const conds = [drizzleSql`${entityVectors.userId} = ${userId}`];
+      if (profileSlug) conds.push(eq(entityVectors.entityType, profileSlug));
+      if (projectIds)
+        conds.push(inArray(entityVectors.entityId, [...projectIds]));
+      const where = conds.length > 1 ? and(...conds) : conds[0];
       const rows = await db
         .select({ entityId: entityVectors.entityId })
         .from(entityVectors)
@@ -128,6 +151,13 @@ export async function hybridRecall(
     keywordIds = hits
       .map((r) => (r.document as Record<string, unknown>).id as string)
       .filter(Boolean);
+    // Project lens — Typesense has no project field, so filter the (widened)
+    // hit list to the project's id set. Truncate to `limit` after filtering.
+    if (projectIds) {
+      keywordIds = keywordIds
+        .filter((id) => projectIds.has(id))
+        .slice(0, limit);
+    }
   } catch (err) {
     logger.debug({ err }, "Typesense recall failed");
   }

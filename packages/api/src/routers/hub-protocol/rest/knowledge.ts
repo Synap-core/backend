@@ -613,6 +613,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
             schema: z.object({
               query: z.string().min(1),
               workspaceId: z.string().optional(),
+              projectId: z.string().optional(),
               limit: z.number().int().min(1).max(100).optional(),
             }),
           },
@@ -690,6 +691,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         query: body.query,
         userId,
         workspaceId,
+        projectId: body.projectId ?? null,
         limit: body.limit,
         catalog,
       });

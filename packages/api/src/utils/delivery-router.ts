@@ -34,16 +34,19 @@
 import { randomUUID, createHash } from "crypto";
 import { createLogger } from "@synap-core/core";
 import { EventNames } from "@synap-core/types/events";
-import { db, eq, workspaces, messages } from "@synap/database";
+import { db, eq, and, workspaces, messages } from "@synap/database";
 import {
   MessageRole,
   MessageAuthorType,
   MessageCategory,
+  channels,
+  ChannelType,
 } from "@synap/database/schema";
 import type {
   WorkspaceSettings,
   SignalDeliveryRule,
   SignalSurface,
+  SurfaceTarget,
   DeliveryPreferences,
 } from "@synap/database/schema";
 import {
@@ -51,6 +54,7 @@ import {
   type ProactiveMessageType,
 } from "../services/DeliveryService.js";
 import { NotificationService } from "../notifications/NotificationService.js";
+import { sendExternalMessage } from "../connectors/external-dispatch.js";
 import { ensureAgentThread, getAgentIdBySlug } from "./personal-channel.js";
 import { emitChatEvent } from "./chat-realtime-broadcast.js";
 
@@ -83,8 +87,11 @@ export interface RouteSignalInput {
   metadata?: Record<string, unknown>;
 }
 
+/** A surface kind a result can report against (includes `external`). */
+export type SurfaceKind = SurfaceTarget["kind"];
+
 export interface SurfaceResult {
-  surface: SignalSurface;
+  surface: SurfaceKind;
   success: boolean;
   reason?: string;
   messageId?: string;
@@ -93,8 +100,8 @@ export interface SurfaceResult {
 export interface RouteSignalResult {
   /** True if at least one surface delivery succeeded */
   delivered: boolean;
-  /** Which surfaces were targeted */
-  surfaces: SignalSurface[];
+  /** Which surface kinds were targeted */
+  surfaces: SurfaceKind[];
   /** Per-surface delivery results */
   results: SurfaceResult[];
 }
@@ -255,6 +262,111 @@ async function deliverToNotification(
   }
 }
 
+/**
+ * Deliver a signal to an EXTERNAL connector (Discord / Telegram / …).
+ *
+ * Resolves the bound EXTERNAL channel for (provider = target.provider,
+ * externalId = target.channelRef), then sends through the SAME outbound door as
+ * the proposal executor — `sendExternalMessage` → `getMessagingConnector`. Never
+ * a parallel send. Missing provider/channelRef or no bound channel → structured
+ * skip (logged), never a throw.
+ */
+async function deliverToExternal(
+  input: RouteSignalInput & { proactiveType: ProactiveMessageType },
+  target: SurfaceTarget
+): Promise<SurfaceResult> {
+  const { provider, channelRef } = target;
+  if (!provider || !channelRef) {
+    logger.warn(
+      { domain: input.domain, provider, channelRef },
+      "external delivery skipped: target missing provider/channelRef"
+    );
+    return {
+      surface: "external",
+      success: false,
+      reason: "missing_provider_or_channel_ref",
+    };
+  }
+
+  try {
+    const boundChannel = await db.query.channels.findFirst({
+      where: and(
+        eq(channels.channelType, ChannelType.EXTERNAL),
+        eq(channels.externalSource, provider),
+        eq(channels.externalId, channelRef)
+      ),
+      columns: { id: true },
+    });
+
+    if (!boundChannel) {
+      logger.warn(
+        { domain: input.domain, provider, channelRef },
+        "external delivery skipped: no bound EXTERNAL channel found"
+      );
+      return {
+        surface: "external",
+        success: false,
+        reason: "no_bound_channel",
+      };
+    }
+
+    // Same outbound door as the proposal executor. Discord ignores accountId
+    // (server-managed bot token); sendExternalMessage resolves the connector
+    // from the channel's externalSource.
+    const { success, messageId } = await sendExternalMessage({
+      threadId: channelRef,
+      accountId: "",
+      body: input.content,
+      userId: input.userId,
+    });
+
+    return {
+      surface: "external",
+      success,
+      messageId,
+      reason: success ? undefined : "connector_send_failed",
+    };
+  } catch (err) {
+    logger.warn(
+      { err, domain: input.domain, provider, channelRef },
+      "external delivery failed"
+    );
+    return {
+      surface: "external",
+      success: false,
+      reason: err instanceof Error ? err.message : "unknown_error",
+    };
+  }
+}
+
+// ── Surface Handler Registry ──────────────────────────────────────────────────
+
+type ResolvedInput = RouteSignalInput & { proactiveType: ProactiveMessageType };
+
+/**
+ * Surface-kind → handler. Mirrors the proposal-executor registry discipline:
+ * routing is data-driven, and an unknown kind is a structured skip (handled in
+ * `routeSignal`), never a thrown error.
+ *
+ * `suppress` is short-circuited before dispatch, so it has no handler here.
+ */
+const SURFACE_HANDLERS: Record<
+  string,
+  (input: ResolvedInput, target: SurfaceTarget) => Promise<SurfaceResult>
+> = {
+  feed: (input) => deliverToFeed(input),
+  chat: (input) => deliverToChat(input),
+  notification: (input) => deliverToNotification(input),
+  external: (input, target) => deliverToExternal(input, target),
+};
+
+/** Normalize a configured surface (bare string or structured) to a target. */
+function toSurfaceTarget(
+  surface: SignalSurface | SurfaceTarget
+): SurfaceTarget {
+  return typeof surface === "string" ? { kind: surface } : surface;
+}
+
 // ── Main Function ─────────────────────────────────────────────────────────────
 
 /**
@@ -273,8 +385,11 @@ export async function routeSignal(
     const prefs = await getDeliveryPreferences(workspaceId);
     const rule = resolveRule(domain, prefs);
 
+    // Normalize bare-string and structured surfaces to a common target shape.
+    const targets = rule.surfaces.map(toSurfaceTarget);
+
     // suppress is a complete no-op
-    if (rule.surfaces.includes("suppress")) {
+    if (targets.some((t) => t.kind === "suppress")) {
       logger.debug(
         { domain, userId, workspaceId },
         "Signal suppressed by delivery preferences"
@@ -282,31 +397,36 @@ export async function routeSignal(
       return { delivered: false, surfaces: ["suppress"], results: [] };
     }
 
-    const activeSurfaces = rule.surfaces.filter(
-      (s): s is Exclude<SignalSurface, "suppress"> => s !== "suppress"
-    );
+    const activeTargets = targets.filter((t) => t.kind !== "suppress");
 
-    if (activeSurfaces.length === 0) {
+    if (activeTargets.length === 0) {
       return { delivered: false, surfaces: [], results: [] };
     }
 
-    const resolvedInput = { ...input, proactiveType };
+    const resolvedInput: ResolvedInput = { ...input, proactiveType };
 
-    // Deliver to all surfaces concurrently
+    // Dispatch to each target's handler concurrently. Unknown surface kind →
+    // structured skip (warn + skipped result), never a throw.
     const results = await Promise.all(
-      activeSurfaces.map((surface) => {
-        switch (surface) {
-          case "feed":
-            return deliverToFeed(resolvedInput);
-          case "chat":
-            return deliverToChat(resolvedInput);
-          case "notification":
-            return deliverToNotification(resolvedInput);
+      activeTargets.map((target): Promise<SurfaceResult> => {
+        const handler = SURFACE_HANDLERS[target.kind];
+        if (!handler) {
+          logger.warn(
+            { domain, userId, workspaceId, surface: target.kind },
+            "Signal delivery skipped: unknown surface kind"
+          );
+          return Promise.resolve({
+            surface: target.kind,
+            success: false,
+            reason: "unknown_surface_kind",
+          });
         }
+        return handler(resolvedInput, target);
       })
     );
 
     const delivered = results.some((r) => r.success);
+    const activeSurfaces = activeTargets.map((t) => t.kind);
 
     logger.debug(
       { domain, userId, workspaceId, surfaces: activeSurfaces, delivered },

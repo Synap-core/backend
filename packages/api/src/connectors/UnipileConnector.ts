@@ -113,6 +113,11 @@ export class UnipileConnector implements MessagingConnector {
     return !!(this.dsn && this.apiKey);
   }
 
+  /** Unipile sends from each user's own connected account. */
+  requiresAccount(): boolean {
+    return true;
+  }
+
   private headers(): Record<string, string> {
     return {
       "X-API-KEY": this.apiKey,

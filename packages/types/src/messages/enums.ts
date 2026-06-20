@@ -25,7 +25,6 @@ export enum MessageLinkTargetType {
   ROLE = "role",
   API_KEY = "apiKey",
   SKILL = "skill",
-  BACKGROUND_TASK = "backgroundTask",
   AGENT = "agent",
   CHAT_THREAD = "chatThread",
   TEMPLATE = "template",

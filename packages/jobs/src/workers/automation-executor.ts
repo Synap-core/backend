@@ -221,15 +221,11 @@ function getOutEdges(
 
 /**
  * Execute a command step by calling the Intelligence Service.
- *
- * Special slug "__skill_trigger": routes to /api/tasks/skill-trigger instead of
- * /api/tasks/execute, enabling event-triggered skill execution (PLAN-03).
  */
 async function executeCommandStep(
   data: {
     commandId?: string;
     commandTitle?: string;
-    commandSlug?: string;
     inputMapping: Record<string, string>;
     promptOverride?: string;
   },
@@ -268,58 +264,6 @@ async function executeCommandStep(
 
   const isUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
   const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY || "";
-
-  // ── Skill trigger routing ──────────────────────────────────────────────
-  // Commands with commandSlug "__skill_trigger" are event-triggered skills
-  // (created by skills.createTrigger). Route to the dedicated skill-trigger
-  // endpoint instead of the generic task executor (PLAN-03).
-  if (data.commandSlug === "__skill_trigger") {
-    const skillId = resolvedInputs.skillId as string | undefined;
-    const entityId = resolvedInputs.entityId as string | undefined;
-    const channelType =
-      (resolvedInputs.channelType as
-        | "personal_thread"
-        | "new_thread"
-        | undefined) ?? "personal_thread";
-
-    if (!skillId) {
-      throw new Error(
-        "__skill_trigger command requires skillId in inputMapping"
-      );
-    }
-
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 30_000);
-      const response = await fetch(`${isUrl}/api/tasks/skill-trigger`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": isApiKey,
-        },
-        body: JSON.stringify({
-          skillId,
-          userId: ownerId,
-          workspaceId,
-          entityId: entityId || undefined,
-          channelType,
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-
-      if (!response.ok) {
-        throw new Error(
-          `IS skill-trigger returned ${response.status}: ${response.statusText}`
-        );
-      }
-
-      return { status: "skill_trigger_executing", skillId, resolvedInputs };
-    } catch (err) {
-      logger.error({ err, skillId }, "Skill trigger IS call failed");
-      throw err;
-    }
-  }
 
   // ── Generic command execution ──────────────────────────────────────────
   try {
@@ -863,6 +807,23 @@ async function executeQueryStep(
     eq(entities.type, profileSlug),
   ];
 
+  // Apply optional filter: { propertyKey: value } pairs as JSONB equality conditions
+  const resolvedFilter = resolveTemplate(data.filter ?? "", context);
+  if (resolvedFilter) {
+    try {
+      const filterObj = JSON.parse(resolvedFilter) as Record<string, unknown>;
+      for (const [key, value] of Object.entries(filterObj)) {
+        if (value !== undefined && value !== null) {
+          conditions.push(
+            drizzleSql`${entities.properties}->>${key} = ${String(value)}`
+          );
+        }
+      }
+    } catch {
+      // unparseable filter — ignore, return unfiltered (defensive)
+    }
+  }
+
   const results = await db
     .select({
       id: entities.id,
@@ -903,6 +864,14 @@ async function executePlaybookRun(
   if (!playbook) {
     throw new Error(`Playbook ${data.playbookId} not found`);
   }
+  // Cross-workspace guard: a flow may only run a playbook from its own workspace
+  // or a pod-wide (NULL) one. Mirrors the subject IDOR guard below — the flow's
+  // playbookId is editor-authored config, but defend in depth (no FK).
+  if (playbook.workspaceId && playbook.workspaceId !== workspaceId) {
+    throw new Error(
+      `playbook_run: playbook ${data.playbookId} not visible in workspace ${workspaceId}`
+    );
+  }
 
   // 2. Resolve params from the automation context (prior step outputs, trigger payload)
   const resolvedParams = data.paramsMapping
@@ -912,6 +881,38 @@ async function executePlaybookRun(
   // 3. Resolve the goal template against automation context
   const goal =
     resolveTemplate(playbook.goalTemplate, context) || playbook.goalTemplate;
+
+  // Resolve subject entity id from params or trigger payload (canonical source).
+  // entityId is the loop-context alias for the iterated entity; subjectId is the
+  // explicit override; trigger.payload.subjectId is the fallback.
+  const candidateSubjectId =
+    (resolvedParams.entityId as string | undefined) ??
+    (resolvedParams.subjectId as string | undefined) ??
+    (context.trigger.payload.subjectId as string | undefined) ??
+    null;
+
+  // Bind the subject ONLY if it's an entity the run can legitimately see —
+  // its own workspace OR a pod-wide (workspaceId NULL) entity. A crafted
+  // paramsMapping / trigger payload must not bind a session to an entity in
+  // another workspace (write-side IDOR guard; the column has no FK).
+  let resolvedSubjectId: string | null = null;
+  if (candidateSubjectId) {
+    const subj = await db.query.entities.findFirst({
+      columns: { id: true, workspaceId: true },
+      where: eq(entities.id, candidateSubjectId),
+    });
+    if (
+      subj &&
+      (subj.workspaceId === workspaceId || subj.workspaceId === null)
+    ) {
+      resolvedSubjectId = subj.id;
+    } else {
+      logger.warn(
+        { candidateSubjectId, workspaceId },
+        "playbook_run: subject not visible in workspace — dropping subject binding"
+      );
+    }
+  }
 
   // 4. Create a focus session for this playbook run
   const [session] = await db
@@ -924,6 +925,7 @@ async function executePlaybookRun(
       status: "active",
       expectedOutputs: (playbook.expectedOutputs ?? []) as any[],
       agentIds: [],
+      subjectEntityId: resolvedSubjectId,
     })
     .returning();
 
@@ -1184,7 +1186,6 @@ async function executeAutomationFlow(params: {
             const data = node.data as {
               commandId?: string;
               commandTitle?: string;
-              commandSlug?: string;
               inputMapping: Record<string, string>;
               promptOverride?: string;
             };
@@ -1327,7 +1328,24 @@ async function executeAutomationFlow(params: {
               data.iteratorExpression,
               context
             );
-            const items = Array.isArray(collection) ? collection : [];
+            const rawItems = Array.isArray(collection) ? collection : [];
+            // Hard cap loop width. A loop child may be `playbook_run` (each spawns
+            // a session + IS dispatch), and the iterator is an arbitrary context
+            // path (could resolve a large fetch/trigger array) — without a cap a
+            // single run could fan out into thousands of paid IS dispatches.
+            // Aligned with the query-node limit (100).
+            const MAX_LOOP_ITERATIONS = 100;
+            const items = rawItems.slice(0, MAX_LOOP_ITERATIONS);
+            if (rawItems.length > MAX_LOOP_ITERATIONS) {
+              logger.warn(
+                {
+                  nodeId: node.id,
+                  requested: rawItems.length,
+                  cap: MAX_LOOP_ITERATIONS,
+                },
+                "loop: iteration count exceeds cap — truncating"
+              );
+            }
 
             if (items.length === 0) {
               output = { status: "empty_collection", itemCount: 0 };
@@ -1367,6 +1385,17 @@ async function executeAutomationFlow(params: {
                       context,
                       workspaceId,
                       automationContext,
+                      ownerId
+                    );
+                  } else if (childNode.type === "playbook_run") {
+                    const playbookRunData = childNode.data as {
+                      playbookId: string;
+                      paramsMapping?: Record<string, string>;
+                    };
+                    childOutput = await executePlaybookRun(
+                      playbookRunData,
+                      context,
+                      workspaceId,
                       ownerId
                     );
                   }

@@ -1,0 +1,90 @@
+{
+  "key": "unipile-linkedin",
+  "name": "Unipile — LinkedIn",
+  "description": "LinkedIn outreach via Unipile (API-key connector). Stores the Unipile API key in the vault, registers one HTTP API tool that authenticates with Unipile's X-API-KEY header against the account's DSN, and seeds two proposal-gated code skills: search LinkedIn profiles (proposed as `person` entities) and send a connection invitation (the result noted as a `note`). Grounded in synap-backend's UnipileConnector (X-API-KEY auth, /api/v1 base) and the Unipile v1 LinkedIn API. PRECONDITION: a Unipile account with a connected LinkedIn account; pass that account_id as the skill `accountId` arg. The applier remaps the tool credentialRef to a runtime vault://<id>; the skills call the tool by NAME via callProvider('unipile_linkedin', ...), so the dispatcher resolves the credentialRef and injects the vaulted X-API-KEY server-side — no providerRef arg needed.",
+  "params": [
+    {
+      "name": "unipileApiKey",
+      "label": "Unipile API key",
+      "type": "text",
+      "required": true,
+      "description": "The Unipile X-API-KEY. Stored server-encrypted in the vault; never persisted in the template."
+    },
+    {
+      "name": "unipileBaseUrl",
+      "label": "Unipile DSN base URL",
+      "type": "text",
+      "required": true,
+      "description": "Your Unipile DSN with the /api/v1 prefix, e.g. https://api6.unipile.com:13670/api/v1 — the same DSN UnipileConnector uses. Includes the host and port assigned to your Unipile account."
+    },
+    {
+      "name": "unipileAccountId",
+      "label": "Unipile LinkedIn account id",
+      "type": "text",
+      "required": true,
+      "description": "The Unipile account_id of the connected LinkedIn account that performs the search and sends invitations (from GET /api/v1/accounts). Used as the default skill accountId."
+    },
+    {
+      "name": "entityProfile",
+      "label": "Target person profile",
+      "type": "text",
+      "required": false,
+      "default": "person",
+      "description": "The profileSlug found LinkedIn profiles are proposed as."
+    }
+  ],
+  "vault": [
+    {
+      "ref": "unipileApiKeySecret",
+      "name": "{{name}} Unipile API key",
+      "value": "{{unipileApiKey}}",
+      "type": "api_key",
+      "description": "Unipile X-API-KEY for the LinkedIn connector."
+    }
+  ],
+  "tools": [
+    {
+      "name": "unipile_linkedin",
+      "kind": "api",
+      "description": "Authenticated HTTP access to the Unipile v1 API (LinkedIn). The applier injects the vaulted API key into the X-API-KEY header; its credentialRef is remapped to the runtime vault://<id> at apply time.",
+      "credentialRef": "unipileApiKeySecret",
+      "executor": "is-agent",
+      "config": {
+        "baseUrl": "{{unipileBaseUrl}}",
+        "auth": { "in": "header", "name": "X-API-KEY", "prefix": "" }
+      }
+    }
+  ],
+  "skills": [
+    {
+      "name": "linkedin_search_profile",
+      "kind": "code",
+      "scope": "pod",
+      "description": "Searches LinkedIn profiles via Unipile and proposes each match as a person entity (proposal-gated). Args: { keywords: string, accountId?: string, limit?: number }. Calls the tool by name via callProvider('unipile_linkedin', ...).",
+      "requires": ["unipile_linkedin"],
+      "executionMode": "async",
+      "timeoutSeconds": 60,
+      "parameters": {
+        "keywords": "string",
+        "accountId": "string?",
+        "limit": "number?"
+      },
+      "code": "// LinkedIn people search via Unipile, proposed as person entities.\n// Executor wraps this body as (async function(args, context){ <code> }); use args\n// directly and `return` the result. callProvider(provider, method, path, body?)\n// runs the required tool through the dispatcher — pass the tool NAME\n// ('unipile_linkedin') and the dispatcher resolves its credentialRef, injects the\n// vaulted X-API-KEY, and uses the tool's config.baseUrl = DSN + /api/v1. No\n// providerRef arg needed.\nconst accountId = String(args?.accountId ?? '{{unipileAccountId}}');\nconst keywords = String(args?.keywords ?? '').trim();\nconst limit = Number(args?.limit ?? 10);\nif (!keywords) throw new Error('linkedin_search_profile: keywords is required');\n\n// Unipile v1 LinkedIn search (category people).\nconst qs = new URLSearchParams({ account_id: accountId, keywords, limit: String(limit) });\nconst res = await callProvider('unipile_linkedin', 'GET', `/linkedin/search?${qs.toString()}`);\nconst payload = res?.body ?? res;\nconst items = Array.isArray(payload?.items) ? payload.items : (Array.isArray(payload) ? payload : []);\n\nconst profileSlug = '{{entityProfile}}' || 'person';\nlet proposed = 0;\nfor (const p of items.slice(0, limit)) {\n  const name = String(p?.name ?? [p?.first_name, p?.last_name].filter(Boolean).join(' ') ?? 'LinkedIn profile').trim() || 'LinkedIn profile';\n  await propose.entity({\n    profileSlug,\n    title: name,\n    properties: {\n      headline: p?.headline ?? null,\n      company: p?.current_company ?? p?.company ?? null,\n      location: p?.location ?? null,\n      linkedinProviderId: p?.provider_id ?? p?.id ?? null,\n      publicIdentifier: p?.public_identifier ?? p?.public_id ?? null,\n      profileUrl: p?.profile_url ?? null,\n      source: 'unipile-linkedin'\n    },\n    reasoning: `LinkedIn profile matched search \"${keywords}\" via Unipile.`\n  });\n  proposed += 1;\n}\nreturn { proposed, keywords };\n"
+    },
+    {
+      "name": "linkedin_send_invite",
+      "kind": "code",
+      "scope": "pod",
+      "description": "Sends a LinkedIn connection invitation via Unipile, then notes the action as a note entity (proposal-gated). Args: { providerId: string (target LinkedIn provider_id), accountId?: string, message?: string }. Calls the tool by name via callProvider('unipile_linkedin', ...).",
+      "requires": ["unipile_linkedin"],
+      "executionMode": "async",
+      "timeoutSeconds": 60,
+      "parameters": {
+        "providerId": "string",
+        "accountId": "string?",
+        "message": "string?"
+      },
+      "code": "// Send a LinkedIn connection request via Unipile, then record a note.\n// Executor wraps this body as (async function(args, context){ <code> }); use args\n// directly and `return`. callProvider runs the unipile_linkedin tool through the\n// dispatcher by NAME — the dispatcher resolves its credentialRef and injects the\n// X-API-KEY server-side from the vault; propose.entity routes the write through\n// governance. No providerRef arg needed.\nconst accountId = String(args?.accountId ?? '{{unipileAccountId}}');\nconst providerId = String(args?.providerId ?? '').trim();\nconst message = typeof args?.message === 'string' ? args.message : undefined;\nif (!providerId) throw new Error('linkedin_send_invite: providerId (the target LinkedIn provider_id) is required');\n\n// Unipile v1 connection-request endpoint.\nconst body = { account_id: accountId, provider_id: providerId };\nif (message) body.message = message;\nconst res = await callProvider('unipile_linkedin', 'POST', '/users/invite', body);\nconst ok = res?.status ? res.status >= 200 && res.status < 300 : true;\n\nawait propose.entity({\n  profileSlug: 'note',\n  title: `LinkedIn invitation ${ok ? 'sent' : 'attempted'} -> ${providerId}`,\n  properties: {\n    action: 'linkedin_send_invite',\n    providerId,\n    message: message ?? null,\n    status: res?.status ?? null,\n    success: ok,\n    source: 'unipile-linkedin'\n  },\n  reasoning: 'Recorded the outbound LinkedIn connection request for the activity timeline.'\n});\nreturn { success: ok, providerId, status: res?.status ?? null };\n"
+    }
+  ]
+}

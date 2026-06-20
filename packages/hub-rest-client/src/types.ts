@@ -237,6 +237,29 @@ export interface CaptureExecuteResponse {
   }>;
 }
 
+// ─── Recall (ask) ──────────────────────────────────────────────────────────────
+
+/** One substrate's slice of an `ask` answer (semantic / procedural / episodic). */
+export interface AskAnswerBlock {
+  substrate: string;
+  items: Array<Record<string, unknown>>;
+  status: "ok" | "error";
+}
+
+/**
+ * The provenance-tagged result of `ask` — glass-box: it says which substrates
+ * were queried (`routedTo`), what the query's cue suggested (`intent`), and the
+ * per-substrate answer blocks. Shape mirrors the backend `AskResult`.
+ */
+export interface AskResponse {
+  query: string;
+  routedTo: string[];
+  intent: string;
+  answers?: AskAnswerBlock[];
+  verdict?: string;
+  [key: string]: unknown;
+}
+
 // ─── Relations & Graph ───────────────────────────────────────────────────────
 
 export interface HubRelation {

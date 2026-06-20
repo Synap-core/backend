@@ -23,19 +23,6 @@ export interface WorkerMetadata {
  */
 export const workerRegistry: WorkerMetadata[] = [
   // ============================================================================
-  // Agent Workers (scheduled autonomous agent runs)
-  // ============================================================================
-  {
-    id: "agent-scheduler",
-    name: "Agent Scheduler",
-    description:
-      "Polls every minute for [agent-sched] entities that are due (nextRunAt <= now, enabled=true). For each due schedule, calls the Intelligence Service /v1/chat/completions with the goal + persona system prompt, stores the result as a research entity, then updates nextRunAt and lastRunAt.",
-    triggers: ["cron:* * * * *"],
-    outputs: ["entity.create (research)"],
-    category: "ai",
-  },
-
-  // ============================================================================
   // Messaging Workers (external conversation routing)
   // ============================================================================
   {
@@ -49,10 +36,10 @@ export const workerRegistry: WorkerMetadata[] = [
   },
   {
     id: "proactive-intelligence",
-    name: "Proactive Intelligence (Feature C)",
+    name: "Proactive Intelligence (scan)",
     description:
-      "Event-driven proactive AI gate. proactive.evaluate loads the entity, applies the AI-origin loop guard, checks the workspace's proactiveAi trigger toggles, and debounces a proactive.scan (15min window) which assembles a candidate cluster and hands it to the intelligence service, which runs the agent and emits a proposal or a proactive_post nudge.",
-    triggers: ["entity.create.validated", "entity.update.validated"],
+      "proactive.scan assembles a candidate cluster (recent entities of one profile in a workspace) and hands it to the intelligence service, which runs the agent and emits a proposal or a proactive_post nudge. Reachable as an action a loop/automation invokes — no parallel per-event auto-trigger.",
+    triggers: ["queue:proactive.scan"],
     category: "ai",
   },
 

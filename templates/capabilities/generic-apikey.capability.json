@@ -1,0 +1,67 @@
+{
+  "key": "generic-apikey",
+  "name": "Generic API-Key Connector",
+  "description": "Provider-neutral demonstration of the capability-template shape: stores one API key in the vault, registers one HTTP API tool that authenticates with it, and seeds one code skill that fetches from the provider and proposes the results as entities. Customize via the {{baseUrl}}, {{apiKey}}, and {{entityProfile}} params — no provider is hardcoded.",
+  "params": [
+    {
+      "name": "apiKey",
+      "label": "API key",
+      "type": "text",
+      "required": true,
+      "description": "The bearer API key for the provider. Stored server-encrypted in the vault; never persisted in the template."
+    },
+    {
+      "name": "baseUrl",
+      "label": "Base URL",
+      "type": "text",
+      "required": true,
+      "description": "The provider's API base URL, e.g. https://api.example.com/v1"
+    },
+    {
+      "name": "entityProfile",
+      "label": "Target entity profile",
+      "type": "text",
+      "required": false,
+      "default": "note",
+      "description": "The profileSlug the skill proposes fetched records as."
+    }
+  ],
+  "vault": [
+    {
+      "ref": "apiKeySecret",
+      "name": "{{name}} API key",
+      "value": "{{apiKey}}",
+      "type": "api_key",
+      "description": "API key for the generic-apikey connector."
+    }
+  ],
+  "tools": [
+    {
+      "name": "generic_api",
+      "kind": "api",
+      "description": "Authenticated HTTP access to the provider API.",
+      "credentialRef": "apiKeySecret",
+      "executor": "is-agent",
+      "config": {
+        "baseUrl": "{{baseUrl}}",
+        "auth": { "in": "header", "name": "Authorization", "prefix": "Bearer " }
+      }
+    }
+  ],
+  "skills": [
+    {
+      "name": "{{name}} fetch-and-propose",
+      "kind": "code",
+      "scope": "pod",
+      "description": "Fetches records from the provider API and proposes each as an entity (proposal-gated). Calls the required tool by name via callProvider('generic_api', ...).",
+      "requires": ["generic_api"],
+      "executionMode": "async",
+      "timeoutSeconds": 60,
+      "parameters": {
+        "path": "string?",
+        "entityProfile": "string?"
+      },
+      "code": "// Generic fetch -> propose loop. The skill body is a STATEMENT body (no `export\n// default`); the executor wraps it as (async function(args, context){ <code> }).\n// callProvider is POSITIONAL: callProvider(provider, method, path, body?) where\n// `provider` is the required tool's NAME ('generic_api') — the dispatcher resolves\n// it to the tool's credentialRef server-side and injects the vaulted API key. No\n// providerRef arg needed. propose.entity REQUIRES `title` (not `name`) and routes\n// the write through checkPermissionOrPropose.\nconst path = args.path || '/records';\nconst profileSlug = args.entityProfile || 'note';\nconst res = await callProvider('generic_api', 'GET', path);\nconst data = res && res.body !== undefined ? res.body : res;\nconst records = Array.isArray(data)\n  ? data\n  : (data && Array.isArray(data.data) ? data.data : (data && data.records) || []);\nlet proposed = 0;\nfor (const record of records) {\n  await propose.entity({\n    profileSlug,\n    title: String((record && (record.name || record.title || record.id)) || 'record'),\n    properties: record,\n  });\n  proposed++;\n}\nreturn { proposed };\n"
+    }
+  ]
+}

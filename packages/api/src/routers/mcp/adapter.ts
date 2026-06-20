@@ -134,6 +134,7 @@ export async function executeMCPToolViaHubProtocol(
         query: args.query as string,
         userId,
         workspaceId: workspaceId ?? null,
+        projectId: (args.projectId as string | undefined) ?? null,
         limit: (args.limit as number) || undefined,
         catalog,
       });

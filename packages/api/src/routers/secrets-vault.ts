@@ -29,6 +29,7 @@ import {
   encryptServerSide,
   decryptServerSide,
   isServerVaultAvailable,
+  assertGrantScoped,
 } from "@synap/database";
 import {
   proposals,
@@ -814,16 +815,12 @@ export const secretsVaultRouter = router({
       const grantedTo =
         proposalRow.agentUserId ?? proposalRow.createdBy ?? null;
 
-      // Defense-in-depth: a grant MUST be scoped to a specific agent OR a
-      // workspace. A grant with BOTH null would be a pod-wide, any-principal
-      // wildcard at redemption (findRedeemableGrant treats a NULL column as a
-      // wildcard). No current path produces this; guard so a future one can't
-      // accidentally mint an unscoped grant.
-      if (!grantedTo && !grantWorkspaceId) {
-        throw new Error(
-          "Refusing to create an unscoped vault grant (both grantedTo and workspaceId are null)"
-        );
-      }
+      // FIREWALL: a grant MUST be scoped to a specific agent OR a workspace. A
+      // grant with BOTH null would be a pod-wide, any-principal wildcard at
+      // redemption (findRedeemableGrant treats a NULL column as a wildcard). The
+      // canonical guard lives next to the grant semantics so every issuance path
+      // is covered — see assertGrantScoped in @synap/database vault-resolver.
+      assertGrantScoped({ grantedTo, workspaceId: grantWorkspaceId });
 
       // 5. Build the vault:// reference
       const vaultRef = `vault://${secret.id}`;

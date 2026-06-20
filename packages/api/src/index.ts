@@ -176,7 +176,6 @@ import { profilesRouter } from "./routers/profiles.js";
 import { propertyDefsRouter } from "./routers/property-defs.js";
 import { profilePropertiesRouter } from "./routers/profile-properties.js";
 import { skillsRouter } from "./routers/skills.js";
-import { backgroundTasksRouter } from "./routers/background-tasks.js";
 import { messageLinksRouter } from "./routers/message-links.js";
 import { typesenseRouter } from "./routers/typesense.js";
 import { n8nActionsRouter } from "./routers/n8n/actions.js";
@@ -382,11 +381,6 @@ registerRouter("skills", skillsRouter, {
   version: "1.0.0",
   source: "core",
   description: "User-created skills management",
-});
-registerRouter("backgroundTasks", backgroundTasksRouter, {
-  version: "1.0.0",
-  source: "core",
-  description: "Background task management",
 });
 registerRouter("messageLinks", messageLinksRouter, {
   version: "1.0.0",

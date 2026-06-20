@@ -32,7 +32,8 @@ import {
   registerAuthRoutes,
   registerExchangeRoutes,
   registerAutomationsRoutes,
-  registerBackgroundTasksRoutes,
+  registerCapabilitiesRoutes,
+  registerLoopsRoutes,
   registerCaptureRoutes,
   registerChannelsRoutes,
   registerCommandsRoutes,
@@ -56,6 +57,8 @@ import {
   registerSessionsRoutes,
   registerSetupRoutes,
   registerSkillsRoutes,
+  registerSkillsCrudRoutes,
+  registerToolsRoutes,
   registerTerminalRoutes,
   registerThreadsRoutes,
   registerUsersRoutes,
@@ -403,7 +406,11 @@ registerCaptureRoutes(app); // /capture/*
 registerSearchRoutes(app); // /search*, /vector-search
 registerDocumentsRoutes(app); // /documents*
 registerProposalsRoutes(app); // /proposals*
-registerSkillsRoutes(app); // /skills/*
+registerSkillsRoutes(app); // /skills/system (static doc)
+registerSkillsCrudRoutes(app); // POST/GET /skills (capability-substrate CRUD seam)
+registerToolsRoutes(app); // POST/GET /tools, GET /tools/:id (capability-substrate CRUD seam)
+registerCapabilitiesRoutes(app); // POST /capabilities/apply (capability-template applier)
+registerLoopsRoutes(app); // POST /loops/apply (loop / autonomy-template applier)
 registerMemoryRoutes(app); // /memory*
 registerKnowledgeRoutes(app); // /knowledge*, /graph/traverse
 registerCommandsRoutes(app); // /commands*, /commands/execute
@@ -422,7 +429,6 @@ registerCellInstancesRoutes(app); // /cell-instances, /cell-instances/html, /cel
 registerWhiteboardsRoutes(app); // /whiteboards/:viewId/placements/propose
 registerMcpServersRoutes(app); // /mcp-servers
 registerAutomationsRoutes(app); // /automations*
-registerBackgroundTasksRoutes(app); // /background-tasks*
 registerVaultRoutes(app); // /vault/request
 registerChannelsRoutes(app); // /channels/*
 registerTerminalRoutes(app); // /terminal/logs

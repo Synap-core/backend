@@ -9,6 +9,7 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
 // validateEventPattern from the main index.js and events/index.js bundles.
 import { validateEventPattern } from "@synap-core/types/events/unified";
@@ -200,6 +201,32 @@ export const automationsRouter = router({
         }
       }
 
+      // Governance membrane — the trigger layer now matches the playbook/tool/
+      // skill bar. AI callers (agentUserId set) route through
+      // checkPermissionOrPropose; on "proposed" no row is written and the
+      // proposal id is surfaced. The gate keys on the request workspaceId
+      // (nullable = pod-wide), consistent with the create body shape.
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: input.workspaceId ?? null,
+        subjectType: "automation",
+        action: "create",
+        source: input.source,
+        data: { name: input.name, triggerType: input.triggerType },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          id: null as string | null,
+          message: "Automation creation proposed for review",
+          proposalId: perm.proposalId,
+        };
+      }
+
       const [row] = await database
         .insert(automations)
         .values({
@@ -222,9 +249,10 @@ export const automationsRouter = router({
         .returning();
 
       return {
-        status: "created",
-        id: row.id,
+        status: "created" as const,
+        id: row.id as string | null,
         message: `Automation "${input.name}" created as ${input.status}`,
+        proposalId: null as string | null,
       };
     }),
 

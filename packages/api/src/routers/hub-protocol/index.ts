@@ -22,7 +22,6 @@ import { documentsRouter } from "./documents.js";
 import { branchesRouter } from "./branches.js";
 import { linkingRouter } from "./linking.js";
 import { skillsRouter } from "./skills.js";
-import { backgroundTasksRouter } from "./background-tasks.js";
 import { proposalsRouter } from "./proposals.js";
 import { channelsRouter as hubChannelsRouter } from "./channels.js";
 import { servicesRouter } from "./services.js";
@@ -55,7 +54,6 @@ export const hubProtocolRouter = router({
   channels: hubChannelsRouter,
   linking: linkingRouter,
   skills: skillsRouter,
-  backgroundTasks: backgroundTasksRouter,
   proposals: proposalsRouter,
   services: servicesRouter,
   views: hubViewsRouter,

@@ -60,6 +60,8 @@ export {
   findRedeemableGrant,
   incrementGrant,
   VaultGrantError,
+  assertGrantScoped,
+  UnscopedVaultGrantError,
 } from "./utils/vault-resolver.js";
 export type { GrantDenialCode, GrantRedeemer } from "./utils/vault-resolver.js";
 

@@ -15,7 +15,19 @@
  * See team/platform/retrieval-architecture.mdx.
  */
 
-import { db, entities, and, eq, inArray, isNull } from "@synap/database";
+import {
+  db,
+  entities,
+  relations,
+  and,
+  eq,
+  inArray,
+  isNull,
+} from "@synap/database";
+import {
+  projectLensWhere,
+  BELONGS_TO_PROJECT,
+} from "../../utils/project-scope.js";
 import { embedQuery, hybridRecall, rrf } from "./hybrid-recall.js";
 import { graphExpand, type Seed } from "./graph-signal.js";
 import { latestEventTimestamps } from "./temporal-signal.js";
@@ -31,6 +43,13 @@ export interface RetrieveParams {
   query: string;
   userId: string;
   workspaceId?: string | null;
+  /**
+   * Project focus lens (entity id of a `project`). When set, results are
+   * narrowed to that project (the project entity + everything `belongs_to` it).
+   * PURE narrowing, ANDed onto the user floor — like the workspace lens, it can
+   * only restrict, never widen. Orthogonal to workspaceId.
+   */
+  projectId?: string | null;
   limit?: number;
   /** The workspace's real profile catalog (drives type inference). */
   catalog: ProfileCatalogEntry[];
@@ -51,11 +70,14 @@ type EntityRow = typeof entities.$inferSelect;
 
 async function fetchOrdered(
   ids: string[],
-  userId: string
+  userId: string,
+  projectId?: string | null
 ): Promise<EntityRow[]> {
   if (ids.length === 0) return [];
   // Defense-in-depth: gate on the loaded row's userId even though every id
   // source upstream (recall + graph edges) is already user-scoped.
+  // Project lens (when set) is ANDed on as a PURE narrowing predicate — it can
+  // only drop rows outside the project, never reveal anything new.
   const rows = await db
     .select()
     .from(entities)
@@ -63,7 +85,8 @@ async function fetchOrdered(
       and(
         inArray(entities.id, ids),
         eq(entities.userId, userId),
-        isNull(entities.deletedAt)
+        isNull(entities.deletedAt),
+        ...(projectId ? [projectLensWhere(entities.id, projectId)] : [])
       )
     );
   const byId = new Map(rows.map((r) => [r.id, r]));
@@ -72,24 +95,55 @@ async function fetchOrdered(
     .filter((r): r is EntityRow => r !== undefined);
 }
 
+/**
+ * Resolve a project's entity-id set — the project entity itself plus every
+ * entity linked to it via `belongs_to_project`. Returned as a Set so recall
+ * passes can constrain in-query. The recall halves already gate by userId, so
+ * this only resolves membership. Empty set ⇒ nothing belongs to the project.
+ */
+async function resolveProjectIds(projectId: string): Promise<Set<string>> {
+  const memberRows = await db
+    .select({ id: relations.sourceEntityId })
+    .from(relations)
+    .where(
+      and(
+        eq(relations.type, BELONGS_TO_PROJECT),
+        eq(relations.targetEntityId, projectId)
+      )
+    );
+  const ids = new Set<string>(
+    memberRows.map((r) => r.id).filter((id): id is string => id !== null)
+  );
+  ids.add(projectId); // the project entity itself is part of its own lens
+  return ids;
+}
+
 export async function retrieve(
   params: RetrieveParams
 ): Promise<RetrieveResult> {
-  const { query, userId, workspaceId, catalog } = params;
+  const { query, userId, workspaceId, projectId, catalog } = params;
   const limit = params.limit ?? 20;
 
   const understanding = understandQuery(query, catalog);
   const embedding = await embedQuery(query); // once; reused across fused passes
 
+  // Project focus lens — resolve the project's entity-id set ONCE (the project
+  // entity + its belongs_to_project members), then constrain every recall pass
+  // to it AT QUERY TIME. Without this the recall budget fills with non-project
+  // rows and the project's matches never enter the pool (the post-filter alone
+  // starves focus mode on a populated pod). Computed once, reused across passes.
+  const projectIds = projectId ? await resolveProjectIds(projectId) : undefined;
+
   // 1. Recall passes — semantic + lexical, unscoped baseline + type-scoped.
   const passes = await Promise.all([
-    hybridRecall({ query, userId, workspaceId, limit, embedding }),
+    hybridRecall({ query, userId, workspaceId, projectIds, limit, embedding }),
     ...understanding.profileTypes.slice(0, 2).map((slug) =>
       hybridRecall({
         query,
         userId,
         workspaceId,
         profileSlug: slug,
+        projectIds,
         limit,
         embedding,
       })
@@ -132,7 +186,7 @@ export async function retrieve(
           limit,
         });
         if (r2.ids.length > 0) {
-          const rows2 = await fetchOrdered(r2.ids, userId);
+          const rows2 = await fetchOrdered(r2.ids, userId, projectId);
           return {
             entities: rows2.slice(0, limit) as Record<string, unknown>[],
             understanding,
@@ -148,7 +202,7 @@ export async function retrieve(
     return { entities: [], understanding, source, verdict: "empty" };
   }
 
-  const ordered = await fetchOrdered(fusedIds, userId);
+  const ordered = await fetchOrdered(fusedIds, userId, projectId);
 
   // 4. Composite re-rank — fused position primary; property + temporal boosts are
   //    bounded to a fraction of the position span (see composite-rerank.ts).

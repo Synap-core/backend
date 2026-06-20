@@ -392,6 +392,25 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0136_focus_sessions_project.sql",
   },
 
+  // focus_sessions — Process North Star subject spine (0139)
+  {
+    table: "focus_sessions",
+    column: "subject_entity_id",
+    addedBy: "0139_process_subject_spine.sql",
+  },
+
+  // playbooks — Process North Star subject spine (0139)
+  {
+    table: "playbooks",
+    column: "flow_automation_id",
+    addedBy: "0139_process_subject_spine.sql",
+  },
+  {
+    table: "playbooks",
+    column: "subject_profile",
+    addedBy: "0139_process_subject_spine.sql",
+  },
+
   // channel_context_items
   {
     table: "channel_context_items",

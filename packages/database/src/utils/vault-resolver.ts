@@ -69,6 +69,44 @@ export class VaultGrantError extends Error {
   }
 }
 
+/** Thrown by assertGrantScoped when a grant would be a fully-wildcard secret read. */
+export class UnscopedVaultGrantError extends Error {
+  constructor() {
+    super(
+      "A vault grant must be scoped to a user and/or a workspace; " +
+        "fully-wildcard grants (both grantedTo and workspaceId null) are not allowed."
+    );
+    this.name = "UnscopedVaultGrantError";
+  }
+}
+
+/**
+ * FIREWALL — issuance-time guard against fully-wildcard vault grants.
+ *
+ * At redemption (`findRedeemableGrant`), a NULL `granted_to` and a NULL
+ * `workspace_id` each act as a WILDCARD: the row matches ANY redeemer principal.
+ * A grant with BOTH null is therefore a pod-wide, any-actor secret read — any
+ * agent reaching `/vault/redeem` (via `secrets.get(ref)`) could redeem the
+ * secret, regardless of owner scope. That is a cross-user secret-read footgun.
+ *
+ * This is the CANONICAL guard: call it at EVERY site that inserts into
+ * `vault_grants`, immediately before the insert, so a future second issuance
+ * path can't accidentally mint an unscoped grant. It throws
+ * `UnscopedVaultGrantError` when both binding columns are null; a grant scoped to
+ * a user, a workspace, or both passes.
+ *
+ * This is prevention only — it does NOT alter redemption semantics or touch
+ * existing rows.
+ */
+export function assertGrantScoped(grant: {
+  grantedTo: string | null | undefined;
+  workspaceId: string | null | undefined;
+}): void {
+  if (!grant.grantedTo && !grant.workspaceId) {
+    throw new UnscopedVaultGrantError();
+  }
+}
+
 /**
  * The principal redeeming a grant. Used to bind redemption to the grantee so a
  * grant issued to one agent/workspace cannot be redeemed by another principal

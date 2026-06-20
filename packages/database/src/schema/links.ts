@@ -77,7 +77,9 @@ export type LinkType =
   // knowledge↔config bridge edges (entity DATA pointing at config objects)
   | "about"
   | "documents"
-  | "concerns";
+  | "concerns"
+  // automation → playbook activation edge (Process North Star Wave 0)
+  | "activates";
 
 export const links = pgTable(
   "links",

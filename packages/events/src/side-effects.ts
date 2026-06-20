@@ -5,10 +5,17 @@
  * after successful synchronous CRUD operations.
  *
  * Replaces the old Inngest-based event forwarding for side-effects.
+ *
+ * The individual reactions live in the reactor registry (reactors.ts). Each is
+ * registered once at module load; `emitSideEffects` iterates them in
+ * registration order. Adding a new reaction = `registerReactor(...)`, never an
+ * edit to the emit loop below.
  */
 
 import { getBoss } from "./boss.js";
 import { createLogger, config } from "@synap-core/core";
+import { registerReactor, getReactors } from "./reactors.js";
+import type { Reactor } from "./reactors.js";
 
 const logger = createLogger({ module: "side-effects" });
 
@@ -37,19 +44,20 @@ export interface SideEffectPayload {
   sessionId?: string | null;
 }
 
-/**
- * Enqueue side-effect jobs after a successful CRUD operation.
- *
- * This is fire-and-forget — failures in side-effects don't affect
- * the CRUD response. pg-boss handles retries automatically.
- */
-export async function emitSideEffects(
-  payload: SideEffectPayload
-): Promise<void> {
-  try {
-    const boss = getBoss();
+// Re-export the reactor registry surface so future reactions can register
+// without importing emitSideEffects' internals.
+export { registerReactor, getReactors };
+export type { Reactor, ReactorDeps, ReactorPayload } from "./reactors.js";
 
-    // 1. Search indexing (Typesense)
+// ============================================================================
+// Built-in reactors — registered at module load, in their original order.
+// Each owns the EXACT guard + boss.send it had inline in emitSideEffects.
+// ============================================================================
+
+// 1. Search indexing (Typesense)
+const searchIndexReactor: Reactor = {
+  id: "search-index",
+  async handler(payload, { boss }) {
     const collectionMap: Record<string, string> = {
       entity: "entities",
       document: "documents",
@@ -67,22 +75,30 @@ export async function emitSideEffects(
         timestamp: Date.now(),
       });
     }
+  },
+};
 
-    // 2. Entity embedding (for entity create/update)
-    // Skip on shared pods where vector search is disabled
-    if (
-      config.server.vectorSearchEnabled &&
-      payload.subjectType === "entity" &&
-      (payload.action === "create" || payload.action === "update")
-    ) {
-      await boss.send("entity-embedding", {
-        entityId: payload.subjectId,
-        userId: payload.userId,
-        workspaceId: payload.workspaceId,
-      });
-    }
+// 2. Entity embedding (for entity create/update)
+// Skip on shared pods where vector search is disabled
+const entityEmbeddingReactor: Reactor = {
+  id: "entity-embedding",
+  match: (payload) =>
+    config.server.vectorSearchEnabled &&
+    payload.subjectType === "entity" &&
+    (payload.action === "create" || payload.action === "update"),
+  async handler(payload, { boss }) {
+    await boss.send("entity-embedding", {
+      entityId: payload.subjectId,
+      userId: payload.userId,
+      workspaceId: payload.workspaceId,
+    });
+  },
+};
 
-    // 3. Webhook delivery
+// 3. Webhook delivery (runs for every emit)
+const webhookDeliveryReactor: Reactor = {
+  id: "webhook-delivery",
+  async handler(payload, { boss }) {
     await boss.send("webhook-delivery", {
       eventType: `${payload.subjectType}.${payload.action}.completed`,
       subjectId: payload.subjectId,
@@ -90,53 +106,98 @@ export async function emitSideEffects(
       workspaceId: payload.workspaceId,
       data: payload.data,
     });
+  },
+};
 
-    // 4. Cross-thread notifications (for entity/document updates)
-    if (
-      (payload.subjectType === "entity" ||
-        payload.subjectType === "document") &&
-      payload.action === "update"
-    ) {
-      await boss.send("cross-thread-notify", {
-        subjectType: payload.subjectType,
-        subjectId: payload.subjectId,
+// 4. Cross-thread notifications (for entity/document updates)
+const crossThreadNotifyReactor: Reactor = {
+  id: "cross-thread-notify",
+  match: (payload) =>
+    (payload.subjectType === "entity" || payload.subjectType === "document") &&
+    payload.action === "update",
+  async handler(payload, { boss }) {
+    await boss.send("cross-thread-notify", {
+      subjectType: payload.subjectType,
+      subjectId: payload.subjectId,
+      userId: payload.userId,
+      workspaceId: payload.workspaceId,
+    });
+  },
+};
+
+// 5. Automation trigger matching — THE trigger hop (load-bearing, byte-identical)
+const automationTriggerMatchReactor: Reactor = {
+  id: "automation-trigger-match",
+  match: (payload) => Boolean(payload.workspaceId),
+  async handler(payload, { boss }) {
+    await boss.send("automation-trigger-match", {
+      eventType: `${payload.subjectType}.${payload.action}.completed`,
+      subjectId: payload.subjectId,
+      userId: payload.userId,
+      workspaceId: payload.workspaceId,
+      data: payload.data,
+      automationContext: payload.automationContext,
+      sessionId: payload.sessionId ?? null,
+    });
+  },
+};
+
+// 6. Hydration summary — proactive welcome message after import review.
+// Fired from capture.executeWithSchema once the import pipeline completes.
+// The worker resolves the personal channel + inserts a single AI greeting
+// summarizing what was just imported. Fire-and-forget, no retries.
+const hydrationSummaryReactor: Reactor = {
+  id: "hydration-summary",
+  match: (payload) =>
+    payload.subjectType === "hydration" && payload.action === "imported",
+  async handler(payload, { boss }) {
+    await boss.send(
+      "hydration-summary-post",
+      {
         userId: payload.userId,
-        workspaceId: payload.workspaceId,
-      });
-    }
+        workspaceId: payload.workspaceId ?? null,
+        data: payload.data ?? {},
+      },
+      {
+        // Delay so the user sees /home render before the message pops.
+        startAfter: new Date(Date.now() + 6_000),
+        // Welcome message is best-effort — do not retry on failure.
+        retryLimit: 0,
+      }
+    );
+  },
+};
 
-    // 5. Automation trigger matching
-    if (payload.workspaceId) {
-      await boss.send("automation-trigger-match", {
-        eventType: `${payload.subjectType}.${payload.action}.completed`,
-        subjectId: payload.subjectId,
-        userId: payload.userId,
-        workspaceId: payload.workspaceId,
-        data: payload.data,
-        automationContext: payload.automationContext,
-        sessionId: payload.sessionId ?? null,
-      });
-    }
+// Registration order === original inline order. Do not reorder.
+registerReactor(searchIndexReactor);
+registerReactor(entityEmbeddingReactor);
+registerReactor(webhookDeliveryReactor);
+registerReactor(crossThreadNotifyReactor);
+registerReactor(automationTriggerMatchReactor);
+registerReactor(hydrationSummaryReactor);
 
-    // 6. Hydration summary — proactive welcome message after import review.
-    // Fired from capture.executeWithSchema once the import pipeline completes.
-    // The worker resolves the personal channel + inserts a single AI greeting
-    // summarizing what was just imported. Fire-and-forget, no retries.
-    if (payload.subjectType === "hydration" && payload.action === "imported") {
-      await boss.send(
-        "hydration-summary-post",
-        {
-          userId: payload.userId,
-          workspaceId: payload.workspaceId ?? null,
-          data: payload.data ?? {},
-        },
-        {
-          // Delay so the user sees /home render before the message pops.
-          startAfter: new Date(Date.now() + 6_000),
-          // Welcome message is best-effort — do not retry on failure.
-          retryLimit: 0,
-        }
-      );
+// ============================================================================
+
+/**
+ * Enqueue side-effect jobs after a successful CRUD operation.
+ *
+ * This is fire-and-forget — failures in side-effects don't affect
+ * the CRUD response. pg-boss handles retries automatically.
+ *
+ * Error semantics (preserved from the original inline implementation):
+ * the entire reactor sequence runs inside ONE try/catch. Reactors run
+ * sequentially in registration order; if a reactor throws, the remaining
+ * reactors are skipped and the error is logged (non-fatal). This is NOT
+ * per-reactor isolation — it matches the prior behavior exactly.
+ */
+export async function emitSideEffects(
+  payload: SideEffectPayload
+): Promise<void> {
+  try {
+    const boss = getBoss();
+    for (const reactor of getReactors()) {
+      if (reactor.match && !reactor.match(payload)) continue;
+      await reactor.handler(payload, { boss });
     }
   } catch (error) {
     // Side-effects are non-critical — log and move on

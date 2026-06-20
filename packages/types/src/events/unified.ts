@@ -31,7 +31,6 @@ export const SUBJECT_TYPES = [
   "role",
   "apiKey",
   "skill",
-  "backgroundTask",
   "agent",
   "agentRun",
   "chatThread",

@@ -39,6 +39,7 @@ import {
   triggerConnectorAction,
   triggerProviderAction,
 } from "../../connectors/external-dispatch.js";
+import { getMessagingConnector } from "../../connectors/index.js";
 import type { Context } from "../../context.js";
 import {
   registerProposalExecutor,
@@ -584,16 +585,26 @@ export function registerApproveExecutors(): void {
         });
       }
 
-      const msgAccount = await deps.resolveMessagingAccountForPlatform(
-        userId,
-        platform
-      );
-      if (!msgAccount) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "No messaging account found for this platform — connect one first",
-        });
+      // Provider-driven account resolution. Connectors with per-user accounts
+      // (Unipile/Stalwart) require a messaging_accounts row; server-managed
+      // connectors (Discord — shared bot token) do NOT, and ignore accountId.
+      const connector = await getMessagingConnector(platform);
+      const needsAccount = connector ? connector.requiresAccount() : true;
+
+      let accountId = "";
+      if (needsAccount) {
+        const msgAccount = await deps.resolveMessagingAccountForPlatform(
+          userId,
+          platform
+        );
+        if (!msgAccount) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "No messaging account found for this platform — connect one first",
+          });
+        }
+        accountId = msgAccount.id;
       }
 
       // Guard: only execute if not already approved (external sends are irreversible).
@@ -607,7 +618,7 @@ export function registerApproveExecutors(): void {
 
       const { success: sent } = await sendExternalMessage({
         threadId,
-        accountId: msgAccount.id,
+        accountId,
         body,
         userId,
       });

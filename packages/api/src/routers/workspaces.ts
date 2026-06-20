@@ -40,7 +40,6 @@ import {
   sql,
   users,
   createWorkspaceFromDefinition,
-  playbooks,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
 import { verifyCpJwt } from "../utils/jwks-client.js";
@@ -67,7 +66,10 @@ import {
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { withWorkspaceProposalIdLock } from "../services/workspace-creation-service.js";
 import { resolveWorkspaceExtends } from "../services/workspace-composition.js";
-import { createLinks } from "../services/links/links-service.js";
+// Loop materialization (playbooks + automation triggers) flows through the ONE
+// shared loop applier — the same one the standalone POST /loops/apply door uses.
+import { createLoopFromDefinition } from "../services/loops/create-from-definition.js";
+import type { LoopDefinition, LoopPlaybookDef } from "@synap/playbooks";
 
 const logger = createLogger({ module: "workspaces" });
 
@@ -2886,70 +2888,82 @@ export const workspacesRouter = router({
             }
           }
 
-          // ── Materialize playbook templates ──────────────────────────────────────
+          // ── Materialize playbooks + automation triggers ─────────────────────────
+          // The workspace `{playbooks · automations}` sub-contract IS an autonomy
+          // loop. Build a `LoopDefinition` from it and apply it through the ONE
+          // shared loop-materialization primitive (`createLoopFromDefinition`) —
+          // the SAME applier the standalone `POST /loops/apply` door uses. This
+          // routes EVERY playbook + trigger through the governed router callers
+          // (zero raw inserts here), so the playbook-schedule cron sugar, grants
+          // links, and governance are all identical to the standalone path.
+          //
+          // The sub-contract has no template-local playbook `ref` (it keys
+          // triggers by `action.playbookSlug` = the playbook NAME), so we use the
+          // playbook name as the loop ref and rewrite each trigger's slug → ref.
           const playbookDefs = input.definition.playbooks;
-          if (playbookDefs && playbookDefs.length > 0) {
+          const automationDefs = input.definition.automations;
+          if (
+            (playbookDefs && playbookDefs.length > 0) ||
+            (automationDefs && automationDefs.length > 0)
+          ) {
             try {
-              for (const pb of playbookDefs) {
-                const [created] = await db
-                  .insert(playbooks)
-                  .values({
-                    workspaceId: result.workspaceId,
-                    createdBy: ctx.userId,
-                    name: pb.name,
-                    description: pb.description,
-                    goalTemplate: pb.goalTemplate,
-                    params: (pb.params ?? []) as unknown as Record<
-                      string,
-                      unknown
-                    >[],
-                    executor: (pb.executor ?? "is-agent") as
-                      | "is-agent"
-                      | "external-agent"
-                      | "hybrid",
-                    expectedOutputs: (pb.expectedOutputs ??
-                      []) as unknown as Record<string, unknown>[],
-                    status: "draft",
-                  })
-                  .returning({ id: playbooks.id });
-
-                const playbookId = created?.id;
-                if (playbookId && pb.grants && pb.grants.length > 0) {
-                  await createLinks(
-                    pb.grants.map((g) => ({
-                      workspaceId: result.workspaceId,
-                      fromType: "playbook" as const,
-                      fromId: playbookId,
-                      toType: g.kind as "tool" | "skill" | "command",
-                      toId: g.ref,
-                      linkType: "grants" as const,
-                      metadata: {},
-                    }))
-                  );
-                }
-
-                logger.info(
-                  {
-                    workspaceId: result.workspaceId,
-                    playbookName: pb.name,
-                    playbookId,
+              const loopDef: LoopDefinition = {
+                key: `workspace-${result.workspaceId}`,
+                name: "Workspace loop",
+                playbooks: (playbookDefs ?? []).map((pb) => ({
+                  ref: pb.name,
+                  name: pb.name,
+                  goalTemplate: pb.goalTemplate,
+                  description: pb.description,
+                  params: pb.params as unknown as LoopPlaybookDef["params"],
+                  executor: pb.executor,
+                  expectedOutputs:
+                    pb.expectedOutputs as unknown as LoopPlaybookDef["expectedOutputs"],
+                  grants: pb.grants?.map((g) => ({
+                    kind: g.kind,
+                    id: g.ref,
+                  })),
+                })),
+                triggers: (automationDefs ?? []).map((auto) => ({
+                  name: auto.name,
+                  description: auto.description,
+                  trigger: {
+                    type: auto.trigger.type,
+                    cron: auto.trigger.cron,
+                    eventType: auto.trigger.eventType,
                   },
-                  "createFromDefinition: materialized playbook"
-                );
-              }
+                  playbookRef: auto.action.playbookSlug,
+                  params: auto.action.params,
+                })),
+              };
+
+              // Scope the applier to the NEWLY created workspace (ctx may carry a
+              // different active workspace from the request header).
+              const loopCtx = {
+                ...ctx,
+                workspaceId: result.workspaceId,
+              } as typeof ctx;
+              const loopResult = await createLoopFromDefinition(
+                loopDef,
+                {},
+                loopCtx
+              );
+
+              logger.info(
+                {
+                  workspaceId: result.workspaceId,
+                  playbooks: loopResult.created.playbooks.length,
+                  triggers: loopResult.created.triggers.length,
+                },
+                "createFromDefinition: materialized loop (playbooks + triggers)"
+              );
             } catch (err) {
               logger.warn(
                 { err, workspaceId: result.workspaceId },
-                "Failed to materialize playbooks (non-fatal)"
+                "Failed to materialize loop (playbooks/automations, non-fatal)"
               );
             }
           }
-
-          // TODO: Materialize automations (definition.automations) — insert rows into
-          // the automations table with a playbook_run action node, linked to the
-          // materialized playbook by slug. Blocked on: resolving playbookId from slug
-          // after materialization, and writing the flowDefinition JSON for a single-node
-          // "playbook_run" action.
 
           // TODO: Materialize tool templates (definition.tools) — insert rows into the
           // tools table using the same schema as ToolTemplate (name, kind, description,

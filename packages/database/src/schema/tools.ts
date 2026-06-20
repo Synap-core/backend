@@ -69,14 +69,17 @@ export const tools = pgTable(
   (table) => ({
     workspaceIdIdx: index("idx_tools_workspace_id").on(table.workspaceId),
     kindIdx: index("idx_tools_kind").on(table.kind),
-    // Pod-wide provider tools are keyed by their nango:// credentialRef. This
-    // partial unique index makes the connection→tool materialization race-safe
-    // (concurrent syncToolRows for the same provider can't insert duplicates).
-    // Scoped to nango:// + workspace_id IS NULL so it never affects builtin or
-    // workspace-scoped tools (which legitimately share NULL credentialRefs).
-    providerCredIdx: uniqueIndex("idx_tools_provider_cred")
+    // Pod-wide tools are keyed by their credentialRef: ONE pod-wide tool per
+    // distinct credential reference. This partial unique index makes the
+    // connection→tool materialization race-safe (concurrent syncToolRows for the
+    // same provider can't insert duplicates) and is scheme-agnostic — it covers
+    // nango://, vault://, mcp://, and any future credentialed pod-wide tool.
+    // Scoped to credential_ref IS NOT NULL + workspace_id IS NULL so it never
+    // affects builtin/script tools (which legitimately carry NULL credentialRef)
+    // or workspace-scoped tools (pod-wide identity only).
+    podwideCredentialRefIdx: uniqueIndex("idx_tools_podwide_credential_ref")
       .on(table.credentialRef)
-      .where(sql`credential_ref LIKE 'nango://%' AND workspace_id IS NULL`),
+      .where(sql`credential_ref IS NOT NULL AND workspace_id IS NULL`),
   })
 );
 

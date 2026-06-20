@@ -23,7 +23,6 @@ import {
   playbookRuns,
   relationDefs,
   widgetDefinitions,
-  skillTriggers,
   intelligenceCommands,
 } from "@synap/database/schema";
 import { registerVisibility } from "./visibility.js";
@@ -113,11 +112,6 @@ registerVisibility({
 
 // Operational workspace config (member-shared; NOT substrate) — a focused
 // workspace shows only its own rows, pod-wide rows surface in the user-wide view.
-registerVisibility({
-  table: skillTriggers,
-  query: () => db.query.skillTriggers,
-  rule: { kind: "workspace", workspaceColumn: skillTriggers.workspaceId },
-});
 registerVisibility({
   table: intelligenceCommands,
   query: () => db.query.intelligenceCommands,

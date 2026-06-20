@@ -1,0 +1,45 @@
+{
+  "key": "morning-briefing",
+  "name": "Morning Briefing",
+  "description": "A daily proactive loop: an is-agent summarizes what changed since yesterday and what needs attention today, delivered to a channel on a cron schedule.",
+  "params": [
+    {
+      "name": "cron",
+      "label": "Schedule (cron)",
+      "type": "text",
+      "required": false,
+      "default": "0 8 * * *",
+      "description": "5-field cron expression controlling when the briefing runs."
+    },
+    {
+      "name": "channelId",
+      "label": "Delivery channel",
+      "type": "text",
+      "required": true,
+      "description": "The channel the briefing is posted into."
+    }
+  ],
+  "playbooks": [
+    {
+      "ref": "briefing",
+      "name": "Morning Briefing",
+      "goalTemplate": "Summarize what changed since yesterday and what needs attention today",
+      "description": "Daily summary of recent changes and today's priorities.",
+      "executor": "is-agent",
+      "channelSpec": {
+        "type": "AGENT_COLLAB",
+        "members": [{ "memberId": "{{channelId}}", "memberKind": "ai_agent" }],
+        "aiReactionMode": "when_confident"
+      },
+      "expectedOutputs": [{ "kind": "report", "label": "Daily briefing" }]
+    }
+  ],
+  "triggers": [
+    {
+      "name": "Daily morning briefing",
+      "description": "Fires the briefing playbook on the configured cron.",
+      "trigger": { "type": "cron", "cron": "{{cron}}" },
+      "playbookRef": "briefing"
+    }
+  ]
+}

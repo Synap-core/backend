@@ -269,9 +269,27 @@ export function getDefaultProactiveAiPreferences(): ProactiveAiPreferences {
  */
 export type SignalSurface = "feed" | "chat" | "notification" | "suppress";
 
+/**
+ * A delivery target. A surface can be a bare kind (back-compat string form) or a
+ * structured target that carries provider/channel routing for the `external`
+ * surface (deliver to a bound Discord/Telegram/etc channel via the messaging
+ * connector seam). Stored in JSONB — adding the structured form needs no migration.
+ */
+export interface SurfaceTarget {
+  kind: "feed" | "chat" | "notification" | "suppress" | "external";
+  /** External provider for kind="external" (e.g. "discord", "telegram"). */
+  provider?: string;
+  /** Bound external channel ref (channels.externalId) for kind="external". */
+  channelRef?: string;
+}
+
 /** Routing rule for a single signal domain. */
 export interface SignalDeliveryRule {
-  surfaces: SignalSurface[];
+  /**
+   * A bare `SignalSurface` string normalizes to `{ kind: string }`; a
+   * `SurfaceTarget` carries provider/channel for `external` routing.
+   */
+  surfaces: (SignalSurface | SurfaceTarget)[];
 }
 
 /**

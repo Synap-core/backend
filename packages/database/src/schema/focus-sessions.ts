@@ -49,6 +49,14 @@ export const focusSessions = pgTable(
      * FK to entities.id (projects are entities with profileSlug='project').
      */
     projectId: uuid("project_id"),
+    /**
+     * The entity this session is "about" — the subject spine anchor.
+     * Process North Star Wave 0: links a session to a specific subject entity
+     * (e.g. a person, company, or deal) so playbook flows can act on it.
+     * FK enforced at the application layer (no hard DB constraint to avoid
+     * ordering issues). Added by 0139_process_subject_spine.sql.
+     */
+    subjectEntityId: uuid("subject_entity_id"),
     /** Owner — the human who started it. */
     userId: text("user_id").notNull(),
     /**
@@ -118,6 +126,9 @@ export const focusSessions = pgTable(
     statusIdx: index("idx_focus_sessions_status").on(table.status),
     playbookIdIdx: index("idx_focus_sessions_playbook_id").on(table.playbookId),
     projectIdIdx: index("idx_focus_sessions_project_id").on(table.projectId),
+    subjectEntityIdIdx: index("idx_focus_sessions_subject_entity_id").on(
+      table.subjectEntityId
+    ),
     // Partial unique index: one active session per channel.
     // Also serves as the covering index for channels.ts per-message lookup
     // (WHERE channel_id = ? AND status = 'active'). NULL channel_id excluded

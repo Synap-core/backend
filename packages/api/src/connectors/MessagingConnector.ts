@@ -53,6 +53,15 @@ export type WebhookEvent =
 
 export interface MessagingConnector {
   isConfigured(): boolean;
+  /**
+   * Whether sending requires a per-user messaging account (resolved from
+   * `messaging_accounts`). Default semantics = true (Unipile/Stalwart: each user
+   * sends from their own connected account). Server-managed connectors that own
+   * a single shared credential (e.g. Discord's bot token) return false, and the
+   * send target is resolved from the bound EXTERNAL channel instead — `accountId`
+   * is then ignored by `sendMessage`.
+   */
+  requiresAccount(): boolean;
   getAuthUrl(
     userId: string,
     redirectUrl: string,

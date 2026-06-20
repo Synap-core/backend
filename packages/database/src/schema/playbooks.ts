@@ -61,6 +61,21 @@ export const playbooks = pgTable(
     })
       .notNull()
       .default("draft"),
+    /**
+     * The automation that drives this playbook's flow.
+     * Process North Star Wave 0: links a playbook to a specific automation
+     * so it can be triggered or governed by that automation.
+     * No hard FK constraint — enforced at the application layer.
+     * Added by 0139_process_subject_spine.sql.
+     */
+    flowAutomationId: uuid("flow_automation_id"),
+    /**
+     * Subject profile selector — which entity profile this playbook operates on.
+     * Shape: { profileSlug: string; filter?: Record<string, unknown> }
+     * Nullable. Process North Star Wave 0.
+     * Added by 0139_process_subject_spine.sql.
+     */
+    subjectProfile: jsonb("subject_profile"),
     metadata: jsonb("metadata").notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -72,6 +87,9 @@ export const playbooks = pgTable(
   (table) => ({
     workspaceIdIdx: index("idx_playbooks_workspace_id").on(table.workspaceId),
     statusIdx: index("idx_playbooks_status").on(table.status),
+    flowAutomationIdIdx: index("idx_playbooks_flow_automation_id").on(
+      table.flowAutomationId
+    ),
   })
 );
 

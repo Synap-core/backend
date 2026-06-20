@@ -107,7 +107,7 @@ export interface SynapReplyRoutedEvent {
   routedAt: string;
 }
 
-/** Hermes background-task lifecycle. `taskId` matches the background_tasks row id. */
+/** Hermes task lifecycle. `taskId` is the Hermes job/task identifier. */
 export interface HermesTaskQueuedEvent {
   taskId: string;
   /** Task kind (job-queue name / task-template id). */

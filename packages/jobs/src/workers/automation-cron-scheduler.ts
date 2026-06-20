@@ -5,8 +5,8 @@
  * When nextRunAt <= now(), creates an automation_runs record
  * and enqueues an automation-execute job.
  *
- * Separate from background-task-scheduler — automations are DAGs,
- * background_tasks are flat single-action schedulers.
+ * This is the single cron scheduler / cron-due parser for the pod
+ * (computeNextRunAt). All autonomous cron behavior flows through automations.
  */
 
 import { db, eq, and, lte, automations, automationRuns } from "@synap/database";

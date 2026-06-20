@@ -47,7 +47,8 @@ Use \`synap_orient\` once to see the available workspaces and entity types. Writ
 export function createMCPServer(
   defaultWorkspaceId?: string,
   sessionUserId?: string,
-  grounding?: string
+  grounding?: string,
+  defaultProjectId?: string
 ) {
   const server = new Server(
     {
@@ -124,12 +125,18 @@ export function createMCPServer(
     ];
 
     const args = request.params.arguments ?? {};
-    // Auto-inject workspace scope when the URL carries ?workspaceId= and the
-    // tool didn't receive one explicitly from the model.
-    const scopedArgs =
-      defaultWorkspaceId && !args.workspaceId
-        ? { workspaceId: defaultWorkspaceId, ...args }
-        : args;
+    // Auto-inject the URL's scope (?workspaceId= / ?projectId=) into every tool
+    // call when the model didn't pass one. This is how the agent's MCP URL pins
+    // its focus: workspace lens + project lens, both orthogonal, both opt-in.
+    const scopedArgs = {
+      ...(defaultWorkspaceId && !args.workspaceId
+        ? { workspaceId: defaultWorkspaceId }
+        : {}),
+      ...(defaultProjectId && !args.projectId
+        ? { projectId: defaultProjectId }
+        : {}),
+      ...args,
+    };
 
     return await tools.execute(
       request.params.name,

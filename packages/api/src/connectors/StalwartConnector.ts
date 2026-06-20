@@ -86,6 +86,11 @@ export class StalwartConnector implements MessagingConnector {
     return Boolean(this.jmapUrl && this.bearerToken);
   }
 
+  /** Stalwart sends from each user's own connected mailbox account. */
+  requiresAccount(): boolean {
+    return true;
+  }
+
   // ── JMAP plumbing ─────────────────────────────────────────────────────────
 
   private authHeaders(): Record<string, string> {

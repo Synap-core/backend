@@ -108,4 +108,6 @@ export type {
   CaptureStructureResponse,
   CaptureExecuteInput,
   CaptureExecuteResponse,
+  AskResponse,
+  AskAnswerBlock,
 } from "./types.js";

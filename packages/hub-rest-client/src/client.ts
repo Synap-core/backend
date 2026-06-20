@@ -33,6 +33,7 @@ import type {
   CaptureStructureResponse,
   CaptureExecuteInput,
   CaptureExecuteResponse,
+  AskResponse,
   HubDocument,
   HubRelation,
   HubGraphResult,
@@ -1029,6 +1030,28 @@ export class HubRestClient {
         workspaceId: input.workspaceId ?? this.workspaceId,
       }
     );
+  }
+
+  // ─── Recall: the one door ──────────────────────────────────────────────────
+
+  /**
+   * `ask` — the unified recall verb. Routes a natural-language question across
+   * all knowledge substrates (semantic entities, procedural runbooks, episodic
+   * facts) server-side and returns ONE provenance-tagged answer. The canonical
+   * recall door — prefer it over the fragmented searchEntities / recallMemory.
+   * The server builds the profile catalog from the caller's workspace; the
+   * client only sends the query (+ optional scope).
+   */
+  async ask(input: {
+    query: string;
+    workspaceId?: string;
+    limit?: number;
+  }): Promise<AskResponse> {
+    return this.request<AskResponse>("POST", "/api/hub/knowledge/ask", {
+      query: input.query,
+      workspaceId: input.workspaceId ?? this.workspaceId,
+      limit: input.limit,
+    });
   }
 
   // ─── Automations ───────────────────────────────────────────────────────────

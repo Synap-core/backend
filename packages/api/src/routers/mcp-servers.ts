@@ -13,9 +13,9 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, or, isNull, asc } from "@synap/database";
+import { db, eq, and, or, isNull, asc, inArray } from "@synap/database";
 import { mcpServers } from "@synap/database/schema";
-import { workspaceMembers } from "@synap/database/schema";
+import { workspaceMembers, workspaces } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { invalidateMcpCache } from "./channels.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
@@ -26,6 +26,39 @@ function requireAdminRole(role: string | undefined | null) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "Only workspace owners and admins can manage MCP servers.",
+    });
+  }
+}
+
+/**
+ * Require pod-admin (owner/admin of the `pod-admin` system workspace) for
+ * pod-wide (null-workspace) MCP servers. A pod-wide server is visible to every
+ * workspace, so creating/re-pointing one is a pod-level privileged action —
+ * mirrors `podAdminProcedure` in trpc.ts. Throws FORBIDDEN otherwise.
+ */
+async function requirePodAdmin(userId: string) {
+  const podAdminWorkspace = await db.query.workspaces.findFirst({
+    where: eq(workspaces.systemSlug, "pod-admin"),
+    columns: { id: true },
+  });
+  if (!podAdminWorkspace) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Pod administration workspace not found.",
+    });
+  }
+  const membership = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
+      eq(workspaceMembers.userId, userId),
+      inArray(workspaceMembers.role, ["admin", "owner"])
+    ),
+    columns: { role: true },
+  });
+  if (!membership) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only pod administrators can manage pod-wide MCP servers.",
     });
   }
 }
@@ -102,6 +135,9 @@ export const mcpServersRouter = router({
       if (input.workspaceId) {
         const role = await getWorkspaceRole(userId, input.workspaceId);
         requireAdminRole(role);
+      } else {
+        // Pod-wide server (null workspaceId) — pod-level privileged action.
+        await requirePodAdmin(userId);
       }
 
       // Validate transport-specific required fields
@@ -167,6 +203,9 @@ export const mcpServersRouter = router({
       if (existing.workspaceId) {
         const role = await getWorkspaceRole(userId, existing.workspaceId);
         requireAdminRole(role);
+      } else {
+        // Editing a pod-wide server is a pod-level privileged action.
+        await requirePodAdmin(userId);
       }
       if (
         workspaceId !== undefined &&
@@ -177,11 +216,26 @@ export const mcpServersRouter = router({
         requireAdminRole(targetRole);
       }
 
+      // Security: if any execution-defining field changes, the server may now
+      // point somewhere different from what was approved — reset approval so an
+      // approved server can't be silently re-pointed to run untrusted code.
+      const RE_APPROVAL_FIELDS = [
+        "command",
+        "args",
+        "env",
+        "url",
+        "transport",
+      ] as const;
+      const execChanged = RE_APPROVAL_FIELDS.some(
+        (k) => (fields as Record<string, unknown>)[k] !== undefined
+      );
+
       const [updated] = await db
         .update(mcpServers)
         .set({
           ...fields,
           ...(workspaceId !== undefined ? { workspaceId } : {}),
+          ...(execChanged ? { approved: false } : {}),
           updatedAt: new Date(),
         })
         .where(eq(mcpServers.id, id))

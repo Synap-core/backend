@@ -33,6 +33,12 @@ export interface AskParams {
   query: string;
   userId: string;
   workspaceId?: string | null;
+  /**
+   * Project focus lens (a `project` entity id). When set, the semantic
+   * substrate narrows to that project (project + everything that belongs_to it).
+   * Orthogonal to workspaceId, pure-narrowing. Forwarded to the retrieval engine.
+   */
+  projectId?: string | null;
   /** Profile catalog for the semantic engine's type inference. */
   catalog: ProfileCatalogEntry[];
   limit?: number;
@@ -86,14 +92,22 @@ async function settle(p: Promise<unknown[]>): Promise<Settled> {
 }
 
 export async function ask(params: AskParams): Promise<AskResult> {
-  const { query, userId, workspaceId, catalog } = params;
+  const { query, userId, workspaceId, projectId, catalog } = params;
   const limit = params.limit ?? 10;
   const { substrates, primary: intent } = classifySubstrates(query);
 
   // Semantic always runs (the backbone) and is NOT wrapped — a total retrieval
   // failure should surface as an error, not a silent empty answer. Procedural /
   // episodic run only when cued and each reports its own ok/error status.
-  const semanticP = retrieve({ query, userId, workspaceId, catalog, limit });
+  // projectId narrows the semantic substrate to the active project focus.
+  const semanticP = retrieve({
+    query,
+    userId,
+    workspaceId,
+    projectId,
+    catalog,
+    limit,
+  });
   // knowledge_keys has no user column; scope to the user's namespace (workspaceId
   // slot), matching GET /knowledge/search — `undefined` would read UNFILTERED
   // across every user/workspace on the pod.

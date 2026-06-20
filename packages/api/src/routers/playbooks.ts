@@ -26,18 +26,51 @@ import {
   desc,
   playbooks,
   focusSessions,
+  automations,
+  entities,
+  type FlowDefinition,
 } from "@synap/database";
-import type { Playbook, FocusSession } from "@synap/database/schema";
+import type {
+  Playbook,
+  FocusSession,
+  Automation,
+} from "@synap/database/schema";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
-import { getLinksFor } from "../services/links/links-service.js";
+import { getLinksFor, createLinks } from "../services/links/links-service.js";
 import { listCapabilities } from "../services/capabilities/capability-registry.js";
 import {
   instantiateSession,
   promoteSessionToPlaybook,
 } from "../services/playbooks/playbook-lifecycle.js";
 import { runPlaybook } from "../services/playbooks/run-playbook.js";
+import { materializePlaybookCronAutomation } from "../services/playbooks/cron-automation.js";
+
+/**
+ * Resolve a subject entity id to bind to a run/session, guarding cross-workspace
+ * IDOR: `subject_entity_id` has no FK, so every writer must verify the entity is
+ * visible (its own workspace OR pod-wide NULL) before binding. Mirrors the
+ * automation-executor guard. Throws NOT_FOUND if the id isn't visible here.
+ */
+async function resolveVisibleSubjectId(
+  database: Awaited<ReturnType<typeof getDb>>,
+  subjectId: string | undefined,
+  workspaceId: string
+): Promise<string | undefined> {
+  if (!subjectId) return undefined;
+  const subj = await database.query.entities.findFirst({
+    columns: { id: true, workspaceId: true },
+    where: eq(entities.id, subjectId),
+  });
+  if (subj && (subj.workspaceId === workspaceId || subj.workspaceId === null)) {
+    return subj.id;
+  }
+  throw new TRPCError({
+    code: "NOT_FOUND",
+    message: `Subject entity ${subjectId} not found in this workspace`,
+  });
+}
 
 // ── Shared input schemas ─────────────────────────────────────────────────────
 
@@ -242,6 +275,12 @@ export const playbooksRouter = router({
         })
         .returning();
 
+      // S1: a scheduled playbook maintains ONE backing cron automation (stamped
+      // on flow_automation_id) that the existing automation-cron-scheduler fires.
+      await materializePlaybookCronAutomation(created as Playbook, {
+        userId: input.agentUserId ?? ctx.userId,
+      });
+
       return {
         playbook: created as Playbook,
         status: "created" as const,
@@ -323,6 +362,13 @@ export const playbooksRouter = router({
         .set(set)
         .where(eq(playbooks.id, input.id))
         .returning();
+
+      // S1: re-reconcile the backing cron automation against the new schedule.
+      // Idempotent — re-points/updates the SAME row via flow_automation_id, or
+      // tears it down when the schedule was cleared/disabled.
+      await materializePlaybookCronAutomation(updated as Playbook, {
+        userId: input.agentUserId ?? ctx.userId,
+      });
 
       return {
         playbook: updated as Playbook,
@@ -422,6 +468,8 @@ export const playbooksRouter = router({
         agentIds: z.array(z.string()).optional(),
         channelId: z.string().uuid().optional(),
         agentUserId: z.string().uuid().optional(),
+        /** Subject entity to bind this session to (polymorphic — any entity). */
+        subjectId: z.string().uuid().optional(),
         source: z.string().optional(),
         reasoning: z.string().optional(),
       })
@@ -447,6 +495,13 @@ export const playbooksRouter = router({
       await assertWorkspaceWrite(database, ctx.userId, {
         workspaceId: ctx.workspaceId,
       });
+
+      // Validate the subject (if any) is visible here before binding (IDOR guard).
+      const subjectId = await resolveVisibleSubjectId(
+        database,
+        input.subjectId,
+        ctx.workspaceId
+      );
 
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
@@ -477,6 +532,7 @@ export const playbooksRouter = router({
         params: input.params,
         channelId: input.channelId ?? null,
         agentIds: input.agentIds,
+        subjectId,
       });
       return {
         session,
@@ -572,6 +628,8 @@ export const playbooksRouter = router({
         params: z.record(z.string(), z.unknown()).optional(),
         agentIds: z.array(z.string()).optional(),
         agentUserId: z.string().uuid().optional(),
+        /** Subject entity to bind this run to (polymorphic — any entity). */
+        subjectId: z.string().uuid().optional(),
         source: z.string().optional(),
         reasoning: z.string().optional(),
       })
@@ -596,6 +654,13 @@ export const playbooksRouter = router({
       await assertWorkspaceWrite(database, ctx.userId, {
         workspaceId: ctx.workspaceId,
       });
+
+      // Validate the subject (if any) is visible here before binding (IDOR guard).
+      const subjectId = await resolveVisibleSubjectId(
+        database,
+        input.subjectId,
+        ctx.workspaceId
+      );
 
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
@@ -627,6 +692,7 @@ export const playbooksRouter = router({
         params: input.params,
         agentIds: input.agentIds,
         agentUserId: input.agentUserId,
+        subjectId,
       });
 
       return {
@@ -634,6 +700,217 @@ export const playbooksRouter = router({
         session,
         status: "running" as const,
         message: "Playbook run started",
+        proposalId: null as string | null,
+      };
+    }),
+
+  /**
+   * Get the flow graph for a playbook (Option-C model: playbook references an
+   * automation that owns the flow definition via `flow_automation_id`).
+   *
+   * If `flow_automation_id` is set → load that automation's flowDefinition.
+   * If NOT set → return a lazy starter graph (NOT persisted) seeded from the
+   * playbook's name and goalTemplate. `automationId: null` signals the caller
+   * that no automation exists yet (saveFlow will create one on first save).
+   */
+  getFlow: protectedProcedure
+    .input(z.object({ playbookId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      // Load with visibility gate — same pattern as `get`.
+      const playbook = await scopedDb(
+        AccessContext.from(ctx)
+      ).findFirst<Playbook>(playbooks, {
+        where: eq(playbooks.id, input.playbookId),
+      });
+
+      if (!playbook) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+
+      // Existing automation → return its persisted flow.
+      if (playbook.flowAutomationId) {
+        const database = await getDb();
+        const automation = await database.query.automations.findFirst({
+          where: eq(automations.id, playbook.flowAutomationId),
+        });
+        if (automation) {
+          return {
+            flowDefinition: automation.flowDefinition as FlowDefinition,
+            automationId: automation.id as string,
+          };
+        }
+        // Dangling pointer (automation deleted) — fall through and return starter.
+      }
+
+      // No automation yet → return a lazy starter graph (not persisted).
+      const triggerId = "trigger-1";
+      const commandId = "command-1";
+      const starterFlow: FlowDefinition = {
+        nodes: [
+          {
+            id: triggerId,
+            type: "trigger",
+            position: { x: 250, y: 50 },
+            data: {
+              triggerType: "manual",
+              label: playbook.name,
+              config: {},
+            },
+          },
+          {
+            id: commandId,
+            type: "command",
+            position: { x: 250, y: 200 },
+            data: {
+              commandTitle: playbook.goalTemplate,
+              inputMapping: {},
+            },
+          },
+        ],
+        edges: [
+          {
+            id: `${triggerId}-${commandId}`,
+            source: triggerId,
+            target: commandId,
+          },
+        ],
+      };
+
+      return {
+        flowDefinition: starterFlow,
+        automationId: null as string | null,
+      };
+    }),
+
+  /**
+   * Save the flow graph for a playbook (Option-C model).
+   *
+   * If `flow_automation_id` is already set → update that automation's
+   * flowDefinition in-place.
+   * If NOT set → create a new "manual" draft automation, stamp
+   * `playbooks.flow_automation_id`, and write an `automation --activates-->
+   * playbook` link edge.
+   *
+   * Governance-gated (mirrors `update`): write-gate on the LOADED playbook's
+   * workspaceId + checkPermissionOrPropose. On "proposed" returns without
+   * writing.
+   */
+  saveFlow: protectedProcedure
+    .input(
+      z.object({
+        playbookId: z.string().uuid(),
+        flowDefinition: z.object({
+          nodes: z.array(z.unknown()),
+          edges: z.array(z.unknown()),
+        }),
+        agentUserId: z.string().uuid().optional(),
+        source: z.string().optional(),
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const database = await getDb();
+
+      // 1. Load by id ONLY — never trust a caller-supplied workspaceId.
+      const existing = await database.query.playbooks.findFirst({
+        where: eq(playbooks.id, input.playbookId),
+      });
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+
+      // 2. Write-gate on the LOADED row's workspaceId (never input.*).
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: existing.workspaceId,
+      });
+
+      // 3. Governance membrane — same verb as update.
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: existing.workspaceId,
+        subjectType: "playbook",
+        action: "update",
+        source: input.source,
+        reasoning: input.reasoning,
+        data: { id: input.playbookId, name: existing.name },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          automationId: null as string | null,
+          status: "proposed" as const,
+          message: "Flow save proposed for review",
+          proposalId: perm.proposalId,
+        };
+      }
+
+      const flowDef = input.flowDefinition as FlowDefinition;
+
+      // 4a. Existing automation → update its flowDefinition in-place.
+      if (existing.flowAutomationId) {
+        await database
+          .update(automations)
+          .set({ flowDefinition: flowDef, updatedAt: new Date() })
+          .where(eq(automations.id, existing.flowAutomationId));
+
+        return {
+          automationId: existing.flowAutomationId as string,
+          status: "updated" as const,
+          message: "Flow definition updated",
+          proposalId: null as string | null,
+        };
+      }
+
+      // 4b. No automation yet → create one, stamp playbook, write link edge.
+      const [created] = await database
+        .insert(automations)
+        .values({
+          workspaceId: existing.workspaceId,
+          createdBy: input.agentUserId ?? ctx.userId,
+          name: existing.name,
+          description: existing.description ?? null,
+          triggerType: "manual",
+          triggerConfig: {},
+          flowDefinition: flowDef,
+          status: "draft",
+          metadata: { createdVia: "manual", playbookId: existing.id },
+        })
+        .returning({ id: automations.id });
+
+      const automationId = (created as Pick<Automation, "id">).id;
+
+      // Stamp the playbook with the new automation id.
+      await database
+        .update(playbooks)
+        .set({ flowAutomationId: automationId, updatedAt: new Date() })
+        .where(eq(playbooks.id, existing.id));
+
+      // Write the `automation --activates--> playbook` link edge (idempotent).
+      await createLinks([
+        {
+          workspaceId: existing.workspaceId,
+          fromType: "automation",
+          fromId: automationId,
+          toType: "playbook",
+          toId: existing.id,
+          linkType: "activates",
+        },
+      ]);
+
+      return {
+        automationId: automationId as string,
+        status: "created" as const,
+        message: "Flow automation created and linked",
         proposalId: null as string | null,
       };
     }),

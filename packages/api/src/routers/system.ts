@@ -1437,7 +1437,6 @@ export const systemRouter = router({
         "messaging_account",
         "feed_item",
         "inbox_item",
-        "backgroundTask",
         "workspaces",
         "workspace_members",
         "api_keys",

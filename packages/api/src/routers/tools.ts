@@ -9,10 +9,11 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, or, isNull, inArray, desc } from "@synap/database";
+import { db, eq, and, or, isNull, inArray, desc } from "@synap/database";
 import { tools, skills } from "@synap/database/schema";
 import type { Tool } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
+import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { getLinksFor } from "../services/links/links-service.js";
 import { emitSideEffects } from "@synap/events";
@@ -38,16 +39,18 @@ export const toolsRouter = router({
         })
         .optional()
     )
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
       const ws = input?.workspaceId;
+      // AND the workspace lens with the user-visible floor so a non-member
+      // passing another workspace's id sees only pod-wide + their own rows.
+      const lens = ws
+        ? or(isNull(tools.workspaceId), eq(tools.workspaceId, ws))
+        : isNull(tools.workspaceId);
       const rows = await db
         .select()
         .from(tools)
-        .where(
-          ws
-            ? or(isNull(tools.workspaceId), eq(tools.workspaceId, ws))
-            : isNull(tools.workspaceId)
-        )
+        .where(and(lens, userVisibleWhere(tools.workspaceId, userId)))
         .orderBy(desc(tools.createdAt))
         .limit(input?.limit ?? 100);
       return rows as Tool[];
@@ -57,8 +60,14 @@ export const toolsRouter = router({
   get: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      // Fold the user-visible floor into the lookup so a non-member can never
+      // read another workspace's tool (pod-wide null-ws tools stay visible).
       const tool = await db.query.tools.findFirst({
-        where: eq(tools.id, input.id),
+        where: and(
+          eq(tools.id, input.id),
+          userVisibleWhere(tools.workspaceId, userId)
+        ),
       });
       if (!tool)
         throw new TRPCError({

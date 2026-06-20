@@ -1672,45 +1672,9 @@ CREATE INDEX IF NOT EXISTS "skills_status_idx"       ON "skills" ("status");
 CREATE INDEX IF NOT EXISTS "skills_kind_idx"         ON "skills" ("kind");
 CREATE INDEX IF NOT EXISTS "skills_name_idx"         ON "skills" ("name");
 
--- ─── 31. skill_triggers ──────────────────────────────────────────────────────
-
-CREATE TABLE IF NOT EXISTS "skill_triggers" (
-  "id"              uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
-  "skill_id"        uuid    NOT NULL REFERENCES "skills"("id") ON DELETE CASCADE,
-  "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
-  "user_id"         text    NOT NULL,
-  "type"            text    NOT NULL,
-  "event_pattern"   text,
-  "filters"         jsonb,
-  "cron_expression" text,
-  "channel_type"    text    NOT NULL DEFAULT 'personal',
-  "is_active"       boolean NOT NULL DEFAULT true,
-  "automation_id"   uuid,
-  "created_at"      timestamp with time zone NOT NULL DEFAULT now(),
-  "updated_at"      timestamp with time zone NOT NULL DEFAULT now()
-);
--- Ensure all columns exist on pre-existing tables (idempotent guard)
-ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "skill_id" uuid REFERENCES "skills"("id") ON DELETE CASCADE;
-ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
-ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "user_id" text;
-ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "type" text;
-ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "event_pattern" text;
-ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "filters" jsonb;
-ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "cron_expression" text;
-ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "channel_type" text DEFAULT 'personal';
-ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "is_active" boolean DEFAULT true;
-ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "automation_id" uuid;
-ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
-ALTER TABLE "skill_triggers" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
-
-CREATE INDEX IF NOT EXISTS "skill_triggers_skill_id_idx"
-  ON "skill_triggers" ("skill_id");
-
-CREATE INDEX IF NOT EXISTS "skill_triggers_workspace_id_idx"
-  ON "skill_triggers" ("workspace_id");
-
-CREATE INDEX IF NOT EXISTS "skill_triggers_type_idx"
-  ON "skill_triggers" ("type");
+-- ─── 31. (retired) skill_triggers ────────────────────────────────────────────
+-- Skill triggers are now plain `automations` rows (unified trigger SSoT).
+-- The table is dropped by migration 0141; intentionally no CREATE here.
 
 -- ─── 32. agents ──────────────────────────────────────────────────────────────
 
@@ -2477,63 +2441,10 @@ CREATE INDEX IF NOT EXISTS "reasoning_traces_user_id_idx"
 CREATE INDEX IF NOT EXISTS "reasoning_traces_agent_idx"
   ON "reasoning_traces" ("agent_id");
 
--- ─── 44. background_tasks ────────────────────────────────────────────────────
-
-CREATE TABLE IF NOT EXISTS "background_tasks" (
-  "id"              uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
-  "user_id"         text    NOT NULL,
-  "workspace_id"    uuid    REFERENCES "workspaces"("id") ON DELETE CASCADE,
-  "name"            text    NOT NULL,
-  "description"     text,
-  "type"            text    NOT NULL,
-  "schedule"        text,
-  "action"          text    NOT NULL,
-  "context"         jsonb   NOT NULL DEFAULT '{}',
-  "status"          text    NOT NULL DEFAULT 'active',
-  "error_message"   text,
-  "last_run_at"     timestamp with time zone,
-  "next_run_at"     timestamp with time zone,
-  "execution_count" integer NOT NULL DEFAULT 0,
-  "success_count"   integer NOT NULL DEFAULT 0,
-  "failure_count"   integer NOT NULL DEFAULT 0,
-  "metadata"        jsonb   NOT NULL DEFAULT '{}',
-  "created_at"      timestamp with time zone NOT NULL DEFAULT now(),
-  "updated_at"      timestamp with time zone NOT NULL DEFAULT now()
-);
--- Ensure all columns exist on pre-existing tables (idempotent guard)
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "user_id" text;
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "name" text;
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "description" text;
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "type" text;
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "schedule" text;
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "action" text;
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "context" jsonb DEFAULT '{}';
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'active';
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "error_message" text;
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "last_run_at" timestamp with time zone;
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "next_run_at" timestamp with time zone;
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "execution_count" integer DEFAULT 0;
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "success_count" integer DEFAULT 0;
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "failure_count" integer DEFAULT 0;
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
-ALTER TABLE "background_tasks" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
-
-CREATE INDEX IF NOT EXISTS "background_tasks_user_id_idx"
-  ON "background_tasks" ("user_id");
-
-CREATE INDEX IF NOT EXISTS "background_tasks_workspace_id_idx"
-  ON "background_tasks" ("workspace_id");
-
-CREATE INDEX IF NOT EXISTS "background_tasks_status_idx"
-  ON "background_tasks" ("status");
-
-CREATE INDEX IF NOT EXISTS "background_tasks_type_idx"
-  ON "background_tasks" ("type");
-
-CREATE INDEX IF NOT EXISTS "background_tasks_next_run_at_idx"
-  ON "background_tasks" ("next_run_at");
+-- ─── 44. (retired) background_tasks ──────────────────────────────────────────
+-- Background-task scheduling is now expressed via playbooks + cron-automations
+-- (unified work + trigger SSoT). The table is dropped by migration 0141;
+-- intentionally no CREATE here.
 
 -- ─── 45. widget_definitions ──────────────────────────────────────────────────
 
@@ -3258,6 +3169,9 @@ CREATE INDEX IF NOT EXISTS "idx_focus_sessions_user_id"      ON "focus_sessions"
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_status"       ON "focus_sessions" ("status");
 -- Project-scoped session lookup (0136)
 CREATE INDEX IF NOT EXISTS idx_focus_sessions_project_id ON "focus_sessions" ("project_id");
+-- Process North Star subject spine (0139)
+ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS subject_entity_id uuid;
+CREATE INDEX IF NOT EXISTS idx_focus_sessions_subject_entity_id ON focus_sessions (subject_entity_id);
 -- One active session per channel + covering index for per-message lookup (0121)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_focus_sessions_active_channel
   ON focus_sessions (channel_id)
@@ -3351,8 +3265,12 @@ CREATE TABLE IF NOT EXISTS "tools" (
 );
 CREATE INDEX IF NOT EXISTS "idx_tools_workspace_id" ON "tools" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_tools_kind"         ON "tools" ("kind");
-CREATE UNIQUE INDEX IF NOT EXISTS "idx_tools_provider_cred" ON "tools" ("credential_ref")
-  WHERE credential_ref LIKE 'nango://%' AND workspace_id IS NULL;
+-- Generalized from the old nango://-only index (mig 0132 → 0140): ONE pod-wide
+-- tool per distinct non-null credential_ref, scheme-agnostic. NULL credential_ref
+-- (builtin/script) and workspace-scoped tools are excluded.
+DROP INDEX IF EXISTS "idx_tools_provider_cred";
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_tools_podwide_credential_ref" ON "tools" ("credential_ref")
+  WHERE credential_ref IS NOT NULL AND workspace_id IS NULL;
 
 CREATE TABLE IF NOT EXISTS "playbooks" (
   "id"               uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -3374,6 +3292,10 @@ CREATE TABLE IF NOT EXISTS "playbooks" (
 );
 CREATE INDEX IF NOT EXISTS "idx_playbooks_workspace_id" ON "playbooks" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_playbooks_status"       ON "playbooks" ("status");
+-- Process North Star subject spine (0139)
+ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS flow_automation_id uuid;
+CREATE INDEX IF NOT EXISTS idx_playbooks_flow_automation_id ON playbooks (flow_automation_id);
+ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS subject_profile jsonb;
 
 CREATE TABLE IF NOT EXISTS "links" (
   "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,

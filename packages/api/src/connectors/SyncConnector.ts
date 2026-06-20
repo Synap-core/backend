@@ -35,6 +35,10 @@ export interface SyncConnector {
   ): Promise<SyncConnectorRecord[]>;
 }
 
+/**
+ * Registry of sync connectors, keyed by `name`, exposing the public shape
+ * (`register`/`get`/`list`) every existing sync caller imports.
+ */
 export class SyncConnectorRegistry {
   private connectors = new Map<string, SyncConnector>();
 

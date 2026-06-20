@@ -17,6 +17,10 @@ export interface EnrichmentProvider {
   enrich(input: EnrichmentInput, apiKey?: string): Promise<EnrichmentResult[]>;
 }
 
+/**
+ * Registry of enrichment providers, keyed by `name`, exposing the public shape
+ * (`register`/`get`/`forCapability`) every existing enrichment caller imports.
+ */
 export class EnrichmentProviderRegistry {
   private providers = new Map<string, EnrichmentProvider>();
 

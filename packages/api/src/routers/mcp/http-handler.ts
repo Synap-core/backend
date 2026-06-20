@@ -177,8 +177,10 @@ mcpHttpApp.post("/", async (c) => {
     );
   }
 
-  // Optional workspace scoping: ?workspaceId= narrows all tool calls to one workspace.
+  // Optional scoping from the URL: ?workspaceId= (workspace lens) and
+  // ?projectId= (project focus lens). Both narrow tool calls; orthogonal.
   const defaultWorkspaceId = c.req.query("workspaceId") ?? undefined;
+  const defaultProjectId = c.req.query("projectId") ?? undefined;
   // Live grounding is only consumed by the client at the `initialize` handshake
   // (it lands in the server's `instructions`). Fetch it ONLY for initialize — a
   // tools/call request would otherwise pay 2 DB queries for instructions no one
@@ -191,7 +193,8 @@ mcpHttpApp.post("/", async (c) => {
   const server = createMCPServer(
     defaultWorkspaceId,
     keyRecord.userId,
-    grounding
+    grounding,
+    defaultProjectId
   );
   await server.connect(transport);
 

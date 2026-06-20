@@ -34,6 +34,11 @@ export const tools = {
               description:
                 "Optional: scope to one workspace. Omit for pod-wide recall across everything the user has.",
             },
+            projectId: {
+              type: "string",
+              description:
+                "Optional: focus recall on a project (its entity id). Narrows to that project's entities; orthogonal to workspaceId. Usually pre-set by the connection's URL, but pass it to scope a single call.",
+            },
             limit: {
               type: "number",
               description: "Max results per substrate (default: 10)",

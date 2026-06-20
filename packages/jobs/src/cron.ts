@@ -29,10 +29,6 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("doc-persistence", "*/10 * * * *", {});
   logger.info("Registered cron: doc-persistence (every 10min)");
 
-  // Background task scheduler (every 1 minute)
-  await boss.schedule("background-task-scheduler", "* * * * *", {});
-  logger.info("Registered cron: background-task-scheduler (every 1min)");
-
   // Search bulk-index catch-up (every 5 minutes).
   // Individual items are indexed immediately via indexNow(); this cron only flushes
   // items that were queued as fallback when Typesense was temporarily unavailable.
@@ -65,13 +61,6 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("feed-scheduler", "* * * * *", {});
   logger.info("Registered cron: feed-scheduler (every 1min)");
 
-  // Proactive scheduler (hourly — enqueues due morning-briefing / weekly-digest feeds).
-  // These are daily/weekly cadences, so hourly polling is sufficient; the per-feed
-  // schedule (e.g. 08:00) decides the actual fire. Worst case a briefing fires within
-  // the hour of its scheduled time.
-  await boss.schedule("proactive-scheduler", "0 * * * *", {});
-  logger.info("Registered cron: proactive-scheduler (hourly)");
-
   // Pod-to-pod replication — event log (catch-up + cursor maintenance; realtime hook is primary path)
   await boss.schedule("sync-push", "* * * * *", {});
   logger.info("Registered cron: sync-push (every 1min)");
@@ -95,10 +84,6 @@ export async function registerCronSchedules(): Promise<void> {
     await boss.schedule("hermes-trigger", "* * * * *", {});
     logger.info("Registered cron: hermes-trigger (every 1min)");
   }
-
-  // Agent scheduler (every 1 minute — executes due [agent-sched] entities via IS)
-  await boss.schedule("agent-scheduler", "* * * * *", {});
-  logger.info("Registered cron: agent-scheduler (every 1min)");
 
   // Memory decay (daily at 03:30 UTC — applies Ebbinghaus decay to knowledge_facts)
   await boss.schedule("memory-decay", "30 3 * * *", {});

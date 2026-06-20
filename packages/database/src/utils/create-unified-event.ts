@@ -32,7 +32,6 @@ export type SubjectType =
   | "role"
   | "apiKey"
   | "skill"
-  | "backgroundTask"
   | "agent"
   | "chatThread"
   | "template"

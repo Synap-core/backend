@@ -38,7 +38,7 @@ import {
   ChannelScope,
   ChannelStatus,
 } from "@synap/database/schema";
-import type { ChannelSpec, RunResult } from "@synap/playbooks";
+import type { ChannelSpec, RunResult, InputStrategy } from "@synap/playbooks";
 import { instantiateSession } from "./playbook-lifecycle.js";
 import { extractCapabilities, getLinksFor } from "../links/links-service.js";
 import { resolveExecutor } from "./executors/registry.js";
@@ -55,12 +55,18 @@ export interface RunPlaybookInput {
   agentIds?: string[];
   /** AI attribution — when set, the run is owned by the agent-user. */
   agentUserId?: string;
+  /** The entity this run is about (e.g. a contact, deal, or document).
+   * Stored as focus_sessions.subjectEntityId and forwarded in RunContext. */
+  subjectId?: string;
 }
 
 export interface RunPlaybookResult {
   run: PlaybookRun;
   session: FocusSession;
 }
+
+/** Max runs a single `query`/`rotating` fan-out may spawn (safety bound). */
+const MAX_INPUT_FANOUT = 50;
 
 /** Map a ChannelSpec.type to the channels.channelType enum (default THREAD). */
 function channelTypeFromSpec(spec: ChannelSpec | undefined) {
@@ -75,8 +81,101 @@ function channelTypeFromSpec(spec: ChannelSpec | undefined) {
   }
 }
 
+/** Narrow the loosely-typed JSONB `inputStrategy` column. */
+function readInputStrategy(value: unknown): InputStrategy {
+  if (!value || typeof value !== "object") return { kind: "none" };
+  const s = value as { kind?: string };
+  if (
+    s.kind === "static" ||
+    s.kind === "rotating" ||
+    s.kind === "query" ||
+    s.kind === "none"
+  ) {
+    return value as InputStrategy;
+  }
+  return { kind: "none" };
+}
+
+/**
+ * Resolve a playbook's InputStrategy into the set of run items to execute.
+ *
+ *   - none / static-empty → exactly ONE run with the caller's params (the
+ *     baseline behavior; `static` with items fans one run per item).
+ *   - static  → one run per declared item.
+ *   - rotating → advance a cursor stored in `playbook.metadata.inputCursor`
+ *     (NO new column) and run for the CURRENT item only.
+ *   - query   → TODO(P-query): resolve `sourceSubscriptionId` into a live item
+ *     set. Not yet implemented — runs ONCE with the caller's params so the
+ *     playbook still fires (we do NOT fabricate items).
+ *
+ * Returns the per-run `input` payloads, capped at MAX_INPUT_FANOUT.
+ */
+async function resolveInputItems(
+  playbook: Playbook,
+  baseParams: Record<string, unknown>
+): Promise<Array<Record<string, unknown>>> {
+  const strategy = readInputStrategy(playbook.inputStrategy);
+
+  switch (strategy.kind) {
+    case "none":
+      return [baseParams];
+
+    case "static": {
+      const items = strategy.items ?? [];
+      if (items.length === 0) return [baseParams];
+      return items
+        .slice(0, MAX_INPUT_FANOUT)
+        .map((item) => ({ ...baseParams, item }));
+    }
+
+    case "rotating": {
+      const items = strategy.items ?? [];
+      if (items.length === 0) return [baseParams];
+      const cursor = typeof strategy.cursor === "number" ? strategy.cursor : 0;
+      const idx = ((cursor % items.length) + items.length) % items.length;
+      const item = items[idx];
+
+      // Persist the advanced cursor back into the strategy (JSONB, no new column).
+      const db = await getDb();
+      const nextStrategy: InputStrategy = {
+        ...strategy,
+        cursor: (idx + 1) % items.length,
+      };
+      await db
+        .update(playbooks)
+        .set({ inputStrategy: nextStrategy, updatedAt: new Date() })
+        .where(eq(playbooks.id, playbook.id));
+
+      return [{ ...baseParams, item }];
+    }
+
+    case "query": {
+      // TODO(P-query): resolve strategy.sourceSubscriptionId → a live item set
+      // (via the source_subscription's query) and fan ONE run per item, bounded
+      // by MAX_INPUT_FANOUT. Until then, run once with the caller's params —
+      // never fabricate items.
+      logger.warn(
+        {
+          playbookId: playbook.id,
+          sourceSubscriptionId: strategy.sourceSubscriptionId,
+        },
+        "inputStrategy 'query' not yet implemented — running once with caller params"
+      );
+      return [baseParams];
+    }
+
+    default:
+      return [baseParams];
+  }
+}
+
 /**
  * Run a playbook end-to-end. Caller MUST gate (checkPermissionOrPropose) first.
+ *
+ * Honors the playbook's `inputStrategy` (S9): `none` runs once; `static`/`query`
+ * may fan one run per item (bounded); `rotating` advances a cursor and runs the
+ * current item. The PRIMARY (first) run + session is returned for the stable
+ * single-result contract; any additional fan-out runs execute as side effects.
  */
 export async function runPlaybook(
   input: RunPlaybookInput
@@ -90,6 +189,43 @@ export async function runPlaybook(
     throw new Error(`Playbook ${input.playbookId} not found`);
   }
 
+  // S9: resolve the input strategy into per-run param payloads. The first item
+  // is the primary (returned) run; the rest fan out as side effects.
+  const runItems = await resolveInputItems(
+    playbook,
+    (input.params ?? {}) as Record<string, unknown>
+  );
+
+  const primary = await executeSingleRun(playbook, input, runItems[0]);
+
+  // Fan-out: additional items each get their own session/channel/run. Failures
+  // are logged but never abort the primary result.
+  for (let i = 1; i < runItems.length; i++) {
+    try {
+      await executeSingleRun(playbook, input, runItems[i]);
+    } catch (err) {
+      logger.error(
+        { err, playbookId: playbook.id, itemIndex: i },
+        "Input-strategy fan-out run failed (non-fatal)"
+      );
+    }
+  }
+
+  return primary;
+}
+
+/**
+ * Execute ONE playbook run for a single resolved param payload: instantiate a
+ * session, create the run channel, record the run ledger row, and dispatch to
+ * the executor. Extracted so the input-strategy fan-out reuses identical logic.
+ */
+async function executeSingleRun(
+  playbook: Playbook,
+  input: RunPlaybookInput,
+  params: Record<string, unknown>
+): Promise<RunPlaybookResult> {
+  const db = await getDb();
+
   // The owning principal: agent-user when an AI runs it, else the human.
   const actorId = input.agentUserId ?? input.userId;
 
@@ -98,8 +234,9 @@ export async function runPlaybook(
     playbookId: input.playbookId,
     workspaceId: input.workspaceId,
     userId: actorId,
-    params: input.params,
+    params,
     agentIds: input.agentIds,
+    subjectId: input.subjectId ?? null,
   });
 
   // 2. Create the run channel per channelSpec.
@@ -138,7 +275,7 @@ export async function runPlaybook(
       sessionId: session.id,
       executor: playbook.executor,
       status: "running",
-      input: (input.params ?? {}) as Record<string, unknown>,
+      input: params,
       createdBy: actorId,
     })
     .returning();
@@ -163,9 +300,10 @@ export async function runPlaybook(
       sessionId: session.id,
       channelId: channel.id,
       goal: session.goal,
+      subjectId: input.subjectId,
       // Thread the run id so an external agent knows which run to capture back
       // against (POST /api/hub/runs/{runId}/capture); webhookUrl rides params.
-      input: { ...(input.params ?? {}), runId: run.id },
+      input: { ...params, runId: run.id },
       capabilities,
     });
   } catch (err) {

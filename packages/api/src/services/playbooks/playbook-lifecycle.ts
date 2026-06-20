@@ -60,6 +60,12 @@ export interface InstantiateInput {
    * membership context even when projectId is set.
    */
   projectId?: string | null;
+  /**
+   * The entity this session is about (e.g. a contact, deal, or document).
+   * Stored as focus_sessions.subjectEntityId — threads RunContext.subjectId
+   * through from the playbook run input.
+   */
+  subjectId?: string | null;
 }
 
 /**
@@ -90,6 +96,7 @@ export async function instantiateSession(
       goal,
       playbookId: playbook.id,
       projectId: input.projectId ?? null,
+      subjectEntityId: input.subjectId ?? null,
       expectedOutputs,
       channelId: input.channelId ?? null,
       agentIds: input.agentIds ?? [],

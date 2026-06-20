@@ -65,6 +65,16 @@ export { getBoss, startBoss, stopBoss, boss } from "./boss.js";
 
 export { emitSideEffects, type SideEffectPayload } from "./side-effects.js";
 
+// Reactor registry — a new reaction = registerReactor(...), never an edit to
+// emitSideEffects. getReactors() is exposed for tests/introspection.
+export {
+  registerReactor,
+  getReactors,
+  type Reactor,
+  type ReactorDeps,
+  type ReactorPayload,
+} from "./reactors.js";
+
 // ============================================================================
 // REALTIME EVENT SCHEMAS (Socket.IO bridge payload validation)
 // ============================================================================
