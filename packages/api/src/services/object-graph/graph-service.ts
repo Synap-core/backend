@@ -34,6 +34,7 @@ import {
   skills,
   automations,
   documents,
+  intelligenceCommands,
 } from "@synap/database";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { getLinksFor } from "../links/links-service.js";
@@ -75,9 +76,12 @@ export interface GraphEnvelope {
 // ── Per-kind hydrator registry ───────────────────────────────────────────────
 // The extensible heart: (kind, ids[]) → batch fetch name+subtype. One entry per
 // table-backed kind; a new kind = one row here, and it's a graph citizen
-// everywhere. Stub kinds (command/source/participant/proposal — no first-class
-// table yet) fall through to a raw-id node so the edge is still SHOWN, never
-// silently dropped.
+// everywhere. The fall-through (raw-id node) is reserved for endpoint kinds that
+// are NOT a single table: `participant` (a user/agent identity — its fromId is a
+// userId/agentUserId, pod-global, scoped differently) and `source` (reserved in
+// LinkEndpointType, no table/writer yet). Those still SHOW the edge, never drop
+// it. Everything table-backed — including `command` (intelligence_commands) — is
+// fully hydrated below.
 
 interface KindSpec {
   table: any;
@@ -98,6 +102,7 @@ const KIND_TABLE: Record<string, KindSpec> = {
   playbook: { table: playbooks, name: "name" },
   tool: { table: tools, name: "name", subtype: "kind" },
   skill: { table: skills, name: "name", subtype: "kind" },
+  command: { table: intelligenceCommands, name: "title" },
   automation: { table: automations, name: "name", subtype: "triggerType" },
   document: { table: documents, name: "title", subtype: "type" },
 };

@@ -23,13 +23,11 @@ import {
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
-import { createHubProtocolCallerContext } from "../utils.js";
-import { relationsRouter } from "../../relations.js";
 import {
   getObjectGraph,
-  connectionsToNeighbors,
   type GraphNeighbor,
 } from "../../../services/object-graph/graph-service.js";
+import { entityDataNeighbors } from "../../../services/object-graph/entity-data-graph.js";
 import type { LinkEndpointType } from "@synap/playbooks";
 
 // Kinds the envelope can focus on. Superset of LinkEndpointType so entity-data
@@ -126,22 +124,15 @@ export function registerGraphRoutes(app: HubHono): void {
 
     try {
       // Entity-data half (relations + property + channel) — only for
-      // entity-backed kinds, via the existing getConnections read.
+      // entity-backed kinds, via the shared getConnections fold.
       let extra: GraphNeighbor[] = [];
       if (ENTITY_BACKED.has(type)) {
-        const ctx = await createHubProtocolCallerContext(
+        extra = await entityDataNeighbors(
           userId,
           c.get("scopes") as string[],
+          id,
           workspaceId ?? undefined
         );
-        const caller = relationsRouter.createCaller(
-          ctx as Parameters<typeof relationsRouter.createCaller>[0]
-        );
-        const result = await caller.getConnections({
-          entityId: id,
-          limit: 100,
-        });
-        extra = connectionsToNeighbors(result.connections);
       }
 
       const envelope = await getObjectGraph(

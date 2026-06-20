@@ -28,6 +28,41 @@ export type ToolKind =
   | "external"
   | "script";
 
+/**
+ * The verb axis of a Tool — the structured, enumerable capability matrix. A
+ * Tool (an integration like Gmail or LinkedIn) exposes a SET of named verbs; each
+ * verb is one concrete operation the AI can invoke. This is the catalog the
+ * connector-capability-matrix is built over: one row per (connection × verb).
+ *
+ * Verbs are DERIVED, not hand-authored: each verb mirrors a skill that
+ * `requires` the tool inside a `CapabilityDefinition` (the source of truth) — so
+ * the catalog can never drift from the skills actually created. Persisted as the
+ * `tools.capabilities` jsonb column (kept in lock-step with the `.$type<>()` on
+ * the schema's `capabilities` column).
+ */
+export type ToolVerbKind = "read" | "write" | "action";
+
+export interface ToolVerb {
+  /** Stable identifier — the requiring skill's name (callable via callProvider/dispatcher). */
+  id: string;
+  /** Human-facing label. */
+  label: string;
+  /**
+   * Verb axis: `read` = pull (no external mutation); `write`/`action` = push (a
+   * mutation/send). Maps the verb onto the read/push capability matrix axis.
+   */
+  kind: ToolVerbKind;
+  /** JSON-schema-ish arg shape for the verb (the requiring skill's parameters). */
+  argsSchema?: Record<string, unknown>;
+  /**
+   * The governance default for this verb — aligns to the exec-mode the seeded
+   * `vault_grants` row carries (so a verb never bypasses the approved+grant
+   * model). `auto` runs directly, `propose` routes through review, `dry-run`
+   * previews. The per-grant exec-mode at the gate still narrows this at run time.
+   */
+  govDefault: ExecMode;
+}
+
 /** A credential a Tool/Skill needs at run time — mirrors the vault taxonomy. */
 export interface CredentialRequirement {
   /** Logical name the tool/skill references (e.g. "apiKey"). */
@@ -230,6 +265,31 @@ export interface Capability {
   executor: ExecutorRef;
   /** Whether AI use is auto-approved or routed through a proposal. */
   governance: "auto" | "propose";
+  /**
+   * The connection's structured verb catalog WITH each verb's resolved
+   * grant-state — the capability-matrix axis. Present for tools that carry a
+   * `tools.capabilities` catalog; the grant-state is joined from the active
+   * `vault_grants` row for the tool (one connection × verb × grant row each).
+   * Empty/undefined for capabilities with no verb catalog (skills, commands,
+   * verb-less provider tools).
+   */
+  verbs?: CapabilityVerbState[];
+}
+
+/**
+ * One row of the connection × verb × grant matrix: a Tool's verb annotated with
+ * the live grant-state derived from `vault_grants`. The read-model joins each
+ * `ToolVerb` (from `tools.capabilities`) with the tool's active grant so a UI /
+ * the AI can see, per verb, whether it is granted and at what exec-mode.
+ */
+export interface CapabilityVerbState extends ToolVerb {
+  /** True when an active (non-revoked, non-expired) grant exists for the tool. */
+  granted: boolean;
+  /**
+   * The effective exec-mode for this verb: the active grant's exec-mode when
+   * granted, else the verb's `govDefault`. This is what the gate would apply.
+   */
+  effectiveExecMode: ExecMode;
 }
 
 // ── CapabilityDefinition — a config descriptor that INSTANTIATES a set of ─────

@@ -10,14 +10,13 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { hubProtocolRouter } from "../hub-protocol/index.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "../hub-protocol/utils.js";
-import { relationsRouter } from "../relations.js";
 import {
   getObjectGraph,
-  connectionsToNeighbors,
   resolveByName,
   type GraphNeighbor,
   type GraphEnvelope,
 } from "../../services/object-graph/graph-service.js";
+import { entityDataNeighbors } from "../../services/object-graph/entity-data-graph.js";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { ask } from "../../services/knowledge/ask.js";
 import { type ProfileCatalogEntry } from "../../services/retrieval/index.js";
@@ -105,7 +104,7 @@ async function getUserWorkspaceIds(userId: string): Promise<string[]> {
  * Build the uniform graph envelope for any object — the shared core behind both
  * `synap_get_graph` and the `neighbors` embedded in detail fetches (get_entity).
  * Folds in the entity-data graph (relations + property + channel) for
- * entity-backed kinds via a fresh relationsRouter caller. `cap` truncates the
+ * entity-backed kinds via the shared `entityDataNeighbors`. `cap` truncates the
  * neighbour list for embedding (counts stay full — honest "showing N of M").
  */
 async function buildGraphEnvelope(
@@ -115,22 +114,10 @@ async function buildGraphEnvelope(
   id: string,
   cap?: number
 ): Promise<GraphEnvelope> {
-  let extra: GraphNeighbor[] = [];
-  if (kind === "entity" || kind === "project") {
-    try {
-      const ctx = await createHubProtocolCallerContext(userId, scopes);
-      const relCaller = relationsRouter.createCaller(
-        ctx as Parameters<typeof relationsRouter.createCaller>[0]
-      );
-      const conns = await relCaller.getConnections({
-        entityId: id,
-        limit: 100,
-      });
-      extra = connectionsToNeighbors(conns.connections);
-    } catch {
-      // entity-data half is additive — a failure shouldn't blank the graph
-    }
-  }
+  const extra: GraphNeighbor[] =
+    kind === "entity" || kind === "project"
+      ? await entityDataNeighbors(userId, scopes, id)
+      : [];
   const envelope = await getObjectGraph(
     userId,
     kind as LinkEndpointType,

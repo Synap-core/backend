@@ -33,6 +33,23 @@ export type ToolKind =
 /** Which "hands" run this Tool. Mirrors @synap/playbooks ExecutorRef. */
 export type ToolExecutorRef = "is-agent" | "external-agent" | "hybrid";
 
+/**
+ * One verb in a Tool's structured capability catalog (the capability-matrix
+ * axis). Kept in lock-step with `ToolVerb` in @synap/playbooks — re-declared here
+ * (not imported) so the schema package stays dependency-free, exactly like the
+ * other `.$type<>()` unions in this file.
+ */
+export type ToolVerbCatalogEntry = {
+  /** Stable id — the requiring skill's name. */
+  id: string;
+  label: string;
+  /** read = pull · write/action = push. */
+  kind: "read" | "write" | "action";
+  argsSchema?: Record<string, unknown>;
+  /** Aligns to the seeded grant exec-mode. */
+  govDefault: "auto" | "propose" | "dry-run";
+};
+
 export const tools = pgTable(
   "tools",
   {
@@ -56,6 +73,18 @@ export const tools = pgTable(
       .default("is-agent"),
     /** Provider-specific config (may contain vault:// refs). */
     config: jsonb("config").notNull().default({}),
+    /**
+     * Structured verb catalog — the enumerable capability-matrix axis. Each entry
+     * is one operation the AI can invoke on this tool (id = a requiring skill's
+     * name; kind = read/write/action; govDefault aligns to the seeded grant
+     * exec-mode). Derived from the `CapabilityDefinition` at apply time
+     * (`createCapabilityFromDefinition`), never hand-authored. Empty `[]` for a
+     * verb-less tool (e.g. a bare connect that hasn't applied its family template).
+     */
+    capabilities: jsonb("capabilities")
+      .$type<ToolVerbCatalogEntry[]>()
+      .notNull()
+      .default([]),
     status: text("status", { enum: ["active", "inactive", "error"] })
       .notNull()
       .default("active"),

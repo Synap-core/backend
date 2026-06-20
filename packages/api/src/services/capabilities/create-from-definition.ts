@@ -43,10 +43,14 @@ import {
   secrets,
   secretAuditLog,
   capabilityTemplates,
+  tools as toolsTable,
 } from "@synap/database/schema";
+import type { ToolVerbCatalogEntry } from "@synap/database/schema";
 import type {
   CapabilityDefinition,
+  CapabilitySkillDef,
   CapabilityVaultDef,
+  ToolVerbKind,
 } from "@synap/playbooks";
 
 import { toolsRouter } from "../../routers/tools.js";
@@ -214,6 +218,9 @@ export async function createCapabilityFromDefinition(
 
   // 2. Tools — through the GOVERNED toolsRouter caller. Remap a credentialRef
   //    that points at a template-local vault `ref` to the real `vault://<id>`.
+  //    Each created tool's structured verb catalog (`tools.capabilities`) is
+  //    DERIVED from the definition's skills that `requires` it — the
+  //    capability-matrix axis, source-of-truth = this CapabilityDefinition.
   const toolsCaller = toolsRouter.createCaller(ctx as never);
   const toolIdByName = new Map<string, string>();
   const createdTools: CreateCapabilityResult["created"]["tools"] = [];
@@ -243,6 +250,20 @@ export async function createCapabilityFromDefinition(
     // side-effecting tool — an agent run routes to review unless re-granted auto.
     if (result.status === "created" && toolId) {
       await issueCapabilityGrant("tool", toolId, userId, workspaceId ?? null);
+      // Derive + persist the verb catalog from the skills that require this tool.
+      // `govDefault` aligns to the exec-mode `issueCapabilityGrant` just seeded
+      // ("propose") so the verb never bypasses the approved+grant model.
+      const verbs = deriveToolVerbs(
+        t.name,
+        def.skills,
+        GRANT_DEFAULT_EXEC_MODE
+      );
+      if (verbs.length > 0) {
+        await db
+          .update(toolsTable)
+          .set({ capabilities: verbs })
+          .where(eq(toolsTable.id, toolId));
+      }
     }
     createdTools.push({
       name: t.name,
@@ -317,6 +338,84 @@ export async function createCapabilityFromDefinition(
   };
 }
 
+// ── Verb-catalog derivation (the capability-matrix axis) ──────────────────────
+//
+// The exec-mode the applier seeds on every tool/skill grant (`issueCapabilityGrant`
+// below). The verb catalog's `govDefault` reuses this SAME constant so a verb's
+// governance default can never drift from the grant the gate actually enforces.
+const GRANT_DEFAULT_EXEC_MODE = "propose" as const;
+
+/**
+ * Infer a verb's read/push axis from the skill that backs it. A `code` skill that
+ * SENDS/WRITES (its name or description signals a mutation) is an `action` (push);
+ * a `read` skill is a pull. Heuristic + conservative default: anything that looks
+ * like it mutates is treated as a push (`action`) so it stays behind governance.
+ */
+function deriveVerbKind(s: CapabilitySkillDef): ToolVerbKind {
+  const haystack = `${s.name} ${s.description ?? ""}`.toLowerCase();
+  const writeSignals = [
+    "send",
+    "invite",
+    "post",
+    "create",
+    "write",
+    "update",
+    "delete",
+    "reply",
+    "message",
+    "email",
+    "publish",
+    "comment",
+    "add",
+    "remove",
+    "set",
+  ];
+  const readSignals = [
+    "search",
+    "list",
+    "get",
+    "fetch",
+    "read",
+    "find",
+    "lookup",
+    "query",
+    "pull",
+  ];
+  if (writeSignals.some((w) => haystack.includes(w))) return "action";
+  if (readSignals.some((r) => haystack.includes(r))) return "read";
+  // Unknown intent → conservative push so it stays governed.
+  return "action";
+}
+
+/**
+ * Build a tool's structured verb catalog from the definition's skills that
+ * `requires` it (by tool NAME). One verb per requiring skill: `id` = skill name
+ * (the callable, dispatched via callProvider/the dispatcher), `label` = skill
+ * name, `kind` = read/push axis, `argsSchema` = the skill's declared parameters,
+ * `govDefault` = the seeded grant exec-mode (passed in, never re-derived here).
+ */
+function deriveToolVerbs(
+  toolName: string,
+  skills: CapabilitySkillDef[],
+  govDefault: "auto" | "propose" | "dry-run"
+): ToolVerbCatalogEntry[] {
+  const verbs: ToolVerbCatalogEntry[] = [];
+  for (const s of skills) {
+    if (!s.requires?.includes(toolName)) continue;
+    verbs.push({
+      id: s.name,
+      label: s.name,
+      kind: deriveVerbKind(s),
+      argsSchema:
+        s.parameters && typeof s.parameters === "object"
+          ? s.parameters
+          : undefined,
+      govDefault,
+    });
+  }
+  return verbs;
+}
+
 // ── Capability-grant seeding (Wave 3b applier grant) ──────────────────────────
 //
 // Issue a `capability_grants` (vault_grants) row for a freshly-created tool/skill
@@ -340,7 +439,7 @@ async function issueCapabilityGrant(
   await db.insert(vaultGrants).values({
     grantableType,
     grantableId,
-    execMode: "propose",
+    execMode: GRANT_DEFAULT_EXEC_MODE,
     grantedTo,
     workspaceId,
     // `permanent` (not `session`): a seeded capability grant persists beyond any

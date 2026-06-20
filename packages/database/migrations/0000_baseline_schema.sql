@@ -3317,6 +3317,7 @@ CREATE TABLE IF NOT EXISTS "tools" (
   "config"         jsonb       NOT NULL DEFAULT '{}'::jsonb,
   "status"         text        NOT NULL DEFAULT 'active',
   "approved"       boolean     NOT NULL DEFAULT false,
+  "capabilities"   jsonb       NOT NULL DEFAULT '[]'::jsonb,
   "metadata"       jsonb       NOT NULL DEFAULT '{}'::jsonb,
   "created_at"     timestamptz NOT NULL DEFAULT now(),
   "updated_at"     timestamptz NOT NULL DEFAULT now()
@@ -3324,6 +3325,8 @@ CREATE TABLE IF NOT EXISTS "tools" (
 -- Per-capability approval gate (mig 0143). IF NOT EXISTS so a pre-existing tools
 -- table picks it up on catch-up.
 ALTER TABLE "tools" ADD COLUMN IF NOT EXISTS "approved" boolean NOT NULL DEFAULT false;
+-- Structured verb catalog — the capability-matrix axis (mig 0145).
+ALTER TABLE "tools" ADD COLUMN IF NOT EXISTS "capabilities" jsonb NOT NULL DEFAULT '[]'::jsonb;
 CREATE INDEX IF NOT EXISTS "idx_tools_workspace_id" ON "tools" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_tools_kind"         ON "tools" ("kind");
 CREATE INDEX IF NOT EXISTS "idx_tools_approved"     ON "tools" ("approved");

@@ -621,6 +621,15 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0143_capability_approval_state.sql",
   },
 
+  // tools — structured verb catalog / capability-matrix axis (0145). Absence
+  // means a pod is on a pre-0145 schema where the connector verb catalog and the
+  // capability-registry verb×grant read-model would read `undefined`.
+  {
+    table: "tools",
+    column: "capabilities",
+    addedBy: "0145_tools_capabilities.sql",
+  },
+
   // capability_templates — templates-as-data (0144). Absence means a pod is on a
   // pre-0144 schema where DB-first template resolution would error and a
   // `templateKey` apply could only fall back to (absent) on-disk JSON files.

@@ -21,9 +21,21 @@
  * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.1)
  */
 
-import { getDb, or, isNull, eq } from "@synap/database";
-import { tools, skills, intelligenceCommands } from "@synap/database/schema";
-import type { Capability, CapabilityKind, ExecutorRef } from "@synap/playbooks";
+import { getDb, or, and, isNull, eq, inArray, gt } from "@synap/database";
+import {
+  tools,
+  skills,
+  intelligenceCommands,
+  vaultGrants,
+  type ToolVerbCatalogEntry,
+} from "@synap/database/schema";
+import type {
+  Capability,
+  CapabilityKind,
+  CapabilityVerbState,
+  ExecMode,
+  ExecutorRef,
+} from "@synap/playbooks";
 
 export interface CapabilityRegistryContext {
   workspaceId: string;
@@ -68,6 +80,27 @@ function deriveGovernance(
 }
 
 /**
+ * Join a tool's structured verb catalog (`tools.capabilities`) with the tool's
+ * active grant to produce the connection × verb × grant matrix rows. Each verb
+ * inherits the SAME tool-level grant state today (grants are issued per tool, not
+ * per verb): `granted` reflects an active grant existing, and `effectiveExecMode`
+ * is the grant's exec-mode when granted, else the verb's `govDefault` — exactly
+ * what the gate would apply.
+ */
+function buildVerbStates(
+  catalog: ToolVerbCatalogEntry[] | null | undefined,
+  grant: { execMode: ExecMode } | undefined
+): CapabilityVerbState[] {
+  if (!Array.isArray(catalog) || catalog.length === 0) return [];
+  const granted = !!grant;
+  return catalog.map((v) => ({
+    ...v,
+    granted,
+    effectiveExecMode: grant ? grant.execMode : v.govDefault,
+  }));
+}
+
+/**
  * List every capability visible to the caller in this workspace, normalized into
  * the `Capability` read-model. Read-only — no writes, no governance.
  *
@@ -87,6 +120,40 @@ export async function listCapabilities(
       or(isNull(tools.workspaceId), eq(tools.workspaceId, ctx.workspaceId))
     );
 
+  // Resolve each tool's active grant so the verb catalog can be surfaced WITH
+  // grant-state (the connection × verb × grant matrix). "Active" = not revoked,
+  // not expired, and uses remaining (or unlimited). When several grants exist for
+  // a tool we keep the first active row — the gate's resolver applies the same
+  // narrowing per redemption. Aligns the read-model to the founder's grant model.
+  const toolIds = toolRows.map((r) => r.id);
+  const grantByGrantableId = new Map<string, { execMode: ExecMode }>();
+  if (toolIds.length > 0) {
+    const now = new Date();
+    const grantRows = await db
+      .select({
+        grantableId: vaultGrants.grantableId,
+        execMode: vaultGrants.execMode,
+      })
+      .from(vaultGrants)
+      .where(
+        and(
+          eq(vaultGrants.grantableType, "tool"),
+          inArray(vaultGrants.grantableId, toolIds),
+          isNull(vaultGrants.revokedAt),
+          or(isNull(vaultGrants.expiresAt), gt(vaultGrants.expiresAt, now)),
+          or(
+            isNull(vaultGrants.maxUses),
+            gt(vaultGrants.maxUses, vaultGrants.useCount)
+          )
+        )
+      );
+    for (const g of grantRows) {
+      if (!grantByGrantableId.has(g.grantableId)) {
+        grantByGrantableId.set(g.grantableId, { execMode: g.execMode });
+      }
+    }
+  }
+
   const toolCaps: Capability[] = toolRows.map((row) => ({
     kind: toolKindToCapabilityKind(row.kind),
     id: row.id,
@@ -95,6 +162,10 @@ export async function listCapabilities(
     inputSchema: asInputSchema(row.inputSchema),
     executor: row.executor as ExecutorRef,
     governance: deriveGovernance(row.approved),
+    verbs: buildVerbStates(
+      row.capabilities as ToolVerbCatalogEntry[] | null,
+      grantByGrantableId.get(row.id)
+    ),
   }));
 
   // ── Skills (instruction | code) ─────────────────────────────────────────────

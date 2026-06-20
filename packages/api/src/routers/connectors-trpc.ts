@@ -50,6 +50,30 @@ import {
   syncConnectionToImport,
   pullToImport,
 } from "../services/connector-import-bridge.js";
+import {
+  createCapabilityFromDefinition,
+  loadCapabilityTemplate,
+} from "../services/capabilities/create-from-definition.js";
+import type { Context } from "../types/context.js";
+
+/**
+ * Provider → capability-template family key.
+ *
+ * Closes connect↔apply: when a provider is connected, this names the family
+ * `CapabilityDefinition` that gives the connection its VERBS + skills + grants
+ * (instead of a verb-less `kind:'provider'` tool). The convention is the on-disk /
+ * DB template key per provider family (`templates/capabilities/<key>.capability.json`).
+ * A provider with NO family template degrades gracefully — the bare provider tool
+ * is kept (today's behavior) and no verbs are applied.
+ */
+const PROVIDER_TEMPLATE_KEY: Record<string, string> = {
+  gmail: "nango-gmail",
+};
+
+/** Resolve the family template key for a connected provider, or null. */
+function providerTemplateKey(provider: string): string | null {
+  return PROVIDER_TEMPLATE_KEY[provider] ?? null;
+}
 
 /**
  * Returns a configured NangoConnector when self-hosted Nango is available,
@@ -517,7 +541,7 @@ export const connectorsRouter = router({
         const displayName = displayNameByProvider.get(provider) ?? provider;
 
         const existing = await db
-          .select({ id: tools.id })
+          .select({ id: tools.id, capabilities: tools.capabilities })
           .from(tools)
           .where(
             and(
@@ -527,47 +551,95 @@ export const connectorsRouter = router({
           )
           .limit(1);
 
+        let toolId: string | null = null;
+        // Whether the resolved tool already carries a verb catalog — gates the
+        // connect↔apply family-template application so re-syncs don't re-run it.
+        let hasVerbs = false;
+
         if (existing[0]) {
-          toolIds.push(existing[0].id);
-          continue;
+          toolId = existing[0].id;
+          hasVerbs = Array.isArray(existing[0].capabilities)
+            ? existing[0].capabilities.length > 0
+            : false;
+        } else {
+          const inserted = await db
+            .insert(tools)
+            .values({
+              workspaceId: null, // pod-wide: a connected provider is available everywhere
+              createdBy: ctx.userId,
+              name: displayName,
+              description: `${displayName} connection — credentials routed per account at use time.`,
+              kind: "provider",
+              credentialRef,
+              executor: "is-agent",
+              config: { providerConfigKey: provider },
+              // The user just connected this account → the materialized tool is
+              // born approved (no separate approval step for a connect).
+              approved: true,
+            })
+            // Race backstop: if a concurrent sync inserted this provider first, the
+            // partial unique index (mig 0132) makes this a no-op instead of a dup.
+            .onConflictDoNothing()
+            .returning({ id: tools.id });
+
+          if (inserted[0]) {
+            toolId = inserted[0].id;
+          } else {
+            // Lost the race — the row exists now; pick it up so the caller still
+            // gets its id (and the next sync/refetch surfaces it).
+            const found = await db
+              .select({ id: tools.id, capabilities: tools.capabilities })
+              .from(tools)
+              .where(
+                and(
+                  eq(tools.credentialRef, credentialRef),
+                  isNull(tools.workspaceId)
+                )
+              )
+              .limit(1);
+            if (found[0]) {
+              toolId = found[0].id;
+              hasVerbs = Array.isArray(found[0].capabilities)
+                ? found[0].capabilities.length > 0
+                : false;
+            }
+          }
         }
 
-        const inserted = await db
-          .insert(tools)
-          .values({
-            workspaceId: null, // pod-wide: a connected provider is available everywhere
-            createdBy: ctx.userId,
-            name: displayName,
-            description: `${displayName} connection — credentials routed per account at use time.`,
-            kind: "provider",
-            credentialRef,
-            executor: "is-agent",
-            config: { providerConfigKey: provider },
-            // The user just connected this account → the materialized tool is
-            // born approved (no separate approval step for a connect).
-            approved: true,
-          })
-          // Race backstop: if a concurrent sync inserted this provider first, the
-          // partial unique index (mig 0132) makes this a no-op instead of a dup.
-          .onConflictDoNothing()
-          .returning({ id: tools.id });
+        if (!toolId) continue;
+        toolIds.push(toolId);
 
-        if (inserted[0]) {
-          toolIds.push(inserted[0].id);
-        } else {
-          // Lost the race — the row exists now; pick it up so the caller still
-          // gets its id (and the next sync/refetch surfaces it).
-          const found = await db
-            .select({ id: tools.id })
-            .from(tools)
-            .where(
-              and(
-                eq(tools.credentialRef, credentialRef),
-                isNull(tools.workspaceId)
-              )
-            )
-            .limit(1);
-          if (found[0]) toolIds.push(found[0].id);
+        // ── Close connect↔apply ──────────────────────────────────────────────
+        // A bare connect materialized a verb-LESS provider tool. If this provider
+        // has a family CapabilityDefinition, apply it (GOVERNED, via the shared
+        // applier) so the connection arrives WITH verbs + skills + grants. The
+        // applier creates the same pod-wide `nango://<provider>` tool — the
+        // partial unique index makes that an idempotent no-op that picks up the
+        // existing row, then derives + writes its verb catalog and seeds skill
+        // grants. We only run it when the tool has NO verbs yet, so a re-connect /
+        // window-focus re-sync never re-applies (no duplicate skills/grants).
+        // Providers WITHOUT a family template degrade gracefully to the bare tool.
+        if (hasVerbs) continue;
+        const templateKey = providerTemplateKey(provider);
+        if (!templateKey) continue;
+        try {
+          const def = await loadCapabilityTemplate(templateKey, {
+            workspaceId: null,
+          });
+          // Pod-wide apply: no workspace lens (the connected provider tool is
+          // pod-wide). The acting user owns the seeded vault/grants.
+          const applyCtx = {
+            ...ctx,
+            workspaceId: null,
+          } as unknown as Context;
+          await createCapabilityFromDefinition(def, {}, applyCtx);
+        } catch (err) {
+          // Graceful degrade — keep the bare tool; the connection still works,
+          // it just lacks the structured verb catalog until applied explicitly.
+          logger.warn(
+            { provider, templateKey, err: String(err) },
+            "connect↔apply: family template apply failed; kept bare provider tool"
+          );
         }
       }
 
