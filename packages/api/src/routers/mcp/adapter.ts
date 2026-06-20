@@ -426,6 +426,28 @@ export async function executeMCPToolViaHubProtocol(
       if (!captureWsId) {
         return ok({ error: "No accessible workspace found for this user" });
       }
+      // GLOBAL lane — mirror the CLI's `capture --global`: a pod-wide procedural
+      // runbook goes to knowledge_keys (a keyed doc upsert), NOT the entity
+      // structuring pipeline. This folds the former synap_write_knowledge tool
+      // into capture so there is ONE write door; the lane is the routing signal.
+      if (args.global === true) {
+        const text = args.text as string;
+        const key =
+          (args.key as string | undefined) ||
+          `note:${text
+            .slice(0, 48)
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "")}`;
+        const record = await knowledgeKeysRepository.upsert(key, {
+          key,
+          value: text,
+          status: "active",
+          workspaceId: captureWsId,
+          author: userId,
+        });
+        return ok({ lane: "global", knowledgeKey: record });
+      }
       const captureCtx = await createHubProtocolCallerContext(
         userId,
         apiKeyScopes,
@@ -605,20 +627,8 @@ export async function executeMCPToolViaHubProtocol(
       return ok({ success: true, proposalId });
     }
 
-    case "synap_write_knowledge": {
-      requireScope(apiKeyScopes, "mcp.write", toolName);
-      const key = args.key as string;
-      const content = args.content as string;
-      const wsId = (args.workspaceId as string | undefined) || userId;
-      const record = await knowledgeKeysRepository.upsert(key, {
-        key,
-        value: content,
-        status: "active",
-        workspaceId: wsId,
-        author: userId,
-      });
-      return ok(record);
-    }
+    // (synap_write_knowledge folded into synap_capture's `global` lane — one
+    // write door. A pod-wide runbook is `capture` with global:true.)
 
     default:
       throw new Error(`Unknown MCP tool: ${toolName}`);

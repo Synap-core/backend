@@ -670,6 +670,11 @@ export const entitiesRouter = router({
         subjectId: createdEntity.id,
         userId: ctx.userId,
         workspaceId: governanceWorkspaceId,
+        // Stamp the session so the automation matcher resolves it → playbook →
+        // `member_of` automations and fires them for entities produced in this
+        // session (e.g. import under a contact-leads playbook). Null on
+        // non-session paths → workspace-wide automations only (unchanged).
+        sessionId: ctx.sessionId ?? null,
         data: { profileSlug, title: input.title },
       });
 
@@ -1513,6 +1518,9 @@ export const entitiesRouter = router({
         subjectId: input.id,
         userId: ctx.userId,
         workspaceId: governanceWorkspaceId,
+        // Session-scope lifecycle updates (e.g. dealStage lead→client inside a
+        // session) so playbook `member_of` automations fire. Null otherwise.
+        sessionId: ctx.sessionId ?? null,
         data: {
           profileSlug: input.profileSlug ?? oldEntity?.type ?? undefined,
           ...(Object.keys(changedProperties).length > 0
@@ -1720,6 +1728,8 @@ export const entitiesRouter = router({
         subjectId: input.id,
         userId: ctx.userId,
         workspaceId: governanceWorkspaceId,
+        // Symmetric with create/update — session-scope deletes too. Null otherwise.
+        sessionId: ctx.sessionId ?? null,
         data: { profileSlug: deletedEntityRow?.type ?? undefined },
       });
 

@@ -307,7 +307,7 @@ export const tools = {
         name: "synap_capture",
         description:
           "THE write door. Hand it any free text — a fact you learned, a decision, a person/company/task mentioned, something worth remembering — and the AI capture pipeline structures it into the right entities and files them in the pod. " +
-          "PROACTIVE RULE: call this AFTER you learn something durable about the user, their work, or their preferences, or whenever the user says something worth keeping (\"remember that…\", a new contact, a decision made). Don't wait to be asked — capturing is how the user's second brain grows. It writes directly (no approval wait) and records an auto-approved, revertible proposal; the created entities come back in the result. Optionally hint a profileSlug to guide extraction.",
+          "PROACTIVE RULE: call this AFTER you learn something durable about the user, their work, or their preferences, or whenever the user says something worth keeping (\"remember that…\", a new contact, a decision made). Don't wait to be asked — capturing is how the user's second brain grows. It writes directly (no approval wait) and records an auto-approved, revertible proposal; the created entities come back in the result. Hint a profileSlug to guide extraction, or set global:true to store a pod-wide runbook (knowledge_keys) instead of entities.",
         inputSchema: {
           type: "object",
           properties: {
@@ -318,7 +318,17 @@ export const tools = {
             profileSlug: {
               type: "string",
               description:
-                "Optional profile hint to guide entity type extraction",
+                "Optional profile hint to guide entity type extraction (work lane)",
+            },
+            global: {
+              type: "boolean",
+              description:
+                "GLOBAL lane: store as a pod-wide procedural runbook (knowledge_keys) instead of structuring into entities. Use for cross-project how-to / decisions / operational docs ('how we deploy', 'auth works like…'). Mirrors the CLI's `capture --global`.",
+            },
+            key: {
+              type: "string",
+              description:
+                "Optional stable key (namespace:slug, e.g. 'deploy:backend') for a global runbook — derived from the text if omitted.",
             },
             workspaceId: { type: "string" },
           },
@@ -451,26 +461,8 @@ export const tools = {
           required: ["proposalId"],
         },
       },
-      {
-        name: "synap_write_knowledge",
-        description:
-          "Create or update a knowledge document by key (namespace:slug format, e.g. 'deploy:backend'). Upserts the entry — safe to call repeatedly to keep docs current.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            key: {
-              type: "string",
-              description: "Knowledge key in namespace:slug format",
-            },
-            content: {
-              type: "string",
-              description: "Document content (markdown)",
-            },
-            workspaceId: { type: "string" },
-          },
-          required: ["key", "content"],
-        },
-      },
+      // (synap_write_knowledge folded into synap_capture's `global` lane — a
+      // pod-wide runbook is `synap_capture` with global:true. One write door.)
     ];
   },
 

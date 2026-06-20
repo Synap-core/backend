@@ -609,7 +609,18 @@ export class ImportOrchestrator {
   async apply(input: ImportApplyInput) {
     const { workspaceId, userId, trpcCtx } = this.ctx;
 
-    const callerCtx = { ...trpcCtx, workspaceId, userId };
+    // Thread the import's session onto the entity-create ctx: entities.create
+    // reads ctx.sessionId to (a) write the `session --produced--> entity` link
+    // and (b) stamp sessionId on the entity-create side-effect so the playbook
+    // automation matcher fires this session's `member_of` automations. Without
+    // it, import-materialized entities have no session and playbook automations
+    // never run for them.
+    const callerCtx = {
+      ...trpcCtx,
+      workspaceId,
+      userId,
+      sessionId: this.ctx.sessionId ?? null,
+    };
     const entityCaller = regularEntitiesRouter.createCaller(callerCtx as never);
     const relationCaller = relationsRouter.createCaller(callerCtx as never);
 
@@ -862,7 +873,15 @@ export class ImportOrchestrator {
     const { workspaceId, userId, trpcCtx } = this.ctx;
     const chunkSize = Math.max(1, opts?.applyChunkSize ?? APPLY_CHUNK_SIZE);
 
-    const callerCtx = { ...trpcCtx, workspaceId, userId };
+    // Same session threading as apply() — see note there. The large/chunked
+    // path materializes through the identical entityCaller, so it needs the
+    // session on ctx for produced-links + automation-firing too.
+    const callerCtx = {
+      ...trpcCtx,
+      workspaceId,
+      userId,
+      sessionId: this.ctx.sessionId ?? null,
+    };
     const entityCaller = regularEntitiesRouter.createCaller(callerCtx as never);
     const relationCaller = relationsRouter.createCaller(callerCtx as never);
 

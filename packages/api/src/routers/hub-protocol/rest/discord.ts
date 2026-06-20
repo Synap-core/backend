@@ -35,6 +35,7 @@ import {
   messages,
   eq,
   and,
+  isNotNull,
   drizzleSql,
   ChannelType,
   ChannelScope,
@@ -168,6 +169,10 @@ export function registerDiscordRoutes(app: HubHono): void {
           })
           .onConflictDoNothing({
             target: [channels.externalSource, channels.externalId],
+            // The unique index is PARTIAL (`WHERE external_id IS NOT NULL`), so
+            // the conflict arbiter must repeat that predicate or Postgres rejects
+            // it with "no unique constraint matching the ON CONFLICT spec".
+            where: isNotNull(channels.externalId),
           })
           .returning({ id: channels.id });
 

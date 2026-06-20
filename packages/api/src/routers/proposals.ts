@@ -1273,6 +1273,12 @@ export const proposalsRouter = router({
           userId: string;
           workspaceId: string | null;
           workspaceRole: string;
+          // The session this proposal belongs to (import.graph carries it).
+          // entities.create reads ctx.sessionId to write the
+          // `session --produced--> entity` link and stamp the side-effect so
+          // playbook automations fire for these entities. Mirrors the import
+          // orchestrator's apply() path for the governed-approval route.
+          sessionId: string | null;
         };
         if (proposal.workspaceId) {
           const membership = await getWorkspaceMembership(
@@ -1292,6 +1298,7 @@ export const proposalsRouter = router({
             userId,
             workspaceId: proposal.workspaceId,
             workspaceRole: membership.role,
+            sessionId: proposal.sessionId ?? null,
           };
         } else {
           compositeCtx = {
@@ -1300,6 +1307,7 @@ export const proposalsRouter = router({
             userId,
             workspaceId: null,
             workspaceRole: "owner",
+            sessionId: proposal.sessionId ?? null,
           };
         }
 
