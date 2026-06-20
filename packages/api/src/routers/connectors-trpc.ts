@@ -40,46 +40,59 @@ import {
   tools,
 } from "@synap/database/schema";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
-import { NangoConnector } from "../connectors/NangoConnector.js";
 import {
   enrichmentProviderRegistry,
   getMessagingConnector,
+  resolveNangoConnector,
   UnipileConnector,
 } from "../connectors/index.js";
-import { syncConnectionToImport } from "../services/connector-import-bridge.js";
-
-/** Env-based connector used for quick isConfigured() checks at startup. */
-const nango = new NangoConnector();
+import {
+  syncConnectionToImport,
+  pullToImport,
+} from "../services/connector-import-bridge.js";
 
 /**
  * Returns a configured NangoConnector when self-hosted Nango is available,
  * checking env vars first then workspace.settings.nango as fallback.
  * Returns null when neither is configured (pod must use CP-managed Nango).
+ *
+ * Delegates to the ONE `resolveNangoConnector` resolver in the connector layer
+ * so this router and the registry share a single Nango resolution path (the
+ * old in-router env→ws.settings duplicate was the dual-Nango drift risk).
  */
-async function getLocalNango(): Promise<NangoConnector | null> {
-  if (nango.isConfigured()) return nango;
+async function getLocalNango() {
+  return resolveNangoConnector();
+}
 
-  try {
-    const database = await getDb();
-    const ws = await database.query.workspaces.findFirst({
-      columns: { settings: true },
+/**
+ * Resolve the workspace an import proposal lands in. A client-supplied
+ * `workspaceId` is NEVER trusted as a write scope: the caller must be an editor+
+ * member of THAT workspace (else a cross-workspace write-leak). With none named,
+ * resolve the user's OWN workspace. Single source of truth for both the
+ * connector→import sync and the enrichment→import sink.
+ */
+async function resolveImportWorkspaceId(
+  userId: string,
+  requestedWorkspaceId?: string
+): Promise<string> {
+  const database = await getDb();
+  if (requestedWorkspaceId) {
+    await assertWorkspaceWrite(database, userId, {
+      workspaceId: requestedWorkspaceId,
     });
-    const cfg = ((ws?.settings as Record<string, unknown>)?.nango ?? {}) as {
-      secretKey?: string;
-      host?: string;
-      connectUrl?: string;
-    };
-    if (cfg.secretKey) {
-      return new NangoConnector({
-        secretKey: cfg.secretKey,
-        host: cfg.host,
-        connectUrl: cfg.connectUrl,
-      });
-    }
-  } catch {
-    // DB not ready — env-only fallback
+    return requestedWorkspaceId;
   }
-  return null;
+  const membership = await database.query.workspaceMembers.findFirst({
+    where: eq(workspaceMembers.userId, userId),
+    columns: { workspaceId: true },
+  });
+  if (!membership?.workspaceId) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "No workspace found to scope the import proposal.",
+    });
+  }
+  return membership.workspaceId;
 }
 
 async function getEnrichmentKeys(): Promise<{
@@ -530,6 +543,9 @@ export const connectorsRouter = router({
             credentialRef,
             executor: "is-agent",
             config: { providerConfigKey: provider },
+            // The user just connected this account → the materialized tool is
+            // born approved (no separate approval step for a connect).
+            approved: true,
           })
           // Race backstop: if a concurrent sync inserted this provider first, the
           // partial unique index (mig 0132) makes this a no-op instead of a dup.
@@ -765,33 +781,10 @@ export const connectorsRouter = router({
         });
       }
 
-      const database = await getDb();
-
-      let workspaceId: string;
-      if (input.workspaceId) {
-        // SECURITY: never trust a client-supplied workspaceId as a write scope.
-        // Assert the caller is an editor+ member of THAT workspace before the
-        // proposal can be landed there — otherwise this is a cross-workspace
-        // write-leak (proposal lands in a workspace the caller doesn't belong to).
-        await assertWorkspaceWrite(database, ctx.userId, {
-          workspaceId: input.workspaceId,
-        });
-        workspaceId = input.workspaceId;
-      } else {
-        // No workspace named → resolve the USER'S OWN workspace (a workspace
-        // they are a member of), never an arbitrary pod workspace.
-        const membership = await database.query.workspaceMembers.findFirst({
-          where: eq(workspaceMembers.userId, ctx.userId),
-          columns: { workspaceId: true },
-        });
-        if (!membership?.workspaceId) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "No workspace found to scope the import proposal.",
-          });
-        }
-        workspaceId = membership.workspaceId;
-      }
+      const workspaceId = await resolveImportWorkspaceId(
+        ctx.userId,
+        input.workspaceId
+      );
 
       const result = await syncConnectionToImport({
         ctx: {
@@ -1110,9 +1103,20 @@ export const connectorsRouter = router({
         provider: z.enum(["apify", "apollo"]),
         capability: z.enum(["person", "company", "leads"]),
         input: z.record(z.string(), z.unknown()),
+        /**
+         * When true, the enrichment results ALSO flow into the unified governed
+         * import sink (one reviewable `import.graph` proposal) — the SAME path
+         * Nango records take. The raw `results` are still returned so callers
+         * that merge inline keep working; `proposalId` carries the sink proposal.
+         */
+        landInPod: z.boolean().optional(),
+        /** Workspace to land the proposal in (asserted as a write scope). */
+        workspaceId: z.string().optional(),
+        /** Session to attach the landed proposal to. */
+        sessionId: z.string().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
       const keys = await getEnrichmentKeys();
       const apiKey =
         input.provider === "apollo"
@@ -1151,7 +1155,36 @@ export const connectorsRouter = router({
         );
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
       }
-      return { results };
+
+      // LOCKED W4 behavior: enrichment results unify onto the governed import
+      // sink (reviewable proposal), like Nango records. Opt-in via `landInPod`
+      // so the existing inline-merge caller is unchanged when the flag is unset.
+      let proposalId: string | null = null;
+      if (input.landInPod) {
+        const workspaceId = await resolveImportWorkspaceId(
+          ctx.userId,
+          input.workspaceId
+        );
+        const landed = await pullToImport({
+          ctx: {
+            workspaceId,
+            userId: ctx.userId,
+            trpcCtx: ctx as unknown as Record<string, unknown>,
+            sessionId: input.sessionId ?? null,
+          },
+          // Read via the registry-keyed enrichment connector (apify/apollo).
+          connector: input.provider,
+          request: {
+            kind: "enrichment",
+            capability: input.capability,
+            input: input.input,
+            apiKey,
+          },
+        });
+        proposalId = landed.proposalId;
+      }
+
+      return { results, proposalId };
     }),
 
   /**
@@ -1189,6 +1222,7 @@ export const connectorsRouter = router({
           authenticated: false,
           error: "DSN or API key not configured",
         };
+      // TODO(W3/W4): becomes a capability cast (Credentialed/probe()).
       const result = await (connector as UnipileConnector).probe();
       return { configured: true, ...result };
     }

@@ -1,25 +1,18 @@
-import { createHash, createHmac, timingSafeEqual } from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
 import { Hono } from "hono";
 import { createLogger } from "@synap-core/core";
-import { sql as drizzleSql } from "drizzle-orm";
 import {
   db,
   eq,
   and,
   workspaces,
-  channels,
-  messages,
   messagingAccounts,
   webhookSubscriptions,
-  ChannelType,
-  ChannelScope,
-  MessageRole,
-  MessageAuthorType,
-  MessageCategory,
 } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { getMessagingConnector } from "../connectors/index.js";
 import { MessagingAccountService } from "../services/messaging-account-service.js";
+import { recordInboundMessage } from "../services/connectors/inbound-recorder.js";
 
 const logger = createLogger({ module: "webhooks-inbound" });
 
@@ -141,112 +134,22 @@ webhooksInboundRouter.post("/messaging", async (c) => {
       }
 
       const senderName = event.message.senderName;
-      const messagePreview = event.message.body.slice(0, 120);
 
-      // ── Upsert the EXTERNAL channel row ────────────────────────────────────
-      // This is the canonical Synap representation of the external thread.
-      // We use (externalSource, externalId) as the unique dedup key.
-      let channelId: string;
-
-      const existingChannel = await db.query.channels.findFirst({
-        where: and(
-          eq(channels.channelType, ChannelType.EXTERNAL),
-          eq(channels.externalSource as any, event.provider),
-          eq(channels.externalId as any, event.threadId)
-        ),
-        columns: { id: true, metadata: true, contextObjectId: true },
-      });
-
-      if (existingChannel) {
-        channelId = existingChannel.id;
-        // Update last-message cache in metadata
-        await db
-          .update(channels)
-          .set({
-            metadata: drizzleSql`${channels.metadata} || ${JSON.stringify({
-              lastMessageAt: event.message.sentAt,
-              lastMessagePreview: messagePreview,
-              unread: true,
-            })}::jsonb`,
-            updatedAt: new Date(),
-          })
-          .where(eq(channels.id, channelId));
-      } else {
-        const [inserted] = await db
-          .insert(channels)
-          .values({
-            userId: account.userId,
-            workspaceId: workspace.id,
-            channelType: ChannelType.EXTERNAL,
-            scope: ChannelScope.WORKSPACE,
-            title: senderName,
-            externalSource: event.provider,
-            externalChannelId: event.threadId,
-            externalId: event.threadId,
-            metadata: {
-              accountId: account.externalId,
-              participantName: senderName,
-              lastMessageAt: event.message.sentAt,
-              lastMessagePreview: messagePreview,
-              unread: true,
-            },
-          })
-          .returning({ id: channels.id });
-        channelId = inserted.id;
-        logger.info(
-          { channelId, provider: event.provider, threadId: event.threadId },
-          "Auto-created EXTERNAL channel for inbound message"
-        );
-      }
-
-      // ── Store the message in the messages table ─────────────────────────────
-      // role=user + authorType=external = inbound message from an external contact
-      const msgHash = createHash("sha256")
-        .update(
-          `${event.provider}:${event.threadId}:${event.message.sentAt}:${event.message.body}`
-        )
-        .digest("hex");
-
-      await db
-        .insert(messages)
-        .values({
-          channelId,
-          userId: account.userId,
-          role: MessageRole.USER,
-          authorType: MessageAuthorType.EXTERNAL,
-          messageCategory: MessageCategory.CHAT,
-          externalSource: event.provider,
-          content: event.message.body,
-          hash: msgHash,
-          timestamp: new Date(event.message.sentAt),
-        })
-        .onConflictDoNothing(); // idempotent — webhook may fire more than once
-
-      logger.info(
-        { channelId, provider: event.provider, threadId: event.threadId },
-        "Inbound message stored"
-      );
-
-      // ── Fire automation event ────────────────────────────────────────────────
-      // Fire for ALL inbound messages (pre-linked or not). Automations with
-      // eventPattern "external_message.received.completed" will match.
-      const contextEntityId = (existingChannel as any)?.contextObjectId ?? null;
-      await emitSideEffects({
-        subjectType: "external_message",
-        action: "received",
-        subjectId: (contextEntityId ?? channelId) as string,
+      // Resolve-or-create the EXTERNAL channel + dedup-record the inbound
+      // message + fire `external_message.received` via the shared recorder.
+      // Unipile has no native message id, so the idempotency seed is the same
+      // composite the inline path hashed before: thread + sentAt + body.
+      await recordInboundMessage({
+        provider: event.provider,
+        externalId: event.threadId,
         userId: account.userId,
         workspaceId: workspace.id,
-        data: {
-          entityId: contextEntityId as string,
-          channelId,
-          provider: event.provider,
-          threadId: event.threadId,
-          participantName: senderName,
-          messagePreview,
-        },
-      }).catch((err) => {
-        logger.warn({ err, channelId }, "emitSideEffects failed (non-fatal)");
+        text: event.message.body,
+        participant: senderName,
+        accountExternalId: account.externalId,
+        title: senderName,
+        idempotencySeed: `${event.threadId}:${event.message.sentAt}:${event.message.body}`,
+        sentAt: event.message.sentAt,
       });
     } else if (event.type === "account.created") {
       // notify_url callback: auto-sync the newly connected account into our DB

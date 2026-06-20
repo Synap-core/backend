@@ -18,7 +18,12 @@ import {
 } from "../services/links/links-service.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
-import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  createPendingProposal,
+} from "../utils/permission-check.js";
+import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
+import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
@@ -38,6 +43,8 @@ export const skillsRouter = router({
           kind: z.enum(["instruction", "code"]).optional(),
           scope: z.enum(["pod", "user", "workspace"]).optional(),
           status: z.enum(["active", "inactive", "error", "all"]).optional(),
+          /** When true, return only approved skills (the agent-tool loader uses this). */
+          approved: z.boolean().optional(),
           limit: z.number().min(1).max(100).default(50),
           offset: z.number().min(0).default(0),
         })
@@ -85,6 +92,10 @@ export const skillsRouter = router({
 
       if (input?.status && input.status !== "all") {
         conditions.push(eq(skills.status, input.status));
+      }
+
+      if (input?.approved !== undefined) {
+        conditions.push(eq(skills.approved, input.approved));
       }
 
       const results = await ctx.db.query.skills.findMany({
@@ -169,7 +180,11 @@ export const skillsRouter = router({
         };
       }
 
-      // 2. Direct DB operation
+      // 2. Direct DB operation.
+      //    Born-draft carve-out (D-D): `instruction` skills are prompt-only with
+      //    no side effects → born approved. `code` skills execute → born draft
+      //    (DEFAULT false) and require an owner to approve before they run or
+      //    load as agent tools.
       const [skill] = await db
         .insert(skills)
         .values({
@@ -187,6 +202,7 @@ export const skillsRouter = router({
           executionMode: input.executionMode,
           timeoutSeconds: input.timeoutSeconds,
           status: "active",
+          approved: input.kind === "instruction",
         })
         .returning();
 
@@ -270,11 +286,26 @@ export const skillsRouter = router({
         return { status: "proposed" as const, proposalId: perm.proposalId };
       }
 
+      // Security: if any execution-defining field changes, the skill may now run
+      // different code — reset approval so an approved skill can't be silently
+      // re-pointed to execute untrusted code.
+      const RE_APPROVAL_FIELDS = [
+        "code",
+        "parameters",
+        "executionMode",
+        "timeoutSeconds",
+        "kind",
+      ] as const;
+      const execChanged = RE_APPROVAL_FIELDS.some(
+        (k) => (updateData as Record<string, unknown>)[k] !== undefined
+      );
+
       // 2. Direct DB operation
       const [_updated] = await db
         .update(skills)
         .set({
           ...updateData,
+          ...(execChanged ? { approved: false } : {}),
           updatedAt: new Date(),
         })
         .where(eq(skills.id, id))
@@ -405,12 +436,74 @@ export const skillsRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Skill not found" });
       }
 
+      // Lifecycle gate (NOT governance): a draft/disabled skill never runs.
       if (skill.status !== "active") {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `Skill is not active (status: ${skill.status})`,
         });
       }
+
+      // Capability-execution gate (Wave 3b chokepoint) — supersedes the bare
+      // `approved` boolean. Owner-bypass: the skill's owner runs their own skill.
+      // A non-owner with an UNAPPROVED skill routes to `propose` (don't run); an
+      // approved skill + auto resolves to run. This is the operator/UI door
+      // (protectedProcedure) — there is no agent identity here, so an approved
+      // skill run by its accessible operator stays auto (no behavior change).
+      const skillDecision = await gateCapabilityExecution({
+        capabilityKind: "skill",
+        capabilityId: skill.id,
+        skill: { id: skill.id, approved: skill.approved, userId: skill.userId },
+        actorUserId: userId,
+        workspaceId: skill.workspaceId ?? null,
+        issuer: "skills.execute",
+      });
+
+      if (skillDecision.decision === "deny") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: skillDecision.reason,
+        });
+      }
+      if (skillDecision.decision === "propose") {
+        // Don't run — materialize a reviewable capability/run proposal. A
+        // pod-wide (null-workspace) skill has no review surface; require approval
+        // upfront rather than silently running (safe-by-default).
+        if (!skill.workspaceId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Skill is not approved for execution.",
+          });
+        }
+        const proposal = await createPendingProposal({
+          userId,
+          workspaceId: skill.workspaceId,
+          targetType: "capability",
+          targetId: skill.id,
+          proposalType: "run",
+          data: {
+            capabilityKind: "skill",
+            capabilityId: skill.id,
+            input: input.input ?? {},
+            workspaceId: skill.workspaceId,
+          },
+          notificationDescription: `Run skill ${skill.name}`,
+        });
+        return {
+          success: false as const,
+          proposed: true as const,
+          proposalId: proposal.id,
+          executionTimeMs: 0,
+        };
+      }
+      if (skillDecision.decision === "dry-run") {
+        return {
+          success: true as const,
+          result: { dryRun: true, skillId: skill.id },
+          executionTimeMs: 0,
+        };
+      }
+      // decision === "run" → fall through to execute.
 
       // Resolve the intelligence service from DB (workspace pref → user pref → default)
       const { endpoint: hubUrl, serviceApiKey: hubApiKey } =
@@ -473,6 +566,54 @@ export const skillsRouter = router({
       }
 
       return result;
+    }),
+
+  /**
+   * Approve or revoke approval for a skill's execution. Owner-gated (workspace
+   * owner, or pod-admin for pod-wide null-workspace skills) — mirrors
+   * `mcpServersRouter.setApproved`. An unapproved skill is refused by the
+   * backend/IS executor and is not loaded as an agent tool.
+   */
+  setApproved: protectedProcedure
+    .input(z.object({ id: z.string().uuid(), approved: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const existing = await ctx.db.query.skills.findFirst({
+        where: eq(skills.id, input.id),
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Skill not found" });
+      }
+      if (existing.workspaceId) {
+        const role = await getWorkspaceRole(userId, existing.workspaceId);
+        if (role !== "owner") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only workspace owners can approve skill execution.",
+          });
+        }
+      } else {
+        // Pod-wide (null-workspace) skill — pod-level privileged action.
+        await requirePodAdmin(userId);
+      }
+
+      const [updated] = await db
+        .update(skills)
+        .set({ approved: input.approved, updatedAt: new Date() })
+        .where(eq(skills.id, input.id))
+        .returning();
+
+      auditLog({
+        subjectType: "skill",
+        action: "update",
+        phase: "completed",
+        subjectId: input.id,
+        userId,
+        workspaceId: existing.workspaceId || undefined,
+        data: { approved: input.approved },
+      });
+
+      return { skill: updated };
     }),
 
   /**
@@ -601,6 +742,8 @@ export const skillsRouter = router({
           category: "instruction",
           executionMode: "sync",
           status: "active",
+          // Instruction skills (prompt-only, no side effects) are born approved.
+          approved: true,
           metadata: {
             source: parsed.source,
             version: parsed.version,

@@ -4,11 +4,14 @@
  * Secure storage for passwords, API keys, and sensitive credentials.
  * Based on industry best practices from 1Password, Bitwarden, and AWS Secrets Manager.
  *
- * Security Model:
- * - Client-side encryption (AES-256-GCM)
- * - Server never sees plaintext secrets
- * - Zero-knowledge architecture
- * - Complete audit trail
+ * Security Model (see the `encryptionMode` column for the authoritative contract):
+ * - AES-256-GCM encryption.
+ * - 'server' mode (default + only write path): the server encrypts with
+ *   VAULT_SERVER_KEY and can read the plaintext — required so AI credential grants
+ *   can resolve secrets server-side on a sovereign pod.
+ * - 'client' mode: LEGACY zero-knowledge rows, still readable for backward
+ *   compatibility but no longer written and not grantable to AI.
+ * - Complete audit trail.
  */
 
 import {
@@ -235,25 +238,67 @@ export const VAULT_GRANT_SCOPES = vaultGrantScopeEnum.enumValues;
 export type VaultGrantScope = (typeof VAULT_GRANT_SCOPES)[number];
 
 /**
- * Vault Grants
+ * What KIND of thing a capability grant authorizes. A `secret` grant is the
+ * original vault-secret read; `tool`/`skill`/`command` generalize the SAME
+ * enforcement shape (scope/TTL/uses/binding) to any grantable capability
+ * (see @synap/playbooks GrantableKind). The subject id is `grantable_id`
+ * (polymorphic text — no FK, since it can point at any of these tables).
+ */
+export const grantableTypeEnum = pgEnum("grantable_type", [
+  "secret",
+  "tool",
+  "skill",
+  "command",
+]);
+
+export const GRANTABLE_TYPES = grantableTypeEnum.enumValues;
+export type GrantableType = (typeof GRANTABLE_TYPES)[number];
+
+/**
+ * What happens when a grant is exercised — the governance/execMode axis (the
+ * same axis as Capability.governance in @synap/playbooks):
+ *   'auto'    — run the capability directly (today's secret-read behavior).
+ *   'propose' — route the exercise through a reviewable proposal.
+ *   'dry-run' — preview only (stub external writes/sends, keep reads + checks).
+ */
+export const grantExecModeEnum = pgEnum("grant_exec_mode", [
+  "auto",
+  "propose",
+  "dry-run",
+]);
+
+export const GRANT_EXEC_MODES = grantExecModeEnum.enumValues;
+export type GrantExecMode = (typeof GRANT_EXEC_MODES)[number];
+
+/**
+ * Capability Grants (formerly Vault Grants — generalized in 0142)
  *
- * Records an AI/agent access grant to a server-encrypted secret, created when a
- * user approves a vault.request proposal via grantAIAccess. Enforced at
- * redemption: the vault resolver looks up an ACTIVE grant (not revoked, not
- * expired, use_count < max_uses) before returning a decrypted value to an
- * agent/IS path, and atomically increments use_count.
+ * Records an AI/agent access grant to a GRANTABLE capability (a vault secret, a
+ * tool, a skill, or a command), created when a user approves a capability/vault
+ * request proposal (grantAIAccess / focus-sessions.grantCapability). Enforced at
+ * redemption: the resolver looks up an ACTIVE grant (not revoked, not expired,
+ * use_count < max_uses), bound to the redeemer, and atomically increments
+ * use_count.
  *
- * The pod's own internal/service redemption paths (getServiceConfig /
- * getServiceSecret bootstrap creds) deliberately do NOT consult this table —
- * grants gate agent/IS redemption only.
+ * The table is still named `vault_grants` (rename-in-place per G1 — only the
+ * subject column generalized from `secret_id` FK to `grantable_type` +
+ * `grantable_id`). The pod's own internal/service redemption paths
+ * (getServiceConfig / getServiceSecret bootstrap creds) deliberately do NOT
+ * consult this table — grants gate agent/IS redemption only.
  */
 export const vaultGrants = pgTable(
   "vault_grants",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    secretId: uuid("secret_id")
-      .notNull()
-      .references(() => secrets.id, { onDelete: "cascade" }),
+
+    // Polymorphic subject: WHAT this grant authorizes. `grantableType`
+    // discriminates; `grantableId` is the id of the secret/tool/skill/command
+    // (text, no FK — a polymorphic id can't reference one table).
+    grantableType: grantableTypeEnum("grantable_type").notNull(),
+    grantableId: text("grantable_id").notNull(),
+
+    // What happens when the grant is exercised (governance axis).
+    execMode: grantExecModeEnum("exec_mode").notNull().default("auto"),
 
     // The proposal this grant was approved against.
     proposalId: uuid("proposal_id"),
@@ -279,12 +324,12 @@ export const vaultGrants = pgTable(
       .defaultNow(),
   },
   (table) => ({
-    secretIdIdx: index("idx_vault_grants_secret_id").on(table.secretId),
     grantedToIdx: index("idx_vault_grants_granted_to").on(table.grantedTo),
     proposalIdIdx: index("idx_vault_grants_proposal_id").on(table.proposalId),
-    // Hot path: find active grants for a secret.
-    secretActiveIdx: index("idx_vault_grants_secret_active").on(
-      table.secretId,
+    // Hot path: find active grants for a grantable capability.
+    grantableActiveIdx: index("idx_vault_grants_secret_active").on(
+      table.grantableType,
+      table.grantableId,
       table.revokedAt
     ),
   })
@@ -394,14 +439,10 @@ export const secretsRelations = relations(secrets, ({ one, many }) => ({
   tags: many(secretTags),
   shares: many(secretShares),
   auditLog: many(secretAuditLog),
-  grants: many(vaultGrants),
-}));
-
-export const vaultGrantsRelations = relations(vaultGrants, ({ one }) => ({
-  secret: one(secrets, {
-    fields: [vaultGrants.secretId],
-    references: [secrets.id],
-  }),
+  // NOTE: `vault_grants` is now polymorphic (grantable_type/grantable_id) — a
+  // grant no longer FKs the secrets table, so there is no Drizzle relation back
+  // to secrets. Grant→secret resolution happens explicitly in the resolver when
+  // grantable_type='secret'.
 }));
 
 export const secretTagsRelations = relations(secretTags, ({ one }) => ({

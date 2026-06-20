@@ -10,12 +10,9 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { syncConnectorRegistry } from "../../../connectors/index.js";
 import type { NangoConnector } from "../../../connectors/NangoConnector.js";
-import {
-  triggerConnectorAction,
-  triggerProviderAction,
-} from "../../../connectors/external-dispatch.js";
+import { triggerProviderAction } from "../../../connectors/external-dispatch.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import { hasScope, logger, resolveActorId, type HubHono } from "./_shared.js";
 
 export function registerConnectorsRoutes(app: HubHono): void {
   // ── GET /connectors/providers ─────────────────────────────────────────────
@@ -59,6 +56,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
           403
         );
       }
+      // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
       const connector = syncConnectorRegistry.get("nango") as
         | NangoConnector
         | undefined;
@@ -140,6 +138,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
           403
         );
       }
+      // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
       const connector = syncConnectorRegistry.get("nango") as
         | NangoConnector
         | undefined;
@@ -238,6 +237,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
           403
         );
       }
+      // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
       const connector = syncConnectorRegistry.get("nango") as
         | NangoConnector
         | undefined;
@@ -311,6 +311,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
           403
         );
       }
+      // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
       const connector = syncConnectorRegistry.get("nango") as
         | NangoConnector
         | undefined;
@@ -334,81 +335,11 @@ export function registerConnectorsRoutes(app: HubHono): void {
     }
   );
 
-  // ── POST /connectors/actions ──────────────────────────────────────────────
-  app.openapi(
-    createRoute({
-      method: "post",
-      path: "/connectors/actions",
-      tags: ["Connectors"],
-      summary: "Trigger a Nango action on a connected integration",
-      request: {
-        body: {
-          content: {
-            "application/json": {
-              schema: z
-                .object({
-                  connectionId: z.string(),
-                  providerConfigKey: z.string(),
-                  actionName: z.string(),
-                  input: z.record(z.string(), z.unknown()).optional(),
-                })
-                .openapi("TriggerConnectorActionRequest"),
-            },
-          },
-        },
-      },
-      responses: {
-        200: {
-          description: "Action triggered",
-          content: {
-            "application/json": {
-              schema: z
-                .object({ result: z.unknown() })
-                .openapi("TriggerConnectorActionResult"),
-            },
-          },
-        },
-        500: {
-          description: "Internal error",
-          content: { "application/json": { schema: ErrorSchema } },
-        },
-        503: {
-          description: "Connector not configured",
-          content: { "application/json": { schema: ErrorSchema } },
-        },
-      },
-    }),
-    async (c): Promise<any> => {
-      if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
-        return c.json(
-          { error: "Insufficient scope: hub-protocol.write required" },
-          403
-        );
-      }
-      const { connectionId, providerConfigKey, actionName, input } =
-        c.req.valid("json");
-      try {
-        const { success, result } = await triggerConnectorAction({
-          connectionId,
-          providerConfigKey,
-          actionName,
-          input: input ?? {},
-        });
-        if (!success)
-          return c.json({ error: "Nango connector not configured" }, 503);
-        return c.json({ result }, 200);
-      } catch (err) {
-        logger.error(
-          { err, connectionId, providerConfigKey, actionName },
-          "POST /connectors/actions failed"
-        );
-        return c.json(
-          { error: err instanceof Error ? err.message : "Unknown error" },
-          500
-        );
-      }
-    }
-  );
+  // NOTE (W3b): the POST /connectors/actions route (Nango named-action 3rd path,
+  // backed by the retired `triggerConnectorAction`) was REMOVED. The agnostic
+  // POST /connectors/tool-execute door (backed by `triggerProviderAction`, which
+  // dispatches Nango via `proxyRequest`) is the ONE governed external-action
+  // endpoint.
 
   // ── GET /connectors/connections/{provider} ──────────────────────────────
   //
@@ -462,6 +393,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         );
       }
 
+      // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
       const connector = syncConnectorRegistry.get("nango") as
         | NangoConnector
         | undefined;
@@ -507,7 +439,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
   // connector code (one impl, two doors — like sendExternalMessage).
   // Supported provider schemes:
   //   - nango:// → resolved via Nango proxy with Connection-Id + Provider-Config-Key
-  //   - vault:// → credential resolved but execution not yet implemented (501)
+  //   - vault:// → credential resolved + downstream request executed via the vault handler
   app.openapi(
     createRoute({
       method: "post",
@@ -530,6 +462,17 @@ export function registerConnectorsRoutes(app: HubHono): void {
                   body: z.record(z.string(), z.unknown()).optional(),
                   /** Optional hint to pick a specific account when multiple connections exist. */
                   accountHint: z.string().optional(),
+                  /**
+                   * Optional acting workspace — routes a `propose` verdict's
+                   * review proposal to the right workspace and scopes the gate.
+                   */
+                  workspaceId: z.string().optional(),
+                  /**
+                   * Optional AI-agent identity. Verified to be a real agent user
+                   * before it's trusted; threaded to the capability-execution
+                   * gate so an agent run routes to `propose`, not auto-run.
+                   */
+                  agentUserId: z.string().optional(),
                 })
                 .openapi("ToolExecuteRequest"),
             },
@@ -551,6 +494,20 @@ export function registerConnectorsRoutes(app: HubHono): void {
             },
           },
         },
+        202: {
+          description:
+            "Execution requires human approval — a reviewable proposal was created instead of running.",
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  proposed: z.literal(true),
+                  proposalId: z.string(),
+                })
+                .openapi("ToolExecuteProposed"),
+            },
+          },
+        },
         400: {
           description: "Bad request",
           content: { "application/json": { schema: ErrorSchema } },
@@ -561,10 +518,6 @@ export function registerConnectorsRoutes(app: HubHono): void {
         },
         404: {
           description: "Tool or connection not found",
-          content: { "application/json": { schema: ErrorSchema } },
-        },
-        501: {
-          description: "Provider type not yet supported for execution",
           content: { "application/json": { schema: ErrorSchema } },
         },
       },
@@ -578,11 +531,33 @@ export function registerConnectorsRoutes(app: HubHono): void {
       }
 
       const userId = c.get("userId") as string;
-      const { provider, method, path, body, accountHint } = c.req.valid("json");
+      const {
+        provider,
+        method,
+        path,
+        body,
+        accountHint,
+        workspaceId,
+        agentUserId,
+      } = c.req.valid("json");
+
+      // Verify a supplied agentUserId is a real agent user before trusting it.
+      // An invalid id is rejected (never silently downgraded to operator — that
+      // would let a caller fake operator trust by passing garbage).
+      let resolvedAgentUserId: string | undefined;
+      if (agentUserId) {
+        const actor = await resolveActorId(agentUserId, userId);
+        if ("error" in actor) {
+          return c.json({ error: actor.error }, 403);
+        }
+        resolvedAgentUserId = agentUserId;
+      }
 
       try {
         // ONE impl, two doors: the same dispatcher the proposals.ts
-        // `provider.action` executor calls. No inline proxy logic here.
+        // `provider.action` executor calls. No inline proxy logic here. The
+        // capability-execution gate lives INSIDE triggerProviderAction, so this
+        // door is now governed identically to the proposal door.
         const result = await triggerProviderAction({
           userId,
           provider,
@@ -590,7 +565,17 @@ export function registerConnectorsRoutes(app: HubHono): void {
           path,
           body,
           accountHint,
+          workspaceId,
+          agentUserId: resolvedAgentUserId,
         });
+
+        // Gate routed to a reviewable proposal instead of executing.
+        if (result.proposed) {
+          return c.json(
+            { proposed: true as const, proposalId: result.proposalId! },
+            202
+          );
+        }
 
         if (result.success) {
           return c.json(
@@ -603,18 +588,8 @@ export function registerConnectorsRoutes(app: HubHono): void {
           );
         }
 
-        // Map the structured failure onto the endpoint's response codes,
-        // preserving the prior status codes (400 / 404 / 501 / 503).
-        if (result.status === 501) {
-          return c.json(
-            {
-              status: "not_implemented",
-              provider: "vault://",
-              detail: result.error,
-            },
-            501
-          );
-        }
+        // Map the structured failure onto the endpoint's response codes
+        // (400 / 404 / 503).
         const code =
           result.status === 404 ? 404 : result.status === 503 ? 503 : 400;
         return c.json({ error: result.error ?? "Unknown error" }, code);

@@ -36,7 +36,6 @@ import { channelsRouter } from "../channels.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import {
   sendExternalMessage,
-  triggerConnectorAction,
   triggerProviderAction,
 } from "../../connectors/external-dispatch.js";
 import { getMessagingConnector } from "../../connectors/index.js";
@@ -616,11 +615,15 @@ export function registerApproveExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
+      // BYPASS the capability gate: this send is already past governance (the
+      // proposal was approved). `alreadyApproved` makes sendExternalMessage
+      // dispatch directly, exactly once — no double-gate on re-entry.
       const { success: sent } = await sendExternalMessage({
         threadId,
         accountId,
         body,
         userId,
+        alreadyApproved: true,
       });
 
       if (!sent) {
@@ -657,78 +660,10 @@ export function registerApproveExecutors(): void {
     },
   });
 
-  // ── connector.action.trigger (proposalType-only) ────────────────────────────
-  registerProposalExecutor({
-    key: "connector.action.trigger",
-    async execute({ proposal, payload, userId, input, deps }) {
-      const data = (proposal.data ?? {}) as Record<string, unknown>;
-      const connectionId = data.connectionId as string | undefined;
-      const providerConfigKey = data.providerConfigKey as string | undefined;
-      const actionName = data.actionName as string | undefined;
-
-      if (!connectionId || !providerConfigKey || !actionName) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "Connector action trigger requires connectionId, providerConfigKey, and actionName",
-        });
-      }
-
-      // Guard: only execute once.
-      const [alreadyDone] = await db
-        .select({ status: proposals.status })
-        .from(proposals)
-        .where(eq(proposals.id, input.proposalId));
-      if (alreadyDone?.status === ProposalStatus.APPROVED) {
-        return { success: true, alreadyApproved: true };
-      }
-
-      const { success: triggered, result: actionResult } =
-        await triggerConnectorAction({
-          connectionId,
-          providerConfigKey,
-          actionName,
-          input: (data.input ?? data.payload) as
-            | Record<string, unknown>
-            | undefined,
-        });
-
-      if (!triggered) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to trigger connector action — Nango not configured",
-        });
-      }
-
-      const materializedPayload = {
-        ...payload,
-        triggeredResult: {
-          triggeredAt: new Date().toISOString(),
-          actionName,
-          result: actionResult,
-        },
-      } as unknown as typeof payload;
-
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
-          data: materializedPayload,
-          reviewedBy: userId,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
-
-      deps.emitProposalReviewed(
-        input.proposalId,
-        proposal.workspaceId,
-        "approved",
-        userId
-      );
-      return { success: true };
-    },
-  });
+  // NOTE (W3b): the `connector.action.trigger` executor (Nango named-action 3rd
+  // path) was RETIRED. The agnostic `provider.action` executor below + the shared
+  // `triggerProviderAction()` dispatcher (Nango `proxyRequest`) is the ONE governed
+  // external-action door — there is no separate named-action path to keep in sync.
 
   // ── provider.action (proposalType-only) — AGNOSTIC EXTERNAL LAST-MILE ────────
   // Closes North Star gap #1's generic tail: approve a proposal that names an
@@ -773,6 +708,11 @@ export function registerApproveExecutors(): void {
         path,
         body: data.body as Record<string, unknown> | undefined,
         accountHint: data.accountHint as string | undefined,
+        workspaceId: (data.workspaceId as string | undefined) ?? undefined,
+        // Governed Door-2 re-entry: a human already approved this proposal, so
+        // bypass the capability-execution gate (no re-propose) — exactly once.
+        alreadyApproved: true,
+        sourceProposalId: input.proposalId,
       });
 
       if (!executed) {
@@ -801,6 +741,110 @@ export function registerApproveExecutors(): void {
         .set({
           status: ProposalStatus.APPROVED,
           data: materializedPayload,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── capability/run — CAPABILITY-EXECUTION LAST-MILE (Wave 3a) ────────────────
+  // Materializes a `propose`/`propose-each` verdict from rung 2.6: on approval,
+  // RE-ENTER the same execute path the auto-path uses, so approve-path and
+  // auto-path share ONE execution impl. Mirrors provider.action: idempotent
+  // (skip if already APPROVED), flips APPROVED + emitProposalReviewed.
+  //
+  // ── The `alreadyApproved` bypass contract (for Wave 3b) ──────────────────────
+  // The chokepoint Wave 3b wires (triggerProviderAction / skill-execute /
+  // automation nodes) calls `gateCapabilityExecution()` FIRST. On the auto path
+  // the gate returns `{ decision: "run" }` and the chokepoint dispatches inline.
+  // On the propose path the gate returns `{ decision: "propose", … }`, a
+  // `capability/run` proposal is created, and THIS executor runs on approval —
+  // re-entering the SAME dispatch. To stop the re-entry from proposing a SECOND
+  // time, the chokepoint's execute input MUST carry an `alreadyApproved: true`
+  // (a.k.a. `bypassGovernance`) flag that SHORT-CIRCUITS the gate to `run`. The
+  // contract Wave 3b must honor:
+  //   • input field name: `alreadyApproved?: boolean` on the capability-execute
+  //     call (and `sourceProposalId?: string` for audit).
+  //   • when `alreadyApproved === true`, the chokepoint SKIPS
+  //     `gateCapabilityExecution()` entirely and dispatches directly — exactly
+  //     once — so an approved proposal never loops back into a new proposal.
+  //   • only THIS executor (and the auto `run` decision) may set it true; no
+  //     external caller may supply it.
+  registerProposalExecutor({
+    key: "capability/run",
+    async execute({ proposal, userId, input, deps }) {
+      const data = (proposal.data ?? {}) as Record<string, unknown>;
+      const capabilityKind = data.capabilityKind as
+        | "tool"
+        | "skill"
+        | "command"
+        | undefined;
+      const capabilityId = data.capabilityId as string | undefined;
+
+      if (!capabilityKind || !capabilityId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "capability/run proposal requires capabilityKind and capabilityId in proposal data",
+        });
+      }
+
+      // Guard: only execute once (the run may be an irreversible external write).
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      // Re-enter the SAME execute path the auto path uses. The `alreadyApproved`
+      // bypass (documented above) is set so the chokepoint does NOT re-propose.
+      if (capabilityKind === "tool") {
+        const provider = (data.provider as string | undefined) ?? capabilityId;
+        const method = (data.method as string | undefined) ?? "POST";
+        const path = (data.path as string | undefined) ?? "/";
+        const { success: executed, error: providerError } =
+          await triggerProviderAction({
+            userId,
+            provider,
+            method,
+            path,
+            body: data.body as Record<string, unknown> | undefined,
+            accountHint: data.accountHint as string | undefined,
+            workspaceId: (data.workspaceId as string | undefined) ?? undefined,
+            // BYPASS the capability-execution gate: a human already approved THIS
+            // proposal, so this is the governed Door-2 re-entry — dispatch directly,
+            // exactly once, without re-proposing (Wave 3a `alreadyApproved` contract).
+            alreadyApproved: true,
+            sourceProposalId: input.proposalId,
+          });
+        if (!executed) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message:
+              providerError ??
+              "Failed to execute granted capability — connector not configured or no connection",
+          });
+        }
+      }
+      // skill / command dispatch is wired by Wave 3b (skill-execute door); the
+      // approval + status flip below still apply so the proposal closes cleanly.
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),

@@ -38,6 +38,7 @@ import {
   ProposalStatus,
 } from "@synap/database/schema";
 import { auditLog } from "../utils/audit-log.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 
 // ============================================================================
 // Validation Schemas
@@ -504,6 +505,52 @@ export const secretsVaultRouter = router({
     }),
 
   /**
+   * Soft-delete a secret via the capability write-gate (used by the headless
+   * Hub `DELETE /vault/secrets/:id` door). Unlike `delete` (owner-only), this
+   * keys off the LOADED row's workspaceId through `assertWorkspaceWrite`
+   * (editor+ member of the row's workspace, or the owner for an ownerless
+   * pod-wide secret). NEVER hard-deletes — grants/audit reference the row, and
+   * `resolveVaultSecret` already returns null for a soft-deleted secret (lazy
+   * grant death). Active grants therefore need no cascade.
+   */
+  deleteSecret: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.userId;
+      const secret = await db.query.secrets.findFirst({
+        where: eq(secrets.id, input.id),
+        columns: { id: true, workspaceId: true, userId: true, deletedAt: true },
+      });
+      if (!secret || secret.deletedAt) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Secret not found" });
+      }
+
+      // Write-gate on the LOADED row's workspaceId (never a request-supplied
+      // one). For an ownerless pod-wide secret the owner is the secret's userId.
+      await assertWorkspaceWrite(db, userId, {
+        workspaceId: secret.workspaceId,
+        ownerId: secret.userId,
+      });
+
+      await db
+        .update(secrets)
+        .set({ deletedAt: new Date(), deletedBy: userId })
+        .where(eq(secrets.id, input.id));
+
+      auditLog({
+        subjectType: "secret",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.id,
+        userId,
+        workspaceId: secret.workspaceId ?? undefined,
+        data: { id: input.id },
+      });
+
+      return { success: true as const };
+    }),
+
+  /**
    * Permanently delete a secret
    */
   permanentDelete: protectedProcedure
@@ -826,10 +873,17 @@ export const secretsVaultRouter = router({
       const vaultRef = `vault://${secret.id}`;
 
       // 6. Insert the grant row (the enforcement record consulted at redemption).
+      //    A vault secret is just one grantable KIND — write the generalized
+      //    capability-grant columns (grantableType='secret', grantableId=secret
+      //    id, execMode='auto'). The legacy `secret_id` column still exists in
+      //    the DB (kept for audit) but is no longer in the Drizzle model — the
+      //    subject is carried by grantableId now.
       const [grant] = await db
         .insert(vaultGrants)
         .values({
-          secretId: secret.id,
+          grantableType: "secret",
+          grantableId: secret.id,
+          execMode: "auto",
           proposalId: input.proposalId,
           grantedTo,
           workspaceId: grantWorkspaceId,
@@ -900,14 +954,22 @@ export const secretsVaultRouter = router({
       if (!secret)
         throw new TRPCError({ code: "NOT_FOUND", message: "Secret not found" });
 
+      // Grants are now keyed by (grantableType, grantableId). For a secret-detail
+      // view that's grantableType='secret', grantableId=<secret id>.
       const rows = await db.query.vaultGrants.findMany({
-        where: eq(vaultGrants.secretId, input.secretId),
+        where: and(
+          eq(vaultGrants.grantableType, "secret"),
+          eq(vaultGrants.grantableId, input.secretId)
+        ),
         orderBy: (t, { desc }) => [desc(t.createdAt)],
       });
 
       const now = Date.now();
       return rows.map((g) => ({
         id: g.id,
+        grantableType: g.grantableType,
+        grantableId: g.grantableId,
+        execMode: g.execMode,
         scope: g.scope,
         grantedTo: g.grantedTo,
         proposalId: g.proposalId,
@@ -938,10 +1000,15 @@ export const secretsVaultRouter = router({
     if (owned.length === 0) return [];
     const nameById = new Map(owned.map((s) => [s.id, s.name]));
 
+    // Owner's "who has AI access to which of MY secrets" view — secret-kind
+    // grants whose grantableId is one of the caller's owned secrets.
     const rows = await db.query.vaultGrants.findMany({
-      where: inArray(
-        vaultGrants.secretId,
-        owned.map((s) => s.id)
+      where: and(
+        eq(vaultGrants.grantableType, "secret"),
+        inArray(
+          vaultGrants.grantableId,
+          owned.map((s) => s.id)
+        )
       ),
       orderBy: (t, { desc }) => [desc(t.createdAt)],
     });
@@ -949,8 +1016,9 @@ export const secretsVaultRouter = router({
     const now = Date.now();
     return rows.map((g) => ({
       grantId: g.id,
-      secretId: g.secretId,
-      secretName: nameById.get(g.secretId) ?? null,
+      secretId: g.grantableId,
+      secretName: nameById.get(g.grantableId) ?? null,
+      execMode: g.execMode,
       grantedTo: g.grantedTo,
       proposalId: g.proposalId,
       scope: g.scope,
@@ -972,17 +1040,32 @@ export const secretsVaultRouter = router({
   revokeGrant: protectedProcedure
     .input(z.object({ grantId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      // Join to the owning secret to enforce owner-only revocation.
+      // Load the grant, then enforce owner-only revocation PER grantableType.
       const grant = await db.query.vaultGrants.findFirst({
         where: eq(vaultGrants.id, input.grantId),
-        columns: { id: true, secretId: true, revokedAt: true },
+        columns: {
+          id: true,
+          grantableType: true,
+          grantableId: true,
+          revokedAt: true,
+        },
       });
       if (!grant)
         throw new TRPCError({ code: "NOT_FOUND", message: "Grant not found" });
 
+      // This router owns secret-kind grants. Tool/skill/command grants are
+      // revoked through their own management surfaces (later waves); fail loud
+      // rather than silently allow a cross-kind revoke here.
+      if (grant.grantableType !== "secret") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `revokeGrant on this router handles secret grants only (got "${grant.grantableType}").`,
+        });
+      }
+
       const secret = await db.query.secrets.findFirst({
         where: and(
-          eq(secrets.id, grant.secretId),
+          eq(secrets.id, grant.grantableId),
           eq(secrets.userId, ctx.userId)
         ),
         columns: { id: true },
@@ -1000,7 +1083,7 @@ export const secretsVaultRouter = router({
           subjectType: "vault_secret",
           action: "revoke_ai_access",
           phase: "completed",
-          subjectId: grant.secretId,
+          subjectId: grant.grantableId,
           userId: ctx.userId,
           data: { grantId: input.grantId },
         });

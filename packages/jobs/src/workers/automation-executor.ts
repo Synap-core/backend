@@ -50,6 +50,7 @@ import {
   FeedScope,
   ChannelStatus,
   MessageRole,
+  skills,
 } from "@synap/database/schema";
 import type {
   FlowDefinition,
@@ -65,6 +66,7 @@ import {
   isVaultReference,
 } from "../utils/vault-resolver.js";
 import { checkAutomationWriteOrPropose } from "../utils/automation-governance.js";
+import { gateCapabilityExecution } from "@synap/capability-gate";
 import { resolveIntelligenceService } from "@synap/intelligence-client";
 import { createLogger } from "@synap-core/core";
 import {
@@ -1200,6 +1202,14 @@ async function executeAutomationFlow(params: {
               .set({ resolvedInputs })
               .where(eq(automationStepRuns.id, stepRun.id));
 
+            // FOLLOW-UP (Wave 3b firewall): `intelligence_commands` has no
+            // `approved` column, so there is no per-capability approval-state to
+            // gate the command run on here. The command runs an IS task whose
+            // pod write-backs remain proposal-governed, and any provider call it
+            // makes funnels through Site 1's gate (triggerProviderAction). Full
+            // capability-grant/exec-mode gating for commands awaits the gate
+            // helper being extracted to a shared package (jobs cannot import
+            // @synap/api — circular dep).
             output = await executeCommandStep(
               data,
               context,
@@ -1513,6 +1523,57 @@ async function executeAutomationFlow(params: {
 
             const skillId = data.skillId;
             if (!skillId) throw new Error("Skill node has no skillId");
+
+            // ── Capability-execution gate (Wave 3a — automation door) ──────────
+            // FULL gate: now that `gateCapabilityExecution` lives in the shared
+            // `@synap/capability-gate` package (no longer trapped in @synap/api,
+            // which `@synap/jobs` cannot import without a cycle), this door runs
+            // the SAME approved + grant + exec-mode gate as the IS/operator doors.
+            // An automation runs as the workspace OWNER (no agent identity), so:
+            //   actorUserId = ownerId, agentUserId = null →
+            //     • owner runs their OWN skill          → owner-bypass → run
+            //     • non-owner-owned + approved          → auto         → run
+            //     • non-owner-owned + UNapproved        → propose
+            // A mid-flow automation has no interactive review surface, so a
+            // propose/deny verdict FAILS CLOSED (throws) — strictly stronger than
+            // the prior approved-only check (which also threw on unapproved), and
+            // honoring dry-run by skipping the external call. NOTE: any in-skill
+            // `callProvider` is ALREADY gated transitively by Site 1 (the IS
+            // provider call funnels through triggerProviderAction).
+            const [skillRow] = await db
+              .select({
+                id: skills.id,
+                approved: skills.approved,
+                userId: skills.userId,
+              })
+              .from(skills)
+              .where(eq(skills.id, skillId))
+              .limit(1);
+            const skillDecision = await gateCapabilityExecution({
+              capabilityKind: "skill",
+              capabilityId: skillId,
+              skill: skillRow ?? null,
+              actorUserId: ownerId,
+              agentUserId: null,
+              workspaceId,
+              issuer: "automation.skill-node",
+            });
+            if (skillDecision.decision === "deny") {
+              throw new Error(
+                `Skill ${skillId} refused by capability gate: ${skillDecision.reason}`
+              );
+            }
+            if (skillDecision.decision === "propose") {
+              throw new Error(
+                `Skill ${skillId} requires human approval and cannot run inside an automation; automation skill node refused.`
+              );
+            }
+            if (skillDecision.decision === "dry-run") {
+              // Grant resolved to dry-run preview — no external side effect.
+              output = { output: { dryRun: true, skillId }, skillId };
+              break;
+            }
+            // decision === "run" → fall through to execute the skill.
 
             const inputMapping = data.inputMapping ?? {};
             const resolvedInputs = resolveInputMapping(inputMapping, context);

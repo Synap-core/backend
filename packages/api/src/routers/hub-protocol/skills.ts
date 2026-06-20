@@ -24,6 +24,8 @@ export const skillsRouter = router({
         userId: z.string(),
         workspaceId: z.string().uuid().optional(),
         status: z.enum(["active", "inactive", "error", "all"]).optional(),
+        /** When true, return only approved skills (agent-tool loader filter). */
+        approved: z.boolean().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -38,6 +40,7 @@ export const skillsRouter = router({
       const result = await caller.list({
         workspaceId: input.workspaceId,
         status: input.status || "all",
+        approved: input.approved,
         limit: 100, // Get all active skills
       });
 

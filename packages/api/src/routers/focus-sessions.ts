@@ -9,7 +9,15 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, desc, focusSessions } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  desc,
+  focusSessions,
+  vaultGrants,
+  assertGrantScoped,
+} from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
 import { getLinksFor, createLinks } from "../services/links/links-service.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
@@ -393,6 +401,28 @@ export const focusSessionsRouter = router({
           metadata: { grantedAt: new Date().toISOString() },
         },
       ]);
+
+      // Write the ENFORCEMENT row alongside the `links{grants}` provenance edge
+      // (G1 §4 convergence): the link is descriptive (graph view); the
+      // capability_grants row is what a delegated capability-execution gate
+      // consults at run time. Scope it to the session's workspace (and the
+      // specific agent when one was named). Session-grants are 'session' scope
+      // (unlimited within the session window) with execMode='auto'. The
+      // canonical wildcard firewall runs here too — a grant must bind to an
+      // agent and/or a workspace.
+      assertGrantScoped({
+        grantedTo: input.agentUserId ?? null,
+        workspaceId: session.workspaceId,
+      });
+      await db.insert(vaultGrants).values({
+        grantableType: input.capabilityKind,
+        grantableId: input.capabilityId,
+        execMode: "auto",
+        grantedTo: input.agentUserId ?? null,
+        workspaceId: session.workspaceId,
+        scope: "session",
+        createdBy: ctx.userId,
+      });
 
       emitSideEffects({
         subjectType: "focus_session",

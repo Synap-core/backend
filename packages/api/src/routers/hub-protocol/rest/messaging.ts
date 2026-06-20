@@ -25,11 +25,13 @@ import {
   ChannelType,
   ChannelScope,
 } from "@synap/database";
+import { resolveActingContext } from "./_shared.js";
 import type { MessagingAccount as DbMessagingAccount } from "@synap/database";
 
 import { getServiceSecret, upsertServiceSecret } from "@synap/database";
 import { getMessagingConnector } from "../../../connectors/index.js";
 import { sendExternalMessage } from "../../../connectors/external-dispatch.js";
+import { pullToImport } from "../../../services/connector-import-bridge.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { logger, type HubHono } from "./_shared.js";
 
@@ -1243,6 +1245,124 @@ export function registerMessagingRoutes(app: HubHono): void {
         return c.json(messages, 200);
       } catch (err) {
         logger.error({ err, threadId, accountId }, "GET messages failed");
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          500
+        );
+      }
+    }
+  );
+
+  // ── POST /messaging/conversations/:threadId/import ────────────────────────
+  // W4 unified sink: pull a thread's messages and land them as ONE governed
+  // `import.graph` proposal (reviewable), the SAME path Nango records take.
+  //
+  // This is the "import these into my pod" path. It is SEPARATE from the
+  // display read (`GET .../messages`), which still streams live messages to the
+  // inbox UI unchanged. Agent-initiated pulls (agent API key) are gated through
+  // `gateCapabilityExecution` inside `pullToImport` (owner → run, agent → grant).
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/messaging/conversations/{threadId}/import",
+      tags: ["Messaging"],
+      summary:
+        "Import a conversation thread into the pod as a governed proposal",
+      request: {
+        params: z.object({ threadId: z.string() }),
+        body: {
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  accountId: z.string(),
+                  workspaceId: z.string().optional(),
+                  sessionId: z.string().optional(),
+                })
+                .openapi("ImportThreadRequest"),
+            },
+          },
+        },
+      },
+      responses: {
+        200: {
+          description: "Import proposal created (or no messages to import)",
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  proposalId: z.string().nullable(),
+                  recordCount: z.number(),
+                  itemCount: z.number(),
+                  gated: z.enum(["denied", "deferred"]).optional(),
+                })
+                .openapi("ImportThreadResult"),
+            },
+          },
+        },
+        400: {
+          description: "Bad request",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+        403: {
+          description: "Access denied",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+        500: {
+          description: "Internal error",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+        503: {
+          description: "Connector not configured",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+      },
+    }),
+    async (c) => {
+      const { threadId } = c.req.valid("param");
+      const { accountId, workspaceId, sessionId } = c.req.valid("json");
+      const agentUserId = c.get("agentUserId");
+
+      const acting = await resolveActingContext(c, { workspaceId });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      // Messaging connectors are resolved PER CALL (DB/vault/env), so we hand the
+      // bridge the live `Readable` instance rather than a registry type string
+      // (the registry holds a resolver DESCRIPTOR, not a `getMessages` surface).
+      const connector = await getMessagingConnector();
+      if (!connector)
+        return c.json({ error: "Messaging connector not configured" }, 503);
+
+      try {
+        const result = await pullToImport({
+          ctx: {
+            workspaceId: acting.workspaceId,
+            userId: acting.userId,
+            trpcCtx: {},
+            sessionId: sessionId ?? null,
+          },
+          // Live messaging connector instance; `pullToImport` wraps it into a
+          // `Readable` (supplying type/kind) and dispatches the messaging `read`.
+          connector,
+          request: { kind: "messaging", accountId, threadId },
+          gate: agentUserId
+            ? { agentUserId, issuer: "messaging.read.import" }
+            : undefined,
+        });
+        return c.json(
+          {
+            proposalId: result.proposalId,
+            recordCount: result.recordCount,
+            itemCount: result.itemCount,
+            ...(result.gated ? { gated: result.gated } : {}),
+          },
+          200
+        );
+      } catch (err) {
+        logger.error(
+          { err, threadId, accountId },
+          "POST /messaging/conversations/:threadId/import failed"
+        );
         return c.json(
           { error: err instanceof Error ? err.message : "Unknown error" },
           500

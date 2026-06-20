@@ -397,6 +397,125 @@ describe("decideAgentPolicy — governance by KIND (user_observation)", () => {
   });
 });
 
+describe("decideAgentPolicy — rung 2.6 per-capability governance", () => {
+  it("absent capability fields → verdict byte-identical to today (data-write safety)", () => {
+    // A normal data write with NO capability signal must be unchanged: entity.create
+    // still auto-approves (rung 8), entity.delete still defaults to propose (rung 9).
+    expect(
+      decideAgentPolicy({ subjectType: "entity", action: "create" }).verdict
+    ).toBe("execute");
+    expect(
+      decideAgentPolicy({ subjectType: "entity", action: "delete" })
+    ).toEqual({ verdict: "propose" });
+    // Explicitly null fields are also a no-op.
+    expect(
+      decideAgentPolicy({
+        subjectType: "entity",
+        action: "create",
+        capabilityGovernance: null,
+        capabilityExecMode: null,
+      }).verdict
+    ).toBe("execute");
+  });
+
+  it("auto → execute", () => {
+    expect(
+      decideAgentPolicy({
+        subjectType: "capability",
+        action: "run",
+        capabilityGovernance: "auto",
+      })
+    ).toEqual({ verdict: "execute" });
+  });
+
+  it("propose → propose", () => {
+    expect(
+      decideAgentPolicy({
+        subjectType: "capability",
+        action: "run",
+        capabilityGovernance: "propose",
+      })
+    ).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.CAPABILITY_PROPOSE,
+    });
+  });
+
+  it("block → deny", () => {
+    const v = decideAgentPolicy({
+      subjectType: "capability",
+      action: "run",
+      capabilityGovernance: "block",
+    });
+    expect(v.verdict).toBe("deny");
+  });
+
+  it("grant exec-mode propose overrides an 'auto' capability → propose", () => {
+    expect(
+      decideAgentPolicy({
+        subjectType: "capability",
+        action: "run",
+        capabilityGovernance: "auto",
+        capabilityExecMode: "propose",
+      })
+    ).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.CAPABILITY_PROPOSE,
+    });
+  });
+
+  it("auto + channel propose → propose (channel tightens; auto never widens)", () => {
+    expect(
+      decideAgentPolicy({
+        subjectType: "capability",
+        action: "run",
+        capabilityGovernance: "auto",
+        channelCapabilities: {
+          canDraft: true,
+          canPropose: true,
+          canAct: false,
+        },
+      })
+    ).toEqual({ verdict: "propose", reason: PROPOSE_REASON.CHANNEL_PROPOSE });
+  });
+
+  it("auto + channel act → execute (channel also permits acting)", () => {
+    expect(
+      decideAgentPolicy({
+        subjectType: "capability",
+        action: "run",
+        capabilityGovernance: "auto",
+        channelCapabilities: { canDraft: true, canPropose: true, canAct: true },
+      })
+    ).toEqual({ verdict: "execute" });
+  });
+
+  it("auto + channel block → deny (channel tightens to block)", () => {
+    expect(
+      decideAgentPolicy({
+        subjectType: "capability",
+        action: "run",
+        capabilityGovernance: "auto",
+        channelCapabilities: {
+          canDraft: true,
+          canPropose: false,
+          canAct: false,
+        },
+      }).verdict
+    ).toBe("deny");
+  });
+
+  it("CBAC (rung 1) still precedes rung 2.6", () => {
+    const v = decideAgentPolicy({
+      subjectType: "capability",
+      action: "run",
+      capabilityGovernance: "auto",
+      agentCapabilities: ["entity.*"], // no capability.run → deny first
+    });
+    expect(v.verdict).toBe("deny");
+  });
+});
+
 describe("constants are intact", () => {
   it("DEFAULT_AUTO_APPROVE contains the known routine writes", () => {
     for (const k of [

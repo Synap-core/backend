@@ -46,6 +46,7 @@
     "@synap-core/core": "workspace:*",
     "@synap-core/types": "workspace:*",
     "@synap/ai-embeddings": "workspace:*",
+    "@synap/capability-gate": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/feed-service": "workspace:*",
     "@synap/governance-policy": "workspace:*",

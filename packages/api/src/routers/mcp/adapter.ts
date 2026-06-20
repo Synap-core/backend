@@ -10,6 +10,15 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { hubProtocolRouter } from "../hub-protocol/index.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "../hub-protocol/utils.js";
+import { relationsRouter } from "../relations.js";
+import {
+  getObjectGraph,
+  connectionsToNeighbors,
+  resolveByName,
+  type GraphNeighbor,
+  type GraphEnvelope,
+} from "../../services/object-graph/graph-service.js";
+import type { LinkEndpointType } from "@synap/playbooks";
 import { ask } from "../../services/knowledge/ask.js";
 import { type ProfileCatalogEntry } from "../../services/retrieval/index.js";
 import { getDb } from "@synap/database";
@@ -90,6 +99,48 @@ async function getUserWorkspaceIds(userId: string): Promise<string[]> {
     .from(workspaceMembers)
     .where(eq(workspaceMembers.userId, userId));
   return rows.map((r) => r.workspaceId);
+}
+
+/**
+ * Build the uniform graph envelope for any object — the shared core behind both
+ * `synap_get_graph` and the `neighbors` embedded in detail fetches (get_entity).
+ * Folds in the entity-data graph (relations + property + channel) for
+ * entity-backed kinds via a fresh relationsRouter caller. `cap` truncates the
+ * neighbour list for embedding (counts stay full — honest "showing N of M").
+ */
+async function buildGraphEnvelope(
+  userId: string,
+  scopes: string[],
+  kind: string,
+  id: string,
+  cap?: number
+): Promise<GraphEnvelope> {
+  let extra: GraphNeighbor[] = [];
+  if (kind === "entity" || kind === "project") {
+    try {
+      const ctx = await createHubProtocolCallerContext(userId, scopes);
+      const relCaller = relationsRouter.createCaller(
+        ctx as Parameters<typeof relationsRouter.createCaller>[0]
+      );
+      const conns = await relCaller.getConnections({
+        entityId: id,
+        limit: 100,
+      });
+      extra = connectionsToNeighbors(conns.connections);
+    } catch {
+      // entity-data half is additive — a failure shouldn't blank the graph
+    }
+  }
+  const envelope = await getObjectGraph(
+    userId,
+    kind as LinkEndpointType,
+    id,
+    extra
+  );
+  if (cap && envelope.neighbors.length > cap) {
+    return { ...envelope, neighbors: envelope.neighbors.slice(0, cap) };
+  }
+  return envelope;
 }
 
 export async function executeMCPToolViaHubProtocol(
@@ -276,7 +327,26 @@ export async function executeMCPToolViaHubProtocol(
         id: args.entityId as string,
         includeProfile: true,
       });
-      return ok(entityResult);
+      // Graph by default: embed a capped typed-neighbour summary so the agent
+      // sees the entity's place in the pod without a second call. Additive +
+      // best-effort — never let the graph half break the entity read.
+      let graph: GraphEnvelope | undefined;
+      try {
+        graph = await buildGraphEnvelope(
+          userId,
+          apiKeyScopes,
+          "entity",
+          args.entityId as string,
+          20
+        );
+      } catch {
+        graph = undefined;
+      }
+      return ok(
+        graph
+          ? { ...(entityResult as Record<string, unknown>), graph }
+          : entityResult
+      );
     }
 
     case "synap_list_profiles": {
@@ -335,6 +405,39 @@ export async function executeMCPToolViaHubProtocol(
         entityId: args.entityId as string,
       });
       return ok(result);
+    }
+
+    case "synap_get_graph": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      const gKind = (args.type as string | undefined) ?? "entity";
+      let gId = args.id as string | undefined;
+      // Name-addressing: fetch the graph by NAME instead of id. Resolve the name
+      // to an object first; ambiguous names return the candidates to pick from.
+      if (!gId && args.name) {
+        const matches = await resolveByName(
+          userId,
+          gKind,
+          args.name as string,
+          args.subtype as string | undefined
+        );
+        if (matches.length === 0)
+          return ok({ error: `No ${gKind} named '${args.name}'` });
+        if (matches.length > 1)
+          return ok({
+            ambiguous: true,
+            message: `Multiple ${gKind}s named '${args.name}' — pass id`,
+            matches,
+          });
+        gId = matches[0].id;
+      }
+      if (!gId) return ok({ error: "id or name is required" });
+      const envelope = await buildGraphEnvelope(
+        userId,
+        apiKeyScopes,
+        gKind,
+        gId
+      );
+      return ok(envelope);
     }
 
     case "synap_link_entities": {

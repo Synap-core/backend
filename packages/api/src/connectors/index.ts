@@ -7,16 +7,61 @@ import { UnipileConnector } from "./UnipileConnector.js";
 import { StalwartConnector } from "./StalwartConnector.js";
 import { DiscordConnector } from "./DiscordConnector.js";
 import type { MessagingConnector } from "./MessagingConnector.js";
-import { connectorRegistry, type BaseConnector } from "./ConnectorRegistry.js";
-import { db, getServiceSecret } from "@synap/database";
+import {
+  connectorRegistry,
+  type BaseConnector,
+  type ConnectorKind,
+} from "./ConnectorRegistry.js";
+import { db, getServiceSecret, getDb } from "@synap/database";
 
-// ── Sync + enrichment connectors register into their OWN facade registries
-//    (`syncConnectorRegistry` / `enrichmentProviderRegistry`); they do NOT
-//    register into the unified `connectorRegistry` — only messaging does
-//    (below). ──────────────────────────────────────────────────────────────
-syncConnectorRegistry.register(new NangoConnector());
-enrichmentProviderRegistry.register(new ApifyProvider());
-enrichmentProviderRegistry.register(new ApolloProvider());
+// ── ONE registry: all three families mirror into the unified
+//    `connectorRegistry`. ─────────────────────────────────────────────────────
+//
+// Sync + enrichment keep their family-specific registries
+// (`syncConnectorRegistry` / `enrichmentProviderRegistry`) as THIN SHIMS so
+// their existing callers are unchanged — but each registered instance is ALSO
+// mirrored into the unified registry via the `asBaseConnector` facade so
+// `forCapability(...)` sees every connector regardless of family. Messaging is
+// per-call (DB/vault/env), so it registers RESOLVER DESCRIPTORS (below) rather
+// than a shared instance.
+
+/**
+ * Wrap a family-specific connector (keyed by `name`) so it satisfies
+ * `BaseConnector` (keyed by `type` + `kind`) for the unified registry, while
+ * preserving every original method so capability guards (`isReadable`, etc.)
+ * still detect the underlying surface. The original instance is the prototype,
+ * so all methods stay bound and present.
+ */
+function asBaseConnector(
+  instance: object,
+  type: string,
+  kind: ConnectorKind
+): BaseConnector {
+  const facade = Object.create(instance) as BaseConnector & {
+    type: string;
+    kind: ConnectorKind;
+  };
+  facade.type = type;
+  facade.kind = kind;
+  return facade;
+}
+
+// Sync: Nango. Register into the sync shim AND mirror into the unified registry.
+const nangoConnector = new NangoConnector();
+syncConnectorRegistry.register(nangoConnector);
+connectorRegistry.register(asBaseConnector(nangoConnector, "nango", "sync"));
+
+// Enrichment: Apify + Apollo. Same dual-register.
+const apifyProvider = new ApifyProvider();
+const apolloProvider = new ApolloProvider();
+enrichmentProviderRegistry.register(apifyProvider);
+enrichmentProviderRegistry.register(apolloProvider);
+connectorRegistry.register(
+  asBaseConnector(apifyProvider, "apify", "enrichment")
+);
+connectorRegistry.register(
+  asBaseConnector(apolloProvider, "apollo", "enrichment")
+);
 
 // ── Messaging connectors ──────────────────────────────────────────────────
 //
@@ -105,6 +150,46 @@ registerMessagingType("unipile", async ({ ownerId, settings }) => {
   return new UnipileConnector({ dsn, apiKey, webhookSecret });
 });
 
+// ── ONE Nango resolver ──────────────────────────────────────────────────────
+//
+// Nango has the SAME per-call config concern as messaging (env first, then
+// `workspace.settings.nango` fallback). This is the SINGLE source for a
+// configured Nango connector: both `syncConnectorRegistry.get("nango")` callers
+// (which get the env-only shared instance) and the former `getLocalNango()` /
+// `new NangoConnector()` sites now route through here, killing the dual path.
+
+/**
+ * Resolve a configured `NangoConnector`, checking env vars first then
+ * `workspace.settings.nango` as fallback. Returns null when neither configures
+ * a secret key (pod must use CP-managed Nango).
+ */
+export async function resolveNangoConnector(): Promise<NangoConnector | null> {
+  // The registry's shared instance is env-configured; prefer it when live.
+  if (nangoConnector.isConfigured()) return nangoConnector;
+
+  try {
+    const database = await getDb();
+    const ws = await database.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const cfg = ((ws?.settings as Record<string, unknown>)?.nango ?? {}) as {
+      secretKey?: string;
+      host?: string;
+      connectUrl?: string;
+    };
+    if (cfg.secretKey) {
+      return new NangoConnector({
+        secretKey: cfg.secretKey,
+        host: cfg.host,
+        connectUrl: cfg.connectUrl,
+      });
+    }
+  } catch {
+    // DB not ready — env-only fallback (already null here).
+  }
+  return null;
+}
+
 /**
  * Returns a configured MessagingConnector resolved through the unified
  * connector registry.
@@ -153,11 +238,21 @@ export async function getMessagingConnector(
 }
 
 export { syncConnectorRegistry, enrichmentProviderRegistry };
-export { connectorRegistry } from "./ConnectorRegistry.js";
+export {
+  connectorRegistry,
+  isCredentialed,
+  isReadable,
+  isPushable,
+  isSensing,
+} from "./ConnectorRegistry.js";
 export type {
   BaseConnector,
   ConnectorKind,
   ConnectorRegistry,
+  Credentialed,
+  Readable,
+  Pushable,
+  Sensing,
 } from "./ConnectorRegistry.js";
 
 export type {
@@ -185,3 +280,4 @@ export { UnipileConnector } from "./UnipileConnector.js";
 export { StalwartConnector } from "./StalwartConnector.js";
 export type { StalwartConnectorConfig } from "./StalwartConnector.js";
 export { DiscordConnector } from "./DiscordConnector.js";
+export { NangoConnector } from "./NangoConnector.js";

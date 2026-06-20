@@ -15,7 +15,10 @@ import type { Tool } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import { auditLog } from "../utils/audit-log.js";
 import { getLinksFor } from "../services/links/links-service.js";
+import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { emitSideEffects } from "@synap/events";
 
 const TOOL_KINDS = [
@@ -159,6 +162,9 @@ export const toolsRouter = router({
         description: z.string().optional(),
         credentialRef: z.string().optional(),
         config: z.record(z.string(), z.unknown()).optional(),
+        executor: z.enum(EXECUTORS).optional(),
+        kind: z.enum(TOOL_KINDS).optional(),
+        inputSchema: z.record(z.string(), z.unknown()).optional(),
         status: z.enum(["active", "inactive", "error"]).optional(),
       })
     )
@@ -188,6 +194,20 @@ export const toolsRouter = router({
           proposalId: perm.proposalId,
         };
 
+      // Security: if any execution-defining field changes, the tool may now run
+      // something different from what was approved — reset approval so an
+      // approved tool can't be silently re-pointed to run untrusted code.
+      const RE_APPROVAL_FIELDS = [
+        "credentialRef",
+        "config",
+        "executor",
+        "kind",
+        "inputSchema",
+      ] as const;
+      const execChanged = RE_APPROVAL_FIELDS.some(
+        (k) => (input as Record<string, unknown>)[k] !== undefined
+      );
+
       const [tool] = await db
         .update(tools)
         .set({
@@ -195,7 +215,11 @@ export const toolsRouter = router({
           description: input.description ?? existing.description,
           credentialRef: input.credentialRef ?? existing.credentialRef,
           config: input.config ?? existing.config,
+          executor: input.executor ?? existing.executor,
+          kind: input.kind ?? existing.kind,
+          inputSchema: input.inputSchema ?? existing.inputSchema,
           status: input.status ?? existing.status,
+          ...(execChanged ? { approved: false } : {}),
           updatedAt: new Date(),
         })
         .where(eq(tools.id, input.id))
@@ -205,5 +229,106 @@ export const toolsRouter = router({
         status: "updated" as const,
         proposalId: null as string | null,
       };
+    }),
+
+  /**
+   * Approve or revoke approval for a tool's execution. Owner-gated (workspace
+   * owner, or pod-admin for pod-wide null-workspace tools) — mirrors
+   * `mcpServersRouter.setApproved`. An unapproved tool is refused by the
+   * dispatcher (`external-dispatch.ts`).
+   */
+  setApproved: protectedProcedure
+    .input(z.object({ id: z.string().uuid(), approved: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const existing = await db.query.tools.findFirst({
+        where: eq(tools.id, input.id),
+      });
+      if (!existing)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Tool ${input.id} not found`,
+        });
+      if (existing.workspaceId) {
+        const role = await getWorkspaceRole(userId, existing.workspaceId);
+        if (role !== "owner") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only workspace owners can approve tool execution.",
+          });
+        }
+      } else {
+        // Pod-wide (null-workspace) tool — pod-level privileged action.
+        await requirePodAdmin(userId);
+      }
+
+      const [tool] = await db
+        .update(tools)
+        .set({ approved: input.approved, updatedAt: new Date() })
+        .where(eq(tools.id, input.id))
+        .returning();
+      return { tool: tool as Tool };
+    }),
+
+  /**
+   * Delete a tool. Governed: AI-initiated deletes propose, human deletes
+   * execute (checkPermissionOrPropose). The write-gate keys off the LOADED
+   * row's workspaceId (never a request-supplied one) — pod-wide (null-ws)
+   * tools require the owner. Deleting a tool frees its credentialRef under the
+   * 0140 unique index; its capability_grants become lazily-dead (no cascade).
+   */
+  delete: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      const existing = await db.query.tools.findFirst({
+        where: eq(tools.id, input.id),
+      });
+      if (!existing)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Tool ${input.id} not found`,
+        });
+
+      // Write-gate on the LOADED row's workspaceId (never input.workspaceId).
+      await assertWorkspaceWrite(db, userId, {
+        workspaceId: existing.workspaceId,
+        ownerId: existing.createdBy,
+      });
+
+      const perm = await checkPermissionOrPropose({
+        userId,
+        workspaceId: existing.workspaceId ?? undefined,
+        subjectType: "tool",
+        action: "delete",
+        data: { id: input.id },
+      });
+      if ("denied" in perm && perm.denied)
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      if ("proposalId" in perm)
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+
+      await db.delete(tools).where(eq(tools.id, input.id));
+
+      auditLog({
+        subjectType: "tool",
+        action: "delete",
+        phase: "completed",
+        subjectId: input.id,
+        userId,
+        workspaceId: existing.workspaceId ?? undefined,
+        data: { id: input.id },
+      });
+
+      emitSideEffects({
+        subjectType: "tool",
+        action: "delete",
+        subjectId: input.id,
+        userId,
+        workspaceId: existing.workspaceId ?? undefined,
+      });
+
+      return { status: "deleted" as const, proposalId: null as string | null };
     }),
 });

@@ -24,6 +24,10 @@
  *   2.5 user_observation by KIND  → INFERENCE propose / EXPLICIT execute
  *                                    (governs by the observation's nature, NOT
  *                                     the routing workspace — see below)
+ *   2.6 per-capability governance → auto execute / propose / block deny
+ *                                    (capability RUNS only; no-ops for data
+ *                                     writes; a channel grant may still tighten
+ *                                     an "auto" capability — see below)
  *   3. isAgentOwnedWorkspace      → execute (non-destructive) / propose (destructive)
  *   4. explicit autoApproveFor    → execute (overrides writesRequireProposal)
  *   5. writesRequireProposal      → propose on non-pure-read writes
@@ -318,6 +322,30 @@ export interface AgentPolicyInput {
    * when `subjectProfileSlug === "user_observation"`.
    */
   subjectUoValidated?: boolean | null;
+  /**
+   * The capability's resolved approval-state, when this gate call governs a
+   * CAPABILITY EXECUTION (tool/skill/command run) rather than a data write.
+   * Sourced from the capability read-model's `governance` field (today derived
+   * from the tool/skill `approved` column) once it is backed by persisted state.
+   * Absent → not a capability run → rung 2.6 no-ops (data-write paths unchanged).
+   */
+  capabilityGovernance?: "auto" | "propose" | "block" | null;
+  /**
+   * The GRANT's exec-mode (the `grant_exec_mode` enum / `@synap/playbooks
+   * ExecMode` — the PERSISTABLE truth: `auto | propose`). Narrows the
+   * capability's own approval-state for THIS grant: "propose" forces a reviewable
+   * per-run proposal even if the capability is "auto". When present it takes
+   * precedence over capabilityGovernance in rung 2.6.
+   *
+   * NOTE: exec-mode lives in TWO layers. `dry-run` is the third persistable
+   * grant_exec_mode value but is a GATE-level concern — `gateCapabilityExecution`
+   * short-circuits it to a preview BEFORE calling `decideAgentPolicy`, so it never
+   * reaches this policy union. The retired `propose-each`/`block` values were
+   * orphaned (never persistable in the grant column); `propose` already covers
+   * what `propose-each` meant, and deny comes from no-grant / not-approved, not a
+   * `block` mode.
+   */
+  capabilityExecMode?: "auto" | "propose" | null;
 }
 
 /**
@@ -341,10 +369,14 @@ export const PROPOSE_REASON = {
     "Teammate may propose in this channel; write requires human approval.",
   USER_OBSERVATION_INFERENCE:
     "AI-inferred observation about the user requires human validation before it is stored.",
+  CAPABILITY_PROPOSE: "Capability execution requires human approval.",
 } as const;
 
 const CHANNEL_BLOCK_REASON =
   "Teammate is draft-only in this channel and may not commit writes (can_act and can_propose are both off).";
+
+const CAPABILITY_BLOCKED_REASON =
+  "Capability is present but disabled (governance/exec-mode resolved to block).";
 
 /**
  * Decide the agent governance verdict. PURE — no I/O. Apply ONLY after RBAC has
@@ -392,6 +424,53 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
           verdict: "propose",
           reason: PROPOSE_REASON.USER_OBSERVATION_INFERENCE,
         };
+  }
+
+  // 2.6 PER-CAPABILITY GOVERNANCE (capability runs only).
+  // Fires ONLY when `capabilityGovernance` is present — i.e. the gate resolved a
+  // tool/skill/command RUN. Orthogonal to DATA writes: a plain entity.create
+  // carries no `capabilityGovernance`, so this rung no-ops for every data write
+  // (the two new fields absent → byte-identical to the prior verdict). Sits after
+  // CBAC (rung 1) and ADMIN_ACTIONS (rung 2) — a capability the agent isn't
+  // allowed must still deny first, and admin actions are non-negotiable — but
+  // BEFORE ownership/autoApprove/writesRequireProposal, because the per-grant
+  // exec-mode is the most specific, operator-authored signal about THIS run and
+  // must not be silently overridden by the routing workspace.
+  if (input.capabilityGovernance) {
+    const mode = input.capabilityExecMode ?? input.capabilityGovernance;
+    //   "auto"    → execute (operator pre-approved this capability)
+    //   "propose" → propose  (reviewable capability.run proposal)
+    //   "block"   → deny     (capability present but disabled — reachable only via
+    //                         capabilityGovernance; the grant exec-mode is just
+    //                         auto|propose, dry-run handled at the gate)
+    if (mode === "block") {
+      return { verdict: "deny", reason: CAPABILITY_BLOCKED_REASON };
+    }
+    if (mode !== "auto") {
+      return { verdict: "propose", reason: PROPOSE_REASON.CAPABILITY_PROPOSE };
+    }
+    // mode === "auto": a per-channel grant (rung 7) can only TIGHTEN, never
+    // widen. If this run is inside a channel and the channel resolves stricter
+    // (propose/block), the stricter wins — so we do NOT short-circuit to execute
+    // here; we fall through to let the channel layer (rung 7) tighten. Only when
+    // there is no channel context does an "auto" capability execute outright.
+    if (
+      input.channelCapabilities === undefined ||
+      input.channelCapabilities === null
+    ) {
+      return { verdict: "execute" };
+    }
+    const channelDecision = resolveChannelCapabilityDecision(
+      input.channelCapabilities
+    );
+    if (channelDecision === "act") {
+      // Channel also permits acting → the capability's "auto" stands.
+      return { verdict: "execute" };
+    }
+    if (channelDecision === "block") {
+      return { verdict: "deny", reason: CHANNEL_BLOCK_REASON };
+    }
+    return { verdict: "propose", reason: PROPOSE_REASON.CHANNEL_PROPOSE };
   }
 
   // 3. Agent owns this workspace (linkedAgentId === agentUserId, workspaceType="agent").

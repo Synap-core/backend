@@ -21,6 +21,7 @@ import {
   timestamp,
   jsonb,
   integer,
+  boolean,
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
@@ -136,6 +137,16 @@ export const skills = pgTable(
       .notNull()
       .default("active"),
 
+    /**
+     * Per-capability approval gate (orthogonal to `status` = lifecycle/health).
+     * A skill is born NOT approved (DEFAULT false): a freshly-created or
+     * AI-created `code` skill cannot execute and is not loaded as an agent tool
+     * until an owner approves it. `instruction` skills (prompt-only, no side
+     * effects) are seeded approved by the create path. Existing rows are
+     * grandfathered to true by migration 0143. Mirrors `mcp_servers.approved`.
+     */
+    approved: boolean("approved").notNull().default(false),
+
     errorMessage: text("error_message"),
 
     // ── Metadata ─────────────────────────────────────────────────────────
@@ -163,6 +174,7 @@ export const skills = pgTable(
     userIdIdx: index("skills_user_id_idx").on(table.userId),
     workspaceIdIdx: index("skills_workspace_id_idx").on(table.workspaceId),
     statusIdx: index("skills_status_idx").on(table.status),
+    approvedIdx: index("idx_skills_approved").on(table.approved),
     kindIdx: index("skills_kind_idx").on(table.kind),
     nameIdx: index("skills_name_idx").on(table.name),
     topicsIdx: index("idx_skills_topics").on(table.topics),

@@ -15,7 +15,29 @@ import { registerOpenApi } from "./_codecs/_register.js";
 import { db } from "@synap/database";
 import { proposals, entities, views, documents } from "@synap/database/schema";
 import { eq } from "drizzle-orm";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  resolveActingContext,
+  type HubHono,
+} from "./_shared.js";
+import { resolveByName } from "../../../services/object-graph/graph-service.js";
+
+const ResolveByNameSchema = z
+  .object({
+    matches: z.array(
+      z.object({
+        kind: z.string(),
+        id: z.string(),
+        name: z.string(),
+        subtype: z.string().nullable(),
+        workspaceId: z.string().nullable(),
+      })
+    ),
+    /** True when exactly one object matched — safe to act on directly. */
+    unique: z.boolean(),
+  })
+  .openapi("ResolveByNameResponse");
 
 const ResolveResponseSchema = z
   .object({
@@ -46,6 +68,53 @@ export function registerResolveRoutes(app: HubHono): void {
       403: { description: "Forbidden", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
+  });
+
+  // ── Name-addressing: GET /resolve?kind=&name=&subtype= ───────────────────
+  // The dual of /resolve/:id — find an object by its NAME (a handle) instead of
+  // its uuid. Names aren't unique pod-wide, so it returns ALL matches + a
+  // `unique` flag. Registered BEFORE /resolve/:id (Hono static-before-dynamic).
+  registerOpenApi(app, {
+    method: "get",
+    path: "/resolve",
+    tags: ["System"],
+    summary: "Resolve an object by NAME (not id)",
+    description:
+      "Find objects of a given kind by name — the navigable-by-name half of the graph. " +
+      "Returns every match (names aren't unique) + `unique`. Pass `subtype` to narrow " +
+      "(entity profileSlug, view type, tool/skill kind).",
+    request: {
+      query: z.object({
+        kind: z.string(),
+        name: z.string(),
+        subtype: z.string().optional(),
+      }),
+    },
+    responses: {
+      200: { description: "Matches", schema: ResolveByNameSchema },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+    },
+  });
+
+  app.get("/resolve", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const kind = c.req.query("kind");
+    const name = c.req.query("name");
+    const subtype = c.req.query("subtype") || undefined;
+    if (!kind || !name) {
+      return c.json({ error: "kind and name are required" }, 400);
+    }
+    const acting = await resolveActingContext(c, {});
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+    const matches = await resolveByName(acting.userId, kind, name, subtype);
+    return c.json({ matches, unique: matches.length === 1 }, 200);
   });
 
   app.get("/resolve/:id", async (c) => {

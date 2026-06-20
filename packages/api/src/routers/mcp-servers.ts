@@ -13,55 +13,16 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, or, isNull, asc, inArray } from "@synap/database";
+import { db, eq, or, isNull, asc } from "@synap/database";
 import { mcpServers } from "@synap/database/schema";
-import { workspaceMembers, workspaces } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { invalidateMcpCache } from "./channels.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
-
-/** Require owner or admin role — throws FORBIDDEN otherwise */
-function requireAdminRole(role: string | undefined | null) {
-  if (!["owner", "admin"].includes(role ?? "")) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Only workspace owners and admins can manage MCP servers.",
-    });
-  }
-}
-
-/**
- * Require pod-admin (owner/admin of the `pod-admin` system workspace) for
- * pod-wide (null-workspace) MCP servers. A pod-wide server is visible to every
- * workspace, so creating/re-pointing one is a pod-level privileged action —
- * mirrors `podAdminProcedure` in trpc.ts. Throws FORBIDDEN otherwise.
- */
-async function requirePodAdmin(userId: string) {
-  const podAdminWorkspace = await db.query.workspaces.findFirst({
-    where: eq(workspaces.systemSlug, "pod-admin"),
-    columns: { id: true },
-  });
-  if (!podAdminWorkspace) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Pod administration workspace not found.",
-    });
-  }
-  const membership = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
-      eq(workspaceMembers.userId, userId),
-      inArray(workspaceMembers.role, ["admin", "owner"])
-    ),
-    columns: { role: true },
-  });
-  if (!membership) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Only pod administrators can manage pod-wide MCP servers.",
-    });
-  }
-}
+import {
+  getWorkspaceRole,
+  requireAdminRole,
+  requirePodAdmin,
+} from "../utils/workspace-role.js";
 
 const McpServerWriteSchema = z.object({
   slug: z
@@ -77,17 +38,6 @@ const McpServerWriteSchema = z.object({
   url: z.string().url().optional(),
   env: z.record(z.string(), z.string()).optional(),
 });
-
-async function getWorkspaceRole(userId: string, workspaceId: string) {
-  const membership = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, workspaceId),
-      eq(workspaceMembers.userId, userId)
-    ),
-    columns: { role: true },
-  });
-  return membership?.role;
-}
 
 export const mcpServersRouter = router({
   /**

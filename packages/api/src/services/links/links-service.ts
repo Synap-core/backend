@@ -132,16 +132,36 @@ export async function deleteLink(id: string): Promise<void> {
  * playbook-lifecycle (promoteSessionToPlaybook) and run-playbook (runPlaybook)
  * to convert link edges into typed CapabilityRef arrays, filtering to the
  * grantable kinds (tool, skill, command).
+ *
+ * The grant edge's JSONB `metadata` is threaded through (optional, additive) so a
+ * capability-execution gate can read the per-grant `execMode` recorded on the
+ * `grants` link. Existing callers that ignore `metadata` are unaffected.
  */
 export function extractCapabilities(
-  links: { linkType: string; fromType: string; toType: string; toId: string }[],
+  links: {
+    linkType: string;
+    fromType: string;
+    toType: string;
+    toId: string;
+    metadata?: unknown;
+  }[],
   opts: { linkType: string; fromType: string }
-): { kind: "tool" | "skill" | "command"; id: string }[] {
+): {
+  kind: "tool" | "skill" | "command";
+  id: string;
+  metadata?: Record<string, unknown>;
+}[] {
   return links
     .filter((l) => l.linkType === opts.linkType && l.fromType === opts.fromType)
     .map((l) => ({
       kind: l.toType as "tool" | "skill" | "command",
       id: l.toId,
+      metadata:
+        l.metadata &&
+        typeof l.metadata === "object" &&
+        !Array.isArray(l.metadata)
+          ? (l.metadata as Record<string, unknown>)
+          : undefined,
     }))
     .filter(
       (c) => c.kind === "tool" || c.kind === "skill" || c.kind === "command"

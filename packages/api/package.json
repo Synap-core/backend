@@ -57,6 +57,7 @@
     "@synap/ai": "workspace:*",
     "@synap/ai-embeddings": "workspace:*",
     "@synap/auth": "workspace:*",
+    "@synap/capability-gate": "workspace:*",
     "@synap/database": "workspace:*",
     "@synap/events": "workspace:*",
     "@synap/feed-service": "workspace:*",

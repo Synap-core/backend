@@ -51,6 +51,24 @@ export interface CapabilityRef {
   id: string;
 }
 
+/**
+ * The full subject kind set an enforcement-bearing capability grant
+ * (`vault_grants` row) can authorize: the grantables PLUS `secret` (a vault
+ * secret is just one grantable kind). Kept in lock-step with the
+ * `grantable_type` pg enum in @synap/database/schema/secrets-vault.
+ */
+export type GrantSubjectKind = GrantableKind | "secret";
+
+/**
+ * What happens when a grant is exercised — the governance / execMode axis. The
+ * same axis as `Capability.governance`; kept in lock-step with the
+ * `grant_exec_mode` pg enum in @synap/database/schema/secrets-vault.
+ *   - `auto`    — run the capability directly.
+ *   - `propose` — route the exercise through a reviewable proposal.
+ *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
+ */
+export type ExecMode = "auto" | "propose" | "dry-run";
+
 // ── Playbook — a session template (configuration) ────────────────────────────
 export type PlaybookParamType =
   | "text"

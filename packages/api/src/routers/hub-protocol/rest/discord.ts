@@ -31,20 +31,15 @@ import { z } from "@hono/zod-openapi";
 import {
   db,
   agents,
-  channels,
   messages,
   eq,
   and,
-  isNotNull,
-  drizzleSql,
-  ChannelType,
-  ChannelScope,
   MessageRole,
   MessageAuthorType,
   MessageCategory,
 } from "@synap/database";
 import type { HubResponse } from "@synap-core/types";
-import { emitSideEffects } from "@synap/events";
+import { recordInboundMessage } from "../../../services/connectors/inbound-recorder.js";
 
 import { resolveIntelligenceServiceByAgentId } from "../../../utils/intelligence-routing.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -114,110 +109,29 @@ export function registerDiscordRoutes(app: HubHono): void {
     const { userId, workspaceId } = acting;
 
     try {
-      // ── 1. Resolve-or-create the Discord-bound EXTERNAL channel ─────────────
-      // Dedup key: (channelType=EXTERNAL, externalSource='discord', externalId).
-      // Mirrors the Unipile webhook upsert so the inbox/automation pipeline and
-      // the outbound relay treat Discord channels identically.
-      const preview = body.text.slice(0, 120);
-      let channelId: string;
-
-      const existing = await db.query.channels.findFirst({
-        where: and(
-          eq(channels.channelType, ChannelType.EXTERNAL),
-          eq(channels.externalSource, "discord"),
-          eq(channels.externalId, body.discordChannelId)
-        ),
-        columns: { id: true },
-      });
-
-      if (existing) {
-        channelId = existing.id;
-        await db
-          .update(channels)
-          .set({
-            metadata: drizzleSql`${channels.metadata} || ${JSON.stringify({
-              lastMessageAt: new Date().toISOString(),
-              lastMessagePreview: preview,
-              participantName: body.discordUsername,
-              unread: true,
-            })}::jsonb`,
-            updatedAt: new Date(),
-          })
-          .where(eq(channels.id, channelId));
-      } else {
-        // Upsert against the partial unique index on (externalSource, externalId).
-        // Under a concurrent first-message race the loser's insert no-ops, so we
-        // re-SELECT the surviving row instead of throwing a 500 to the bot.
-        const [inserted] = await db
-          .insert(channels)
-          .values({
-            userId,
-            workspaceId,
-            channelType: ChannelType.EXTERNAL,
-            scope: ChannelScope.WORKSPACE,
-            title: `Discord · ${body.discordUsername}`,
-            externalSource: "discord",
-            externalChannelId: body.discordChannelId,
-            externalId: body.discordChannelId,
-            metadata: {
-              participantName: body.discordUsername,
-              participantExternalId: body.discordUserId,
-              lastMessageAt: new Date().toISOString(),
-              lastMessagePreview: preview,
-              unread: true,
-            },
-          })
-          .onConflictDoNothing({
-            target: [channels.externalSource, channels.externalId],
-            // The unique index is PARTIAL (`WHERE external_id IS NOT NULL`), so
-            // the conflict arbiter must repeat that predicate or Postgres rejects
-            // it with "no unique constraint matching the ON CONFLICT spec".
-            where: isNotNull(channels.externalId),
-          })
-          .returning({ id: channels.id });
-
-        if (inserted) {
-          channelId = inserted.id;
-          logger.info(
-            { channelId, discordChannelId: body.discordChannelId },
-            "Auto-created EXTERNAL channel for inbound Discord message"
-          );
-        } else {
-          // Lost the race — the surviving row was inserted concurrently.
-          const survivor = await db.query.channels.findFirst({
-            where: and(
-              eq(channels.channelType, ChannelType.EXTERNAL),
-              eq(channels.externalSource, "discord"),
-              eq(channels.externalId, body.discordChannelId)
-            ),
-            columns: { id: true },
-          });
-          if (!survivor) {
-            throw new Error(
-              "Failed to resolve-or-create Discord channel after conflict"
-            );
-          }
-          channelId = survivor.id;
-        }
-      }
-
-      // ── 2. Idempotency guard: has this exact inbound already been processed? ──
+      // ── 1+2. Resolve-or-create the Discord channel + dedup-record the inbound
+      // message + fire `external_message.received` via the shared recorder.
       // Discord delivery is at-least-once (gateway retries), so a duplicate POST
-      // must NOT re-run the IS turn or post a second reply. The inbound hash is
-      // deterministic over (channel, messageId); if a row already exists we replay
-      // the prior assistant reply instead of doing the work again.
-      const inboundHash = createHash("sha256")
-        .update(`discord:${body.discordChannelId}:${body.messageId}`)
-        .digest("hex");
-
-      const alreadyProcessed = await db.query.messages.findFirst({
-        where: eq(messages.hash, inboundHash),
-        columns: { id: true },
+      // must NOT re-run the IS turn or post a second reply: the recorder reports
+      // `recorded: false` for a duplicate, and we replay the prior assistant
+      // reply (chained off the same inbound hash) instead of doing the work again.
+      const { channelId, inboundHash, recorded } = await recordInboundMessage({
+        provider: "discord",
+        externalId: body.discordChannelId,
+        userId,
+        workspaceId,
+        text: body.text,
+        participant: body.discordUsername,
+        participantExternalId: body.discordUserId,
+        title: `Discord · ${body.discordUsername}`,
+        // Discord exposes a native message id — deterministic over (channel, id).
+        idempotencySeed: `${body.discordChannelId}:${body.messageId}`,
       });
-      if (alreadyProcessed) {
-        // Duplicate delivery. Return the prior assistant reply (chained off the
-        // same inbound hash) if it exists; otherwise the first turn is still in
-        // flight — return an empty reply so the bot posts nothing twice.
+
+      if (!recorded) {
+        // Duplicate delivery. Return the prior assistant reply if it exists;
+        // otherwise the first turn is still in flight — return an empty reply so
+        // the bot posts nothing twice.
         const priorReply = await db.query.messages.findFirst({
           where: and(
             eq(messages.previousHash, inboundHash),
@@ -227,39 +141,6 @@ export function registerDiscordRoutes(app: HubHono): void {
         });
         return c.json({ reply: priorReply?.content ?? "" }, 200);
       }
-
-      // Record the inbound message (role=user, authorType=external).
-      await db
-        .insert(messages)
-        .values({
-          channelId,
-          userId,
-          role: MessageRole.USER,
-          authorType: MessageAuthorType.EXTERNAL,
-          messageCategory: MessageCategory.CHAT,
-          externalSource: "discord",
-          content: body.text,
-          hash: inboundHash,
-        })
-        .onConflictDoNothing();
-
-      // Fire the same automation event inbound external messages emit.
-      emitSideEffects({
-        subjectType: "external_message",
-        action: "received",
-        subjectId: channelId,
-        userId,
-        workspaceId,
-        data: {
-          channelId,
-          provider: "discord",
-          threadId: body.discordChannelId,
-          participantName: body.discordUsername,
-          messagePreview: preview,
-        },
-      }).catch((err) => {
-        logger.warn({ err, channelId }, "emitSideEffects failed (non-fatal)");
-      });
 
       // ── 3. Run ONE orchestrator turn via the Intelligence Service ───────────
       // Reuse the channel chat path's IS dispatch: resolve the orchestrator, then

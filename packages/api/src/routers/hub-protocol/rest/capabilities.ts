@@ -37,7 +37,7 @@ import {
 
 // ── Local OpenAPI schemas ────────────────────────────────────────────────────
 
-const ParamSpecSchema = z.object({
+export const ParamSpecSchema = z.object({
   name: z.string(),
   label: z.string().optional(),
   type: z.enum(["text", "number", "entity", "choice", "boolean"]).optional(),
@@ -46,7 +46,7 @@ const ParamSpecSchema = z.object({
   description: z.string().optional(),
 });
 
-const VaultDefSchema = z.object({
+export const VaultDefSchema = z.object({
   ref: z.string().min(1),
   name: z.string().min(1),
   value: z.string(),
@@ -69,7 +69,7 @@ const VaultDefSchema = z.object({
   description: z.string().optional(),
 });
 
-const ToolDefSchema = z.object({
+export const ToolDefSchema = z.object({
   name: z.string().min(1),
   kind: z.enum(["builtin", "api", "mcp", "provider", "external", "script"]),
   description: z.string().optional(),
@@ -79,7 +79,7 @@ const ToolDefSchema = z.object({
   config: z.record(z.string(), z.unknown()).optional(),
 });
 
-const SkillDefSchema = z.object({
+export const SkillDefSchema = z.object({
   name: z.string().min(1),
   kind: z.enum(["instruction", "code"]).optional(),
   scope: z.enum(["pod", "user", "workspace"]).optional(),
@@ -93,7 +93,7 @@ const SkillDefSchema = z.object({
   requires: z.array(z.string()).optional(),
 });
 
-const CapabilityDefinitionSchema = z.object({
+export const CapabilityDefinitionSchema = z.object({
   key: z.string().min(1),
   name: z.string().min(1),
   description: z.string().optional(),
@@ -186,7 +186,10 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       let definition;
       try {
         definition =
-          body.definition ?? loadCapabilityTemplate(body.templateKey!);
+          body.definition ??
+          (await loadCapabilityTemplate(body.templateKey!, {
+            workspaceId: body.workspaceId ?? null,
+          }));
       } catch (loadErr) {
         return c.json(
           {

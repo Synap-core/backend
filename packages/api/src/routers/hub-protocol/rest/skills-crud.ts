@@ -19,8 +19,9 @@
  * registered here and never collides with `/skills/system` (different path).
  *
  * Routes:
- *   POST /skills   — create a skill (proposal-gated; optional `requires` tool links)
- *   GET  /skills   — list skills (pod + user + workspace scope)
+ *   POST   /skills      — create a skill (proposal-gated; optional `requires` tool links)
+ *   GET    /skills      — list skills (pod + user + workspace scope)
+ *   DELETE /skills/:id   — delete a skill (proposal-gated; reuses skillsRouter.delete)
  */
 
 import { z } from "@hono/zod-openapi";
@@ -73,6 +74,11 @@ const ListSkillsResponseSchema = z.object({
   skills: z.array(z.record(z.string(), z.unknown())),
 });
 
+const DeleteSkillResponseSchema = z.object({
+  status: z.enum(["deleted", "proposed"]),
+  proposalId: z.string().nullable(),
+});
+
 // ── Register function ──────────────────────────────────────────────────────
 
 export function registerSkillsCrudRoutes(app: HubHono): void {
@@ -121,6 +127,28 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
     responses: {
       200: { description: "Skill list", schema: ListSkillsResponseSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "delete",
+    path: "/skills/{id}",
+    tags: ["Skills"],
+    summary: "Delete a skill (capability substrate)",
+    description:
+      "Deletes a `skills` row. Proposal-gated: returns status='proposed' with a " +
+      "proposalId when governance requires review (AI-initiated deletes propose, " +
+      "human deletes execute). Requires hub-protocol.write scope.",
+    request: { params: z.object({ id: z.string().uuid() }) },
+    responses: {
+      200: {
+        description: "Deleted or proposed",
+        schema: DeleteSkillResponseSchema,
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -262,6 +290,52 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
         { error: err instanceof Error ? err.message : "Unknown error" },
         500
       );
+    }
+  });
+
+  // ── DELETE /skills/:id ─────────────────────────────────────────────────────
+  // Thin door over the existing governed skillsRouter.delete (permission/propose
+  // + audit + db.delete all run inside the tRPC handler). No new logic here.
+  app.delete("/skills/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const id = c.req.param("id");
+    const idCheck = z.string().uuid().safeParse(id);
+    if (!idCheck.success) {
+      return c.json({ error: "id must be a UUID" }, 400);
+    }
+
+    try {
+      const acting = await resolveActingContext(c, {});
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      const ctx = await createHubProtocolCallerContext(
+        acting.userId,
+        c.get("scopes") as string[]
+      );
+      const caller = skillsRouter.createCaller(ctx as never);
+      const result = await caller.delete({ id });
+
+      return c.json(
+        {
+          status: result.status,
+          proposalId:
+            "proposalId" in result ? (result.proposalId ?? null) : null,
+        },
+        200
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      if (msg.toLowerCase().includes("not found")) {
+        return c.json({ error: msg }, 404);
+      }
+      logger.error({ err, id }, "skills delete failed");
+      return c.json({ error: msg }, 500);
     }
   });
 }

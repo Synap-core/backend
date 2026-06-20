@@ -169,6 +169,38 @@ export const tools = {
           required: ["entityId"],
         },
       },
+      {
+        name: "synap_get_graph",
+        description:
+          "Fetch ANY object PLUS everything it's linked to, typed. Returns { object, neighbors[], counts }. Each neighbor is { kind, subtype, name, id, edgeType, direction, via } — so you see a person linked to a deal, a skill linked to its tools, a session to its produced entities, etc. Graph by default: call this to understand an object's place in the pod before acting. Works for entity, project, view, channel, session, playbook, tool, skill, automation, document.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            id: {
+              type: "string",
+              description:
+                "The object's id (uuid, or kind short-id). Provide id OR name.",
+            },
+            name: {
+              type: "string",
+              description:
+                "Fetch by NAME instead of id (a handle). Ambiguous names return candidates to pick from. Provide id OR name.",
+            },
+            type: {
+              type: "string",
+              description:
+                "Object kind: entity (default), project, view, channel, session, playbook, tool, skill, automation, document.",
+            },
+            subtype: {
+              type: "string",
+              description:
+                "Narrow a name lookup (entity profileSlug, view type, tool/skill kind). Optional.",
+            },
+          },
+          required: [],
+        },
+      },
+
       // (Procedural how-to recall — "how do we deploy", "how does auth work" —
       // is now served by `synap_ask`, which routes to the knowledge_keys
       // substrate. The standalone get_knowledge/list_knowledge tools were folded

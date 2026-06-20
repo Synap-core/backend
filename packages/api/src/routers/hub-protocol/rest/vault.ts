@@ -4,8 +4,9 @@
  * Three capabilities for agents:
  *   1. POST /vault/request          — request to READ a secret (proposal-gated)
  *   2. GET  /vault/request/:id       — poll the outcome of a request proposal
- *   3. POST /vault/secrets           — STORE a credential (direct, server-encrypted)
- *   4. GET  /vault/secrets           — LIST credential metadata (never values)
+ *   3. POST   /vault/secrets         — STORE a credential (direct, server-encrypted)
+ *   4. GET    /vault/secrets         — LIST credential metadata (never values)
+ *   5. DELETE /vault/secrets/:id     — SOFT-delete a credential (governed write-gate)
  *
  * Reading secret VALUES stays exclusively behind the request → proposal →
  * grantAIAccess flow. No route here returns decrypted data to an agent.
@@ -34,6 +35,8 @@ import {
 
 import { NotificationService } from "../../../notifications/NotificationService.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
+import { secretsVaultRouter } from "../../secrets-vault.js";
+import { createHubProtocolCallerContext } from "../utils.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -593,6 +596,72 @@ export function registerVaultRoutes(app: HubHono): void {
         { error: err instanceof Error ? err.message : "Unknown error" },
         500
       );
+    }
+  });
+
+  // ── DELETE /vault/secrets/:id ──────────────────────────────────────────────
+  // SOFT-delete only (sets deletedAt/deletedBy) — grants/audit reference the row
+  // and resolveVaultSecret returns null for a deleted secret (lazy grant death),
+  // so a hard delete is never needed. Thin door over the governed
+  // secretsVaultRouter.deleteSecret (write-gate on the LOADED row's workspaceId).
+  registerOpenApi(app, {
+    method: "delete",
+    path: "/vault/secrets/{id}",
+    tags: ["Vault"],
+    summary: "Soft-delete a credential",
+    description:
+      "Soft-deletes a vault secret (sets deletedAt/deletedBy). Write-gated on the " +
+      "secret's own workspace (editor+) or its owner for a pod-wide secret. Never " +
+      "hard-deletes — grants and audit rows reference it. Requires hub-protocol.write.",
+    request: { params: z.object({ id: z.string().uuid() }) },
+    responses: {
+      200: {
+        description: "Soft-deleted",
+        schema: z.object({ success: z.boolean() }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.delete("/vault/secrets/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const id = c.req.param("id");
+    const idCheck = z.string().uuid().safeParse(id);
+    if (!idCheck.success) {
+      return c.json({ error: "id must be a UUID" }, 400);
+    }
+
+    try {
+      const acting = await resolveActingContext(c, {});
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      const ctx = await createHubProtocolCallerContext(
+        acting.userId,
+        c.get("scopes") as string[],
+        acting.workspaceId ?? null
+      );
+      const caller = secretsVaultRouter.createCaller(ctx as never);
+      const result = await caller.deleteSecret({ id });
+      return c.json(result, 200);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      if (msg.toLowerCase().includes("not found")) {
+        return c.json({ error: msg }, 404);
+      }
+      if (msg.toLowerCase().includes("not a member") || msg.includes("owner")) {
+        return c.json({ error: msg }, 403);
+      }
+      logger.error({ err, id }, "vault.secrets delete failed");
+      return c.json({ error: msg }, 500);
     }
   });
 }

@@ -62,6 +62,9 @@
       "path": "./packages/governance-policy"
     },
     {
+      "path": "./packages/capability-gate"
+    },
+    {
       "path": "./packages/hub-protocol"
     },
     {

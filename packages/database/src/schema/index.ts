@@ -175,6 +175,10 @@ export * from "./links.js";
 // Playbook run ledger (RUNTIME) — one row per playbook execution (executor spine, P3).
 export * from "./playbook-runs.js";
 
+// Capability Templates (CONFIG) — DB-resident seed CapabilityDefinitions so a
+// templateKey apply resolves without the JSON files being present in the image.
+export * from "./capability-templates.js";
+
 // Provenance vocabulary (createdByKind column type — must be public so tsc
 // can name router return types without referencing internal dist paths)
 export type { ProvenanceKind } from "./provenance.js";

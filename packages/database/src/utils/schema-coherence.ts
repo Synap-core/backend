@@ -607,6 +607,29 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0126_playbooks_capability_substrate.sql",
   },
 
+  // tools / skills — per-capability approval gate (0143). Absence means a pod is
+  // on a pre-0143 schema where the dispatcher/loader approval checks would read
+  // `undefined` and silently treat everything as unapproved (or crash).
+  {
+    table: "tools",
+    column: "approved",
+    addedBy: "0143_capability_approval_state.sql",
+  },
+  {
+    table: "skills",
+    column: "approved",
+    addedBy: "0143_capability_approval_state.sql",
+  },
+
+  // capability_templates — templates-as-data (0144). Absence means a pod is on a
+  // pre-0144 schema where DB-first template resolution would error and a
+  // `templateKey` apply could only fall back to (absent) on-disk JSON files.
+  {
+    table: "capability_templates",
+    column: "definition",
+    addedBy: "0144_capability_templates.sql",
+  },
+
   // playbook_runs — the run ledger / executor spine (0127)
   {
     table: "playbook_runs",
@@ -634,6 +657,20 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "events",
     column: "run_status",
     addedBy: "0131_agent_run_observability.sql",
+  },
+
+  // vault_grants → capability grants generalization (0142). The polymorphic
+  // subject columns are what the resolver/issuance now key on; their absence
+  // means a pod is on a pre-0142 schema and grant redemption would break.
+  {
+    table: "vault_grants",
+    column: "grantable_type",
+    addedBy: "0142_capability_grants.sql",
+  },
+  {
+    table: "vault_grants",
+    column: "exec_mode",
+    addedBy: "0142_capability_grants.sql",
   },
 
   // relations — polymorphic endpoints (0041)

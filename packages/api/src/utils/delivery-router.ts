@@ -34,13 +34,11 @@
 import { randomUUID, createHash } from "crypto";
 import { createLogger } from "@synap-core/core";
 import { EventNames } from "@synap-core/types/events";
-import { db, eq, and, workspaces, messages } from "@synap/database";
+import { db, eq, workspaces, messages } from "@synap/database";
 import {
   MessageRole,
   MessageAuthorType,
   MessageCategory,
-  channels,
-  ChannelType,
 } from "@synap/database/schema";
 import type {
   WorkspaceSettings,
@@ -55,6 +53,7 @@ import {
 } from "../services/DeliveryService.js";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { sendExternalMessage } from "../connectors/external-dispatch.js";
+import { resolveExternalChannel } from "../services/connectors/inbound-recorder.js";
 import { ensureAgentThread, getAgentIdBySlug } from "./personal-channel.js";
 import { emitChatEvent } from "./chat-realtime-broadcast.js";
 
@@ -85,6 +84,13 @@ export interface RouteSignalInput {
   notificationType?: string;
   /** Additional metadata to embed in delivered messages */
   metadata?: Record<string, unknown>;
+  /**
+   * The AI-agent identity, when this signal is agent-initiated. Threaded to the
+   * external-send capability gate (`sendExternalMessage`) so an agent's external
+   * delivery is governed (approved+grant → run, else → propose). ABSENT → owner
+   * delivery → the gate is skipped (byte-identical to before W3b).
+   */
+  agentUserId?: string | null;
 }
 
 /** A surface kind a result can report against (includes `external`). */
@@ -289,13 +295,9 @@ async function deliverToExternal(
   }
 
   try {
-    const boundChannel = await db.query.channels.findFirst({
-      where: and(
-        eq(channels.channelType, ChannelType.EXTERNAL),
-        eq(channels.externalSource, provider),
-        eq(channels.externalId, channelRef)
-      ),
-      columns: { id: true },
+    const boundChannel = await resolveExternalChannel({
+      provider,
+      externalId: channelRef,
     });
 
     if (!boundChannel) {
@@ -312,19 +314,30 @@ async function deliverToExternal(
 
     // Same outbound door as the proposal executor. Discord ignores accountId
     // (server-managed bot token); sendExternalMessage resolves the connector
-    // from the channel's externalSource.
-    const { success, messageId } = await sendExternalMessage({
+    // from the channel's externalSource. Thread the agent identity + workspace so
+    // an agent-initiated external delivery is governed by the capability gate (an
+    // owner delivery — no agentUserId — skips the gate, byte-identical).
+    const { success, messageId, proposed } = await sendExternalMessage({
       threadId: channelRef,
       accountId: "",
       body: input.content,
       userId: input.userId,
+      agentUserId: input.agentUserId ?? null,
+      workspaceId: input.workspaceId,
     });
 
     return {
       surface: "external",
       success,
       messageId,
-      reason: success ? undefined : "connector_send_failed",
+      // A gated agent delivery routed to a proposal is NOT a send failure — it is
+      // pending review. Surface a distinct reason so callers don't read it as an
+      // error.
+      reason: success
+        ? undefined
+        : proposed
+          ? "pending_approval"
+          : "connector_send_failed",
     };
   } catch (err) {
     logger.warn(

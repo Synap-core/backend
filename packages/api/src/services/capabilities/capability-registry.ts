@@ -51,6 +51,23 @@ function asInputSchema(value: unknown): Record<string, unknown> {
 }
 
 /**
+ * Derive the read-model `governance` from a capability row's persisted
+ * `approved` state instead of a hardcoded literal (C-DEAD-3). This is a
+ * DISCOVERY read-model, NOT enforcement (the real gate is `decideAgentPolicy`
+ * rung 2.6 + `gate-capability-execution.ts`), so it is intentionally minimal:
+ *   - UNAPPROVED (born `false`) → "propose" — never auto-runnable, needs review;
+ *   - APPROVED                  → "auto"    — operator-approved capability.
+ * The point is to STOP hardcoding `"propose"`: the value now reflects the row.
+ * The grant's per-grant exec-mode still narrows this at the gate (an approved
+ * capability granted "propose-each" is proposed per run regardless).
+ */
+function deriveGovernance(
+  approved: boolean | null | undefined
+): "auto" | "propose" {
+  return approved ? "auto" : "propose";
+}
+
+/**
  * List every capability visible to the caller in this workspace, normalized into
  * the `Capability` read-model. Read-only — no writes, no governance.
  *
@@ -77,7 +94,7 @@ export async function listCapabilities(
     description: row.description ?? null,
     inputSchema: asInputSchema(row.inputSchema),
     executor: row.executor as ExecutorRef,
-    governance: "propose",
+    governance: deriveGovernance(row.approved),
   }));
 
   // ── Skills (instruction | code) ─────────────────────────────────────────────
@@ -100,7 +117,7 @@ export async function listCapabilities(
     description: row.description ?? null,
     inputSchema: asInputSchema(row.parameters),
     executor: "is-agent",
-    governance: "propose",
+    governance: deriveGovernance(row.approved),
   }));
 
   // ── Commands (intelligence_commands) ────────────────────────────────────────
@@ -123,7 +140,9 @@ export async function listCapabilities(
     // a `derivedInputs` key (the contract's inputSchema is an open record).
     inputSchema: { derivedInputs: row.derivedInputs ?? [] },
     executor: "is-agent",
-    governance: "propose",
+    // intelligence_commands has no `approved` column → always the conservative
+    // needs-review default (no row state to derive from yet).
+    governance: deriveGovernance(undefined),
   }));
 
   // TODO(phase-1): builtin IS tools — requires an IS manifest endpoint; returns

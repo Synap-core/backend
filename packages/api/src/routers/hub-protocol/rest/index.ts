@@ -21,6 +21,7 @@ export { registerSkillsRoutes } from "./skills.js";
 export { registerSkillsCrudRoutes } from "./skills-crud.js";
 export { registerToolsRoutes } from "./tools.js";
 export { registerCapabilitiesRoutes } from "./capabilities.js";
+export { registerCapabilityTemplatesRoutes } from "./capability-templates.js";
 export { registerLoopsRoutes } from "./loops.js";
 export { registerMemoryRoutes } from "./memory.js";
 export { registerKnowledgeRoutes } from "./knowledge.js";
@@ -63,5 +64,6 @@ export { registerUiRoutes } from "./ui.js";
 export { registerArtifactsRoutes } from "./artifacts.js";
 export { registerRunsRoutes } from "./runs.js";
 export { registerResolveRoutes } from "./resolve.js";
+export { registerGraphRoutes } from "./graph.js";
 
 export type { HubHono } from "./_shared.js";

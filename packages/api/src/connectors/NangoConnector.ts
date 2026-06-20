@@ -5,6 +5,7 @@ import type {
   SyncConnectorRecord,
   SyncConnectorSession,
 } from "./SyncConnector.js";
+import type { ReadRequest, ReadResult } from "./ConnectorRegistry.js";
 
 const NangoRecordSchema = z
   .object({
@@ -312,6 +313,33 @@ export class NangoConnector implements SyncConnector {
     }
 
     return res.json();
+  }
+
+  /**
+   * Canonical W4 read seam. Maps a `sync` read request onto `fetchRecords` and
+   * normalizes each Nango record to a `ReadRecord` for the unified import sink.
+   * Mismatched request kinds throw (a Nango connector only services sync reads).
+   */
+  async read(req: ReadRequest): Promise<ReadResult> {
+    if (req.kind !== "sync") {
+      throw new Error(
+        `NangoConnector.read: unsupported read kind "${req.kind}"`
+      );
+    }
+    const records = await this.fetchRecords(
+      req.connectionId,
+      req.model,
+      req.since
+    );
+    return {
+      kind: "sync",
+      records: records.map((r) => ({
+        externalId: r.externalId,
+        model: r.model,
+        data: r.data,
+        lastModified: r.lastModified,
+      })),
+    };
   }
 
   async fetchRecords(

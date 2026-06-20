@@ -22,6 +22,7 @@ export const WireSkillSchema = z
     parameters: z.record(z.string(), z.unknown()).optional(),
     category: SkillCategorySchema.optional(),
     status: z.enum(["active", "inactive", "error"]).optional(),
+    approved: z.boolean().optional(),
     workspaceId: z.string().nullable().optional(),
     createdAt: z.union([z.string(), z.date()]).optional(),
     updatedAt: z.union([z.string(), z.date()]).optional(),
@@ -35,6 +36,8 @@ export const GetSkillsQuerySchema = z
     userId: z.string().optional(),
     workspaceId: z.string().optional(),
     status: SkillStatusSchema.optional(),
+    /** When "true", return only approved skills (agent-tool loader filter). */
+    approved: z.enum(["true", "false"]).optional(),
   })
   .openapi("GetSkillsQuery");
 

@@ -58,6 +58,8 @@ export {
   getServiceSecret,
   upsertServiceSecret,
   findRedeemableGrant,
+  findCapabilityGrant,
+  resolveCapabilityGrant,
   incrementGrant,
   VaultGrantError,
   assertGrantScoped,

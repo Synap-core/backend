@@ -18,13 +18,21 @@ import {
   MessageCategory,
   tools,
 } from "@synap/database";
-import { channels, ChannelType, mcpServers } from "@synap/database/schema";
+import {
+  channels,
+  ChannelType,
+  mcpServers,
+  secrets,
+} from "@synap/database/schema";
 import { getMessagingConnector } from "./index.js";
 import { syncConnectorRegistry } from "./SyncConnector.js";
 import type { NangoConnector } from "./NangoConnector.js";
 import { resolveVaultSecret } from "../utils/vault-resolver.js";
+import { resolveCapabilityGrant } from "@synap/database";
 import { validateExternalUrl } from "../utils/validate-url.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
+import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
+import { createPendingProposal } from "../utils/permission-check.js";
 
 /**
  * Resolve the configured Nango connector (or undefined when unconfigured).
@@ -32,6 +40,7 @@ import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
  * not hardcoded in multiple places.
  */
 function getNangoConnector(): NangoConnector | undefined {
+  // TODO(W3/W4): becomes a capability cast (Pushable — proxyRequest/triggerAction).
   const connector = syncConnectorRegistry.get("nango") as
     | NangoConnector
     | undefined;
@@ -49,6 +58,32 @@ export interface SendExternalMessageInput {
   body: string;
   /** The user performing the send. */
   userId: string;
+  /**
+   * The AI-agent identity, when this send is agent-initiated. Threaded to the
+   * capability-execution gate so an agent run (no owner-bypass) routes to
+   * `propose` instead of dispatching. ABSENT (the long-standing case for every
+   * caller today) → owner send → the gate is skipped and the send dispatches
+   * directly, BYTE-IDENTICAL to before W3b.
+   */
+  agentUserId?: string | null;
+  /** Acting workspace — routes a `propose` verdict's proposal + grant lookup. */
+  workspaceId?: string | null;
+  /** Optional session/playbook context for the gate's proposal payload + audit. */
+  sessionId?: string | null;
+  playbookId?: string | null;
+  /**
+   * The acting `grants`-link metadata (carrying the per-grant `execMode`), when
+   * the caller resolved a grant for this run. Threaded to the gate.
+   */
+  grantMetadata?: Record<string, unknown> | null;
+  /**
+   * BYPASS CONTRACT (W3b): set ONLY by the `messaging.external.send` proposal
+   * executor (the send is already past governance at proposal-approval time).
+   * When `true`, the capability-execution gate is SKIPPED and the send dispatches
+   * directly, exactly once — so an already-approved proposal never double-gates.
+   * No external/untrusted caller may supply it.
+   */
+  alreadyApproved?: boolean;
 }
 
 export interface SendExternalMessageResult {
@@ -60,6 +95,14 @@ export interface SendExternalMessageResult {
    * `proposal.data.materialized` so a retry is a no-op.
    */
   externalId?: string;
+  /**
+   * Set when the capability-execution gate routed an AGENT send to a reviewable
+   * proposal instead of dispatching it. The message was NOT sent; on approval the
+   * `messaging.external.send` executor re-enters with `alreadyApproved`.
+   */
+  proposed?: boolean;
+  /** The created `capability/run` proposal id when `proposed === true`. */
+  proposalId?: string;
 }
 
 /**
@@ -83,11 +126,40 @@ export async function sendExternalMessage(
     columns: { id: true, externalSource: true },
   });
 
-  const connector = await getMessagingConnector(
-    linkedChannel?.externalSource ?? undefined
-  );
+  const provider = linkedChannel?.externalSource ?? undefined;
+  const connector = await getMessagingConnector(provider);
   if (!connector) {
     return { success: false };
+  }
+
+  // ── Capability-execution gate (W3b: messaging-send under the ONE gate) ────────
+  // Messaging-send is now governed by the SAME `gateCapabilityExecution` that
+  // governs `triggerProviderAction` (the provider-tool door). A messaging
+  // connector has no `tools` row (it is resolved per-call from DB/vault/env), so
+  // the gate is keyed off a `messaging://<provider>` capability identity resolved
+  // here (see `gateMessagingSend`).
+  //
+  // BYPASS: an OWNER send (no `agentUserId`) or an already-approved proposal
+  // re-entry (`alreadyApproved`) SKIPS the gate and dispatches directly, exactly
+  // once — BYTE-IDENTICAL to pre-W3b behavior. Only an AGENT send (agentUserId
+  // present) is gated: approved+grant+exec-mode → run, else → propose/deny.
+  if (input.agentUserId && !input.alreadyApproved) {
+    const gateResult = await gateMessagingSend({ ...input, provider });
+    if (gateResult.kind === "deny") {
+      return { success: false };
+    }
+    if (gateResult.kind === "propose") {
+      return {
+        success: false,
+        proposed: true,
+        proposalId: gateResult.proposalId,
+      };
+    }
+    if (gateResult.kind === "dry-run") {
+      // No external side effect — report success without sending or mirroring.
+      return { success: true };
+    }
+    // gateResult.kind === "run" → fall through and dispatch.
   }
 
   await connector.sendMessage(accountId, threadId, body);
@@ -119,48 +191,138 @@ export async function sendExternalMessage(
   return { success: true, messageId };
 }
 
-// ── External connector action trigger (Nango) ───────────────────────────────
-
-export interface TriggerConnectorActionInput {
-  connectionId: string;
-  providerConfigKey: string;
-  actionName: string;
-  input?: Record<string, unknown>;
-}
-
-export interface TriggerConnectorActionResult {
-  success: boolean;
-  result?: unknown;
-}
+/**
+ * Verdict of the messaging-send capability gate (W3b). Mirrors the four
+ * `gateCapabilityExecution` outcomes, with `propose` carrying the created
+ * proposal id so the caller can surface it.
+ */
+type MessagingGateResult =
+  | { kind: "run" }
+  | { kind: "dry-run" }
+  | { kind: "deny"; reason: string }
+  | { kind: "propose"; proposalId: string };
 
 /**
- * Trigger a pre-defined Nango action (write to an integration through a user's
- * connected account). Actions are defined in the Nango integration config;
- * there is no generic proxy() — only named actions work.
+ * Gate an AGENT-initiated messaging send through `gateCapabilityExecution` — the
+ * SAME gate `triggerProviderAction` uses for provider tools, so the messaging
+ * door can no longer diverge from the governed provider door.
+ *
+ * Capability resolution: a messaging connector has no `tools` row (it is resolved
+ * per-call from DB/vault/env), so the gate is keyed off a `messaging://<provider>`
+ * pod-wide tool row WHEN one has been seeded; absent, we synthesize an unapproved,
+ * owner-less `GateToolRow`. For an agent run with no active grant the gate routes
+ * to `propose` either way (safe-by-default) — never an auto-run.
+ *
+ * Only reached for an AGENT send that is NOT an already-approved re-entry; the
+ * owner door never calls this (it dispatches directly upstream).
  */
-export async function triggerConnectorAction(
-  input: TriggerConnectorActionInput
-): Promise<TriggerConnectorActionResult> {
-  const connector = getNangoConnector();
-  if (!connector) {
-    return { success: false };
-  }
+async function gateMessagingSend(
+  input: SendExternalMessageInput & { provider?: string }
+): Promise<MessagingGateResult> {
+  const provider = input.provider ?? "unipile";
+  const credentialRef = `messaging://${provider}`;
 
-  const {
-    connectionId,
-    providerConfigKey,
-    actionName,
-    input: actionInput,
-  } = input;
-  const result = await connector.triggerAction({
-    connectionId,
-    providerConfigKey,
-    actionName,
-    input: actionInput ?? {},
+  // Resolve a seeded pod-wide messaging tool row (if any); else synthesize one.
+  const [seeded] = await db
+    .select({
+      id: tools.id,
+      approved: tools.approved,
+      createdBy: tools.createdBy,
+    })
+    .from(tools)
+    .where(
+      and(eq(tools.credentialRef, credentialRef), isNull(tools.workspaceId))
+    )
+    .limit(1);
+
+  const capabilityId = seeded?.id ?? credentialRef;
+  const toolRow = {
+    id: capabilityId,
+    approved: seeded?.approved ?? false,
+    createdBy: seeded?.createdBy ?? null,
+  };
+
+  const decision = await gateCapabilityExecution({
+    capabilityKind: "tool",
+    capabilityId,
+    tool: toolRow,
+    grantMetadata: input.grantMetadata ?? null,
+    actorUserId: input.agentUserId ?? input.userId,
+    agentUserId: input.agentUserId ?? null,
+    workspaceId: input.workspaceId ?? null,
+    sessionId: input.sessionId ?? null,
+    playbookId: input.playbookId ?? null,
+    issuer: "messaging.external.send",
   });
 
-  return { success: true, result };
+  if (decision.decision === "deny") {
+    return { kind: "deny", reason: decision.reason };
+  }
+  if (decision.decision === "dry-run") {
+    return { kind: "dry-run" };
+  }
+  if (decision.decision === "propose") {
+    // Route to a reviewable proposal that, on approval, re-enters
+    // `sendExternalMessage` via the `messaging.external.send` executor with
+    // `alreadyApproved`. Proposals require a workspace; with none there is no
+    // review surface → fail closed rather than silently send.
+    const proposalWorkspaceId = input.workspaceId ?? null;
+    if (!proposalWorkspaceId) {
+      return {
+        kind: "deny",
+        reason:
+          "Messaging send requires approval but no workspace was supplied to route the proposal.",
+      };
+    }
+    const proposal = await createPendingProposal({
+      userId: input.userId,
+      workspaceId: proposalWorkspaceId,
+      targetType: "messaging",
+      targetId: input.threadId,
+      proposalType: "messaging.external.send",
+      data: {
+        threadId: input.threadId,
+        body: input.body,
+        platform: provider,
+        capabilityKind: "tool",
+        capabilityId,
+        workspaceId: proposalWorkspaceId,
+        agentUserId: input.agentUserId ?? null,
+        sessionId: input.sessionId ?? null,
+        playbookId: input.playbookId ?? null,
+      },
+      agentUserId: input.agentUserId ?? undefined,
+      sessionId: input.sessionId ?? null,
+      notificationDescription: `Send message via ${provider}`,
+    });
+    return { kind: "propose", proposalId: proposal.id };
+  }
+
+  // decision === "run" → consume one grant use (the gate's lookup is
+  // non-consuming), then dispatch. Mirrors triggerProviderAction's consume-on-run.
+  // A seeded tool gives a real capabilityId to spend against; a synthesized
+  // capabilityId would have routed to propose above (no grant), so a `run` verdict
+  // for an agent here implies a seeded tool with an active grant.
+  if (input.agentUserId) {
+    const consumed = await resolveCapabilityGrant("tool", capabilityId, {
+      agentUserId: input.agentUserId,
+      workspaceId: input.workspaceId ?? null,
+    });
+    if (!consumed.ok) {
+      return {
+        kind: "deny",
+        reason: `Capability grant could not be consumed (${consumed.code}).`,
+      };
+    }
+  }
+  return { kind: "run" };
 }
+
+// NOTE (W3b): `triggerConnectorAction` (the Nango named-action 3rd push path,
+// `connector.triggerAction`) was RETIRED — it bypassed the capability gate and
+// duplicated the agnostic provider door. Its real use is folded into
+// `triggerProviderAction` below (Nango via the generic `proxyRequest`), which is
+// the ONE governed external-action dispatcher.
 
 // ── Agnostic provider tool execution (Nango proxy) ──────────────────────────
 //
@@ -196,6 +358,31 @@ export interface TriggerProviderActionInput {
   body?: Record<string, unknown>;
   /** Optional hint to pick a specific account when multiple connections exist. */
   accountHint?: string;
+  /**
+   * The AI-agent identity, when this provider call is agent-initiated. Threaded
+   * to the capability-execution gate so an agent run (no owner-bypass) routes to
+   * `propose` instead of auto. Absent → resolved by the safe-by-default rule
+   * below (a non-owner `userId` is treated as a delegated agent → propose).
+   */
+  agentUserId?: string | null;
+  /**
+   * The acting `grants`-link metadata (carrying the per-grant `execMode`), when
+   * the caller resolved a grant for this run. Threaded to the gate.
+   */
+  grantMetadata?: Record<string, unknown> | null;
+  /** Optional session/playbook context for the gate's proposal payload + audit. */
+  sessionId?: string | null;
+  playbookId?: string | null;
+  /**
+   * BYPASS CONTRACT (Wave 3a/3b): set ONLY by the `capability/run` proposal
+   * executor (and the auto `run` decision re-entry). When `true`, the
+   * capability-execution gate is SKIPPED and the dispatch runs directly, exactly
+   * once — so an already-approved proposal never loops back into a new proposal.
+   * No external/untrusted caller may supply it.
+   */
+  alreadyApproved?: boolean;
+  /** Audit linkage to the proposal that authorized an `alreadyApproved` run. */
+  sourceProposalId?: string;
 }
 
 export interface TriggerProviderActionResult {
@@ -204,10 +391,19 @@ export interface TriggerProviderActionResult {
   status: number;
   headers?: Record<string, string>;
   body?: unknown;
-  /** Machine-readable error key for the REST endpoint (404 / 400 / 501 / 503). */
-  errorCode?: "not_found" | "bad_request" | "not_implemented" | "unavailable";
+  /** Machine-readable error key for the REST endpoint (404 / 400 / 503). */
+  errorCode?: "not_found" | "bad_request" | "unavailable";
   /** Human-readable error message. */
   error?: string;
+  /**
+   * Set when the capability-execution gate routed this run to a reviewable
+   * proposal instead of executing it (the ungoverned-door + propose-each ≡
+   * governed-door mechanism). The call did NOT reach the provider; on approval
+   * the `capability/run` executor re-enters this impl with `alreadyApproved`.
+   */
+  proposed?: boolean;
+  /** The created `capability/run` proposal id when `proposed === true`. */
+  proposalId?: string;
 }
 
 /** A resolved `tools` row, passed to each scheme handler. */
@@ -348,13 +544,58 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   const field =
     typeof toolConfig.field === "string" ? toolConfig.field : undefined;
 
-  // (a) Resolve the credential (grant-gated, atomic consume-after-decrypt).
+  // OWNER-BYPASS (dogfood #3a): a caller running their OWN secret must not be
+  // grant-gated. Ownership is structural — determined by the secret's `userId`,
+  // never by the request. Look up the owner first, then:
+  //   - acting identity === owner  → owner path: requireGrant=false (no grant
+  //     needed; you can't revoke your own access to your own secret).
+  //   - acting identity !== owner  → delegated agent: requireGrant=true with a
+  //     SERVER-DERIVED redeemer ({ agentUserId, workspaceId }). The secret is
+  //     decrypted under its OWNER for the filter; authorization is the grant.
+  // The redeemer is NEVER request-supplied; `assertGrantScoped` (issuance) +
+  // consume-after-decrypt are preserved by the resolver.
+  const ownerRow = await db.query.secrets.findFirst({
+    where: eq(secrets.id, vaultId),
+    columns: { userId: true },
+  });
+  if (!ownerRow) {
+    return {
+      success: false,
+      status: 404,
+      errorCode: "not_found",
+      error: `Vault secret "${vaultId}" could not be resolved (missing or deleted).`,
+    };
+  }
+  const ownerUserId = ownerRow.userId;
+  // SEC#1: the owner-bypass must key off the EFFECTIVE actor, not raw `userId`.
+  // An agent running under the owner's hub identity (agentUserId present, userId =
+  // secret owner) must STILL be grant-gated on the per-secret vault grant (TTL /
+  // once / revoke) — otherwise the owner can't scope an agent's access to their
+  // own secret. Only a GENUINE human-owner run (no agentUserId) bypasses the grant.
+  const effectiveActor = input.agentUserId ?? userId;
+  const callerIsOwner = ownerUserId === effectiveActor && !input.agentUserId;
+
+  // (a) Resolve the credential. Owner → ungated. Delegated → grant-gated with a
+  //     server-derived redeemer (atomic consume-after-decrypt inside resolver).
   let secret: string | null;
   try {
-    secret = await resolveVaultSecret(vaultId, userId, field, {
-      requireGrant: true,
-      redeemer: { agentUserId: userId },
-    });
+    secret = await resolveVaultSecret(
+      vaultId,
+      ownerUserId,
+      field,
+      callerIsOwner
+        ? undefined
+        : {
+            requireGrant: true,
+            redeemer: {
+              // Bind to the EFFECTIVE actor (the genuine agent identity when
+              // present, else the caller) so the grant's `granted_to` matches the
+              // principal actually running — never the secret owner we decrypt under.
+              agentUserId: effectiveActor,
+              workspaceId: input.workspaceId ?? null,
+            },
+          }
+    );
   } catch (err) {
     return {
       success: false,
@@ -827,6 +1068,139 @@ export async function triggerProviderAction(
       };
     }
     credentialRef = tool.credentialRef;
+  }
+
+  // ── Capability-execution gate (Wave 3b chokepoint) ─────────────────────────
+  // Both resolution paths converge here with a loaded `tool` row. This is THE
+  // single point that consults (per-capability approval-state + grant + exec-mode)
+  // so the ungoverned door (/connectors/tool-execute, IS callProvider) can no
+  // longer diverge from the governed proposal door.
+  //
+  // BYPASS: an `alreadyApproved` run is the `capability/run` proposal executor
+  // re-entering after a human clicked Approve — it is the governed door, so it
+  // dispatches directly (exactly once). Only that executor (and the auto `run`
+  // decision) may set the flag; no external caller supplies it. This preserves
+  // the Door-2 `provider.action` behavior byte-for-byte (it never re-checked).
+  if (!input.alreadyApproved) {
+    // SAFE-BY-DEFAULT actor resolution: the gate's owner-bypass keys off the
+    // EFFECTIVE actor vs the tool's owner (`createdBy`). When an `agentUserId` is
+    // present the effective actor is the AGENT (mirrors checkPermissionOrPropose's
+    // `effectiveUserId = agentUserId || userId`), so owner-bypass does NOT fire
+    // for the human owner — an agent is always grant-gated, never owner-bypassed.
+    // When the actor is NOT the owner — an agent, a hub service-key call, or any
+    // uncertain principal — the gate routes to `propose`, never auto-run. We do
+    // NOT trust a request-supplied identity to upgrade to auto; only an APPROVED
+    // capability + an explicit `auto` grant (or genuine owner) yields `run`.
+    const effectiveActorUserId = input.agentUserId ?? input.userId;
+    const decision = await gateCapabilityExecution({
+      capabilityKind: "tool",
+      capabilityId: tool.id,
+      tool: {
+        id: tool.id,
+        approved: tool.approved,
+        createdBy: tool.createdBy,
+      },
+      grantMetadata: input.grantMetadata ?? null,
+      actorUserId: effectiveActorUserId,
+      agentUserId: input.agentUserId ?? null,
+      workspaceId: input.workspaceId ?? null,
+      sessionId: input.sessionId ?? null,
+      playbookId: input.playbookId ?? null,
+      issuer: "connector.tool-execute",
+    });
+
+    if (decision.decision === "deny") {
+      return {
+        success: false,
+        status: 403,
+        errorCode: "bad_request",
+        error: decision.reason,
+      };
+    }
+
+    if (decision.decision === "dry-run") {
+      // Build nothing external — return a stub echoing the intended call so a
+      // playbook/skill test sees the shape without a real side effect.
+      return {
+        success: true,
+        status: 200,
+        body: {
+          dryRun: true,
+          provider,
+          method: input.method,
+          path: input.path,
+        },
+      };
+    }
+
+    if (decision.decision === "propose") {
+      // The previously-ungoverned door now PRODUCES a reviewable proposal that,
+      // on approval, re-enters this same impl (Door 2) with `alreadyApproved`.
+      // We carry the full provider call in `data` so the executor can replay it.
+      // Proposals require a workspace (createPendingProposal inserts workspaceId);
+      // when none is supplied there is no review surface — fail closed rather
+      // than silently auto-run.
+      const proposalWorkspaceId = input.workspaceId ?? null;
+      if (!proposalWorkspaceId) {
+        return {
+          success: false,
+          status: 403,
+          errorCode: "bad_request",
+          error:
+            "Capability execution requires approval but no workspace was supplied to route the proposal. Provide a workspaceId or pre-approve the capability.",
+        };
+      }
+      const proposal = await createPendingProposal({
+        userId: input.userId,
+        workspaceId: proposalWorkspaceId,
+        targetType: "capability",
+        targetId: tool.id,
+        proposalType: "run",
+        data: {
+          capabilityKind: "tool",
+          capabilityId: tool.id,
+          provider,
+          method: input.method,
+          path: input.path,
+          body: input.body ?? null,
+          accountHint: input.accountHint ?? null,
+          workspaceId: proposalWorkspaceId,
+          agentUserId: input.agentUserId ?? null,
+          sessionId: input.sessionId ?? null,
+          playbookId: input.playbookId ?? null,
+        },
+        agentUserId: input.agentUserId ?? undefined,
+        sessionId: input.sessionId ?? null,
+        notificationDescription: `Run tool ${tool.name}`,
+      });
+      return {
+        success: true,
+        status: 202,
+        proposed: true,
+        proposalId: proposal.id,
+      };
+    }
+    // decision.decision === "run" → consume one grant use, then dispatch.
+    // CONSUME-ON-RUN: the gate's grant lookup is NON-CONSUMING, so a `run` verdict
+    // for an AGENT (the gate already required a grant to exist — no grant routes to
+    // propose) must spend one use here. This is the serialization point for capped
+    // ('once') grants. The owner/operator door (no agentUserId) has no grant to
+    // consume and is skipped. If the grant was exhausted in the race window,
+    // fail closed rather than dispatch the credentialed call ungoverned.
+    if (input.agentUserId) {
+      const consumed = await resolveCapabilityGrant("tool", tool.id, {
+        agentUserId: input.agentUserId,
+        workspaceId: input.workspaceId ?? null,
+      });
+      if (!consumed.ok) {
+        return {
+          success: false,
+          status: 403,
+          errorCode: "bad_request",
+          error: `Capability grant could not be consumed (${consumed.code}). The grant may have just expired, been revoked, or been exhausted.`,
+        };
+      }
+    }
   }
 
   // ── Parse scheme://rest from the resolved credentialRef and pick the handler ─

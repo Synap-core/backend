@@ -28,8 +28,22 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { encryptServerSide, db } from "@synap/database";
-import { secrets, secretAuditLog } from "@synap/database/schema";
+import {
+  encryptServerSide,
+  db,
+  and,
+  eq,
+  or,
+  isNull,
+  drizzleSql,
+  vaultGrants,
+  assertGrantScoped,
+} from "@synap/database";
+import {
+  secrets,
+  secretAuditLog,
+  capabilityTemplates,
+} from "@synap/database/schema";
 import type {
   CapabilityDefinition,
   CapabilityVaultDef,
@@ -63,10 +77,53 @@ function templateDirCandidates(): string[] {
   return dirs;
 }
 
-/** Load a `CapabilityDefinition` by templateKey from the seed-template dir. */
-export function loadCapabilityTemplate(
-  templateKey: string
-): CapabilityDefinition {
+/**
+ * Load a `CapabilityDefinition` by templateKey — DB-first.
+ *
+ * Resolution order:
+ *   1. DB: a live `capability_templates` row whose key matches and whose scope is
+ *      the requested workspace OR pod-wide (`workspace_id IS NULL`). A workspace
+ *      overlay wins over the pod-wide row (ORDER BY workspace_id NULLS LAST).
+ *   2. File fallback: the on-disk seed JSONs (templateDirCandidates) — kept for
+ *      local-dev ergonomics and as the bootstrap before `eve capabilities sync`
+ *      has populated the DB. The containment guard is a security control, not a
+ *      workaround — it stays.
+ *
+ * Making this DB-first is what closes the deployed-pod `templateKey` 404: the
+ * JSONs are NOT bundled into the @synap/api image, so on a deployed pod only the
+ * DB path resolves.
+ */
+export async function loadCapabilityTemplate(
+  templateKey: string,
+  opts?: { workspaceId?: string | null }
+): Promise<CapabilityDefinition> {
+  // 1. DB-first: workspace overlay (if any) wins over the pod-wide row.
+  const workspaceId = opts?.workspaceId ?? null;
+  const scopePredicate = workspaceId
+    ? or(
+        eq(capabilityTemplates.workspaceId, workspaceId),
+        isNull(capabilityTemplates.workspaceId)
+      )
+    : isNull(capabilityTemplates.workspaceId);
+
+  const [row] = await db
+    .select({ definition: capabilityTemplates.definition })
+    .from(capabilityTemplates)
+    .where(
+      and(
+        eq(capabilityTemplates.key, templateKey),
+        isNull(capabilityTemplates.deletedAt),
+        scopePredicate
+      )
+    )
+    .orderBy(drizzleSql`${capabilityTemplates.workspaceId} ASC NULLS LAST`)
+    .limit(1);
+
+  if (row) {
+    return row.definition as CapabilityDefinition;
+  }
+
+  // 2. File fallback (dev ergonomics / pre-sync bootstrap).
   const fileName = `${templateKey}.capability.json`;
   for (const dir of templateDirCandidates()) {
     const filePath = path.join(dir, fileName);
@@ -180,6 +237,13 @@ export async function createCapabilityFromDefinition(
     const toolId = result.tool?.id ?? null;
     if (toolId) toolIdByName.set(t.name, toolId);
     if (result.proposalId) proposals.push(result.proposalId);
+    // Seed the ENFORCEMENT grant so an APPROVED tool is runnable by agents once
+    // the born-draft tool is approved (Wave 2 + 3b: seed(draft) → approve →
+    // grant → agent run is governed). Conservative `execMode: "propose"` for a
+    // side-effecting tool — an agent run routes to review unless re-granted auto.
+    if (result.status === "created" && toolId) {
+      await issueCapabilityGrant("tool", toolId, userId, workspaceId ?? null);
+    }
     createdTools.push({
       name: t.name,
       status: result.status,
@@ -223,6 +287,17 @@ export async function createCapabilityFromDefinition(
       }
     }
 
+    // Seed the enforcement grant for a created skill (same conservative policy
+    // as tools — approved skill runnable by agents, execMode propose by default).
+    if (result.status === "created") {
+      await issueCapabilityGrant(
+        "skill",
+        result.id,
+        userId,
+        workspaceId ?? null
+      );
+    }
+
     createdSkills.push({
       name: s.name,
       status: result.status,
@@ -240,6 +315,39 @@ export async function createCapabilityFromDefinition(
     },
     proposals,
   };
+}
+
+// ── Capability-grant seeding (Wave 3b applier grant) ──────────────────────────
+//
+// Issue a `capability_grants` (vault_grants) row for a freshly-created tool/skill
+// so that — once the born-draft capability is approved — an agent can RUN it
+// under governance. Workspace-scoped when a workspace is present (grantedTo null,
+// runnable by any agent in that workspace); otherwise pod-wide, bound to the
+// acting user (grantedTo = userId) so the canonical wildcard firewall
+// (`assertGrantScoped`: never both null) is satisfied. `execMode: "propose"` is
+// the conservative default for a side-effecting tool/skill — the capability
+// runs through review unless an explicit auto grant is later issued.
+async function issueCapabilityGrant(
+  grantableType: "tool" | "skill",
+  grantableId: string,
+  userId: string,
+  workspaceId: string | null
+): Promise<void> {
+  // Workspace grant → grantedTo null (any agent in the ws); pod-wide → bind to
+  // the owner so the grant is never fully-wildcard.
+  const grantedTo = workspaceId ? null : userId;
+  assertGrantScoped({ grantedTo, workspaceId });
+  await db.insert(vaultGrants).values({
+    grantableType,
+    grantableId,
+    execMode: "propose",
+    grantedTo,
+    workspaceId,
+    // `permanent` (not `session`): a seeded capability grant persists beyond any
+    // single focus-session window — the scope enum is once|session|permanent.
+    scope: "permanent",
+    createdBy: userId,
+  });
 }
 
 // ── Vault helper — mirrors POST /vault/secrets server-encryption path ─────────

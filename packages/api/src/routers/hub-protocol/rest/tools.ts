@@ -14,9 +14,10 @@
  * (Same pattern hub-protocol/skills.ts uses with the regular skills router.)
  *
  * Routes (static before dynamic — Hono is first-match):
- *   POST /tools       — create a tool (proposal-gated)
- *   GET  /tools       — list tools (pod-wide + the given workspace)
- *   GET  /tools/:id   — get a tool + the skills that `require` it
+ *   POST   /tools       — create a tool (proposal-gated)
+ *   GET    /tools       — list tools (pod-wide + the given workspace)
+ *   GET    /tools/:id   — get a tool + the skills that `require` it
+ *   DELETE /tools/:id   — delete a tool (proposal-gated; reuses toolsRouter.delete)
  */
 
 import { z } from "@hono/zod-openapi";
@@ -81,6 +82,11 @@ const GetToolResponseSchema = z.object({
   skills: z.array(z.record(z.string(), z.unknown())),
 });
 
+const DeleteToolResponseSchema = z.object({
+  status: z.enum(["deleted", "proposed"]),
+  proposalId: z.string().nullable(),
+});
+
 // ── Register function ──────────────────────────────────────────────────────
 
 export function registerToolsRoutes(app: HubHono): void {
@@ -139,6 +145,28 @@ export function registerToolsRoutes(app: HubHono): void {
         description: "Tool + requiring skills",
         schema: GetToolResponseSchema,
       },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "delete",
+    path: "/tools/{id}",
+    tags: ["Tools"],
+    summary: "Delete a tool (capability substrate)",
+    description:
+      "Deletes a `tools` row. Proposal-gated: returns status='proposed' with a " +
+      "proposalId when governance requires review (AI-initiated deletes propose, " +
+      "human deletes execute). Requires hub-protocol.write scope.",
+    request: { params: z.object({ id: z.string().uuid() }) },
+    responses: {
+      200: {
+        description: "Deleted or proposed",
+        schema: DeleteToolResponseSchema,
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
@@ -271,6 +299,48 @@ export function registerToolsRoutes(app: HubHono): void {
         return c.json({ error: msg }, 404);
       }
       logger.error({ err, id }, "tools get failed");
+      return c.json({ error: msg }, 500);
+    }
+  });
+
+  // ── DELETE /tools/:id ──────────────────────────────────────────────────────
+  // Thin door over the governed toolsRouter.delete (write-gate on the loaded
+  // row's workspaceId + checkPermissionOrPropose + audit all run inside).
+  app.delete("/tools/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const id = c.req.param("id");
+    const idCheck = z.string().uuid().safeParse(id);
+    if (!idCheck.success) {
+      return c.json({ error: "id must be a UUID" }, 400);
+    }
+
+    try {
+      const acting = await resolveActingContext(c, {});
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      const ctx = await createHubProtocolCallerContext(
+        acting.userId,
+        c.get("scopes") as string[]
+      );
+      const caller = toolsRouter.createCaller(ctx as never);
+      const result = await caller.delete({ id });
+
+      return c.json(
+        { status: result.status, proposalId: result.proposalId ?? null },
+        200
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      if (msg.toLowerCase().includes("not found")) {
+        return c.json({ error: msg }, 404);
+      }
+      logger.error({ err, id }, "tools delete failed");
       return c.json({ error: msg }, 500);
     }
   });

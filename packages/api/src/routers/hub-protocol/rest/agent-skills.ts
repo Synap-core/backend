@@ -251,12 +251,16 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     const userId = c.req.query("userId") || (c.get("userId") as string);
     const workspaceId = c.req.query("workspaceId");
     const status = c.req.query("status");
+    const approvedQuery = c.req.query("approved");
+    const approved =
+      approvedQuery === undefined ? undefined : approvedQuery === "true";
     try {
       const caller = await getCaller(c);
       const result = await caller.skills.getSkills({
         userId,
         workspaceId: workspaceId || undefined,
         status: (status as "active" | "inactive" | "error" | "all") || "all",
+        approved,
       });
       return c.json(result);
     } catch (err) {

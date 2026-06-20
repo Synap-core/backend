@@ -33,6 +33,7 @@ import {
   registerExchangeRoutes,
   registerAutomationsRoutes,
   registerCapabilitiesRoutes,
+  registerCapabilityTemplatesRoutes,
   registerLoopsRoutes,
   registerCaptureRoutes,
   registerChannelsRoutes,
@@ -84,6 +85,7 @@ import {
   registerArtifactsRoutes,
   registerRunsRoutes,
   registerResolveRoutes,
+  registerGraphRoutes,
 } from "./hub-protocol/rest/index.js";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
@@ -410,6 +412,7 @@ registerSkillsRoutes(app); // /skills/system (static doc)
 registerSkillsCrudRoutes(app); // POST/GET /skills (capability-substrate CRUD seam)
 registerToolsRoutes(app); // POST/GET /tools, GET /tools/:id (capability-substrate CRUD seam)
 registerCapabilitiesRoutes(app); // POST /capabilities/apply (capability-template applier)
+registerCapabilityTemplatesRoutes(app); // POST/GET /capabilities/templates, DELETE /capabilities/templates/:key (templates-as-data)
 registerLoopsRoutes(app); // POST /loops/apply (loop / autonomy-template applier)
 registerMemoryRoutes(app); // /memory*
 registerKnowledgeRoutes(app); // /knowledge*, /graph/traverse
@@ -452,6 +455,7 @@ registerUiRoutes(app); // /ui/focus
 registerArtifactsRoutes(app); // /artifacts*
 registerRunsRoutes(app); // /runs/:runId/capture (playbook run capture-back)
 registerResolveRoutes(app); // /resolve/:id — universal ID resolver
+registerGraphRoutes(app); // /graph/:type/:id — object + typed neighbour graph
 
 // ── OpenAPI stubs for routes not yet annotated inline ──────────────────────
 //

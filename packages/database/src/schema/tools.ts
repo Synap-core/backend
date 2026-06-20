@@ -14,6 +14,7 @@ import {
   uuid,
   text,
   jsonb,
+  boolean,
   timestamp,
   index,
   uniqueIndex,
@@ -58,6 +59,15 @@ export const tools = pgTable(
     status: text("status", { enum: ["active", "inactive", "error"] })
       .notNull()
       .default("active"),
+    /**
+     * Per-capability approval gate (orthogonal to `status`, which is
+     * lifecycle/health). A tool is born NOT approved (DEFAULT false) so a
+     * freshly-created/AI-seeded tool cannot execute until an owner approves it.
+     * The dispatcher (`external-dispatch.ts`) refuses to run an unapproved tool.
+     * Mirrors `mcp_servers.approved`. Existing rows are grandfathered to true by
+     * migration 0143.
+     */
+    approved: boolean("approved").notNull().default(false),
     metadata: jsonb("metadata").notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -69,6 +79,7 @@ export const tools = pgTable(
   (table) => ({
     workspaceIdIdx: index("idx_tools_workspace_id").on(table.workspaceId),
     kindIdx: index("idx_tools_kind").on(table.kind),
+    approvedIdx: index("idx_tools_approved").on(table.approved),
     // Pod-wide tools are keyed by their credentialRef: ONE pod-wide tool per
     // distinct credential reference. This partial unique index makes the
     // connection→tool materialization race-safe (concurrent syncToolRows for the

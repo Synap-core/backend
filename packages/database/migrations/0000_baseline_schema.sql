@@ -1642,6 +1642,7 @@ CREATE TABLE IF NOT EXISTS "skills" (
   "execution_mode"  text    NOT NULL DEFAULT 'sync',
   "timeout_seconds" integer DEFAULT 30,
   "status"          text    NOT NULL DEFAULT 'active',
+  "approved"        boolean NOT NULL DEFAULT false,
   "error_message"   text,
   "metadata"        jsonb   NOT NULL DEFAULT '{}',
   "created_at"      timestamp with time zone NOT NULL DEFAULT now(),
@@ -1661,6 +1662,8 @@ ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "category" text;
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "execution_mode" text DEFAULT 'sync';
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "timeout_seconds" integer DEFAULT 30;
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'active';
+-- Per-capability approval gate (mig 0143).
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "approved" boolean NOT NULL DEFAULT false;
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "error_message" text;
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
@@ -1669,6 +1672,7 @@ ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time z
 CREATE INDEX IF NOT EXISTS "skills_user_id_idx"     ON "skills" ("user_id");
 CREATE INDEX IF NOT EXISTS "skills_workspace_id_idx" ON "skills" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "skills_status_idx"       ON "skills" ("status");
+CREATE INDEX IF NOT EXISTS "idx_skills_approved"     ON "skills" ("approved");
 CREATE INDEX IF NOT EXISTS "skills_kind_idx"         ON "skills" ("kind");
 CREATE INDEX IF NOT EXISTS "skills_name_idx"         ON "skills" ("name");
 
@@ -2147,6 +2151,59 @@ CREATE INDEX IF NOT EXISTS "idx_secrets_user_type"       ON "secrets" ("user_id"
 CREATE INDEX IF NOT EXISTS "idx_secrets_service_id"      ON "secrets" ("service_id");
 CREATE INDEX IF NOT EXISTS "idx_secrets_encryption_mode" ON "secrets" ("encryption_mode");
 CREATE INDEX IF NOT EXISTS "idx_secrets_user_service"    ON "secrets" ("user_id", "service_id");
+
+-- ── capability grants (formerly vault_grants — generalized in 0142) ──────────
+-- Records an AI/agent access grant to a grantable capability (secret/tool/skill/
+-- command). Catch-up block in the GENERALIZED shape so a fresh pod boots with
+-- the polymorphic columns in one shot. Idempotent guards mirror 0124 + 0142.
+DO $$ BEGIN
+  CREATE TYPE vault_grant_scope AS ENUM ('once', 'session', 'permanent');
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+DO $$ BEGIN
+  CREATE TYPE grantable_type AS ENUM ('secret', 'tool', 'skill', 'command');
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+DO $$ BEGIN
+  CREATE TYPE grant_exec_mode AS ENUM ('auto', 'propose', 'dry-run');
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
+CREATE TABLE IF NOT EXISTS "vault_grants" (
+  "id"             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "grantable_type" grantable_type NOT NULL,
+  "grantable_id"   text NOT NULL,
+  "exec_mode"      grant_exec_mode NOT NULL DEFAULT 'auto',
+  "secret_id"      uuid,
+  "proposal_id"    uuid,
+  "granted_to"     text,
+  "workspace_id"   uuid,
+  "scope"          vault_grant_scope NOT NULL DEFAULT 'session',
+  "expires_at"     timestamp with time zone,
+  "max_uses"       integer,
+  "use_count"      integer NOT NULL DEFAULT 0,
+  "revoked_at"     timestamp with time zone,
+  "created_by"     text NOT NULL,
+  "created_at"     timestamp with time zone NOT NULL DEFAULT now()
+);
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "grantable_type" grantable_type;
+ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "grantable_id" text;
+ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "exec_mode" grant_exec_mode NOT NULL DEFAULT 'auto';
+ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "secret_id" uuid;
+ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "proposal_id" uuid;
+ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "granted_to" text;
+ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "scope" vault_grant_scope NOT NULL DEFAULT 'session';
+ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
+ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "max_uses" integer;
+ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "use_count" integer NOT NULL DEFAULT 0;
+ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "revoked_at" timestamp with time zone;
+ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "created_by" text;
+
+CREATE INDEX IF NOT EXISTS "idx_vault_grants_granted_to"    ON "vault_grants" ("granted_to");
+CREATE INDEX IF NOT EXISTS "idx_vault_grants_proposal_id"   ON "vault_grants" ("proposal_id");
+CREATE INDEX IF NOT EXISTS "idx_vault_grants_secret_active" ON "vault_grants" ("grantable_type", "grantable_id", "revoked_at");
 
 CREATE TABLE IF NOT EXISTS "secret_tags" (
   "id"         uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -3259,12 +3316,17 @@ CREATE TABLE IF NOT EXISTS "tools" (
   "executor"       text        NOT NULL DEFAULT 'is-agent',
   "config"         jsonb       NOT NULL DEFAULT '{}'::jsonb,
   "status"         text        NOT NULL DEFAULT 'active',
+  "approved"       boolean     NOT NULL DEFAULT false,
   "metadata"       jsonb       NOT NULL DEFAULT '{}'::jsonb,
   "created_at"     timestamptz NOT NULL DEFAULT now(),
   "updated_at"     timestamptz NOT NULL DEFAULT now()
 );
+-- Per-capability approval gate (mig 0143). IF NOT EXISTS so a pre-existing tools
+-- table picks it up on catch-up.
+ALTER TABLE "tools" ADD COLUMN IF NOT EXISTS "approved" boolean NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS "idx_tools_workspace_id" ON "tools" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_tools_kind"         ON "tools" ("kind");
+CREATE INDEX IF NOT EXISTS "idx_tools_approved"     ON "tools" ("approved");
 -- Generalized from the old nango://-only index (mig 0132 → 0140): ONE pod-wide
 -- tool per distinct non-null credential_ref, scheme-agnostic. NULL credential_ref
 -- (builtin/script) and workspace-scoped tools are excluded.
@@ -3370,3 +3432,30 @@ CREATE INDEX IF NOT EXISTS "idx_project_members_user"
   ON "project_members" ("user_id");
 CREATE INDEX IF NOT EXISTS "idx_project_members_user_project"
   ON "project_members" ("user_id", "project_id");
+
+-- ── Capability Templates (templates-as-data, 0144 catch-up) ───────────────────
+-- DB-resident seed CapabilityDefinitions so a `templateKey` apply resolves
+-- without the JSON files being bundled into the deployed image. workspace_id
+-- NULL = pod-wide; SET = workspace overlay. See migration 0144.
+CREATE TABLE IF NOT EXISTS "capability_templates" (
+  "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "key"          text        NOT NULL,
+  "workspace_id" uuid        REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "name"         text        NOT NULL,
+  "description"  text,
+  "definition"   jsonb       NOT NULL,
+  "version"      integer     NOT NULL DEFAULT 1,
+  "source"       text,
+  "created_by"   text,
+  "deleted_at"   timestamptz,
+  "deleted_by"   text,
+  "created_at"   timestamptz NOT NULL DEFAULT now(),
+  "updated_at"   timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "uniq_capability_templates_key_pod_wide"
+  ON "capability_templates" ("key")
+  WHERE "workspace_id" IS NULL AND "deleted_at" IS NULL;
+CREATE INDEX IF NOT EXISTS "idx_capability_templates_key"
+  ON "capability_templates" ("key");
+CREATE INDEX IF NOT EXISTS "idx_capability_templates_workspace_id"
+  ON "capability_templates" ("workspace_id");

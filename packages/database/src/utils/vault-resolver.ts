@@ -17,6 +17,7 @@
 import { eq, and, sql as drizzleSql } from "drizzle-orm";
 import { getDb } from "../client-pg.js";
 import { secrets, vaultGrants } from "../schema/index.js";
+import type { GrantableType, GrantExecMode } from "../schema/secrets-vault.js";
 import {
   decryptServerSide,
   decryptConfig,
@@ -145,15 +146,19 @@ export interface GrantRedeemer {
  *   2. then soonest expiry              -> expires_at ASC NULLS LAST
  *   3. then fewest remaining uses       -> (max_uses - use_count) ASC NULLS LAST
  *
- * Returns `{ ok: true, grantId }` with the chosen candidate, or `{ ok: false,
- * code }` with a specific denial reason (scoped to the same redeemer predicate)
- * for diagnostics.
+ * Returns `{ ok: true, grantId, execMode }` with the chosen candidate, or
+ * `{ ok: false, code }` with a specific denial reason (scoped to the same
+ * redeemer predicate) for diagnostics. `execMode` is the grant ROW's governance
+ * axis (auto | propose | dry-run) — the source of truth for how the capability
+ * runs (see `findCapabilityGrant` / `gateCapabilityExecution`).
  */
 export async function findRedeemableGrant(
-  secretId: string,
+  grantableType: GrantableType,
+  grantableId: string,
   redeemer: GrantRedeemer
 ): Promise<
-  { ok: true; grantId: string } | { ok: false; code: GrantDenialCode }
+  | { ok: true; grantId: string; execMode: GrantExecMode }
+  | { ok: false; code: GrantDenialCode }
 > {
   const db = await getDb();
   const agentUserId = redeemer.agentUserId ?? null;
@@ -161,8 +166,9 @@ export async function findRedeemableGrant(
 
   // Read-only candidate find: most-constrained active grant for this redeemer.
   const candidate = await db.execute(drizzleSql`
-    SELECT id FROM vault_grants
-    WHERE secret_id = ${secretId}
+    SELECT id, exec_mode FROM vault_grants
+    WHERE grantable_type = ${grantableType}
+      AND grantable_id = ${grantableId}
       AND revoked_at IS NULL
       AND (expires_at IS NULL OR expires_at > now())
       AND (max_uses IS NULL OR use_count < max_uses)
@@ -176,15 +182,19 @@ export async function findRedeemableGrant(
   `);
 
   // postgres-js: db.execute returns a RowList (array-like) of result rows.
-  const grantId = (candidate as unknown as Array<{ id: string }>)[0]?.id;
-  if (grantId) return { ok: true, grantId };
+  const chosen = (
+    candidate as unknown as Array<{ id: string; exec_mode: GrantExecMode }>
+  )[0];
+  if (chosen?.id)
+    return { ok: true, grantId: chosen.id, execMode: chosen.exec_mode };
 
   // No redeemable grant — classify why, scoped to the SAME redeemer predicate so
   // we don't misreport based on a grant this principal could never redeem. We
   // pick the newest matching grant and report its specific failure reason.
   const any = await db.query.vaultGrants.findFirst({
     where: and(
-      eq(vaultGrants.secretId, secretId),
+      eq(vaultGrants.grantableType, grantableType),
+      eq(vaultGrants.grantableId, grantableId),
       drizzleSql`(${vaultGrants.grantedTo} IS NULL OR ${vaultGrants.grantedTo} = ${agentUserId})`,
       drizzleSql`(${vaultGrants.workspaceId} IS NULL OR ${vaultGrants.workspaceId} = ${workspaceId})`
     ),
@@ -229,6 +239,85 @@ export async function incrementGrant(grantId: string): Promise<boolean> {
 }
 
 /**
+ * NON-CONSUMING capability-grant existence + exec-mode check for non-secret
+ * grantables (tool / skill / command). This is the EXISTENCE-and-mode half of
+ * the capability gate (the model's namesake): it answers "does an active grant
+ * authorize THIS redeemer to run this capability, and in what exec-mode?" WITHOUT
+ * burning a use.
+ *
+ * Use this INSIDE `gateCapabilityExecution` to make the verdict: an approved tool
+ * with NO grant for an agent must route to a proposal (never auto-run); a grant's
+ * `execMode` is the source of truth for auto/propose/dry-run. The use-count is
+ * consumed separately, only when the final verdict is `run` (see
+ * `resolveCapabilityGrant` / `incrementGrant` at the dispatch point) — so a run
+ * that routes to propose/deny never spends a once-grant.
+ *
+ * Returns `{ ok: true, grantId, execMode }` (no use consumed) or `{ ok: false,
+ * code }`. The redeemer MUST be server-derived — same firewall as redemption.
+ */
+export async function findCapabilityGrant(
+  grantableType: Exclude<GrantableType, "secret">,
+  grantableId: string,
+  redeemer: GrantRedeemer
+): Promise<
+  | { ok: true; grantId: string; execMode: GrantExecMode }
+  | { ok: false; code: GrantDenialCode }
+> {
+  return findRedeemableGrant(grantableType, grantableId, redeemer);
+}
+
+/**
+ * Authorize-only capability-grant gate for non-secret grantables (tool / skill /
+ * command). This is the generic counterpart to `resolveVaultSecret`'s grant
+ * check: it finds a redeemable grant for the grantable and CONSUMES one use, but
+ * has NO decrypt step (there is no secret payload to return — the grant simply
+ * authorizes the capability to run).
+ *
+ * Use this at a capability-execution chokepoint when an agent invokes a tool/
+ * skill/command on a delegated path. Owner-invoked runs bypass it (the owner is
+ * never gated on a grant for their own capability — same rule as the secret
+ * owner-bypass, expressed by NOT calling this).
+ *
+ * Returns `{ ok: true, grantId, execMode }` on success (one use consumed), or
+ * `{ ok: false, code }` with a specific denial reason. The redeemer MUST be
+ * server-derived (never request-supplied) — same firewall as secret redemption.
+ *
+ * Note: like the secret path, consumption is "find then increment". Here the
+ * increment runs immediately after find (no intervening decrypt), so the guarded
+ * UPDATE is still the serialization point under concurrency.
+ */
+export async function resolveCapabilityGrant(
+  grantableType: Exclude<GrantableType, "secret">,
+  grantableId: string,
+  redeemer: GrantRedeemer
+): Promise<
+  | { ok: true; grantId: string; execMode: GrantExecMode }
+  | { ok: false; code: GrantDenialCode }
+> {
+  const grant = await findRedeemableGrant(grantableType, grantableId, redeemer);
+  if (!grant.ok) {
+    logger.warn(
+      { grantableType, grantableId, code: grant.code },
+      "Capability grant check failed"
+    );
+    return grant;
+  }
+  const consumed = await incrementGrant(grant.grantId);
+  if (!consumed) {
+    logger.warn(
+      { grantableType, grantableId, grantId: grant.grantId },
+      "Capability grant exhausted in redemption window"
+    );
+    return { ok: false, code: "grant_exhausted" };
+  }
+  logger.info(
+    { grantableType, grantableId, grantId: grant.grantId },
+    "Capability grant consumed for agent/IS redemption"
+  );
+  return { ok: true, grantId: grant.grantId, execMode: grant.execMode };
+}
+
+/**
  * Resolve a single vault reference to its plaintext value.
  *
  * @param secretId - UUID of the secret
@@ -261,7 +350,12 @@ export async function resolveVaultSecret(
   // successful decrypt, so a decrypt/missing-secret failure cannot burn a grant.
   let pendingGrantId: string | null = null;
   if (opts?.requireGrant) {
-    const grant = await findRedeemableGrant(secretId, opts.redeemer ?? {});
+    // A vault secret is just one grantable KIND — gate on grantableType='secret'.
+    const grant = await findRedeemableGrant(
+      "secret",
+      secretId,
+      opts.redeemer ?? {}
+    );
     if (!grant.ok) {
       logger.warn({ secretId, code: grant.code }, "Vault grant check failed");
       throw new VaultGrantError(grant.code);

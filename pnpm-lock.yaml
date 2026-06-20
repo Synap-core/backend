@@ -346,6 +346,9 @@ importers:
       '@synap/auth':
         specifier: workspace:*
         version: link:../auth
+      '@synap/capability-gate':
+        specifier: workspace:*
+        version: link:../capability-gate
       '@synap/database':
         specifier: workspace:*
         version: link:../database
@@ -502,6 +505,15 @@ importers:
       typescript:
         specifier: ^5.3.3
         version: 5.9.3
+
+  packages/capability-gate:
+    dependencies:
+      '@synap/database':
+        specifier: workspace:*
+        version: link:../database
+      '@synap/governance-policy':
+        specifier: workspace:*
+        version: link:../governance-policy
 
   packages/core:
     dependencies:
@@ -758,6 +770,9 @@ importers:
       '@synap/ai-embeddings':
         specifier: workspace:*
         version: link:../ai-embeddings
+      '@synap/capability-gate':
+        specifier: workspace:*
+        version: link:../capability-gate
       '@synap/database':
         specifier: workspace:*
         version: link:../database
