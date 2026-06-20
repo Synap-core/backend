@@ -10,8 +10,10 @@ import type { MessagingConnector } from "./MessagingConnector.js";
 import { connectorRegistry, type BaseConnector } from "./ConnectorRegistry.js";
 import { db, getServiceSecret } from "@synap/database";
 
-// ── Sync + enrichment connectors register through their facades, which also
-//    mirror into the single unified `connectorRegistry`. ─────────────────────
+// ── Sync + enrichment connectors register into their OWN facade registries
+//    (`syncConnectorRegistry` / `enrichmentProviderRegistry`); they do NOT
+//    register into the unified `connectorRegistry` — only messaging does
+//    (below). ──────────────────────────────────────────────────────────────
 syncConnectorRegistry.register(new NangoConnector());
 enrichmentProviderRegistry.register(new ApifyProvider());
 enrichmentProviderRegistry.register(new ApolloProvider());

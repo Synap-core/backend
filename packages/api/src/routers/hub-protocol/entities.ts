@@ -86,6 +86,10 @@ export const entitiesRouter = router({
         title: z.string(),
         description: z.string().optional(),
         properties: z.record(z.string(), z.unknown()).optional(),
+        // File the entity into a project — threaded to checkPermissionOrPropose
+        // so the proposal carries projectId and the materializer stamps the
+        // belongs_to_project edge that project-scoped recall relies on.
+        projectId: z.string().uuid().optional(),
         agentUserId: z.string().uuid().optional(),
         /**
          * The proposing agent's own rationale for this action. Surfaced in the
@@ -153,6 +157,7 @@ export const entitiesRouter = router({
         title: input.title,
         description: input.description,
         properties: input.properties,
+        ...(input.projectId ? { projectId: input.projectId } : {}),
         ...(authWorkspaceId ? { targetWorkspaceId: authWorkspaceId } : {}),
         // Agent's own rationale for the proposal inbox. Top-level `reasoning`
         // wins; fall back to the legacy `aiMetadata.reasoning` alias.

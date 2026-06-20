@@ -10,13 +10,6 @@
       "required": false,
       "default": "0 8 * * *",
       "description": "5-field cron expression controlling when the briefing runs."
-    },
-    {
-      "name": "channelId",
-      "label": "Delivery channel",
-      "type": "text",
-      "required": true,
-      "description": "The channel the briefing is posted into."
     }
   ],
   "playbooks": [
@@ -28,7 +21,7 @@
       "executor": "is-agent",
       "channelSpec": {
         "type": "AGENT_COLLAB",
-        "members": [{ "memberId": "{{channelId}}", "memberKind": "ai_agent" }],
+        "members": [],
         "aiReactionMode": "when_confident"
       },
       "expectedOutputs": [{ "kind": "report", "label": "Daily briefing" }]

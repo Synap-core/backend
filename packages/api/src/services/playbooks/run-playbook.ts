@@ -24,6 +24,7 @@ import {
   getDb,
   eq,
   channels,
+  entities,
   focusSessions,
   playbooks,
   playbookRuns,
@@ -292,6 +293,20 @@ async function executeSingleRun(
     fromType: "playbook",
   });
 
+  // Resolve the subject's name + profile so the executor can tell the agent WHAT
+  // it is working on (subjectId alone is opaque). Visibility was already enforced
+  // by the caller (resolveVisibleSubjectId) before this runs.
+  let subjectName: string | undefined;
+  let subjectProfile: string | undefined;
+  if (input.subjectId) {
+    const subj = await db.query.entities.findFirst({
+      columns: { title: true, type: true },
+      where: eq(entities.id, input.subjectId),
+    });
+    subjectName = subj?.title ?? undefined;
+    subjectProfile = subj?.type ?? undefined;
+  }
+
   let result: RunResult;
   try {
     result = await resolveExecutor(playbook.executor).run({
@@ -301,6 +316,8 @@ async function executeSingleRun(
       channelId: channel.id,
       goal: session.goal,
       subjectId: input.subjectId,
+      subjectName,
+      subjectProfile,
       // Thread the run id so an external agent knows which run to capture back
       // against (POST /api/hub/runs/{runId}/capture); webhookUrl rides params.
       input: { ...params, runId: run.id },

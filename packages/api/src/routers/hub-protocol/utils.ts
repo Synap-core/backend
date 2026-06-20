@@ -18,7 +18,8 @@ export async function createHubProtocolCallerContext(
   scopes: string[],
   workspaceId?: string | null,
   sourceMessageId?: string | null,
-  sessionId?: string | null
+  sessionId?: string | null,
+  agentUserId?: string | null
 ): Promise<
   Context & {
     scopes?: string[];
@@ -46,6 +47,10 @@ export async function createHubProtocolCallerContext(
     // Always brand hub-protocol delegated calls as intelligence-sourced.
     source: "intelligence",
     isHubProtocol: true,
+    // The agent acting on behalf of this request (agent-key linkedUserId remap).
+    // When set, downstream mutations route through the governance membrane
+    // (propose instead of auto-apply); undefined for operator-driven calls.
+    agentUserId: agentUserId ?? null,
     // Link proposals created during this request to the triggering message.
     sourceMessageId: sourceMessageId ?? null,
     // Link proposals created during this request to the active session.

@@ -72,6 +72,14 @@ export class ExternalAgentExecutor implements Executor {
         sessionId: ctx.sessionId,
         channelId: ctx.channelId ?? null,
         goal: ctx.goal,
+        // The bound subject — the external agent scopes its work to this entity.
+        subject: ctx.subjectId
+          ? {
+              id: ctx.subjectId,
+              name: ctx.subjectName ?? null,
+              profile: ctx.subjectProfile ?? null,
+            }
+          : null,
         capturePath: input.runId
           ? `/api/hub/runs/${input.runId}/capture`
           : null,

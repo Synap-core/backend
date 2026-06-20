@@ -745,7 +745,7 @@ const SCHEME_HANDLERS: Record<string, SchemeHandler> = {
  * SCHEME (`scheme://rest`):
  *   - `nango://` → Nango proxy (Connection-Id + Provider-Config-Key)
  *   - `vault://` → vault-resolved API key, injected into a config-driven HTTP call
- *   - `mcp://`   → registered but not handled here (clean 501)
+ *   - `mcp://`   → bridged to the resolved MCP server's tool call (mcpHandler)
  *
  * Returns a structured result so both the REST endpoint (needs status codes for
  * its HTTP response) and the proposal-approval executor (needs success/result)
@@ -790,10 +790,16 @@ export async function triggerProviderAction(
     const scope = workspaceId
       ? or(isNull(tools.workspaceId), eq(tools.workspaceId, workspaceId))
       : isNull(tools.workspaceId);
-    const matches = await db
-      .select()
-      .from(tools)
-      .where(and(or(eq(tools.name, provider), eq(tools.id, provider)), scope));
+    // `tools.id` is a uuid column — comparing it to a non-uuid string throws a
+    // Postgres cast error (22P02), so only match by id when `provider` IS a uuid.
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        provider
+      );
+    const nameOrId = isUuid
+      ? or(eq(tools.name, provider), eq(tools.id, provider))
+      : eq(tools.name, provider);
+    const matches = await db.select().from(tools).where(and(nameOrId, scope));
 
     if (matches.length === 0) {
       return {

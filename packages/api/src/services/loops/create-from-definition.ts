@@ -124,7 +124,25 @@ export async function createLoopFromDefinition(
     key: rawDef.key,
     ...params,
   };
+  // Seed declared defaults so a caller that omits an optional param with a
+  // `default` still gets it (mirrors the capability applier). Without this a
+  // template's `{{cron}}` with default "0 8 * * *" would interpolate to "".
+  // Explicit params (already spread above) win.
+  for (const p of rawDef.params ?? []) {
+    if (p.default !== undefined && !(p.name in params)) {
+      effectiveParams[p.name] = p.default;
+    }
+  }
   const def = interpolateDeep(rawDef, effectiveParams);
+
+  // Acting provenance — when an AI agent applies the loop (agentUserId present
+  // on the caller ctx), forward it so each playbook/trigger create routes
+  // through checkPermissionOrPropose (propose, not auto-apply). An operator
+  // provision path (e.g. workspaces.createFromDefinition) carries no
+  // agentUserId, so it stays synchronous. Mirrors the hub automations caller's
+  // `source: agentUserId ? "agent" : "intelligence"`.
+  const agentUserId = ctx.agentUserId ?? undefined;
+  const source = agentUserId ? "agent" : "intelligence";
 
   const proposals: string[] = [];
 
@@ -144,6 +162,8 @@ export async function createLoopFromDefinition(
       expectedOutputs: pb.expectedOutputs,
       schedule: pb.schedule,
       executor: pb.executor ?? "is-agent",
+      agentUserId,
+      source,
     });
 
     const playbookId = result.playbook?.id ?? null;
@@ -224,6 +244,8 @@ export async function createLoopFromDefinition(
       },
       status: "active",
       metadata: { createdVia: "template", playbookId },
+      agentUserId,
+      source,
     });
 
     if (result.proposalId) proposals.push(result.proposalId);

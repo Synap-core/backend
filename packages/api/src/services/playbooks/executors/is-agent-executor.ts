@@ -34,18 +34,27 @@ export class IsAgentExecutor implements Executor {
 
     const db = await getDb();
 
+    // Surface the bound subject so the agent knows WHAT it is working on. The id
+    // lets it fetch full details via its tools; the name/profile give immediate
+    // context. Omitted entirely when the run has no subject.
+    const kickoff = ctx.subjectId
+      ? `[Subject: ${ctx.subjectName ?? "entity"}${
+          ctx.subjectProfile ? ` · ${ctx.subjectProfile}` : ""
+        } · id ${ctx.subjectId}]\n\n${ctx.goal}`
+      : ctx.goal;
+
     // Post the resolved goal as a USER message — the persisted kickoff message
     // the IS responds to. Attributed to the run's acting principal.
     const messageId = randomUUID();
     const hash = createHash("sha256")
-      .update(`${messageId}${ctx.goal}`)
+      .update(`${messageId}${kickoff}`)
       .digest("hex");
 
     await db.insert(messages).values({
       id: messageId,
       channelId: ctx.channelId,
       role: MessageRole.USER,
-      content: ctx.goal,
+      content: kickoff,
       userId: ctx.userId,
       previousHash: "",
       hash,
@@ -58,7 +67,7 @@ export class IsAgentExecutor implements Executor {
     const triggered = await triggerAutoRespond({
       channelId: ctx.channelId,
       userMessageId: messageId,
-      content: ctx.goal,
+      content: kickoff,
       sourceUserId: ctx.userId,
     });
     if (!triggered) {

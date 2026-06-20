@@ -67,6 +67,12 @@ export const CreateEntityRequestSchema = z
       .describe(
         "Target workspace. Falls back to profile.entityScope and the user's first accessible workspace."
       ),
+    projectId: z
+      .string()
+      .optional()
+      .describe(
+        "File the new entity into a project (its entity id). Stamps a belongs_to_project edge at materialization, so project-scoped recall (ask with projectId) finds it. Orthogonal to workspaceId."
+      ),
     profileSlug: z
       .string()
       .optional()

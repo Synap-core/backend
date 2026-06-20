@@ -1027,6 +1027,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         title: body.title,
         description: body.description,
         properties: body.properties,
+        ...(body.projectId ? { projectId: body.projectId } : {}),
         ...(effectiveWorkspaceId
           ? { targetWorkspaceId: effectiveWorkspaceId }
           : {}),

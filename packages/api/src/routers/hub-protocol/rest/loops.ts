@@ -193,7 +193,14 @@ export function registerLoopsRoutes(app: HubHono): void {
       const ctx = await createHubProtocolCallerContext(
         acting.userId,
         c.get("scopes") as string[],
-        body.workspaceId ?? null
+        body.workspaceId ?? null,
+        null,
+        null,
+        // Forward the acting agent (agent-key linkedUserId remap) so an AI
+        // caller's loop apply routes each playbook/trigger create through the
+        // governance membrane (propose, not auto-apply). Undefined for
+        // operator/human-driven keys, which stay synchronous.
+        (c.get("agentUserId") as string | undefined) ?? null
       );
 
       const result = await createLoopFromDefinition(

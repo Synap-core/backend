@@ -211,6 +211,9 @@ export async function executeMCPToolViaHubProtocol(
         title: args.title as string,
         description: args.description as string | undefined,
         properties: args.properties as Record<string, unknown> | undefined,
+        // A project-pinned MCP URL (?projectId=) auto-injects args.projectId, so
+        // entities the agent creates are filed into its project focus.
+        ...(args.projectId ? { projectId: args.projectId as string } : {}),
         aiMetadata: { model: "mcp", reasoning: `MCP tool: ${toolName}` },
       });
       return ok(result);

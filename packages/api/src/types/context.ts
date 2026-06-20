@@ -68,6 +68,14 @@ export interface Context {
    */
   isHubProtocol?: boolean;
   /**
+   * The agent user ID acting on behalf of this request, when the caller is an
+   * AI agent (set from the hub-protocol key's `linkedUserId`). Drives the
+   * governance membrane: when present, mutations route through
+   * checkPermissionOrPropose (propose instead of auto-apply). Undefined for
+   * operator/human-driven requests, which stay synchronous.
+   */
+  agentUserId?: string | null;
+  /**
    * The message ID that triggered this hub-protocol request.
    * When set, proposals created during this request are linked to this message.
    */

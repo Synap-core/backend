@@ -162,6 +162,10 @@ export interface RunContext {
   capabilities: CapabilityRef[];
   /** The bound subject entity id — any entity profile; propagates so every step auto-scopes to it. */
   subjectId?: string;
+  /** Resolved subject display name (so the executor can tell the agent WHAT it works on). */
+  subjectName?: string;
+  /** Resolved subject profile slug (entity type), e.g. "person", "deal". */
+  subjectProfile?: string;
 }
 
 export interface RunResult {
