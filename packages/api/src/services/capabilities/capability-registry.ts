@@ -21,11 +21,12 @@
  * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.1)
  */
 
-import { getDb, or, and, isNull, eq, inArray, gt } from "@synap/database";
+import { getDb, or, and, isNull, eq, inArray, gt, desc } from "@synap/database";
 import {
   tools,
   skills,
   intelligenceCommands,
+  secrets,
   vaultGrants,
   type ToolVerbCatalogEntry,
 } from "@synap/database/schema";
@@ -221,4 +222,149 @@ export async function listCapabilities(
   const builtinCaps: Capability[] = [];
 
   return [...builtinCaps, ...toolCaps, ...skillCaps, ...commandCaps];
+}
+
+// ── Capability grant listing (polymorphic — all grantableTypes) ───────────────
+
+/** The grantable kinds the vault_grants table discriminates over. */
+export type CapabilityGrantKind = "secret" | "tool" | "skill" | "command";
+
+/** One grant row enriched with the joined capability's display name. */
+export interface CapabilityGrantRow {
+  grantId: string;
+  grantableType: CapabilityGrantKind;
+  grantableId: string;
+  /** Display name of the granted capability (secret/tool/skill/command), null if dead. */
+  capabilityName: string | null;
+  execMode: string;
+  scope: string;
+  grantedTo: string | null;
+  workspaceId: string | null;
+  proposalId: string | null;
+  expiresAt: string | null;
+  maxUses: number | null;
+  useCount: number;
+  revokedAt: string | null;
+  createdAt: string;
+  active: boolean;
+}
+
+/**
+ * List capability grants across ALL grantable kinds (tool · skill · command ·
+ * secret), each enriched with the granted capability's display name. This is the
+ * generalization of `secretsVault.listAllGrants` (which filtered to secrets only):
+ * the same `vault_grants` table powers every kind, so one resolver surfaces the
+ * polymorphic grants the applier seeds (`issueCapabilityGrant`) — previously
+ * invisible because no read path covered tool/skill/command kinds.
+ *
+ * Visibility: pod-wide grants (workspaceId IS NULL) OR grants belonging to one of
+ * the workspaces the caller can see (passed in by the router, which knows the
+ * caller's membership). Names are resolved per-kind from the owning tables; a
+ * grant whose subject was deleted surfaces `capabilityName: null` (lazily-dead,
+ * still revocable). Reads only — no governance.
+ */
+export async function listCapabilityGrants(args: {
+  /** Workspaces the caller may see (their memberships). Pod-wide (null) always included. */
+  visibleWorkspaceIds: string[];
+  /** Optional kind filter; omit for every kind. */
+  kind?: CapabilityGrantKind;
+}): Promise<CapabilityGrantRow[]> {
+  const db = await getDb();
+
+  // Visibility predicate: pod-wide (null ws) OR a workspace the caller can see.
+  const wsVisibility =
+    args.visibleWorkspaceIds.length > 0
+      ? or(
+          isNull(vaultGrants.workspaceId),
+          inArray(vaultGrants.workspaceId, args.visibleWorkspaceIds)
+        )
+      : isNull(vaultGrants.workspaceId);
+
+  const rows = await db
+    .select()
+    .from(vaultGrants)
+    .where(
+      and(
+        wsVisibility,
+        args.kind ? eq(vaultGrants.grantableType, args.kind) : undefined
+      )
+    )
+    .orderBy(desc(vaultGrants.createdAt));
+
+  if (rows.length === 0) return [];
+
+  // Resolve display names per kind in batch (one query per table touched).
+  const idsByKind: Record<CapabilityGrantKind, string[]> = {
+    secret: [],
+    tool: [],
+    skill: [],
+    command: [],
+  };
+  for (const r of rows) {
+    const k = r.grantableType as CapabilityGrantKind;
+    if (idsByKind[k]) idsByKind[k].push(r.grantableId);
+  }
+
+  const nameById = new Map<string, string>();
+  const collect = (list: { id: string; name: string }[]): void => {
+    for (const row of list) nameById.set(row.id, row.name);
+  };
+
+  if (idsByKind.tool.length > 0) {
+    collect(
+      await db
+        .select({ id: tools.id, name: tools.name })
+        .from(tools)
+        .where(inArray(tools.id, idsByKind.tool))
+    );
+  }
+  if (idsByKind.skill.length > 0) {
+    collect(
+      await db
+        .select({ id: skills.id, name: skills.name })
+        .from(skills)
+        .where(inArray(skills.id, idsByKind.skill))
+    );
+  }
+  if (idsByKind.command.length > 0) {
+    collect(
+      await db
+        .select({
+          id: intelligenceCommands.id,
+          name: intelligenceCommands.title,
+        })
+        .from(intelligenceCommands)
+        .where(inArray(intelligenceCommands.id, idsByKind.command))
+    );
+  }
+  if (idsByKind.secret.length > 0) {
+    collect(
+      await db
+        .select({ id: secrets.id, name: secrets.name })
+        .from(secrets)
+        .where(inArray(secrets.id, idsByKind.secret))
+    );
+  }
+
+  const now = Date.now();
+  return rows.map((g) => ({
+    grantId: g.id,
+    grantableType: g.grantableType as CapabilityGrantKind,
+    grantableId: g.grantableId,
+    capabilityName: nameById.get(g.grantableId) ?? null,
+    execMode: g.execMode,
+    scope: g.scope,
+    grantedTo: g.grantedTo,
+    workspaceId: g.workspaceId,
+    proposalId: g.proposalId,
+    expiresAt: g.expiresAt ? g.expiresAt.toISOString() : null,
+    maxUses: g.maxUses,
+    useCount: g.useCount,
+    revokedAt: g.revokedAt ? g.revokedAt.toISOString() : null,
+    createdAt: g.createdAt.toISOString(),
+    active:
+      !g.revokedAt &&
+      (!g.expiresAt || g.expiresAt.getTime() > now) &&
+      (g.maxUses == null || g.useCount < g.maxUses),
+  }));
 }

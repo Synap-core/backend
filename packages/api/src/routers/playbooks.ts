@@ -28,6 +28,9 @@ import {
   focusSessions,
   automations,
   entities,
+  secrets,
+  vaultGrants,
+  workspaceMembers,
   type FlowDefinition,
 } from "@synap/database";
 import type {
@@ -39,7 +42,12 @@ import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { getLinksFor, createLinks } from "../services/links/links-service.js";
-import { listCapabilities } from "../services/capabilities/capability-registry.js";
+import {
+  listCapabilities,
+  listCapabilityGrants,
+} from "../services/capabilities/capability-registry.js";
+import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
+import { auditLog } from "../utils/audit-log.js";
 import {
   instantiateSession,
   promoteSessionToPlaybook,
@@ -164,6 +172,109 @@ const capabilitiesRouter = router({
   }),
 });
 
+// ── Capability grants sub-router (polymorphic grant management) ──────────────
+
+const GRANT_KINDS = ["secret", "tool", "skill", "command"] as const;
+
+const capabilityGrantsRouter = router({
+  /**
+   * List capability grants across ALL grantable kinds (tool · skill · command ·
+   * secret) the caller can see, each enriched with the granted capability's
+   * display name. Generalizes `secretsVault.listAllGrants` (secret-only) so the
+   * polymorphic grants the applier seeds become LISTABLE. Visibility = pod-wide
+   * grants + grants in the caller's workspaces.
+   */
+  list: protectedProcedure
+    .input(z.object({ kind: z.enum(GRANT_KINDS).optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      const memberships = await db.query.workspaceMembers.findMany({
+        where: eq(workspaceMembers.userId, ctx.userId),
+        columns: { workspaceId: true },
+      });
+      return listCapabilityGrants({
+        visibleWorkspaceIds: memberships.map((m) => m.workspaceId),
+        kind: input?.kind,
+      });
+    }),
+
+  /**
+   * Revoke a capability grant (sets `revokedAt`). Owner/pod-admin gated PER kind:
+   *   - workspace-scoped grant → caller must be owner of that workspace;
+   *   - pod-wide grant (null workspaceId) → caller must be pod-admin;
+   *   - secret grant → caller must own the secret (mirrors the secrets-vault path).
+   * Idempotent — re-revoking is a no-op. REUSES the same `vault_grants` table and
+   * the shared owner/pod-admin gates (`getWorkspaceRole` / `requirePodAdmin`); it
+   * does NOT duplicate `secretsVault.revokeGrant`, which stays for the per-secret
+   * surface.
+   */
+  revoke: protectedProcedure
+    .input(z.object({ grantId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      const grant = await db.query.vaultGrants.findFirst({
+        where: eq(vaultGrants.id, input.grantId),
+        columns: {
+          id: true,
+          grantableType: true,
+          grantableId: true,
+          workspaceId: true,
+          revokedAt: true,
+        },
+      });
+      if (!grant)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Grant not found" });
+
+      // Owner/pod-admin gate, keyed off the LOADED grant (never caller input).
+      if (grant.grantableType === "secret") {
+        // Secret grant — caller must own the underlying secret (same gate as
+        // secretsVault.revokeGrant), so the two surfaces agree.
+        const secret = await db.query.secrets.findFirst({
+          where: and(
+            eq(secrets.id, grant.grantableId),
+            eq(secrets.userId, ctx.userId)
+          ),
+          columns: { id: true },
+        });
+        if (!secret)
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Not your secret",
+          });
+      } else if (grant.workspaceId) {
+        const role = await getWorkspaceRole(ctx.userId, grant.workspaceId);
+        if (role !== "owner") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only workspace owners can revoke capability grants.",
+          });
+        }
+      } else {
+        // Pod-wide (null-workspace) grant — pod-level privileged action.
+        await requirePodAdmin(ctx.userId);
+      }
+
+      if (!grant.revokedAt) {
+        await db
+          .update(vaultGrants)
+          .set({ revokedAt: new Date() })
+          .where(eq(vaultGrants.id, input.grantId));
+
+        auditLog({
+          subjectType: "capability_grant",
+          action: "revoke",
+          phase: "completed",
+          subjectId: grant.grantableId,
+          userId: ctx.userId,
+          workspaceId: grant.workspaceId ?? undefined,
+          data: { grantId: input.grantId, grantableType: grant.grantableType },
+        });
+      }
+
+      return { success: true };
+    }),
+});
+
 // ── Playbooks router ─────────────────────────────────────────────────────────
 
 export const playbooksRouter = router({
@@ -171,6 +282,9 @@ export const playbooksRouter = router({
   // Named `capabilityRegistry` (not `capabilities`) to avoid colliding with the
   // pre-existing top-level `capabilities` router in root.ts.
   capabilityRegistry: capabilitiesRouter,
+  // Polymorphic grant management (tool|skill|command|secret) — the listable +
+  // revocable counterpart to the seeded `vault_grants` the applier issues.
+  capabilityGrants: capabilityGrantsRouter,
 
   /**
    * List playbooks visible in the active workspace (pod-wide + this workspace),

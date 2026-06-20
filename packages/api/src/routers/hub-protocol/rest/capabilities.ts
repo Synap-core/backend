@@ -24,6 +24,7 @@ import {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,
 } from "../../../services/capabilities/create-from-definition.js";
+import { playbooksRouter } from "../../playbooks.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -132,9 +133,80 @@ const ApplyCapabilityResponseSchema = z.object({
   proposals: z.array(z.string()),
 });
 
+const CapabilitiesListResponseSchema = z.object({
+  capabilities: z.array(z.record(z.string(), z.unknown())),
+});
+
 // ── Register function ──────────────────────────────────────────────────────
 
 export function registerCapabilitiesRoutes(app: HubHono): void {
+  registerOpenApi(app, {
+    method: "get",
+    path: "/capabilities",
+    tags: ["Capabilities"],
+    summary: "List the capability read-model (verb × grant × approval matrix)",
+    description:
+      "Returns the unified `Capability[]` read-model for a workspace (pod-wide + " +
+      "the given workspace): tools + skills + commands, each with `verbs` " +
+      "(label/kind/granted/effectiveExecMode/govDefault), `governance`, and the " +
+      "tool's `approved` state. Reuses the same `listCapabilities` adapter the " +
+      "tRPC `playbooks.capabilityRegistry.list` exposes. Requires " +
+      "hub-protocol.read scope and a `workspaceId` query param.",
+    request: {
+      query: z.object({ workspaceId: z.string().uuid() }),
+    },
+    responses: {
+      200: {
+        description: "Capability read-model",
+        schema: CapabilitiesListResponseSchema,
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  // ── GET /capabilities ──────────────────────────────────────────────────────
+  // Thin door over the tRPC `playbooks.capabilityRegistry.list` (a
+  // workspaceProcedure) — so a workspaceId is required. No business logic here.
+  app.get("/capabilities", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+
+    const workspaceId = c.req.query("workspaceId");
+    const wsCheck = z.string().uuid().safeParse(workspaceId);
+    if (!wsCheck.success) {
+      return c.json(
+        { error: "workspaceId query param (UUID) is required" },
+        400
+      );
+    }
+
+    try {
+      const acting = await resolveActingContext(c, { workspaceId });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      const ctx = await createHubProtocolCallerContext(
+        acting.userId,
+        c.get("scopes") as string[],
+        workspaceId
+      );
+      const caller = playbooksRouter.createCaller(ctx as never);
+      const capabilities = await caller.capabilityRegistry.list();
+      return c.json({ capabilities }, 200);
+    } catch (err) {
+      logger.error({ err }, "capabilities list failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
   registerOpenApi(app, {
     method: "post",
     path: "/capabilities/apply",

@@ -20,6 +20,7 @@ COPY packages/ai/package.json            ./packages/ai/
 COPY packages/api-types/package.json     ./packages/api-types/
 COPY packages/api/package.json           ./packages/api/
 COPY packages/auth/package.json          ./packages/auth/
+COPY packages/capability-gate/package.json ./packages/capability-gate/
 COPY packages/core/package.json          ./packages/core/
 COPY packages/database/package.json      ./packages/database/
 COPY packages/events/package.json        ./packages/events/
@@ -30,6 +31,7 @@ COPY packages/hub-protocol/package.json  ./packages/hub-protocol/
 COPY packages/hub-rest-client/package.json ./packages/hub-rest-client/
 COPY packages/intelligence-client/package.json ./packages/intelligence-client/
 COPY packages/jobs/package.json          ./packages/jobs/
+COPY packages/playbooks/package.json     ./packages/playbooks/
 COPY packages/realtime/package.json      ./packages/realtime/
 COPY packages/scripts/package.json       ./packages/scripts/
 COPY packages/search/package.json        ./packages/search/

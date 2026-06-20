@@ -3933,6 +3933,27 @@ export interface CapabilityVerbState extends ToolVerb {
 	 */
 	effectiveExecMode: ExecMode;
 }
+/** The grantable kinds the vault_grants table discriminates over. */
+export type CapabilityGrantKind = "secret" | "tool" | "skill" | "command";
+/** One grant row enriched with the joined capability's display name. */
+export interface CapabilityGrantRow {
+	grantId: string;
+	grantableType: CapabilityGrantKind;
+	grantableId: string;
+	/** Display name of the granted capability (secret/tool/skill/command), null if dead. */
+	capabilityName: string | null;
+	execMode: string;
+	scope: string;
+	grantedTo: string | null;
+	workspaceId: string | null;
+	proposalId: string | null;
+	expiresAt: string | null;
+	maxUses: number | null;
+	useCount: number;
+	revokedAt: string | null;
+	createdAt: string;
+	active: boolean;
+}
 /**
  * Core API Router
  */
@@ -16553,6 +16574,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			list: import("@trpc/server").TRPCQueryProcedure<{
 				input: void;
 				output: Capability[];
+				meta: object;
+			}>;
+		}>>;
+		capabilityGrants: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			meta: object;
+			errorShape: {
+				message: string;
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+				data: import("@trpc/server").TRPCDefaultErrorData;
+			};
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			list: import("@trpc/server").TRPCQueryProcedure<{
+				input: {
+					kind?: "secret" | "command" | "tool" | "skill" | undefined;
+				} | undefined;
+				output: CapabilityGrantRow[];
+				meta: object;
+			}>;
+			revoke: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					grantId: string;
+				};
+				output: {
+					success: boolean;
+				};
 				meta: object;
 			}>;
 		}>>;
