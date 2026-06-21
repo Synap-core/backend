@@ -907,7 +907,7 @@ export interface AutomationTriggerConfig {
 }
 export interface AutomationNodeBase {
 	id: string;
-	type: "trigger" | "command" | "condition" | "delay" | "output" | "loop" | "transform" | "fetch" | "query" | "switch" | "skill" | "sub_automation" | "playbook_run";
+	type: "trigger" | "command" | "condition" | "delay" | "output" | "loop" | "transform" | "fetch" | "query" | "switch" | "skill" | "capability" | "sub_automation" | "playbook_run";
 	position: {
 		x: number;
 		y: number;
@@ -1035,6 +1035,33 @@ export interface SkillNodeDef extends AutomationNodeBase {
 		errorHandling?: NodeErrorHandling;
 	};
 }
+/**
+ * Typed, governed Tool → Verb step (Process builder). The author picks a Tool
+ * (`capabilityId` = the tool row id) and a Verb on it (`verbId` = the requiring
+ * skill's NAME — see `ToolVerbCatalogEntry.id`). The executor resolves the verb
+ * to its backing skill and runs it through the SAME capability gate the `skill`
+ * node uses. Display fields (`capabilityName`/`verbLabel`/`verbKind`/`granted`/
+ * `execMode`) are authored by the FE for the canvas and not required at run time.
+ */
+export interface CapabilityNodeDef extends AutomationNodeBase {
+	type: "capability";
+	data: {
+		label?: string;
+		/** Tool row id of the selected capability. */
+		capabilityId?: string;
+		/** Display name of the chosen tool. */
+		capabilityName?: string;
+		/** Verb id = the requiring skill's name (resolves to the backing skill). */
+		verbId?: string;
+		verbLabel?: string;
+		verbKind?: "read" | "write" | "action";
+		granted?: boolean;
+		execMode?: "auto" | "propose" | "dry-run";
+		/** Maps verb args to prior step outputs ({{steps.id.output}}). */
+		inputMapping?: Record<string, string>;
+		errorHandling?: NodeErrorHandling;
+	};
+}
 export interface SubAutomationNodeDef extends AutomationNodeBase {
 	type: "sub_automation";
 	data: {
@@ -1056,7 +1083,7 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		errorHandling?: NodeErrorHandling;
 	};
 }
-export type AutomationNode = TriggerNodeDef | CommandNodeDef | ConditionNodeDef | DelayNodeDef | OutputNodeDef | LoopNodeDef | TransformNodeDef | FetchNodeDef | QueryNodeDef | SwitchNodeDef | SkillNodeDef | SubAutomationNodeDef | PlaybookRunNodeDef;
+export type AutomationNode = TriggerNodeDef | CommandNodeDef | ConditionNodeDef | DelayNodeDef | OutputNodeDef | LoopNodeDef | TransformNodeDef | FetchNodeDef | QueryNodeDef | SwitchNodeDef | SkillNodeDef | CapabilityNodeDef | SubAutomationNodeDef | PlaybookRunNodeDef;
 export interface AutomationEdge {
 	id: string;
 	source: string;

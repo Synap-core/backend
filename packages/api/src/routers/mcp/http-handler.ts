@@ -89,7 +89,14 @@ mcpHttpApp.get("/", async (c) => {
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless
     });
-    const server = createMCPServer(c.req.query("workspaceId") ?? undefined);
+    // GET/SSE is stream-establishment only (no auth/userId per spec); still carry
+    // BOTH lenses so the stream's scope matches the POST tool-call path.
+    const server = createMCPServer(
+      c.req.query("workspaceId") ?? undefined,
+      undefined,
+      undefined,
+      c.req.query("projectId") ?? undefined
+    );
     await server.connect(transport);
     return transport.handleRequest(c.req.raw);
   }

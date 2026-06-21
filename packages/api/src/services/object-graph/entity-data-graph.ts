@@ -11,9 +11,31 @@
  * so any failure yields [] rather than blanking the whole graph.
  */
 
+import { createLogger } from "@synap-core/core";
 import { createHubProtocolCallerContext } from "../../routers/hub-protocol/utils.js";
 import { relationsRouter } from "../../routers/relations.js";
 import { connectionsToNeighbors, type GraphNeighbor } from "./graph-service.js";
+
+const logger: any = createLogger({ module: "object-graph" });
+
+/**
+ * `getConnections` is a hub-protocol procedure gated on `hub-protocol.read`. The
+ * REST route already holds hub scopes, but the MCP path passes raw `mcp.*` key
+ * scopes — translate them (idempotent: a Set dedups already-present hub scopes)
+ * so the same shared seam works from either surface. Mirrors the translation in
+ * the MCP adapter's `createHubProtocolCaller`.
+ */
+function toHubScopes(scopes: string[]): string[] {
+  return Array.from(
+    new Set([
+      ...scopes,
+      ...(scopes.includes("mcp.read") ? ["hub-protocol.read"] : []),
+      ...(scopes.includes("mcp.write")
+        ? ["hub-protocol.read", "hub-protocol.write"]
+        : []),
+    ])
+  );
+}
 
 /**
  * The relations + property + channel neighbours of an entity, as GraphNeighbor[].
@@ -28,7 +50,7 @@ export async function entityDataNeighbors(
   try {
     const ctx = await createHubProtocolCallerContext(
       userId,
-      scopes,
+      toHubScopes(scopes),
       workspaceId
     );
     const caller = relationsRouter.createCaller(
@@ -36,8 +58,14 @@ export async function entityDataNeighbors(
     );
     const result = await caller.getConnections({ entityId, limit: 100 });
     return connectionsToNeighbors(result.connections);
-  } catch {
-    // entity-data half is additive — never let it blank the graph
+  } catch (err) {
+    // The entity-data half is additive — a failure degrades to [] rather than
+    // blanking the whole graph. But LOG it: a silent catch here once hid a scope
+    // bug (mcp.* not translated) that made the agent's graph look empty.
+    logger.warn(
+      { err, entityId },
+      "entityDataNeighbors failed — degraded to []"
+    );
     return [];
   }
 }

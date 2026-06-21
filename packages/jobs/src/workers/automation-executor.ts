@@ -30,6 +30,8 @@ import {
   db,
   eq,
   and,
+  or,
+  isNull,
   automations,
   automationRuns,
   automationStepRuns,
@@ -1626,6 +1628,154 @@ async function executeAutomationFlow(params: {
               unknown
             >;
             output = { output: skillResult.output ?? skillResult, skillId };
+            break;
+          }
+
+          case "capability": {
+            // ── Typed/governed Tool → Verb step (Process builder) ─────────────
+            // A `capability` node is the structured sibling of the `skill` node:
+            // the author picks a Tool (capabilityId) and a Verb on it (verbId).
+            // A verb is BACKED BY A SKILL — its `id` is the requiring skill's
+            // NAME (see ToolVerbCatalogEntry.id in schema/tools.ts). So the case
+            // resolves verb → backing skill row, then runs it through the SAME
+            // governed path `case "skill"` uses (gateCapabilityExecution →
+            // run | propose | dry-run | deny). No parallel governance, no new
+            // tables: the skill IS the executor; the gate IS the door.
+            const data = node.data as {
+              capabilityId?: string;
+              verbId?: string;
+              inputMapping?: Record<string, string>;
+            };
+
+            const verbId = data.verbId;
+            if (!verbId) throw new Error("Capability node has no verbId");
+
+            // Resolve the backing skill by NAME (verbId = requiring skill's name),
+            // scoped exactly like the capability registry read-model: pod-wide
+            // (NULL workspace) OR this workspace OR owned by the automation owner.
+            const [skillRow] = await db
+              .select({
+                id: skills.id,
+                approved: skills.approved,
+                userId: skills.userId,
+              })
+              .from(skills)
+              .where(
+                and(
+                  eq(skills.name, verbId),
+                  or(
+                    isNull(skills.workspaceId),
+                    eq(skills.workspaceId, workspaceId),
+                    eq(skills.userId, ownerId)
+                  )
+                )
+              )
+              .limit(1);
+
+            if (!skillRow) {
+              throw new Error(
+                `Capability verb "${verbId}" has no backing skill in this workspace.`
+              );
+            }
+
+            const capSkillId = skillRow.id;
+
+            // ── Capability-execution gate (SAME door as `case "skill"`) ───────
+            // An automation runs as the workspace OWNER (no agent identity):
+            //   actorUserId = ownerId, agentUserId = null →
+            //     • owner runs their OWN skill          → owner-bypass → run
+            //     • non-owner-owned + approved          → auto         → run
+            //     • non-owner-owned + UNapproved        → propose (FAILS CLOSED)
+            // A mid-flow automation has no interactive review surface, so a
+            // propose/deny verdict throws; dry-run is honored as a no-op preview.
+            const capDecision = await gateCapabilityExecution({
+              capabilityKind: "skill",
+              capabilityId: capSkillId,
+              skill: skillRow,
+              actorUserId: ownerId,
+              agentUserId: null,
+              workspaceId,
+              issuer: "automation.capability-node",
+            });
+            if (capDecision.decision === "deny") {
+              throw new Error(
+                `Capability ${verbId} refused by capability gate: ${capDecision.reason}`
+              );
+            }
+            if (capDecision.decision === "propose") {
+              throw new Error(
+                `Capability ${verbId} requires human approval and cannot run inside an automation; capability node refused.`
+              );
+            }
+            if (capDecision.decision === "dry-run") {
+              // Grant resolved to dry-run preview — no external side effect.
+              output = {
+                output: { dryRun: true, verbId, skillId: capSkillId },
+                verbId,
+                skillId: capSkillId,
+              };
+              break;
+            }
+            // decision === "run" → execute the backing skill.
+
+            const capInputMapping = data.inputMapping ?? {};
+            const capResolvedInputs = resolveInputMapping(
+              capInputMapping,
+              context
+            );
+
+            await db
+              .update(automationStepRuns)
+              .set({ resolvedInputs: capResolvedInputs })
+              .where(eq(automationStepRuns.id, stepRun.id));
+
+            const capIsUrl =
+              process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+            const capIsApiKey = process.env.INTELLIGENCE_HUB_API_KEY || "";
+
+            const capController = new AbortController();
+            const capTimer = setTimeout(() => capController.abort(), 60_000);
+
+            let capResponse: Response;
+            try {
+              capResponse = await fetch(
+                `${capIsUrl}/api/skills/${capSkillId}/execute`,
+                {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "X-API-Key": capIsApiKey,
+                  },
+                  body: JSON.stringify({
+                    context: capResolvedInputs,
+                    workspaceId,
+                    userId: ownerId,
+                  }),
+                  signal: capController.signal,
+                }
+              );
+              clearTimeout(capTimer);
+            } catch (err) {
+              clearTimeout(capTimer);
+              throw err;
+            }
+
+            if (!capResponse.ok) {
+              const body = await capResponse.text();
+              throw new Error(
+                `Capability execution failed: ${capResponse.status} ${body}`
+              );
+            }
+
+            const capResult = (await capResponse.json()) as Record<
+              string,
+              unknown
+            >;
+            output = {
+              output: capResult.output ?? capResult,
+              verbId,
+              skillId: capSkillId,
+            };
             break;
           }
 

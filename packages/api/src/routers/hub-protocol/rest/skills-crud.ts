@@ -22,12 +22,14 @@
  *   POST   /skills            — create a skill (proposal-gated; optional `requires` tool links)
  *   GET    /skills            — list skills (pod + user + workspace scope)
  *   POST   /skills/:id/approve — approve/revoke skill execution (owner/pod-admin gated; reuses skillsRouter.setApproved)
+ *   POST   /skills/:id/dry-run — preview a skill (proxies to the IS dry-run route — external writes stubbed, reads real)
  *   DELETE /skills/:id         — delete a skill (proposal-gated; reuses skillsRouter.delete)
  */
 
 import { z } from "@hono/zod-openapi";
 
 import { skillsRouter } from "../../skills.js";
+import { resolveIntelligenceService } from "../../../utils/intelligence-routing.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -87,6 +89,18 @@ const ApproveSkillRequestSchema = z.object({
 const ApproveSkillResponseSchema = z.object({
   id: z.string(),
   approved: z.boolean(),
+});
+
+const DryRunSkillRequestSchema = z.object({
+  /** Parameters to feed the skill for this preview run. */
+  parameters: z.record(z.string(), z.unknown()).optional(),
+});
+
+const DryRunSkillResponseSchema = z.object({
+  /** The skill's execution result (verbatim from the IS dry-run handler). */
+  result: z.unknown(),
+  /** The side effects the skill INTENDED to perform (external writes stubbed). */
+  dryRunEffects: z.array(z.unknown()),
 });
 
 // ── Register function ──────────────────────────────────────────────────────
@@ -163,6 +177,37 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/skills/{id}/dry-run",
+    tags: ["Skills"],
+    summary: "Dry-run (preview) a skill to any level",
+    description:
+      "Executes a skill with external writes/sends STUBBED and reads kept real, " +
+      "returning the side effects it intended to perform — a safe preview before " +
+      "approval. Proxies to the Intelligence Service dry-run executor (it owns the " +
+      "sandbox); the acting identity is server-derived. Requires hub-protocol.write " +
+      "scope.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: DryRunSkillRequestSchema,
+    },
+    responses: {
+      200: {
+        description: "Dry-run result + intended side effects",
+        schema: DryRunSkillResponseSchema,
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+      503: {
+        description: "Intelligence Service unavailable",
+        schema: ErrorSchema,
+      },
     },
   });
 
@@ -374,6 +419,135 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       }
       logger.error({ err, id }, "skills approve failed");
       return c.json({ error: msg }, 500);
+    }
+  });
+
+  // ── POST /skills/:id/dry-run ───────────────────────────────────────────────
+  // Headless door for the "preview a skill to any level" dry-run. The sandbox
+  // executor lives on the Intelligence Service, so this PROXIES to the IS
+  // dry-run route — mirroring external-dispatch's mcpHandler exactly
+  // (resolveIntelligenceService → fetch(`${endpoint}/api/...`, X-API-Key)). The
+  // IS handler reads `{ userId, parameters }`; we pass the SERVER-DERIVED acting
+  // userId (never a body-supplied one) and forward parameters verbatim. Different
+  // method+suffix from /skills/:id/approve (POST) and /skills/:id (DELETE) — no
+  // route collision.
+  app.post("/skills/:id/dry-run", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const id = c.req.param("id");
+    const idCheck = z.string().uuid().safeParse(id);
+    if (!idCheck.success) {
+      return c.json({ error: "id must be a UUID" }, 400);
+    }
+
+    const parsed = DryRunSkillRequestSchema.safeParse(
+      await c.req.json().catch(() => ({}))
+    );
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.message }, 400);
+    }
+    const parameters = parsed.data.parameters;
+
+    try {
+      const acting = await resolveActingContext(c, {});
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      // Resolve the IS endpoint + service key (same util external-dispatch uses).
+      let endpoint: string;
+      let serviceApiKey: string;
+      try {
+        const resolved = await resolveIntelligenceService({
+          userId: acting.userId,
+          workspaceId: acting.workspaceId,
+        });
+        endpoint = resolved.endpoint;
+        serviceApiKey = resolved.serviceApiKey;
+      } catch (err) {
+        return c.json(
+          {
+            error: `Intelligence Service unavailable for skill dry-run: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          },
+          503
+        );
+      }
+
+      // Forward to the IS dry-run route (mounted at /api → /api/skills/:id/dry-run).
+      // The IS handler reads `{ userId, parameters }` and returns { result, dryRunEffects }.
+      let res: Response;
+      try {
+        res = await fetch(`${endpoint}/api/skills/${id}/dry-run`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": serviceApiKey,
+          },
+          body: JSON.stringify({
+            userId: acting.userId,
+            parameters: parameters ?? {},
+          }),
+        });
+      } catch (err) {
+        return c.json(
+          {
+            error: `Skill dry-run call to the Intelligence Service failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          },
+          503
+        );
+      }
+
+      // A 404 from the IS means the dry-run route is absent on this IS version
+      // (or the skill itself wasn't found) — surface it as a clear message.
+      if (res.status === 404) {
+        return c.json(
+          {
+            error:
+              `Intelligence Service returned 404 for skill dry-run "${id}" — ` +
+              "the skill was not found, or the IS version does not expose the dry-run route.",
+          },
+          404
+        );
+      }
+
+      const data = (await res.json().catch(() => null)) as {
+        result?: unknown;
+        dryRunEffects?: unknown[];
+        error?: string;
+      } | null;
+
+      if (!res.ok) {
+        return c.json(
+          {
+            error:
+              data?.error ??
+              `Intelligence Service dry-run failed (${res.status})`,
+          },
+          res.status >= 400 && res.status <= 599 ? (res.status as never) : 500
+        );
+      }
+
+      // Return the IS response verbatim ({ result, dryRunEffects }).
+      return c.json(
+        {
+          result: data?.result ?? null,
+          dryRunEffects: data?.dryRunEffects ?? [],
+        },
+        200
+      );
+    } catch (err) {
+      logger.error({ err, id }, "skills dry-run failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
     }
   });
 
