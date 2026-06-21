@@ -44,6 +44,7 @@ import {
   secretAuditLog,
   capabilityTemplates,
   tools as toolsTable,
+  skills as skillsTable,
 } from "@synap/database/schema";
 import type { ToolVerbCatalogEntry } from "@synap/database/schema";
 import type {
@@ -230,6 +231,44 @@ export async function createCapabilityFromDefinition(
         ? vaultByRef.get(t.credentialRef)
         : t.credentialRef;
 
+    // Idempotent: reuse an existing tool with the same name in scope. Re-apply
+    // refreshes its credentialRef + verb catalog instead of creating a duplicate.
+    const [existingTool] = await db
+      .select({ id: toolsTable.id })
+      .from(toolsTable)
+      .where(
+        and(
+          eq(toolsTable.name, t.name),
+          workspaceId
+            ? eq(toolsTable.workspaceId, workspaceId)
+            : isNull(toolsTable.workspaceId)
+        )
+      )
+      .limit(1);
+    if (existingTool) {
+      toolIdByName.set(t.name, existingTool.id);
+      const verbs = deriveToolVerbs(
+        t.name,
+        def.skills,
+        GRANT_DEFAULT_EXEC_MODE
+      );
+      await db
+        .update(toolsTable)
+        .set({
+          credentialRef: credentialRef ?? null,
+          ...(verbs.length > 0 ? { capabilities: verbs } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(toolsTable.id, existingTool.id));
+      createdTools.push({
+        name: t.name,
+        status: "created",
+        toolId: existingTool.id,
+        proposalId: null,
+      });
+      continue;
+    }
+
     const result = await toolsCaller.create({
       name: t.name,
       kind: t.kind,
@@ -279,6 +318,45 @@ export async function createCapabilityFromDefinition(
   const skillsCaller = skillsRouter.createCaller(ctx as never);
   const createdSkills: CreateCapabilityResult["created"]["skills"] = [];
   for (const s of def.skills) {
+    // Idempotent: reuse an existing skill with the same name in scope, refreshing
+    // its code + required-tool links instead of creating a duplicate.
+    const [existingSkill] = await db
+      .select({ id: skillsTable.id })
+      .from(skillsTable)
+      .where(
+        and(
+          eq(skillsTable.name, s.name),
+          workspaceId
+            ? eq(skillsTable.workspaceId, workspaceId)
+            : isNull(skillsTable.workspaceId)
+        )
+      )
+      .limit(1);
+    if (existingSkill) {
+      await db
+        .update(skillsTable)
+        .set({ code: s.code, updatedAt: new Date() })
+        .where(eq(skillsTable.id, existingSkill.id));
+      if (s.requires && s.requires.length > 0) {
+        const toolIds = s.requires
+          .map((name) => toolIdByName.get(name))
+          .filter((id): id is string => !!id);
+        if (toolIds.length > 0) {
+          await skillsCaller.setRequiredTools({
+            skillId: existingSkill.id,
+            toolIds,
+          });
+        }
+      }
+      createdSkills.push({
+        name: s.name,
+        status: "created",
+        skillId: existingSkill.id,
+        proposalId: null,
+      });
+      continue;
+    }
+
     const result = await skillsCaller.create({
       name: s.name,
       kind: s.kind ?? "code",
@@ -463,6 +541,41 @@ async function createVaultSecret(
   await assertWorkspaceWrite(db, userId, { workspaceId, ownerId: userId });
 
   const blob = encryptServerSide(v.value);
+
+  // Idempotent: reuse an existing secret with the same name in scope, updating
+  // its encrypted value (re-apply rotates the credential instead of duplicating).
+  const [existing] = await db
+    .select({ id: secrets.id })
+    .from(secrets)
+    .where(
+      and(
+        eq(secrets.userId, userId),
+        eq(secrets.name, v.name),
+        workspaceId
+          ? eq(secrets.workspaceId, workspaceId)
+          : isNull(secrets.workspaceId),
+        isNull(secrets.deletedAt)
+      )
+    )
+    .limit(1);
+  if (existing) {
+    await db
+      .update(secrets)
+      .set({
+        type: v.type ?? "api_key",
+        description: v.description ?? null,
+        serviceId: v.service ?? null,
+        encryptedData: blob.encryptedData,
+        iv: blob.iv,
+        authTag: blob.authTag,
+        encryptionVersion: 1,
+        encryptionMode: "server",
+        updatedAt: new Date(),
+      })
+      .where(eq(secrets.id, existing.id));
+    return { vaultRef: `vault://${existing.id}`, secretId: existing.id };
+  }
+
   const [secret] = await db
     .insert(secrets)
     .values({
