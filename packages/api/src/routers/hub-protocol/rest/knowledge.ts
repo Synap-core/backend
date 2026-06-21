@@ -704,4 +704,201 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       );
     }
   });
+
+  // ── POST /knowledge/answer ────────────────────────────────────────────────
+  // The "answer" door (tier-2 = retrieve + synthesize). Same retrieval as
+  // /knowledge/ask (the ONE read door), then ONE focused LLM call in the IS to
+  // synthesize a direct answer over the matched context. Explicit doors:
+  // `ask` = search (raw matches), `answer` = synthesized. If synthesis is
+  // unavailable the answer is null but sources are still returned so callers
+  // can fall back to showing matches.
+  const SourceSchema = z
+    .object({
+      substrate: z.string(),
+      id: z.string(),
+      title: z.string(),
+    })
+    .openapi("KnowledgeAnswerSource");
+
+  const answerRoute = createRoute({
+    method: "post",
+    path: "/knowledge/answer",
+    tags: ["Knowledge"],
+    summary: "Synthesized knowledge answer — retrieve + synthesize",
+    description:
+      "Retrieves matches via the unified knowledge router, then synthesizes a " +
+      "single concise answer over that context with one focused LLM call. " +
+      "Returns the answer plus the sources it drew from; answer is null when " +
+      "synthesis is unavailable (callers fall back to the sources list).",
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              query: z.string().min(1).optional(),
+              question: z.string().min(1).optional(),
+              workspaceId: z.string().optional(),
+              projectId: z.string().optional(),
+              limit: z.number().int().min(1).max(100).optional(),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Synthesized answer with sources",
+        content: {
+          "application/json": {
+            schema: z.object({
+              answer: z.string().nullable(),
+              sources: z.array(SourceSchema),
+              routedTo: z.array(z.string()),
+              error: z.string().optional(),
+            }),
+          },
+        },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(answerRoute, async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+
+    const body = c.req.valid("json");
+    const question = body.question ?? body.query;
+    if (!question) {
+      return c.json({ error: "Missing query or question" }, 500);
+    }
+    const workspaceId = body.workspaceId ?? null;
+
+    try {
+      // Same catalog resolution + retrieval as /knowledge/ask (the ONE read door).
+      let catalogWs = workspaceId;
+      if (!catalogWs) {
+        const wsIds = await getUserAccessibleWorkspaceIds(userId);
+        catalogWs = wsIds[0] ?? null;
+      }
+
+      let catalog: ProfileCatalogEntry[] = [];
+      if (catalogWs) {
+        const caller = await getCaller(c, { workspaceId: catalogWs });
+        const { profiles: profileRows } = await caller.profiles.listProfiles({
+          userId,
+          workspaceId: catalogWs,
+        });
+        catalog = profileRows.flatMap((p) =>
+          p.slug ? [{ slug: p.slug, displayName: p.displayName ?? p.slug }] : []
+        );
+      }
+
+      const result = await ask({
+        query: question,
+        userId,
+        workspaceId,
+        projectId: body.projectId ?? null,
+        limit: body.limit,
+        catalog,
+      });
+
+      // Build the context string + sources from the items that actually answered.
+      const MAX_CONTEXT_CHARS = 16000;
+      const sources: Array<{ substrate: string; id: string; title: string }> =
+        [];
+      const contextParts: string[] = [];
+      let contextLen = 0;
+
+      for (const block of result.answers) {
+        if (block.status !== "ok") continue;
+        for (const item of block.items) {
+          const rec = item as Record<string, unknown>;
+          const id = typeof rec.id === "string" ? rec.id : "";
+          const title =
+            (typeof rec.name === "string" && rec.name) ||
+            (typeof rec.title === "string" && rec.title) ||
+            (typeof rec.claim === "string" && rec.claim) ||
+            (typeof rec.fact === "string" && rec.fact) ||
+            (typeof rec.content === "string" && rec.content) ||
+            id ||
+            "(item)";
+
+          if (id) sources.push({ substrate: block.substrate, id, title });
+
+          // Short snippet: title + a few key string props.
+          const snippetBits: string[] = [String(title)];
+          for (const [k, v] of Object.entries(rec)) {
+            if (k === "id" || k === "name" || k === "title") continue;
+            if (typeof v === "string" && v.trim()) {
+              snippetBits.push(`${k}: ${v.slice(0, 300)}`);
+            }
+            if (snippetBits.length >= 5) break;
+          }
+          const entry = `- [${block.substrate}] ${snippetBits.join(" · ")}`;
+          if (contextLen + entry.length > MAX_CONTEXT_CHARS) break;
+          contextParts.push(entry);
+          contextLen += entry.length + 1;
+        }
+        if (contextLen >= MAX_CONTEXT_CHARS) break;
+      }
+
+      const context = contextParts.join("\n");
+
+      // Call the IS "answer" door — ONE focused synthesis LLM call.
+      const isUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+      try {
+        const res = await fetch(`${isUrl}/api/knowledge/answer`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Internal-Key": process.env.INTELLIGENCE_HUB_INTERNAL_KEY ?? "",
+          },
+          body: JSON.stringify({
+            question,
+            context,
+            workspaceId: workspaceId ?? undefined,
+          }),
+          signal: AbortSignal.timeout(60_000),
+        });
+        if (!res.ok) throw new Error(`IS answer HTTP ${res.status}`);
+        const data = (await res.json()) as { answer?: string };
+        return c.json(
+          {
+            answer: typeof data.answer === "string" ? data.answer : null,
+            sources,
+            routedTo: result.routedTo,
+          },
+          200
+        );
+      } catch (isErr) {
+        logger.error({ err: isErr, userId }, "knowledge/answer IS call failed");
+        return c.json(
+          {
+            answer: null,
+            sources,
+            routedTo: result.routedTo,
+            error: "synthesis_unavailable",
+          },
+          200
+        );
+      }
+    } catch (err) {
+      logger.error({ err, userId }, "POST /knowledge/answer failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Internal error" },
+        500
+      );
+    }
+  });
 }
