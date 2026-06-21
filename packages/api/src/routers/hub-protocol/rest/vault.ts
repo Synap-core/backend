@@ -25,12 +25,14 @@ import {
   parseVaultReference,
   resolveVaultSecret,
   VaultGrantError,
+  assertGrantScoped,
 } from "@synap/database";
 import {
   secrets,
   secretAuditLog,
   proposals,
   users,
+  vaultGrants,
 } from "@synap/database/schema";
 
 import { NotificationService } from "../../../notifications/NotificationService.js";
@@ -398,6 +400,129 @@ export function registerVaultRoutes(app: HubHono): void {
       }
       logger.error({ err, secretId: parsed.secretId }, "vault.redeem failed");
       return c.json({ error: "Vault redeem failed" }, 500);
+    }
+  });
+
+  // ── POST /vault/secrets/{id}/grant ─────────────────────────────────────────
+  // Direct, OWNER-gated grant of redeem access to a vault secret — the headless
+  // equivalent of the UI "grant access to this ability" flow (which is proposal-
+  // based). Lets the CLI authorize an external client (e.g. the Discord bridge)
+  // to redeem a capability credential it just provisioned, so the token lives
+  // ONLY in the vault — never an env var. Scope: once (15m/1use) · session
+  // (ttlMinutes, default 60m) · permanent. assertGrantScoped firewalls a fully-
+  // wildcard grant. Idempotent: reuses an active, identically-scoped grant.
+  const GrantRequestSchema = z.object({
+    grantedTo: z.string().uuid().optional(),
+    workspaceId: z.string().uuid().optional(),
+    scope: z.enum(["once", "session", "permanent"]).optional(),
+    ttlMinutes: z.number().int().min(1).max(525600).optional(),
+  });
+  app.post("/vault/secrets/:id/grant", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const secretId = c.req.param("id");
+    const parsed = GrantRequestSchema.safeParse(
+      await c.req.json().catch(() => ({}))
+    );
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid grant body", details: parsed.error.issues },
+        400
+      );
+    }
+    const acting = await resolveActingContext(c, {});
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+    // OWNER gate — authorize on the LOADED row's userId, never a request value.
+    const secret = await db.query.secrets.findFirst({
+      where: eq(secrets.id, secretId),
+      columns: { id: true, userId: true },
+    });
+    if (!secret) return c.json({ error: "Secret not found" }, 404);
+    if (secret.userId !== acting.userId) {
+      return c.json({ error: "Only the secret owner can grant access" }, 403);
+    }
+
+    const scope = parsed.data.scope ?? "permanent";
+    const now = Date.now();
+    let expiresAt: Date | null;
+    let maxUses: number | null;
+    if (scope === "once") {
+      expiresAt = new Date(now + 15 * 60 * 1000);
+      maxUses = 1;
+    } else if (scope === "permanent") {
+      expiresAt = null;
+      maxUses = null;
+    } else {
+      expiresAt = new Date(now + (parsed.data.ttlMinutes ?? 60) * 60 * 1000);
+      maxUses = null;
+    }
+
+    const grantedTo = parsed.data.grantedTo ?? null;
+    const grantWorkspaceId = parsed.data.workspaceId ?? null;
+    try {
+      assertGrantScoped({ grantedTo, workspaceId: grantWorkspaceId });
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Invalid grant scope" },
+        400
+      );
+    }
+
+    try {
+      // Idempotent: reuse an active, identically-scoped grant.
+      const existing = await db.query.vaultGrants.findFirst({
+        where: and(
+          eq(vaultGrants.grantableType, "secret"),
+          eq(vaultGrants.grantableId, secretId),
+          grantedTo
+            ? eq(vaultGrants.grantedTo, grantedTo)
+            : isNull(vaultGrants.grantedTo),
+          grantWorkspaceId
+            ? eq(vaultGrants.workspaceId, grantWorkspaceId)
+            : isNull(vaultGrants.workspaceId),
+          isNull(vaultGrants.revokedAt)
+        ),
+        columns: { id: true, scope: true, expiresAt: true },
+      });
+      if (
+        existing &&
+        (existing.expiresAt === null || existing.expiresAt > new Date())
+      ) {
+        return c.json({
+          grantId: existing.id,
+          scope: existing.scope ?? scope,
+          expiresAt: existing.expiresAt
+            ? existing.expiresAt.toISOString()
+            : null,
+          reused: true,
+        });
+      }
+
+      const [grant] = await db
+        .insert(vaultGrants)
+        .values({
+          grantableType: "secret",
+          grantableId: secretId,
+          execMode: "auto",
+          grantedTo,
+          workspaceId: grantWorkspaceId,
+          scope,
+          expiresAt,
+          maxUses,
+          createdBy: acting.userId,
+        })
+        .returning({ id: vaultGrants.id });
+
+      return c.json({
+        grantId: grant.id,
+        scope,
+        expiresAt: expiresAt ? expiresAt.toISOString() : null,
+      });
+    } catch (err) {
+      logger.error({ err, secretId }, "vault.grant failed");
+      return c.json({ error: "Vault grant failed" }, 500);
     }
   });
 
