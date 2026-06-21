@@ -194,14 +194,22 @@ mcpHttpApp.post("/", async (c) => {
   // re-reads. (Stateless mode rebuilds the server per request, hence the gate.)
   const isInitialize =
     (parsedBody as { method?: string } | null)?.method === "initialize";
+  // Agent-key identity remap (mirrors the Hub REST auth middleware): when the
+  // key has a linkedUserId (= the human the agent acts on behalf of), the DATA
+  // FLOOR is the operator (so the agent reads the user's second brain), while the
+  // agent itself is tracked as `agentUserId` so WRITES still route through the
+  // governance membrane (propose, never auto-apply as the operator).
+  const effectiveUserId = keyRecord.linkedUserId ?? keyRecord.userId;
+  const agentUserId = keyRecord.linkedUserId ? keyRecord.userId : undefined;
   const grounding = isInitialize
-    ? await buildGrounding(keyRecord.userId)
+    ? await buildGrounding(effectiveUserId)
     : undefined;
   const server = createMCPServer(
     defaultWorkspaceId,
-    keyRecord.userId,
+    effectiveUserId,
     grounding,
-    defaultProjectId
+    defaultProjectId,
+    agentUserId
   );
   await server.connect(transport);
 

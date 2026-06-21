@@ -39,6 +39,7 @@ import {
   triggerProviderAction,
 } from "../../connectors/external-dispatch.js";
 import { getMessagingConnector } from "../../connectors/index.js";
+import { executeSkillViaIS } from "../../services/skills/execute-skill-via-is.js";
 import type { Context } from "../../context.js";
 import {
   registerProposalExecutor,
@@ -637,6 +638,66 @@ export function registerApproveExecutors(): void {
       const materializedPayload = {
         ...payload,
         sentResult: { sentAt: new Date().toISOString(), threadId, platform },
+      } as unknown as typeof payload;
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          data: materializedPayload,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── capability.run (proposalType-only) — AGNOSTIC CAPABILITY LAST-MILE ───────
+  // Re-entry for a `propose` verdict from POST /capabilities/execute (and any
+  // other capability launcher): approve → run the backing skill through the SAME
+  // executeSkillViaIS the door uses (ONE wire contract, two doors). The gate
+  // already ran when the proposal was created, so this does NOT re-gate.
+  // Idempotent: skip if already APPROVED.
+  registerProposalExecutor({
+    key: "capability.run",
+    async execute({ proposal, payload, userId, input, deps }) {
+      const data = (proposal.data ?? {}) as Record<string, unknown>;
+      const skillId = data.skillId as string | undefined;
+      const parameters = (data.parameters ?? {}) as Record<string, unknown>;
+
+      if (!skillId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "capability.run requires skillId in proposal data",
+        });
+      }
+
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const runResult = await executeSkillViaIS({
+        skillId,
+        userId,
+        parameters,
+      });
+
+      const materializedPayload = {
+        ...payload,
+        runResult,
       } as unknown as typeof payload;
 
       await db

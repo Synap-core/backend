@@ -174,13 +174,21 @@ export async function getKratosSessionByCookie(
  * @returns Session data or null if invalid
  */
 export async function getSession(headers: Headers): Promise<any | null> {
-  // Check X-Session-Token first (API clients like Telegram Mini App)
+  // Check X-Session-Token first (API clients like Telegram Mini App).
   const sessionToken = headers.get("x-session-token");
   if (sessionToken) {
-    return getKratosSessionByToken(sessionToken);
+    const tokenSession = await getKratosSessionByToken(sessionToken);
+    if (tokenSession) return tokenSession;
+    // A STALE/invalid token must NOT shadow a valid cookie. The browser always
+    // sends X-Session-Token; if that token has expired while the Kratos cookie is
+    // still good, returning null here would 401 a perfectly valid session — the
+    // "proven (via cookie) but every /trpc 401s, forever" divergence + signout
+    // loop. So fall through to cookie auth instead of short-circuiting. This makes
+    // the function actually "check both", as its contract above promises.
   }
 
-  // Fall back to cookie-based auth (browser)
+  // Cookie-based auth (browser) — primary for browser/Electron, and the fallback
+  // when an X-Session-Token is present but no longer valid.
   const cookie = headers.get("cookie") || "";
   return getKratosSession(cookie);
 }

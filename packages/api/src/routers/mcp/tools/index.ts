@@ -511,7 +511,8 @@ export const tools = {
     args: Record<string, unknown>,
     userId: string,
     apiKeyScopes: string[],
-    sessionUserId?: string
+    sessionUserId?: string,
+    agentUserId?: string
   ): Promise<CallToolResult> {
     const { executeMCPToolViaHubProtocol } = await import("../adapter.js");
     return await executeMCPToolViaHubProtocol(
@@ -519,7 +520,8 @@ export const tools = {
       args,
       userId,
       apiKeyScopes,
-      sessionUserId
+      sessionUserId,
+      agentUserId
     );
   },
 };

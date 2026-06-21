@@ -48,7 +48,13 @@ export function createMCPServer(
   defaultWorkspaceId?: string,
   sessionUserId?: string,
   grounding?: string,
-  defaultProjectId?: string
+  defaultProjectId?: string,
+  /**
+   * The acting agent's own userId, when `sessionUserId` is a remapped operator
+   * (agent-key linkedUserId flow). Threaded to writes so governance proposes
+   * instead of auto-applying as the operator. Undefined for operator keys.
+   */
+  agentUserId?: string
 ) {
   const server = new Server(
     {
@@ -143,7 +149,8 @@ export function createMCPServer(
       scopedArgs,
       userId,
       apiKeyScopes,
-      sessionUserId
+      sessionUserId,
+      agentUserId
     );
   });
 

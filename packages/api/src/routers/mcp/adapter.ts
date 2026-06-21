@@ -43,7 +43,11 @@ import type { Context } from "../../types/context.js";
 
 // ── tRPC caller factory ───────────────────────────────────────────────────────
 
-async function createHubProtocolCaller(userId: string, scopes: string[]) {
+async function createHubProtocolCaller(
+  userId: string,
+  scopes: string[],
+  agentUserId?: string
+) {
   await getDb();
 
   // MCP keys use mcp.read / mcp.write scopes. Hub Protocol procedures require
@@ -67,6 +71,9 @@ async function createHubProtocolCaller(userId: string, scopes: string[]) {
     db,
     authenticated: true,
     userId,
+    // When set (agent-key remap), `userId` is the operator and `agentUserId` is
+    // the acting agent — write procs gate on agentUserId so they propose.
+    agentUserId: agentUserId ?? null,
     scopes: hubScopes,
     apiKeyId: "mcp",
     apiKeyName: "MCP Server",
@@ -135,9 +142,14 @@ export async function executeMCPToolViaHubProtocol(
   args: Record<string, unknown>,
   userId: string,
   apiKeyScopes: string[],
-  _sessionUserId?: string
+  _sessionUserId?: string,
+  agentUserId?: string
 ): Promise<CallToolResult> {
-  const caller = await createHubProtocolCaller(userId, apiKeyScopes);
+  const caller = await createHubProtocolCaller(
+    userId,
+    apiKeyScopes,
+    agentUserId
+  );
 
   switch (toolName) {
     // ── Recall: THE one door ──────────────────────────────────────────────────
@@ -252,6 +264,9 @@ export async function executeMCPToolViaHubProtocol(
         // A project-pinned MCP URL (?projectId=) auto-injects args.projectId, so
         // entities the agent creates are filed into its project focus.
         ...(args.projectId ? { projectId: args.projectId as string } : {}),
+        // agent-key remap: the write is OWNED by the operator (userId) but
+        // AUTHORED by the agent — pass agentUserId so governance proposes.
+        ...(agentUserId ? { agentUserId } : {}),
         aiMetadata: { model: "mcp", reasoning: `MCP tool: ${toolName}` },
       });
       return ok(result);
@@ -268,6 +283,7 @@ export async function executeMCPToolViaHubProtocol(
         metadata: (args.properties ?? args.metadata) as
           | Record<string, unknown>
           | undefined,
+        ...(agentUserId ? { agentUserId } : {}),
       });
       return ok(result);
     }
@@ -280,6 +296,7 @@ export async function executeMCPToolViaHubProtocol(
         title: args.title as string,
         content: (args.content as string) || "",
         reasoning: "Created via MCP",
+        ...(agentUserId ? { agentUserId } : {}),
       });
       return ok(result);
     }
@@ -307,7 +324,10 @@ export async function executeMCPToolViaHubProtocol(
       const entityCallerCtx = await createHubProtocolCallerContext(
         userId,
         apiKeyScopes,
-        (args.workspaceId as string) || undefined
+        (args.workspaceId as string) || undefined,
+        undefined,
+        undefined,
+        agentUserId
       );
       const entityCaller = regularEntitiesRouter.createCaller(entityCallerCtx);
       const entityResult = await entityCaller.get({
@@ -441,6 +461,7 @@ export async function executeMCPToolViaHubProtocol(
         sourceEntityId: args.sourceEntityId as string,
         targetEntityId: args.targetEntityId as string,
         type: (args.type as string) || "related",
+        ...(agentUserId ? { agentUserId } : {}),
       });
       return ok(result);
     }
@@ -545,7 +566,10 @@ export async function executeMCPToolViaHubProtocol(
       const captureCtx = await createHubProtocolCallerContext(
         userId,
         apiKeyScopes,
-        captureWsId
+        captureWsId,
+        undefined,
+        undefined,
+        agentUserId
       );
       const captureCaller = captureRouter.createCaller(
         captureCtx as Parameters<typeof captureRouter.createCaller>[0]
@@ -611,6 +635,7 @@ export async function executeMCPToolViaHubProtocol(
         type: args.type as string,
         profileId: args.profileId as string | undefined,
         config: args.config as Record<string, unknown> | undefined,
+        ...(agentUserId ? { agentUserId } : {}),
       });
       return ok(result);
     }

@@ -61,7 +61,6 @@ import {
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { getLinksFor } from "../services/links/links-service.js";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
@@ -531,14 +530,12 @@ export const relationsRouter = router({
       const [graphRelations, propertyLinks, channelLinks] = await Promise.all([
         // ── 1. Semantic graph relations ─────────────────────────────────────
         db.query.relations.findMany({
-          // Visibility floor = the canonical `userVisibleWhere` (workspace
-          // membership / ownership / pod-wide), NOT raw `userId`. A workspace
-          // member who isn't the literal creator — e.g. the user's own AI agent
-          // (a distinct userId) — must see the relations graph of entities they
-          // can see, or "your agent gets your second brain" breaks. Consistent
-          // with entities.list and the object-graph hydrator.
+          // Owner-scoped by ctx.userId. The agent-key identity remap (hub/MCP)
+          // sets ctx.userId = the operator the agent acts for, so the agent sees
+          // the operator's relations graph WITHOUT widening visibility on a
+          // multi-user pod (the agent only ever sees ITS operator's data).
           where: and(
-            userVisibleWhere(relations.workspaceId, ctx.userId),
+            eq(relations.userId, ctx.userId),
             or(
               eq(relations.sourceEntityId, input.entityId),
               eq(relations.targetEntityId, input.entityId)
@@ -571,8 +568,7 @@ export const relationsRouter = router({
           where: and(
             eq(channelContextItems.objectId, input.entityId),
             eq(channelContextItems.objectType, ChannelContextObjectType.ENTITY),
-            // Same floor as the relations half — workspace-visible, not owner-only.
-            userVisibleWhere(channelContextItems.workspaceId, ctx.userId)
+            eq(channelContextItems.userId, ctx.userId)
           ),
           orderBy: (ci, { desc }) => [desc(ci.createdAt)],
           limit: input.limit,
@@ -598,11 +594,8 @@ export const relationsRouter = router({
       const entityMap = new Map<string, typeof entities.$inferSelect>();
       if (entityIdsToFetch.size > 0) {
         const fetched = await db.query.entities.findMany({
-          // Hydrate neighbour names on the same visibility floor — otherwise a
-          // visible relation would resolve to a null entity (nameless neighbour)
-          // for a non-owner viewer.
           where: and(
-            userVisibleWhere(entities.workspaceId, ctx.userId),
+            eq(entities.userId, ctx.userId),
             or(...[...entityIdsToFetch].map((id) => eq(entities.id, id)))
           ),
         });

@@ -872,6 +872,113 @@ export function registerWorkspacesRoutes(app: HubHono): void {
   });
 
   /**
+   * PATCH /workspaces/:workspaceId/delivery-preferences
+   *
+   * Set the signal delivery routing (`settings.deliveryPreferences`) — the config
+   * that lets routeSignal() reach a surface. To make the agent post PROACTIVELY
+   * into Discord, route a domain (e.g. `ai_insight`) to an `external` target
+   * `{ kind:"external", provider:"discord", channelRef:"<discord channel id>" }`.
+   * Merges per-domain into the existing preferences (does not clobber others).
+   * Owner/admin only — same membership gate as eve-provider-routing.
+   */
+  app.patch("/workspaces/:workspaceId/delivery-preferences", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const userId = c.get("userId") as string;
+    const workspaceId = c.req.param("workspaceId");
+    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+
+    const membership = await db.query.workspaceMembers.findFirst({
+      where: and(
+        eq(workspaceMembers.workspaceId, workspaceId),
+        eq(workspaceMembers.userId, userId)
+      ),
+      columns: { role: true },
+    });
+    if (!membership) return c.json({ error: "Access denied" }, 403);
+    if (membership.role !== "owner" && membership.role !== "admin") {
+      return c.json(
+        { error: "Owner/admin role required to set delivery preferences" },
+        403
+      );
+    }
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    // A delivery rule: { surfaces: (string | { kind, provider?, channelRef? })[] }.
+    const SurfaceTargetSchema = zOpenapi.object({
+      kind: zOpenapi.string(),
+      provider: zOpenapi.string().optional(),
+      channelRef: zOpenapi.string().optional(),
+    });
+    const RuleSchema = zOpenapi.object({
+      surfaces: zOpenapi.array(
+        zOpenapi.union([zOpenapi.string(), SurfaceTargetSchema])
+      ),
+    });
+    const parsed = zOpenapi
+      .object({
+        deliveryPreferences: zOpenapi.record(zOpenapi.string(), RuleSchema),
+      })
+      .safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        {
+          error: "Invalid deliveryPreferences payload",
+          details: parsed.error.issues,
+        },
+        400
+      );
+    }
+
+    try {
+      // Merge per-domain so we never clobber existing delivery rules.
+      const existing = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspaceId),
+        columns: { settings: true },
+      });
+      const currentPrefs =
+        ((existing?.settings ?? {}) as Record<string, unknown>)
+          .deliveryPreferences ?? {};
+      const mergedPrefs = {
+        ...(currentPrefs as Record<string, unknown>),
+        ...parsed.data.deliveryPreferences,
+      };
+
+      const dbConn = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
+      await workspaceRepo.mergeSettings(
+        workspaceId,
+        { deliveryPreferences: mergedPrefs },
+        userId
+      );
+
+      return c.json({
+        ok: true,
+        workspaceId,
+        deliveryPreferences: mergedPrefs,
+      });
+    } catch (err) {
+      logger.error(
+        { err, userId, workspaceId },
+        "PATCH /workspaces/:workspaceId/delivery-preferences failed"
+      );
+      return c.json({ error: "Failed to set delivery preferences" }, 500);
+    }
+  });
+
+  /**
    * GET /workspaces/:workspaceId/governance
    */
   app.get("/workspaces/:workspaceId/governance", async (c) => {

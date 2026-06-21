@@ -33,6 +33,7 @@ import {
   registerExchangeRoutes,
   registerAutomationsRoutes,
   registerCapabilitiesRoutes,
+  registerCapabilitiesExecuteRoutes,
   registerCapabilityTemplatesRoutes,
   registerLoopsRoutes,
   registerCaptureRoutes,
@@ -412,6 +413,7 @@ registerSkillsRoutes(app); // /skills/system (static doc)
 registerSkillsCrudRoutes(app); // POST/GET /skills (capability-substrate CRUD seam)
 registerToolsRoutes(app); // POST/GET /tools, GET /tools/:id (capability-substrate CRUD seam)
 registerCapabilitiesRoutes(app); // POST /capabilities/apply (capability-template applier)
+registerCapabilitiesExecuteRoutes(app); // POST /capabilities/execute (agnostic capability launcher)
 registerCapabilityTemplatesRoutes(app); // POST/GET /capabilities/templates, DELETE /capabilities/templates/:key (templates-as-data)
 registerLoopsRoutes(app); // POST /loops/apply (loop / autonomy-template applier)
 registerMemoryRoutes(app); // /memory*

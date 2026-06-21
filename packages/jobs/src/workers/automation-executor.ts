@@ -1594,22 +1594,23 @@ async function executeAutomationFlow(params: {
 
             let skillResponse: Response;
             try {
-              skillResponse = await fetch(
-                `${isUrl}/api/skills/${skillId}/execute`,
-                {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "X-API-Key": isApiKey,
-                  },
-                  body: JSON.stringify({
-                    context: resolvedInputs,
-                    workspaceId,
-                    userId: ownerId,
-                  }),
-                  signal: controller.signal,
-                }
-              );
+              // IS contract (routes/skills-route.ts): POST /api/skills/execute,
+              // skill id + inputs in the BODY ({ skillId, userId, parameters }).
+              // The prior `/:id/execute` path + `{ context }` body 404'd / dropped
+              // inputs — skill nodes never actually ran. Fixed to the real contract.
+              skillResponse = await fetch(`${isUrl}/api/skills/execute`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-API-Key": isApiKey,
+                },
+                body: JSON.stringify({
+                  skillId,
+                  userId: ownerId,
+                  parameters: resolvedInputs,
+                }),
+                signal: controller.signal,
+              });
               clearTimeout(timer);
             } catch (err) {
               clearTimeout(timer);
@@ -1738,22 +1739,21 @@ async function executeAutomationFlow(params: {
 
             let capResponse: Response;
             try {
-              capResponse = await fetch(
-                `${capIsUrl}/api/skills/${capSkillId}/execute`,
-                {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "X-API-Key": capIsApiKey,
-                  },
-                  body: JSON.stringify({
-                    context: capResolvedInputs,
-                    workspaceId,
-                    userId: ownerId,
-                  }),
-                  signal: capController.signal,
-                }
-              );
+              // IS contract: POST /api/skills/execute with { skillId, userId,
+              // parameters } in the body (see executeSkillViaIS + skills-route.ts).
+              capResponse = await fetch(`${capIsUrl}/api/skills/execute`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-API-Key": capIsApiKey,
+                },
+                body: JSON.stringify({
+                  skillId: capSkillId,
+                  userId: ownerId,
+                  parameters: capResolvedInputs,
+                }),
+                signal: capController.signal,
+              });
               clearTimeout(capTimer);
             } catch (err) {
               clearTimeout(capTimer);

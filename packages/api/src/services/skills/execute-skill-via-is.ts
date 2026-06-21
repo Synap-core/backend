@@ -1,0 +1,61 @@
+/**
+ * executeSkillViaIS — the ONE wire contract for running a sandboxed skill.
+ *
+ * Skill code (`kind:"code"`) runs in the Intelligence Hub's isolated-vm executor
+ * (it owns the sandbox + the Hub Protocol bridge), so the backend delegates over
+ * HTTP. This helper is the single source of truth for that contract, imported by
+ * BOTH the `/capabilities/execute` hub door AND the `capability.run` approve-
+ * executor — so the path + body keys live in exactly one place.
+ *
+ * Contract (verified against intelligence-hub `routes/skills-route.ts`):
+ *   POST {IS}/api/skills/execute
+ *     body: { skillId, userId, parameters }
+ *     → SkillExecutionResult { success, result?, error?, executionTimeMs }
+ *
+ * NOTE: the IS execute route reads `parameters` (mapped to the skill's `args`),
+ * NOT `context`, and takes the skill id in the BODY, not the path. The automation
+ * worker's two skill calls were fixed to match this same contract.
+ */
+
+/** Mirrors the Intelligence Hub `SkillExecutionResult`. */
+export interface SkillExecutionResult {
+  success: boolean;
+  result?: unknown;
+  error?: string;
+  executionTimeMs?: number;
+}
+
+export async function executeSkillViaIS(args: {
+  skillId: string;
+  userId: string;
+  parameters?: Record<string, unknown>;
+  timeoutMs?: number;
+}): Promise<SkillExecutionResult> {
+  const isUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+  const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY || "";
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), args.timeoutMs ?? 60_000);
+  try {
+    const res = await fetch(`${isUrl}/api/skills/execute`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-Key": isApiKey,
+      },
+      body: JSON.stringify({
+        skillId: args.skillId,
+        userId: args.userId,
+        parameters: args.parameters ?? {},
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Skill execution failed: ${res.status} ${body}`);
+    }
+    return (await res.json()) as SkillExecutionResult;
+  } finally {
+    clearTimeout(timer);
+  }
+}
