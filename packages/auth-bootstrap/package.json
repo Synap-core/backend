@@ -1,0 +1,45 @@
+{
+  "name": "@synap-core/auth-bootstrap",
+  "version": "0.1.0",
+  "description": "Zero-dependency auth bootstrap for Synap data pods — handshake (session token) + agent setup (API key). Shared by the tRPC SDK and the REST client.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "synap",
+    "auth",
+    "handshake",
+    "data-pod",
+    "sdk"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/synaptik-ai/synap.git",
+    "directory": "packages/auth-bootstrap"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.3"
+  }
+}
