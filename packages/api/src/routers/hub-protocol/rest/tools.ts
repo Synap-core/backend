@@ -14,10 +14,11 @@
  * (Same pattern hub-protocol/skills.ts uses with the regular skills router.)
  *
  * Routes (static before dynamic — Hono is first-match):
- *   POST   /tools       — create a tool (proposal-gated)
- *   GET    /tools       — list tools (pod-wide + the given workspace)
- *   GET    /tools/:id   — get a tool + the skills that `require` it
- *   DELETE /tools/:id   — delete a tool (proposal-gated; reuses toolsRouter.delete)
+ *   POST   /tools           — create a tool (proposal-gated)
+ *   GET    /tools           — list tools (pod-wide + the given workspace)
+ *   GET    /tools/:id       — get a tool + the skills that `require` it
+ *   POST   /tools/:id/approve — approve/revoke tool execution (owner/pod-admin gated; reuses toolsRouter.setApproved)
+ *   DELETE /tools/:id       — delete a tool (proposal-gated; reuses toolsRouter.delete)
  */
 
 import { z } from "@hono/zod-openapi";
@@ -87,6 +88,15 @@ const DeleteToolResponseSchema = z.object({
   proposalId: z.string().nullable(),
 });
 
+const ApproveToolRequestSchema = z.object({
+  approved: z.boolean().default(true),
+});
+
+const ApproveToolResponseSchema = z.object({
+  id: z.string(),
+  approved: z.boolean(),
+});
+
 // ── Register function ──────────────────────────────────────────────────────
 
 export function registerToolsRoutes(app: HubHono): void {
@@ -145,6 +155,31 @@ export function registerToolsRoutes(app: HubHono): void {
         description: "Tool + requiring skills",
         schema: GetToolResponseSchema,
       },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/tools/{id}/approve",
+    tags: ["Tools"],
+    summary: "Approve or revoke a tool's execution",
+    description:
+      "Sets the `approved` flag on a tool — the draft→approve→run gate. " +
+      "Owner-gated (workspace owner, or pod-admin for pod-wide tools) via the " +
+      "governed toolsRouter.setApproved. Requires hub-protocol.write scope.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: ApproveToolRequestSchema,
+    },
+    responses: {
+      200: {
+        description: "Updated approval state",
+        schema: ApproveToolResponseSchema,
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
@@ -299,6 +334,55 @@ export function registerToolsRoutes(app: HubHono): void {
         return c.json({ error: msg }, 404);
       }
       logger.error({ err, id }, "tools get failed");
+      return c.json({ error: msg }, 500);
+    }
+  });
+
+  // ── POST /tools/:id/approve ────────────────────────────────────────────────
+  // Thin door over the governed toolsRouter.setApproved (owner / pod-admin gate
+  // runs inside the tRPC handler). Different method+path from /tools/:id — no
+  // collision with GET/DELETE.
+  app.post("/tools/:id/approve", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const id = c.req.param("id");
+    const idCheck = z.string().uuid().safeParse(id);
+    if (!idCheck.success) {
+      return c.json({ error: "id must be a UUID" }, 400);
+    }
+
+    const parsed = ApproveToolRequestSchema.safeParse(
+      await c.req.json().catch(() => ({}))
+    );
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.message }, 400);
+    }
+    const approved = parsed.data.approved;
+
+    try {
+      const acting = await resolveActingContext(c, {});
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      const ctx = await createHubProtocolCallerContext(
+        acting.userId,
+        c.get("scopes") as string[]
+      );
+      const caller = toolsRouter.createCaller(ctx as never);
+      // Reuse the governed setApproved — owner/pod-admin gate runs inside.
+      await caller.setApproved({ id, approved });
+
+      return c.json({ id, approved }, 200);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      if (msg.toLowerCase().includes("not found")) {
+        return c.json({ error: msg }, 404);
+      }
+      logger.error({ err, id }, "tools approve failed");
       return c.json({ error: msg }, 500);
     }
   });

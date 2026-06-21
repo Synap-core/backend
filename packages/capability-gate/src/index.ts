@@ -198,6 +198,19 @@ export async function gateCapabilityExecution(
     ownerId = null;
   }
 
+  // ── 0. APPROVAL GATE (applies to EVERYONE, including the owner — mirrors the
+  //       MCP `approved` hard gate). A draft/unapproved tool or skill must NOT run
+  //       for anyone; the owner approves it (setApproved) — or dry-runs to test —
+  //       FIRST. Owner-bypass below skips the GRANT requirement, never approval.
+  //       `approved === null` = no approval concept (commands) → not gated here.
+  if (approved === false) {
+    return {
+      decision: "deny",
+      reason:
+        "Capability is not approved. Approve it (setApproved) before running, or use dry-run to test it.",
+    };
+  }
+
   // ── 1. Owner bypass — only a GENUINE human owner run (no agentUserId) skips the
   //       grant. An agent acting under the owner's identity is grant-gated.
   const isOwnerRun =

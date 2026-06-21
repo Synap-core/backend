@@ -19,9 +19,10 @@
  * registered here and never collides with `/skills/system` (different path).
  *
  * Routes:
- *   POST   /skills      — create a skill (proposal-gated; optional `requires` tool links)
- *   GET    /skills      — list skills (pod + user + workspace scope)
- *   DELETE /skills/:id   — delete a skill (proposal-gated; reuses skillsRouter.delete)
+ *   POST   /skills            — create a skill (proposal-gated; optional `requires` tool links)
+ *   GET    /skills            — list skills (pod + user + workspace scope)
+ *   POST   /skills/:id/approve — approve/revoke skill execution (owner/pod-admin gated; reuses skillsRouter.setApproved)
+ *   DELETE /skills/:id         — delete a skill (proposal-gated; reuses skillsRouter.delete)
  */
 
 import { z } from "@hono/zod-openapi";
@@ -79,6 +80,15 @@ const DeleteSkillResponseSchema = z.object({
   proposalId: z.string().nullable(),
 });
 
+const ApproveSkillRequestSchema = z.object({
+  approved: z.boolean().default(true),
+});
+
+const ApproveSkillResponseSchema = z.object({
+  id: z.string(),
+  approved: z.boolean(),
+});
+
 // ── Register function ──────────────────────────────────────────────────────
 
 export function registerSkillsCrudRoutes(app: HubHono): void {
@@ -127,6 +137,31 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
     responses: {
       200: { description: "Skill list", schema: ListSkillsResponseSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/skills/{id}/approve",
+    tags: ["Skills"],
+    summary: "Approve or revoke a skill's execution",
+    description:
+      "Sets the `approved` flag on a skill — the draft→approve→run gate. " +
+      "Owner-gated (workspace owner, or pod-admin for pod-wide skills) via the " +
+      "governed skillsRouter.setApproved. Requires hub-protocol.write scope.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: ApproveSkillRequestSchema,
+    },
+    responses: {
+      200: {
+        description: "Updated approval state",
+        schema: ApproveSkillResponseSchema,
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -290,6 +325,55 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
         { error: err instanceof Error ? err.message : "Unknown error" },
         500
       );
+    }
+  });
+
+  // ── POST /skills/:id/approve ───────────────────────────────────────────────
+  // Thin door over the governed skillsRouter.setApproved (owner / pod-admin gate
+  // + audit run inside the tRPC handler). Different method+path from /skills/:id
+  // and never collides with the static /skills/system doc route.
+  app.post("/skills/:id/approve", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const id = c.req.param("id");
+    const idCheck = z.string().uuid().safeParse(id);
+    if (!idCheck.success) {
+      return c.json({ error: "id must be a UUID" }, 400);
+    }
+
+    const parsed = ApproveSkillRequestSchema.safeParse(
+      await c.req.json().catch(() => ({}))
+    );
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.message }, 400);
+    }
+    const approved = parsed.data.approved;
+
+    try {
+      const acting = await resolveActingContext(c, {});
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      const ctx = await createHubProtocolCallerContext(
+        acting.userId,
+        c.get("scopes") as string[]
+      );
+      const caller = skillsRouter.createCaller(ctx as never);
+      // Reuse the governed setApproved — owner/pod-admin gate runs inside.
+      await caller.setApproved({ id, approved });
+
+      return c.json({ id, approved }, 200);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      if (msg.toLowerCase().includes("not found")) {
+        return c.json({ error: msg }, 404);
+      }
+      logger.error({ err, id }, "skills approve failed");
+      return c.json({ error: msg }, 500);
     }
   });
 
