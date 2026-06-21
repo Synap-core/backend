@@ -6424,7 +6424,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			output: {
 				env: {
-					key: "NODE_ENV" | "CONTROL_PLANE_URL" | "PUBLIC_URL" | "DOMAIN" | "OPENCLAW_DOMAIN" | "INTELLIGENCE_HUB_URL" | "ALLOWED_ORIGINS" | "EMBEDDING_PROVIDER";
+					key: "NODE_ENV" | "CONTROL_PLANE_URL" | "PUBLIC_URL" | "DOMAIN" | "INTELLIGENCE_HUB_URL" | "OPENCLAW_DOMAIN" | "ALLOWED_ORIGINS" | "EMBEDDING_PROVIDER";
 					value: string | null;
 				}[];
 				files: {

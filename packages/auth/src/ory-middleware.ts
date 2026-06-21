@@ -147,14 +147,22 @@ export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
   // browser-flow cookie), but accepts it as X-Session-Token.
   let session: unknown;
   try {
+    // X-Session-Token first (API clients). CRITICAL: a STALE/invalid token must NOT
+    // shadow a valid cookie. The Electron browser ALWAYS sends X-Session-Token, so
+    // if it has expired while the Kratos cookie is still good, a token-only check
+    // returns null → 401 on a perfectly valid session — the "proven via cookie but
+    // every /trpc 401s forever" divergence + signout loop. So a null token result
+    // falls THROUGH to cookie auth (this is the real /trpc hot path — getSession()
+    // is the non-Hono path; both must agree).
     if (sessionToken) {
       session = await getKratosSessionByToken(sessionToken);
-    } else {
-      // Try as encrypted browser cookie first
+    }
+    if (!session) {
+      // Encrypted browser cookie first
       session = await getKratosSession(cookie);
 
-      // If cookie validation failed, extract ory_kratos_session value and try
-      // it as a raw session token (handles API-flow tokens stored as cookies)
+      // Then the raw ory_kratos_session value as a session token (API-flow tokens
+      // stored as cookies — e.g. Eve's login flow).
       if (!session) {
         const match = cookie.match(/(?:^|;\s*)ory_kratos_session=([^;]+)/);
         if (match?.[1]) {
