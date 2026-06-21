@@ -320,6 +320,27 @@ app.use("/*", async (c, next) => {
       c.set("userId", keyRecord.linkedUserId); // human owns the entities
       c.set("agentUserId", keyRecord.userId); // agent performed the action
     }
+
+    // ── Trusted-IS operator-floor read delegation ───────────────────────────
+    // The IS orchestrator reads the pod with its shared service key. Without a
+    // remap, reads scope to the service identity ("system") instead of the
+    // operator whose turn the IS is processing — so the agent sees 0 entities.
+    //
+    // SECURITY: this remap is gated EXCLUSIVELY on keyType === "is_internal" —
+    // the trusted pod-read key minted only by the CP-JWT-gated provision handler
+    // (apps/api/src/routers/provision.ts). A normal key (hub_inbound, user_pat,
+    // service, …) that sends X-Delegated-Operator-Id is IGNORED: the header is
+    // only read inside this branch, so it can never be triggered by a key that
+    // isn't is_internal. WRITES STAY GOVERNED: agentUserId is set to the IS key
+    // owner, so the write-gate routes agent mutations through proposals.
+    if (keyRecord.keyType === "is_internal") {
+      const op = c.req.header("x-delegated-operator-id");
+      if (op) {
+        c.set("userId", op); // operator owns/sees the entities (data floor)
+        c.set("agentUserId", keyRecord.userId); // IS performed the action → proposals
+        c.set("linkedUserId", op);
+      }
+    }
     return next();
   }
 

@@ -43,11 +43,22 @@ export const apiKeys = pgTable(
     keyType: text("key_type")
       .notNull()
       .default("hub_inbound")
-      .$type<"hub_inbound" | "user_pat" | "system" | "service">(), // Categorical purpose label
+      .$type<
+        "hub_inbound" | "user_pat" | "system" | "service" | "is_internal"
+      >(), // Categorical purpose label
     // 'service' is for service-account keys (e.g. the Eve dashboard's
     // realtime-observer key). Service keys are owned by an agent-typed user
     // (agentMetadata.agentType=eve) and carry the `realtime:observe` scope.
     // Mint path is the same as other agents — POST /api/hub/setup/agent.
+    //
+    // 'is_internal' is the TRUSTED Intelligence-Service pod-read key. It is the
+    // ONLY keyType that may activate the X-Delegated-Operator-Id auth gate (see
+    // hub-protocol-rest.ts), letting the IS orchestrator read on behalf of the
+    // operator whose turn it is processing. It is minted EXCLUSIVELY by the
+    // CP-signed-JWT-gated POST /api/provision/register-intelligence handler
+    // (apps/api/src/routers/provision.ts). No public key-mint path can set it —
+    // every public path hardcodes a non-is_internal literal and none reads
+    // keyType from caller input.
     description: text("description"), // Human-readable explanation of what this key does
 
     // Metadata

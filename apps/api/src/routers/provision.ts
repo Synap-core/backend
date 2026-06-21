@@ -612,7 +612,14 @@ provisionRouter.post("/register-intelligence", async (c) => {
         keyName: "Intelligence Hub IS Key",
         keyPrefix,
         keyHash,
-        keyType: "hub_inbound",
+        // TRUSTED Intelligence-Service pod-read key. keyType "is_internal" is the
+        // ONLY value that activates the X-Delegated-Operator-Id auth gate in
+        // hub-protocol-rest.ts, so the IS orchestrator can read the pod on behalf
+        // of the operator whose turn it is processing (operator-floor delegation).
+        // This is the SINGLE provisioning point for is_internal — gated above by a
+        // CP-signed ES256 JWT (type="provision", JWKS-verified, audience-pinned,
+        // serviceUrl matched to the JWT claim). No public mint path can set it.
+        keyType: "is_internal",
         hubId: IS_HUB_ID,
         scope: ["hub-protocol.read", "hub-protocol.write"],
         isActive: true,
