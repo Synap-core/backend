@@ -9325,6 +9325,44 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		exposeToAnchor: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				entityId: string;
+				anchorId: string;
+				metadata?: Record<string, any> | undefined;
+			};
+			output: {
+				status: "proposed";
+				proposalId: string;
+				id?: undefined;
+			} | {
+				status: "created";
+				id: string;
+				proposalId?: undefined;
+			};
+			meta: object;
+		}>;
+		grantAnchorMembership: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				anchorId: string;
+				userId: string;
+				role?: "owner" | "editor" | "viewer" | undefined;
+			};
+			output: {
+				status: "exists";
+				memberId: string;
+				proposalId?: undefined;
+			} | {
+				status: "proposed";
+				proposalId: string;
+				memberId?: undefined;
+			} | {
+				status: "created";
+				memberId: string;
+				proposalId?: undefined;
+			};
+			meta: object;
+		}>;
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				sourceEntityId: string;
