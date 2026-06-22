@@ -208,6 +208,12 @@ export interface RecordInboundMessageArgs {
 
 export interface RecordInboundMessageResult {
   channelId: string;
+  /**
+   * The context entity this channel is bound to (set by /link-client via
+   * contextObjectType="entity"), or null when the channel isn't client-bound.
+   * Lets callers make the agent turn client-aware.
+   */
+  contextObjectId: string | null;
   /** The resolved inbound message hash (deterministic over provider + seed). */
   inboundHash: string;
   /** False when this exact inbound was already recorded (duplicate delivery). */
@@ -253,7 +259,7 @@ export async function recordInboundMessage(
     columns: { id: true },
   });
   if (already) {
-    return { channelId, inboundHash, recorded: false };
+    return { channelId, contextObjectId, inboundHash, recorded: false };
   }
 
   await db
@@ -297,5 +303,5 @@ export async function recordInboundMessage(
     logger.warn({ err, channelId }, "emitSideEffects failed (non-fatal)");
   });
 
-  return { channelId, inboundHash, recorded: true };
+  return { channelId, contextObjectId, inboundHash, recorded: true };
 }

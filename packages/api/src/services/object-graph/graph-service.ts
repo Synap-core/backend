@@ -40,6 +40,40 @@ import type { LinkEndpointType } from "@synap/playbooks";
 import { getLinksFor } from "../links/links-service.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 
+/**
+ * Kinds the graph envelope can focus on. Superset of `LinkEndpointType` so
+ * entity-data kinds (view, document) are addressable too — they hydrate via the
+ * KIND_TABLE registry. ONE source of truth, shared by the REST route, the tRPC
+ * procedure, and the MCP tool so the addressable surface can't drift.
+ */
+export const GRAPH_KINDS = [
+  "entity",
+  "project",
+  "view",
+  "channel",
+  "session",
+  "playbook",
+  "tool",
+  "skill",
+  "automation",
+  "document",
+  "command",
+  "source",
+  "participant",
+] as const;
+
+export type GraphKind = (typeof GRAPH_KINDS)[number];
+
+/**
+ * Entity-backed kinds carry the relations/property/channel DATA graph on top of
+ * their links graph — the caller folds in `getConnections` for these (it needs
+ * the tRPC ctx, so it can't be fetched inside the dependency-light service).
+ */
+export const ENTITY_BACKED: ReadonlySet<string> = new Set([
+  "entity",
+  "project",
+]);
+
 /** A node in the pod graph — uniform across every object kind. */
 export interface GraphNode {
   /** The object's table/kind (the link-endpoint type). */

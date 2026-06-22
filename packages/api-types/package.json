@@ -19,7 +19,9 @@
   "scripts": {
     "build": "tsc && cp src/generated.d.ts dist/generated.d.ts",
     "clean": "rm -rf dist",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "release:check": "node scripts/check-and-bump.mjs --check",
+    "release:bump": "node scripts/check-and-bump.mjs"
   },
   "dependencies": {
     "@synap-core/types": "workspace:*",

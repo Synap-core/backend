@@ -247,6 +247,12 @@ app.get("/health", (c) => {
     status: "ok",
     timestamp: new Date().toISOString(),
     version: "0.2.0-saas",
+    // Published `@synap-core/api-types` version this pod's router was built
+    // against. Clients compare its major via `assertApiTypesCompatible()` to
+    // detect stale pinned types. Kept in sync with
+    // packages/api-types/package.json#version by
+    // packages/api-types/scripts/check-and-bump.mjs — do not hand-edit.
+    apiTypesVersion: "1.18.2",
     mode: "multi-user",
     auth: "ory-stack",
   });

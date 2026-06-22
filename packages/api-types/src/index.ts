@@ -19,3 +19,18 @@ export type {
   SetupAgentSuccess,
   ActivateAddonSuccess,
 } from "@synap-core/types";
+
+// Version stamp + runtime drift guard. A client pins a major; the pod reports
+// `apiTypesVersion` in `GET /health`. `assertApiTypesCompatible()` warns/throws
+// when the two diverge. See ./version.ts.
+export {
+  API_TYPES_VERSION,
+  API_TYPES_MAJOR,
+  majorOf,
+  checkApiTypesCompatible,
+  assertApiTypesCompatible,
+} from "./version.js";
+export type {
+  ApiTypesCompatibility,
+  AssertApiTypesOptions,
+} from "./version.js";

@@ -630,6 +630,15 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0145_tools_capabilities.sql",
   },
 
+  // tools — dynamic auth binding (0146). Absence means a pod is on a pre-0146
+  // schema where the dispatcher's per-user/agent/entity credential resolution
+  // would read `undefined` and every tool would behave as 'static'.
+  {
+    table: "tools",
+    column: "auth_binding",
+    addedBy: "0146_tool_auth_binding.sql",
+  },
+
   // capability_templates — templates-as-data (0144). Absence means a pod is on a
   // pre-0144 schema where DB-first template resolution would error and a
   // `templateKey` apply could only fall back to (absent) on-disk JSON files.

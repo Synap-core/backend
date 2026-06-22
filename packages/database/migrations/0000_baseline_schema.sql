@@ -3327,6 +3327,8 @@ CREATE TABLE IF NOT EXISTS "tools" (
 ALTER TABLE "tools" ADD COLUMN IF NOT EXISTS "approved" boolean NOT NULL DEFAULT false;
 -- Structured verb catalog — the capability-matrix axis (mig 0145).
 ALTER TABLE "tools" ADD COLUMN IF NOT EXISTS "capabilities" jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- Dynamic auth binding — credential resolves per principal/entity (mig 0146).
+ALTER TABLE "tools" ADD COLUMN IF NOT EXISTS "auth_binding" text NOT NULL DEFAULT 'static';
 CREATE INDEX IF NOT EXISTS "idx_tools_workspace_id" ON "tools" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_tools_kind"         ON "tools" ("kind");
 CREATE INDEX IF NOT EXISTS "idx_tools_approved"     ON "tools" ("approved");

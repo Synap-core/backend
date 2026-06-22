@@ -2135,6 +2135,17 @@ export type ToolKind = "builtin" | "api" | "mcp" | "provider" | "external" | "sc
 /** Which "hands" run this Tool. Mirrors @synap/playbooks ExecutorRef. */
 export type ToolExecutorRef = "is-agent" | "external-agent" | "hybrid";
 /**
+ * How a Tool's credential is resolved at execution time.
+ *   static     — the tool's own `credentialRef` (one shared credential). DEFAULT.
+ *   per_user   — the acting human user's own credential (a
+ *                `participant(userId) --provides_credential--> secret` link).
+ *   per_agent  — the acting agent-user's own credential (same link, agent id).
+ *   per_entity — the run's SUBJECT entity's credential (e.g. per client) — an
+ *                `entity(subjectId) --provides_credential--> secret` link.
+ * Dynamic bindings let ONE tool ("Email", "LinkedIn") run against many accounts.
+ */
+export type ToolAuthBinding = "static" | "per_user" | "per_agent" | "per_entity";
+/**
  * One verb in a Tool's structured capability catalog (the capability-matrix
  * axis). Kept in lock-step with `ToolVerb` in @synap/playbooks — re-declared here
  * (not imported) so the schema package stays dependency-free, exactly like the
@@ -2307,6 +2318,30 @@ declare const tools: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {}>;
+		authBinding: import("drizzle-orm/pg-core").PgColumn<{
+			name: "auth_binding";
+			tableName: "tools";
+			dataType: "string";
+			columnType: "PgText";
+			data: ToolAuthBinding;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				"static",
+				"per_user",
+				"per_agent",
+				"per_entity"
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {
+			$type: ToolAuthBinding;
+		}>;
 		executor: import("drizzle-orm/pg-core").PgColumn<{
 			name: "executor";
 			tableName: "tools";
@@ -2848,9 +2883,9 @@ export type Playbook = typeof playbooks.$inferSelect;
  * The kind of object on either end of a link edge.
  * `participant` = a user-id OR agent-user-id (both live in the `users` table).
  */
-export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project";
+export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project" | "secret";
 /** The relationship an edge expresses. */
-export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "targets" | "produced" | "member_of" | "feeds" | "promoted_to" | "provided_by" | "about" | "documents" | "concerns" | "activates";
+export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "targets" | "produced" | "member_of" | "feeds" | "promoted_to" | "provided_by" | "about" | "documents" | "concerns" | "activates" | "provides_credential";
 /**
  * Playbook Runs Schema — the run ledger (executor spine, Phase 3)
  *
@@ -3720,6 +3755,148 @@ export interface ExecutionStats {
 	[key: string]: unknown;
 }
 /**
+ * @synap/playbooks — Playbooks & Capability Substrate contracts
+ *
+ * The pure, I/O-free DOMAIN contracts for the autonomous-capability spine:
+ * Tool · Skill(ref) · Playbook · Link · Executor · PlaybookRun.
+ *
+ * Contains NO database / event / proposal side effects — ONLY types + the
+ * Executor interface. Persistence ROW types live in @synap/database/schema
+ * (tools / playbooks / links); the interfaces here describe the behavioral
+ * shapes the loosely-typed JSONB columns conform to, applied at the domain/API
+ * boundary. Small string-unions are intentionally re-declared here (rather than
+ * imported from @synap/database) so this package stays dependency-free — they
+ * must stay in lock-step with the `.$type<>()` unions in the schema files.
+ *
+ * Design doc: team/platform/playbooks-capability-substrate.mdx
+ */
+/** IS persona-agent · BYOA external agent (Claude Code, CLI) · hybrid. */
+export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
+/**
+ * The verb axis of a Tool — the structured, enumerable capability matrix. A
+ * Tool (an integration like Gmail or LinkedIn) exposes a SET of named verbs; each
+ * verb is one concrete operation the AI can invoke. This is the catalog the
+ * connector-capability-matrix is built over: one row per (connection × verb).
+ *
+ * Verbs are DERIVED, not hand-authored: each verb mirrors a skill that
+ * `requires` the tool inside a `CapabilityDefinition` (the source of truth) — so
+ * the catalog can never drift from the skills actually created. Persisted as the
+ * `tools.capabilities` jsonb column (kept in lock-step with the `.$type<>()` on
+ * the schema's `capabilities` column).
+ */
+export type ToolVerbKind = "read" | "write" | "action";
+export interface ToolVerb {
+	/** Stable identifier — the requiring skill's name (callable via callProvider/dispatcher). */
+	id: string;
+	/** Human-facing label. */
+	label: string;
+	/**
+	 * Verb axis: `read` = pull (no external mutation); `write`/`action` = push (a
+	 * mutation/send). Maps the verb onto the read/push capability matrix axis.
+	 */
+	kind: ToolVerbKind;
+	/** JSON-schema-ish arg shape for the verb (the requiring skill's parameters). */
+	argsSchema?: Record<string, unknown>;
+	/**
+	 * The governance default for this verb — aligns to the exec-mode the seeded
+	 * `vault_grants` row carries (so a verb never bypasses the approved+grant
+	 * model). `auto` runs directly, `propose` routes through review, `dry-run`
+	 * previews. The per-grant exec-mode at the gate still narrows this at run time.
+	 */
+	govDefault: ExecMode;
+}
+/** A credential a Tool/Skill needs at run time — mirrors the vault taxonomy. */
+export interface CredentialRequirement {
+	/** Logical name the tool/skill references (e.g. "apiKey"). */
+	name: string;
+	secretType: "api-key" | "credential" | "ssh-key" | "oauth-token" | "env-variable" | "connection-string";
+	/** Human-facing reason, surfaced in the vault approval proposal. */
+	purpose?: string;
+}
+/** What a Playbook can GRANT / a run uses. (Tools and Skills are linked, not merged.) */
+export type GrantableKind = "tool" | "skill" | "command";
+/**
+ * What happens when a grant is exercised — the governance / execMode axis. The
+ * same axis as `Capability.governance`; kept in lock-step with the
+ * `grant_exec_mode` pg enum in @synap/database/schema/secrets-vault.
+ *   - `auto`    — run the capability directly.
+ *   - `propose` — route the exercise through a reviewable proposal.
+ *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
+ */
+export type ExecMode = "auto" | "propose" | "dry-run";
+/**
+ * The normalized shape the Phase-1 adapters produce from builtin IS tools,
+ * code/instruction skills, intelligence_commands, and source providers — so a
+ * Playbook can grant capabilities uniformly and the AI can discover them.
+ */
+/** The full read-model kind set: grantables + the discoverable source systems. */
+export type CapabilityKind = GrantableKind | "source-provider" | "builtin-tool";
+export interface Capability {
+	kind: CapabilityKind;
+	id: string;
+	name: string;
+	description?: string | null;
+	inputSchema: Record<string, unknown>;
+	credentials?: CredentialRequirement[];
+	executor: ExecutorRef;
+	/** Whether AI use is auto-approved or routed through a proposal. */
+	governance: "auto" | "propose";
+	/**
+	 * The connection's structured verb catalog WITH each verb's resolved
+	 * grant-state — the capability-matrix axis. Present for tools that carry a
+	 * `tools.capabilities` catalog; the grant-state is joined from the active
+	 * `vault_grants` row for the tool (one connection × verb × grant row each).
+	 * Empty/undefined for capabilities with no verb catalog (skills, commands,
+	 * verb-less provider tools).
+	 */
+	verbs?: CapabilityVerbState[];
+}
+/**
+ * One row of the connection × verb × grant matrix: a Tool's verb annotated with
+ * the live grant-state derived from `vault_grants`. The read-model joins each
+ * `ToolVerb` (from `tools.capabilities`) with the tool's active grant so a UI /
+ * the AI can see, per verb, whether it is granted and at what exec-mode.
+ */
+export interface CapabilityVerbState extends ToolVerb {
+	/** True when an active (non-revoked, non-expired) grant exists for the tool. */
+	granted: boolean;
+	/**
+	 * The effective exec-mode for this verb: the active grant's exec-mode when
+	 * granted, else the verb's `govDefault`. This is what the gate would apply.
+	 */
+	effectiveExecMode: ExecMode;
+}
+/** A node in the pod graph — uniform across every object kind. */
+export interface GraphNode {
+	/** The object's table/kind (the link-endpoint type). */
+	kind: string;
+	/** The object's id (uuid or kind short-id). */
+	id: string;
+	/** Human-facing name — the handle you navigate by (id stays canonical). */
+	name: string;
+	/** In-kind discriminator: entity→profileSlug, view→viewType, tool/skill→kind… */
+	subtype: string | null;
+	workspaceId: string | null;
+}
+/** A neighbour = a node + the edge that connects it to the focused object. */
+export interface GraphNeighbor extends GraphNode {
+	/** linkType (config edge) or relationType (data edge). */
+	edgeType: string;
+	direction: "outgoing" | "incoming" | "structural";
+	/** Which substrate the edge came from — glass-box provenance. */
+	via: "links" | "relations" | "property" | "channel";
+}
+/** "Fetch X, get X + everything it's linked to, typed." */
+export interface GraphEnvelope {
+	object: GraphNode;
+	neighbors: GraphNeighbor[];
+	counts: {
+		total: number;
+		byKind: Record<string, number>;
+		byVia: Record<string, number>;
+	};
+}
+/**
  * Standard paginated response envelope.
  */
 export type PaginatedResponse<T> = {
@@ -3847,118 +4024,6 @@ export interface ReactionEvent {
 	note?: string;
 	/** the fan-out */
 	reactions: Reaction[];
-}
-/**
- * @synap/playbooks — Playbooks & Capability Substrate contracts
- *
- * The pure, I/O-free DOMAIN contracts for the autonomous-capability spine:
- * Tool · Skill(ref) · Playbook · Link · Executor · PlaybookRun.
- *
- * Contains NO database / event / proposal side effects — ONLY types + the
- * Executor interface. Persistence ROW types live in @synap/database/schema
- * (tools / playbooks / links); the interfaces here describe the behavioral
- * shapes the loosely-typed JSONB columns conform to, applied at the domain/API
- * boundary. Small string-unions are intentionally re-declared here (rather than
- * imported from @synap/database) so this package stays dependency-free — they
- * must stay in lock-step with the `.$type<>()` unions in the schema files.
- *
- * Design doc: team/platform/playbooks-capability-substrate.mdx
- */
-/** IS persona-agent · BYOA external agent (Claude Code, CLI) · hybrid. */
-export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
-/**
- * The verb axis of a Tool — the structured, enumerable capability matrix. A
- * Tool (an integration like Gmail or LinkedIn) exposes a SET of named verbs; each
- * verb is one concrete operation the AI can invoke. This is the catalog the
- * connector-capability-matrix is built over: one row per (connection × verb).
- *
- * Verbs are DERIVED, not hand-authored: each verb mirrors a skill that
- * `requires` the tool inside a `CapabilityDefinition` (the source of truth) — so
- * the catalog can never drift from the skills actually created. Persisted as the
- * `tools.capabilities` jsonb column (kept in lock-step with the `.$type<>()` on
- * the schema's `capabilities` column).
- */
-export type ToolVerbKind = "read" | "write" | "action";
-export interface ToolVerb {
-	/** Stable identifier — the requiring skill's name (callable via callProvider/dispatcher). */
-	id: string;
-	/** Human-facing label. */
-	label: string;
-	/**
-	 * Verb axis: `read` = pull (no external mutation); `write`/`action` = push (a
-	 * mutation/send). Maps the verb onto the read/push capability matrix axis.
-	 */
-	kind: ToolVerbKind;
-	/** JSON-schema-ish arg shape for the verb (the requiring skill's parameters). */
-	argsSchema?: Record<string, unknown>;
-	/**
-	 * The governance default for this verb — aligns to the exec-mode the seeded
-	 * `vault_grants` row carries (so a verb never bypasses the approved+grant
-	 * model). `auto` runs directly, `propose` routes through review, `dry-run`
-	 * previews. The per-grant exec-mode at the gate still narrows this at run time.
-	 */
-	govDefault: ExecMode;
-}
-/** A credential a Tool/Skill needs at run time — mirrors the vault taxonomy. */
-export interface CredentialRequirement {
-	/** Logical name the tool/skill references (e.g. "apiKey"). */
-	name: string;
-	secretType: "api-key" | "credential" | "ssh-key" | "oauth-token" | "env-variable" | "connection-string";
-	/** Human-facing reason, surfaced in the vault approval proposal. */
-	purpose?: string;
-}
-/** What a Playbook can GRANT / a run uses. (Tools and Skills are linked, not merged.) */
-export type GrantableKind = "tool" | "skill" | "command";
-/**
- * What happens when a grant is exercised — the governance / execMode axis. The
- * same axis as `Capability.governance`; kept in lock-step with the
- * `grant_exec_mode` pg enum in @synap/database/schema/secrets-vault.
- *   - `auto`    — run the capability directly.
- *   - `propose` — route the exercise through a reviewable proposal.
- *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
- */
-export type ExecMode = "auto" | "propose" | "dry-run";
-/**
- * The normalized shape the Phase-1 adapters produce from builtin IS tools,
- * code/instruction skills, intelligence_commands, and source providers — so a
- * Playbook can grant capabilities uniformly and the AI can discover them.
- */
-/** The full read-model kind set: grantables + the discoverable source systems. */
-export type CapabilityKind = GrantableKind | "source-provider" | "builtin-tool";
-export interface Capability {
-	kind: CapabilityKind;
-	id: string;
-	name: string;
-	description?: string | null;
-	inputSchema: Record<string, unknown>;
-	credentials?: CredentialRequirement[];
-	executor: ExecutorRef;
-	/** Whether AI use is auto-approved or routed through a proposal. */
-	governance: "auto" | "propose";
-	/**
-	 * The connection's structured verb catalog WITH each verb's resolved
-	 * grant-state — the capability-matrix axis. Present for tools that carry a
-	 * `tools.capabilities` catalog; the grant-state is joined from the active
-	 * `vault_grants` row for the tool (one connection × verb × grant row each).
-	 * Empty/undefined for capabilities with no verb catalog (skills, commands,
-	 * verb-less provider tools).
-	 */
-	verbs?: CapabilityVerbState[];
-}
-/**
- * One row of the connection × verb × grant matrix: a Tool's verb annotated with
- * the live grant-state derived from `vault_grants`. The read-model joins each
- * `ToolVerb` (from `tools.capabilities`) with the tool's active grant so a UI /
- * the AI can see, per verb, whether it is granted and at what exec-mode.
- */
-export interface CapabilityVerbState extends ToolVerb {
-	/** True when an active (non-revoked, non-expired) grant exists for the tool. */
-	granted: boolean;
-	/**
-	 * The effective exec-mode for this verb: the active grant's exec-mode when
-	 * granted, else the verb's `govDefault`. This is what the gate would apply.
-	 */
-	effectiveExecMode: ExecMode;
 }
 /** The grantable kinds the vault_grants table discriminates over. */
 export type CapabilityGrantKind = "secret" | "tool" | "skill" | "command";
@@ -4908,9 +4973,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		resolveOrCreateChannel: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab";
+				channelType: "external" | "personal" | "feed" | "thread" | "sub_thread" | "agent_collab";
 				workspaceId?: string | undefined;
-				contextObjectType?: "user" | "entity" | "external" | "workspace" | "document" | "view" | "task" | "project" | undefined;
+				contextObjectType?: "user" | "entity" | "external" | "workspace" | "view" | "document" | "task" | "project" | undefined;
 				contextObjectId?: string | undefined;
 				parentChannelId?: string | undefined;
 				branchPurpose?: string | undefined;
@@ -4948,8 +5013,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					scope: "user" | "pod" | "workspace";
+					channelType: "external" | "personal" | "feed" | "thread" | "sub_thread" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -5053,7 +5118,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deepAnalysis?: boolean | undefined;
 				channelType?: "personal" | "thread" | "sub_thread" | "agent_collab" | undefined;
 				contextObjectId?: string | undefined;
-				contextObjectType?: "entity" | "document" | "view" | undefined;
+				contextObjectType?: "entity" | "view" | "document" | undefined;
 				branchPurpose?: string | undefined;
 			};
 			output: {
@@ -5084,8 +5149,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					scope: "user" | "pod" | "workspace";
+					channelType: "external" | "personal" | "feed" | "thread" | "sub_thread" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -5129,7 +5194,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "skipped" | "error" | "success";
+								status: "error" | "success" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -5183,7 +5248,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "error" | "pending" | "running" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 					} | null;
@@ -5243,10 +5308,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		listChannels: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | undefined;
-				channelType?: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | undefined;
+				channelType?: "external" | "personal" | "feed" | "thread" | "sub_thread" | "agent_collab" | undefined;
 				limit?: number | undefined;
 				contextObjectId?: string | undefined;
-				contextObjectType?: "entity" | "document" | "view" | undefined;
+				contextObjectType?: "entity" | "view" | "document" | undefined;
 				assignedAgentId?: string | undefined;
 				agentUserId?: string | undefined;
 			};
@@ -5263,7 +5328,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | undefined;
 				contextObjectId?: string | undefined;
-				contextObjectType?: "entity" | "document" | "view" | undefined;
+				contextObjectType?: "entity" | "view" | "document" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -5382,8 +5447,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					scope: "user" | "pod" | "workspace";
+					channelType: "external" | "personal" | "feed" | "thread" | "sub_thread" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -5448,8 +5513,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					scope: "user" | "pod" | "workspace";
+					channelType: "external" | "personal" | "feed" | "thread" | "sub_thread" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -5476,7 +5541,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					channelId: string;
 					relevanceScore: number | null;
-					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
+					objectType: "entity" | "view" | "document" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
 					conflictStatus: "pending" | "none" | "resolved";
@@ -5557,8 +5622,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					scope: "user" | "pod" | "workspace";
+					channelType: "external" | "personal" | "feed" | "thread" | "sub_thread" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -5587,8 +5652,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					scope: "user" | "pod" | "workspace";
+					channelType: "external" | "personal" | "feed" | "thread" | "sub_thread" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -5617,8 +5682,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					scope: "user" | "pod" | "workspace";
+					channelType: "external" | "personal" | "feed" | "thread" | "sub_thread" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -5643,7 +5708,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		getChannelContext: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				channelId: string;
-				objectTypes?: ("entity" | "document" | "view" | "proposal" | "inbox_item")[] | undefined;
+				objectTypes?: ("entity" | "view" | "document" | "proposal" | "inbox_item")[] | undefined;
 				relationshipTypes?: ("created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent")[] | undefined;
 			};
 			output: {
@@ -5655,7 +5720,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					channelId: string;
 					relevanceScore: number | null;
-					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
+					objectType: "entity" | "view" | "document" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
 					conflictStatus: "pending" | "none" | "resolved";
@@ -5668,7 +5733,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					channelId: string;
 					relevanceScore: number | null;
-					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
+					objectType: "entity" | "view" | "document" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
 					conflictStatus: "pending" | "none" | "resolved";
@@ -5681,7 +5746,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					channelId: string;
 					relevanceScore: number | null;
-					objectType: "entity" | "document" | "view" | "proposal" | "inbox_item";
+					objectType: "entity" | "view" | "document" | "proposal" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
 					conflictStatus: "pending" | "none" | "resolved";
@@ -5692,7 +5757,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		addContextItem: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				channelId: string;
-				objectType: "entity" | "document" | "view";
+				objectType: "entity" | "view" | "document";
 				objectId: string;
 			};
 			output: {
@@ -5714,7 +5779,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				channelId: string;
 				objectId: string;
-				objectType: "entity" | "document" | "view";
+				objectType: "entity" | "view" | "document";
 			};
 			output: {
 				ok: boolean;
@@ -5782,8 +5847,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string | null;
 					externalSource: string | null;
 					status: "active" | "merged" | "archived";
-					scope: "user" | "workspace" | "pod";
-					channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab" | "group";
+					scope: "user" | "pod" | "workspace";
+					channelType: "external" | "personal" | "feed" | "thread" | "sub_thread" | "agent_collab" | "group";
 					feedScope: "user" | "workspace" | null;
 					contextObjectType: string | null;
 					contextObjectId: string | null;
@@ -5921,7 +5986,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 				offset?: number | undefined;
 				workspaceId?: string | null | undefined;
-				targetType?: "entity" | "document" | "view" | "whiteboard" | "profile" | undefined;
+				targetType?: "entity" | "view" | "document" | "whiteboard" | "profile" | undefined;
 				targetId?: string | undefined;
 				threadId?: string | undefined;
 				correlationId?: string | undefined;
@@ -6099,7 +6164,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		submit: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				targetType: "entity" | "workspace" | "document" | "view" | "relation" | "profile";
+				targetType: "entity" | "workspace" | "view" | "document" | "relation" | "profile";
 				changeType: "create" | "update" | "delete";
 				data: Record<string, any>;
 				targetId?: string | undefined;
@@ -6782,7 +6847,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				userId: string;
 				keyName: string;
 				keyPrefix: string;
-				keyType: "system" | "hub_inbound" | "user_pat" | "service";
+				keyType: "system" | "hub_inbound" | "user_pat" | "service" | "is_internal";
 				hubId: string | null;
 				scope: string[];
 				isActive: boolean;
@@ -6979,7 +7044,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				keyName: string;
 				keyPrefix: string;
-				keyType: "system" | "hub_inbound" | "user_pat" | "service";
+				keyType: "system" | "hub_inbound" | "user_pat" | "service" | "is_internal";
 				hubId: string | null;
 				scope: string[];
 				isActive: boolean;
@@ -8538,7 +8603,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					errorMessage: string | null;
 					startedAt: Date;
-					status: "completed" | "running" | "failed";
+					status: "completed" | "failed" | "running";
 					threadId: string;
 					commandId: string;
 					permissionsSnapshot: Record<string, unknown> | null;
@@ -8564,7 +8629,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				errorMessage: string | null;
 				startedAt: Date;
-				status: "completed" | "running" | "failed";
+				status: "completed" | "failed" | "running";
 				threadId: string;
 				commandId: string;
 				permissionsSnapshot: Record<string, unknown> | null;
@@ -9409,6 +9474,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		getObjectGraph: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+				type?: "session" | "source" | "channel" | "command" | "tool" | "skill" | "entity" | "view" | "document" | "playbook" | "participant" | "automation" | "project" | undefined;
+				workspaceId?: string | null | undefined;
+			};
+			output: GraphEnvelope;
+			meta: object;
+		}>;
 		getNode: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				entityId: string;
@@ -9948,7 +10022,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				email: string;
 				workspaceId: string | null;
 				id: string;
-				type: "workspace" | "pod";
+				type: "pod" | "workspace";
 				token: string;
 				createdAt: Date;
 				role: string;
@@ -9962,14 +10036,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		listInvites: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				type: "workspace" | "pod";
+				type: "pod" | "workspace";
 				workspaceId?: string | undefined;
 			};
 			output: {
 				email: string;
 				workspaceId: string | null;
 				id: string;
-				type: "workspace" | "pod";
+				type: "pod" | "workspace";
 				token: string;
 				createdAt: Date;
 				role: string;
@@ -10026,7 +10100,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			output: {
 				id: string;
-				type: "workspace" | "pod";
+				type: "pod" | "workspace";
 				email: string;
 				role: string;
 				token: string;
@@ -10196,7 +10270,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							matchUrls?: string[] | undefined;
 							surface?: {
 								[x: string]: unknown;
-								kind: "url" | "channel" | "entity" | "cell" | "document" | "view" | "app";
+								kind: "url" | "channel" | "entity" | "cell" | "view" | "document" | "app";
 								cellKey?: string | undefined;
 								viewId?: string | undefined;
 								viewName?: string | undefined;
@@ -11234,7 +11308,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		createPublicLink: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				resourceType: "entity" | "document" | "view";
+				resourceType: "entity" | "view" | "document";
 				resourceId: string;
 				expiresInDays?: number | undefined;
 				access?: "workspace_only" | "anyone_with_link" | undefined;
@@ -11249,7 +11323,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		invite: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				resourceType: "entity" | "document" | "view";
+				resourceType: "entity" | "view" | "document";
 				resourceId: string;
 				userEmail: string;
 			};
@@ -11356,7 +11430,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				resourceType: "entity" | "document" | "view";
+				resourceType: "entity" | "view" | "document";
 				resourceId: string;
 				visibility?: "private" | "public" | undefined;
 				expiresAt?: Date | undefined;
@@ -11839,7 +11913,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | undefined;
 				kind?: "code" | "instruction" | undefined;
-				scope?: "user" | "workspace" | "pod" | undefined;
+				scope?: "user" | "pod" | "workspace" | undefined;
 				status?: "error" | "active" | "inactive" | "all" | undefined;
 				approved?: boolean | undefined;
 				limit?: number | undefined;
@@ -11865,7 +11939,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				code: string;
 				workspaceId?: string | undefined;
 				kind?: "code" | "instruction" | undefined;
-				scope?: "user" | "workspace" | "pod" | undefined;
+				scope?: "user" | "pod" | "workspace" | undefined;
 				agentTypes?: string[] | undefined;
 				description?: string | undefined;
 				parameters?: Record<string, unknown> | undefined;
@@ -11888,7 +11962,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				kind?: "code" | "instruction" | undefined;
-				scope?: "user" | "workspace" | "pod" | undefined;
+				scope?: "user" | "pod" | "workspace" | undefined;
 				agentTypes?: string[] | null | undefined;
 				name?: string | undefined;
 				description?: string | undefined;
@@ -12032,6 +12106,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: ToolKind;
 					inputSchema: unknown;
 					credentialRef: string | null;
+					authBinding: ToolAuthBinding;
 					executor: ToolExecutorRef;
 					config: unknown;
 					capabilities: ToolVerbCatalogEntry[];
@@ -12087,6 +12162,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				approved: boolean;
 				inputSchema: unknown;
 				credentialRef: string | null;
+				authBinding: ToolAuthBinding;
 				executor: ToolExecutorRef;
 			}[];
 			meta: object;
@@ -12183,6 +12259,49 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				tool: Tool;
+			};
+			meta: object;
+		}>;
+		setAuthBinding: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				authBinding: "static" | "per_user" | "per_agent" | "per_entity";
+			};
+			output: {
+				tool: Tool;
+			};
+			meta: object;
+		}>;
+		listBoundCredentials: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				toolId: string;
+			};
+			output: {
+				linkId: string;
+				principalType: LinkEndpointType;
+				principalId: string;
+				secretId: string;
+			}[];
+			meta: object;
+		}>;
+		bindCredential: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				toolId: string;
+				principalType: "entity" | "participant";
+				principalId: string;
+				secretId: string;
+			};
+			output: {
+				linkId: string;
+			};
+			meta: object;
+		}>;
+		unbindCredential: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				linkId: string;
+			};
+			output: {
+				ok: boolean;
 			};
 			meta: object;
 		}>;
@@ -12366,7 +12485,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
-					entityScope: "workspace" | "pod";
+					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
@@ -12395,7 +12514,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
-					entityScope: "workspace" | "pod";
+					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
@@ -12414,7 +12533,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				defaultValues?: Record<string, unknown> | undefined;
 				scope?: "user" | "shared" | "system" | "workspace" | undefined;
 				allowedWorkspaceIds?: string[] | undefined;
-				entityScope?: "workspace" | "pod" | undefined;
+				entityScope?: "pod" | "workspace" | undefined;
 				source?: "user" | "system" | "ai" | "intelligence" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
@@ -12435,7 +12554,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
-					entityScope: "workspace" | "pod";
+					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
@@ -12467,7 +12586,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
-					entityScope: "workspace" | "pod";
+					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
@@ -12489,7 +12608,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				defaultValues?: Record<string, unknown> | undefined;
 				scope?: "user" | "shared" | "system" | "workspace" | undefined;
 				allowedWorkspaceIds?: string[] | undefined;
-				entityScope?: "workspace" | "pod" | undefined;
+				entityScope?: "pod" | "workspace" | undefined;
 				defaultListRenderer?: {
 					kind: "cell";
 					cellKey: string;
@@ -12612,7 +12731,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
-					entityScope: "workspace" | "pod";
+					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
@@ -12659,7 +12778,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
-					entityScope: "workspace" | "pod";
+					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
@@ -12698,7 +12817,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
-					entityScope: "workspace" | "pod";
+					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
@@ -12728,7 +12847,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentProfileId: string | null;
 					defaultValues: unknown;
 					semanticSlug: string | null;
-					entityScope: "workspace" | "pod";
+					entityScope: "pod" | "workspace";
 					defaultListRenderer: unknown;
 					defaultDetailRenderer: unknown;
 					defaultDashboardRenderer: unknown;
@@ -15503,7 +15622,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				title: string;
 				recipeId: string | null;
-				runStatus: "success" | "running" | "failed" | "cancelled" | null;
+				runStatus: "success" | "failed" | "running" | "cancelled" | null;
 				runSteps: RunStep[];
 				runStartedAt: string | null;
 				runFinishedAt: string | null;
@@ -17042,7 +17161,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				workspaceId: string;
 				userId: string;
-				kind: "url" | "entity" | "cell" | "document" | "view";
+				kind: "url" | "entity" | "cell" | "view" | "document";
 				refId: string | null;
 				cellKey: string | null;
 				props: unknown;
@@ -17070,7 +17189,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				workspaceId: string;
 				userId: string;
-				kind: "url" | "entity" | "cell" | "document" | "view";
+				kind: "url" | "entity" | "cell" | "view" | "document";
 				refId: string | null;
 				cellKey: string | null;
 				props: unknown;
@@ -17099,7 +17218,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				updatedAt: Date;
 				createdAt: Date;
 				title: string;
-				kind: "url" | "entity" | "cell" | "document" | "view";
+				kind: "url" | "entity" | "cell" | "view" | "document";
 				refId: string | null;
 				cellKey: string | null;
 				props: unknown;
@@ -17114,7 +17233,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				kind: "url" | "entity" | "cell" | "document" | "view";
+				kind: "url" | "entity" | "cell" | "view" | "document";
 				title: string;
 				refId?: string | undefined;
 				cellKey?: string | undefined;
@@ -17132,7 +17251,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				updatedAt: Date;
 				createdAt: Date;
 				title: string;
-				kind: "url" | "entity" | "cell" | "document" | "view";
+				kind: "url" | "entity" | "cell" | "view" | "document";
 				refId: string | null;
 				cellKey: string | null;
 				props: unknown;
@@ -17159,7 +17278,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				updatedAt: Date;
 				createdAt: Date;
 				title: string;
-				kind: "url" | "entity" | "cell" | "document" | "view";
+				kind: "url" | "entity" | "cell" | "view" | "document";
 				refId: string | null;
 				cellKey: string | null;
 				props: unknown;

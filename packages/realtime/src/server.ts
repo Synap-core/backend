@@ -14,7 +14,7 @@ import { CollaborationManager } from "./collaboration-manager.js";
 import { setupYjsServer, type YjsServerInstance } from "./yjs-server.js";
 import { setupBridge } from "./bridge.js";
 import { validateRealtimeApiKey } from "./api-key-auth.js";
-import { getKratosSessionByCookie } from "@synap/auth";
+import { getKratosSessionByCookie, getKratosSessionByToken } from "@synap/auth";
 import { db, and, eq } from "@synap/database";
 import { workspaceMembers, channels, views } from "@synap/database/schema";
 
@@ -239,9 +239,21 @@ presenceNamespace.use(async (socket, next) => {
       return next(new Error("Realtime auth: missing session token"));
     }
 
-    let session: Awaited<ReturnType<typeof getKratosSessionByCookie>> | null;
+    let session: Awaited<ReturnType<typeof getKratosSessionByToken>> | null;
     try {
-      session = await getKratosSessionByCookie(token);
+      // The browser sends the Kratos API SESSION TOKEN (X-Session-Token), so
+      // validate it AS A TOKEN first. The old code passed it to the COOKIE
+      // validator (`getKratosSessionByCookie`), which does
+      // `toSession({ cookie: 'ory_kratos_session='+value })` — Kratos rejected the
+      // session-token as a malformed cookie → the socket NEVER connected → the AI
+      // chat showed a permanent false "Offline" banner while tRPC was perfectly
+      // healthy (tRPC sends the same token as a header, the correct path). Fall back
+      // to cookie validation for flows that pass a raw ory_kratos_session value as
+      // the token (local pod / Eve's raw-token-as-cookie flow).
+      session = await getKratosSessionByToken(token);
+      if (!session) {
+        session = await getKratosSessionByCookie(token);
+      }
     } catch {
       return next(new Error("Realtime auth: session validation unavailable"));
     }

@@ -236,7 +236,7 @@ sidebar_position: 1
 
 > **Auto-generated** from tRPC router definitions. Do not edit manually — run \`pnpm gen-docs\` in \`synap-backend/packages/api\` to regenerate.
 
-This page lists every tRPC procedure exposed by the Synap data pod. All procedures are callable via \`@synap/sdk\` (vanilla JS) or \`@synap/react\` hooks.
+This page lists every tRPC procedure exposed by the Synap data pod. All procedures are callable via \`@synap-core/sdk\` (vanilla JS) or \`@synap-core/react\` hooks.
 
 ## How to read this page
 
@@ -246,12 +246,12 @@ This page lists every tRPC procedure exposed by the Synap data pod. All procedur
 
 \`\`\`typescript
 // Vanilla JS
-import { createSynapClient } from "@synap/sdk";
+import { createSynapClient } from "@synap-core/sdk";
 const synap = createSynapClient({ podUrl, apiKey, workspaceId });
 const result = await synap.entities.list.query({ limit: 20 });
 
 // React
-import { useSynap } from "@synap/react";
+import { useSynap } from "@synap-core/react";
 const { data } = useSynap().entities.list.useQuery({ limit: 20 });
 \`\`\`
 

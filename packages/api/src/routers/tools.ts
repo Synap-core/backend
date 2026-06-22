@@ -10,7 +10,7 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, or, isNull, inArray, desc } from "@synap/database";
-import { tools, skills } from "@synap/database/schema";
+import { tools, skills, links, secrets } from "@synap/database/schema";
 import type { Tool } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
@@ -178,6 +178,12 @@ export const toolsRouter = router({
           code: "NOT_FOUND",
           message: `Tool ${input.id} not found`,
         });
+      // Pod-wide (null-workspace) tools have no RBAC layer inside
+      // checkPermissionOrPropose (it grants when workspaceId is falsy), so gate
+      // the privileged pod-level case explicitly — mirrors setApproved /
+      // setAuthBinding / delete. Without this any user could re-point a pod-wide
+      // tool's name/description/config.
+      if (!existing.workspaceId) await requirePodAdmin(userId);
       const perm = await checkPermissionOrPropose({
         userId,
         workspaceId: existing.workspaceId ?? undefined,
@@ -268,6 +274,197 @@ export const toolsRouter = router({
         .where(eq(tools.id, input.id))
         .returning();
       return { tool: tool as Tool };
+    }),
+
+  /**
+   * Set a tool's dynamic auth binding (static · per_user · per_agent ·
+   * per_entity). Owner-gated, mirroring setApproved: workspace tool → owner;
+   * pod-wide → pod-admin. Changing the binding RESETS approval — the trust
+   * decision covers WHOSE credential the tool runs with, not just what it does:
+   * static→per_entity means it now runs against subject-supplied credentials the
+   * approver never vetted, so the owner must re-affirm (like `update` does when
+   * an execution-defining field changes).
+   */
+  setAuthBinding: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        authBinding: z.enum(["static", "per_user", "per_agent", "per_entity"]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const existing = await db.query.tools.findFirst({
+        where: eq(tools.id, input.id),
+      });
+      if (!existing)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Tool not found" });
+      if (existing.workspaceId) {
+        const role = await getWorkspaceRole(userId, existing.workspaceId);
+        if (role !== "owner")
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only workspace owners can change a tool's auth binding.",
+          });
+      } else {
+        await requirePodAdmin(userId);
+      }
+      const bindingChanged = existing.authBinding !== input.authBinding;
+      const [tool] = await db
+        .update(tools)
+        .set({
+          authBinding: input.authBinding,
+          // Re-affirm trust whenever the binding actually changes.
+          ...(bindingChanged ? { approved: false } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(tools.id, input.id))
+        .returning();
+      return { tool: tool as Tool };
+    }),
+
+  /**
+   * List the credentials bound to a tool for a dynamic auth binding — the
+   * `provides_credential` edges scoped to this tool. Powers the Authentication
+   * step's "who has a credential" list. OWNER-GATED: the binding graph maps
+   * principalId→secretId and must not leak to non-owners, so the caller must own
+   * the tool (workspace owner / pod-admin) — same gate as bind/unbind.
+   */
+  listBoundCredentials: protectedProcedure
+    .input(z.object({ toolId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const tool = await db.query.tools.findFirst({
+        where: eq(tools.id, input.toolId),
+      });
+      if (!tool)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Tool not found" });
+      if (tool.workspaceId) {
+        const role = await getWorkspaceRole(userId, tool.workspaceId);
+        if (role !== "owner")
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "Only workspace owners can view a tool's bound credentials.",
+          });
+      } else {
+        await requirePodAdmin(userId);
+      }
+      const edges = await db
+        .select()
+        .from(links)
+        .where(eq(links.linkType, "provides_credential"));
+      return edges
+        .filter(
+          (e) =>
+            (e.metadata as { toolId?: string } | null)?.toolId === input.toolId
+        )
+        .map((e) => ({
+          linkId: e.id,
+          principalType: e.fromType,
+          principalId: e.fromId,
+          secretId: e.toId,
+        }));
+    }),
+
+  /**
+   * Bind a credential (vault secret) to a principal/entity for a tool's dynamic
+   * auth binding: `principal|entity --provides_credential--> secret`
+   * (metadata.toolId scopes it). Owner-gated. Idempotent on the unique edge.
+   */
+  bindCredential: protectedProcedure
+    .input(
+      z.object({
+        toolId: z.string().uuid(),
+        principalType: z.enum(["participant", "entity"]),
+        principalId: z.string().min(1),
+        secretId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const tool = await db.query.tools.findFirst({
+        where: eq(tools.id, input.toolId),
+      });
+      if (!tool)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Tool not found" });
+      if (tool.workspaceId) {
+        const role = await getWorkspaceRole(userId, tool.workspaceId);
+        if (role !== "owner")
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only workspace owners can bind tool credentials.",
+          });
+      } else {
+        await requirePodAdmin(userId);
+      }
+      // The secret must exist AND belong to the acting user — never bind a
+      // caller-supplied secret id the caller doesn't own (else an owner could
+      // point a tool at another user's vault secret, which the dispatcher would
+      // then decrypt at execution under the tool's authority).
+      const [secret] = await db
+        .select({ id: secrets.id, userId: secrets.userId })
+        .from(secrets)
+        .where(eq(secrets.id, input.secretId))
+        .limit(1);
+      if (!secret || secret.userId !== userId)
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Secret not found in your vault.",
+        });
+      const [edge] = await db
+        .insert(links)
+        .values({
+          workspaceId: tool.workspaceId,
+          fromType: input.principalType,
+          fromId: input.principalId,
+          toType: "secret",
+          toId: input.secretId,
+          linkType: "provides_credential",
+          metadata: { toolId: input.toolId },
+          createdBy: userId,
+        })
+        .onConflictDoNothing()
+        .returning();
+      return { linkId: edge?.id ?? null };
+    }),
+
+  /** Remove a bound credential edge (owner-gated by the linked tool). */
+  unbindCredential: protectedProcedure
+    .input(z.object({ linkId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const [edge] = await db
+        .select()
+        .from(links)
+        .where(eq(links.id, input.linkId))
+        .limit(1);
+      if (!edge || edge.linkType !== "provides_credential")
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Credential binding not found",
+        });
+      const toolId = (edge.metadata as { toolId?: string } | null)?.toolId;
+      const tool = toolId
+        ? await db.query.tools.findFirst({ where: eq(tools.id, toolId) })
+        : undefined;
+      if (tool?.workspaceId) {
+        const role = await getWorkspaceRole(userId, tool.workspaceId);
+        if (role !== "owner")
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only workspace owners can unbind tool credentials.",
+          });
+      } else if (tool) {
+        // Pod-wide tool — pod-level privileged action.
+        await requirePodAdmin(userId);
+      } else {
+        // Orphan edge (tool deleted / metadata missing): gate on the binding's
+        // creator, falling back to pod-admin — never a silent confused-deputy.
+        if (edge.createdBy !== userId) await requirePodAdmin(userId);
+      }
+      await db.delete(links).where(eq(links.id, input.linkId));
+      return { ok: true };
     }),
 
   /**

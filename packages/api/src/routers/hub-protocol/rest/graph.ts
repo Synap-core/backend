@@ -25,32 +25,12 @@ import {
 } from "./_shared.js";
 import {
   getObjectGraph,
+  GRAPH_KINDS,
+  ENTITY_BACKED,
   type GraphNeighbor,
 } from "../../../services/object-graph/graph-service.js";
 import { entityDataNeighbors } from "../../../services/object-graph/entity-data-graph.js";
 import type { LinkEndpointType } from "@synap/playbooks";
-
-// Kinds the envelope can focus on. Superset of LinkEndpointType so entity-data
-// kinds (view, document) are addressable too — they hydrate via the registry.
-const GRAPH_KINDS = [
-  "entity",
-  "project",
-  "view",
-  "channel",
-  "session",
-  "playbook",
-  "tool",
-  "skill",
-  "automation",
-  "document",
-  "command",
-  "source",
-  "participant",
-] as const;
-
-// Entity-backed kinds carry the relations/property/channel data graph on top of
-// their links graph — fold in getConnections for these.
-const ENTITY_BACKED = new Set(["entity", "project"]);
 
 const GraphNodeSchema = z
   .object({

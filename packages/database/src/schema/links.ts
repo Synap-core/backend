@@ -60,7 +60,10 @@ export type LinkEndpointType =
   | "automation"
   // A project entity (profileSlug='project'). Sessions may be scoped to a
   // project (project-centric-scope Phase 4): `session --targets--> project`.
-  | "project";
+  | "project"
+  // A vault secret, as the TARGET of a `provides_credential` edge (dynamic
+  // tool auth binding: a principal/entity provides the credential for a tool).
+  | "secret";
 
 /** The relationship an edge expresses. */
 export type LinkType =
@@ -79,7 +82,11 @@ export type LinkType =
   | "documents"
   | "concerns"
   // automation → playbook activation edge (Process North Star Wave 0)
-  | "activates";
+  | "activates"
+  // dynamic tool-auth binding: principal|entity --provides_credential--> secret.
+  // metadata.toolId scopes the credential to a specific tool. Resolved at
+  // execution by the dispatcher per the tool's `authBinding`.
+  | "provides_credential";
 
 export const links = pgTable(
   "links",

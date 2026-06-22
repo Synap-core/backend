@@ -15,6 +15,16 @@ import { router, protectedProcedure, podProcedure } from "../trpc.js";
 import { db, eq, and, or, inArray, isNull, desc } from "@synap/database";
 import { entities, relations } from "@synap/database/schema";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
+import {
+  getObjectGraph,
+  connectionsToNeighbors,
+  GRAPH_KINDS,
+  ENTITY_BACKED,
+  type GraphNeighbor,
+  type GraphEnvelope,
+} from "../services/object-graph/graph-service.js";
+import { relationsRouter } from "./relations.js";
+import type { LinkEndpointType } from "@synap/playbooks";
 
 /**
  * Get a single node with full graph context
@@ -23,6 +33,51 @@ import { userVisibleWhere } from "../utils/user-visible-where.js";
  * Essential for graph view performance.
  */
 export const graphRouter = router({
+  /**
+   * THE unified graph envelope — fetch ANY object kind + its typed neighbourhood
+   * (links graph for every kind, + relations/property/channel data graph for
+   * entity-backed kinds). The tRPC twin of `GET /graph/:type/:id` and the MCP
+   * `synap_get_graph` tool: all three share `getObjectGraph` so the browser, the
+   * agent, and external REST see the SAME graph. This is the UI's door to the
+   * "graph by default" envelope (the legacy getNode/getSubgraph below stay for
+   * the force-graph view's bulk fetches).
+   */
+  getObjectGraph: podProcedure
+    .input(
+      z.object({
+        /** Object kind to focus on (entity, session, playbook, tool, …). */
+        type: z.enum(GRAPH_KINDS).default("entity"),
+        /** The object's id (uuid or kind short-id). */
+        id: z.string(),
+        /**
+         * Rendering/property lens for the entity-data fold. Object access is by
+         * id; workspaceId only narrows the relations/property/channel half.
+         */
+        workspaceId: z.string().uuid().nullable().optional(),
+      })
+    )
+    .query(async ({ input, ctx }): Promise<GraphEnvelope> => {
+      // Entity-data half (relations + property + channel) — only for
+      // entity-backed kinds, folded via the SAME getConnections the entity
+      // detail page uses. We hold the real tRPC ctx, so call the relations
+      // router directly (no hub-scope translation needed).
+      let extra: GraphNeighbor[] = [];
+      if (ENTITY_BACKED.has(input.type)) {
+        const relCaller = relationsRouter.createCaller(ctx);
+        const conns = await relCaller.getConnections({
+          entityId: input.id,
+          limit: 100,
+        });
+        extra = connectionsToNeighbors(conns.connections);
+      }
+      return getObjectGraph(
+        ctx.userId,
+        input.type as LinkEndpointType,
+        input.id,
+        extra
+      );
+    }),
+
   /**
    * Get entity with all its relationships and related entity previews
    *

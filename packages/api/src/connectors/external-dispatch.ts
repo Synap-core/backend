@@ -23,7 +23,10 @@ import {
   ChannelType,
   mcpServers,
   secrets,
+  links,
+  entities,
 } from "@synap/database/schema";
+import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { getMessagingConnector } from "./index.js";
 import { syncConnectorRegistry } from "./SyncConnector.js";
 import type { NangoConnector } from "./NangoConnector.js";
@@ -45,6 +48,107 @@ function getNangoConnector(): NangoConnector | undefined {
     | NangoConnector
     | undefined;
   return connector && connector.isConfigured() ? connector : undefined;
+}
+
+/**
+ * Resolve a tool's EFFECTIVE credentialRef per its `authBinding`.
+ *   static     → the tool's own credentialRef (unchanged).
+ *   per_user   → the acting user's bound credential.
+ *   per_agent  → the acting agent-user's bound credential.
+ *   per_entity → the run's subject entity's bound credential (e.g. per client).
+ *
+ * Dynamic bindings resolve a `provides_credential` link from the principal
+ * (participant = user/agent id) or entity (subjectId) to a vault `secret`, scoped
+ * to THIS tool via `metadata.toolId`. Returns `vault://<secretId>`. Throws when
+ * the binding has no bound credential or the required principal is absent — the
+ * caller turns the throw into a 400 (never silently falls back to a shared cred).
+ */
+async function resolveBoundCredentialRef(
+  tool: Pick<ToolRow, "id" | "name" | "authBinding" | "credentialRef">,
+  ctx: {
+    userId: string;
+    agentUserId?: string | null;
+    subjectId?: string | null;
+  }
+): Promise<string> {
+  const binding = tool.authBinding ?? "static";
+  if (binding === "static") {
+    if (!tool.credentialRef)
+      throw new Error(`Tool "${tool.name}" has no credential.`);
+    return tool.credentialRef;
+  }
+
+  let principalType: "participant" | "entity";
+  let principalId: string | null | undefined;
+  if (binding === "per_user") {
+    principalType = "participant";
+    principalId = ctx.userId;
+  } else if (binding === "per_agent") {
+    principalType = "participant";
+    principalId = ctx.agentUserId;
+  } else if (binding === "per_entity") {
+    principalType = "entity";
+    principalId = ctx.subjectId;
+  } else {
+    // Unknown binding — never silently treat it as per_entity (defence against a
+    // malformed/unmigrated value reaching the dynamic path).
+    throw new Error(
+      `Tool "${tool.name}" has an unknown auth binding "${binding}".`
+    );
+  }
+  if (!principalId) {
+    const need =
+      principalType === "entity" ? "subject entity" : "acting principal";
+    throw new Error(
+      `Tool "${tool.name}" is bound "${binding}" but no ${need} is in context.`
+    );
+  }
+
+  // per_entity resolves a SUBJECT-supplied id — verify the actor can actually see
+  // that entity, so a caller can't point at an entity in a workspace they don't
+  // belong to and have the dispatcher decrypt its credential.
+  if (binding === "per_entity") {
+    const [ent] = await db
+      .select({ id: entities.id })
+      .from(entities)
+      .where(
+        and(
+          eq(entities.id, principalId),
+          userVisibleWhere(entities.workspaceId, ctx.userId)
+        )
+      )
+      .limit(1);
+    if (!ent)
+      throw new Error(
+        `Tool "${tool.name}" subject entity is not accessible to the actor.`
+      );
+  }
+
+  const edges = await db
+    .select()
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, principalType),
+        eq(links.fromId, principalId),
+        eq(links.toType, "secret"),
+        eq(links.linkType, "provides_credential")
+      )
+    );
+  // Require a credential scoped to THIS tool (metadata.toolId). NEVER fall back to
+  // an unrelated edge — a single bound secret for a different tool must not be
+  // mis-routed here (cross-tool credential leak).
+  const edge = edges.find(
+    (e) => (e.metadata as { toolId?: string } | null)?.toolId === tool.id
+  );
+  if (!edge) {
+    throw new Error(
+      `No credential is bound to this ${
+        binding === "per_entity" ? "entity" : "principal"
+      } for "${tool.name}". Bind one in the capability's Authentication step.`
+    );
+  }
+  return `vault://${edge.toId}`;
 }
 
 // ── External messaging send ──────────────────────────────────────────────────
@@ -373,6 +477,13 @@ export interface TriggerProviderActionInput {
   /** Optional session/playbook context for the gate's proposal payload + audit. */
   sessionId?: string | null;
   playbookId?: string | null;
+  /**
+   * The run's SUBJECT entity id (the entity the work is "about" — e.g. a client).
+   * Used ONLY to resolve a `per_entity`-bound tool's credential at execution. A
+   * `static`/`per_user`/`per_agent` tool ignores it; absent when not in a
+   * subject-bound run.
+   */
+  subjectId?: string | null;
   /**
    * BYPASS CONTRACT (Wave 3a/3b): set ONLY by the `capability/run` proposal
    * executor (and the auto `run` decision re-entry). When `true`, the
@@ -1068,6 +1179,30 @@ export async function triggerProviderAction(
       };
     }
     credentialRef = tool.credentialRef;
+  }
+
+  // ── Dynamic auth binding — resolve the effective credential per principal ───
+  // A non-static tool resolves its credential per the acting user/agent or the
+  // run's subject entity (a `provides_credential` link). `static` tools keep the
+  // ref resolved above, byte-identical. A binding with no bound credential 400s.
+  if ((tool.authBinding ?? "static") !== "static") {
+    try {
+      credentialRef = await resolveBoundCredentialRef(tool, {
+        userId: input.userId,
+        agentUserId: input.agentUserId ?? null,
+        subjectId: input.subjectId ?? null,
+      });
+    } catch (e) {
+      return {
+        success: false,
+        status: 400,
+        errorCode: "bad_request",
+        error:
+          e instanceof Error
+            ? e.message
+            : "Credential binding could not be resolved.",
+      };
+    }
   }
 
   // ── Capability-execution gate (Wave 3b chokepoint) ─────────────────────────

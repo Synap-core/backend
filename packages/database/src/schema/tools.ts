@@ -34,6 +34,22 @@ export type ToolKind =
 export type ToolExecutorRef = "is-agent" | "external-agent" | "hybrid";
 
 /**
+ * How a Tool's credential is resolved at execution time.
+ *   static     — the tool's own `credentialRef` (one shared credential). DEFAULT.
+ *   per_user   — the acting human user's own credential (a
+ *                `participant(userId) --provides_credential--> secret` link).
+ *   per_agent  — the acting agent-user's own credential (same link, agent id).
+ *   per_entity — the run's SUBJECT entity's credential (e.g. per client) — an
+ *                `entity(subjectId) --provides_credential--> secret` link.
+ * Dynamic bindings let ONE tool ("Email", "LinkedIn") run against many accounts.
+ */
+export type ToolAuthBinding =
+  | "static"
+  | "per_user"
+  | "per_agent"
+  | "per_entity";
+
+/**
  * One verb in a Tool's structured capability catalog (the capability-matrix
  * axis). Kept in lock-step with `ToolVerb` in @synap/playbooks — re-declared here
  * (not imported) so the schema package stays dependency-free, exactly like the
@@ -63,8 +79,17 @@ export const tools = pgTable(
     kind: text("kind").$type<ToolKind>().notNull(),
     /** JSON Schema for the tool's invocation arguments. */
     inputSchema: jsonb("input_schema").notNull().default({}),
-    /** Opaque vault reference (vault://…), resolved server-side per executor. */
+    /** Opaque vault reference (vault://…), resolved server-side per executor.
+     * For a dynamic `authBinding` this is the static/fallback ref; the effective
+     * credential is resolved per principal at execution. */
     credentialRef: text("credential_ref"),
+    /** How the credential is resolved at execution — see ToolAuthBinding. */
+    authBinding: text("auth_binding", {
+      enum: ["static", "per_user", "per_agent", "per_entity"],
+    })
+      .$type<ToolAuthBinding>()
+      .notNull()
+      .default("static"),
     executor: text("executor", {
       enum: ["is-agent", "external-agent", "hybrid"],
     })
