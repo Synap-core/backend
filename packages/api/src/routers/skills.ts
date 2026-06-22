@@ -144,12 +144,17 @@ export const skillsRouter = router({
     .input(
       z.object({
         workspaceId: z.string().uuid().optional(),
-        kind: z.enum(["instruction", "code"]).default("code"),
+        // A skill is Documentation (always) + optional Code. `kind` is derived
+        // from whether code is present; still accepted for back-compat.
+        kind: z.enum(["instruction", "code"]).optional(),
         scope: z.enum(["pod", "user", "workspace"]).default("pod"),
         agentTypes: z.array(z.string()).optional(),
         name: z.string().min(1).max(255),
         description: z.string().optional(),
-        code: z.string().min(1),
+        /** Documentation (Markdown): what the skill does + when to use it. */
+        body: z.string().optional(),
+        /** Optional executable — present ⇒ the skill is runnable (sandboxed). */
+        code: z.string().optional(),
         parameters: z.record(z.string(), z.unknown()).optional(),
         category: z.string().optional(),
         executionMode: z.enum(["sync", "async"]).default("sync"),
@@ -159,6 +164,17 @@ export const skillsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const skillId = randomUUID();
+
+      // Documentation + optional Code. Derive `kind` from code presence (explicit
+      // input.kind still honored). A skill must carry documentation or code.
+      const hasCode = !!input.code?.trim();
+      const kind = input.kind ?? (hasCode ? "code" : "instruction");
+      if (!input.body?.trim() && !hasCode) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "A skill needs documentation or code.",
+        });
+      }
 
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
@@ -191,18 +207,19 @@ export const skillsRouter = router({
           id: skillId,
           userId,
           workspaceId: input.workspaceId,
-          kind: input.kind,
+          kind,
           scope: input.scope,
           agentTypes: input.agentTypes ?? null,
           name: input.name,
           description: input.description,
-          code: input.code,
+          body: input.body ?? null,
+          code: input.code ?? null,
           parameters: input.parameters || {},
           category: input.category,
           executionMode: input.executionMode,
           timeoutSeconds: input.timeoutSeconds,
           status: "active",
-          approved: input.kind === "instruction",
+          approved: kind === "instruction",
         })
         .returning();
 

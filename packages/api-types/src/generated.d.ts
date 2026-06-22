@@ -16973,7 +16973,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		grantCapability: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				sessionId: string;
-				capabilityKind: "command" | "tool" | "skill";
+				capabilityKind: "command" | "tool" | "skill" | "capability";
 				capabilityId: string;
 				agentUserId?: string | undefined;
 				source?: string | undefined;

@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// NOTE: `synap bridge-setup` now seeds these same agency capabilities
+// idempotently as part of its flow. This standalone script remains for
+// headless/CI use-cases where the bridge is not being set up.
 // ─────────────────────────────────────────────────────────────────────────────
 // seed-agency-capabilities.mjs — apply the agency capability TEMPLATES to a pod.
 //
