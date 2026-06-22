@@ -45,6 +45,7 @@ import {
   capabilityTemplates,
   tools as toolsTable,
   skills as skillsTable,
+  playbooks as playbooksTable,
 } from "@synap/database/schema";
 import type { ToolVerbCatalogEntry } from "@synap/database/schema";
 import type {
@@ -54,6 +55,7 @@ import type {
   ToolVerbKind,
 } from "@synap/playbooks";
 
+import { playbooksRouter } from "../../routers/playbooks.js";
 import { toolsRouter } from "../../routers/tools.js";
 import { skillsRouter } from "../../routers/skills.js";
 import type { Context } from "../../types/context.js";
@@ -146,6 +148,31 @@ export async function loadCapabilityTemplate(
   throw new Error(`Capability template not found: ${templateKey}`);
 }
 
+// ── Playbook template shape ───────────────────────────────────────────────────
+//
+// Mirrors the `playbooks.create` tRPC input (createInputSchema in
+// routers/playbooks.ts). A playbook is a session-template seeded alongside the
+// {vault · tools · skills} of a capability. Kept local (not on the shared
+// @synap/playbooks `CapabilityDefinition` contract) so the applier can accept it
+// without a cross-package contract change.
+export interface CapabilityPlaybookDef {
+  name: string;
+  description?: string;
+  goalTemplate: string;
+  params?: Record<string, unknown>[];
+  inputStrategy?: Record<string, unknown>;
+  channelSpec?: Record<string, unknown>;
+  expectedOutputs?: Record<string, unknown>[];
+  schedule?: unknown;
+  executor?: "is-agent" | "external-agent" | "hybrid";
+  status?: "draft" | "active" | "paused" | "archived";
+}
+
+/** Definition the applier accepts — the shared contract plus optional playbooks. */
+export type CapabilityDefinitionWithPlaybooks = CapabilityDefinition & {
+  playbooks?: CapabilityPlaybookDef[];
+};
+
 // ── Result shape ──────────────────────────────────────────────────────────────
 
 export interface CreateCapabilityResult {
@@ -164,6 +191,12 @@ export interface CreateCapabilityResult {
       skillId: string | null;
       proposalId: string | null;
     }[];
+    playbooks: {
+      name: string;
+      status: "created" | "reused" | "proposed";
+      playbookId: string | null;
+      proposalId: string | null;
+    }[];
   };
   proposals: string[];
 }
@@ -175,7 +208,7 @@ export interface CreateCapabilityResult {
  * its {vault · tools · skills} for the acting user/workspace in `ctx`.
  */
 export async function createCapabilityFromDefinition(
-  rawDef: CapabilityDefinition,
+  rawDef: CapabilityDefinitionWithPlaybooks,
   params: Record<string, unknown>,
   ctx: Context
 ): Promise<CreateCapabilityResult> {
@@ -405,12 +438,73 @@ export async function createCapabilityFromDefinition(
     });
   }
 
+  // 4. Playbooks — session-templates seeded alongside the capability. Idempotent:
+  //    reuse an existing playbook with the same name in scope (a no-op reapply, so
+  //    a launch never duplicates). When absent, create through the GOVERNED
+  //    playbooksRouter.create caller — ZERO duplicated insert / cron / governance
+  //    logic (same delegation pattern tools & skills use above). Playbooks are
+  //    workspace-scoped: `create` is a workspaceProcedure, so a workspaceId is
+  //    required for any playbook item.
+  const createdPlaybooks: CreateCapabilityResult["created"]["playbooks"] = [];
+  if ((def.playbooks?.length ?? 0) > 0) {
+    if (!workspaceId) {
+      throw new Error(
+        "createCapabilityFromDefinition: playbooks require a workspaceId (playbooks are workspace-scoped)"
+      );
+    }
+    const playbooksCaller = playbooksRouter.createCaller(ctx as never);
+    for (const p of def.playbooks ?? []) {
+      // Idempotent reuse keyed on the stable natural key: name within scope.
+      const [existing] = await db
+        .select({ id: playbooksTable.id })
+        .from(playbooksTable)
+        .where(
+          and(
+            eq(playbooksTable.name, p.name),
+            eq(playbooksTable.workspaceId, workspaceId)
+          )
+        )
+        .limit(1);
+      if (existing) {
+        createdPlaybooks.push({
+          name: p.name,
+          status: "reused",
+          playbookId: existing.id,
+          proposalId: null,
+        });
+        continue;
+      }
+
+      const result = await playbooksCaller.create({
+        name: p.name,
+        description: p.description,
+        goalTemplate: p.goalTemplate,
+        params: p.params,
+        inputStrategy: p.inputStrategy,
+        channelSpec: p.channelSpec,
+        expectedOutputs: p.expectedOutputs,
+        schedule: p.schedule,
+        executor: p.executor ?? "is-agent",
+        status: p.status ?? "draft",
+      });
+
+      if (result.proposalId) proposals.push(result.proposalId);
+      createdPlaybooks.push({
+        name: p.name,
+        status: result.status === "proposed" ? "proposed" : "created",
+        playbookId: result.playbook?.id ?? null,
+        proposalId: result.proposalId,
+      });
+    }
+  }
+
   return {
     capabilityKey: def.key,
     created: {
       vault: createdVault,
       tools: createdTools,
       skills: createdSkills,
+      playbooks: createdPlaybooks,
     },
     proposals,
   };

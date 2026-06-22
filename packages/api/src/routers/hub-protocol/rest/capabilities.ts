@@ -94,6 +94,22 @@ export const SkillDefSchema = z.object({
   requires: z.array(z.string()).optional(),
 });
 
+// A PLAYBOOK template the definition seeds — mirrors the `playbooks.create`
+// tRPC input shape (createInputSchema in routers/playbooks.ts). String fields
+// support `{{param}}` interpolation like the rest of the definition.
+export const PlaybookDefSchema = z.object({
+  name: z.string().min(1).max(500),
+  description: z.string().optional(),
+  goalTemplate: z.string().min(1).max(5000),
+  params: z.array(z.record(z.string(), z.unknown())).optional(),
+  inputStrategy: z.record(z.string(), z.unknown()).optional(),
+  channelSpec: z.record(z.string(), z.unknown()).optional(),
+  expectedOutputs: z.array(z.record(z.string(), z.unknown())).optional(),
+  schedule: z.unknown().optional(),
+  executor: z.enum(["is-agent", "external-agent", "hybrid"]).optional(),
+  status: z.enum(["draft", "active", "paused", "archived"]).optional(),
+});
+
 export const CapabilityDefinitionSchema = z.object({
   key: z.string().min(1),
   name: z.string().min(1),
@@ -102,6 +118,8 @@ export const CapabilityDefinitionSchema = z.object({
   vault: z.array(VaultDefSchema).optional(),
   tools: z.array(ToolDefSchema),
   skills: z.array(SkillDefSchema),
+  // Optional: session-template playbooks seeded alongside {vault · tools · skills}.
+  playbooks: z.array(PlaybookDefSchema).optional(),
 });
 
 const ApplyCapabilityRequestSchema = z
@@ -129,6 +147,7 @@ const ApplyCapabilityResponseSchema = z.object({
     vault: z.array(z.record(z.string(), z.unknown())),
     tools: z.array(z.record(z.string(), z.unknown())),
     skills: z.array(z.record(z.string(), z.unknown())),
+    playbooks: z.array(z.record(z.string(), z.unknown())),
   }),
   proposals: z.array(z.string()),
 });
