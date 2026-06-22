@@ -2222,10 +2222,22 @@ export const workspacesRouter = router({
             layoutConfig: z
               .object({
                 pinnedApps: z.array(z.string()).optional(),
-                /** Browser: which app to open by default (e.g. 'intelligence' for chat-first) */
-                defaultApp: z.string().optional(),
-                defaultView: z.string().optional(),
-                theme: z.string().optional(),
+                /** Browser: which app to open by default (e.g. 'intelligence' for chat-first).
+                 *  Accept `null` (templates like crm.yaml/marketing.yaml set these to null to
+                 *  mean "no default") but normalize to undefined so the output type stays
+                 *  string|undefined — .optional() alone rejects null. */
+                defaultApp: z
+                  .string()
+                  .nullish()
+                  .transform((v) => v ?? undefined),
+                defaultView: z
+                  .string()
+                  .nullish()
+                  .transform((v) => v ?? undefined),
+                theme: z
+                  .string()
+                  .nullish()
+                  .transform((v) => v ?? undefined),
                 sidebarItems: z
                   .array(
                     z
