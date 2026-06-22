@@ -120,6 +120,12 @@ export function registerChannelsRoutes(app: HubHono): void {
         contextObjectId: z.string().optional(),
         contextObjectType: z.enum(["entity", "document", "view"]).optional(),
         title: z.string().optional(),
+        // Thread-as-child support: when this linked channel is a thread inside a
+        // room, parentChannelId points at the room's Synap channel id and
+        // branchPurpose distinguishes the threads (e.g. "client-comms" / "team").
+        // Both absent → unchanged room behaviour.
+        parentChannelId: z.string().optional(),
+        branchPurpose: z.string().optional(),
       }),
     },
     responses: {
@@ -381,6 +387,8 @@ export function registerChannelsRoutes(app: HubHono): void {
       contextObjectId?: string;
       contextObjectType?: "entity" | "document" | "view";
       title?: string;
+      parentChannelId?: string;
+      branchPurpose?: string;
     };
     if (!body.externalSource || !body.externalChannelId) {
       return c.json(
@@ -437,6 +445,29 @@ export function registerChannelsRoutes(app: HubHono): void {
             )
           );
         linked = true;
+      }
+
+      // 3. Establish the parent/child (thread-in-room) shape when requested.
+      //    Set parentChannelId only when it's still NULL so a re-link never
+      //    clobbers or re-parents an existing thread (idempotent + additive).
+      //    branchPurpose is the thread's role label ("client-comms" / "team");
+      //    we set it alongside the parent link on first establishment.
+      if (body.parentChannelId) {
+        await db
+          .update(channelsTable)
+          .set({
+            parentChannelId: body.parentChannelId,
+            ...(body.branchPurpose
+              ? { branchPurpose: body.branchPurpose }
+              : {}),
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(channelsTable.id, channelId),
+              isNull(channelsTable.parentChannelId)
+            )
+          );
       }
 
       const channel = await db.query.channels.findFirst({
