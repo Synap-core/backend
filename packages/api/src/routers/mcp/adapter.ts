@@ -19,6 +19,7 @@ import {
 import { entityDataNeighbors } from "../../services/object-graph/entity-data-graph.js";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { ask } from "../../services/knowledge/ask.js";
+import { synthesizeAnswer } from "../../services/knowledge/synthesize.js";
 import { type ProfileCatalogEntry } from "../../services/retrieval/index.js";
 import { getDb } from "@synap/database";
 import {
@@ -190,81 +191,14 @@ export async function executeMCPToolViaHubProtocol(
         catalog,
       });
 
-      // Build context + sources from the retrieved items — mirrors the
-      // /knowledge/answer REST handler so the synthesis step is identical.
-      const MAX_CONTEXT_CHARS = 16000;
-      const sources: Array<{ substrate: string; id: string; title: string }> =
-        [];
-      const contextParts: string[] = [];
-      let contextLen = 0;
-
-      for (const block of retrieved.answers) {
-        if (block.status !== "ok") continue;
-        for (const item of block.items) {
-          const rec = item as Record<string, unknown>;
-          const id = typeof rec.id === "string" ? rec.id : "";
-          const title =
-            (typeof rec.name === "string" && rec.name) ||
-            (typeof rec.title === "string" && rec.title) ||
-            (typeof rec.claim === "string" && rec.claim) ||
-            (typeof rec.fact === "string" && rec.fact) ||
-            (typeof rec.content === "string" && rec.content) ||
-            id ||
-            "(item)";
-
-          if (id) sources.push({ substrate: block.substrate, id, title });
-
-          const snippetBits: string[] = [String(title)];
-          for (const [k, v] of Object.entries(rec)) {
-            if (k === "id" || k === "name" || k === "title") continue;
-            if (typeof v === "string" && v.trim()) {
-              snippetBits.push(`${k}: ${v.slice(0, 300)}`);
-            }
-            if (snippetBits.length >= 5) break;
-          }
-          const entry = `- [${block.substrate}] ${snippetBits.join(" · ")}`;
-          if (contextLen + entry.length > MAX_CONTEXT_CHARS) break;
-          contextParts.push(entry);
-          contextLen += entry.length + 1;
-        }
-        if (contextLen >= MAX_CONTEXT_CHARS) break;
-      }
-
-      const context = contextParts.join("\n");
-
-      // Synthesize via the IS "answer" door — one focused LLM call.
-      // On IS unavailability, fall back gracefully: return sources + null answer.
-      const isUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
-      try {
-        const res = await fetch(`${isUrl}/api/knowledge/answer`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Internal-Key": process.env.INTELLIGENCE_HUB_INTERNAL_KEY ?? "",
-          },
-          body: JSON.stringify({
-            question: args.query as string,
-            context,
-            workspaceId: workspaceId ?? undefined,
-          }),
-          signal: AbortSignal.timeout(60_000),
-        });
-        if (!res.ok) throw new Error(`IS answer HTTP ${res.status}`);
-        const data = (await res.json()) as { answer?: string };
-        return ok({
-          answer: typeof data.answer === "string" ? data.answer : null,
-          sources,
-          routedTo: retrieved.routedTo,
-        });
-      } catch {
-        // Synthesis unavailable — return sources so callers can still show matches.
-        return ok({
-          answer: null,
-          sources,
-          routedTo: retrieved.routedTo,
-          error: "synthesis_unavailable",
-        });
-      }
+      // Build context + sources, then synthesize via IS.
+      const synthesis = await synthesizeAnswer(
+        retrieved.answers,
+        args.query as string,
+        retrieved.routedTo,
+        workspaceId ?? null
+      );
+      return ok(synthesis);
     }
 
     case "synap_get_entities": {

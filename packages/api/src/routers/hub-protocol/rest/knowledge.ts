@@ -40,6 +40,7 @@ import {
   type HubProtocolCaller,
 } from "./_shared.js";
 import { ask } from "../../../services/knowledge/index.js";
+import { synthesizeAnswer } from "../../../services/knowledge/synthesize.js";
 import { type ProfileCatalogEntry } from "../../../services/retrieval/index.js";
 
 const ArchiveKnowledgeResponseSchema = z
@@ -845,6 +846,10 @@ export function registerKnowledgeRoutes(app: HubHono): void {
           },
         },
       },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
       403: {
         description: "Forbidden",
         content: { "application/json": { schema: ErrorSchema } },
@@ -866,7 +871,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     const body = c.req.valid("json");
     const question = body.question ?? body.query;
     if (!question) {
-      return c.json({ error: "Missing query or question" }, 500);
+      return c.json({ error: "Missing query or question" }, 400);
     }
     const workspaceId = body.workspaceId ?? null;
 
@@ -899,86 +904,25 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         catalog,
       });
 
-      // Build the context string + sources from the items that actually answered.
-      const MAX_CONTEXT_CHARS = 16000;
-      const sources: Array<{ substrate: string; id: string; title: string }> =
-        [];
-      const contextParts: string[] = [];
-      let contextLen = 0;
-
-      for (const block of result.answers) {
-        if (block.status !== "ok") continue;
-        for (const item of block.items) {
-          const rec = item as Record<string, unknown>;
-          const id = typeof rec.id === "string" ? rec.id : "";
-          const title =
-            (typeof rec.name === "string" && rec.name) ||
-            (typeof rec.title === "string" && rec.title) ||
-            (typeof rec.claim === "string" && rec.claim) ||
-            (typeof rec.fact === "string" && rec.fact) ||
-            (typeof rec.content === "string" && rec.content) ||
-            id ||
-            "(item)";
-
-          if (id) sources.push({ substrate: block.substrate, id, title });
-
-          // Short snippet: title + a few key string props.
-          const snippetBits: string[] = [String(title)];
-          for (const [k, v] of Object.entries(rec)) {
-            if (k === "id" || k === "name" || k === "title") continue;
-            if (typeof v === "string" && v.trim()) {
-              snippetBits.push(`${k}: ${v.slice(0, 300)}`);
-            }
-            if (snippetBits.length >= 5) break;
-          }
-          const entry = `- [${block.substrate}] ${snippetBits.join(" · ")}`;
-          if (contextLen + entry.length > MAX_CONTEXT_CHARS) break;
-          contextParts.push(entry);
-          contextLen += entry.length + 1;
-        }
-        if (contextLen >= MAX_CONTEXT_CHARS) break;
+      // Build context + sources, then synthesize via IS.
+      const synthesis = await synthesizeAnswer(
+        result.answers,
+        question,
+        result.routedTo,
+        workspaceId
+      );
+      if (synthesis.error) {
+        logger.error({ userId }, "knowledge/answer IS call failed");
       }
-
-      const context = contextParts.join("\n");
-
-      // Call the IS "answer" door — ONE focused synthesis LLM call.
-      const isUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
-      try {
-        const res = await fetch(`${isUrl}/api/knowledge/answer`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Internal-Key": process.env.INTELLIGENCE_HUB_INTERNAL_KEY ?? "",
-          },
-          body: JSON.stringify({
-            question,
-            context,
-            workspaceId: workspaceId ?? undefined,
-          }),
-          signal: AbortSignal.timeout(60_000),
-        });
-        if (!res.ok) throw new Error(`IS answer HTTP ${res.status}`);
-        const data = (await res.json()) as { answer?: string };
-        return c.json(
-          {
-            answer: typeof data.answer === "string" ? data.answer : null,
-            sources,
-            routedTo: result.routedTo,
-          },
-          200
-        );
-      } catch (isErr) {
-        logger.error({ err: isErr, userId }, "knowledge/answer IS call failed");
-        return c.json(
-          {
-            answer: null,
-            sources,
-            routedTo: result.routedTo,
-            error: "synthesis_unavailable",
-          },
-          200
-        );
-      }
+      return c.json(
+        {
+          answer: synthesis.answer,
+          sources: synthesis.sources,
+          routedTo: synthesis.routedTo,
+          ...(synthesis.error ? { error: synthesis.error } : {}),
+        },
+        200
+      );
     } catch (err) {
       logger.error({ err, userId }, "POST /knowledge/answer failed");
       return c.json(
