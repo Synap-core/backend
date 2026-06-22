@@ -63,7 +63,10 @@ export type LinkEndpointType =
   | "project"
   // A vault secret, as the TARGET of a `provides_credential` edge (dynamic
   // tool auth binding: a principal/entity provides the credential for a tool).
-  | "secret";
+  | "secret"
+  // A capability CONTAINER (`capabilities` table). Parts attach as members:
+  // `tool|skill|command --member_of--> capability` (mirrors automation→playbook).
+  | "capability";
 
 /** The relationship an edge expresses. */
 export type LinkType =

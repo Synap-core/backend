@@ -171,6 +171,9 @@ export * from "./artifacts.js";
 // templates (playbooks), and the polymorphic config/runtime graph (links).
 export * from "./tools.js";
 export * from "./playbooks.js";
+// Capability containers (CONFIG) — named bundles grouping tools/skills/built-ins
+// (parts attach via `links`: part --member_of--> capability).
+export * from "./capabilities.js";
 export * from "./links.js";
 // Playbook run ledger (RUNTIME) — one row per playbook execution (executor spine, P3).
 export * from "./playbook-runs.js";

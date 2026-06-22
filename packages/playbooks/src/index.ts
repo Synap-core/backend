@@ -169,7 +169,12 @@ export type LinkEndpointType =
   | "automation"
   // A project entity (profileSlug='project'). Sessions may target a project
   // (project-centric-scope Phase 4): `session --targets--> project`.
-  | "project";
+  | "project"
+  // A vault secret — TARGET of a `provides_credential` edge (dynamic tool auth).
+  | "secret"
+  // A capability CONTAINER (`capabilities` table). Parts attach as members:
+  // `tool|skill|command --member_of--> capability`.
+  | "capability";
 export type LinkType =
   | "grants"
   | "requires"

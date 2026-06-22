@@ -3339,6 +3339,22 @@ DROP INDEX IF EXISTS "idx_tools_provider_cred";
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_tools_podwide_credential_ref" ON "tools" ("credential_ref")
   WHERE credential_ref IS NOT NULL AND workspace_id IS NULL;
 
+-- Capability CONTAINERS (mig 0147) — named bundles grouping tools/skills/built-ins.
+-- Parts attach via `links`: part --member_of--> capability. Born NOT approved.
+CREATE TABLE IF NOT EXISTS "capabilities" (
+  "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "workspace_id" uuid,
+  "created_by"   text        NOT NULL,
+  "name"         text        NOT NULL,
+  "description"  text,
+  "approved"     boolean     NOT NULL DEFAULT false,
+  "metadata"     jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  "created_at"   timestamptz NOT NULL DEFAULT now(),
+  "updated_at"   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS "idx_capabilities_workspace_id" ON "capabilities" ("workspace_id");
+CREATE INDEX IF NOT EXISTS "idx_capabilities_created_by"   ON "capabilities" ("created_by");
+
 CREATE TABLE IF NOT EXISTS "playbooks" (
   "id"               uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "workspace_id"     uuid,

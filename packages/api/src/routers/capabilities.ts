@@ -15,6 +15,7 @@ import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import { db, intelligenceServices, eq, drizzleSql } from "@synap/database";
 import { MessageAuthorType } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+import { capabilityContainersRouter } from "./capability-containers.js";
 
 const logger = createLogger({ module: "capabilities" });
 
@@ -54,6 +55,9 @@ async function pingServiceHealth(webhookUrl: string): Promise<boolean> {
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 export const capabilitiesRouter = router({
+  /** Capability CONTAINERS (the named bundles) — CRUD + part attach/detach. */
+  containers: capabilityContainersRouter,
+
   /**
    * List all available capabilities.
    *

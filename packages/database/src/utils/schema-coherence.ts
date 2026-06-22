@@ -597,6 +597,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0126_playbooks_capability_substrate.sql",
   },
   {
+    table: "capabilities",
+    column: "created_by",
+    addedBy: "0147_capabilities.sql",
+  },
+  {
     table: "links",
     column: "from_type",
     addedBy: "0126_playbooks_capability_substrate.sql",
