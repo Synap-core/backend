@@ -474,14 +474,9 @@ export const relationsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
-        // The governed/agent materialization path for exposure edges is not yet
-        // implemented (no relation/create approve-executor + materializer case) —
-        // fail LOUD rather than return a "proposed" that silently never lands.
-        throw new TRPCError({
-          code: "NOT_IMPLEMENTED",
-          message:
-            "exposeToAnchor is operator-direct only for now; the governed/agent (proposal) path is not yet materializable.",
-        });
+        // Governed/agent path: the proposal materializes via the materializer
+        // worker's `relation/create` case (writes the visible_to edge on approval).
+        return { status: "proposed" as const, proposalId: perm.proposalId };
       }
 
       const eventRepo = new EventRepository(sql);
@@ -591,14 +586,9 @@ export const relationsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
-        // Governed/agent materialization for projectMember is not implemented yet
-        // (no projectMember/create executor + materializer case) — fail LOUD,
-        // don't fake a "proposed" that silently never materializes.
-        throw new TRPCError({
-          code: "NOT_IMPLEMENTED",
-          message:
-            "grantAnchorMembership is operator-direct only for now; the governed/agent (proposal) path is not yet materializable.",
-        });
+        // Governed/agent path: the proposal materializes via the materializer
+        // worker's `projectMember/create` case (writes the grant on approval).
+        return { status: "proposed" as const, proposalId: perm.proposalId };
       }
 
       const eventRepo = new EventRepository(sql);

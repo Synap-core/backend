@@ -51,6 +51,8 @@ import {
   users,
   proposals,
   focusSessions,
+  relations,
+  projectMembers,
 } from "@synap/database/schema";
 import {
   createUnifiedEvent,
@@ -136,6 +138,12 @@ export async function handleMaterialize(
         break;
       case "link":
         await materializeLink(action, workspaceId, data);
+        break;
+      case "relation":
+        await materializeRelation(action, workspaceId, data);
+        break;
+      case "projectMember":
+        await materializeProjectMember(action, data);
         break;
       case "whiteboard":
         // Whiteboard proposals are handled inline by their own REST route;
@@ -843,6 +851,83 @@ async function materializeLink(
     { fromType, fromId, toType, toId, linkType },
     "Link materialized"
   );
+}
+
+/**
+ * Materialize an approved `relation/create` proposal (chantier α — the governed
+ * path for `exposeToAnchor`'s `visible_to` edge, and any other relation proposal).
+ * The authz already happened at proposal-creation (the gated mutation) + human
+ * approval; this just writes the approved edge. Idempotent via onConflictDoNothing.
+ */
+async function materializeRelation(
+  action: string,
+  workspaceId: string | undefined,
+  data: Record<string, unknown>
+): Promise<void> {
+  if (action !== "create") {
+    logger.warn({ action }, "Relation materialization only supports 'create'");
+    return;
+  }
+  const id = data.id as string | undefined;
+  const sourceEntityId = data.sourceEntityId as string | undefined;
+  const targetEntityId = data.targetEntityId as string | undefined;
+  const type = data.type as string | undefined;
+  if (!sourceEntityId || !targetEntityId || !type) {
+    logger.error(
+      { id, sourceEntityId, targetEntityId, type },
+      "Relation materialization missing required fields; skipping"
+    );
+    return;
+  }
+  const db = await getDb();
+  await db
+    .insert(relations)
+    .values({
+      ...(id ? { id } : {}),
+      sourceEntityId,
+      targetEntityId,
+      type,
+      workspaceId: (data.workspaceId as string) ?? workspaceId ?? null,
+      userId: (data.userId as string) ?? null,
+      metadata: (data.metadata as Record<string, unknown>) ?? {},
+    })
+    .onConflictDoNothing();
+  logger.info({ id, sourceEntityId, targetEntityId, type }, "Relation materialized");
+}
+
+/**
+ * Materialize an approved `projectMember/create` proposal (chantier α — the
+ * governed path for `grantAnchorMembership`). AuthZ happened at proposal-creation
+ * (assertAnchorAdmin) + human approval. Idempotent via onConflictDoNothing on the
+ * (project_id, user_id) unique constraint.
+ */
+async function materializeProjectMember(
+  action: string,
+  data: Record<string, unknown>
+): Promise<void> {
+  if (action !== "create") {
+    logger.warn(
+      { action },
+      "ProjectMember materialization only supports 'create'"
+    );
+    return;
+  }
+  const projectId = data.projectId as string | undefined;
+  const userId = data.userId as string | undefined;
+  if (!projectId || !userId) {
+    logger.error(
+      { projectId, userId },
+      "ProjectMember materialization missing required fields; skipping"
+    );
+    return;
+  }
+  const role = (data.role as "owner" | "editor" | "viewer") ?? "viewer";
+  const db = await getDb();
+  await db
+    .insert(projectMembers)
+    .values({ projectId, userId, role })
+    .onConflictDoNothing();
+  logger.info({ projectId, userId, role }, "ProjectMember materialized");
 }
 
 async function materializeWorkspace(
