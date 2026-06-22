@@ -46,6 +46,7 @@ import {
   EventRepository,
   RelationRepository,
   RelationDefRepository,
+  ProjectMemberRepository,
   SYSTEM_RELATION_TYPES,
   sql,
   inArray,
@@ -62,6 +63,7 @@ import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { getLinksFor } from "../services/links/links-service.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import { VISIBLE_TO } from "../utils/project-scope.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
@@ -366,6 +368,201 @@ export const relationsRouter = router({
   /**
    * Create a new relation between entities
    */
+  /**
+   * Expose an entity to an anchor (chantier α P2) — the SANCTIONED, anchor-admin-
+   * gated writer of the `visible_to` exposure edge. This is the ONLY path that may
+   * create `visible_to` (relations.create rejects it). The edge makes `entityId`
+   * visible to members of `anchorId` via the exposure floor (`exposureMemberWhere`).
+   * AuthZ: caller must be able to WRITE the exposed entity AND ADMINISTER the anchor
+   * (both gated on the LOADED rows, never request-supplied ids).
+   */
+  exposeToAnchor: protectedProcedure
+    .input(
+      z.object({
+        entityId: z.string().uuid(),
+        anchorId: z.string().uuid(),
+        metadata: z.record(z.string(), z.any()).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const database = await getDb();
+      const [entityRow] = await database
+        .select({
+          id: entities.id,
+          workspaceId: entities.workspaceId,
+          userId: entities.userId,
+        })
+        .from(entities)
+        .where(eq(entities.id, input.entityId))
+        .limit(1);
+      const [anchorRow] = await database
+        .select({
+          id: entities.id,
+          workspaceId: entities.workspaceId,
+          userId: entities.userId,
+        })
+        .from(entities)
+        .where(eq(entities.id, input.anchorId))
+        .limit(1);
+      if (!entityRow) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
+      }
+      if (!anchorRow) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Anchor entity not found",
+        });
+      }
+      if (!anchorRow.workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Anchor entity must be workspace-scoped",
+        });
+      }
+
+      // AuthZ — gate on the LOADED rows: the caller must be able to write the
+      // exposed entity AND administer the anchor. (Never gate on input ids.)
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: entityRow.workspaceId,
+        ownerId: entityRow.userId,
+      });
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: anchorRow.workspaceId,
+        ownerId: anchorRow.userId,
+      });
+
+      const id = randomUUID();
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: anchorRow.workspaceId,
+        subjectType: "relation",
+        action: "create",
+        data: {
+          id,
+          sourceEntityId: input.entityId,
+          targetEntityId: input.anchorId,
+          type: VISIBLE_TO,
+          // Mirror the direct-write provenance so a materialized proposal carries
+          // the right owner/workspace (not the sync fallback).
+          userId: ctx.userId,
+          workspaceId: anchorRow.workspaceId,
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      const eventRepo = new EventRepository(sql);
+      const relationRepo = new RelationRepository(database, eventRepo);
+      const relation = await relationRepo.create(
+        {
+          id,
+          sourceEntityId: input.entityId,
+          targetEntityId: input.anchorId,
+          type: VISIBLE_TO,
+          workspaceId: anchorRow.workspaceId,
+          userId: ctx.userId,
+          metadata: input.metadata,
+        },
+        ctx.userId
+      );
+      auditLog({
+        subjectType: "relation",
+        action: "create",
+        phase: "completed",
+        subjectId: relation.id,
+        userId: ctx.userId,
+        workspaceId: anchorRow.workspaceId,
+        data: {
+          type: VISIBLE_TO,
+          entityId: input.entityId,
+          anchorId: input.anchorId,
+        },
+      });
+      return { status: "created" as const, id: relation.id };
+    }),
+
+  /**
+   * Grant a user membership of an anchor entity (chantier α P2, GO-LIVE control #1)
+   * — the gated writer of `project_members`. AuthZ: only someone who can ADMINISTER
+   * the anchor may grant membership on it (else a user could add themselves to an
+   * arbitrary anchor and read its exposed set). For a CLIENT principal: grant
+   * membership on the client anchor and do NOT add them to the workspace — the
+   * exposure floor then scopes their reads to that anchor's exposed entities only.
+   */
+  grantAnchorMembership: protectedProcedure
+    .input(
+      z.object({
+        anchorId: z.string().uuid(),
+        userId: z.string().uuid(),
+        role: z.enum(["owner", "editor", "viewer"]).default("viewer"),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const database = await getDb();
+      const [anchorRow] = await database
+        .select({
+          id: entities.id,
+          workspaceId: entities.workspaceId,
+          userId: entities.userId,
+        })
+        .from(entities)
+        .where(eq(entities.id, input.anchorId))
+        .limit(1);
+      if (!anchorRow) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Anchor entity not found",
+        });
+      }
+      if (!anchorRow.workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Anchor entity must be workspace-scoped",
+        });
+      }
+
+      // AuthZ (control #1) — gate on the LOADED anchor row: only an admin of the
+      // anchor may grant membership on it.
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: anchorRow.workspaceId,
+        ownerId: anchorRow.userId,
+      });
+
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: anchorRow.workspaceId,
+        subjectType: "projectMember",
+        action: "create",
+        data: {
+          projectId: input.anchorId,
+          userId: input.userId,
+          role: input.role,
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      }
+
+      const eventRepo = new EventRepository(sql);
+      const memberRepo = new ProjectMemberRepository(database, eventRepo);
+      const member = await memberRepo.add(
+        {
+          projectId: input.anchorId,
+          userId: input.userId,
+          role: input.role,
+        },
+        ctx.userId
+      );
+      return { status: "created" as const, memberId: member.id };
+    }),
+
   create: protectedProcedure
     .input(
       z.object({
@@ -378,6 +575,15 @@ export const relationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Exposure edges are NOT freely creatable — `visible_to` grants cross-anchor
+      // visibility and MUST go through the anchor-admin-gated sanctioned writer.
+      if (input.type === VISIBLE_TO) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "visible_to is an exposure edge — use relations.exposeToAnchor (anchor-admin gated), not relations.create.",
+        });
+      }
       const id = randomUUID();
       // Resolve workspace ID: prefer explicit input, fall back to context header
       const effectiveWorkspaceId = input.workspaceId || ctx.workspaceId;
@@ -1017,6 +1223,18 @@ export const relationsRouter = router({
       const existingDefSlugs = new Set(existingDefs.map((d) => d.slug));
       const systemTypes = new Set(SYSTEM_RELATION_TYPES as readonly string[]);
       let relationDefsCreated = 0;
+
+      // Exposure edges are NOT freely creatable here either — reject visible_to
+      // BEFORE any relation-def is auto-created; use relations.exposeToAnchor.
+      for (const rel of input.relations) {
+        if (rel.type === VISIBLE_TO) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "visible_to is an exposure edge — use relations.exposeToAnchor, not relations.batchCreate.",
+          });
+        }
+      }
 
       for (const rel of input.relations) {
         if (systemTypes.has(rel.type)) continue;
