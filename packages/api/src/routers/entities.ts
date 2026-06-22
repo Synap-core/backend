@@ -60,7 +60,7 @@ import {
   workspaceLensWhere,
 } from "../utils/user-visible-where.js";
 import {
-  projectMemberWhere,
+  exposureMemberWhere,
   projectLensWhere,
 } from "../utils/project-scope.js";
 import { resolveContentTarget } from "../import/materialize-document.js";
@@ -75,10 +75,12 @@ function entityVisibleWhere(userId: string) {
       isNotNull(entities.workspaceId),
       userVisibleWhere(entities.workspaceId, userId)
     ),
-    // Project-membership access (project-centric-scope): a project member sees
-    // their project's entities ACROSS workspaces — even ones they aren't a member
-    // of — and nothing else there. The third access source in the user floor.
-    projectMemberWhere(entities.id, userId)
+    // Exposure-membership access (chantier α): an anchor member — a PROJECT member
+    // (belongs_to_project) OR a CLIENT (visible_to) — sees their anchor's exposed
+    // entities ACROSS workspaces, and nothing else there. The third access source
+    // in the user floor. Dormant until visible_to edges + anchor members exist
+    // (belongs_to_project behaviour is unchanged — it's in the default whitelist).
+    exposureMemberWhere(entities.id, userId)
   )!;
 }
 
