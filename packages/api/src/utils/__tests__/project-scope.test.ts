@@ -75,7 +75,11 @@ import {
   projectMemberWhere,
   projectLensWhere,
   accessScopeWhere,
+  exposureMemberWhere,
+  exposureLensWhere,
   BELONGS_TO_PROJECT,
+  VISIBLE_TO,
+  EXPOSURE_RELATION_TYPES,
 } from "../project-scope.js";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
@@ -88,6 +92,48 @@ const col = (name: string): AnyPgColumn =>
 describe("BELONGS_TO_PROJECT", () => {
   it("is the canonical relation type string", () => {
     expect(BELONGS_TO_PROJECT).toBe("belongs_to_project");
+  });
+});
+
+describe("exposure axis (VISIBLE_TO / generic edges)", () => {
+  it("VISIBLE_TO is the generic exposure relation type", () => {
+    expect(VISIBLE_TO).toBe("visible_to");
+  });
+
+  it("EXPOSURE_RELATION_TYPES whitelists exactly project + visible_to edges", () => {
+    // The whitelist IS the leak guardrail — adding a type is a deliberate widening.
+    expect([...EXPOSURE_RELATION_TYPES].sort()).toEqual([
+      "belongs_to_project",
+      "visible_to",
+    ]);
+  });
+
+  it("exposureMemberWhere returns OR(inArray, inArray) keyed on entityIdColumn", () => {
+    const entityIdCol = col("entities.id");
+    const result = exposureMemberWhere(entityIdCol, "user-1") as any;
+    expect(result._tag).toBe("or");
+    expect(result.args).toHaveLength(2);
+    expect(result.args[0]._tag).toBe("inArray");
+    expect(result.args[1]._tag).toBe("inArray");
+    expect(result.args[0].col).toBe(entityIdCol);
+    expect(result.args[1].col).toBe(entityIdCol);
+  });
+
+  it("exposureLensWhere returns OR(eq, inArray) with eq matching the anchor", () => {
+    const entityIdCol = col("id");
+    const result = exposureLensWhere(entityIdCol, "client-entity-uuid") as any;
+    expect(result._tag).toBe("or");
+    expect(result.args[0]._tag).toBe("eq");
+    expect(result.args[0].col).toBe(entityIdCol);
+    expect(result.args[0].val).toBe("client-entity-uuid");
+    expect(result.args[1]._tag).toBe("inArray");
+  });
+
+  it("projectMemberWhere is the belongs_to_project preset of exposureMemberWhere", () => {
+    const preset = projectMemberWhere(col("id"), "u") as any;
+    const generic = exposureMemberWhere(col("id"), "u", [BELONGS_TO_PROJECT]) as any;
+    expect(preset._tag).toBe(generic._tag);
+    expect(preset.args).toHaveLength(generic.args.length);
   });
 });
 
