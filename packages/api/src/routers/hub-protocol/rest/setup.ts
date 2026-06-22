@@ -61,6 +61,7 @@ const SURFACE_AGENT_TYPES = [
   "raycast",
   "codex",
   "openwebui",
+  "discord",
   "generic",
 ] as const;
 
