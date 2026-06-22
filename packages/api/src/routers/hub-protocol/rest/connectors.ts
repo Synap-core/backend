@@ -8,11 +8,18 @@
  */
 
 import { createRoute, z } from "@hono/zod-openapi";
+import { db, workspaceMembers, eq, and } from "@synap/database";
 import { syncConnectorRegistry } from "../../../connectors/index.js";
 import type { NangoConnector } from "../../../connectors/NangoConnector.js";
 import { triggerProviderAction } from "../../../connectors/external-dispatch.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
-import { hasScope, logger, resolveActorId, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  resolveActingContext,
+  resolveActorId,
+  type HubHono,
+} from "./_shared.js";
 
 export function registerConnectorsRoutes(app: HubHono): void {
   // ── GET /connectors/providers ─────────────────────────────────────────────
@@ -101,6 +108,15 @@ export function registerConnectorsRoutes(app: HubHono): void {
                 .object({
                   providerId: z.string().optional(),
                   workspaceId: z.string().optional(),
+                  /**
+                   * Optional: bind the resulting Nango connection to ANOTHER
+                   * workspace member instead of the caller (the operator). Used
+                   * by the Discord bridge so a linked teammate's `/connect`
+                   * creates a connection owned by THEM. SECURITY-GATED: allowed
+                   * only when the caller is owner/admin of the workspace OR is
+                   * the same user; AND the target must be a workspace member.
+                   */
+                  onBehalfOfUserId: z.string().optional(),
                 })
                 .openapi("ConnectorSessionRequest"),
             },
@@ -145,8 +161,56 @@ export function registerConnectorsRoutes(app: HubHono): void {
       if (!connector || !connector.isConfigured()) {
         return c.json({ error: "Nango not configured" }, 503);
       }
-      const userId = c.get("userId") as string;
-      const { providerId, workspaceId } = c.req.valid("json");
+      const callerUserId = c.get("userId") as string;
+      const { providerId, workspaceId, onBehalfOfUserId } = c.req.valid("json");
+
+      // Resolve WHO the connection binds to. Default = the caller (operator for
+      // the bridge key) — behaviour unchanged when onBehalfOfUserId is absent.
+      let userId = callerUserId;
+      if (onBehalfOfUserId && onBehalfOfUserId !== callerUserId) {
+        // ── SECURITY GATE (mirrors discord-identity.ts's link gate) ──────────
+        // Bind the acting identity + workspace, then allow on-behalf-of only if
+        // the caller is owner/admin of that workspace OR is acting as themself.
+        const acting = await resolveActingContext(c, { workspaceId });
+        if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+        const isPrivileged = acting.role === "owner" || acting.role === "admin";
+        const isSelf = onBehalfOfUserId === acting.userId;
+        if (!isPrivileged && !isSelf) {
+          logger.warn(
+            {
+              callerUserId: acting.userId,
+              workspaceId: acting.workspaceId,
+              role: acting.role,
+              onBehalfOfUserId,
+            },
+            "POST /connectors/session rejected: not owner/admin and not self"
+          );
+          return c.json(
+            {
+              error:
+                "Only a workspace owner or admin can create a connection on behalf of another member",
+            },
+            403
+          );
+        }
+        // The target MUST be a member of the acting workspace — never bind a
+        // connection to an arbitrary pod user the caller can't actually manage.
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, acting.workspaceId),
+            eq(workspaceMembers.userId, onBehalfOfUserId)
+          ),
+          columns: { id: true },
+        });
+        if (!membership) {
+          return c.json(
+            { error: "onBehalfOfUserId is not a member of this workspace" },
+            403
+          );
+        }
+        userId = onBehalfOfUserId;
+      }
+
       const effectiveProvider = providerId ?? "*";
       let session;
       try {
