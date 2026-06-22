@@ -41,7 +41,10 @@ import {
 } from "@synap/database/schema";
 import type { ChannelSpec, RunResult, InputStrategy } from "@synap/playbooks";
 import { instantiateSession } from "./playbook-lifecycle.js";
-import { extractCapabilities, getLinksFor } from "../links/links-service.js";
+import {
+  resolveGrantedCapabilities,
+  getLinksFor,
+} from "../links/links-service.js";
 import { resolveExecutor } from "./executors/registry.js";
 import { createLogger } from "@synap-core/core";
 
@@ -288,7 +291,7 @@ async function executeSingleRun(
     "playbook",
     input.playbookId
   );
-  const capabilities = extractCapabilities(playbookLinks, {
+  const capabilities = await resolveGrantedCapabilities(playbookLinks, {
     linkType: "grants",
     fromType: "playbook",
   });

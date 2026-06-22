@@ -2849,6 +2849,176 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	dialect: "pg";
 }>;
 export type Playbook = typeof playbooks.$inferSelect;
+declare const capabilities: import("drizzle-orm/pg-core").PgTableWithColumns<{
+	name: "capabilities";
+	schema: undefined;
+	columns: {
+		id: import("drizzle-orm/pg-core").PgColumn<{
+			name: "id";
+			tableName: "capabilities";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: true;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		workspaceId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "workspace_id";
+			tableName: "capabilities";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		createdBy: import("drizzle-orm/pg-core").PgColumn<{
+			name: "created_by";
+			tableName: "capabilities";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		name: import("drizzle-orm/pg-core").PgColumn<{
+			name: "name";
+			tableName: "capabilities";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		description: import("drizzle-orm/pg-core").PgColumn<{
+			name: "description";
+			tableName: "capabilities";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		approved: import("drizzle-orm/pg-core").PgColumn<{
+			name: "approved";
+			tableName: "capabilities";
+			dataType: "boolean";
+			columnType: "PgBoolean";
+			data: boolean;
+			driverParam: boolean;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		metadata: import("drizzle-orm/pg-core").PgColumn<{
+			name: "metadata";
+			tableName: "capabilities";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		createdAt: import("drizzle-orm/pg-core").PgColumn<{
+			name: "created_at";
+			tableName: "capabilities";
+			dataType: "date";
+			columnType: "PgTimestamp";
+			data: Date;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		updatedAt: import("drizzle-orm/pg-core").PgColumn<{
+			name: "updated_at";
+			tableName: "capabilities";
+			dataType: "date";
+			columnType: "PgTimestamp";
+			data: Date;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+	};
+	dialect: "pg";
+}>;
+export type CapabilityRow = typeof capabilities.$inferSelect;
 /**
  * Links Schema — the config/runtime graph edges
  *
@@ -2883,7 +3053,7 @@ export type Playbook = typeof playbooks.$inferSelect;
  * The kind of object on either end of a link edge.
  * `participant` = a user-id OR agent-user-id (both live in the `users` table).
  */
-export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project" | "secret";
+export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project" | "secret" | "capability";
 /** The relationship an edge expresses. */
 export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "targets" | "produced" | "member_of" | "feeds" | "promoted_to" | "provided_by" | "about" | "documents" | "concerns" | "activates" | "provides_credential";
 /**
@@ -8014,12 +8184,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				id: string;
 				updatedAt: Date;
+				capabilities: string[];
 				createdAt: Date;
 				metadata: Record<string, unknown> | null;
 				version: string | null;
 				status: string;
 				description: string | null;
-				capabilities: string[];
 				serviceId: string;
 				webhookUrl: string;
 				mcpEndpoint: string | null;
@@ -8064,12 +8234,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				id: string;
 				updatedAt: Date;
+				capabilities: string[];
 				createdAt: Date;
 				metadata: Record<string, unknown> | null;
 				version: string | null;
 				status: string;
 				description: string | null;
-				capabilities: string[];
 				serviceId: string;
 				webhookUrl: string;
 				mcpEndpoint: string | null;
@@ -8678,10 +8848,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agents: {
 					name: string;
 					id: string;
+					capabilities: string[] | null;
 					description: string | null;
 					slug: string;
 					icon: string | null;
-					capabilities: string[] | null;
 					ownerType: string;
 				}[];
 			};
@@ -8955,12 +9125,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					id: string;
 					updatedAt: Date;
+					capabilities: string[];
 					createdAt: Date;
 					metadata: Record<string, unknown> | null;
 					version: string | null;
 					status: string;
 					description: string | null;
-					capabilities: string[];
 					serviceId: string;
 					webhookUrl: string;
 					mcpEndpoint: string | null;
@@ -9039,6 +9209,122 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		};
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		containers: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			meta: object;
+			errorShape: {
+				message: string;
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+				data: import("@trpc/server").TRPCDefaultErrorData;
+			};
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			list: import("@trpc/server").TRPCQueryProcedure<{
+				input: {
+					workspaceId?: string | undefined;
+				} | undefined;
+				output: {
+					parts: {
+						connections: number;
+						skills: number;
+						builtins: number;
+					};
+					name: string;
+					workspaceId: string | null;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					metadata: unknown;
+					description: string | null;
+					createdBy: string;
+					approved: boolean;
+				}[];
+				meta: object;
+			}>;
+			get: import("@trpc/server").TRPCQueryProcedure<{
+				input: {
+					id: string;
+				};
+				output: {
+					capability: CapabilityRow;
+					parts: {
+						connections: {
+							id: string;
+							name: string;
+							kind: string;
+							approved: boolean;
+						}[];
+						builtins: {
+							id: string;
+							name: string;
+							kind: string;
+							approved: boolean;
+						}[];
+						skills: {
+							id: string;
+							name: string;
+							kind: string;
+							approved: boolean;
+						}[];
+					};
+				};
+				meta: object;
+			}>;
+			create: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					name: string;
+					description?: string | undefined;
+					workspaceId?: string | undefined;
+				};
+				output: {
+					capability: CapabilityRow;
+				};
+				meta: object;
+			}>;
+			update: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+					name?: string | undefined;
+					description?: string | undefined;
+					approved?: boolean | undefined;
+				};
+				output: {
+					capability: CapabilityRow;
+				};
+				meta: object;
+			}>;
+			delete: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+				};
+				output: {
+					ok: true;
+				};
+				meta: object;
+			}>;
+			addPart: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					capabilityId: string;
+					partType: "tool" | "skill";
+					partId: string;
+				};
+				output: {
+					ok: true;
+				};
+				meta: object;
+			}>;
+			removePart: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					capabilityId: string;
+					partType: "tool" | "skill";
+					partId: string;
+				};
+				output: {
+					ok: true;
+				};
+				meta: object;
+			}>;
+		}>>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: {
@@ -10289,9 +10575,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					layoutConfig?: {
 						pinnedApps?: string[] | undefined;
-						defaultApp?: string | undefined;
-						defaultView?: string | undefined;
-						theme?: string | undefined;
+						defaultApp?: string | null | undefined;
+						defaultView?: string | null | undefined;
+						theme?: string | null | undefined;
 						sidebarItems?: {
 							[x: string]: unknown;
 							kind: "cell" | "external" | "view" | "app" | "profile";
@@ -12189,12 +12475,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string | null;
 				id: string;
 				updatedAt: Date;
+				capabilities: ToolVerbCatalogEntry[];
 				createdAt: Date;
 				metadata: unknown;
 				status: "error" | "active" | "inactive";
 				description: string | null;
 				createdBy: string;
-				capabilities: ToolVerbCatalogEntry[];
 				config: unknown;
 				kind: ToolKind;
 				approved: boolean;
@@ -13816,13 +14102,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				userId: string | null;
 				id: string;
 				updatedAt: Date;
+				capabilities: string[] | null;
 				createdAt: Date;
 				metadata: unknown;
 				description: string | null;
 				active: boolean | null;
 				slug: string;
 				icon: string | null;
-				capabilities: string[] | null;
 				ownerType: string;
 				intelligenceServiceId: string | null;
 			};
@@ -13843,13 +14129,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				userId: string | null;
 				id: string;
 				updatedAt: Date;
+				capabilities: string[] | null;
 				createdAt: Date;
 				metadata: unknown;
 				description: string | null;
 				active: boolean | null;
 				slug: string;
 				icon: string | null;
-				capabilities: string[] | null;
 				ownerType: string;
 				intelligenceServiceId: string | null;
 			};

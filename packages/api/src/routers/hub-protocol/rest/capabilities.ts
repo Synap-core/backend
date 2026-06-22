@@ -24,6 +24,7 @@ import {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,
 } from "../../../services/capabilities/create-from-definition.js";
+import { capabilitiesRouter } from "../../capabilities.js";
 import { playbooksRouter } from "../../playbooks.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 
@@ -156,6 +157,10 @@ const CapabilitiesListResponseSchema = z.object({
   capabilities: z.array(z.record(z.string(), z.unknown())),
 });
 
+const CapabilityContainersListResponseSchema = z.object({
+  capabilities: z.array(z.record(z.string(), z.unknown())),
+});
+
 // ── Register function ──────────────────────────────────────────────────────
 
 export function registerCapabilitiesRoutes(app: HubHono): void {
@@ -219,6 +224,87 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       return c.json({ capabilities }, 200);
     } catch (err) {
       logger.error({ err }, "capabilities list failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/capabilities/containers",
+    tags: ["Capabilities"],
+    summary:
+      "List capability CONTAINERS (named bundles) the agent can discover",
+    description:
+      "Returns the capability containers visible in a workspace (pod-wide + the " +
+      "given workspace). Each container is a named bundle of parts — Connections " +
+      "(tools), Skills, and Built-ins — grouped via the `links` table as " +
+      "`tool|skill --member_of--> capability`. Each returned container includes " +
+      "its `parts` (connections/builtins/skills with names + kinds) so the agent " +
+      "knows what each bundle contains. Thin door over the tRPC " +
+      "`capabilities.containers.list` + `.get` callers. Requires hub-protocol.read " +
+      "scope and a `workspaceId` query param.",
+    request: {
+      query: z.object({ workspaceId: z.string().uuid() }),
+    },
+    responses: {
+      200: {
+        description: "Capability containers with their member parts",
+        schema: CapabilityContainersListResponseSchema,
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  // ── GET /capabilities/containers ───────────────────────────────────────────
+  // Thin door over the tRPC `capabilities.containers.list` + per-container `.get`
+  // (both queries on a protectedProcedure). Static route — declared BEFORE any
+  // dynamic `/capabilities/:id` (none today) per the Hono ordering rule.
+  app.get("/capabilities/containers", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+
+    const workspaceId = c.req.query("workspaceId");
+    const wsCheck = z.string().uuid().safeParse(workspaceId);
+    if (!wsCheck.success) {
+      return c.json(
+        { error: "workspaceId query param (UUID) is required" },
+        400
+      );
+    }
+
+    try {
+      const acting = await resolveActingContext(c, { workspaceId });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      const ctx = await createHubProtocolCallerContext(
+        acting.userId,
+        c.get("scopes") as string[],
+        workspaceId
+      );
+      const caller = capabilitiesRouter.createCaller(ctx as never);
+      const containers = await caller.containers.list({ workspaceId });
+
+      // Enrich each container with its member parts (names + kinds) so the agent
+      // sees what skills/connections each bundle holds, not just counts.
+      const enriched = await Promise.all(
+        containers.map(async (container) => {
+          const detail = await caller.containers.get({ id: container.id });
+          return { ...container, members: detail.parts };
+        })
+      );
+
+      return c.json({ capabilities: enriched }, 200);
+    } catch (err) {
+      logger.error({ err }, "capabilities containers list failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

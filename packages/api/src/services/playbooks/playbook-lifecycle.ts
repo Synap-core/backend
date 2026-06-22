@@ -167,6 +167,11 @@ export async function promoteSessionToPlaybook(
   }
 
   // Capabilities the session USED → re-grant them on the new playbook.
+  // NB: `used` edges are part-only today (every `used`-edge writer constrains the
+  // kind to tool|skill|command), so `extractCapabilities` (which drops container
+  // edges) is correct here. If a `used --> capability` edge ever becomes possible,
+  // switch this to `resolveGrantedCapabilities` so the container fans out to its
+  // members rather than being silently dropped.
   const sessionLinks = await getLinksFor(input.userId, "session", session.id);
   const grantedCaps = extractCapabilities(sessionLinks, {
     linkType: "used",

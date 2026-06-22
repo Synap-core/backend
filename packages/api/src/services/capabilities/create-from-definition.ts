@@ -46,6 +46,7 @@ import {
   tools as toolsTable,
   skills as skillsTable,
   playbooks as playbooksTable,
+  capabilities as capabilitiesTable,
 } from "@synap/database/schema";
 import type { ToolVerbCatalogEntry } from "@synap/database/schema";
 import type {
@@ -58,6 +59,7 @@ import type {
 import { playbooksRouter } from "../../routers/playbooks.js";
 import { toolsRouter } from "../../routers/tools.js";
 import { skillsRouter } from "../../routers/skills.js";
+import { capabilityContainersRouter } from "../../routers/capability-containers.js";
 import type { Context } from "../../types/context.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { interpolateDeep } from "../_shared/interpolate.js";
@@ -178,6 +180,12 @@ export type CapabilityDefinitionWithPlaybooks = CapabilityDefinition & {
 export interface CreateCapabilityResult {
   capabilityKey: string;
   created: {
+    /** The capability CONTAINER the seeded tools + skills are grouped under. */
+    container: {
+      id: string;
+      name: string;
+      status: "created" | "reused";
+    } | null;
     vault: { ref: string; vaultRef: string; secretId: string }[];
     tools: {
       name: string;
@@ -498,9 +506,64 @@ export async function createCapabilityFromDefinition(
     }
   }
 
+  // 5. Capability CONTAINER — group the seeded tools + skills under ONE named
+  //    capability (the container model). Idempotent on name within scope; parts
+  //    attach as `tool|skill --member_of--> capability` via the GOVERNED container
+  //    router (addPart is itself idempotent — re-apply never duplicates a member).
+  const containersCaller = capabilityContainersRouter.createCaller(
+    ctx as never
+  );
+  let container: CreateCapabilityResult["created"]["container"] = null;
+  const [existingContainer] = await db
+    .select({ id: capabilitiesTable.id })
+    .from(capabilitiesTable)
+    .where(
+      and(
+        eq(capabilitiesTable.name, def.name),
+        workspaceId
+          ? eq(capabilitiesTable.workspaceId, workspaceId)
+          : isNull(capabilitiesTable.workspaceId)
+      )
+    )
+    .limit(1);
+  const containerId = existingContainer
+    ? existingContainer.id
+    : ((
+        await containersCaller.create({
+          name: def.name,
+          description: def.description,
+          workspaceId,
+        })
+      ).capability?.id ?? null);
+  if (containerId) {
+    container = {
+      id: containerId,
+      name: def.name,
+      status: existingContainer ? "reused" : "created",
+    };
+    // Attach every created tool (connections + built-ins) and skill as a member.
+    for (const toolId of toolIdByName.values()) {
+      await containersCaller.addPart({
+        capabilityId: containerId,
+        partType: "tool",
+        partId: toolId,
+      });
+    }
+    for (const s of createdSkills) {
+      if (s.skillId) {
+        await containersCaller.addPart({
+          capabilityId: containerId,
+          partType: "skill",
+          partId: s.skillId,
+        });
+      }
+    }
+  }
+
   return {
     capabilityKey: def.key,
     created: {
+      container,
       vault: createdVault,
       tools: createdTools,
       skills: createdSkills,

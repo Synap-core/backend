@@ -1,0 +1,136 @@
+{
+  "key": "agency-skills",
+  "name": "Agency — AI Know-How",
+  "description": "The agency's AI know-how bundle: six instruction skills (prompt/doc skills injected into the agent's turn — no sandboxed code, no connector calls) that teach the agent how to draft outreach, draft replies, qualify replies, summarize threads, extract action items, and assemble a client brief. Plus two process playbooks (lead-outreach, client-onboarding) that sequence those skills + the connector tools into the §2 agency flows. Instruction skills are pure know-how: when the agent runs in a client's thread it gets that client as the subject (contextEntityId), and these skills shape WHAT it writes. Their `requires` lists name the connector tools the skill's output feeds into (e.g. draft-outreach feeds the LinkedIn send) — the tools come from the sibling capabilities (unipile-linkedin, nango-gmail, telegram-bridge); apply those to wire the links. Outbound actions remain proposal-gated and reversible.",
+  "params": [],
+  "vault": [],
+  "tools": [],
+  "skills": [
+    {
+      "name": "draft-outreach",
+      "kind": "instruction",
+      "scope": "pod",
+      "description": "Write a personalized, non-salesy first outreach message to a lead, grounded in their LinkedIn profile and our agency's pitch. Output feeds the LinkedIn send (Unipile), which stays proposal-gated.",
+      "requires": ["unipile_linkedin"],
+      "code": "# Draft Outreach\n\nYou are writing the FIRST message to a lead we just connected with on LinkedIn. The goal is to start a genuine conversation, not to sell. A good first message earns a reply; a salesy one gets ignored.\n\n## Inputs you are given\n- The lead's LinkedIn profile (name, headline, current company, role, recent activity, location).\n- Our agency's pitch / positioning (what we do, who we help, the outcome we deliver).\n- Any prior context about why this lead was sourced (the list they came from, the angle).\n\n## How to write it\n1. **Open with them, not us.** Reference something specific and true from their profile — their role, a company milestone, a post they shared, a shared interest. Generic openers (\"I came across your profile\") are a tell; be specific enough that it could only have been written for this person.\n2. **One sentence of relevance.** Connect what they do to what we do, lightly. Show you understand their world.\n3. **A low-friction invitation.** Ask one easy, open question OR offer something small and useful (an idea, a resource). Never pitch the engagement in message one. No calendar links, no \"hop on a call\" yet.\n4. **Be brief.** 3–5 sentences. LinkedIn rewards short. If it reads like a template, rewrite it.\n5. **Match their register.** Mirror the lead's seniority and tone — peer-to-peer for founders/execs, warm and concrete for operators.\n\n## Hard rules\n- No flattery that isn't earned, no buzzwords (\"synergy\", \"circle back\", \"game-changer\").\n- No more than one ask. No links unless they're genuinely helpful.\n- Use the lead's first name once, naturally.\n- Never invent facts about the lead — only use what's in the profile.\n\n## Output\nReturn ONLY the message text, ready to review and send. No subject line (LinkedIn DMs have none), no preamble, no explanation. The operator reviews and edits before it sends."
+    },
+    {
+      "name": "draft-reply",
+      "kind": "instruction",
+      "scope": "pod",
+      "description": "Draft a proposed reply to a client's mail or Telegram thread, in the client's voice and with full client context. Output feeds the Gmail/Telegram send, which stays proposal-gated and operator-reviewed.",
+      "requires": ["gmail", "telegram"],
+      "code": "# Draft Reply\n\nYou are drafting a reply on behalf of the operator, inside a specific client's communication thread (mail or Telegram). The operator will review and edit before it sends — your job is to get them 90% of the way with a reply they can approve in one read.\n\n## Inputs you are given\n- The full thread (most recent message last) — mail or Telegram.\n- The client's context: who they are, the engagement, recent activity, known preferences (e.g. \"prefers async\", \"likes bullet points\", tone).\n- Any open commitments or deadlines relevant to this thread.\n\n## How to write it\n1. **Answer what was actually asked.** Identify the concrete asks/questions in the latest message and address each. Don't dodge, don't pad.\n2. **Match the client's voice and channel.** Mail can be a touch more formal; Telegram is shorter and warmer. Mirror how this client and operator have written earlier in the thread.\n3. **Be specific and committed.** If we owe something, say what and by when. If we need info, ask precisely. Avoid vague reassurance (\"we'll look into it\").\n4. **Acknowledge, then move forward.** One line of acknowledgement if warranted, then the substance. No long apologies.\n5. **Surface, don't hide, uncertainty.** If a question can't be answered without info the operator holds, draft the reply with a clearly-marked placeholder like [confirm timeline with operator] rather than guessing.\n\n## Hard rules\n- Never commit to a date, price, or scope that isn't supported by the thread or client context — flag it for the operator instead.\n- Don't invent facts about the engagement.\n- Keep it tight: clients value brevity. Cut anything that doesn't serve the reply.\n\n## Output\nReturn ONLY the reply body, ready to review and send. For mail, you MAY include a one-line subject ONLY if starting a new subject; otherwise omit it. No commentary about your reasoning — just the draft."
+    },
+    {
+      "name": "qualify-reply",
+      "kind": "instruction",
+      "scope": "pod",
+      "description": "Classify a lead's or client's reply (interested / not-interested / needs-info) and state the single recommended next step. Pure classification — no tools, no sends.",
+      "code": "# Qualify Reply\n\nYou are triaging an inbound reply from a lead or client so the operator (and the automation) knows what to do next. Be decisive and honest — a wrong \"interested\" wastes outreach, a wrong \"not\" loses a deal.\n\n## Inputs you are given\n- The reply text.\n- The thread it replied to (what we asked / sent).\n- Light context on the lead/client and where they are in the flow.\n\n## Classify into exactly ONE label\n- **interested** — they signal openness: a question back, a yes, a request to talk, curiosity about what we do. Lukewarm-but-engaged counts as interested.\n- **not-interested** — a clear no, \"not now\", \"please remove me\", silence-with-decline, or an out-of-office that closes the door. Respect it.\n- **needs-info** — they're not saying yes or no; they need something from us first (pricing, a clarification, proof, a different contact). The ball is in our court.\n\n## How to decide\n- Read intent, not just politeness. \"Thanks, this is interesting, but...\" is usually not-interested or needs-info depending on the \"but\".\n- When genuinely ambiguous, prefer **needs-info** over guessing interested/not — it routes to a human-shaped next step instead of a premature send.\n- Detect explicit opt-outs and ALWAYS classify them not-interested, regardless of tone.\n\n## Output\nReturn a compact result with exactly these fields:\n- `label`: one of interested | not-interested | needs-info\n- `confidence`: low | medium | high\n- `reason`: one sentence citing the signal in their reply.\n- `next_step`: one concrete recommended action (e.g. \"send the personalized first message\", \"draft a reply answering their pricing question\", \"mark not-interested and stop outreach\", \"promote to a deal and start onboarding\").\n\nDo not take the action — only recommend it. Every send remains proposal-gated and operator-reviewed."
+    },
+    {
+      "name": "summarize-thread",
+      "kind": "instruction",
+      "scope": "pod",
+      "description": "Condense a mail or Telegram thread into the key points plus the open questions. Pure know-how — no tools.",
+      "code": "# Summarize Thread\n\nYou are condensing a communication thread (mail or Telegram) so the operator can grasp it in seconds and pick up where it left off. Accuracy and brevity both matter — a summary that hides an open question is worse than none.\n\n## Inputs you are given\n- The full thread, oldest to newest.\n- Light client/lead context (who the parties are).\n\n## What to produce\n1. **TL;DR** — one or two sentences: what this thread is about and where it stands right now.\n2. **Key points** — 3–6 bullets of the substance: decisions made, commitments given (by us and by them), facts established, dates/numbers that matter. Attribute who said what when it's load-bearing.\n3. **Open questions / awaiting** — the things still unresolved: what we're waiting on from them, what they're waiting on from us, any unanswered question. Be explicit about whose court the ball is in.\n4. **Recommended next step** — one line, only if obvious from the thread.\n\n## Rules\n- Only state what's in the thread. Never infer commitments that weren't made.\n- Preserve specifics — exact dates, amounts, names — don't blur them into \"soon\" or \"some\".\n- If the thread is short, keep the summary shorter than the thread; don't pad.\n\n## Output\nReturn the four sections above as plain markdown. No preamble."
+    },
+    {
+      "name": "extract-action-items",
+      "kind": "instruction",
+      "scope": "pod",
+      "description": "Turn a thread (mail/Telegram) into a list of concrete, assignable tasks. Pure know-how — no tools.",
+      "code": "# Extract Action Items\n\nYou are turning a communication thread into a clean list of concrete tasks the team can act on. A good action item is unambiguous about WHAT and WHO; a vague one (\"follow up\") is useless.\n\n## Inputs you are given\n- The full thread (mail or Telegram).\n- Client/lead context and who's on our side.\n\n## How to extract\n1. Read the whole thread, then pull out every commitment, request, and unresolved decision that requires someone to DO something.\n2. Phrase each as an imperative starting with a verb: \"Send the revised proposal\", \"Confirm the launch date with the client\", \"Draft the onboarding doc\".\n3. Assign an owner where the thread makes it clear (us vs the client vs a named person). If unclear, mark owner as `unassigned`.\n4. Capture a due date / timeframe ONLY if the thread states or strongly implies one — never invent deadlines.\n5. Note a one-clause source so the operator can trace it back (\"client asked for pricing in last message\").\n\n## Rules\n- One task per item — split compound asks (\"send the deck and book a call\") into two.\n- Don't manufacture tasks the thread doesn't support. If there are no action items, say so plainly.\n- Keep client-side and our-side tasks distinct so the operator sees what we owe vs what we're waiting on.\n\n## Output\nReturn a list where each item has: `task` (imperative), `owner` (us | client | named person | unassigned), `due` (date/timeframe or null), `source` (one clause). These will be proposed as task entities linked to the client — every write stays proposal-gated."
+    },
+    {
+      "name": "client-brief",
+      "kind": "instruction",
+      "scope": "pod",
+      "description": "Assemble a client's context — who they are, the engagement, recent activity — at the start of an agent turn so the agent acts with full grounding. Pure know-how — no tools.",
+      "code": "# Client Brief\n\nYou are assembling a fast, accurate briefing on a client at the START of a turn, so everything you do next (drafting a reply, planning work, answering the operator) is grounded in who this client actually is. Think of it as reading the file before the meeting.\n\n## Inputs you are given\n- The client entity (name, company, the engagement, status).\n- Recent activity: latest messages across their channels, recent tasks/deals, recent notes.\n- Any stored preferences or facts about how they like to work.\n\n## What to assemble\n1. **Who they are** — client/company name, the relationship (deal stage or active engagement), and the one-line of what we do for them.\n2. **Where things stand** — the current state of the engagement: what's in flight, what's blocked, what's recently shipped or decided.\n3. **Recent activity** — the last few meaningful touchpoints (a mail, a Telegram exchange, a meeting), newest first, each one clause.\n4. **Open items** — what we owe them and what we're waiting on (pull from open tasks / unresolved threads).\n5. **How to work with them** — known preferences: tone, channel, cadence, sensitivities (e.g. \"prefers async\", \"wants weekly updates\", \"don't loop in X\").\n\n## Rules\n- Only state what the pod actually knows — never fabricate engagement details or preferences.\n- Lead with what's most decision-relevant for the turn ahead; cut stale or irrelevant history.\n- Keep it scannable — the agent reads this in one pass before acting.\n\n## Output\nReturn the five sections as compact markdown. This is the agent's grounding for the turn; it is not shown to the client."
+    }
+  ],
+  "playbooks": [
+    {
+      "name": "Lead Outreach",
+      "description": "Flow 1 — Lead acquisition via LinkedIn outreach from an imported list. The agent works the list one lead at a time, each step proposal-gated and operator-reviewed.",
+      "goalTemplate": "Work a list of imported leads into qualified conversations via LinkedIn. For each lead: (1) find their LinkedIn profile via Unipile profile search; (2) send a connection request (proposal-gated); (3) wait for acceptance (delay / scheduled re-check); (4) on acceptance, use the draft-outreach skill to write a personalized, non-salesy first message from the lead's profile + our agency pitch, and propose it for the operator to review and send; (5) on reply, use qualify-reply to classify interest and recommend the next step — if interested, promote the lead to a deal/client and trigger the client-onboarding flow. Every outbound action stays proposal-gated and reversible.",
+      "params": [
+        {
+          "name": "leadSource",
+          "label": "Lead source",
+          "type": "text",
+          "required": false,
+          "description": "Where this batch of leads came from (e.g. the monthly CSV name or the campaign angle) — used to ground the outreach."
+        }
+      ],
+      "inputStrategy": {
+        "kind": "entity-list",
+        "description": "Bound to a list of lead entities (e.g. imported from a monthly CSV); the agent iterates one lead per cycle."
+      },
+      "channelSpec": {
+        "kind": "session",
+        "description": "Runs in the lead-outreach session; outreach drafts and qualification post into the session for review."
+      },
+      "expectedOutputs": [
+        {
+          "kind": "entity",
+          "profileSlug": "person",
+          "description": "LinkedIn profiles matched and enriched as person entities."
+        },
+        {
+          "kind": "note",
+          "description": "Connection requests and sent first messages recorded for the activity timeline."
+        },
+        {
+          "kind": "deal",
+          "description": "Interested leads promoted to deals for the onboarding flow."
+        }
+      ],
+      "schedule": null,
+      "executor": "is-agent",
+      "status": "draft"
+    },
+    {
+      "name": "Client Onboarding",
+      "description": "Flow 3 — One command (a won deal, or /link-client) sets up the whole client context. Idempotent: re-running ensures the pieces exist without duplicating them. Every creation is proposal-gated.",
+      "goalTemplate": "Onboard a client into a complete working context. Steps: (1) ensure the client ENTITY exists (create it from the deal/name if absent); (2) ensure the client ROOM + threads exist — a client-comms thread for inbound mail/Telegram and a team+AI thread for work; (3) start a per-client SESSION bound to the client (instantiate with subjectId = the client entity) as the hub linking their mail/Drive/tasks/messages; (4) attach the DEFAULT automations for this client (e.g. draft-reply on inbound mail, intro message on first channel creation) — opt-in per client; (5) link the client's Google DRIVE folder (create + share if absent) via the gdrive tool; (6) link the client's MAIL (the dedicated per-engagement address); (7) PIN the client context to the channel — the Drive link and a client-brief (use the client-brief skill) so every turn starts grounded. Each step is proposal-gated and reversible; re-running is idempotent.",
+      "params": [
+        {
+          "name": "clientName",
+          "label": "Client name",
+          "type": "text",
+          "required": true,
+          "description": "The client to onboard (used to find-or-create the client entity)."
+        }
+      ],
+      "inputStrategy": {
+        "kind": "entity",
+        "description": "Bound to a single client entity (the subject); the session is instantiated with this client as subjectId."
+      },
+      "channelSpec": {
+        "kind": "client-room",
+        "description": "Sets up the client's room with a client-comms thread (inbound mail/Telegram) and a team+AI thread (work)."
+      },
+      "expectedOutputs": [
+        {
+          "kind": "entity",
+          "profileSlug": "client",
+          "description": "The client entity, ensured."
+        },
+        {
+          "kind": "channel",
+          "description": "The client room + client-comms and team+AI threads."
+        },
+        {
+          "kind": "note",
+          "description": "Pinned client context: Drive link + client-brief."
+        }
+      ],
+      "schedule": null,
+      "executor": "is-agent",
+      "status": "draft"
+    }
+  ]
+}

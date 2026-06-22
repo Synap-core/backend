@@ -1,0 +1,20 @@
+{
+  "key": "nango-gdrive",
+  "name": "Nango — Google Drive",
+  "description": "Google Drive access through Nango OAuth. Registers one provider tool whose credentialRef is the stable nango://google-drive ref (Nango holds the OAuth credential — no vault secret). The dispatcher resolves the user's most-recent google-drive connection (Connection-Id + Provider-Config-Key) and proxies requests to the Google Drive API. PRECONDITION: a Nango integration with providerConfigKey 'google-drive' must already exist and the acting user must have connected their Google account via Settings -> Connectors. Drive code skills (create folder, share link, list files) are NOT seeded here — those connector operations are not yet built; this template establishes the connection + auth so those skills can land later.",
+  "params": [],
+  "vault": [],
+  "tools": [
+    {
+      "name": "gdrive",
+      "kind": "provider",
+      "description": "Google Drive access through Nango. credentialRef nango://google-drive resolves the user's Google connection (Connection-Id + Provider-Config-Key) and proxies the request to the Google Drive API.",
+      "credentialRef": "nango://google-drive",
+      "executor": "is-agent",
+      "config": {
+        "providerConfigKey": "google-drive"
+      }
+    }
+  ],
+  "skills": []
+}

@@ -13,7 +13,7 @@
  * (team/platform/playbooks-capability-substrate.mdx).
  */
 
-import { getDb, eq, and, or, links } from "@synap/database";
+import { getDb, eq, and, or, inArray, links } from "@synap/database";
 import type { Link } from "@synap/database/schema";
 import type { LinkInput, LinkEndpointType } from "@synap/playbooks";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
@@ -166,4 +166,120 @@ export function extractCapabilities(
     .filter(
       (c) => c.kind === "tool" || c.kind === "skill" || c.kind === "command"
     );
+}
+
+/**
+ * Resolve a capability CONTAINER's runnable member parts via the `member_of`
+ * graph (`tool|skill|command --member_of--> capability`). The shared expansion
+ * used by BOTH grant resolution (run-playbook) and grant issuance (session
+ * grantCapability). Returns each part's kind + id + the capability it belongs to
+ * (so callers can attribute per-capability metadata / grant scope).
+ */
+export async function getCapabilityMemberParts(
+  capabilityIds: string[]
+): Promise<
+  { kind: "tool" | "skill" | "command"; id: string; capabilityId: string }[]
+> {
+  if (capabilityIds.length === 0) return [];
+  const db = await getDb();
+  const rows = await db
+    .select({
+      fromType: links.fromType,
+      fromId: links.fromId,
+      toId: links.toId,
+    })
+    .from(links)
+    .where(
+      and(
+        eq(links.toType, "capability"),
+        inArray(links.toId, capabilityIds),
+        eq(links.linkType, "member_of")
+      )
+    );
+  // Dedup by kind+id so a part shared by two granted containers (or a duplicate
+  // member_of edge) yields ONE part — callers issuing per-part rows must not
+  // double-insert. First occurrence wins its capabilityId (for metadata attrib).
+  const seen = new Set<string>();
+  return rows
+    .filter(
+      (m) =>
+        m.fromType === "tool" ||
+        m.fromType === "skill" ||
+        m.fromType === "command"
+    )
+    .map((m) => ({
+      kind: m.fromType as "tool" | "skill" | "command",
+      id: m.fromId,
+      capabilityId: m.toId,
+    }))
+    .filter((p) => {
+      const key = `${p.kind}:${p.id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+/**
+ * Capability-aware grant resolution. Same as `extractCapabilities` for direct
+ * `tool|skill|command` grant edges, but ADDITIONALLY fans out grant edges that
+ * target a capability CONTAINER (`toType === "capability"`) into that container's
+ * member parts.
+ *
+ * This is the ONE seam that makes a Capability the grantable unit: granting a
+ * capability to a playbook/session grants all its parts, while the gate stays
+ * per-(kind,id) and unchanged. The capability grant edge's `metadata` (e.g. the
+ * recorded `execMode`) is inherited by each expanded member. Direct part grants
+ * win over inherited ones on a kind+id collision.
+ */
+export async function resolveGrantedCapabilities(
+  edges: {
+    linkType: string;
+    fromType: string;
+    toType: string;
+    toId: string;
+    metadata?: unknown;
+  }[],
+  opts: { linkType: string; fromType: string }
+): Promise<
+  {
+    kind: "tool" | "skill" | "command";
+    id: string;
+    metadata?: Record<string, unknown>;
+  }[]
+> {
+  const direct = extractCapabilities(edges, opts);
+
+  const capEdges = edges.filter(
+    (l) =>
+      l.linkType === opts.linkType &&
+      l.fromType === opts.fromType &&
+      l.toType === "capability"
+  );
+  if (capEdges.length === 0) return direct;
+
+  const asMeta = (m: unknown): Record<string, unknown> | undefined =>
+    m && typeof m === "object" && !Array.isArray(m)
+      ? (m as Record<string, unknown>)
+      : undefined;
+  const metaByCap = new Map<string, Record<string, unknown> | undefined>();
+  for (const e of capEdges) metaByCap.set(e.toId, asMeta(e.metadata));
+
+  const members = await getCapabilityMemberParts([
+    ...new Set(capEdges.map((e) => e.toId)),
+  ]);
+
+  const seen = new Set(direct.map((c) => `${c.kind}:${c.id}`));
+  const merged = [...direct];
+  for (const m of members) {
+    const key = `${m.kind}:${m.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push({
+      kind: m.kind,
+      id: m.id,
+      metadata: metaByCap.get(m.capabilityId),
+    });
+  }
+  return merged;
 }

@@ -15,11 +15,17 @@ import {
   and,
   desc,
   focusSessions,
+  capabilities,
   vaultGrants,
   assertGrantScoped,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
-import { getLinksFor, createLinks } from "../services/links/links-service.js";
+import {
+  getLinksFor,
+  createLinks,
+  getCapabilityMemberParts,
+} from "../services/links/links-service.js";
+import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { emitSideEffects } from "@synap/events";
 
@@ -333,7 +339,9 @@ export const focusSessionsRouter = router({
     .input(
       z.object({
         sessionId: z.string().uuid(),
-        capabilityKind: z.enum(["tool", "skill", "command"]),
+        // "capability" grants a CONTAINER — expanded to per-part enforcement
+        // rows below (the gate stays per-tool/skill/command).
+        capabilityKind: z.enum(["tool", "skill", "command", "capability"]),
         capabilityId: z.string(),
         agentUserId: z.string().uuid().optional(),
         source: z.string().optional(),
@@ -414,15 +422,50 @@ export const focusSessionsRouter = router({
         grantedTo: input.agentUserId ?? null,
         workspaceId: session.workspaceId,
       });
-      await db.insert(vaultGrants).values({
-        grantableType: input.capabilityKind,
-        grantableId: input.capabilityId,
-        execMode: "auto",
-        grantedTo: input.agentUserId ?? null,
-        workspaceId: session.workspaceId,
-        scope: "session",
-        createdBy: ctx.userId,
-      });
+      // Enforcement rows are ALWAYS per runnable part — the gate is per-(kind,id)
+      // and has no notion of a container. Granting a "capability" expands to one
+      // vault_grants row per member part; a direct tool/skill/command grant is
+      // the single part. (An empty container grants nothing enforceable yet; new
+      // parts added later are not retroactively granted.)
+      // For a capability CONTAINER grant, confirm the caller can actually SEE
+      // the container before fanning its members out into grant rows — the
+      // fan-out helper is a pure graph lookup with no visibility filter, so the
+      // check belongs here (mirrors `containers.get`'s userVisibleWhere gate).
+      if (input.capabilityKind === "capability") {
+        const [container] = await db
+          .select({ id: capabilities.id })
+          .from(capabilities)
+          .where(
+            and(
+              eq(capabilities.id, input.capabilityId),
+              userVisibleWhere(capabilities.workspaceId, ctx.userId)
+            )
+          );
+        if (!container) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Capability not found",
+          });
+        }
+      }
+
+      const grantParts =
+        input.capabilityKind === "capability"
+          ? await getCapabilityMemberParts([input.capabilityId])
+          : [{ kind: input.capabilityKind, id: input.capabilityId }];
+      if (grantParts.length > 0) {
+        await db.insert(vaultGrants).values(
+          grantParts.map((p) => ({
+            grantableType: p.kind,
+            grantableId: p.id,
+            execMode: "auto" as const,
+            grantedTo: input.agentUserId ?? null,
+            workspaceId: session.workspaceId,
+            scope: "session" as const,
+            createdBy: ctx.userId,
+          }))
+        );
+      }
 
       emitSideEffects({
         subjectType: "focus_session",
