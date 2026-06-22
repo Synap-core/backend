@@ -10,8 +10,10 @@ import {
   eq,
   and,
   desc,
+  isNull,
 } from "@synap/database";
 
+import { resolveOrCreateExternalChannel } from "../../../services/connectors/inbound-recorder.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
   ChannelByContextRequestSchema,
@@ -21,7 +23,13 @@ import {
   WireChannelSchema,
 } from "./_codecs/channel.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  getCaller,
+  hasScope,
+  logger,
+  resolveActingContext,
+  type HubHono,
+} from "./_shared.js";
 
 export function registerChannelsRoutes(app: HubHono): void {
   // ── GET /channels ────────────────────────────────────────────────────────
@@ -92,6 +100,44 @@ export function registerChannelsRoutes(app: HubHono): void {
   });
 
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
+  registerOpenApi(app, {
+    method: "post",
+    path: "/channels",
+    tags: ["Channels"],
+    summary: "Create-or-link an EXTERNAL channel bound to an entity",
+    description:
+      "Idempotent find-or-link of the canonical EXTERNAL channel for " +
+      "(externalSource, externalChannelId). Creates the channel if absent and, " +
+      "when contextObjectId is supplied, binds it to that entity (e.g. a client " +
+      "person/client entity mirrored as a Discord channel). Reuses the shared " +
+      "inbound-recorder upsert so it dedups on the (externalSource, externalId) " +
+      "partial unique index.",
+    request: {
+      body: z.object({
+        workspaceId: z.string().optional(),
+        externalSource: z.string().min(1),
+        externalChannelId: z.string().min(1),
+        contextObjectId: z.string().optional(),
+        contextObjectType: z.enum(["entity", "document", "view"]).optional(),
+        title: z.string().optional(),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Created-or-linked channel",
+        schema: z.object({
+          channelId: z.string(),
+          created: z.boolean(),
+          linked: z.boolean(),
+          channel: WireChannelSchema,
+        }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
   registerOpenApi(app, {
     method: "post",
     path: "/channels/by-context",
@@ -303,6 +349,120 @@ export function registerChannelsRoutes(app: HubHono): void {
       );
       return c.json(
         { error: err instanceof Error ? err.message : String(err) },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /channels — create-or-link an EXTERNAL channel bound to an entity.
+   *
+   * The agency "/link-client" door: given a Discord channel id and a client
+   * entity id, ensure there is ONE Synap EXTERNAL channel mirroring that Discord
+   * channel and bound (contextObjectType="entity") to the client. Idempotent on
+   * the (externalSource, externalId) partial unique index — calling it twice for
+   * the same Discord channel returns the existing row.
+   *
+   * Reuses `resolveOrCreateExternalChannel` (the shared inbound-recorder upsert)
+   * for the create/dedup half, then sets the entity link in a follow-up update
+   * if the row isn't already bound. We do NOT duplicate channel-creation logic.
+   */
+  app.post("/channels", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const body = (await c.req.json().catch(() => ({}))) as {
+      workspaceId?: string;
+      externalSource?: string;
+      externalChannelId?: string;
+      contextObjectId?: string;
+      contextObjectType?: "entity" | "document" | "view";
+      title?: string;
+    };
+    if (!body.externalSource || !body.externalChannelId) {
+      return c.json(
+        { error: "externalSource and externalChannelId are required" },
+        400
+      );
+    }
+    if (body.contextObjectId && !body.contextObjectType) {
+      return c.json(
+        {
+          error:
+            "contextObjectType is required when contextObjectId is provided",
+        },
+        400
+      );
+    }
+
+    // Bind the acting identity + workspace to the authenticated bearer (same
+    // IDOR-closing path the Discord agent-turn door uses).
+    const acting = await resolveActingContext(c, {
+      workspaceId: body.workspaceId,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const { userId, workspaceId } = acting;
+
+    try {
+      // 1. Create-or-find the canonical EXTERNAL channel (race-safe upsert on the
+      //    (externalSource, externalId) partial unique index).
+      const { channelId, contextObjectId: existingContextId } =
+        await resolveOrCreateExternalChannel({
+          provider: body.externalSource,
+          externalId: body.externalChannelId,
+          userId,
+          workspaceId,
+          title: body.title ?? `${body.externalSource} channel`,
+        });
+
+      // 2. Bind to the entity if requested and not already bound. Guard on
+      //    contextObjectId IS NULL so a re-link never clobbers an existing bind
+      //    (keeps the door idempotent + safe).
+      let linked = false;
+      if (body.contextObjectId && !existingContextId) {
+        await db
+          .update(channelsTable)
+          .set({
+            contextObjectType: body.contextObjectType,
+            contextObjectId: body.contextObjectId,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(channelsTable.id, channelId),
+              isNull(channelsTable.contextObjectId)
+            )
+          );
+        linked = true;
+      }
+
+      const channel = await db.query.channels.findFirst({
+        where: eq(channelsTable.id, channelId),
+      });
+
+      return c.json({
+        channelId,
+        // `linked` = the channel is now bound to an entity (either we just bound
+        // it, or it was already bound to one). The upsert helper doesn't surface
+        // a create-vs-found flag, so `created` mirrors "no prior entity bind".
+        created: !existingContextId,
+        linked: linked || !!existingContextId,
+        channel,
+      });
+    } catch (err) {
+      logger.error(
+        {
+          err,
+          externalSource: body.externalSource,
+          externalChannelId: body.externalChannelId,
+        },
+        "POST /channels create-or-link failed"
+      );
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
         500
       );
     }
