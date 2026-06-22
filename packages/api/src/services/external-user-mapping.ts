@@ -37,6 +37,7 @@ import {
   users,
   workspaceMembers,
   type ApiKeyExternalUserRecord,
+  type ApiKeyExternalUserMetadata,
 } from "@synap/database";
 
 import { createLogger } from "@synap-core/core";
@@ -422,6 +423,123 @@ export async function lookupExternalUserMapping(
     ),
   });
   return found ?? null;
+}
+
+/**
+ * READ-ONLY resolve of an existing Discord→Synap link.
+ *
+ * Returns the linked Synap user (with display name) or `{ linked: false }`.
+ * Unlike `resolveExternalUserMapping`, this NEVER auto-creates a user — it is
+ * the safe lookup used by the agent-turn caller-resolution and the
+ * GET /discord/identity probe. Identity must be EXPLICITLY linked first.
+ */
+export interface ResolvedExternalLink {
+  linked: boolean;
+  synapUserId?: string;
+  displayName?: string;
+}
+
+export async function resolveExistingExternalUser(
+  parentKeyId: string,
+  externalUserId: string
+): Promise<ResolvedExternalLink> {
+  // Cheap path: the in-process cache only holds confirmed mappings.
+  const cached = getCached(parentKeyId, externalUserId);
+  if (cached) {
+    return { linked: true, synapUserId: cached.synapUserId };
+  }
+
+  const existing = await db.query.apiKeyExternalUsers.findFirst({
+    where: and(
+      eq(apiKeyExternalUsers.parentApiKeyId, parentKeyId),
+      eq(apiKeyExternalUsers.externalUserId, externalUserId)
+    ),
+    columns: { id: true, synapUserId: true, metadata: true },
+  });
+
+  if (!existing) return { linked: false };
+
+  setCached(parentKeyId, externalUserId, existing.synapUserId, existing.id);
+
+  // Prefer the human's real user.name; fall back to the mapping's stored label.
+  const user = await db.query.users.findFirst({
+    where: eq(users.id, existing.synapUserId),
+    columns: { name: true },
+  });
+  const meta = existing.metadata as ApiKeyExternalUserMetadata | null;
+  return {
+    linked: true,
+    synapUserId: existing.synapUserId,
+    displayName: user?.name ?? meta?.displayName ?? undefined,
+  };
+}
+
+/**
+ * Explicitly link an external user id to an EXISTING Synap user.
+ *
+ * Distinct from `provisionMapping` (which creates a NEW user): this maps the
+ * external id onto a Synap user the caller already chose. The route layer is
+ * responsible for authorizing the caller (workspace owner/admin) AND for
+ * verifying `targetUserId` is a legitimate member of the acting workspace —
+ * this function does NOT re-check authorization (it would need the request
+ * context). It is idempotent: if a mapping already exists it is returned
+ * unchanged (no silent re-pointing to a different user).
+ *
+ * Returns null only on DB failure.
+ */
+export async function linkExternalUserToExisting(
+  parentKeyId: string,
+  externalUserId: string,
+  targetUserId: string,
+  opts: { source?: string; displayName?: string } = {}
+): Promise<ExternalUserMappingResult | null> {
+  try {
+    // Idempotency: never overwrite an existing link (anti-impersonation —
+    // re-pointing a Discord id at a different Synap user is a privilege change,
+    // not a no-op). Return the existing mapping as-is.
+    const existing = await db.query.apiKeyExternalUsers.findFirst({
+      where: and(
+        eq(apiKeyExternalUsers.parentApiKeyId, parentKeyId),
+        eq(apiKeyExternalUsers.externalUserId, externalUserId)
+      ),
+      columns: { id: true, synapUserId: true },
+    });
+    if (existing) {
+      setCached(parentKeyId, externalUserId, existing.synapUserId, existing.id);
+      return {
+        synapUserId: existing.synapUserId,
+        mappingId: existing.id,
+        created: false,
+      };
+    }
+
+    const [mapping] = await db
+      .insert(apiKeyExternalUsers)
+      .values({
+        parentApiKeyId: parentKeyId,
+        externalUserId,
+        synapUserId: targetUserId,
+        metadata: {
+          source: opts.source,
+          displayName: opts.displayName,
+          linkMode: "existing",
+        },
+      })
+      .returning({ id: apiKeyExternalUsers.id });
+
+    setCached(parentKeyId, externalUserId, targetUserId, mapping.id);
+    logger.info(
+      { parentKeyId, externalUserId, targetUserId, source: opts.source },
+      "external-user-mapping: linked external id to existing Synap user"
+    );
+    return { synapUserId: targetUserId, mappingId: mapping.id, created: false };
+  } catch (err) {
+    logger.error(
+      { err, parentKeyId, externalUserId, targetUserId },
+      "external-user-mapping: link-to-existing failed"
+    );
+    return null;
+  }
 }
 
 /**

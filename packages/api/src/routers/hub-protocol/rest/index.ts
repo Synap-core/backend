@@ -52,6 +52,7 @@ export { registerSetupRoutes } from "./setup.js";
 export { registerAgentsRoutes } from "./agents.js";
 export { registerMessagingRoutes } from "./messaging.js";
 export { registerDiscordRoutes } from "./discord.js";
+export { registerDiscordIdentityRoutes } from "./discord-identity.js";
 export { registerConnectorsRoutes } from "./connectors.js";
 export { registerWebhooksRoutes } from "./webhooks.js";
 export { registerSubscriptionsRoutes } from "./subscriptions.js";

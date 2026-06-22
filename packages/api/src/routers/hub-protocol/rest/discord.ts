@@ -42,6 +42,7 @@ import type { HubResponse } from "@synap-core/types";
 import { recordInboundMessage } from "../../../services/connectors/inbound-recorder.js";
 
 import { resolveIntelligenceServiceByAgentId } from "../../../utils/intelligence-routing.js";
+import { resolveExistingExternalUser } from "../../../services/external-user-mapping.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -67,7 +68,14 @@ const AgentTurnRequestSchema = z
   .openapi("DiscordAgentTurnRequest");
 
 const AgentTurnResponseSchema = z
-  .object({ reply: z.string() })
+  .object({
+    reply: z.string(),
+    // Set when the inbound Discord user is NOT yet linked to a Synap identity.
+    // The agent ran as the operator (legacy behavior); the bridge can use this
+    // signal + discordUserId to prompt the user through onboarding/linking.
+    needsConnect: z.boolean().optional(),
+    discordUserId: z.string().optional(),
+  })
   .openapi("DiscordAgentTurnResponse");
 
 export function registerDiscordRoutes(app: HubHono): void {
@@ -111,6 +119,38 @@ export function registerDiscordRoutes(app: HubHono): void {
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId, workspaceId } = acting;
+
+    // ── Caller identity resolution (Option B) ──────────────────────────────────
+    // The bridge authenticates with the OPERATOR key; `userId` above is the
+    // operator. If THIS Discord user has been EXPLICITLY linked to a Synap user
+    // (via POST /discord/identity/link), the agent should act AS them — so we
+    // pass their Synap userId to the IS as the delegated identity. We use the
+    // bearer's api_keys.id as the mapping's parentKeyId (same key the link was
+    // created under). This is a READ-ONLY resolve — never auto-create here:
+    // unlinked users keep the operator identity and get a `needsConnect` hint.
+    const callerKeyId = c.get("apiKeyId") as string | undefined;
+    let actingUserId = userId; // identity the IS turn runs as
+    let needsConnect = false;
+    if (callerKeyId) {
+      try {
+        const link = await resolveExistingExternalUser(
+          callerKeyId,
+          body.discordUserId
+        );
+        if (link.linked && link.synapUserId) {
+          actingUserId = link.synapUserId;
+        } else {
+          needsConnect = true;
+        }
+      } catch (err) {
+        // Never fail the turn on a lookup error — fall back to the operator
+        // identity (same fail-open contract as the auth-middleware sub-token path).
+        logger.warn(
+          { err, discordUserId: body.discordUserId },
+          "Discord agent turn: identity resolve failed — acting as operator"
+        );
+      }
+    }
 
     try {
       // ── 1+2. Resolve-or-create the Discord channel + dedup-record the inbound
@@ -183,7 +223,10 @@ export function registerDiscordRoutes(app: HubHono): void {
           await resolvedService.client.sendMessage({
             query: body.text,
             threadId: channelId,
-            userId,
+            // Run the turn AS the linked caller (or the operator when unlinked).
+            // The IS delegates this via the is_internal keystone, so the agent's
+            // reads/proposals are attributed to the Discord user's own identity.
+            userId: actingUserId,
             agentId,
             agentType: "meta",
             workspaceId,
@@ -232,7 +275,16 @@ export function registerDiscordRoutes(app: HubHono): void {
         });
       }
 
-      return c.json({ reply }, 200);
+      return c.json(
+        {
+          reply,
+          // Signal the bridge to prompt onboarding when the caller is unlinked.
+          ...(needsConnect
+            ? { needsConnect: true, discordUserId: body.discordUserId }
+            : {}),
+        },
+        200
+      );
     } catch (err) {
       logger.error(
         { err, discordChannelId: body.discordChannelId },

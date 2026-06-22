@@ -73,6 +73,7 @@ import {
   registerWorkspacesRoutes,
   registerMessagingRoutes,
   registerDiscordRoutes,
+  registerDiscordIdentityRoutes,
   registerConnectorsRoutes,
   registerWebhooksRoutes,
   registerSubscriptionsRoutes,
@@ -465,6 +466,7 @@ registerSetupRoutes(app); // /setup/agent (provisioning auth)
 registerAgentsRoutes(app); // /agents/sync
 registerMessagingRoutes(app); // /messaging/*
 registerDiscordRoutes(app); // /discord/agent-turn
+registerDiscordIdentityRoutes(app); // /discord/identity, /discord/identity/members, /discord/identity/link
 registerConnectorsRoutes(app); // /connectors/*
 registerWebhooksRoutes(app); // /webhooks
 registerSubscriptionsRoutes(app); // /subscriptions*, /webhooks/:id/deliveries
