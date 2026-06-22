@@ -115,18 +115,19 @@ export function registerDiscordRoutes(app: HubHono): void {
       // must NOT re-run the IS turn or post a second reply: the recorder reports
       // `recorded: false` for a duplicate, and we replay the prior assistant
       // reply (chained off the same inbound hash) instead of doing the work again.
-      const { channelId, inboundHash, recorded } = await recordInboundMessage({
-        provider: "discord",
-        externalId: body.discordChannelId,
-        userId,
-        workspaceId,
-        text: body.text,
-        participant: body.discordUsername,
-        participantExternalId: body.discordUserId,
-        title: `Discord · ${body.discordUsername}`,
-        // Discord exposes a native message id — deterministic over (channel, id).
-        idempotencySeed: `${body.discordChannelId}:${body.messageId}`,
-      });
+      const { channelId, contextObjectId, inboundHash, recorded } =
+        await recordInboundMessage({
+          provider: "discord",
+          externalId: body.discordChannelId,
+          userId,
+          workspaceId,
+          text: body.text,
+          participant: body.discordUsername,
+          participantExternalId: body.discordUserId,
+          title: `Discord · ${body.discordUsername}`,
+          // Discord exposes a native message id — deterministic over (channel, id).
+          idempotencySeed: `${body.discordChannelId}:${body.messageId}`,
+        });
 
       if (!recorded) {
         // Duplicate delivery. Return the prior assistant reply if it exists;
@@ -187,6 +188,10 @@ export function registerDiscordRoutes(app: HubHono): void {
               process.env.PUBLIC_URL || `https://${process.env.DOMAIN}`,
             dataPodApiKey: resolvedService.serviceApiKey,
             channelKind: "pm",
+            // Client-aware: when this Discord channel is bound to a client entity
+            // (via /link-client → contextObjectType="entity"), tell the IS which
+            // entity this conversation is about so it loads that client's context.
+            ...(contextObjectId ? { contextEntityId: contextObjectId } : {}),
           });
         assistantContent = hubResponse?.content ?? "";
         reply = assistantContent;

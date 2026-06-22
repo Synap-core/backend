@@ -58,6 +58,13 @@ export interface IntelligenceHubRequest {
   /** Entity context: channel is scoped to this entity (thread + contextObjectType='entity') */
   contextObjectType?: string;
   contextObjectId?: string;
+  /**
+   * Subject entity this conversation is about (e.g. the bound client). When set,
+   * the IS loads it and injects its name + key props into the prompt — sent as
+   * contextObjectType="entity" + contextObjectId on the wire so it reuses the
+   * existing "## Context Entity" injection seam. Optional, backward-compatible.
+   */
+  contextEntityId?: string;
   /** Billing channel: browser (included in subscription) | api (billable per-token) | relay */
   billingChannel?: "browser" | "api" | "relay";
   /** Channel kind: pm = private message / personal, group = workspace-shared channel */
@@ -329,6 +336,14 @@ export class IntelligenceHubClient {
               workspaceSettings: request.workspaceSettings,
               channelKind: request.channelKind,
               focusSessionId: request.focusSessionId,
+              // Subject-aware turn: map the bound entity onto the IS's existing
+              // contextObjectType/Id seam so it injects the "## Context Entity" block.
+              ...(request.contextEntityId
+                ? {
+                    contextObjectType: "entity",
+                    contextObjectId: request.contextEntityId,
+                  }
+                : {}),
             }),
           },
           // Chat (non-streaming fallback) can run a slow conversational LLM —

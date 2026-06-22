@@ -83,6 +83,13 @@ export interface HubRequest {
   /** Context for agent (documents, entities, etc.) */
   context?: HubContext;
 
+  /**
+   * Entity this conversation is bound to (e.g. a client). When set, the
+   * Intelligence Service loads that entity and injects its name + key props into
+   * the prompt so the agent is subject-aware. Optional, backward-compatible.
+   */
+  contextEntityId?: string;
+
   /** Whether to stream response */
   stream?: boolean;
 }
