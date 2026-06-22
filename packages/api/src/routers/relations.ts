@@ -47,6 +47,7 @@ import {
   RelationRepository,
   RelationDefRepository,
   ProjectMemberRepository,
+  getWorkspaceMembership,
   SYSTEM_RELATION_TYPES,
   sql,
   inArray,
@@ -58,6 +59,7 @@ import {
   propertyDefs,
   channelContextItems,
   ChannelContextObjectType,
+  projectMembers,
 } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
@@ -71,6 +73,29 @@ import {
   syncRelationToPropertyOnCreate,
   syncRelationToPropertyOnDelete,
 } from "../utils/property-relation-sync.js";
+
+/**
+ * Administer-the-anchor authz (chantier α, GO-LIVE control #1). Granting anchor
+ * membership / exposing entities to an anchor admits a principal to that anchor's
+ * exposed set (cross-workspace) — higher-privilege than ordinary edits. So gate
+ * on the anchor ENTITY OWNER or a workspace OWNER/ADMIN, NOT a mere editor.
+ */
+async function assertAnchorAdmin(
+  db: unknown,
+  userId: string,
+  anchor: { workspaceId: string | null; userId: string | null }
+): Promise<void> {
+  if (anchor.userId && anchor.userId === userId) return; // anchor entity owner
+  if (anchor.workspaceId) {
+    const m = await getWorkspaceMembership(db, anchor.workspaceId, userId);
+    if (m && (m.role === "owner" || m.role === "admin")) return;
+  }
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message:
+      "Only the anchor owner or a workspace owner/admin may administer this anchor.",
+  });
+}
 
 /**
  * Direction schema for relation queries
@@ -426,10 +451,7 @@ export const relationsRouter = router({
         workspaceId: entityRow.workspaceId,
         ownerId: entityRow.userId,
       });
-      await assertWorkspaceWrite(database, ctx.userId, {
-        workspaceId: anchorRow.workspaceId,
-        ownerId: anchorRow.userId,
-      });
+      await assertAnchorAdmin(database, ctx.userId, anchorRow);
 
       const id = randomUUID();
       const perm = await checkPermissionOrPropose({
@@ -452,7 +474,14 @@ export const relationsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
-        return { status: "proposed" as const, proposalId: perm.proposalId };
+        // The governed/agent materialization path for exposure edges is not yet
+        // implemented (no relation/create approve-executor + materializer case) —
+        // fail LOUD rather than return a "proposed" that silently never lands.
+        throw new TRPCError({
+          code: "NOT_IMPLEMENTED",
+          message:
+            "exposeToAnchor is operator-direct only for now; the governed/agent (proposal) path is not yet materializable.",
+        });
       }
 
       const eventRepo = new EventRepository(sql);
@@ -527,10 +556,25 @@ export const relationsRouter = router({
 
       // AuthZ (control #1) — gate on the LOADED anchor row: only an admin of the
       // anchor may grant membership on it.
-      await assertWorkspaceWrite(database, ctx.userId, {
-        workspaceId: anchorRow.workspaceId,
-        ownerId: anchorRow.userId,
-      });
+      await assertAnchorAdmin(database, ctx.userId, anchorRow);
+
+      // Idempotent: a re-grant of an existing membership is a benign, expected
+      // event (re-invite/retry) — return the existing row instead of 500-ing on
+      // the (project_id, user_id) unique constraint. Placed AFTER the authz gate
+      // so it never leaks membership existence to a non-admin caller.
+      const [existingMember] = await database
+        .select({ id: projectMembers.id })
+        .from(projectMembers)
+        .where(
+          and(
+            eq(projectMembers.projectId, input.anchorId),
+            eq(projectMembers.userId, input.userId)
+          )
+        )
+        .limit(1);
+      if (existingMember) {
+        return { status: "exists" as const, memberId: existingMember.id };
+      }
 
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
@@ -547,7 +591,14 @@ export const relationsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
-        return { status: "proposed" as const, proposalId: perm.proposalId };
+        // Governed/agent materialization for projectMember is not implemented yet
+        // (no projectMember/create executor + materializer case) — fail LOUD,
+        // don't fake a "proposed" that silently never materializes.
+        throw new TRPCError({
+          code: "NOT_IMPLEMENTED",
+          message:
+            "grantAnchorMembership is operator-direct only for now; the governed/agent (proposal) path is not yet materializable.",
+        });
       }
 
       const eventRepo = new EventRepository(sql);
@@ -560,6 +611,19 @@ export const relationsRouter = router({
         },
         ctx.userId
       );
+      auditLog({
+        subjectType: "projectMember",
+        action: "create",
+        phase: "completed",
+        subjectId: member.id,
+        userId: ctx.userId,
+        workspaceId: anchorRow.workspaceId,
+        data: {
+          anchorId: input.anchorId,
+          grantedUserId: input.userId,
+          role: input.role,
+        },
+      });
       return { status: "created" as const, memberId: member.id };
     }),
 
