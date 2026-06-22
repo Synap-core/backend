@@ -140,7 +140,7 @@ export async function handleMaterialize(
         await materializeLink(action, workspaceId, data);
         break;
       case "relation":
-        await materializeRelation(action, workspaceId, data);
+        await materializeRelation(action, userId, workspaceId, data);
         break;
       case "projectMember":
         await materializeProjectMember(action, data);
@@ -861,6 +861,7 @@ async function materializeLink(
  */
 async function materializeRelation(
   action: string,
+  userId: string | undefined,
   workspaceId: string | undefined,
   data: Record<string, unknown>
 ): Promise<void> {
@@ -872,9 +873,14 @@ async function materializeRelation(
   const sourceEntityId = data.sourceEntityId as string | undefined;
   const targetEntityId = data.targetEntityId as string | undefined;
   const type = data.type as string | undefined;
-  if (!sourceEntityId || !targetEntityId || !type) {
+  // `relations.user_id` is NOT NULL — fall back to the job's author when the
+  // proposal `data` omits it (the generic relations.create path doesn't stamp a
+  // userId). Skip (not throw) if no author can be resolved, so a malformed
+  // proposal can't poison-loop the materialize queue.
+  const author = (data.userId as string | undefined) ?? userId;
+  if (!sourceEntityId || !targetEntityId || !type || !author) {
     logger.error(
-      { id, sourceEntityId, targetEntityId, type },
+      { id, sourceEntityId, targetEntityId, type, author },
       "Relation materialization missing required fields; skipping"
     );
     return;
@@ -888,7 +894,7 @@ async function materializeRelation(
       targetEntityId,
       type,
       workspaceId: (data.workspaceId as string) ?? workspaceId ?? null,
-      userId: (data.userId as string) ?? null,
+      userId: author,
       metadata: (data.metadata as Record<string, unknown>) ?? {},
     })
     .onConflictDoNothing();
