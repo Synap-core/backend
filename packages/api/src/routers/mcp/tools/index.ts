@@ -67,6 +67,11 @@ export const tools = {
               type: "string",
               description: "Workspace ID (optional)",
             },
+            projectId: {
+              type: "string",
+              description:
+                "Optional: narrow to a project (its entity id) — only entities belonging to it. Orthogonal to workspaceId; usually pre-set by the connection URL.",
+            },
             limit: { type: "number", default: 50 },
           },
           required: [],

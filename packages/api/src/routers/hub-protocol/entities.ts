@@ -36,6 +36,12 @@ export const entitiesRouter = router({
         type: z.string().optional(),
         limit: z.number().optional(),
         /**
+         * Project focus lens — narrows to the project (its entity + everything
+         * that belongs_to it). Pure-narrowing, orthogonal to workspaceId.
+         * Forwarded to the regular `list` procedure (applies projectLensWhere).
+         */
+        projectId: z.string().uuid().optional(),
+        /**
          * Scoped-by-default (PRODUCT DECISION): with a workspaceId set, only that
          * workspace's entities are returned. Pass true to also include pod-wide
          * (workspaceId IS NULL) globals — the legacy behavior. Forwarded to the
@@ -62,6 +68,7 @@ export const entitiesRouter = router({
       const result = await caller.list({
         profileSlug: profileSlug ?? undefined,
         limit: input.limit || 50,
+        ...(input.projectId ? { projectId: input.projectId } : {}),
         ...(input.includePodWide !== undefined
           ? { includePodWide: input.includePodWide }
           : {}),

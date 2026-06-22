@@ -212,6 +212,9 @@ export async function executeMCPToolViaHubProtocol(
         ...(args.workspaceId
           ? { workspaceId: args.workspaceId as string }
           : {}),
+        // Project-pinned MCP URL (?projectId=) auto-injects args.projectId, so a
+        // focused agent's entity reads narrow to its project — same lens as ask.
+        ...(args.projectId ? { projectId: args.projectId as string } : {}),
         limit: (args.limit as number) || 50,
       });
       return ok(result);
