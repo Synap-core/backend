@@ -59,6 +59,10 @@ const AgentTurnRequestSchema = z
     discordUsername: z.string().min(1),
     text: z.string().min(1).max(50_000),
     messageId: z.string().min(1),
+    // Optional: a skill the bot's `/skill <name>` command wants force-loaded into
+    // this turn. Passed through to the IS as forcedSkillName; the agent runs WITH
+    // that skill's know-how loaded — the "Claude-Code-with-a-skill" model.
+    skillName: z.string().min(1).max(200).optional(),
   })
   .openapi("DiscordAgentTurnRequest");
 
@@ -192,6 +196,10 @@ export function registerDiscordRoutes(app: HubHono): void {
             // (via /link-client → contextObjectType="entity"), tell the IS which
             // entity this conversation is about so it loads that client's context.
             ...(contextObjectId ? { contextEntityId: contextObjectId } : {}),
+            // Skill-aware: when the bot's `/skill <name>` command names a skill,
+            // tell the IS to force-load it into this turn so the agent runs WITH
+            // that skill as know-how (the Claude-Code-with-a-skill model).
+            ...(body.skillName ? { forcedSkillName: body.skillName } : {}),
           });
         assistantContent = hubResponse?.content ?? "";
         reply = assistantContent;

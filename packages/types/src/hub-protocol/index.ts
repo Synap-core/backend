@@ -90,6 +90,14 @@ export interface HubRequest {
    */
   contextEntityId?: string;
 
+  /**
+   * Name of a skill to force-load into this turn (e.g. Discord `/skill <name>`).
+   * The Intelligence Service injects that skill's content into the system prompt so
+   * the agent runs WITH the skill as know-how — the "Claude-Code-with-a-skill" model.
+   * Optional, backward-compatible.
+   */
+  forcedSkillName?: string;
+
   /** Whether to stream response */
   stream?: boolean;
 }

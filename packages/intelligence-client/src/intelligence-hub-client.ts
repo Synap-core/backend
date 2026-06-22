@@ -65,6 +65,12 @@ export interface IntelligenceHubRequest {
    * existing "## Context Entity" injection seam. Optional, backward-compatible.
    */
   contextEntityId?: string;
+  /**
+   * Name of a skill to force-load into this turn (e.g. Discord `/skill <name>`).
+   * Forwarded to the IS, which injects the skill's content into the system prompt so
+   * the agent runs WITH the skill as know-how. Optional, backward-compatible.
+   */
+  forcedSkillName?: string;
   /** Billing channel: browser (included in subscription) | api (billable per-token) | relay */
   billingChannel?: "browser" | "api" | "relay";
   /** Channel kind: pm = private message / personal, group = workspace-shared channel */
@@ -343,6 +349,11 @@ export class IntelligenceHubClient {
                     contextObjectType: "entity",
                     contextObjectId: request.contextEntityId,
                   }
+                : {}),
+              // Forced skill (Discord `/skill <name>`): the IS injects this
+              // skill's content into the system prompt for this turn.
+              ...(request.forcedSkillName
+                ? { forcedSkillName: request.forcedSkillName }
                 : {}),
             }),
           },
