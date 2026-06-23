@@ -3185,6 +3185,41 @@ export interface ViewColumn {
 	visible?: boolean;
 	width?: number;
 }
+export interface ReconcileReport {
+	workspaceId: string;
+	dryRun: boolean;
+	settings: {
+		merged: string[];
+	};
+	profiles: {
+		added: string[];
+		reused: string[];
+	};
+	properties: {
+		/** New overlay/base property-defs added. */
+		added: Array<{
+			profile: string;
+			slug: string;
+		}>;
+		/** Already present (same slug, same type) — left as-is. */
+		skipped: Array<{
+			profile: string;
+			slug: string;
+		}>;
+		/** Template type differs from the live type — NOT changed; needs a decision. */
+		conflicts: Array<{
+			profile: string;
+			slug: string;
+			liveType: string;
+			templateType: string;
+		}>;
+	};
+	views: {
+		added: string[];
+		skipped: string[];
+		deferred: string[];
+	};
+}
 /**
  * View Query Types
  *
@@ -10713,6 +10748,73 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				viewIds: string[];
 				entityIds: string[];
 			};
+			meta: object;
+		}>;
+		reconcileFromDefinition: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				workspaceId: string;
+				definition: {
+					workspacePurpose?: string | undefined;
+					workspaceSubtype?: string | undefined;
+					workspaceVisibility?: string | undefined;
+					workspaceCapabilities?: string[] | undefined;
+					profiles?: {
+						slug: string;
+						displayName: string;
+						icon?: string | undefined;
+						color?: string | undefined;
+						description?: string | undefined;
+						scope?: string | undefined;
+						semanticSlug?: string | null | undefined;
+						properties?: {
+							slug: string;
+							valueType: string;
+							label?: string | undefined;
+							inputType?: string | undefined;
+							placeholder?: string | undefined;
+							enumValues?: string[] | undefined;
+							constraints?: Record<string, unknown> | undefined;
+							targetProfileSlug?: string | undefined;
+						}[] | undefined;
+						uiHints?: {
+							icon?: string | undefined;
+							color?: string | undefined;
+							description?: string | undefined;
+						} | undefined;
+						propertyDefs?: {
+							slug: string;
+							valueType: string;
+							constraints?: {
+								[x: string]: unknown;
+								enum?: string[] | undefined;
+							} | undefined;
+							uiHints?: {
+								label?: string | undefined;
+								inputType?: string | undefined;
+								placeholder?: string | undefined;
+							} | undefined;
+						}[] | undefined;
+					}[] | undefined;
+					views?: {
+						type: string;
+						name?: string | undefined;
+						displayName?: string | undefined;
+						slug?: string | undefined;
+						scopeProfileSlug?: string | undefined;
+						scopeProfileSlugs?: string[] | undefined;
+						config?: Record<string, unknown> | undefined;
+						groupBy?: string | undefined;
+						sortBy?: string | undefined;
+						sortOrder?: "asc" | "desc" | undefined;
+						filterBy?: Record<string, unknown> | undefined;
+						description?: string | undefined;
+						defaultView?: boolean | undefined;
+						colorBy?: string | undefined;
+					}[] | undefined;
+				};
+				dryRun?: boolean | undefined;
+			};
+			output: ReconcileReport;
 			meta: object;
 		}>;
 		seedPlugin: import("@trpc/server").TRPCMutationProcedure<{
