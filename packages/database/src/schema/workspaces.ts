@@ -267,7 +267,12 @@ export function getDefaultProactiveAiPreferences(): ProactiveAiPreferences {
  * - notification → notification bell (ephemeral, shown in notification center)
  * - suppress     → don't deliver (silences this signal domain)
  */
-export type SignalSurface = "feed" | "chat" | "notification" | "suppress";
+export type SignalSurface =
+  | "feed"
+  | "chat"
+  | "notification"
+  | "suppress"
+  | "external";
 
 /**
  * A delivery target. A surface can be a bare kind (back-compat string form) or a
