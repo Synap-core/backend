@@ -1164,7 +1164,9 @@ export const entitiesRouter = router({
           eq(entities.documentId, input.documentId),
           or(
             eq(entities.workspaceId, ctx.workspaceId),
-            isNull(entities.workspaceId)
+            // Pod-personal (NULL workspace) rows are per-user — gate by userId so
+            // a documentId can't reverse-look-up another user's pod-wide entity.
+            and(isNull(entities.workspaceId), eq(entities.userId, ctx.userId))
           )
         ),
       });
