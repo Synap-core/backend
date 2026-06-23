@@ -49,16 +49,16 @@ const logger = createLogger({ module: "inbound-recorder" });
 export async function resolveExternalChannel(args: {
   provider: string;
   externalId: string;
-}): Promise<{ id: string; contextObjectId: string | null } | null> {
+}): Promise<{ id: string; contextObjectId: string | null; branchPurpose: string | null } | null> {
   const row = await db.query.channels.findFirst({
     where: and(
       eq(channels.channelType, ChannelType.EXTERNAL),
       eq(channels.externalSource, args.provider),
       eq(channels.externalId, args.externalId)
     ),
-    columns: { id: true, contextObjectId: true },
+    columns: { id: true, contextObjectId: true, branchPurpose: true },
   });
-  return row ? { id: row.id, contextObjectId: row.contextObjectId } : null;
+  return row ? { id: row.id, contextObjectId: row.contextObjectId, branchPurpose: row.branchPurpose } : null;
 }
 
 export interface ResolveOrCreateExternalChannelArgs {
