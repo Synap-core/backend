@@ -175,6 +175,18 @@ export const CreateEntityResponseSchema = z
       .describe(
         "Workspace the entity actually landed in. May be null for pod-wide profiles."
       ),
+    proposalType: z
+      .string()
+      .optional()
+      .describe(
+        'Present when status is "proposed". "join" for a workspace-join gate, else "<subject>.<action>" (e.g. "entity.create").'
+      ),
+    reviewUrl: z
+      .string()
+      .optional()
+      .describe(
+        'Present when status is "proposed". Absolute URL to review the proposal in the Studio.'
+      ),
   })
   .openapi("CreateEntityResponse");
 

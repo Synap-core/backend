@@ -80,6 +80,12 @@ export type PermissionResult =
   | {
       granted: false;
       proposalId: string;
+      /**
+       * The proposal's type: "join" for a workspace-join gate, else
+       * "<subject>.<action>" (e.g. "entity.create"). Lets callers distinguish
+       * a membership gate from a content proposal.
+       */
+      proposalType: string;
       /** Short human-readable summary: e.g., `Delete task "Q2 plan review"`. */
       summary: string;
       /** The AI's reasoning, echoed back so callers can surface it to the user. */
@@ -901,6 +907,7 @@ async function createProposal(opts: {
 }): Promise<{
   granted: false;
   proposalId: string;
+  proposalType: string;
   summary: string;
   reasoning: string;
   reviewPath: string;
@@ -1035,6 +1042,7 @@ async function createProposal(opts: {
   return {
     granted: false,
     proposalId: proposal.id,
+    proposalType: `${subjectType}.${action}`,
     summary,
     reasoning: reasoning ?? `${action} ${singularType} requires your approval`,
     reviewPath,
@@ -1112,6 +1120,7 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
     return {
       granted: false,
       proposalId: existing.id,
+      proposalType: "join",
       summary,
       reasoning: summary,
       reviewPath: `/proposals/${existing.id}`,
@@ -1148,6 +1157,7 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
   return {
     granted: false,
     proposalId: row.id,
+    proposalType: "join",
     summary,
     reasoning: summary,
     reviewPath: `/proposals/${row.id}`,

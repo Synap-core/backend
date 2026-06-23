@@ -471,6 +471,8 @@ export const entitiesRouter = router({
           message: "Entity creation proposed for review",
           entity: null as Record<string, unknown> | null,
           proposalId: perm.proposalId,
+          proposalType: perm.proposalType,
+          reviewUrl: perm.reviewUrl,
           proposedEntityId: entityId,
         };
       }
@@ -1426,6 +1428,8 @@ export const entitiesRouter = router({
           status: "proposed",
           message: "Update proposed for review",
           proposalId: perm.proposalId,
+          proposalType: perm.proposalType,
+          reviewUrl: perm.reviewUrl,
         };
       }
 
@@ -1664,6 +1668,8 @@ export const entitiesRouter = router({
           status: "proposed",
           message: "Deletion proposed for review",
           proposalId: perm.proposalId,
+          proposalType: perm.proposalType,
+          reviewUrl: perm.reviewUrl,
         };
       }
 
