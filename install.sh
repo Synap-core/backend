@@ -348,6 +348,17 @@ SECRETS_EOF
       warn "Could not derive SYNAP_BASE_DOMAIN — set it in .env manually, or cross-subdomain frontends will be denied by CORS"
     fi
   fi
+
+  # Self-heal: backfill VAULT_SERVER_KEY (the secret-vault encryption key). .env
+  # files from before the vault feature lack it; without it every vault write
+  # (e.g. storing a Discord bot token via /capabilities/apply) fails HTTP 500.
+  # Generate one if missing. SAFE: never overwrite an existing key — rotating it
+  # would orphan already-encrypted secrets.
+  if ! grep -q "^VAULT_SERVER_KEY=" "$INSTALL_DIR/.env" 2>/dev/null; then
+    printf '\n# Secret-vault encryption key (backfilled on update)\nVAULT_SERVER_KEY=%s\n' "$(openssl rand -hex 32)" >> "$INSTALL_DIR/.env"
+    info "Backfilled VAULT_SERVER_KEY into .env (vault self-heal)"
+    RECREATE_FOR_CORS=1
+  fi
 else
   heading "Generating secrets"
 
