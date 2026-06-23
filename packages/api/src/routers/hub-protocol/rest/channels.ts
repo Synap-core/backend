@@ -45,6 +45,7 @@ export function registerChannelsRoutes(app: HubHono): void {
         userId: z.string().optional(),
         workspaceId: z.string().optional(),
         channelType: z.string().optional(),
+        contextObjectId: z.string().optional(),
         limit: z.string().optional(),
       }),
     },
@@ -82,6 +83,9 @@ export function registerChannelsRoutes(app: HubHono): void {
       }
       if (q.channelType) {
         conditions.push(eq(channelsTable.channelType, q.channelType as never));
+      }
+      if (q.contextObjectId) {
+        conditions.push(eq(channelsTable.contextObjectId, q.contextObjectId));
       }
       const rows = await db
         .select()

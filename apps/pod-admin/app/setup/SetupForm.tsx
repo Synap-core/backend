@@ -16,7 +16,7 @@
  * and any existing session is properly flushed.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect as _useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button, Card, CardBody, Input } from "@heroui/react";
 import { KeyRound, AlertCircle, CheckCircle2 } from "lucide-react";

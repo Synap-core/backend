@@ -167,6 +167,7 @@ export const CreateEntityResponseSchema = z
     message: z.string().optional(),
     id: z.string().optional(),
     proposalId: z.string().nullable().optional(),
+    proposedEntityId: z.string().nullable().optional(),
     workspaceId: z.string().nullable().optional(),
     effectiveWorkspaceId: z
       .string()

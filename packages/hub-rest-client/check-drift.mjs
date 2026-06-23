@@ -124,7 +124,7 @@ for (const path of [...allPaths].sort()) {
 }
 
 // ── Report ────────────────────────────────────────────────────────────────────
-const clientCount = [...allPaths].filter((p) => !SERVER_ONLY.has(p)).length;
+const _clientCount = [...allPaths].filter((p) => !SERVER_ONLY.has(p)).length;
 console.log("\nHub Protocol Drift Report");
 console.log("=========================");
 console.log(

@@ -164,6 +164,7 @@ export function handleClaudeCodeUpgrade(
     ]);
 
     // Lazy-import node-pty so the module only loads when needed
+    // eslint-disable-next-line @typescript-eslint/consistent-type-imports
     let ptyModule: typeof import("node-pty");
     try {
       ptyModule = await import("node-pty");
@@ -179,6 +180,7 @@ export function handleClaudeCodeUpgrade(
 
     const shell = process.env["SHELL"] ?? "/bin/bash";
 
+    // eslint-disable-next-line @typescript-eslint/consistent-type-imports
     let ptyProcess: import("node-pty").IPty;
     try {
       ptyProcess = ptyModule.spawn(shell, [], {

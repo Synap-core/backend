@@ -108,6 +108,7 @@ function extractBearerToken(authHeader: string | null): string | null {
 // which differs from `ErrorSchema` and would make response shapes inconsistent
 // across migrated vs non-migrated routes.
 const app: HubHono = new OpenAPIHono<{
+  // eslint-disable-next-line @typescript-eslint/consistent-type-imports
   Variables: import("./hub-protocol/rest/_shared.js").HubVariables;
 }>({
   defaultHook: (result, c) => {

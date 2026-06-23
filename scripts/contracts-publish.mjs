@@ -129,7 +129,7 @@ sub(
 // ─────────────────────────────────────────────────────────────────────────────
 const API_TYPES_DIR = join(ROOT_DIR, "packages/api-types");
 const GENERATED_REL = "packages/api-types/src/generated.d.ts";
-const GENERATED_ABS = join(ROOT_DIR, GENERATED_REL);
+const _GENERATED_ABS = join(ROOT_DIR, GENERATED_REL);
 const apiTypesPkgFile = join(API_TYPES_DIR, "package.json");
 
 step("A", "Regenerate api-types contract (gen-types) & detect drift");
@@ -260,7 +260,7 @@ for (const art of TGZ_ARTIFACTS) {
         sub(`  ${tag()} would remove superseded: packages/${s}`);
     }
     if (isPkgText) {
-      const { count } = repinJsonText(isPkgText, art.name, "__N/A__"); // count only for file: style below
+      const { count: _count } = repinJsonText(isPkgText, art.name, "__N/A__"); // count only for file: style below
       // file: refs are not semver — detect by name presence
       const hasRef = new RegExp(
         `"${art.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\s*:\\s*"file:`

@@ -655,6 +655,7 @@ export const viewsRouter = router({
           if (latestVersion) {
             try {
               content = JSON.parse(latestVersion.content);
+              // eslint-disable-next-line @typescript-eslint/no-unused-vars
             } catch (_e) {
               content = {};
             }

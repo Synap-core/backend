@@ -127,6 +127,7 @@ async function runTests() {
           .where(eq(documents.id, doc.id));
       });
       console.log(`  ✗ User 2 should not be able to update`);
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
     } catch (_err) {
       console.log(`  ✓ User 2 correctly blocked from update`);
     }

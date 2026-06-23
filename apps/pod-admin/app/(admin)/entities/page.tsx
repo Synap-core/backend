@@ -23,7 +23,7 @@ import {
   ModalHeader,
   Select,
   SelectItem,
-  Spinner,
+  Spinner as _Spinner,
   Switch,
 } from "@heroui/react";
 import {

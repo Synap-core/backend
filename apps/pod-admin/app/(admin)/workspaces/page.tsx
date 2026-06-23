@@ -115,13 +115,13 @@ function deriveStatus(ws: Workspace): WorkspaceStatus {
   return { kind: "unknown", label: "Idle" };
 }
 
-function workspaceInitial(ws: Workspace): string {
+function _workspaceInitial(ws: Workspace): string {
   const trimmed = (ws.name ?? "").trim();
   return trimmed.length > 0 ? trimmed[0].toUpperCase() : "?";
 }
 
 // Deterministic hue from workspace id so the chip color is stable.
-function colorForWorkspace(ws: Workspace): string {
+function _colorForWorkspace(ws: Workspace): string {
   let hash = 0;
   for (let i = 0; i < ws.id.length; i += 1) {
     hash = (hash + ws.id.charCodeAt(i)) | 0;

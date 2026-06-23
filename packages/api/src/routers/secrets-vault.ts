@@ -390,7 +390,8 @@ export const secretsVaultRouter = router({
           iv: secret.iv,
           authTag: secret.authTag,
         });
-      } catch (err) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      } catch (_err) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message:

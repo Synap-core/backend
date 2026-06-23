@@ -176,6 +176,7 @@ export function handleLocalTerminalUpgrade(
     const cwd = await resolveWorkspaceCwd(workspaceId);
 
     // Lazy-import node-pty so the module only loads when needed
+    // eslint-disable-next-line @typescript-eslint/consistent-type-imports
     let ptyModule: typeof import("node-pty");
     try {
       ptyModule = await import("node-pty");
@@ -191,6 +192,7 @@ export function handleLocalTerminalUpgrade(
 
     const shell = process.env["SHELL"] ?? "/bin/bash";
 
+    // eslint-disable-next-line @typescript-eslint/consistent-type-imports
     let ptyProcess: import("node-pty").IPty;
     try {
       ptyProcess = ptyModule.spawn(shell, [], {
