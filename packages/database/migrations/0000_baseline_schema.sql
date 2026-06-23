@@ -416,6 +416,7 @@ CREATE TABLE IF NOT EXISTS "documents" (
   "id"                       uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"                  text    NOT NULL,
   "workspace_id"             uuid    NOT NULL,
+  "skill_id"                 uuid    REFERENCES skills(id) ON DELETE SET NULL,
   "title"                    text    NOT NULL,
   "type"                     text    NOT NULL,
   "language"                 text,
@@ -435,6 +436,7 @@ CREATE TABLE IF NOT EXISTS "documents" (
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "user_id" text;
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "skill_id" uuid;
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "title" text;
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "type" text;
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "language" text;

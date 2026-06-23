@@ -22,7 +22,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { db, eq, and, skills } from "@synap/database";
+import { db, eq, and, skills, documents } from "@synap/database";
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -544,6 +544,153 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     } catch (err) {
       logger.error({ err }, "delete agent skill failed");
       return c.json({ error: "Internal error" }, 500);
+    }
+  });
+
+  // ── Import schemas ──────────────────────────────────────────────────────
+
+  const ImportSkillDocumentSchema = z.object({
+    title: z.string().min(1).max(500),
+    content: z.string().optional(),
+    type: z
+      .enum(["text", "markdown", "code", "html", "pdf", "docx"])
+      .optional()
+      .default("markdown"),
+  });
+
+  const ImportSkillBodySchema = z.object({
+    userId: z.string().min(1),
+    skill: z.object({
+      name: z.string().min(1).max(200),
+      description: z.string().max(2000).optional(),
+      slug: z.string().min(1).max(100),
+      body: z.string().optional(),
+    }),
+    documents: z.array(ImportSkillDocumentSchema).optional().default([]),
+  });
+
+  const ImportSkillResponseSchema = z.object({
+    skill: AgentSkillWireSchema,
+    documents: z.array(
+      z.object({
+        id: z.string(),
+        title: z.string(),
+      })
+    ),
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/agent-skills/import",
+    tags: ["Agent Skills"],
+    summary: "Import a skill with associated documents (JSON payload)",
+    description:
+      "Accepts a JSON body with skill metadata and an array of reference documents. " +
+      "Creates a pod-wide instruction skill and linked document rows. " +
+      "TODO: support ZIP (.skill file) upload with YAML frontmatter parsing.",
+    request: {
+      body: ImportSkillBodySchema,
+    },
+    responses: {
+      200: {
+        description: "Imported skill + documents",
+        schema: ImportSkillResponseSchema,
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  /**
+   * POST /agent-skills/import
+   *
+   * Import a skill from a JSON payload containing skill metadata and optional
+   * reference documents. The skill is created as kind="instruction", scope="pod",
+   * approved=true for pod-wide availability.
+   *
+   * TODO: Accept multipart/form-data ZIP upload (.skill file) containing
+   * SKILL.md with YAML frontmatter + reference .md files.
+   */
+  app.post("/agent-skills/import", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Insufficient scope" }, 403);
+    }
+
+    const parsed = ImportSkillBodySchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.message }, 400);
+    }
+
+    const { userId, skill: skillMeta, documents: docs } = parsed.data;
+
+    try {
+      // Check slug uniqueness
+      const [existing] = await db
+        .select({ id: skills.id })
+        .from(skills)
+        .where(eq(skills.slug, skillMeta.slug))
+        .limit(1);
+      if (existing) {
+        return c.json({ error: "Skill with this slug already exists" }, 409);
+      }
+
+      // Create the skill (instruction kind, pod-wide, auto-approved)
+      const [skillRow] = await db
+        .insert(skills)
+        .values({
+          userId,
+          slug: skillMeta.slug,
+          kind: "instruction",
+          name: skillMeta.name,
+          description: skillMeta.description ?? null,
+          body: skillMeta.body ?? null,
+          approved: true,
+          tags: [],
+          topics: [],
+          metadata: {},
+        })
+        .returning();
+
+      // Create linked documents through the tRPC caller so content is properly
+      // stored (MinIO-backed via documents.createDocument procedure).
+      const caller = await getCaller(c);
+      const createdDocs: Array<{ id: string; title: string }> = [];
+      if (docs.length > 0) {
+        for (const d of docs) {
+          const result = await caller.documents.createDocument({
+            userId,
+            title: d.title,
+            content: d.content ?? "",
+            type: d.type ?? "markdown",
+            workspaceId: null,
+          });
+          // createDocument returns { id, documentId, status } shape.
+          const docId = (result as any)?.documentId ?? (result as any)?.id;
+          if (docId) {
+            // Link the document to the parent skill after creation.
+            await db
+              .update(documents)
+              .set({ skillId: skillRow.id } as any)
+              .where(eq(documents.id, docId));
+            createdDocs.push({ id: docId, title: d.title });
+          }
+        }
+      }
+
+      return c.json(
+        {
+          skill: wireSkill(skillRow),
+          documents: createdDocs,
+        },
+        200
+      );
+    } catch (err) {
+      logger.error({ err }, "import agent skill failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
     }
   });
 }

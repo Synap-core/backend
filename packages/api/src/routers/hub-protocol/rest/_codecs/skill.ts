@@ -19,6 +19,7 @@ export const WireSkillSchema = z
     name: z.string(),
     description: z.string().nullable().optional(),
     code: z.string().optional(),
+    body: z.string().nullable(),
     parameters: z.record(z.string(), z.unknown()).optional(),
     category: SkillCategorySchema.optional(),
     status: z.enum(["active", "inactive", "error"]).optional(),
