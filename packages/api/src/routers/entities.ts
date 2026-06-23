@@ -241,9 +241,11 @@ export const entitiesRouter = router({
         .from(entities)
         .where(
           and(
+            // Pod-personal (workspaceId IS NULL) entities are per-user —
+            // count only the caller's own globals, not all users' pod-personal rows.
             or(
               eq(entities.workspaceId, ctx.workspaceId),
-              isNull(entities.workspaceId)
+              and(isNull(entities.workspaceId), eq(entities.userId, ctx.userId))
             ),
             isNull(entities.deletedAt)
           )
@@ -741,7 +743,7 @@ export const entitiesRouter = router({
          * migrated. Ignored for `globalOnly` and workspace-less callers (those
          * already return pod-wide-only).
          */
-        includePodWide: z.boolean().optional().default(false),
+        includePodWide: z.boolean().optional().default(true),
         /**
          * Explicit list lens. `undefined` falls back to ctx.workspaceId for
          * backwards compatibility; `null` returns the caller's pod-wide rows.
@@ -1105,12 +1107,18 @@ export const entitiesRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const conditions: any[] = [];
+      // Floor: every search result must belong to the caller. This prevents
+      // pod-personal entities (workspaceId IS NULL) that belong to OTHER users
+      // from leaking through — both the pod-scoped-profile branch (which
+      // previously skipped the workspace filter) and the workspace branch
+      // (which had no per-user guard on the NULL case).
+      const conditions: any[] = [entityVisibleWhere(ctx.userId)];
 
       if (input.profileSlug) {
         conditions.push(eq(entities.type, input.profileSlug));
 
-        // Check if this profile type is pod-wide — if so, skip workspace filter
+        // For workspace-scoped profiles, also narrow to the active workspace
+        // (plus pod-wide globals already covered by the floor above).
         const database = await getDb();
         const profileService = new ProfileResolutionService(database);
         const entityScope = await profileService.getEntityScope(

@@ -24,6 +24,7 @@ import {
   isNotNull,
 } from "@synap/database";
 import { inArray } from "drizzle-orm";
+import { userVisibleWhere } from "../../../utils/user-visible-where.js";
 
 import { relationsRouter } from "../../relations.js";
 import { resolveEntityByName } from "../../../services/entity-resolution.js";
@@ -318,6 +319,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
         q: z.string().optional().describe("Free-text search query."),
         profileSlug: z.string().optional(),
         workspaceId: z.string().optional(),
+        projectId: z
+          .string()
+          .optional()
+          .describe(
+            "Project lens — narrows results to a single project's data " +
+              "(the project entity + everything that belongs_to it). " +
+              "Pure-narrowing; cannot widen access past the user floor."
+          ),
         limit: z.string().optional(),
         sort: z.string().optional().describe("e.g. `updatedAt:desc`."),
         scope: z
@@ -332,9 +341,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
           .string()
           .optional()
           .describe(
-            "Scoped-by-default: with a workspaceId, only that workspace's " +
-              "entities are returned. Set `true` to also include pod-wide " +
-              "(null workspaceId) globals — the legacy behavior."
+            "When a workspaceId is supplied, include pod-wide (null " +
+              "workspaceId) globals in the result. Defaults to `true` " +
+              "so a workspace lens returns 'that workspace + pod-wide " +
+              "globals' — the behavior agents and the CRM expect. " +
+              "Set `false` to return only the exact workspace's rows."
           ),
       }),
     },
@@ -372,6 +383,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const q = (query.q ?? "").trim();
     const profileSlug = query.profileSlug || undefined;
     const workspaceIdParam = query.workspaceId || null;
+    const projectIdParam = query.projectId || undefined;
     const limitRaw = query.limit;
     const limit = Math.min(
       Math.max(parseInt(limitRaw ?? "20", 10) || 20, 1),
@@ -379,7 +391,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
     );
     const sortParam = (query.sort ?? "").trim();
     const scope = query.scope;
-    const includePodWide = query.includePodWide === "true";
+    // Default TRUE: a workspace lens should include pod-wide globals (the caller's
+    // own pod-personal entities with workspaceId IS NULL) so a CRM or agent view
+    // sees pod-wide profiles (person, company…) alongside workspace-specific data.
+    // Callers that want ONLY the exact workspace's rows must explicitly pass "false".
+    const includePodWide = query.includePodWide !== "false";
 
     try {
       const effectiveWsIds = workspaceIdParam
@@ -440,6 +456,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
               profileSlug: profileSlug || undefined,
               limit,
               includePodWide,
+              ...(projectIdParam ? { projectId: projectIdParam } : {}),
             })
           )
         );
@@ -477,6 +494,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         profileSlug: profileSlug || undefined,
         limit,
         includePodWide,
+        ...(projectIdParam ? { projectId: projectIdParam } : {}),
       });
 
       let rows = (listed as unknown[]).map((e) => entityToWire(e));
@@ -759,12 +777,24 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
 
     // ── Fetch full entity rows for top ids ─────────────────────────────────
+    // Security: AND the floor predicate so a ranked-but-inaccessible id
+    // (e.g. another user's pod-personal entity that slipped through the
+    // vector/keyword index) cannot leak. The floor mirrors entityVisibleWhere:
+    //   pod-personal rows → gated by userId;
+    //   workspace rows    → gated by workspace membership (userVisibleWhere).
     try {
+      const floor = or(
+        and(isNull(entities.workspaceId), eq(entities.userId, userId)),
+        and(
+          isNotNull(entities.workspaceId),
+          userVisibleWhere(entities.workspaceId, userId)
+        )
+      )!;
       const rows = await db
         .select()
         .from(entities)
         .where(
-          and(inArray(entities.id, rankedIds), isNull(entities.deletedAt))
+          and(inArray(entities.id, rankedIds), isNull(entities.deletedAt), floor)
         );
 
       // Re-sort to match RRF rank order
