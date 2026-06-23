@@ -21,7 +21,7 @@
  * See team/platform/unified-knowledge-access.mdx.
  */
 import { knowledgeRepository, knowledgeKeysRepository } from "@synap/database";
-import { retrieve } from "../retrieval/retrieve.js";
+import { retrieve, type RetrieveResult } from "../retrieval/retrieve.js";
 import type {
   ProfileCatalogEntry,
   QueryUnderstanding,
@@ -76,6 +76,14 @@ export interface AskResult {
 
 type Settled = { status: "ok" | "error"; items: Record<string, unknown>[] };
 
+/** Fallback understanding when the retrieval engine itself fails. */
+const FALLBACK_UNDERSTANDING: QueryUnderstanding = {
+  profileTypes: [],
+  propertyHints: [],
+  temporal: false,
+  confidence: 0,
+};
+
 /**
  * Run an ancillary store and report whether it ACTUALLY answered. We degrade an
  * outage to an empty result (the answer must survive a how-to-doc store being
@@ -96,10 +104,9 @@ export async function ask(params: AskParams): Promise<AskResult> {
   const limit = params.limit ?? 10;
   const { substrates, primary: intent } = classifySubstrates(query);
 
-  // Semantic always runs (the backbone) and is NOT wrapped — a total retrieval
-  // failure should surface as an error, not a silent empty answer. Procedural /
-  // episodic run only when cued and each reports its own ok/error status.
-  // projectId narrows the semantic substrate to the active project focus.
+  // Semantic always runs (the backbone). Procedural / episodic run only when
+  // cued and each reports its own ok/error status. projectId narrows the
+  // semantic substrate to the active project focus.
   const semanticP = retrieve({
     query,
     userId,
@@ -124,16 +131,30 @@ export async function ask(params: AskParams): Promise<AskResult> {
     ? settle(knowledgeRepository.searchFacts({ userId, query, limit }))
     : Promise.resolve(null);
 
-  const [semantic, procedural, episodic] = await Promise.all([
-    semanticP,
-    proceduralP,
-    episodicP,
-  ]);
+  // Semantic is the backbone — a failure must surface cleanly (never HTTP 500).
+  // We await it separately so the caller gets a degraded answer with status:error
+  // instead of a crash. Procedural / episodic are already settle()-wrapped.
+  let semantic: RetrieveResult;
+  let semanticStatus: AskAnswer["status"] = "ok";
+  try {
+    semantic = await semanticP;
+  } catch (err) {
+    console.error("[ask] semantic retrieval failed:", err);
+    semantic = {
+      entities: [],
+      understanding: FALLBACK_UNDERSTANDING,
+      source: "hybrid",
+      verdict: "empty",
+    };
+    semanticStatus = "error";
+  }
+  const [procedural, episodic] = await Promise.all([proceduralP, episodicP]);
 
   const answers: AskAnswer[] = [
-    { substrate: "semantic", items: semantic.entities, status: "ok" },
+    { substrate: "semantic", items: semantic.entities, status: semanticStatus },
   ];
   const degraded: SubstrateKind[] = [];
+  if (semanticStatus === "error") degraded.push("semantic");
   if (procedural) {
     answers.push({
       substrate: "procedural",

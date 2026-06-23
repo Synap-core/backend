@@ -11,7 +11,7 @@
  * See team/platform/retrieval-architecture.mdx, Phase 3.
  */
 import { db, events } from "@synap/database";
-import { sql as rawSql } from "drizzle-orm";
+import { sql, and, eq, inArray } from "drizzle-orm";
 
 /**
  * MAX(event.timestamp) per entity id — the real "last activity" from the append-
@@ -26,13 +26,15 @@ export async function latestEventTimestamps(
   const rows = await db
     .select({
       subjectId: events.subjectId,
-      lastSeen: rawSql<Date>`MAX(${events.timestamp})`.as("last_seen"),
+      lastSeen: sql<Date>`MAX(${events.timestamp})`.as("last_seen"),
     })
     .from(events)
-    // user-scoped — every other read in the engine is; an unscoped read on the
-    // shared events table is the exact anti-pattern the read-scoping tripwire flags.
     .where(
-      rawSql`${events.subjectType} = 'entity' AND ${events.userId} = ${userId} AND ${events.subjectId} = ANY(${entityIds})`
+      and(
+        eq(events.subjectType, "entity"),
+        eq(events.userId, userId),
+        inArray(events.subjectId, entityIds)
+      )
     )
     .groupBy(events.subjectId);
   return new Map(
