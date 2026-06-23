@@ -297,7 +297,14 @@ function canReviewProposal(args: {
   memberRole: string | undefined;
   isOwner: boolean;
 }): boolean {
-  const isAdmin = args.memberRole === "admin";
+  // Workspace `owner` is the TOP role — it satisfies every policy (owner ≥ admin
+  // ≥ editor). The previous ladder matched only `=== "admin"`, so an actual
+  // workspace OWNER was locked out of approving agent proposals under the default
+  // `owner_and_admins` policy: `isOwner` here means "approver IS the proposer"
+  // (sourceId === userId), NOT "workspace owner" — and agent proposals carry
+  // sourceId = the agent, so that flag never helps the human owner. Net effect was
+  // the 403 "Not authorized to approve this proposal" for the workspace owner.
+  const isAdmin = args.memberRole === "admin" || args.memberRole === "owner";
   const isEditor = args.memberRole === "editor" || isAdmin;
   return args.policy === "admins_only"
     ? isAdmin
