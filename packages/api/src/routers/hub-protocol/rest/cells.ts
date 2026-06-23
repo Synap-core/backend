@@ -188,7 +188,12 @@ export function registerCellsRoutes(app: HubHono): void {
         eventType: "widget_definition.create.completed",
         subjectId: typeKey,
         userId: userId ?? "",
-        data: { id: typeKey, typeKey, workspaceId: workspaceId ?? undefined, changeType: "created" },
+        data: {
+          id: typeKey,
+          typeKey,
+          workspaceId: workspaceId ?? undefined,
+          changeType: "created",
+        },
       });
 
       return c.json({ success: true, typeKey });
@@ -270,8 +275,14 @@ export function registerCellsRoutes(app: HubHono): void {
       );
     }
 
-    const { name, rendererSource, workspaceId, description, defaultSize, deps } =
-      parsed.data;
+    const {
+      name,
+      rendererSource,
+      workspaceId,
+      description,
+      defaultSize,
+      deps,
+    } = parsed.data;
     const userId = c.get("userId");
 
     // Only gate workspace access when a specific workspace is targeted
@@ -321,9 +332,18 @@ export function registerCellsRoutes(app: HubHono): void {
               updatedAt: new Date(),
             },
           })
-          .returning({ id: widgetDefinitions.id, updatedAt: widgetDefinitions.updatedAt, createdAt: widgetDefinitions.createdAt });
+          .returning({
+            id: widgetDefinitions.id,
+            updatedAt: widgetDefinitions.updatedAt,
+            createdAt: widgetDefinitions.createdAt,
+          });
         const row = result[0];
-        if (row && row.updatedAt && row.createdAt && row.updatedAt.getTime() !== row.createdAt.getTime()) {
+        if (
+          row &&
+          row.updatedAt &&
+          row.createdAt &&
+          row.updatedAt.getTime() !== row.createdAt.getTime()
+        ) {
           changeType = "updated";
         }
       } else {
@@ -354,12 +374,18 @@ export function registerCellsRoutes(app: HubHono): void {
       }
 
       emitHubRealtimeEvent({
-        eventType: changeType === "created"
-          ? "widget_definition.create.completed"
-          : "widget_definition.update.completed",
+        eventType:
+          changeType === "created"
+            ? "widget_definition.create.completed"
+            : "widget_definition.update.completed",
         subjectId: typeKey,
         userId: userId ?? "",
-        data: { id: typeKey, typeKey, workspaceId: workspaceId ?? undefined, changeType },
+        data: {
+          id: typeKey,
+          typeKey,
+          workspaceId: workspaceId ?? undefined,
+          changeType,
+        },
       });
 
       return c.json({ success: true, typeKey }, 201);

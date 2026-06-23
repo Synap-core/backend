@@ -129,7 +129,9 @@ function main() {
   const surfaceChanged = previous !== next;
 
   if (!surfaceChanged) {
-    log("✅ Router surface unchanged vs committed generated.d.ts. Nothing to bump.");
+    log(
+      "✅ Router surface unchanged vs committed generated.d.ts. Nothing to bump."
+    );
     return;
   }
 
@@ -139,7 +141,7 @@ function main() {
     fail(
       "Router surface drifted but @synap-core/api-types version was not bumped.\n" +
         "   Run `node scripts/check-and-bump.mjs [--minor|--major]` and commit the\n" +
-        "   regenerated generated.d.ts + version bump before merging.",
+        "   regenerated generated.d.ts + version bump before merging."
     );
   }
 
@@ -158,7 +160,7 @@ function main() {
     VERSION_TS,
     /export const API_TYPES_VERSION = "[^"]*";/,
     `export const API_TYPES_VERSION = "${nextVersion}";`,
-    "API_TYPES_VERSION",
+    "API_TYPES_VERSION"
   );
 
   // 3. apps/api/src/index.ts — /health apiTypesVersion literal
@@ -166,12 +168,12 @@ function main() {
     HEALTH_TS,
     /apiTypesVersion: "[^"]*",/,
     `apiTypesVersion: "${nextVersion}",`,
-    "/health apiTypesVersion",
+    "/health apiTypesVersion"
   );
 
   log(
     `\n✅ Bumped to ${nextVersion}. Review the diff, commit, then publish:\n` +
-      `     cd packages/api-types && npm publish`,
+      `     cd packages/api-types && npm publish`
   );
 }
 

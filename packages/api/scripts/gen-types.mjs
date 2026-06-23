@@ -36,7 +36,11 @@ try {
   // dts-bundle-generator can SIGSEGV in memory-constrained Docker builds.
   // This is non-fatal: the previously-committed generated.d.ts stays in place.
   // Consumers continue to work; types will be refreshed on the next local run.
-  const reason = error.signal ? `signal ${error.signal}` : String(error.message ?? error);
-  console.warn(`⚠️  Type generation skipped (${reason}). Using existing generated.d.ts.`);
+  const reason = error.signal
+    ? `signal ${error.signal}`
+    : String(error.message ?? error);
+  console.warn(
+    `⚠️  Type generation skipped (${reason}). Using existing generated.d.ts.`
+  );
   process.exit(0);
 }

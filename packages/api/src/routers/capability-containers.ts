@@ -85,10 +85,10 @@ export const capabilityContainersRouter = router({
         const c = counts.get(l.toId);
         if (!c) continue;
         if (l.fromType === "skill") c.skills += 1;
-        else if (l.fromType === "tool")
-          toolKind.get(l.fromId) === "builtin"
-            ? (c.builtins += 1)
-            : (c.connections += 1);
+        else if (l.fromType === "tool") {
+          if (toolKind.get(l.fromId) === "builtin") c.builtins += 1;
+          else c.connections += 1;
+        }
       }
 
       return rows.map((r) => ({
