@@ -446,26 +446,59 @@ async function ensureLocalUser(): Promise<void> {
  * (same hash/scope; only the keyType discriminator changes), idempotent, every
  * boot. Targets ONLY the one trusted IS key, never arbitrary keys.
  */
-const IS_HUB_ID = "intelligence-hub-primary";
 export async function ensureISKeyIsInternal(): Promise<void> {
   try {
+    // DIAGNOSTIC: log every hub/system key so the BOOT LOG reveals the IS key's
+    // real key_type / hub_id / key_name (we cannot inspect the prod DB otherwise).
+    const inventory = await db
+      .select({
+        id: apiKeys.id,
+        keyType: apiKeys.keyType,
+        hubId: apiKeys.hubId,
+        keyName: apiKeys.keyName,
+        userId: apiKeys.userId,
+      })
+      .from(apiKeys)
+      .where(
+        drizzleSql`${apiKeys.hubId} IS NOT NULL OR ${apiKeys.userId} = 'system'`
+      );
+    logger.info(
+      {
+        keys: inventory.map((k) => ({
+          id: k.id.slice(0, 8),
+          keyType: k.keyType,
+          hubId: k.hubId,
+          keyName: k.keyName,
+        })),
+      },
+      "🔑 IS-key self-heal: hub/system key inventory"
+    );
+
+    // UPGRADE the IS pod-read key to is_internal (the keystone delegation key).
+    // Match the register-intelligence convention robustly — by hub_id OR the
+    // canonical key_name — so an older key (minted before the keystone) is
+    // caught even if its hub_id differs. In place, no rotation. Specific enough
+    // to never touch an unrelated system key.
     const healed = await db
       .update(apiKeys)
       .set({ keyType: "is_internal" })
       .where(
-        and(
-          eq(apiKeys.hubId, IS_HUB_ID),
-          drizzleSql`${apiKeys.keyType} <> 'is_internal'`
-        )
+        drizzleSql`(${apiKeys.hubId} = 'intelligence-hub-primary' OR ${apiKeys.keyName} = 'Intelligence Hub IS Key') AND ${apiKeys.keyType} <> 'is_internal'`
       )
-      .returning({ id: apiKeys.id });
+      .returning({
+        id: apiKeys.id,
+        keyName: apiKeys.keyName,
+        hubId: apiKeys.hubId,
+      });
     if (healed.length > 0) {
       logger.info(
-        { count: healed.length },
-        "✅ Self-healed IS key → keyType=is_internal (keystone operator-floor delegation now active)"
+        { healed },
+        "✅ Self-healed IS key(s) → keyType=is_internal (keystone operator-floor delegation now active)"
       );
     } else {
-      logger.debug("IS key keyType already is_internal — no self-heal needed");
+      logger.info(
+        "ℹ️ No IS key upgraded — already is_internal, OR none matched (check the inventory above to find the real IS key)"
+      );
     }
   } catch (error) {
     logger.error({ error }, "❌ Failed to self-heal IS key keyType");
