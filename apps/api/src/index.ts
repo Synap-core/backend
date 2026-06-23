@@ -315,6 +315,38 @@ app.get("/admin/connect", (c) => {
   return c.redirect(target, 302);
 });
 
+// ── Deep-link bounce (public, no auth) ──────────────────────────────────────
+// An https URL — clickable anywhere (Discord, email, chat) — that forwards into
+// the Electron app via its registered `synap://` protocol. Discord (and most
+// chat clients) will NOT linkify a raw `synap://` URL, so we serve a tiny https
+// page that immediately redirects to it. The app's deep-link handler
+// (`useDeepLinkHandler.ts`) understands `synap://open/<type>/<id>` for
+// proposal | entity | view | document | cell. No auth here: this only forwards a
+// scheme; the target surface is access-gated inside the app.
+app.get("/open/:type/:id", (c) => {
+  const ALLOWED = new Set(["proposal", "entity", "view", "document", "cell"]);
+  const type = c.req.param("type");
+  const id = c.req.param("id");
+  // id is a UUID or a cell typeKey — allow only url/HTML-safe chars so it can be
+  // interpolated into href/JS without escaping concerns.
+  if (!ALLOWED.has(type) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
+    return c.text("Invalid deep link", 400);
+  }
+  const deep = `synap://open/${type}/${id}`;
+  const html =
+    `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
+    `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `<title>Opening Synap…</title>` +
+    `<script>location.replace(${JSON.stringify(deep)});</script>` +
+    `<style>html,body{height:100%}body{margin:0;font-family:system-ui,-apple-system,sans-serif;` +
+    `background:#0b0b0c;color:#e9e9ec;display:flex;align-items:center;justify-content:center}` +
+    `a{color:#10b981;text-decoration:none}main{text-align:center;max-width:24rem;padding:2rem}</style>` +
+    `</head><body><main><p>Opening in Synap…</p>` +
+    `<p><a href="${deep}">Open the ${type}</a> if it doesn't open automatically.</p>` +
+    `</main></body></html>`;
+  return c.html(html);
+});
+
 // Ory Kratos routes
 // Kratos handles its own routes via public API
 // We proxy the necessary endpoints for browser-based flows
