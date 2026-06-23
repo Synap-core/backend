@@ -29,6 +29,7 @@ import {
   resolveIntelligenceService,
   ensureAgentThread,
   getAgentIdBySlug,
+  getPodCallback,
 } from "@synap/api";
 
 const logger = createLogger({ module: "channel-gateway-rest" });
@@ -326,11 +327,7 @@ channelGatewayApp.post("/inbound", async (c) => {
       threadId,
       userId,
       workspaceId: workspaceId ?? undefined,
-      dataPodUrl:
-        process.env.PUBLIC_URL ||
-        process.env.BACKEND_URL ||
-        "http://localhost:3000",
-      dataPodApiKey: process.env.HUB_PROTOCOL_API_KEY || "",
+      ...getPodCallback(),
     });
 
     aiReply = hubResponse.content || "Sorry, I couldn't generate a response.";

@@ -21,7 +21,7 @@ import { z } from "zod";
 import { db, eq, and } from "@synap/database";
 import { workspaceMembers } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
-import { getPodReadKey } from "../../utils/pod-read-key.js";
+import { getPodCallback } from "../../utils/pod-callback.js";
 import {
   ensureAgentThread,
   getAgentIdBySlug,
@@ -509,8 +509,7 @@ openaiCompatApp.post(
       userId,
       workspaceId: resolvedWorkspaceId,
       agentType: "meta",
-      dataPodUrl: process.env.PUBLIC_URL ?? process.env.BACKEND_URL ?? "",
-      dataPodApiKey: getPodReadKey(),
+      ...getPodCallback(),
       stream: input.stream,
     };
 
