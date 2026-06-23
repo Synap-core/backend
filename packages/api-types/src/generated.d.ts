@@ -12260,12 +12260,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				name: string;
-				code: string;
 				workspaceId?: string | undefined;
 				kind?: "code" | "instruction" | undefined;
 				scope?: "user" | "pod" | "workspace" | undefined;
 				agentTypes?: string[] | undefined;
 				description?: string | undefined;
+				body?: string | undefined;
+				code?: string | undefined;
 				parameters?: Record<string, unknown> | undefined;
 				category?: string | undefined;
 				executionMode?: "sync" | "async" | undefined;
@@ -12290,6 +12291,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentTypes?: string[] | null | undefined;
 				name?: string | undefined;
 				description?: string | undefined;
+				body?: string | undefined;
 				code?: string | undefined;
 				parameters?: Record<string, unknown> | undefined;
 				category?: string | undefined;

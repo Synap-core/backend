@@ -261,7 +261,10 @@ export const skillsRouter = router({
         agentTypes: z.array(z.string()).nullable().optional(),
         name: z.string().min(1).max(255).optional(),
         description: z.string().optional(),
-        code: z.string().min(1).optional(),
+        /** Documentation (Markdown): what the skill does + when to use it. */
+        body: z.string().optional(),
+        /** Optional executable; empty clears it (doc-only). */
+        code: z.string().optional(),
         parameters: z.record(z.string(), z.unknown()).optional(),
         category: z.string().optional(),
         executionMode: z.enum(["sync", "async"]).optional(),
@@ -316,6 +319,20 @@ export const skillsRouter = router({
       const execChanged = RE_APPROVAL_FIELDS.some(
         (k) => (updateData as Record<string, unknown>)[k] !== undefined
       );
+
+      // Documentation + optional Code: when code is set, derive `kind` (unless
+      // given) and store empty code as null (the skill becomes doc-only).
+      if (updateData.code !== undefined) {
+        const trimmed = updateData.code.trim();
+        (updateData as Record<string, unknown>).code = trimmed
+          ? updateData.code
+          : null;
+        if (updateData.kind === undefined) {
+          (updateData as Record<string, unknown>).kind = trimmed
+            ? "code"
+            : "instruction";
+        }
+      }
 
       // 2. Direct DB operation
       const [_updated] = await db
