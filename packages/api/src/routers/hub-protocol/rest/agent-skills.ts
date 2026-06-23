@@ -22,7 +22,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { db, eq, and, skills, documents } from "@synap/database";
+import { db, eq, and, skills } from "@synap/database";
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -654,6 +654,8 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
 
       // Create linked documents through the tRPC caller so content is properly
       // stored (MinIO-backed via documents.createDocument procedure).
+      // The skill OWNS the relationship (documentIds TEXT[]) — documents are
+      // generic substrate that don't know who references them.
       const caller = await getCaller(c);
       const createdDocs: Array<{ id: string; title: string }> = [];
       if (docs.length > 0) {
@@ -665,17 +667,16 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
             type: d.type ?? "markdown",
             workspaceId: null,
           });
-          // createDocument returns { id, documentId, status } shape.
           const docId = (result as any)?.documentId ?? (result as any)?.id;
-          if (docId) {
-            // Link the document to the parent skill after creation.
-            await db
-              .update(documents)
-              .set({ skillId: skillRow.id } as any)
-              .where(eq(documents.id, docId));
-            createdDocs.push({ id: docId, title: d.title });
-          }
+          if (docId) createdDocs.push({ id: docId, title: d.title });
         }
+      }
+
+      if (createdDocs.length > 0) {
+        await db
+          .update(skills)
+          .set({ documentIds: createdDocs.map((d) => d.id) } as any)
+          .where(eq(skills.id, skillRow.id));
       }
 
       return c.json(

@@ -93,6 +93,13 @@ export const skills = pgTable(
     body: text("body"),
 
     /**
+     * Document IDs linked to this skill (e.g. reference files like
+     * reference/02-scoring-framework.md). The skill owns the relationship —
+     * documents are generic substrate that don't know who references them.
+     */
+    documentIds: text("document_ids").array().default([]),
+
+    /**
      * For kind='code': the JavaScript/TypeScript function body.
      * Nullable — doc-style skills (kind='instruction') have no code.
      */

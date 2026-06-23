@@ -14,7 +14,6 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import type { ProvenanceKind } from "./provenance.js";
-import { skills } from "./skills.js";
 
 /**
  * Documents table
@@ -29,9 +28,6 @@ export const documents = pgTable(
     userId: text("user_id").notNull(),
     // Nullable for pod-wide documents (workspace is optional).
     workspaceId: uuid("workspace_id"),
-    skillId: uuid("skill_id").references(() => skills.id, {
-      onDelete: "set null",
-    }),
     // Projects: Use relations table (if document is linked to entity) or remove projectIds
 
     // Document metadata
