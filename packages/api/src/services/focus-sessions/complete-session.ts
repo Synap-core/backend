@@ -7,10 +7,12 @@
  */
 import { db, focusSessions, playbookRuns, eq, and } from "@synap/database";
 import type { FocusSession } from "@synap/database";
+import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 
 export interface CompleteFocusSessionParams {
   sessionId: string;
   userId: string;
+  agentUserId?: string;
   /** Short human-readable outcome — surfaced in session lists. */
   summary?: string;
   verificationReport?: Record<string, unknown> | null;
@@ -34,9 +36,37 @@ export async function completeFocusSession(
   // Load the session — scoping is the caller's responsibility (REST resolves
   // acting context; MCP passes the operator userId).
   const session = await db.query.focusSessions.findFirst({
-    where: eq(focusSessions.id, sessionId),
+    where: and(
+      eq(focusSessions.id, sessionId),
+      eq(focusSessions.userId, params.userId)
+    ),
   });
   if (!session) return null;
+
+  // Governance membrane — AI callers route through proposals.
+  // Completing a session is an update action, consistent with the REST PATCH path.
+  const perm = await checkPermissionOrPropose({
+    userId: params.userId,
+    agentUserId: params.agentUserId,
+    workspaceId: session.workspaceId,
+    subjectType: "focus_session",
+    action: "update",
+    source: "intelligence",
+    data: { id: sessionId, status: "closed" },
+  });
+
+  if ("denied" in perm && perm.denied) {
+    throw Object.assign(new Error(perm.reason), { code: "FORBIDDEN" });
+  }
+  if ("proposalId" in perm) {
+    // Completion via proposal is not supported — the MCP tool needs a synchronous
+    // result. If governance proposes, reject with FORBIDDEN so the agent can
+    // communicate that the action requires manual review.
+    throw Object.assign(
+      new Error("Session completion proposed for review — approval required"),
+      { code: "FORBIDDEN" }
+    );
+  }
 
   // Close any running playbook_run for this session.
   const [run] = await db
@@ -63,10 +93,10 @@ export async function completeFocusSession(
     .set({
       status: "closed",
       closedAt: new Date(),
-      ...(summary !== undefined
+      ...(summary !== undefined || executionLog !== undefined
         ? {
             executionLog: {
-              summary,
+              ...(summary !== undefined ? { summary } : {}),
               ...((executionLog as Record<string, unknown>) ?? {}),
             },
           }

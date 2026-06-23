@@ -530,6 +530,10 @@ export async function executeMCPToolViaHubProtocol(
         correlationId: args.correlationId as string | undefined,
         channelId: args.channelId as string | undefined,
         agentIds: args.agentIds as string[] | undefined,
+        templateId: args.templateId as string | undefined,
+        expectedOutputs: args.expectedOutputs as
+          | Array<{ kind: string; label: string; icon?: string }>
+          | undefined,
       });
       return ok(result);
     }
@@ -541,6 +545,7 @@ export async function executeMCPToolViaHubProtocol(
       const session = await completeFocusSession({
         sessionId: args.sessionId as string,
         userId,
+        agentUserId,
         summary: args.summary as string | undefined,
         verificationReport: args.verificationReport as
           | Record<string, unknown>
@@ -549,6 +554,7 @@ export async function executeMCPToolViaHubProtocol(
         contextReport: args.contextReport as
           | Record<string, unknown>
           | undefined,
+        executionLog: args.executionLog as Record<string, unknown> | undefined,
       });
       if (!session) {
         return ok({ error: `Focus session ${args.sessionId} not found` });

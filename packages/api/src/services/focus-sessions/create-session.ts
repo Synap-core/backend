@@ -27,6 +27,7 @@ export type CreateFocusSessionResult =
       proposalId: string;
       message: string;
       summary?: string;
+      reasoning?: string;
       reviewPath?: string;
       reviewUrl?: string;
     };
@@ -78,6 +79,7 @@ export async function createFocusSession(
       proposalId: perm.proposalId,
       message: "Focus session creation proposed for review",
       summary: perm.summary,
+      reasoning: perm.reasoning,
       reviewPath: perm.reviewPath,
       reviewUrl: perm.reviewUrl,
     };

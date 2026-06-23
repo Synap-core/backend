@@ -364,6 +364,25 @@ export const tools = {
               description:
                 "Optional array of agent IDs participating in this session.",
             },
+            templateId: {
+              type: "string",
+              description:
+                "Optional session template UUID to bootstrap this session from.",
+            },
+            expectedOutputs: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  kind: { type: "string" },
+                  label: { type: "string" },
+                  icon: { type: "string" },
+                },
+                required: ["kind", "label"],
+              },
+              description:
+                "Optional expected deliverables — what the session should produce.",
+            },
           },
           required: ["goal", "workspaceId"],
         },
@@ -396,6 +415,11 @@ export const tools = {
             contextReport: {
               type: "object",
               description: "Optional context gathered before starting.",
+            },
+            executionLog: {
+              type: "object",
+              description:
+                "Optional structured execution log — step-by-step transcript of what happened.",
             },
           },
           required: ["sessionId"],
