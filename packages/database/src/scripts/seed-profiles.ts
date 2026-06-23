@@ -575,7 +575,7 @@ async function seedProfiles() {
       {
         slug: "knowledge",
         displayName: "Knowledge",
-        entityScope: "workspace",
+        entityScope: "pod",
         uiHints: {
           icon: "brain",
           color: "#6366F1",
