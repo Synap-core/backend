@@ -898,7 +898,10 @@ async function materializeRelation(
       metadata: (data.metadata as Record<string, unknown>) ?? {},
     })
     .onConflictDoNothing();
-  logger.info({ id, sourceEntityId, targetEntityId, type }, "Relation materialized");
+  logger.info(
+    { id, sourceEntityId, targetEntityId, type },
+    "Relation materialized"
+  );
 }
 
 /**

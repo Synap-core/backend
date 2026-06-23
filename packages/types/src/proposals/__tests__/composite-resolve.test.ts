@@ -50,10 +50,25 @@ describe("registerEntityRef + resolveCompositeRef", () => {
     // Mirrors what /import/analyze produces: t1↔t2 cross-links.
     const data: CompositeProposalData = {
       operations: [
-        { op: "create_entity", ref: "t1", profileSlug: "project", title: "Alpha" },
+        {
+          op: "create_entity",
+          ref: "t1",
+          profileSlug: "project",
+          title: "Alpha",
+        },
         { op: "create_entity", ref: "t2", profileSlug: "person", title: "Bob" },
-        { op: "create_relation", type: "references", sourceRef: "t1", targetRef: "t2" },
-        { op: "create_relation", type: "references", sourceRef: "t2", targetRef: "t1" },
+        {
+          op: "create_relation",
+          type: "references",
+          sourceRef: "t1",
+          targetRef: "t2",
+        },
+        {
+          op: "create_relation",
+          type: "references",
+          sourceRef: "t2",
+          targetRef: "t1",
+        },
       ],
     };
     expect(isCompositeProposalData(data)).toBe(true);
@@ -73,8 +88,14 @@ describe("registerEntityRef + resolveCompositeRef", () => {
     const rels = data.operations
       .filter((o) => o.op === "create_relation")
       .map((o) => ({
-        source: resolveCompositeRef(map, (o as { sourceRef: string }).sourceRef),
-        target: resolveCompositeRef(map, (o as { targetRef: string }).targetRef),
+        source: resolveCompositeRef(
+          map,
+          (o as { sourceRef: string }).sourceRef
+        ),
+        target: resolveCompositeRef(
+          map,
+          (o as { targetRef: string }).targetRef
+        ),
       }));
 
     expect(rels).toEqual([
