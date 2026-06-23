@@ -28,6 +28,7 @@
 
 import { createHash, randomUUID } from "crypto";
 import { z } from "@hono/zod-openapi";
+import { getPodReadKey } from "../../../utils/pod-read-key.js";
 import {
   db,
   agents,
@@ -233,7 +234,7 @@ export function registerDiscordRoutes(app: HubHono): void {
             agentUserId: resolvedService.agentUserId,
             dataPodUrl:
               process.env.PUBLIC_URL || `https://${process.env.DOMAIN}`,
-            dataPodApiKey: resolvedService.serviceApiKey,
+            dataPodApiKey: getPodReadKey(),
             channelKind: "pm",
             // Client-aware: when this Discord channel is bound to a client entity
             // (via /link-client → contextObjectType="entity"), tell the IS which

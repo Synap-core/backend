@@ -13,6 +13,7 @@ import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import { getPodReadKey } from "../utils/pod-read-key.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import {
   resolveAgentHandle,
@@ -2008,7 +2009,7 @@ export const channelsRouter = router({
           contextObjectId: channel.contextObjectId ?? undefined,
           // Pod credentials — IS uses these to call back into this pod via Hub Protocol
           dataPodUrl: process.env.PUBLIC_URL || `https://${process.env.DOMAIN}`,
-          dataPodApiKey: resolvedService.serviceApiKey,
+          dataPodApiKey: getPodReadKey(),
           // Billing channel: Browser chat is included in subscription
           // Channel kind: signals to IS whether this is a private or shared channel
           channelKind,
@@ -2222,7 +2223,7 @@ export const channelsRouter = router({
             mcpServers: mcpServersList,
             dataPodUrl:
               process.env.PUBLIC_URL || `https://${process.env.DOMAIN}`,
-            dataPodApiKey: resolvedService.serviceApiKey,
+            dataPodApiKey: getPodReadKey(),
             channelKind,
             focusSessionId: activeFocusSessionId,
           });

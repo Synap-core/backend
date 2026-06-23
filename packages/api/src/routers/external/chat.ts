@@ -17,6 +17,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { db, eq, and, inArray, or } from "@synap/database";
 import { channels, workspaceMembers } from "@synap/database/schema";
+import { getPodReadKey } from "../../utils/pod-read-key.js";
 import { ChannelType, ChannelStatus } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
 import {
@@ -227,7 +228,7 @@ externalChatApp.post(
       workspaceId: resolvedWorkspaceId,
       agentType: input.agentType ?? "meta",
       dataPodUrl: process.env.PUBLIC_URL ?? process.env.BACKEND_URL ?? "",
-      dataPodApiKey: isApiKey,
+      dataPodApiKey: getPodReadKey(),
       stream: true,
     };
 

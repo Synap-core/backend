@@ -43,6 +43,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { db, eq, and, desc, isNull } from "@synap/database";
+import { getPodReadKey } from "../utils/pod-read-key.js";
 import {
   channels,
   agents,
@@ -236,7 +237,7 @@ chatStreamApp.post("/stream", async (c) => {
     workspaceId: resolvedWorkspaceId,
     agentType: input.agentType ?? channelAgentSlug ?? "meta",
     dataPodUrl: process.env.PUBLIC_URL ?? process.env.BACKEND_URL ?? "",
-    dataPodApiKey: isApiKey,
+    dataPodApiKey: getPodReadKey(),
     stream: true,
   };
 
