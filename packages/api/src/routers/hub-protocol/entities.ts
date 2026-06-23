@@ -194,6 +194,13 @@ export const entitiesRouter = router({
         message: result.message,
         id: result.id,
         proposalId: result.proposalId,
+        // Forward the governance discriminator + review link from the inner
+        // create so hub callers (Discord bridge, CLI, MCP) can tell a workspace
+        // JOIN gate ("join") from a content proposal, and surface a clickable
+        // review URL — instead of mislabeling a membership gate as "entity
+        // proposed". Undefined on the auto-approved / created path.
+        proposalType: (result as { proposalType?: string }).proposalType,
+        reviewUrl: (result as { reviewUrl?: string }).reviewUrl,
         // Stable entity ID exposed at propose-time for cross-write proposal
         // graphs. Only populated when the action was proposal-gated.
         proposedEntityId: result.proposedEntityId as string | undefined,
