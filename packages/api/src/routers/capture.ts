@@ -192,6 +192,20 @@ export const captureRouter = router({
           profileSlug = entity.profileSlug;
           title = entity.title || title;
           properties = entity.properties ?? {};
+
+          // Knowledge profile requires ek_type discriminator (gotcha|lesson|decision|reference).
+          // The IS structuring correctly identifies the profile but does not always set
+          // ek_type — infer it from the text when missing so the entity creation succeeds.
+          if (profileSlug === "knowledge" && !properties.ek_type) {
+            const prefix = input.content.slice(0, 30).toLowerCase();
+            if (prefix.includes("gotcha")) properties.ek_type = "gotcha";
+            else if (prefix.includes("lesson")) properties.ek_type = "lesson";
+            else if (prefix.includes("decision"))
+              properties.ek_type = "decision";
+            else if (prefix.includes("reference"))
+              properties.ek_type = "reference";
+          }
+
           mode = "ai";
           logger.debug(
             { userId, profileSlug, confidence: entity.confidence },
