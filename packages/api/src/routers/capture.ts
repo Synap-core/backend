@@ -591,6 +591,28 @@ export const captureRouter = router({
         return degradedFallback("is_empty_result");
       }
 
+      // Knowledge profile requires ek_type discriminator (gotcha|lesson|decision|reference).
+      // The IS structuring correctly identifies the profile but does not always set
+      // ek_type — infer it from each entity's title/text when missing so entity creation
+      // succeeds instead of degrading to note.
+      for (const entity of structureResult.entities) {
+        if (
+          entity.profileSlug === "knowledge" &&
+          !(entity.properties as Record<string, unknown>).ek_type
+        ) {
+          const prefix = (entity.title || "").toLowerCase();
+          if (prefix.includes("gotcha"))
+            (entity.properties as Record<string, unknown>).ek_type = "gotcha";
+          else if (prefix.includes("lesson"))
+            (entity.properties as Record<string, unknown>).ek_type = "lesson";
+          else if (prefix.includes("decision"))
+            (entity.properties as Record<string, unknown>).ek_type = "decision";
+          else if (prefix.includes("reference"))
+            (entity.properties as Record<string, unknown>).ek_type =
+              "reference";
+        }
+      }
+
       // Additive extraction summary from the IS response (present when a `file`
       // input was normalized to text upstream). Passed through to the tRPC
       // caller without changing existing fields — published clients ignore it.
