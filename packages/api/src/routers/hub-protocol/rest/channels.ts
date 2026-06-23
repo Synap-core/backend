@@ -126,6 +126,12 @@ export function registerChannelsRoutes(app: HubHono): void {
         // Both absent → unchanged room behaviour.
         parentChannelId: z.string().optional(),
         branchPurpose: z.string().optional(),
+        // Explicit user re-link (e.g. /link-client run again): when true, move the
+        // channel to `workspaceId` and OVERWRITE its context binding even if it was
+        // already set — so a channel created in the wrong workspace (or bound to a
+        // stale/dangling entity) self-heals. Default false keeps the idempotent,
+        // never-clobber behaviour for automatic callers.
+        relink: z.boolean().optional(),
       }),
     },
     responses: {
@@ -389,6 +395,7 @@ export function registerChannelsRoutes(app: HubHono): void {
       title?: string;
       parentChannelId?: string;
       branchPurpose?: string;
+      relink?: boolean;
     };
     if (!body.externalSource || !body.externalChannelId) {
       return c.json(
@@ -426,11 +433,23 @@ export function registerChannelsRoutes(app: HubHono): void {
           title: body.title ?? `${body.externalSource} channel`,
         });
 
-      // 2. Bind to the entity if requested and not already bound. Guard on
-      //    contextObjectId IS NULL so a re-link never clobbers an existing bind
-      //    (keeps the door idempotent + safe).
+      // 1b. Explicit re-link (user ran /link-client again): move the channel to
+      //     the requested workspace. resolveOrCreateExternalChannel matches by
+      //     (externalSource, externalId) only, so a channel first created in the
+      //     pod-primary before the operator chose CRM would otherwise be stuck
+      //     there forever. Only on an explicit relink — never for auto callers.
+      if (body.relink) {
+        await db
+          .update(channelsTable)
+          .set({ workspaceId, updatedAt: new Date() })
+          .where(eq(channelsTable.id, channelId));
+      }
+
+      // 2. Bind to the entity. Normally only when not already bound (idempotent,
+      //    never-clobber). An explicit relink OVERWRITES a stale/dangling bind
+      //    (e.g. a proposed-but-unapproved client id that never materialised).
       let linked = false;
-      if (body.contextObjectId && !existingContextId) {
+      if (body.contextObjectId && (body.relink || !existingContextId)) {
         await db
           .update(channelsTable)
           .set({
@@ -439,10 +458,12 @@ export function registerChannelsRoutes(app: HubHono): void {
             updatedAt: new Date(),
           })
           .where(
-            and(
-              eq(channelsTable.id, channelId),
-              isNull(channelsTable.contextObjectId)
-            )
+            body.relink
+              ? eq(channelsTable.id, channelId)
+              : and(
+                  eq(channelsTable.id, channelId),
+                  isNull(channelsTable.contextObjectId)
+                )
           );
         linked = true;
       }
