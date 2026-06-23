@@ -90,10 +90,12 @@ SET scope = 'pod'
 WHERE channel_type = 'thread'
   AND thread_kind = 'personal';
 
--- Skill triggers: align to renamed trigger target value.
-UPDATE skill_triggers
-SET channel_type = 'personal_thread'
-WHERE channel_type = 'personal';
+-- Skill triggers: align to renamed trigger target value (table may not exist in embedded pod).
+DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'skill_triggers') THEN
+  UPDATE skill_triggers
+  SET channel_type = 'personal_thread'
+  WHERE channel_type = 'personal';
+END IF; END; $$;
 
 CREATE INDEX IF NOT EXISTS channels_thread_kind_idx
   ON channels (thread_kind);
