@@ -332,6 +332,76 @@ export const tools = {
         },
       },
       {
+        name: "synap_start_session",
+        description:
+          "Create a focus session — a goal-bound work session tracked in Synap. Use this to declare 'I'm starting work on X'. The session appears in the browser SessionRoom. After creating, use synap_get_channel to get a personal channel, then synap_post_message with triggerAI=true to dispatch the IS agent for autonomous work. The agent's produced entities are linked to the session via the graph.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            goal: {
+              type: "string",
+              description:
+                "The goal of the session — what work is being done. Be specific and outcome-oriented (e.g. 'Research best web scraping approaches for social media', not 'do research').",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Workspace ID the session belongs to. Required — sessions are workspace-scoped.",
+            },
+            correlationId: {
+              type: "string",
+              description:
+                "Optional idempotency key — same correlationId for same user+workspace returns the existing session.",
+            },
+            channelId: {
+              type: "string",
+              description:
+                "Optional channel UUID to attach to the session (e.g. the personal channel from synap_get_channel).",
+            },
+            agentIds: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Optional array of agent IDs participating in this session.",
+            },
+          },
+          required: ["goal", "workspaceId"],
+        },
+      },
+      {
+        name: "synap_complete_session",
+        description:
+          "Complete a focus session — mark it closed with a summary and optional reports. Closes any running playbook_run and updates the session record. The session becomes visible as a closed session in the browser SessionRoom with deliverables.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: {
+              type: "string",
+              description: "The focus session ID to complete.",
+            },
+            summary: {
+              type: "string",
+              description:
+                "Short human-readable outcome — what was accomplished. Surfaced in session lists (e.g. 'Found 5 viable approaches; top 2: Puppeteer for SPAs, Apify for social media').",
+            },
+            verificationReport: {
+              type: "object",
+              description:
+                "Optional structured verification report (e.g. what was checked, confidence levels).",
+            },
+            planReport: {
+              type: "object",
+              description: "Optional plan report detailing the approach taken.",
+            },
+            contextReport: {
+              type: "object",
+              description: "Optional context gathered before starting.",
+            },
+          },
+          required: ["sessionId"],
+        },
+      },
+      {
         name: "synap_governance",
         description:
           "Read workspace governance policy and count of pending proposals. Use before writes to understand auto-approve rules and whether proposals will be created.",

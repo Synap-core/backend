@@ -26,6 +26,7 @@ import {
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { createLinks } from "../../../services/links/links-service.js";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
+import { createFocusSession } from "../../../services/focus-sessions/create-session.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -324,86 +325,40 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     const { userId, workspaceId } = acting;
 
     try {
-      // Idempotency: if a correlationId was given, return the existing session.
-      // Floor by the acting user + bound workspace so a guessed/colliding
-      // correlationId can't return another user's session (defense-in-depth).
-      if (body.correlationId) {
-        const existing = await db.query.focusSessions.findFirst({
-          where: and(
-            eq(focusSessions.correlationId, body.correlationId),
-            eq(focusSessions.userId, userId),
-            eq(focusSessions.workspaceId, workspaceId)
-          ),
-        });
-        if (existing) return c.json(existing);
-      }
-
-      // Governance membrane — focus_session.create goes through checkPermissionOrPropose.
+      // Delegate to the shared service (used by both Hub REST and MCP adapter).
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
-
-      const perm = await checkPermissionOrPropose({
+      const result = await createFocusSession({
         userId,
-        agentUserId: ctxAgentUserId,
         workspaceId,
-        subjectType: "focus_session",
-        action: "create",
-        source: "intelligence",
-        data: {
-          goal: body.goal,
-          templateId: body.templateId,
-        },
+        goal: body.goal,
+        agentUserId: ctxAgentUserId,
+        correlationId: body.correlationId,
+        channelId: body.channelId ?? null,
+        agentIds: body.agentIds,
+        templateId: body.templateId ?? null,
+        expectedOutputs: body.expectedOutputs,
       });
 
-      if ("denied" in perm && perm.denied) {
-        return c.json({ error: perm.reason }, 403);
-      }
-      if ("proposalId" in perm) {
+      if (result.status === "proposed") {
         return c.json({
           status: "proposed",
-          message: "Focus session creation proposed for review",
-          proposalId: perm.proposalId,
-          summary: perm.summary,
-          reasoning: perm.reasoning,
-          reviewPath: perm.reviewPath,
-          reviewUrl: perm.reviewUrl,
+          message: result.message,
+          proposalId: result.proposalId,
+          summary: result.summary,
+          reviewPath: result.reviewPath,
+          reviewUrl: result.reviewUrl,
           session: null,
         });
       }
 
-      const [created] = await db
-        .insert(focusSessions)
-        .values({
-          workspaceId,
-          userId,
-          goal: body.goal,
-          correlationId: body.correlationId ?? null,
-          templateId: body.templateId ?? null,
-          expectedOutputs: body.expectedOutputs ?? [],
-          channelId: body.channelId ?? null,
-          agentIds: body.agentIds ?? [],
-          status: "active",
-        })
-        .returning();
-
-      emitHubRealtimeEvent({
-        eventType: "focus_session.create.completed",
-        subjectId: created.id,
-        userId,
-        data: {
-          id: created.id,
-          workspaceId: created.workspaceId,
-          status: created.status,
-          goal: created.goal,
-          progress: created.progress,
-        },
-      });
-
-      return c.json(created);
+      return c.json(result.session);
     } catch (err) {
       logger.error({ err }, "focus-sessions.create failed");
+      const code =
+        (err as Record<string, unknown>).code === "FORBIDDEN" ? 403 : 500;
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        code as 403 | 500
       );
     }
   });

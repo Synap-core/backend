@@ -517,6 +517,45 @@ export async function executeMCPToolViaHubProtocol(
       });
     }
 
+    // ── Focus sessions (work tracking) ──────────────────────────────────────
+    case "synap_start_session": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      const { createFocusSession } =
+        await import("../../services/focus-sessions/create-session.js");
+      const result = await createFocusSession({
+        userId,
+        workspaceId: args.workspaceId as string,
+        goal: args.goal as string,
+        agentUserId,
+        correlationId: args.correlationId as string | undefined,
+        channelId: args.channelId as string | undefined,
+        agentIds: args.agentIds as string[] | undefined,
+      });
+      return ok(result);
+    }
+
+    case "synap_complete_session": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      const { completeFocusSession } =
+        await import("../../services/focus-sessions/complete-session.js");
+      const session = await completeFocusSession({
+        sessionId: args.sessionId as string,
+        userId,
+        summary: args.summary as string | undefined,
+        verificationReport: args.verificationReport as
+          | Record<string, unknown>
+          | undefined,
+        planReport: args.planReport as Record<string, unknown> | undefined,
+        contextReport: args.contextReport as
+          | Record<string, unknown>
+          | undefined,
+      });
+      if (!session) {
+        return ok({ error: `Focus session ${args.sessionId} not found` });
+      }
+      return ok({ status: "closed", session });
+    }
+
     case "synap_governance": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
       const wsId = args.workspaceId as string;
