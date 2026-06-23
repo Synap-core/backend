@@ -4697,6 +4697,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				entity: Record<string, unknown> | null;
 				proposalId: string;
+				proposalType: string;
+				reviewUrl: string;
 				proposedEntityId: string;
 				id?: undefined;
 			} | {
@@ -4725,6 +4727,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					systemData?: Record<string, unknown> | undefined;
 				};
 				proposalId?: undefined;
+				proposalType?: undefined;
+				reviewUrl?: undefined;
 				proposedEntityId?: undefined;
 			};
 			meta: object;
@@ -5013,10 +5017,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: string;
 				message: string;
 				proposalId: string;
+				proposalType: string;
+				reviewUrl: string;
 			} | {
 				status: string;
 				message: string;
 				proposalId?: undefined;
+				proposalType?: undefined;
+				reviewUrl?: undefined;
 			};
 			meta: object;
 		}>;
@@ -5031,10 +5039,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: string;
 				message: string;
 				proposalId: string;
+				proposalType: string;
+				reviewUrl: string;
 			} | {
 				status: string;
 				message: string;
 				proposalId?: undefined;
+				proposalType?: undefined;
+				reviewUrl?: undefined;
 			};
 			meta: object;
 		}>;
