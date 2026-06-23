@@ -5,6 +5,7 @@
 ## What exists (don't rebuild)
 
 The studio app already has a **complete first-run onboarding wizard** — `HydrationFlow` (`apps/studio/components/onboarding/`), stages `dump → structure → review → arrive`:
+
 - **DumpStage** — categorized dropzones (AI exports, People, Notes incl. **Obsidian/Notion/markdown**, Misc); a frontend `ImporterRegistry` (`@synap-core/hydration`) unzips + parses client-side.
 - **StructureStage** — calls `capture.structure` (the **AI/LLM** path) per dump → entity proposals.
 - **ReviewStage** — bulk approve/reject → `capture.execute` (governed materialize).
@@ -16,12 +17,12 @@ So onboarding, import dropzones, AI structuring, review, and the proposal gate *
 
 Two import paths don't know about each other, and one is wrong for structured sources:
 
-| Source kind | Right path | Why |
-|---|---|---|
-| **Unstructured** (ChatGPT/Claude export, loose text) | `capture.structure` (LLM) | needs AI to extract entities from a blob |
+| Source kind                                                              | Right path                                         | Why                                                                        |
+| ------------------------------------------------------------------------ | -------------------------------------------------- | -------------------------------------------------------------------------- |
+| **Unstructured** (ChatGPT/Claude export, loose text)                     | `capture.structure` (LLM)                          | needs AI to extract entities from a blob                                   |
 | **Already-structured** (Obsidian, Notion, markdown w/ frontmatter+links) | **`POST /api/hub/import/analyze`** (deterministic) | per-note LLM is expensive + lossy on structure; faithful mirror is correct |
 
-Today the wizard sends *everything* through `capture.structure`. Obsidian should go through the new deterministic endpoint instead.
+Today the wizard sends _everything_ through `capture.structure`. Obsidian should go through the new deterministic endpoint instead.
 
 ## Backend contract (IMPLEMENTED + tested)
 
@@ -49,6 +50,7 @@ Today the wizard sends *everything* through `capture.structure`. Obsidian should
 ### The graph composite proposal (the unit-of-work)
 
 `proposals.data` carries:
+
 ```jsonc
 { "operations": [
     { "op": "create_entity", "ref": "t1", "profileSlug": "project", "title": "Launch", "properties": {...} },
@@ -57,6 +59,7 @@ Today the wizard sends *everything* through `capture.structure`. Obsidian should
   ],
   "source": "obsidian" }
 ```
+
 On approval (generalized composite branch in `routers/proposals.ts`): **pass 1** creates every `create_entity` op (canonical entity path, full side-effects), building a `ref → realId` map (`ref` = the item tempId; positional `$opN` and `$primary` also resolve); **pass 2** creates relations, resolving each `sourceRef`/`targetRef` through the map (a literal that isn't an in-proposal ref is treated as an existing entity UUID, so a graph can link to pre-existing data). Atomic, governed, no pre-minted entity ids — `tempId`/`ref` IS the reservation, living only inside the unit of work.
 
 This is the SAME `CompositeProposalData` type the approve flow consumes — a test (`import.test.ts`) locks the bridge output to `isCompositeProposalData()`.
@@ -64,6 +67,7 @@ This is the SAME `CompositeProposalData` type the approve flow consumes — a te
 ## Governance — now consistent
 
 All import writes go through proposals:
+
 - `import.submitBatch` (file batch: markdown/csv/bookmarks) — **changed** from direct-write to **pending proposals** via `createEventBackedProposal` (one per parsed entity). Returns `proposalsCreated` in stats. (JSON-chat→channel and raw file storage stay as-is — channels/files aren't entity writes.)
 - `/import/analyze` (structured graph) — **one** governed graph proposal.
 - `capture.structure` (unstructured) — already proposal-gated.

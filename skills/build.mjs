@@ -27,7 +27,8 @@ function assemblePackage(pkgDir) {
   const yamlPath = path.join(pkgDir, "_skill.yaml");
   if (!fs.existsSync(orderPath) || !fs.existsSync(yamlPath)) return null;
 
-  const frontmatter = fs.readFileSync(yamlPath, "utf8").replace(/\s*$/, "") + "\n";
+  const frontmatter =
+    fs.readFileSync(yamlPath, "utf8").replace(/\s*$/, "") + "\n";
   const order = fs
     .readFileSync(orderPath, "utf8")
     .split("\n")
@@ -37,7 +38,9 @@ function assemblePackage(pkgDir) {
   const topics = order.map((file) => {
     const p = path.join(pkgDir, file);
     if (!fs.existsSync(p)) {
-      throw new Error(`build: ${pkgDir}: _order.txt references missing topic "${file}"`);
+      throw new Error(
+        `build: ${pkgDir}: _order.txt references missing topic "${file}"`
+      );
     }
     // normalize: strip trailing whitespace so the joiner controls spacing
     return fs.readFileSync(p, "utf8").replace(/\s*$/, "");
@@ -47,7 +50,11 @@ function assemblePackage(pkgDir) {
     "---\n" + frontmatter + "---\n\n" + topics.join("\n\n---\n\n") + "\n";
 
   fs.writeFileSync(path.join(pkgDir, "SKILL.md"), assembled);
-  return { slug: path.basename(pkgDir), topics: order.length, bytes: assembled.length };
+  return {
+    slug: path.basename(pkgDir),
+    topics: order.length,
+    bytes: assembled.length,
+  };
 }
 
 const built = [];
@@ -62,6 +69,8 @@ if (built.length === 0) {
   process.exit(1);
 }
 for (const b of built) {
-  console.log(`  built ${b.slug}/SKILL.md (${b.topics} topics, ${b.bytes} bytes)`);
+  console.log(
+    `  built ${b.slug}/SKILL.md (${b.topics} topics, ${b.bytes} bytes)`
+  );
 }
 console.log(`build: assembled ${built.length} SKILL.md`);

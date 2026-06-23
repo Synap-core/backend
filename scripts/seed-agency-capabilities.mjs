@@ -38,7 +38,7 @@ const WORKSPACE_ID = process.env.SYNAP_WORKSPACE_ID || "";
 
 if (!POD_URL || !API_KEY || !WORKSPACE_ID) {
   console.error(
-    "Missing env. Need SYNAP_POD_URL, SYNAP_HUB_API_KEY, SYNAP_WORKSPACE_ID.",
+    "Missing env. Need SYNAP_POD_URL, SYNAP_HUB_API_KEY, SYNAP_WORKSPACE_ID."
   );
   process.exit(1);
 }
@@ -54,8 +54,12 @@ const PLAN = [
     needs: "UNIPILE_API_KEY",
     params: {
       unipileApiKey: process.env.UNIPILE_API_KEY,
-      ...(process.env.UNIPILE_BASE_URL && { unipileBaseUrl: process.env.UNIPILE_BASE_URL }),
-      ...(process.env.UNIPILE_ACCOUNT_ID && { unipileAccountId: process.env.UNIPILE_ACCOUNT_ID }),
+      ...(process.env.UNIPILE_BASE_URL && {
+        unipileBaseUrl: process.env.UNIPILE_BASE_URL,
+      }),
+      ...(process.env.UNIPILE_ACCOUNT_ID && {
+        unipileAccountId: process.env.UNIPILE_ACCOUNT_ID,
+      }),
     },
   },
   {
@@ -74,27 +78,41 @@ async function applyOne(key, params) {
   const definition = loadDefinition(key);
   const res = await fetch(`${POD_URL}/api/hub/capabilities/apply`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
+    headers: {
+      Authorization: `Bearer ${API_KEY}`,
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify({ definition, params, workspaceId: WORKSPACE_ID }),
   });
   const text = await res.text();
   let json;
-  try { json = text ? JSON.parse(text) : {}; } catch { json = { raw: text }; }
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = { raw: text };
+  }
   return { ok: res.ok, status: res.status, json, name: definition.name };
 }
 
 function summarize(json) {
   const c = json?.created ?? {};
-  const container = c.container ? `${c.container.name} [${c.container.status}]` : "—";
-  const tools = (c.tools ?? []).map((t) => `${t.name}(${t.status})`).join(", ") || "—";
-  const skills = (c.skills ?? []).map((s) => `${s.name}(${s.status})`).join(", ") || "—";
-  const playbooks = (c.playbooks ?? []).map((p) => `${p.name}(${p.status})`).join(", ") || "—";
+  const container = c.container
+    ? `${c.container.name} [${c.container.status}]`
+    : "—";
+  const tools =
+    (c.tools ?? []).map((t) => `${t.name}(${t.status})`).join(", ") || "—";
+  const skills =
+    (c.skills ?? []).map((s) => `${s.name}(${s.status})`).join(", ") || "—";
+  const playbooks =
+    (c.playbooks ?? []).map((p) => `${p.name}(${p.status})`).join(", ") || "—";
   const proposals = (json?.proposals ?? []).length;
   return `container=${container} · tools=${tools} · skills=${skills} · playbooks=${playbooks} · proposals=${proposals}`;
 }
 
 async function main() {
-  console.log(`Seeding agency capabilities → ${POD_URL} (workspace ${WORKSPACE_ID})\n`);
+  console.log(
+    `Seeding agency capabilities → ${POD_URL} (workspace ${WORKSPACE_ID})\n`
+  );
   const skipped = [];
   for (const item of PLAN) {
     if (item.needs && !process.env[item.needs]) {
@@ -106,7 +124,9 @@ async function main() {
       if (r.ok) {
         console.log(`✓ ${item.key.padEnd(18)} ${summarize(r.json)}`);
       } else {
-        console.log(`✗ ${item.key.padEnd(18)} HTTP ${r.status} — ${r.json.error || r.json.raw || "failed"}`);
+        console.log(
+          `✗ ${item.key.padEnd(18)} HTTP ${r.status} — ${r.json.error || r.json.raw || "failed"}`
+        );
       }
     } catch (err) {
       console.log(`✗ ${item.key.padEnd(18)} ${err.message}`);
@@ -120,8 +140,11 @@ async function main() {
     `\nNext: open the Capabilities app to see the containers, then connect accounts:` +
       `\n  • Google (Gmail/Drive/Calendar): Settings → Connectors → connect Google (Nango OAuth).` +
       `\n  • LinkedIn: provide UNIPILE_API_KEY and re-run; connect the LinkedIn account in Unipile.` +
-      `\n  • Telegram/Discord: provision the bot token via the bridge (synap bridge-setup).`,
+      `\n  • Telegram/Discord: provision the bot token via the bridge (synap bridge-setup).`
   );
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
