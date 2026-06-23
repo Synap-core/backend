@@ -285,6 +285,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
         workspaceId: workspaceId || undefined,
         profileSlug: profileSlug || undefined,
         limit: limit ? parseInt(limit, 10) : undefined,
+        // This is the user-wide FLOOR read (the agent's door). `list` is
+        // scoped-by-default, so without this a workspace lens drops pod-wide
+        // profiles (person/company/contact live at workspace_id NULL) — which
+        // is why "what people are in the CRM" returned 0 despite 122 people.
+        // Honor this endpoint's documented contract: pod-wide returned regardless.
+        includePodWide: true,
       });
       return c.json(result, 200);
     } catch (err) {
