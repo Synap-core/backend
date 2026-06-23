@@ -56,7 +56,7 @@ export async function isLocalTerminalEnabled(
     where: and(eq(workspaces.id, workspaceId), eq(workspaces.ownerId, userId)),
     columns: { settings: true },
   });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   return (workspace?.settings as any)?.devplane?.localTerminalEnabled === true;
 }
 

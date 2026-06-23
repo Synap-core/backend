@@ -22,7 +22,13 @@
  * risk.
  */
 
-import { db, eq, and, entityExternalLinks, relations } from "@synap/database";
+import {
+  type db,
+  eq,
+  and,
+  entityExternalLinks,
+  relations,
+} from "@synap/database";
 
 /** nangoConnectionId sentinel for non-OAuth imports (mirrors entity-upsert-service). */
 const DIRECT_IMPORT_CONNECTION_ID = "direct-import";

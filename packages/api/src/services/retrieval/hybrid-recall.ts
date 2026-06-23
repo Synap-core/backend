@@ -23,7 +23,7 @@ import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 // Degradation is graceful but not invisible: the `source` flag signals a
 // vector-skip at the API boundary, and these debug logs let a pod operator see
 // WHY a half dropped. Kept at debug (not error) — a missing half is recoverable.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 const logger: any = createLogger({ module: "retrieval" });
 
 /** Embed a query via the active Intelligence Service; null on any failure. */

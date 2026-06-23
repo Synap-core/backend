@@ -393,7 +393,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     }
 
     // workspaceId from the body is accepted for back-compat but NOT used for scoping.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
     const { workspaceId: _ignored, ...patch } = parsed.data;
 
     try {

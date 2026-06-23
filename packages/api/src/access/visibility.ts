@@ -86,9 +86,8 @@ export type VisibilityRule =
  * limit, offset, columns}; ScopedDb re-narrows the result via its own generic.
  */
 export interface RelationalQuery {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   findMany: (config?: any) => Promise<any[]>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   findFirst: (config?: any) => Promise<any>;
 }
 

@@ -44,7 +44,7 @@ import {
   enrichmentProviderRegistry,
   getMessagingConnector,
   resolveNangoConnector,
-  UnipileConnector,
+  type UnipileConnector,
 } from "../connectors/index.js";
 import {
   syncConnectionToImport,

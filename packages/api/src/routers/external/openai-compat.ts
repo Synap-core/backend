@@ -16,7 +16,7 @@
  *   <any other>    — passed through as-is to IS
  */
 
-import { Hono, Context } from "hono";
+import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { db, eq, and } from "@synap/database";
 import { workspaceMembers } from "@synap/database/schema";

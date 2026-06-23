@@ -29,7 +29,7 @@ import { createHubProtocolCallerContext } from "../utils.js";
  * the `--declaration` portability check (TS2742). Internal callers infer the
  * pino API correctly at use sites.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 export const logger: any = createLogger({ module: "hub-protocol-rest" });
 
 /**

@@ -520,7 +520,6 @@ app.doc31("/openapi.json", {
 // Mounted only when NODE_ENV !== "production". The dynamic import keeps the
 // swagger-ui bundle out of the production footprint when tree-shaking allows.
 if (process.env.NODE_ENV !== "production") {
-  // eslint-disable-next-line @typescript-eslint/no-floating-promises
   import("@hono/swagger-ui")
     .then(({ swaggerUI }) => {
       app.get("/docs", swaggerUI({ url: "/api/hub/openapi.json" }));

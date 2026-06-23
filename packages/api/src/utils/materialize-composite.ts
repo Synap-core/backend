@@ -121,9 +121,9 @@ export interface MaterializeResult {
  * `create` carries a much wider inferred input than we use) so this util can be
  * shared without re-deriving the router's exact procedure types.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 export type EntityCreateCaller = { create: (input: any) => Promise<any> };
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 export type RelationCreateCaller = { create: (input: any) => Promise<any> };
 
 export interface MaterializeOptions {

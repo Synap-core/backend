@@ -5399,7 +5399,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -7681,7 +7681,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					skillId: string | null;
 					title: string;
 					type: string;
 					language: string | null;
@@ -7833,7 +7832,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					userId: string;
 					workspaceId: string | null;
-					skillId: string | null;
 					title: string;
 					type: string;
 					language: string | null;
@@ -12459,6 +12457,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					description: string | null;
 					body: string | null;
+					documentIds: string[] | null;
 					code: string | null;
 					parameters: unknown;
 					category: string | null;
@@ -12521,6 +12520,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: SkillKind;
 					agentTypes: string[] | null;
 					body: string | null;
+					documentIds: string[] | null;
 					parameters: unknown;
 					topics: string[] | null;
 					executionMode: "sync" | "async";
@@ -12614,6 +12614,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					description: string | null;
 					body: string | null;
+					documentIds: string[] | null;
 					code: string | null;
 					parameters: unknown;
 					category: string | null;

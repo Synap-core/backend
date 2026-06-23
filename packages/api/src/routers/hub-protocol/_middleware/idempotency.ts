@@ -103,7 +103,7 @@ let warned = false;
 function warnIfFirst() {
   if (warned) return;
   warned = true;
-  // eslint-disable-next-line no-console
+
   console.warn(
     "[hub-idempotency] Using in-memory idempotency cache (per-instance). " +
       "Replace with Redis for multi-instance deployments."
@@ -211,7 +211,6 @@ export function idempotencyMiddleware(
     try {
       cached = await cacheGet(cacheKey);
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.warn("[hub-idempotency] cache get failed", err);
     }
 
@@ -245,7 +244,6 @@ export function idempotencyMiddleware(
         // pattern check stops the secret from being served on replay. The
         // response itself still flows back to the original caller.
         if (secretPattern.test(text)) {
-          // eslint-disable-next-line no-console
           console.warn(
             `[hub-idempotency] response body matched secretBodyPattern at ${reqPath} — skipping cache`
           );
@@ -258,7 +256,6 @@ export function idempotencyMiddleware(
           contentType,
         });
       } catch (err) {
-        // eslint-disable-next-line no-console
         console.warn("[hub-idempotency] cache set failed", err);
       }
     }
