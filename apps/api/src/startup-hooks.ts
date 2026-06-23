@@ -22,7 +22,7 @@ import {
 } from "@synap/database";
 import { randomUUID, randomBytes } from "crypto";
 import { sql as drizzleSql } from "drizzle-orm";
-import { setDynamicCorsOrigins } from "@synap/api";
+import { setDynamicCorsOrigins, apiKeyService } from "@synap/api";
 
 const logger = createLogger({ module: "startup-hooks" });
 
@@ -474,30 +474,53 @@ export async function ensureISKeyIsInternal(): Promise<void> {
       "🔑 IS-key self-heal: hub/system key inventory"
     );
 
-    // UPGRADE the IS pod-read key to is_internal (the keystone delegation key).
-    // Match the register-intelligence convention robustly — by hub_id OR the
-    // canonical key_name — so an older key (minted before the keystone) is
-    // caught even if its hub_id differs. In place, no rotation. Specific enough
-    // to never touch an unrelated system key.
-    const healed = await db
-      .update(apiKeys)
-      .set({ keyType: "is_internal" })
-      .where(
-        drizzleSql`(${apiKeys.hubId} = 'intelligence-hub-primary' OR ${apiKeys.keyName} = 'Intelligence Hub IS Key') AND ${apiKeys.keyType} <> 'is_internal'`
-      )
-      .returning({
-        id: apiKeys.id,
-        keyName: apiKeys.keyName,
-        hubId: apiKeys.hubId,
-      });
-    if (healed.length > 0) {
+    // DETERMINISTIC heal: the key the IS actually PRESENTS per turn (as
+    // dataPodApiKey) is process.env.HUB_PROTOCOL_API_KEY — the exact same value
+    // getPodCallback() sends. Resolve ITS exact api_keys row (prefix + bcrypt)
+    // and heal THAT, instead of guessing the row by hub_id/key_name convention
+    // (a guess that misses when the presented key's row carries neither). This is
+    // the only heal that guarantees the *presented* key becomes is_internal.
+    const presented = process.env.HUB_PROTOCOL_API_KEY?.trim();
+    if (!presented) {
+      logger.error(
+        "❌ HUB_PROTOCOL_API_KEY is NOT set — the IS pod-read key cannot be the is_internal key, so operator-floor delegation CANNOT fire (agent reads 0). Set HUB_PROTOCOL_API_KEY in the pod env (it is the plaintext provision.ts hashes into the is_internal row) and redeploy."
+      );
+      return;
+    }
+
+    const status = await apiKeyService.getApiKeyStatus(presented);
+    if (status.status === "invalid_format" || status.status === "not_found") {
+      logger.error(
+        { status: status.status },
+        "❌ HUB_PROTOCOL_API_KEY does not resolve to any api_keys row on this pod — the presented key was never provisioned here (secret mismatch between env and DB). Re-run register-intelligence (provision) so the is_internal row is minted from THIS HUB_PROTOCOL_API_KEY."
+      );
+      return;
+    }
+
+    const row = status.record;
+    logger.info(
+      {
+        id: row.id.slice(0, 8),
+        keyType: row.keyType,
+        hubId: row.hubId,
+        keyName: row.keyName,
+        ownerUserId: row.userId,
+      },
+      "🔑 IS-key self-heal: HUB_PROTOCOL_API_KEY resolves to this row"
+    );
+
+    if (row.keyType === "is_internal") {
       logger.info(
-        { healed },
-        "✅ Self-healed IS key(s) → keyType=is_internal (keystone operator-floor delegation now active)"
+        "✅ Presented IS key is already is_internal — keystone delegation active"
       );
     } else {
+      await db
+        .update(apiKeys)
+        .set({ keyType: "is_internal" })
+        .where(eq(apiKeys.id, row.id));
       logger.info(
-        "ℹ️ No IS key upgraded — already is_internal, OR none matched (check the inventory above to find the real IS key)"
+        { id: row.id.slice(0, 8), wasKeyType: row.keyType },
+        "✅ Self-healed the PRESENTED IS key → keyType=is_internal (keystone operator-floor delegation now active)"
       );
     }
   } catch (error) {
