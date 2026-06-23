@@ -385,7 +385,7 @@ log(
   `      - commit packages/api-types (version → ${apiTypesNew} + generated.d.ts)`
 );
 log(
-  `        git add packages/api-types && git commit -m "chore(contracts): api-types@${apiTypesNew}\"`
+  `        git add packages/api-types && git commit -m "chore(contracts): api-types@${apiTypesNew}"`
 );
 log("");
 log(" 2. synap-intelligence-service:");
