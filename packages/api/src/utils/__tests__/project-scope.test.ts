@@ -131,7 +131,9 @@ describe("exposure axis (VISIBLE_TO / generic edges)", () => {
 
   it("projectMemberWhere is the belongs_to_project preset of exposureMemberWhere", () => {
     const preset = projectMemberWhere(col("id"), "u") as any;
-    const generic = exposureMemberWhere(col("id"), "u", [BELONGS_TO_PROJECT]) as any;
+    const generic = exposureMemberWhere(col("id"), "u", [
+      BELONGS_TO_PROJECT,
+    ]) as any;
     expect(preset._tag).toBe(generic._tag);
     expect(preset.args).toHaveLength(generic.args.length);
   });

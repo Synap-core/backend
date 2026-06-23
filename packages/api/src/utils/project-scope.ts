@@ -60,7 +60,10 @@ export const VISIBLE_TO = "visible_to";
  * the generic client/portal exposure edge. Whitelist = the leak guardrail: adding
  * a type here is a deliberate, reviewable widening of what counts as "exposed".
  */
-export const EXPOSURE_RELATION_TYPES = [BELONGS_TO_PROJECT, VISIBLE_TO] as const;
+export const EXPOSURE_RELATION_TYPES = [
+  BELONGS_TO_PROJECT,
+  VISIBLE_TO,
+] as const;
 
 /**
  * The whitelist as a TYPE — so the type system (not just a runtime default)
@@ -131,7 +134,10 @@ export function exposureMemberWhere(
   const anchorIds = userAnchorIdsSubquery(userId);
   return or(
     inArray(entityIdColumn, anchorIds),
-    inArray(entityIdColumn, exposedByAnyAnchorSubquery(anchorIds, relationTypes))
+    inArray(
+      entityIdColumn,
+      exposedByAnyAnchorSubquery(anchorIds, relationTypes)
+    )
   )!;
 }
 

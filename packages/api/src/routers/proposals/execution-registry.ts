@@ -150,7 +150,7 @@ class ProposalExecRegistryClass {
    * old top-down if-chain order:
    *   1. exact composite `${targetType}/${proposalType}`  (e.g. "entity/create")
    *   2. exact proposalType-only key                       (e.g. "messaging.external.send")
-   *   3. wildcard catch-all                                (the `*​/*` generic path)
+   *   3. wildcard catch-all                                (the `*/*` generic path)
    *
    * Crucially, BOTH exact lookups run before any wildcard — so a proposalType-only
    * executor is never shadowed by the catch-all.

@@ -794,7 +794,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
         .select()
         .from(entities)
         .where(
-          and(inArray(entities.id, rankedIds), isNull(entities.deletedAt), floor)
+          and(
+            inArray(entities.id, rankedIds),
+            isNull(entities.deletedAt),
+            floor
+          )
         );
 
       // Re-sort to match RRF rank order

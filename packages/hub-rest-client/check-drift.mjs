@@ -78,7 +78,9 @@ for (const file of routeFiles) {
 // ── Collect all public async method names from client ────────────────────────
 const clientSrc = readFileSync(CLIENT_FILE, "utf-8");
 const clientMethods = new Set(
-  [...clientSrc.matchAll(/^\s+async ([a-zA-Z]+)\(/gm)].map((m) => m[1].toLowerCase())
+  [...clientSrc.matchAll(/^\s+async ([a-zA-Z]+)\(/gm)].map((m) =>
+    m[1].toLowerCase()
+  )
 );
 
 // ── Coverage heuristic ────────────────────────────────────────────────────────
@@ -125,7 +127,9 @@ for (const path of [...allPaths].sort()) {
 const clientCount = [...allPaths].filter((p) => !SERVER_ONLY.has(p)).length;
 console.log("\nHub Protocol Drift Report");
 console.log("=========================");
-console.log(`Routes: ${allPaths.size} total | ${serverOnly.length} server-only | ${covered.length} client-covered | ${uncovered.length} gaps\n`);
+console.log(
+  `Routes: ${allPaths.size} total | ${serverOnly.length} server-only | ${covered.length} client-covered | ${uncovered.length} gaps\n`
+);
 
 if (uncovered.length > 0) {
   console.log("Uncovered routes (consider adding to HubRestClient):");
@@ -135,7 +139,11 @@ if (uncovered.length > 0) {
   );
   process.exit(1);
 } else {
-  console.log(`✓ No drift detected — all ${covered.length} client-facing routes are covered.`);
-  console.log(`  (${serverOnly.length} server-only infra routes intentionally excluded)`);
+  console.log(
+    `✓ No drift detected — all ${covered.length} client-facing routes are covered.`
+  );
+  console.log(
+    `  (${serverOnly.length} server-only infra routes intentionally excluded)`
+  );
   process.exit(0);
 }

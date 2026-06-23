@@ -249,7 +249,7 @@ export const podAdminProcedure = protectedProcedure.use(async (opts) => {
 
   // Find the pod-admin workspace
   const podAdminWorkspace = await db.query.workspaces.findFirst({
-    where: eq(workspaces.systemSlug, 'pod-admin'),
+    where: eq(workspaces.systemSlug, "pod-admin"),
     columns: { id: true },
   });
 
