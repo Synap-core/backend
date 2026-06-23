@@ -40,6 +40,7 @@ import {
   sql,
   users,
   createWorkspaceFromDefinition,
+  reconcileWorkspaceFromDefinition,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
 import { verifyCpJwt } from "../utils/jwks-client.js";
@@ -3027,6 +3028,132 @@ export const workspacesRouter = router({
           };
         }
       ); // close withWorkspaceProposalIdLock
+    }),
+
+  /**
+   * Reconcile an EXISTING workspace's definition to a template — non-destructively.
+   * Counterpart to createFromDefinition: adds missing profiles, property-defs
+   * (as overlays for reused pod-wide profiles), and views (find-or-create);
+   * merges capabilities/subtype. NEVER deletes or mutates a property-def type
+   * (type conflicts are reported, not changed). `dryRun` previews the diff.
+   * Owner/admin only. The caller resolves the template → definition (e.g.
+   * toWorkspaceDefinition('crm')) and passes it, mirroring createFromDefinition.
+   */
+  reconcileFromDefinition: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().uuid(),
+        dryRun: z.boolean().optional(),
+        definition: z.object({
+          workspacePurpose: z.string().optional(),
+          workspaceSubtype: z.string().optional(),
+          workspaceVisibility: z.string().optional(),
+          workspaceCapabilities: z.array(z.string()).optional(),
+          profiles: z
+            .array(
+              z.object({
+                slug: z.string(),
+                displayName: z.string(),
+                icon: z.string().optional(),
+                color: z.string().optional(),
+                description: z.string().optional(),
+                scope: z.string().optional(),
+                semanticSlug: z.string().nullable().optional(),
+                properties: z
+                  .array(
+                    z.object({
+                      slug: z.string(),
+                      label: z.string().optional(),
+                      valueType: z.string(),
+                      inputType: z.string().optional(),
+                      placeholder: z.string().optional(),
+                      enumValues: z.array(z.string()).optional(),
+                      constraints: z.record(z.string(), z.unknown()).optional(),
+                      targetProfileSlug: z.string().optional(),
+                    })
+                  )
+                  .optional(),
+                uiHints: z
+                  .object({
+                    icon: z.string().optional(),
+                    color: z.string().optional(),
+                    description: z.string().optional(),
+                  })
+                  .optional(),
+                propertyDefs: z
+                  .array(
+                    z.object({
+                      slug: z.string(),
+                      valueType: z.string(),
+                      constraints: z
+                        .object({ enum: z.array(z.string()).optional() })
+                        .passthrough()
+                        .optional(),
+                      uiHints: z
+                        .object({
+                          label: z.string().optional(),
+                          inputType: z.string().optional(),
+                          placeholder: z.string().optional(),
+                        })
+                        .optional(),
+                    })
+                  )
+                  .optional(),
+              })
+            )
+            .optional(),
+          views: z
+            .array(
+              z.object({
+                name: z.string().optional(),
+                displayName: z.string().optional(),
+                slug: z.string().optional(),
+                type: z.string(),
+                scopeProfileSlug: z.string().optional(),
+                scopeProfileSlugs: z.array(z.string()).optional(),
+                config: z.record(z.string(), z.unknown()).optional(),
+                groupBy: z.string().optional(),
+                sortBy: z.string().optional(),
+                sortOrder: z.enum(["asc", "desc"]).optional(),
+                filterBy: z.record(z.string(), z.unknown()).optional(),
+                description: z.string().optional(),
+                defaultView: z.boolean().optional(),
+                colorBy: z.string().optional(),
+              })
+            )
+            .optional(),
+        }),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Owner/admin only — this is a structural workspace change, not a data
+      // mutation, so it runs directly (never proposed). Reuse the same RBAC gate
+      // as workspaces.update; if it would only be granted via a proposal, the
+      // caller isn't an owner/admin → reject.
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId,
+        subjectType: "workspaces",
+        action: "update",
+        data: { id: input.workspaceId },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("granted" in perm && !perm.granted) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Reconciling a workspace definition requires owner/admin access.",
+        });
+      }
+
+      return reconcileWorkspaceFromDefinition({
+        workspaceId: input.workspaceId,
+        userId: ctx.userId,
+        definition: input.definition as unknown as WorkspaceDefinitionInput,
+        dryRun: input.dryRun,
+      });
     }),
 
   /**

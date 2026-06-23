@@ -139,6 +139,11 @@ export {
   type CreateFromDefinitionResult,
   type ResumeState,
 } from "./utils/create-workspace-from-definition.js";
+export {
+  reconcileWorkspaceFromDefinition,
+  type ReconcileOptions,
+  type ReconcileReport,
+} from "./utils/reconcile-workspace-from-definition.js";
 
 // Export workspace definitions (built-in presets for createWorkspaceFromDefinition)
 export { DEVOPS_DEFINITION } from "./definitions/devops-definition.js";
