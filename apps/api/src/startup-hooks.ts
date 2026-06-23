@@ -18,6 +18,7 @@ import {
   users,
   workspaces,
   workspaceMembers,
+  apiKeys,
 } from "@synap/database";
 import { randomUUID, randomBytes } from "crypto";
 import { sql as drizzleSql } from "drizzle-orm";
@@ -434,6 +435,43 @@ async function ensureLocalUser(): Promise<void> {
 /**
  * Run all startup hooks
  */
+/**
+ * Self-heal the keystone: ensure the trusted Intelligence-Service pod key is
+ * keyType "is_internal" so the X-Delegated-Operator-Id delegation gate fires.
+ *
+ * The IS key (hub_id="intelligence-hub-primary", owned by `system`) may have
+ * been minted BEFORE the keystone existed → an old keyType → the delegation
+ * gate never fires → the agent reads as the IS service identity instead of the
+ * operator floor ("0 entities"). This UPDATES it IN PLACE — no key rotation
+ * (same hash/scope; only the keyType discriminator changes), idempotent, every
+ * boot. Targets ONLY the one trusted IS key, never arbitrary keys.
+ */
+const IS_HUB_ID = "intelligence-hub-primary";
+export async function ensureISKeyIsInternal(): Promise<void> {
+  try {
+    const healed = await db
+      .update(apiKeys)
+      .set({ keyType: "is_internal" })
+      .where(
+        and(
+          eq(apiKeys.hubId, IS_HUB_ID),
+          drizzleSql`${apiKeys.keyType} <> 'is_internal'`
+        )
+      )
+      .returning({ id: apiKeys.id });
+    if (healed.length > 0) {
+      logger.info(
+        { count: healed.length },
+        "✅ Self-healed IS key → keyType=is_internal (keystone operator-floor delegation now active)"
+      );
+    } else {
+      logger.debug("IS key keyType already is_internal — no self-heal needed");
+    }
+  } catch (error) {
+    logger.error({ error }, "❌ Failed to self-heal IS key keyType");
+  }
+}
+
 export async function runStartupHooks(): Promise<void> {
   logger.info("🚀 Running startup hooks...");
 
@@ -443,6 +481,9 @@ export async function runStartupHooks(): Promise<void> {
   ensureChannelGatewayKey();
   await seedDefaultCorsOrigins(); // Ensure synap.dev can reach this pod
   await loadCorsOrigins();
+  // Keystone self-heal first — ensures the IS key is is_internal so the agent
+  // reads the operator floor (not the empty service identity).
+  await ensureISKeyIsInternal();
   await configureN8NWebhook();
   await configureLangFlow();
 
