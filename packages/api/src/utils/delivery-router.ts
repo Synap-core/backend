@@ -91,6 +91,15 @@ export interface RouteSignalInput {
    * delivery → the gate is skipped (byte-identical to before W3b).
    */
   agentUserId?: string | null;
+  /**
+   * Per-call override for external delivery target. When set, takes precedence
+   * over the workspace-level deliveryPreferences channelRef for the `external`
+   * surface. Enables per-playbook / per-automation channel targeting without
+   * changing workspace settings.
+   *
+   * Format: { provider: "discord", channelRef: "<snowflake>" }
+   */
+  externalOverride?: { provider: string; channelRef: string };
 }
 
 /** A surface kind a result can report against (includes `external`). */
@@ -281,7 +290,9 @@ async function deliverToExternal(
   input: RouteSignalInput & { proactiveType: ProactiveMessageType },
   target: SurfaceTarget
 ): Promise<SurfaceResult> {
-  const { provider, channelRef } = target;
+  // Per-call override wins over the workspace-level target (enables per-playbook routing).
+  const provider = input.externalOverride?.provider ?? target.provider;
+  const channelRef = input.externalOverride?.channelRef ?? target.channelRef;
   if (!provider || !channelRef) {
     logger.warn(
       { domain: input.domain, provider, channelRef },
@@ -309,6 +320,25 @@ async function deliverToExternal(
         surface: "external",
         success: false,
         reason: "no_bound_channel",
+      };
+    }
+
+    // Guardrail: AI/proactive output must never land on a client-comms channel.
+    // branchPurpose='team' (or null) is the only allowed target for AI signals.
+    if (boundChannel.branchPurpose === "client-comms") {
+      logger.warn(
+        {
+          domain: input.domain,
+          provider,
+          channelRef,
+          channelId: boundChannel.id,
+        },
+        "external delivery blocked: AI proactive output must not go to a client-comms channel"
+      );
+      return {
+        surface: "external",
+        success: false,
+        reason: "blocked_client_comms_channel",
       };
     }
 

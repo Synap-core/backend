@@ -351,6 +351,64 @@ async function postProactiveNotification(
   return { posted: !!row, messageId: row?.id };
 }
 
+/**
+ * Delegate external (Discord / Telegram / …) delivery to the API process via
+ * a loopback HTTP call to POST /internal/signal/route.
+ *
+ * The jobs package cannot import @synap/api (circular dep), so this is the
+ * canonical bridge. The endpoint is internal-only (bound to loopback / behind
+ * the same process network; no public auth needed — uses BRIDGE_SECRET).
+ */
+async function postToExternalViaBridge(
+  options: PostProactiveOptions
+): Promise<PostProactiveResult> {
+  const apiUrl = process.env.API_INTERNAL_URL ?? "http://localhost:4000";
+  const secret = process.env.BRIDGE_SECRET ?? "";
+
+  try {
+    const res = await fetch(`${apiUrl}/internal/signal/route`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(secret ? { "X-Bridge-Secret": secret } : {}),
+      },
+      body: JSON.stringify({
+        domain: "proactive",
+        content: options.content,
+        userId: options.userId,
+        workspaceId: options.workspaceId,
+        proactiveType: options.proactiveType,
+        metadata: options.metadata,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      logger.warn(
+        { status: res.status, body: text, userId: options.userId },
+        "external delivery bridge returned non-OK status"
+      );
+      return { posted: false, reason: `bridge_http_${res.status}` };
+    }
+
+    const body = (await res.json()) as {
+      delivered?: boolean;
+      messageId?: string;
+    };
+    return { posted: body.delivered ?? false, messageId: body.messageId };
+  } catch (err) {
+    logger.warn(
+      { err, userId: options.userId, workspaceId: options.workspaceId },
+      "external delivery bridge call failed"
+    );
+    return {
+      posted: false,
+      reason: err instanceof Error ? err.message : "bridge_error",
+    };
+  }
+}
+
 // ── Main Router ───────────────────────────────────────────────────────────────
 
 /**
@@ -402,13 +460,24 @@ export async function routeProactiveMessage(
     // ── Deliver to each surface concurrently ──────────────────────────────
     const results = await Promise.allSettled(
       activeSurfaces.map((surface): Promise<PostProactiveResult> => {
-        switch (surface) {
+        // A surface entry is either a bare SignalSurface string ("feed"|"chat"|
+        // "notification"|"suppress") or a SurfaceTarget object ({ kind, provider?,
+        // channelRef? }). "external" only exists as SurfaceTarget.kind — never as
+        // a bare string — so we normalise to kind first.
+        const kind = typeof surface === "string" ? surface : surface.kind;
+        switch (kind) {
           case "feed":
             return postToProactiveFeed(options);
           case "chat":
             return postToPersonalChat(options);
           case "notification":
             return postProactiveNotification(options);
+          case "external":
+            // jobs package cannot import @synap/api (circular dep) so external
+            // delivery is delegated to the API process via an internal HTTP call
+            // to POST /internal/signal/route — the API's routeSignal behind a
+            // thin internal-only endpoint (no auth token needed: loopback-only).
+            return postToExternalViaBridge(options);
           default:
             // `surfaces` is a stored string[]; an unrecognized surface is a
             // no-op skip rather than a crash (keeps the result type total).

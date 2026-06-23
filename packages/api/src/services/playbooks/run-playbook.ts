@@ -62,6 +62,17 @@ export interface RunPlaybookInput {
   /** The entity this run is about (e.g. a contact, deal, or document).
    * Stored as focus_sessions.subjectEntityId and forwarded in RunContext. */
   subjectId?: string;
+  /**
+   * Route the run's external output to this existing channel instead of creating
+   * a new playbook channel. When set, the channel-create step is skipped and the
+   * existing channel is used as the run room. Intended for delivering playbook
+   * output to a client entity's team channel (branchPurpose='team') rather than
+   * a throwaway playbook-scoped channel.
+   *
+   * The caller is responsible for ensuring the channel exists and is accessible
+   * to the acting principal.
+   */
+  targetChannelId?: string;
 }
 
 export interface RunPlaybookResult {
@@ -243,26 +254,42 @@ async function executeSingleRun(
     subjectId: input.subjectId ?? null,
   });
 
-  // 2. Create the run channel per channelSpec.
+  // 2. Create the run channel per channelSpec, OR reuse an existing channel when
+  // the caller specifies targetChannelId (e.g. to route output to a client entity's
+  // team channel instead of a throwaway playbook channel).
   // TODO(P3): full channelSpec member wiring (channel_members rows + per-member
   // caps from spec.members) — for now we create the channel and seed agentIds
   // onto the session; explicit member rows are a follow-up.
-  const spec = (playbook.channelSpec ?? {}) as ChannelSpec;
-  const channelType = channelTypeFromSpec(spec);
-  const [channel] = await db
-    .insert(channels)
-    .values({
-      userId: actorId,
-      workspaceId: input.workspaceId,
-      channelType,
-      scope: ChannelScope.WORKSPACE,
-      status: ChannelStatus.ACTIVE,
-      title: playbook.name,
-      contextObjectType: "playbook",
-      contextObjectId: input.playbookId,
-      metadata: { origin: "playbook-run", playbookId: input.playbookId },
-    })
-    .returning();
+  let channel: typeof channels.$inferSelect;
+  if (input.targetChannelId) {
+    const existing = await db.query.channels.findFirst({
+      where: eq(channels.id, input.targetChannelId),
+    });
+    if (!existing) {
+      throw new Error(
+        `targetChannelId ${input.targetChannelId} not found — cannot run playbook against a non-existent channel`
+      );
+    }
+    channel = existing;
+  } else {
+    const spec = (playbook.channelSpec ?? {}) as ChannelSpec;
+    const channelType = channelTypeFromSpec(spec);
+    const [created] = await db
+      .insert(channels)
+      .values({
+        userId: actorId,
+        workspaceId: input.workspaceId,
+        channelType,
+        scope: ChannelScope.WORKSPACE,
+        status: ChannelStatus.ACTIVE,
+        title: playbook.name,
+        contextObjectType: "playbook",
+        contextObjectId: input.playbookId,
+        metadata: { origin: "playbook-run", playbookId: input.playbookId },
+      })
+      .returning();
+    channel = created;
+  }
 
   // 3. Wire focus_sessions.channelId = the new channel.
   await db

@@ -1479,6 +1479,71 @@ ${
   return c.html(html);
 });
 
+// ── Internal signal route endpoint ────────────────────────────────────────────
+//
+// POST /internal/signal/route — loopback-only, gated by X-Bridge-Secret.
+// Used by the jobs package (proactive-post.ts) to delegate external-surface
+// delivery to routeSignal in @synap/api, avoiding a circular dep.
+//
+// This is NOT a public endpoint — it should never be exposed through Caddy.
+app.post("/internal/signal/route", async (c) => {
+  const secret = process.env.BRIDGE_SECRET;
+  if (secret) {
+    const incoming = c.req.header("x-bridge-secret") ?? "";
+    if (!safeTokenEqual(incoming, secret)) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+  }
+
+  try {
+    const body = await c.req.json();
+    const {
+      domain,
+      content,
+      userId,
+      workspaceId,
+      proactiveType,
+      metadata,
+      externalOverride,
+    } = body as {
+      domain?: string;
+      content?: string;
+      userId?: string;
+      workspaceId?: string;
+      proactiveType?: string;
+      metadata?: Record<string, unknown>;
+      externalOverride?: { provider: string; channelRef: string };
+    };
+
+    if (!domain || !content || !userId || !workspaceId) {
+      return c.json(
+        { error: "domain, content, userId, workspaceId are required" },
+        400
+      );
+    }
+
+    const apiModule = (await import("@synap/api")) as unknown as {
+      routeSignal: (
+        input: Record<string, unknown>
+      ) => Promise<{ delivered: boolean; messageId?: string }>;
+    };
+    const result = await apiModule.routeSignal({
+      domain,
+      content,
+      userId,
+      workspaceId,
+      proactiveType,
+      metadata,
+      externalOverride,
+    });
+
+    return c.json(result);
+  } catch (err) {
+    apiLogger.error({ err }, "/internal/signal/route failed");
+    return c.json({ error: "internal_error" }, 500);
+  }
+});
+
 // 404 handler
 app.notFound((c) => {
   return c.json({ error: "Not found" }, 404);

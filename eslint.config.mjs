@@ -17,6 +17,7 @@ export default [
       "**/*.generated.ts",
       "**/*.generated.d.ts",
       "**/*.d.ts", // Declaration files (auto-generated, not hand-written)
+      "**/.claude/**",
       "**/deploy/pod-agent/**", // Standalone Node.js agent (not part of TS build)
     ],
   },

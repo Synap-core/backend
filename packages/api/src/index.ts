@@ -617,3 +617,12 @@ export {
   type CircuitBreakerOptions,
   type CircuitBreakerStats,
 } from "@synap/shared-utils";
+
+export {
+  routeSignal,
+  type RouteSignalInput,
+  type RouteSignalResult,
+  type SignalDomain,
+  type SurfaceKind,
+  type SurfaceResult,
+} from "./utils/delivery-router.js";
