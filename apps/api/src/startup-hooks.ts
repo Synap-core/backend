@@ -18,11 +18,10 @@ import {
   users,
   workspaces,
   workspaceMembers,
-  apiKeys,
 } from "@synap/database";
 import { randomUUID, randomBytes } from "crypto";
 import { sql as drizzleSql } from "drizzle-orm";
-import { setDynamicCorsOrigins, apiKeyService } from "@synap/api";
+import { setDynamicCorsOrigins } from "@synap/api";
 
 const logger = createLogger({ module: "startup-hooks" });
 
@@ -227,7 +226,6 @@ const REQUIRED_SECRETS_LOCAL_MODE: string[] = [
 
 const RECOMMENDED_SECRETS: string[] = [
   "VAULT_SERVER_KEY",
-  "HUB_PROTOCOL_API_KEY",
   "KRATOS_SECRETS_CIPHER",
 ];
 
@@ -435,99 +433,6 @@ async function ensureLocalUser(): Promise<void> {
 /**
  * Run all startup hooks
  */
-/**
- * Self-heal the keystone: ensure the trusted Intelligence-Service pod key is
- * keyType "is_internal" so the X-Delegated-Operator-Id delegation gate fires.
- *
- * The IS key (hub_id="intelligence-hub-primary", owned by `system`) may have
- * been minted BEFORE the keystone existed → an old keyType → the delegation
- * gate never fires → the agent reads as the IS service identity instead of the
- * operator floor ("0 entities"). This UPDATES it IN PLACE — no key rotation
- * (same hash/scope; only the keyType discriminator changes), idempotent, every
- * boot. Targets ONLY the one trusted IS key, never arbitrary keys.
- */
-export async function ensureISKeyIsInternal(): Promise<void> {
-  try {
-    // DIAGNOSTIC: log every hub/system key so the BOOT LOG reveals the IS key's
-    // real key_type / hub_id / key_name (we cannot inspect the prod DB otherwise).
-    const inventory = await db
-      .select({
-        id: apiKeys.id,
-        keyType: apiKeys.keyType,
-        hubId: apiKeys.hubId,
-        keyName: apiKeys.keyName,
-        userId: apiKeys.userId,
-      })
-      .from(apiKeys)
-      .where(
-        drizzleSql`${apiKeys.hubId} IS NOT NULL OR ${apiKeys.userId} = 'system'`
-      );
-    logger.info(
-      {
-        keys: inventory.map((k) => ({
-          id: k.id.slice(0, 8),
-          keyType: k.keyType,
-          hubId: k.hubId,
-          keyName: k.keyName,
-        })),
-      },
-      "🔑 IS-key self-heal: hub/system key inventory"
-    );
-
-    // DETERMINISTIC heal: the key the IS actually PRESENTS per turn (as
-    // dataPodApiKey) is process.env.HUB_PROTOCOL_API_KEY — the exact same value
-    // getPodCallback() sends. Resolve ITS exact api_keys row (prefix + bcrypt)
-    // and heal THAT, instead of guessing the row by hub_id/key_name convention
-    // (a guess that misses when the presented key's row carries neither). This is
-    // the only heal that guarantees the *presented* key becomes is_internal.
-    const presented = process.env.HUB_PROTOCOL_API_KEY?.trim();
-    if (!presented) {
-      logger.error(
-        "❌ HUB_PROTOCOL_API_KEY is NOT set — the IS pod-read key cannot be the is_internal key, so operator-floor delegation CANNOT fire (agent reads 0). Set HUB_PROTOCOL_API_KEY in the pod env (it is the plaintext provision.ts hashes into the is_internal row) and redeploy."
-      );
-      return;
-    }
-
-    const status = await apiKeyService.getApiKeyStatus(presented);
-    if (status.status === "invalid_format" || status.status === "not_found") {
-      logger.error(
-        { status: status.status },
-        "❌ HUB_PROTOCOL_API_KEY does not resolve to any api_keys row on this pod — the presented key was never provisioned here (secret mismatch between env and DB). Re-run register-intelligence (provision) so the is_internal row is minted from THIS HUB_PROTOCOL_API_KEY."
-      );
-      return;
-    }
-
-    const row = status.record;
-    logger.info(
-      {
-        id: row.id.slice(0, 8),
-        keyType: row.keyType,
-        hubId: row.hubId,
-        keyName: row.keyName,
-        ownerUserId: row.userId,
-      },
-      "🔑 IS-key self-heal: HUB_PROTOCOL_API_KEY resolves to this row"
-    );
-
-    if (row.keyType === "is_internal") {
-      logger.info(
-        "✅ Presented IS key is already is_internal — keystone delegation active"
-      );
-    } else {
-      await db
-        .update(apiKeys)
-        .set({ keyType: "is_internal" })
-        .where(eq(apiKeys.id, row.id));
-      logger.info(
-        { id: row.id.slice(0, 8), wasKeyType: row.keyType },
-        "✅ Self-healed the PRESENTED IS key → keyType=is_internal (keystone operator-floor delegation now active)"
-      );
-    }
-  } catch (error) {
-    logger.error({ error }, "❌ Failed to self-heal IS key keyType");
-  }
-}
-
 export async function runStartupHooks(): Promise<void> {
   logger.info("🚀 Running startup hooks...");
 
@@ -537,9 +442,6 @@ export async function runStartupHooks(): Promise<void> {
   ensureChannelGatewayKey();
   await seedDefaultCorsOrigins(); // Ensure synap.dev can reach this pod
   await loadCorsOrigins();
-  // Keystone self-heal first — ensures the IS key is is_internal so the agent
-  // reads the operator floor (not the empty service identity).
-  await ensureISKeyIsInternal();
   await configureN8NWebhook();
   await configureLangFlow();
 

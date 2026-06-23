@@ -584,32 +584,32 @@ provisionRouter.post("/register-intelligence", async (c) => {
       "Intelligence service self-registered and activated"
     );
 
-    // Return the pod's Hub Protocol API key so IS can store it in customer_refs.
-    // IS uses this key for proactive outbound Hub Protocol calls (event-triggered skills, background tasks).
-    let hubProtocolApiKey = process.env.HUB_PROTOCOL_API_KEY ?? "";
+    // Mint a FRESH pod-read key for THIS IS and return it so the IS stores it in
+    // its directory (customer_refs.hubProtocolApiKey). That stored copy is the
+    // single source of truth the IS presents on every callback — there is NO env
+    // var: a registry-minted random key is correct precisely because the IS keeps
+    // what we return here. (The pod keeps only the bcrypt hash, to validate.)
+    let hubProtocolApiKey = "";
 
-    // Always register the hub protocol key in api_keys so the pod can validate
-    // IS callbacks. Whether the key is pre-configured via env or auto-generated,
-    // the registration step is the same — upsert by hub_id.
     try {
-      const IS_HUB_ID = "intelligence-hub-primary";
+      // Key the row PER-IS by serviceId (not a global "intelligence-hub-primary"),
+      // so connecting a SECOND intelligence service never clobbers this one's key.
+      // Each IS in the directory owns its own is_internal pod-read key.
+      const isHubId = SERVICE_ID;
       const keyPrefix =
         process.env.NODE_ENV === "production"
           ? "synap_hub_live_"
           : "synap_hub_test_";
 
-      if (!hubProtocolApiKey) {
-        hubProtocolApiKey = `${keyPrefix}${randomBytes(32).toString("hex")}`;
-      }
-
+      hubProtocolApiKey = `${keyPrefix}${randomBytes(32).toString("hex")}`;
       const keyHash = await bcrypt.hash(hubProtocolApiKey, 12);
 
-      // Delete any existing IS hub keys before issuing the current one.
-      await db.delete(apiKeys).where(eq(apiKeys.hubId, IS_HUB_ID));
+      // Replace only THIS IS's prior key (scoped per-IS — never cross-IS).
+      await db.delete(apiKeys).where(eq(apiKeys.hubId, isHubId));
 
       await db.insert(apiKeys).values({
         userId: "system",
-        keyName: "Intelligence Hub IS Key",
+        keyName: `Intelligence Hub IS Key (${SERVICE_ID})`,
         keyPrefix,
         keyHash,
         // TRUSTED Intelligence-Service pod-read key. keyType "is_internal" is the
@@ -620,19 +620,19 @@ provisionRouter.post("/register-intelligence", async (c) => {
         // CP-signed ES256 JWT (type="provision", JWKS-verified, audience-pinned,
         // serviceUrl matched to the JWT claim). No public mint path can set it.
         keyType: "is_internal",
-        hubId: IS_HUB_ID,
+        hubId: isHubId,
         scope: ["hub-protocol.read", "hub-protocol.write"],
         isActive: true,
       });
 
       logger.info(
-        { podId: payload.podId, keyPrefix },
-        "Hub Protocol API key registered for IS"
+        { podId: payload.podId, serviceId: SERVICE_ID, keyPrefix },
+        "Minted per-IS pod-read key (is_internal) for IS directory"
       );
     } catch (keyErr) {
       logger.warn(
         { err: keyErr },
-        "Failed to register Hub Protocol API key — IS will lack outbound Hub access"
+        "Failed to mint IS pod-read key — IS will lack outbound Hub access"
       );
     }
 
