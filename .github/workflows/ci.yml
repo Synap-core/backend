@@ -74,6 +74,10 @@ jobs:
         run: pnpm format || echo "⚠️  Format check failed - run 'pnpm format:fix' to auto-fix"
         continue-on-error: true
 
+      - name: Check orphaned REST route files
+        run: node packages/api/src/routers/hub-protocol/rest/check-orphan-routes.mjs
+        continue-on-error: false
+
       - name: Build workspace dependencies
         # Build workspace packages first so TypeScript can resolve types during typecheck
         # TypeScript project references require built .d.ts files
