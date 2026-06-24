@@ -164,7 +164,14 @@ export function registerSearchRoutes(app: HubHono): void {
     }
     try {
       const effectiveWsId = workspaceId || undefined;
-      const caller = await getCaller(c, { workspaceId: effectiveWsId ?? null });
+      // Scope by the resolved acting user. For a service key (the IS reading on
+      // behalf of an operator) getCaller now honors this userId, so typesense —
+      // which filters by ctx.userId — searches the operator's floor instead of the
+      // system service identity (which owns nothing → empty results).
+      const caller = await getCaller(c, {
+        workspaceId: effectiveWsId ?? null,
+        userId,
+      });
       const result = await caller.search.search({
         userId,
         query,
