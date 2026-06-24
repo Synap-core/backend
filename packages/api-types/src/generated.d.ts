@@ -4089,7 +4089,7 @@ export interface GraphNeighbor extends GraphNode {
 	edgeType: string;
 	direction: "outgoing" | "incoming" | "structural";
 	/** Which substrate the edge came from — glass-box provenance. */
-	via: "links" | "relations" | "property" | "channel";
+	via: "links" | "relations" | "property" | "channel" | "session";
 }
 /** "Fetch X, get X + everything it's linked to, typed." */
 export interface GraphEnvelope {
@@ -9746,12 +9746,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null;
 					label: string;
 					direction: "outgoing" | "incoming" | "structural";
-					source: "graph" | "property" | "thread";
+					source: "graph" | "property" | "thread" | "context_channel" | "focus_session";
 					relationType?: string;
 					propertySlug?: string;
 					propertyLabel?: string;
 					channelId?: string;
 					channelRelationshipType?: string;
+					channelTitle?: string | null;
+					focusSessionGoal?: string;
+					focusSessionStatus?: string;
 					createdAt?: Date | null;
 				}[];
 				counts: {
@@ -9759,6 +9762,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					graph: number;
 					structural: number;
 					threads: number;
+					contextChannels: number;
+					focusSessions: number;
 				};
 			};
 			meta: object;
