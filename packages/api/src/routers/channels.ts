@@ -1397,32 +1397,18 @@ export const channelsRouter = router({
         channelId = resolvedChannel.id;
       }
 
-      // Get channel
+      // Get channel — scoped to what the caller may see via the canonical
+      // visibility predicate so workspace membership alone is not enough to
+      // post in private channels (THREAD/PERSONAL) that belong to someone else.
       const channel = await db.query.channels.findFirst({
-        where: eq(channels.id, channelId),
+        where: and(eq(channels.id, channelId), channelVisibilityWhere(userId)),
       });
 
       if (!channel) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Channel not found",
+          message: "Channel not found or access denied",
         });
-      }
-
-      // Verify the user has access to the channel's workspace
-      if (channel.workspaceId && channel.userId !== userId) {
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, channel.workspaceId),
-            eq(workspaceMembers.userId, userId)
-          ),
-        });
-        if (!membership) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "You do not have access to this channel",
-          });
-        }
       }
 
       // If no explicit agentId in the request and channel has an assigned agent, use it for IS routing
@@ -2590,34 +2576,19 @@ export const channelsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      // Canonical channel visibility — replaces the old owner-only gate so
+      // workspace members see messages in shared channels (GROUP/AGENT_COLLAB/
+      // EXTERNAL) they don't own.
       const channel = await db.query.channels.findFirst({
-        where: eq(channels.id, input.threadId),
+        where: and(
+          eq(channels.id, input.threadId),
+          channelVisibilityWhere(ctx.userId)
+        ),
       });
       if (!channel) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Channel not found",
-        });
-      }
-      if (channel.userId !== ctx.userId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Access denied to this channel",
-        });
-      }
-      // PERSONAL and FEED channels are pod-wide — no workspace isolation applied.
-      const isPodWideChannel =
-        channel.channelType === ChannelType.FEED ||
-        channel.channelType === ChannelType.PERSONAL;
-      if (
-        !isPodWideChannel &&
-        ctx.workspaceId &&
-        channel.workspaceId &&
-        channel.workspaceId !== ctx.workspaceId
-      ) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Channel is not in the current workspace",
+          message: "Channel not found or access denied",
         });
       }
 
@@ -2654,19 +2625,18 @@ export const channelsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      // Canonical channel visibility — replaces the old owner-only gate so
+      // workspace members see timelines in shared channels they don't own.
       const channel = await db.query.channels.findFirst({
-        where: eq(channels.id, input.channelId),
+        where: and(
+          eq(channels.id, input.channelId),
+          channelVisibilityWhere(ctx.userId)
+        ),
       });
       if (!channel) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Channel not found",
-        });
-      }
-      if (channel.userId !== ctx.userId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Access denied to this channel",
+          message: "Channel not found or access denied",
         });
       }
 
@@ -3104,12 +3074,12 @@ export const channelsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      // Owner pin (mirrors getBranchTree) — without it any user reads another
-      // user's branch/sub-thread structure under any parent channel id.
+      // Canonical channel visibility — workspace members can see branches of
+      // shared channels (GROUP/AGENT_COLLAB/EXTERNAL) they don't own.
       const branches = await db.query.channels.findMany({
         where: and(
           eq(channels.parentChannelId, input.parentChannelId),
-          eq(channels.userId, ctx.userId)
+          channelVisibilityWhere(ctx.userId)
         ),
         orderBy: [desc(channels.createdAt)],
       });
@@ -3305,26 +3275,19 @@ export const channelsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      // Canonical channel visibility — workspace members can access details
+      // of shared channels (GROUP/AGENT_COLLAB/EXTERNAL) they don't own.
       const channel = await db.query.channels.findFirst({
-        where: eq(channels.id, input.channelId),
+        where: and(
+          eq(channels.id, input.channelId),
+          channelVisibilityWhere(ctx.userId)
+        ),
       });
 
       if (!channel) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Channel not found",
-        });
-      }
-      const isPodWideChannel =
-        channel.channelType === ChannelType.FEED ||
-        channel.channelType === ChannelType.PERSONAL;
-      // Owner check (mirrors getMessages/getTimeline/getBranchTree). The old
-      // guard keyed off ctx.workspaceId, which protectedProcedure does NOT
-      // guarantee — omitting the workspace header bypassed it entirely.
-      if (!isPodWideChannel && channel.userId !== ctx.userId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Not authorized to view this channel",
+          message: "Channel not found or access denied",
         });
       }
 
@@ -3671,13 +3634,15 @@ export const channelsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      // Canonical channel visibility — workspace members can see branches of
+      // shared channels (GROUP/AGENT_COLLAB/EXTERNAL) they don't own.
       const allChannels = await db.query.channels.findMany({
         where: and(
           or(
             eq(channels.id, input.rootChannelId),
             eq(channels.parentChannelId, input.rootChannelId)
           ),
-          eq(channels.userId, ctx.userId)
+          channelVisibilityWhere(ctx.userId)
         ),
       });
 
@@ -3726,17 +3691,19 @@ export const channelsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      // Canonical channel visibility — workspace members can see context items
+      // of shared channels (GROUP/AGENT_COLLAB/EXTERNAL) they don't own.
       const channel = await db.query.channels.findFirst({
         where: and(
           eq(channels.id, input.channelId),
-          eq(channels.userId, ctx.userId)
+          channelVisibilityWhere(ctx.userId)
         ),
       });
 
       if (!channel) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Channel not found",
+          message: "Channel not found or access denied",
         });
       }
 
