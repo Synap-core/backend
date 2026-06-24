@@ -93,6 +93,215 @@ export function registerConnectorsRoutes(app: HubHono): void {
     }
   );
 
+  // ── POST /connectors/connect ──────────────────────────────────────────────
+  //
+  // THE single "resolve-or-start" door every thin client (Discord bot, CLI, the
+  // IS connect_service tool, browser) calls instead of re-implementing the flow.
+  // In one governed call it: (1) resolves the requested provider against the
+  // real integration list (no provider-less generic picker — an unknown/empty
+  // provider returns the pickable list so the caller can choose), (2) checks for
+  // an EXISTING connection for the acting user → returns it instead of pushing a
+  // fresh OAuth, (3) otherwise mints a provider-SPECIFIC OAuth session URL.
+  // `onBehalfOfUserId` binds the connection to another workspace member (same
+  // owner/admin gate as POST /connectors/session). Owner-kinds beyond the acting
+  // user (global / entity / agent — the `authBinding` axis) are a documented
+  // follow-up: they need matching execution-side resolution in nangoHandler, so
+  // we don't half-wire a creation path the dispatcher can't resolve yet.
+  app.openapi(
+    createRoute({
+      method: "post",
+      path: "/connectors/connect",
+      tags: ["Connectors"],
+      summary:
+        "Resolve-or-start a connection for a provider (the unified door)",
+      request: {
+        body: {
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  provider: z.string().optional(),
+                  workspaceId: z.string().optional(),
+                  onBehalfOfUserId: z.string().optional(),
+                })
+                .openapi("ConnectorConnectRequest"),
+            },
+          },
+        },
+      },
+      responses: {
+        200: {
+          description:
+            "Connection status: connected | setup_required | provider_required",
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  status: z.enum([
+                    "connected",
+                    "setup_required",
+                    "provider_required",
+                  ]),
+                  provider: z.string().optional(),
+                  displayName: z.string().optional(),
+                  connectionId: z.string().optional(),
+                  redirectUrl: z.string().optional(),
+                  sessionToken: z.string().optional(),
+                  // Populated for provider_required: the pickable provider list.
+                  providers: z
+                    .array(
+                      z.object({
+                        id: z.string(),
+                        provider: z.string(),
+                        displayName: z.string().optional(),
+                        connected: z.boolean(),
+                      })
+                    )
+                    .optional(),
+                })
+                .openapi("ConnectorConnectResult"),
+            },
+          },
+        },
+        403: {
+          description: "Forbidden",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+        503: {
+          description: "Not configured",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+      },
+    }),
+    async (c): Promise<any> => {
+      if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+        return c.json(
+          { error: "Insufficient scope: hub-protocol.write required" },
+          403
+        );
+      }
+      const connector = syncConnectorRegistry.get("nango") as
+        | NangoConnector
+        | undefined;
+      if (!connector || !connector.isConfigured()) {
+        return c.json({ error: "Nango not configured" }, 503);
+      }
+
+      const { provider, workspaceId, onBehalfOfUserId } = c.req.valid("json");
+
+      // Resolve the acting identity. Default = the caller; an explicit
+      // onBehalfOfUserId binds to another member (owner/admin-gated + the target
+      // must be a workspace member). Same gate as POST /connectors/session.
+      let userId = c.get("userId") as string;
+      if (onBehalfOfUserId && onBehalfOfUserId !== userId) {
+        const acting = await resolveActingContext(c, { workspaceId });
+        if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+        const isPrivileged = acting.role === "owner" || acting.role === "admin";
+        if (!isPrivileged) {
+          return c.json(
+            {
+              error:
+                "Only a workspace owner or admin can connect on behalf of another member",
+            },
+            403
+          );
+        }
+        const membership = await db.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.workspaceId, acting.workspaceId),
+            eq(workspaceMembers.userId, onBehalfOfUserId)
+          ),
+          columns: { id: true },
+        });
+        if (!membership) {
+          return c.json(
+            { error: "onBehalfOfUserId is not a member of this workspace" },
+            403
+          );
+        }
+        userId = onBehalfOfUserId;
+      }
+
+      try {
+        const [integrations, connections] = await Promise.all([
+          connector.listIntegrations(),
+          connector.listConnections(userId),
+        ]);
+
+        // ── Provider resolution: match the requested term against the real
+        // integration list by uniqueKey / provider / displayName (case-insensitive).
+        // Empty or unknown → return the pickable list (NOT a generic popup).
+        const wanted = (provider ?? "").trim().toLowerCase();
+        const match = wanted
+          ? integrations.find(
+              (i) =>
+                i.uniqueKey.toLowerCase() === wanted ||
+                i.provider.toLowerCase() === wanted ||
+                (i.displayName ?? "").toLowerCase() === wanted
+            )
+          : undefined;
+
+        if (!match) {
+          const connSet = new Set(connections.map((conn) => conn.provider));
+          return c.json(
+            {
+              status: "provider_required" as const,
+              providers: integrations.map((i) => ({
+                id: i.uniqueKey,
+                provider: i.provider,
+                displayName: i.displayName,
+                connected: connSet.has(i.uniqueKey),
+              })),
+            },
+            200
+          );
+        }
+
+        // ── Already connected? Return it instead of a fresh OAuth.
+        const existing = connections.find(
+          (conn) => conn.provider === match.uniqueKey
+        );
+        if (existing) {
+          return c.json(
+            {
+              status: "connected" as const,
+              provider: match.uniqueKey,
+              displayName: match.displayName,
+              connectionId: existing.connectionId,
+            },
+            200
+          );
+        }
+
+        // ── Not connected → provider-specific OAuth session.
+        const session = await connector.createSession(
+          userId,
+          match.uniqueKey,
+          workspaceId ?? ""
+        );
+        return c.json(
+          {
+            status: "setup_required" as const,
+            provider: match.uniqueKey,
+            displayName: match.displayName,
+            redirectUrl: session.redirectUrl,
+            sessionToken: session.sessionToken,
+          },
+          200
+        );
+      } catch (err) {
+        logger.error(
+          { err, provider, userId },
+          "POST /connectors/connect failed"
+        );
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          500
+        );
+      }
+    }
+  );
+
   // ── POST /connectors/session ──────────────────────────────────────────────
   app.openapi(
     createRoute({
