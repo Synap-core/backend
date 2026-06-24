@@ -664,7 +664,7 @@ async function vaultDelegatedHandler(ctx: {
   secretRow: { userId: string; providerIntegrationId: string };
   providerIntegrationId: string;
 }): Promise<TriggerProviderActionResult> {
-  const { input, tool } = ctx;
+  const { input } = ctx;
   const { userId, method, path, body, accountHint } = input;
 
   // Resolve the provider integration + its parent provider.
@@ -776,7 +776,7 @@ async function vaultDelegatedHandler(ctx: {
 //     shape the nango branch returns. The secret is NEVER logged.
 const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   const { userId, provider, method, path, body, accountHint } = input;
-
+  void accountHint; // used below in connection-selection
   const vaultId = provider.replace(/^vault:\/\//, "");
   const toolConfig = (tool.config ?? {}) as Record<string, unknown>;
   const field =
@@ -810,8 +810,11 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
       input,
       tool,
       vaultId,
-      secretRow,
-      providerIntegrationId: secretRow.providerIntegrationId,
+      secretRow: {
+        ...secretRow,
+        providerIntegrationId: secretRow.providerIntegrationId!,
+      },
+      providerIntegrationId: secretRow.providerIntegrationId!,
     });
   }
 
