@@ -12474,6 +12474,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					description: string | null;
 					body: string | null;
+					bodyDocumentId: string | null;
 					documentIds: string[] | null;
 					code: string | null;
 					parameters: unknown;
@@ -12537,6 +12538,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: SkillKind;
 					agentTypes: string[] | null;
 					body: string | null;
+					bodyDocumentId: string | null;
 					documentIds: string[] | null;
 					parameters: unknown;
 					topics: string[] | null;
@@ -12631,6 +12633,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					description: string | null;
 					body: string | null;
+					bodyDocumentId: string | null;
 					documentIds: string[] | null;
 					code: string | null;
 					parameters: unknown;
