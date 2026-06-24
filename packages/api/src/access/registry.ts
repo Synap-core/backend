@@ -26,6 +26,7 @@ import {
   intelligenceCommands,
 } from "@synap/database/schema";
 import { registerVisibility } from "./visibility.js";
+import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 
 // ── Workspace-scoped: visible = pod-wide (NULL) OR a workspace the user is in ──
 registerVisibility({
@@ -56,7 +57,16 @@ registerVisibility({
 registerVisibility({
   table: channels,
   query: () => db.query.channels,
-  rule: { kind: "workspace", workspaceColumn: channels.workspaceId },
+  // Channels need CUSTOM visibility, not the flat `workspace` rule: a channel's
+  // workspace_id = NULL means "personal" (owner-private), but the `workspace`
+  // rule treats a NULL workspace column as a pod-wide GLOBAL (visible to
+  // everyone) — which would leak every user's personal channels. The custom
+  // predicate encodes the correct semantics (own / explicit-member /
+  // shared-type-in-accessible-workspace).
+  rule: {
+    kind: "custom",
+    predicate: (access) => channelVisibilityWhere(access.userId),
+  },
 });
 registerVisibility({
   table: artifacts,

@@ -94,6 +94,12 @@ const ALLOWLIST = new Set<string>([
   // workspaceMembers before the read (events.ts:356-369). See WORKSPACE-LENS-
   // CONSOLIDATION-PLAN.md §P3 (events → justified allowlist, not scopedDb).
   "events.ts::aggregateTimeSeries",
+  // views.list floors every read with viewVisibleWhere(ctx.userId) — the same
+  // userVisibleWhere-based predicate entities.list uses (isNull-personal OR
+  // member/owned/pod-visible workspaces) — plus an optional project-lens narrow.
+  // Correctly scoped, hand-rolled rather than scopedDb (its conditional
+  // project/profile filters don't fit a uniform rule), same as the entities path.
+  "views.ts::list",
 ]);
 
 function collectRouterFiles(dir: string): string[] {

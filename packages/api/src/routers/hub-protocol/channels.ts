@@ -25,6 +25,7 @@ import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
 import { db, eq, and, gt, inArray } from "@synap/database";
+import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import {
   agents,
   channels,
@@ -910,9 +911,20 @@ export const channelsRouter = router({
         limit: z.number().int().min(1).max(100).default(50),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      if (!ctx.userId) {
+        throw new TRPCError({
+          code: "UNAUTHORIZED",
+          message: "Unauthenticated",
+        });
+      }
       const rows = await db.query.channels.findMany({
+        // SECURITY: scope to channels the caller can actually see — this route
+        // previously filtered ONLY by the caller-supplied workspaceId, so any
+        // hub-protocol.read key could enumerate every agent_collab channel in any
+        // workspace. channelVisibilityWhere applies the canonical floor.
         where: and(
+          channelVisibilityWhere(ctx.userId),
           eq(channels.workspaceId, input.workspaceId),
           eq(channels.channelType, ChannelType.AGENT_COLLAB)
         ),

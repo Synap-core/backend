@@ -14,6 +14,7 @@ import {
 } from "@synap/database";
 
 import { resolveOrCreateExternalChannel } from "../../../services/connectors/inbound-recorder.js";
+import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
   ChannelByContextRequestSchema,
@@ -77,7 +78,12 @@ export function registerChannelsRoutes(app: HubHono): void {
     const workspaceId = q.workspaceId;
     const limit = q.limit ? Math.min(parseInt(q.limit, 10), 100) : 20;
     try {
-      const conditions = [eq(channelsTable.userId, userId)];
+      // Canonical channel visibility: own it OR explicit member OR a shared-type
+      // channel (external/agent_collab/group) in a workspace the caller can
+      // access. Replaces the bare owner-pin so a client's external channel is
+      // visible to every workspace member (not just the channel's creator), while
+      // private threads / personal channels stay owner-or-member only.
+      const conditions = [channelVisibilityWhere(userId)];
       if (workspaceId) {
         conditions.push(eq(channelsTable.workspaceId, workspaceId));
       }

@@ -14,6 +14,7 @@ import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { getPodCallback } from "../utils/pod-callback.js";
+import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import {
   resolveAgentHandle,
@@ -504,23 +505,13 @@ async function listChannelsWithFlags(params: {
     }
   >
 > {
-  // A channel is accessible when the caller owns it OR is a member of it
-  // (group channels record membership in channel_members; non-group channels
-  // have no member rows, so this leaves their behavior unchanged).
-  const accessPredicate = or(
-    eq(channels.userId, params.userId),
-    exists(
-      db
-        .select({ one: drizzleSql`1` })
-        .from(channelMembers)
-        .where(
-          and(
-            eq(channelMembers.channelId, channels.id),
-            eq(channelMembers.memberId, params.userId)
-          )
-        )
-    )
-  )!;
+  // A channel is accessible when the caller owns it, is an explicit member, OR
+  // it is a SHARED-type channel (external/agent_collab/group) in a workspace the
+  // caller can access — the single canonical channel-visibility predicate (also
+  // the registered `custom` access rule for `channels`). This is what makes a
+  // client's external channel visible to every workspace member, while private
+  // threads / personal channels stay owner-or-member only.
+  const accessPredicate = channelVisibilityWhere(params.userId);
   const conditions: any[] = [accessPredicate];
 
   if (params.workspaceId !== undefined) {
