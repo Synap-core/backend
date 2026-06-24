@@ -565,6 +565,10 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       description: z.string().max(2000).optional(),
       slug: z.string().min(1).max(100),
       body: z.string().optional(),
+      // auto_load=true → always-loaded core DNA (body injected every turn);
+      // false → on-demand (only name+description in the catalog until the agent
+      // loads it). Stored in metadata; the IS loader reads it (progressive disclosure).
+      autoLoad: z.boolean().optional().default(false),
     }),
     documents: z.array(ImportSkillDocumentSchema).optional().default([]),
   });
@@ -648,7 +652,9 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
           approved: true,
           tags: [],
           topics: [],
-          metadata: {},
+          // autoLoad: true = always-loaded core DNA; false = on-demand (catalog
+          // + load_skill). The IS loader reads this for progressive disclosure.
+          metadata: { autoLoad: skillMeta.autoLoad ?? false },
         })
         .returning();
 
