@@ -34,6 +34,7 @@ import { sendExternalMessage } from "../../../connectors/external-dispatch.js";
 import { pullToImport } from "../../../services/connector-import-bridge.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { logger, type HubHono } from "./_shared.js";
+import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 
 // ── Shared response schemas ────────────────────────────────────────────────
 
@@ -1511,7 +1512,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         const rows = await db.query.channels.findMany({
           where: and(
             eq(channels.channelType, ChannelType.EXTERNAL),
-            eq(channels.userId, userId),
+            channelVisibilityWhere(userId),
             ...(provider ? [eq(channels.externalSource as any, provider)] : [])
           ),
           orderBy: [desc(channels.updatedAt)],

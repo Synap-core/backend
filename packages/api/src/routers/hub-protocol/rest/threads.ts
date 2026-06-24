@@ -58,6 +58,7 @@ import {
   logger,
   type HubHono,
 } from "./_shared.js";
+import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 
 export function registerThreadsRoutes(app: HubHono): void {
   // ── GET /threads ────────────────────────────────────────────────────────
@@ -116,15 +117,16 @@ export function registerThreadsRoutes(app: HubHono): void {
         eq(channels.channelType, ChannelType.FEED)
       );
 
+      const visibility = channelVisibilityWhere(userId);
       if (workspaceId) {
         whereClause = and(
-          eq(channels.userId, userId),
+          visibility,
           or(eq(channels.workspaceId, workspaceId), podWideFilter)
         );
       } else {
         const accessibleWsIds = await getUserAccessibleWorkspaceIds(userId);
         whereClause = and(
-          eq(channels.userId, userId),
+          visibility,
           or(
             ...(accessibleWsIds.length > 0
               ? [inArray(channels.workspaceId, accessibleWsIds)]

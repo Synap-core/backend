@@ -51,6 +51,7 @@ const ALL_BUILDERS = [
 const SCOPING_HELPERS = [
   "scopedDb",
   "AccessContext",
+  "channelVisibilityWhere",
   "userVisibleWhere",
   // Thin entity/workspace wrappers OVER userVisibleWhere — equally legitimate
   // scoping (the entities/views routers self-scope through these).

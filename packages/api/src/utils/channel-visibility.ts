@@ -6,9 +6,15 @@
  *   1. they OWN it (`channels.userId = me`), OR
  *   2. they are an explicit member (a `channel_members` row), OR
  *   3. it is a SHARED-type channel (external / agent_collab / group) that lives
- *      in a workspace the caller can access (`userVisibleWhere`) — so a client
- *      channel mirrored into a workspace is visible to EVERY workspace member,
- *      WITHOUT exposing other users' private threads / personal channels.
+ *      in a workspace the caller BELONGS to (member of, or owner of) — so a
+ *      client channel mirrored into a workspace is visible to everyone who
+ *      actually belongs to that workspace, WITHOUT exposing other users'
+ *      private threads / personal channels.
+ *
+ * Branch 3 deliberately does NOT use `userVisibleWhere` — that helper also
+ * matches pod-visible workspaces, which would leak shared channels to pod-wide
+ * bystanders who aren't workspace members. Channel visibility is membership-
+ * gated, not discoverability-gated.
  *
  * Personal / thread / sub_thread / feed channels are deliberately NOT
  * workspace-broadcast — they stay owner-or-member only.
@@ -33,7 +39,7 @@ import {
   drizzleSql,
 } from "@synap/database";
 import { isNotNull } from "drizzle-orm";
-import { userVisibleWhere } from "./user-visible-where.js";
+import { workspaceMembers, workspaces } from "@synap/database/schema";
 
 /** Shared-type channels that are visible to all members of their workspace. */
 const SHARED_CHANNEL_TYPES = [
@@ -43,10 +49,30 @@ const SHARED_CHANNEL_TYPES = [
 ] as const;
 
 export function channelVisibilityWhere(userId: string) {
+  // Workspace membership subquery — reused by branch 3.
+  const memberOfWs = db
+    .select({ one: drizzleSql`1` })
+    .from(workspaceMembers)
+    .where(
+      and(
+        eq(workspaceMembers.workspaceId, channels.workspaceId),
+        eq(workspaceMembers.userId, userId)
+      )
+    );
+  const ownerOfWs = db
+    .select({ one: drizzleSql`1` })
+    .from(workspaces)
+    .where(
+      and(
+        eq(workspaces.id, channels.workspaceId),
+        eq(workspaces.ownerId, userId)
+      )
+    );
+
   return or(
     // 1. Own it.
     eq(channels.userId, userId),
-    // 2. Explicit member (group/collab channels record membership here).
+    // 2. Explicit member (recorded in channel_members).
     exists(
       db
         .select({ one: drizzleSql`1` })
@@ -58,13 +84,12 @@ export function channelVisibilityWhere(userId: string) {
           )
         )
     ),
-    // 3. Shared-type channel in a workspace the caller can access. isNotNull
-    //    guards the personal-NULL case so userVisibleWhere's pod-wide-global
-    //    branch can never broadcast a NULL-workspace channel.
+    // 3. Shared-type channel in a workspace the caller belongs to (member OR
+    //    owner — NOT pod-visible, which would leak channels to bystanders).
     and(
       inArray(channels.channelType, [...SHARED_CHANNEL_TYPES]),
       isNotNull(channels.workspaceId),
-      userVisibleWhere(channels.workspaceId, userId)
+      or(exists(memberOfWs), exists(ownerOfWs))
     )
   )!;
 }
