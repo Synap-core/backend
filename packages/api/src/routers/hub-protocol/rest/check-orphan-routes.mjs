@@ -99,6 +99,35 @@ if (wiringContent) {
   }
 }
 
+
+// ---- Naming convention: file 'capabilities-execute.ts' → registerCapabilitiesExecuteRoutes ----
+function kebabToRegisterName(filename) {
+  const withoutExt = filename.replace(".ts", "");
+  const parts = withoutExt.split("-");
+  const camel = parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join("");
+  return "register" + camel + "Routes";
+}
+
+const namingIssues = [];
+for (const file of routeFiles) {
+  if (file.endsWith(".test")) continue;
+  const expected = kebabToRegisterName(file);
+  const content = readFileSync(join(REST_DIR, file + ".ts"), "utf-8");
+  const fnRegex = /export (?:function |const )((?:register)\w+Routes)/g;
+  let fnMatch;
+  let found = false;
+  while ((fnMatch = fnRegex.exec(content)) !== null) {
+    if (fnMatch[1] === expected) {
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    namingIssues.push({ file: file, expected: expected });
+  }
+}
+
+
 // ---- Report ----
 let exitCode = 0;
 
@@ -137,9 +166,24 @@ if (unwiredExports.length > 0) {
   );
 }
 
+
+if (namingIssues.length > 0) {
+  exitCode = 1;
+  console.error(
+    "✗ Found " + namingIssues.length + " naming convention issue(s):\n"
+  );
+  for (const ni of namingIssues) {
+    console.error("  " + ni.file + ".ts → expected function " + ni.expected);
+  }
+  console.error(
+    "\nRename the file or update the function name to match the convention.\n"
+  );
+}
+
+
 if (exitCode === 0) {
   console.log(
-    `✓ ${routeFiles.size} route files, ${registerExports.size} exports, all wired in hub-protocol-rest.ts`
+    `✓ ${routeFiles.size} route files, naming convention clean, ${registerExports.size} exports, all wired in hub-protocol-rest.ts`
   );
 }
 process.exit(exitCode);
