@@ -2152,6 +2152,8 @@ CREATE INDEX IF NOT EXISTS "idx_secrets_user_type"       ON "secrets" ("user_id"
 CREATE INDEX IF NOT EXISTS "idx_secrets_service_id"      ON "secrets" ("service_id");
 CREATE INDEX IF NOT EXISTS "idx_secrets_encryption_mode" ON "secrets" ("encryption_mode");
 CREATE INDEX IF NOT EXISTS "idx_secrets_user_service"    ON "secrets" ("user_id", "service_id");
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "provider_integration_id" uuid;
+CREATE INDEX IF NOT EXISTS "idx_secrets_provider_integration" ON "secrets" ("provider_integration_id");
 
 -- ── capability grants (formerly vault_grants — generalized in 0142) ──────────
 -- Records an AI/agent access grant to a grantable capability (secret/tool/skill/
@@ -3481,3 +3483,36 @@ CREATE INDEX IF NOT EXISTS "idx_capability_templates_key"
   ON "capability_templates" ("key");
 CREATE INDEX IF NOT EXISTS "idx_capability_templates_workspace_id"
   ON "capability_templates" ("workspace_id");
+
+-- ── Provider Integrations (0150 catch-up) ─────────────────────────────────────
+-- Credential backend registry + secrets FK. See migration 0150 for the seeded
+-- provider rows (nango, vault, unipile).
+CREATE TABLE IF NOT EXISTS "providers" (
+  "id"              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "slug"            text NOT NULL UNIQUE,
+  "display_name"    text NOT NULL,
+  "description"     text,
+  "backend_type"    text NOT NULL,
+  "logo_url"        text,
+  "metadata"        jsonb NOT NULL DEFAULT '{}',
+  "created_at"      timestamptz NOT NULL DEFAULT now(),
+  "updated_at"      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS "idx_providers_backend_type" ON "providers" ("backend_type");
+
+CREATE TABLE IF NOT EXISTS "provider_integrations" (
+  "id"              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "provider_id"     uuid NOT NULL REFERENCES "providers"("id") ON DELETE CASCADE,
+  "slug"            text NOT NULL,
+  "display_name"    text NOT NULL,
+  "description"     text,
+  "backend_config"  jsonb NOT NULL DEFAULT '{}',
+  "logo_url"        text,
+  "metadata"        jsonb NOT NULL DEFAULT '{}',
+  "created_at"      timestamptz NOT NULL DEFAULT now(),
+  "updated_at"      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS "idx_provider_integrations_provider_id"
+  ON "provider_integrations" ("provider_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_provider_integrations_provider_slug"
+  ON "provider_integrations" ("provider_id", "slug");

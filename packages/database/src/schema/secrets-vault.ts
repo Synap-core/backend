@@ -101,6 +101,14 @@ export const secrets = pgTable(
     // Used by getServiceConfig to fetch credentials by serviceId without scanning all user secrets.
     serviceId: text("service_id"),
 
+    /**
+     * Optional FK to provider_integrations. When set, this secret's credential
+     * routes through the linked provider for OAuth lifecycle (token refresh, proxy)
+     * instead of being injected as a raw API key. Null -> direct vault injection
+     * (existing behavior, unchanged).
+     */
+    providerIntegrationId: uuid("provider_integration_id"),
+
     // Organization
     isFavorite: boolean("is_favorite").notNull().default(false),
     sortOrder: integer("sort_order").default(0),
@@ -149,6 +157,9 @@ export const secrets = pgTable(
     userServiceIdx: index("idx_secrets_user_service").on(
       table.userId,
       table.serviceId
+    ),
+    providerIntegrationIdx: index("idx_secrets_provider_integration").on(
+      table.providerIntegrationId
     ),
   })
 );

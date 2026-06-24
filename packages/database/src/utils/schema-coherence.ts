@@ -722,6 +722,33 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "target_cell_id",
     addedBy: "0041_cell_instances.sql",
   },
+
+  // provider integrations — credential backend registry (0150)
+  {
+    table: "providers",
+    column: "slug",
+    addedBy: "0150_provider_integrations.sql",
+  },
+  {
+    table: "providers",
+    column: "backend_type",
+    addedBy: "0150_provider_integrations.sql",
+  },
+  {
+    table: "provider_integrations",
+    column: "provider_id",
+    addedBy: "0150_provider_integrations.sql",
+  },
+  {
+    table: "provider_integrations",
+    column: "slug",
+    addedBy: "0150_provider_integrations.sql",
+  },
+  {
+    table: "secrets",
+    column: "provider_integration_id",
+    addedBy: "0150_provider_integrations.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

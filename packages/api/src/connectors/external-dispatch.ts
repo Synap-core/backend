@@ -23,6 +23,8 @@ import {
   ChannelType,
   mcpServers,
   secrets,
+  providerIntegrations,
+  providers,
   links,
   entities,
 } from "@synap/database/schema";
@@ -639,6 +641,131 @@ function resolveVaultAuthConfig(raw: unknown): VaultAuthConfig {
   return { in: where, name, prefix };
 }
 
+/**
+ * Vault-delegated handler — routes a vault:// secret with a
+ * `provider_integration_id` to the correct credential backend.
+ *
+ * This is the runtime heart of Approach B: the vault becomes the UNIFIED routing
+ * intermediary. When a secret carries `provider_integration_id`, its credential
+ * is NOT a static key — it lives on the linked provider (Nango OAuth) and must
+ * be resolved through that provider's connection lifecycle (proxy, token refresh).
+ *
+ * Current delegation paths:
+ *   nango   → look up the user's Nango connection, proxy the HTTP call
+ *   vault   → should never reach here (provider_integration_id would be null)
+ *   unipile → not yet delegated through vault (still uses messaging connector)
+ *
+ * As new provider types are added, add a case here — no caller changes needed.
+ */
+async function vaultDelegatedHandler(ctx: {
+  input: TriggerProviderActionInput;
+  tool: ToolRow;
+  vaultId: string;
+  secretRow: { userId: string; providerIntegrationId: string };
+  providerIntegrationId: string;
+}): Promise<TriggerProviderActionResult> {
+  const { input, tool } = ctx;
+  const { userId, method, path, body, accountHint } = input;
+
+  // Resolve the provider integration + its parent provider.
+  const integration = await db.query.providerIntegrations.findFirst({
+    where: eq(providerIntegrations.id, ctx.providerIntegrationId),
+    columns: { id: true, slug: true, providerId: true, backendConfig: true },
+  });
+  if (!integration) {
+    return {
+      success: false,
+      status: 400,
+      errorCode: "bad_request",
+      error: `Provider integration "${ctx.providerIntegrationId}" not found (deleted?).`,
+    };
+  }
+
+  const prov = await db.query.providers.findFirst({
+    where: eq(providers.id, integration.providerId),
+    columns: { slug: true, backendType: true },
+  });
+  if (!prov) {
+    return {
+      success: false,
+      status: 400,
+      errorCode: "bad_request",
+      error: `Provider "${integration.providerId}" not found for integration "${integration.slug}".`,
+    };
+  }
+
+  // ── Nango delegation ────────────────────────────────────────────────────
+  // The secret points at a provider integration owned by Nango. Route through
+  // the Nango proxy (same logic as the nangoHandler, but the providerConfigKey
+  // comes from the integration's backendConfig, not the tool config).
+  if (prov.backendType === "nango") {
+    const connector = getNangoConnector();
+    if (!connector) {
+      return {
+        success: false,
+        status: 503,
+        errorCode: "unavailable",
+        error: "Nango not configured",
+      };
+    }
+
+    const bCfg = (integration.backendConfig ?? {}) as Record<string, unknown>;
+    const providerConfigKey =
+      (bCfg.providerConfigKey as string) ?? integration.slug;
+
+    // Resolve user's connection for this provider
+    const connections = await connector.listConnections(userId);
+    const matchingConnections = connections.filter(
+      (conn) => conn.provider === providerConfigKey
+    );
+
+    if (matchingConnections.length === 0) {
+      return {
+        success: false,
+        status: 404,
+        errorCode: "not_found",
+        error: `No Nango connection found for provider "${providerConfigKey}". Connect it via Settings → Connectors first.`,
+      };
+    }
+
+    // Pick by accountHint or default to most recent
+    let connection = matchingConnections[0]!;
+    if (accountHint) {
+      const hinted = matchingConnections.find((c) =>
+        c.connectionId.includes(accountHint)
+      );
+      if (hinted) connection = hinted;
+    } else {
+      connection = matchingConnections.sort(
+        (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+      )[0]!;
+    }
+
+    const result = await connector.proxyRequest({
+      connectionId: connection.connectionId,
+      providerConfigKey,
+      method: method ?? "GET",
+      path: path ?? "/",
+      body,
+    });
+
+    return {
+      success: true,
+      status: result.status,
+      headers: result.headers,
+      body: result.body,
+    };
+  }
+
+  // ── Unknown backend type ─────────────────────────────────────────────────
+  return {
+    success: false,
+    status: 400,
+    errorCode: "bad_request",
+    error: `Vault secret "${ctx.vaultId}" is linked to provider integration "${integration.slug}" whose backend type "${prov.backendType}" is not yet supported for delegated credential routing.`,
+  };
+}
+
 // ── vault:// handler (API-key / non-Nango tools — direct guarded HTTP) ────────
 //
 // (a) resolve the credential via grant-gated resolveVaultSecret;
@@ -648,28 +775,26 @@ function resolveVaultAuthConfig(raw: unknown): VaultAuthConfig {
 //     private / link-local / cloud-metadata) and return the SAME structured
 //     shape the nango branch returns. The secret is NEVER logged.
 const vaultHandler: SchemeHandler = async ({ input, tool }) => {
-  const { userId, provider, method, path, body } = input;
+  const { userId, provider, method, path, body, accountHint } = input;
 
   const vaultId = provider.replace(/^vault:\/\//, "");
   const toolConfig = (tool.config ?? {}) as Record<string, unknown>;
   const field =
     typeof toolConfig.field === "string" ? toolConfig.field : undefined;
 
-  // OWNER-BYPASS (dogfood #3a): a caller running their OWN secret must not be
-  // grant-gated. Ownership is structural — determined by the secret's `userId`,
-  // never by the request. Look up the owner first, then:
-  //   - acting identity === owner  → owner path: requireGrant=false (no grant
-  //     needed; you can't revoke your own access to your own secret).
-  //   - acting identity !== owner  → delegated agent: requireGrant=true with a
-  //     SERVER-DERIVED redeemer ({ agentUserId, workspaceId }). The secret is
-  //     decrypted under its OWNER for the filter; authorization is the grant.
-  // The redeemer is NEVER request-supplied; `assertGrantScoped` (issuance) +
-  // consume-after-decrypt are preserved by the resolver.
-  const ownerRow = await db.query.secrets.findFirst({
+  // ── Phase 0: Provider-integration delegation ──────────────────────────────
+  // When the secret has a `provider_integration_id`, the credential is NOT a
+  // static API key — it routes through the linked provider's credential lifecycle
+  // (OAuth flow, token refresh, proxy). Look up the secret row FIRST to check.
+  //
+  // This is the core of Approach B: `credentialRef = vault://<secretId>` is the
+  // ONLY ref format; the `provider_integration_id` FK discriminates between
+  // vault-direct (API key injection) and provider-delegated (Nango proxy, etc.).
+  const secretRow = await db.query.secrets.findFirst({
     where: eq(secrets.id, vaultId),
-    columns: { userId: true },
+    columns: { userId: true, providerIntegrationId: true },
   });
-  if (!ownerRow) {
+  if (!secretRow) {
     return {
       success: false,
       status: 404,
@@ -677,7 +802,20 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
       error: `Vault secret "${vaultId}" could not be resolved (missing or deleted).`,
     };
   }
-  const ownerUserId = ownerRow.userId;
+
+  // If this secret is linked to a provider integration, delegate to the
+  // provider's credential handler instead of vault-direct injection.
+  if (secretRow.providerIntegrationId) {
+    return vaultDelegatedHandler({
+      input,
+      tool,
+      vaultId,
+      secretRow,
+      providerIntegrationId: secretRow.providerIntegrationId,
+    });
+  }
+
+  const ownerUserId = secretRow.userId;
   // SEC#1: the owner-bypass must key off the EFFECTIVE actor, not raw `userId`.
   // An agent running under the owner's hub identity (agentUserId present, userId =
   // secret owner) must STILL be grant-gated on the per-secret vault grant (TTL /
@@ -1095,8 +1233,12 @@ const SCHEME_HANDLERS: Record<string, SchemeHandler> = {
 /**
  * Execute an agnostic provider tool, dispatching by the tool's credentialRef
  * SCHEME (`scheme://rest`):
- *   - `nango://` → Nango proxy (Connection-Id + Provider-Config-Key)
- *   - `vault://` → vault-resolved API key, injected into a config-driven HTTP call
+ *   - `vault://` → UNIFIED handler (Approach B). When the secret carries a
+ *     `provider_integration_id`, routes through the linked provider's credential
+ *     lifecycle (Nango OAuth proxy, etc.). When null, injects the decrypted API
+ *     key into a config-driven HTTP call (existing behavior).
+ *   - `nango://` → backward-compat shim (existing tool rows only). NEW tools
+ *     use `vault://<secretId>` with the secret's `provider_integration_id`.
  *   - `mcp://`   → bridged to the resolved MCP server's tool call (mcpHandler)
  *
  * Returns a structured result so both the REST endpoint (needs status codes for

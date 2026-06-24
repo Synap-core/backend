@@ -171,6 +171,10 @@ export * from "./artifacts.js";
 // templates (playbooks), and the polymorphic config/runtime graph (links).
 export * from "./tools.js";
 export * from "./playbooks.js";
+// Provider integrations (CONFIG) — credential backend registry (Nango, Vault, etc.)
+// + the specific services each exposes (gmail, gdrive, openai…). Links into the
+// secrets vault via `provider_integration_id` FK for OAuth/vault routing.
+export * from "./provider-integrations.js";
 // Capability containers (CONFIG) — named bundles grouping tools/skills/built-ins
 // (parts attach via `links`: part --member_of--> capability).
 export * from "./capabilities.js";
