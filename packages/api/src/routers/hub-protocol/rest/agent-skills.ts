@@ -658,11 +658,31 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
         })
         .returning();
 
-      // Create linked documents through the tRPC caller so content is properly
-      // stored (MinIO-backed via documents.createDocument procedure).
-      // The skill OWNS the relationship (documentIds TEXT[]) — documents are
-      // generic substrate that don't know who references them.
+      // Create the CANONICAL body document (MinIO-backed, versioned) so the skill
+      // body gets version history and collaborative editing. skills.body stays as
+      // the hot-path cache the IS loader reads. Storage unification: everything
+      // is a document; body is a denormalized cache.
       const caller = await getCaller(c);
+      if (skillMeta.body) {
+        const bodyDoc = (await caller.documents.createDocument({
+          userId,
+          title: `${skillMeta.slug}.md`,
+          content: skillMeta.body,
+          type: "markdown",
+          workspaceId: null,
+        })) as { documentId?: string; id?: string } | undefined;
+        const bodyDocId = bodyDoc?.documentId ?? (bodyDoc as any)?.id;
+        if (bodyDocId) {
+          await db
+            .update(skills)
+            .set({ bodyDocumentId: bodyDocId } as any)
+            .where(eq(skills.id, skillRow.id));
+        }
+      }
+
+      // Create linked reference documents — the skill OWNS the relationship
+      // (documentIds TEXT[]). Documents are generic substrate that don't know
+      // who references them.
       const createdDocs: Array<{ id: string; title: string }> = [];
       if (docs.length > 0) {
         for (const d of docs) {

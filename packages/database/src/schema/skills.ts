@@ -26,6 +26,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { workspaces } from "./workspaces.js";
+import { documents } from "./documents.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 export type SkillKind = "instruction" | "code";
@@ -91,6 +92,16 @@ export const skills = pgTable(
      * injection. Absorbed from agent_skills.body.
      */
     body: text("body"),
+
+    /**
+     * Canonical MinIO document for the skill body (versioned, collaborative).
+     * `body` above is a denormalized CACHE of this document's content, populated
+     * on skill save for fast per-turn IS prompt injection. When the body changes,
+     * the linked document gets a new immutable version in `document_versions`.
+     */
+    bodyDocumentId: uuid("body_document_id").references(() => documents.id, {
+      onDelete: "set null",
+    }),
 
     /**
      * Document IDs linked to this skill (e.g. reference files like
