@@ -271,6 +271,14 @@ export async function getCaller(
   // a hub key act as (and read/write the data of) another user. We don't THROW on a
   // mismatch (a redundant/legacy userId in the body shouldn't break first-party
   // tools like the CLI) — we simply never honor it and log the discrepancy.
+  //
+  // INTENTIONAL ASYMMETRY: the sibling `resolveActingContext` (used by WRITE
+  // routes) DOES honor a service-key body.userId. Reads here do not — read
+  // scoping rides on the auth middleware's identity remap (is_internal→operator,
+  // agent-key→linkedUserId), already the correct floor, so a read never needs the
+  // route to re-pick the user and allowing it would re-open the cross-user read
+  // this revert closed. Writes still need it to attribute the mutation to the
+  // specific operator the IS acts for.
   const userId = c.get("userId") as string;
   if (options?.userId && options.userId !== userId) {
     logger.warn(

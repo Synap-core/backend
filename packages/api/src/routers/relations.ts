@@ -69,6 +69,7 @@ import { getLinksFor } from "../services/links/links-service.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { VISIBLE_TO } from "../utils/project-scope.js";
 import { auditLog } from "../utils/audit-log.js";
+import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
 import {
@@ -850,8 +851,14 @@ export const relationsRouter = router({
         db.query.channels.findMany({
           where: and(
             eq(channels.contextObjectType, "entity"),
-            eq(channels.contextObjectId, input.entityId as any),
-            eq(channels.userId, ctx.userId)
+            eq(channels.contextObjectId, input.entityId),
+            // Use the canonical channel-visibility floor (own / member /
+            // shared-type-in-accessible-workspace) — NOT owner-only — so the
+            // entity graph shows the same channels get_entity's linkedChannels
+            // does (which hits /channels → channelVisibilityWhere). Owner-pinning
+            // here made a workspace member see the channel in the IS tool but not
+            // in the graph.
+            channelVisibilityWhere(ctx.userId)
           ),
           orderBy: (ch, { desc }) => [desc(ch.createdAt)],
           limit: input.limit,
@@ -862,7 +869,7 @@ export const relationsRouter = router({
         // entity as the subject spine. Uses idx_focus_sessions_subject_entity_id.
         db.query.focusSessions.findMany({
           where: and(
-            eq(focusSessions.subjectEntityId, input.entityId as any),
+            eq(focusSessions.subjectEntityId, input.entityId),
             eq(focusSessions.userId, ctx.userId)
           ),
           orderBy: (fs, { desc }) => [desc(fs.startedAt)],
@@ -922,7 +929,6 @@ export const relationsRouter = router({
         /** For context_channel: the channel title. */
         channelTitle?: string | null;
         /** For focus_session: the session goal and lifecycle state. */
-        focusSessionId?: string;
         focusSessionGoal?: string;
         focusSessionStatus?: string;
         createdAt?: Date | null;
@@ -996,7 +1002,6 @@ export const relationsRouter = router({
           label: fs.goal,
           direction: "incoming",
           source: "focus_session",
-          focusSessionId: fs.id,
           focusSessionGoal: fs.goal,
           focusSessionStatus: fs.status,
           createdAt: fs.createdAt,

@@ -505,12 +505,7 @@ async function listChannelsWithFlags(params: {
     }
   >
 > {
-  // A channel is accessible when the caller owns it, is an explicit member, OR
-  // it is a SHARED-type channel (external/agent_collab/group) in a workspace the
-  // caller can access — the single canonical channel-visibility predicate (also
-  // the registered `custom` access rule for `channels`). This is what makes a
-  // client's external channel visible to every workspace member, while private
-  // threads / personal channels stay owner-or-member only.
+  // Canonical channel visibility — see utils/channel-visibility.ts.
   const accessPredicate = channelVisibilityWhere(params.userId);
   const conditions: any[] = [accessPredicate];
 
