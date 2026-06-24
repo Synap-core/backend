@@ -11,8 +11,9 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const REST_DIR = __dirname; // runs from rest/
+const REST_DIR = __dirname;
 const INDEX_FILE = join(REST_DIR, "index.ts");
+const WIRING_FILE = join(REST_DIR, "..", "hub-protocol-rest.ts");
 
 if (!existsSync(INDEX_FILE)) {
   console.error("ERROR: index.ts not found at", INDEX_FILE);
@@ -85,6 +86,19 @@ for (const reg of registerExports) {
   }
 }
 
+// ---- Cross-reference: register export → wired (imported/called) in hub-protocol-rest.ts? ----
+const wiringContent = existsSync(WIRING_FILE)
+  ? readFileSync(WIRING_FILE, "utf-8")
+  : "";
+const unwiredExports = [];
+if (wiringContent) {
+  for (const reg of registerExports) {
+    if (!wiringContent.includes(reg)) {
+      unwiredExports.push(reg);
+    }
+  }
+}
+
 // ---- Report ----
 let exitCode = 0;
 
@@ -110,9 +124,22 @@ if (extraExports.length > 0) {
   console.error();
 }
 
+if (unwiredExports.length > 0) {
+  exitCode = 1;
+  console.error(
+    `✗ Found ${unwiredExports.length} register export(s) not imported/called in hub-protocol-rest.ts:\n`
+  );
+  for (const reg of unwiredExports) {
+    console.error(`  ${reg} — not referenced in hub-protocol-rest.ts`);
+  }
+  console.error(
+    "\nImport and call it in hub-protocol-rest.ts, or remove the export from index.ts.\n"
+  );
+}
+
 if (exitCode === 0) {
   console.log(
-    `✓ All ${routeFiles.size} route files match ${registerExports.size} register exports`
+    `✓ ${routeFiles.size} route files, ${registerExports.size} exports, all wired in hub-protocol-rest.ts`
   );
 }
 process.exit(exitCode);
