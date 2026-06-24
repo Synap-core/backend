@@ -262,30 +262,21 @@ export async function getCaller(
     sessionId?: string | null;
   }
 ): Promise<HubProtocolCaller> {
-  // SECURITY KEYSTONE: the acting identity is the authenticated owner resolved by
-  // the auth middleware (agent-key → linkedUserId, sub-token → mapped user, Kratos
-  // → identity). EXCEPTION — service/infra keys (apiKeyId set, e.g. the
-  // Intelligence Service reading on behalf of an operator) MAY act as an explicit
-  // options.userId: the SAME delegation `resolveActingContext` already grants hub
-  // WRITES (its `isServiceKey ? body.userId : authUserId` rule). Without this, a
-  // system-owned service key keeps ctx.userId="system" and every ctx.userId-scoped
-  // read (typesense search, etc.) returns NOTHING for the operator's data — the
-  // entity-list reads avoid this only because they pass an explicit path userId.
-  // Non-service callers (Kratos session, agent key bound to its own user) NEVER
-  // override — a mismatched userId is ignored (the original keystone protection
-  // against one user's key acting as another user).
-  const authUserId = c.get("userId") as string;
-  const isServiceKey = !!c.get("apiKeyId");
-  let userId = authUserId;
-  if (options?.userId && options.userId !== authUserId) {
-    if (isServiceKey) {
-      userId = options.userId;
-    } else {
-      logger.warn(
-        { passedUserId: options.userId, resolvedUserId: authUserId },
-        "getCaller: ignoring caller-supplied userId; acting as the resolved owner"
-      );
-    }
+  // SECURITY KEYSTONE: the acting identity is ALWAYS the authenticated owner
+  // resolved by the auth middleware. For the Intelligence Service this is the
+  // OPERATOR — its `is_internal` key + `X-Delegated-Operator-Id` header is remapped
+  // to the operator's userId in the auth middleware (hub-protocol-rest.ts), so
+  // `c.get("userId")` already IS the operator floor here; no per-route delegation
+  // is needed. A caller-supplied options.userId is IGNORED — honoring it would let
+  // a hub key act as (and read/write the data of) another user. We don't THROW on a
+  // mismatch (a redundant/legacy userId in the body shouldn't break first-party
+  // tools like the CLI) — we simply never honor it and log the discrepancy.
+  const userId = c.get("userId") as string;
+  if (options?.userId && options.userId !== userId) {
+    logger.warn(
+      { passedUserId: options.userId, resolvedUserId: userId },
+      "getCaller: ignoring caller-supplied userId; acting as the resolved owner"
+    );
   }
   const scopes = c.get("scopes") as string[];
   const ctx = await createHubProtocolCallerContext(
