@@ -339,7 +339,16 @@ app.use("/*", async (c, next) => {
       const op = c.req.header("x-delegated-operator-id");
       if (op) {
         c.set("userId", op); // operator owns/sees the entities (data floor)
-        c.set("agentUserId", keyRecord.userId); // IS performed the action → proposals
+        // Attribute writes to the key owner ONLY if it's a real agent user. A
+        // self-hosted IS key is owned by the "system" sentinel (no users row,
+        // not userType='agent'), and setting it here made every write that
+        // didn't carry its own body.agentUserId 400 ("invalid agentUserId").
+        // Skip it for the sentinel: governed IS writes pass a real agentUserId
+        // in the body (the acting agent); a write that omits it then falls back
+        // to an operator-direct write, not the rejected "system".
+        if (keyRecord.userId && keyRecord.userId !== "system") {
+          c.set("agentUserId", keyRecord.userId); // IS performed the action → proposals
+        }
         c.set("linkedUserId", op);
       }
     }

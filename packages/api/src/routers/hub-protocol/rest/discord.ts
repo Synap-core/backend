@@ -130,6 +130,12 @@ export function registerDiscordRoutes(app: HubHono): void {
     // created under). This is a READ-ONLY resolve — never auto-create here:
     // unlinked users keep the operator identity and get a `needsConnect` hint.
     const callerKeyId = c.get("apiKeyId") as string | undefined;
+    // The acting AGENT (the bridge key's agent-user, e.g. the Discord agent) — a
+    // real userType='agent' member. Writes this turn produces are attributed to
+    // it so proposals are valid + governed. The IS service identity
+    // (resolvedService.agentUserId) is "system" on self-hosted pods, which is NOT
+    // an agent user and makes every write 400 (resolveActorId rejects it).
+    const callerAgentUserId = c.get("agentUserId") as string | undefined;
     let actingUserId = userId; // identity the IS turn runs as
     let needsConnect = false;
     if (callerKeyId) {
@@ -235,7 +241,7 @@ export function registerDiscordRoutes(app: HubHono): void {
             agentId,
             agentType: "meta",
             workspaceId,
-            agentUserId: resolvedService.agentUserId,
+            agentUserId: callerAgentUserId ?? resolvedService.agentUserId,
             ...getPodCallback(),
             channelKind: "pm",
             // Client-aware: when this Discord channel is bound to a client entity
