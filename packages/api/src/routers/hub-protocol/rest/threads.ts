@@ -642,6 +642,7 @@ export function registerThreadsRoutes(app: HubHono): void {
           userId: messages.userId,
           timestamp: messages.timestamp,
           sessionId: messages.sessionId,
+          authorType: messages.authorType,
           metadata: messages.metadata,
         })
         .from(messages)

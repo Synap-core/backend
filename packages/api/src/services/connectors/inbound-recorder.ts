@@ -40,6 +40,7 @@ import {
   MessageCategory,
 } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
+import { resolveExistingExternalUser } from "../external-user-mapping.js";
 
 const logger = createLogger({ module: "inbound-recorder" });
 
@@ -214,6 +215,19 @@ export interface RecordInboundMessageArgs {
   idempotencySeed: string;
   /** Message timestamp; defaults to now. */
   sentAt?: string | Date;
+  /**
+   * External user id of the message sender (e.g. Discord user id).
+   * When provided together with `senderKeyId`, the recorder resolves whether
+   * this sender is linked to a Synap user and stores the result in
+   * `metadata.sender`. Best-effort: a lookup failure never blocks recording.
+   */
+  senderExternalId?: string;
+  /**
+   * The operator API key id used to authenticate this inbound delivery.
+   * Paired with `senderExternalId` to look up the `api_key_external_users`
+   * mapping table.
+   */
+  senderKeyId?: string;
 }
 
 export interface RecordInboundMessageResult {
@@ -272,6 +286,28 @@ export async function recordInboundMessage(
     return { channelId, contextObjectId, inboundHash, recorded: false };
   }
 
+  // Resolve sender attribution (best-effort — never blocks recording).
+  let senderMetadata: Record<string, unknown> | undefined;
+  if (args.senderExternalId && args.senderKeyId) {
+    try {
+      const link = await resolveExistingExternalUser(
+        args.senderKeyId,
+        args.senderExternalId
+      );
+      senderMetadata = {
+        name: args.participant ?? args.senderExternalId,
+        externalId: args.senderExternalId,
+        externalSource: args.provider,
+        synapUserId: link.linked ? (link.synapUserId ?? null) : null,
+      };
+    } catch (err) {
+      logger.warn(
+        { err, senderExternalId: args.senderExternalId },
+        "inbound-recorder: sender resolution failed — recording without attribution"
+      );
+    }
+  }
+
   await db
     .insert(messages)
     .values({
@@ -284,6 +320,13 @@ export async function recordInboundMessage(
       content: args.text,
       hash: inboundHash,
       timestamp: sentAt,
+      ...(senderMetadata
+        ? {
+            metadata: {
+              sender: senderMetadata,
+            } as (typeof messages.$inferInsert)["metadata"],
+          }
+        : {}),
     })
     .onConflictDoNothing(); // idempotent — webhook may fire more than once
 

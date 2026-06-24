@@ -32,6 +32,7 @@ export const MessageSchema = z
     userId: z.string(),
     timestamp: z.union([z.string(), z.date()]).optional(),
     sessionId: z.string().nullable().optional(),
+    authorType: z.string().nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).nullable().optional(),
   })
   .openapi("Message");

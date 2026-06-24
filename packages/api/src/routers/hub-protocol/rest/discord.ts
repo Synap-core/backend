@@ -172,6 +172,10 @@ export function registerDiscordRoutes(app: HubHono): void {
           title: `Discord · ${body.discordUsername}`,
           // Discord exposes a native message id — deterministic over (channel, id).
           idempotencySeed: `${body.discordChannelId}:${body.messageId}`,
+          // Attribution: resolve whether this Discord user is linked to a Synap
+          // user so the message row carries a sender block in metadata.
+          senderExternalId: body.discordUserId,
+          senderKeyId: callerKeyId,
         });
 
       if (!recorded) {
