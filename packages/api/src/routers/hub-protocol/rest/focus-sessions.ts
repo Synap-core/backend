@@ -219,6 +219,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       ? (statusRaw as (typeof validStatuses)[number])
       : "all";
 
+    // Optional: narrow to sessions ABOUT a specific subject entity (the
+    // subject-spine anchor). Lets a caller fetch "the sessions linked to this
+    // client/person/deal" — the session half of an entity's neighborhood.
+    const subjectEntityId = c.req.query("subjectEntityId");
+
     try {
       const conditions = [
         eq(focusSessions.workspaceId, acting.workspaceId),
@@ -226,6 +231,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       ];
       if (status !== "all") {
         conditions.push(eq(focusSessions.status, status));
+      }
+      if (subjectEntityId) {
+        conditions.push(eq(focusSessions.subjectEntityId, subjectEntityId));
       }
 
       const rows = await db
