@@ -94,7 +94,7 @@ export interface GraphNeighbor extends GraphNode {
   edgeType: string;
   direction: "outgoing" | "incoming" | "structural";
   /** Which substrate the edge came from — glass-box provenance. */
-  via: "links" | "relations" | "property" | "channel";
+  via: "links" | "relations" | "property" | "channel" | "session";
 }
 
 /** "Fetch X, get X + everything it's linked to, typed." */
@@ -255,8 +255,12 @@ export async function getLinkNeighbors(
  * Map the ENTITY-DATA graph (`relations.getConnections` Connection rows) into the
  * uniform neighbour shape, so the route layer can fold it into the envelope. Pure
  * — the caller already fetched the connections (it holds the tRPC ctx). The
- * `source` discriminator becomes our `via`: graph→relations, property→property,
- * thread→channel.
+ * `source` discriminator becomes our `via`:
+ *   graph            → relations
+ *   property         → property
+ *   thread           → channel  (channel_context_items: messages that touched entity)
+ *   context_channel  → channel  (channels.contextObjectId: channel opened ON entity)
+ *   focus_session    → session  (focus_sessions.subjectEntityId: session about entity)
  */
 export function connectionsToNeighbors(
   connections: {
@@ -268,10 +272,19 @@ export function connectionsToNeighbors(
     } | null;
     label: string;
     direction: "outgoing" | "incoming" | "structural";
-    source: "graph" | "property" | "thread";
+    source:
+      | "graph"
+      | "property"
+      | "thread"
+      | "context_channel"
+      | "focus_session";
     relationType?: string;
     propertySlug?: string;
     channelRelationshipType?: string;
+    channelTitle?: string | null;
+    focusSessionId?: string;
+    focusSessionGoal?: string;
+    focusSessionStatus?: string;
   }[]
 ): GraphNeighbor[] {
   return connections.map((c) => ({
@@ -288,7 +301,9 @@ export function connectionsToNeighbors(
         ? "relations"
         : c.source === "property"
           ? "property"
-          : "channel",
+          : c.source === "focus_session"
+            ? "session"
+            : "channel",
   }));
 }
 

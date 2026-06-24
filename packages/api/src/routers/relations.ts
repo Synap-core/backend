@@ -59,6 +59,8 @@ import {
   propertyDefs,
   channelContextItems,
   ChannelContextObjectType,
+  channels,
+  focusSessions,
   projectMembers,
 } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
@@ -787,7 +789,13 @@ export const relationsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const [graphRelations, propertyLinks, channelLinks] = await Promise.all([
+      const [
+        graphRelations,
+        propertyLinks,
+        channelLinks,
+        contextChannels,
+        subjectSessions,
+      ] = await Promise.all([
         // ── 1. Semantic graph relations ─────────────────────────────────────
         db.query.relations.findMany({
           // Owner-scoped by ctx.userId. The agent-key identity remap (hub/MCP)
@@ -833,6 +841,33 @@ export const relationsRouter = router({
           orderBy: (ci, { desc }) => [desc(ci.createdAt)],
           limit: input.limit,
         }),
+
+        // ── 4. Channels whose context IS this entity ─────────────────────────
+        // channels.contextObjectId = entityId: the channel opened ON the entity
+        // detail page (contextObjectType='entity'). Distinct from
+        // channel_context_items (messages that touched the entity). Uses the
+        // channels_context_idx index on (contextObjectType, contextObjectId).
+        db.query.channels.findMany({
+          where: and(
+            eq(channels.contextObjectType, "entity"),
+            eq(channels.contextObjectId, input.entityId as any),
+            eq(channels.userId, ctx.userId)
+          ),
+          orderBy: (ch, { desc }) => [desc(ch.createdAt)],
+          limit: input.limit,
+        }),
+
+        // ── 5. Focus sessions anchored to this entity ────────────────────────
+        // focus_sessions.subjectEntityId = entityId: sessions started with this
+        // entity as the subject spine. Uses idx_focus_sessions_subject_entity_id.
+        db.query.focusSessions.findMany({
+          where: and(
+            eq(focusSessions.subjectEntityId, input.entityId as any),
+            eq(focusSessions.userId, ctx.userId)
+          ),
+          orderBy: (fs, { desc }) => [desc(fs.startedAt)],
+          limit: input.limit,
+        }),
       ]);
 
       // Collect all entity IDs we need to resolve
@@ -871,7 +906,12 @@ export const relationsRouter = router({
         entity: typeof entities.$inferSelect | null;
         label: string;
         direction: "outgoing" | "incoming" | "structural";
-        source: "graph" | "property" | "thread";
+        source:
+          | "graph"
+          | "property"
+          | "thread"
+          | "context_channel"
+          | "focus_session";
         relationType?: string;
         /** Slug of the property that holds the link (e.g. "assignee", "project") */
         propertySlug?: string;
@@ -879,6 +919,12 @@ export const relationsRouter = router({
         propertyLabel?: string;
         channelId?: string;
         channelRelationshipType?: string;
+        /** For context_channel: the channel title. */
+        channelTitle?: string | null;
+        /** For focus_session: the session goal and lifecycle state. */
+        focusSessionId?: string;
+        focusSessionGoal?: string;
+        focusSessionStatus?: string;
         createdAt?: Date | null;
       };
 
@@ -930,6 +976,33 @@ export const relationsRouter = router({
         });
       }
 
+      for (const ch of contextChannels) {
+        connections.push({
+          entityId: ch.id,
+          entity: null,
+          label: ch.title ?? ch.channelType,
+          direction: "incoming",
+          source: "context_channel",
+          channelId: ch.id,
+          channelTitle: ch.title,
+          createdAt: ch.createdAt,
+        });
+      }
+
+      for (const fs of subjectSessions) {
+        connections.push({
+          entityId: fs.id,
+          entity: null,
+          label: fs.goal,
+          direction: "incoming",
+          source: "focus_session",
+          focusSessionId: fs.id,
+          focusSessionGoal: fs.goal,
+          focusSessionStatus: fs.status,
+          createdAt: fs.createdAt,
+        });
+      }
+
       return {
         connections,
         counts: {
@@ -937,6 +1010,8 @@ export const relationsRouter = router({
           graph: graphRelations.length,
           structural: propertyLinks.length,
           threads: channelLinks.length,
+          contextChannels: contextChannels.length,
+          focusSessions: subjectSessions.length,
         },
       };
     }),
