@@ -635,7 +635,9 @@ export function registerSetupRoutes(app: HubHono): void {
           .update(apiKeys)
           .set({ isActive: false })
           .where(eq(apiKeys.id, apiKey.id));
-        const origin = new URL(c.req.url).origin;
+        // Reverse-proxy-safe: prefer the pod's PUBLIC_URL, fall back to request
+        // origin. c.req.url picks up the internal (often http://) URL behind nginx.
+        const origin = process.env.PUBLIC_URL || new URL(c.req.url).origin;
         const reviewUrl = `${origin}/api/hub/setup/agent/pending/${apiKey.id}/review?agentType=${encodeURIComponent(agentType)}`;
         return c.json({
           agentUserId,
