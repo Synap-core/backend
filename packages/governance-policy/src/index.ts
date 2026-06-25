@@ -86,6 +86,64 @@ export const DESTRUCTIVE_ACTIONS: readonly string[] = [
 ];
 
 /**
+ * Named governance presets — choose one when provisioning an external agent.
+ * Applied to workspace settings.aiGovernance at bridge-setup time.
+ *
+ * SAFE:   everything is proposed — human gates every mutation.
+ * NORMAL: creates auto-execute, updates & deletes are proposed (recommended).
+ * CRAZY:  everything auto-executes — revert is the safety net (needs revert-without-proposal).
+ */
+export const GOVERNANCE_MODES = {
+  safe: {
+    label: "Safe — every change requires your approval",
+    autoApproveFor: [
+      "search.*",
+      "memory.recall",
+      "entity.read",
+      "document.read",
+      "context.*",
+      "filesystem.read",
+      "bento.arrange",
+    ],
+    writesRequireProposal: true,
+  },
+  normal: {
+    label:
+      "Normal — creates are instant, updates & deletes need approval (recommended)",
+    autoApproveFor: [
+      "search.*",
+      "memory.recall",
+      "entity.read",
+      "document.read",
+      "context.*",
+      "filesystem.read",
+      "bento.arrange",
+      "entity.create",
+      "document.create",
+      "relation.create",
+      "view.create",
+      "profile.create",
+      "property_def.create",
+      "channel.create",
+      "playbook.read",
+      "tool.read",
+      "link.read",
+      "capability.read",
+      "terminal.read_logs",
+      "filesystem.write_workspace",
+    ],
+    writesRequireProposal: false,
+  },
+  crazy: {
+    label: "Crazy — everything is instant; revert in Studio if needed",
+    autoApproveFor: ["*"],
+    writesRequireProposal: false,
+  },
+} as const;
+
+export type GovernanceMode = keyof typeof GOVERNANCE_MODES;
+
+/**
  * Administrative actions that ALWAYS require a proposal, regardless of
  * auto-approve overrides, the writesRequireProposal flag, or the whitelist.
  * Even a twin agent (writesRequireProposal=false) must propose these.
