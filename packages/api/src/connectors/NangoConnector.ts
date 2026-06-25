@@ -109,7 +109,7 @@ export class NangoConnector implements SyncConnector {
 
   async createSession(
     userId: string,
-    provider: string,
+    _provider: string,
     _workspaceId: string
   ): Promise<SyncConnectorSession> {
     const res = await fetch(`${this.host}/connect/sessions`, {
