@@ -9,8 +9,7 @@
 
 import { createRoute, z } from "@hono/zod-openapi";
 import { db, workspaceMembers, eq, and } from "@synap/database";
-import { syncConnectorRegistry } from "../../../connectors/index.js";
-import type { NangoConnector } from "../../../connectors/NangoConnector.js";
+import { resolveNangoConnector } from "../../../connectors/index.js";
 import { triggerProviderAction } from "../../../connectors/external-dispatch.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -64,9 +63,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         );
       }
       // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
-      const connector = syncConnectorRegistry.get("nango") as
-        | NangoConnector
-        | undefined;
+      const connector = await resolveNangoConnector();
       if (!connector || !connector.isConfigured()) {
         return c.json({ error: "Nango not configured" }, 503);
       }
@@ -180,9 +177,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
           403
         );
       }
-      const connector = syncConnectorRegistry.get("nango") as
-        | NangoConnector
-        | undefined;
+      const connector = await resolveNangoConnector();
       if (!connector || !connector.isConfigured()) {
         return c.json({ error: "Nango not configured" }, 503);
       }
@@ -364,9 +359,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         );
       }
       // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
-      const connector = syncConnectorRegistry.get("nango") as
-        | NangoConnector
-        | undefined;
+      const connector = await resolveNangoConnector();
       if (!connector || !connector.isConfigured()) {
         return c.json({ error: "Nango not configured" }, 503);
       }
@@ -511,9 +504,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         );
       }
       // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
-      const connector = syncConnectorRegistry.get("nango") as
-        | NangoConnector
-        | undefined;
+      const connector = await resolveNangoConnector();
       if (!connector || !connector.isConfigured()) {
         return c.json({ error: "Nango not configured" }, 503);
       }
@@ -585,9 +576,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         );
       }
       // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
-      const connector = syncConnectorRegistry.get("nango") as
-        | NangoConnector
-        | undefined;
+      const connector = await resolveNangoConnector();
       if (!connector || !connector.isConfigured()) {
         return c.json({ error: "Nango not configured" }, 503);
       }
@@ -667,9 +656,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
       }
 
       // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
-      const connector = syncConnectorRegistry.get("nango") as
-        | NangoConnector
-        | undefined;
+      const connector = await resolveNangoConnector();
       if (!connector || !connector.isConfigured()) {
         return c.json({ error: "Nango not configured" }, 503);
       }
