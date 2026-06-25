@@ -761,7 +761,8 @@ export const skillsRouter = router({
 
       const skillId = randomUUID();
 
-      // Store skill — instructions go in `code` field; kind='instruction' tells hub to inject into prompt
+      // Store skill — instruction content goes in `body` (the canonical doc column).
+      // `code` is the executable JS/TS column; instruction skills have none.
       const [skill] = await db
         .insert(skills)
         .values({
@@ -772,7 +773,8 @@ export const skillsRouter = router({
           scope: "pod",
           name: parsed.name,
           description: parsed.description,
-          code: parsed.instructions, // instructions text, not executable code
+          body: parsed.instructions,
+          code: null,
           category: "instruction",
           executionMode: "sync",
           status: "active",
