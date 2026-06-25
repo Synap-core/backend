@@ -236,6 +236,26 @@ export function registerConnectorsRoutes(app: HubHono): void {
             )
           : undefined;
 
+        // When Nango is configured but no integrations are declared (self-hosted
+        // Nango v0.70+ where the environment API key can't list admin-created
+        // integrations), skip the provider-required dead-end and go straight to
+        // a Connect session. The Nango Connect UI handles integration discovery.
+        if (integrations.length === 0) {
+          const session = await connector.createSession(
+            userId,
+            wanted || "*",
+            workspaceId ?? ""
+          );
+          return c.json(
+            {
+              status: "setup_required" as const,
+              redirectUrl: session.redirectUrl,
+              sessionToken: session.sessionToken,
+            },
+            200
+          );
+        }
+
         if (!match) {
           const connSet = new Set(connections.map((conn) => conn.provider));
           return c.json(
