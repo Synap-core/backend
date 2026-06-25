@@ -117,8 +117,11 @@ export class NangoConnector implements SyncConnector {
       headers: this.authHeaders(),
       body: JSON.stringify({
         end_user: { id: userId, display_name: userId },
-        // Omit allowed_integrations to show all configured integrations
-        ...(provider !== "*" ? { allowed_integrations: [provider] } : {}),
+        // Always show ALL configured integrations — Nango's allowed_integrations
+        // filter uses an internal mapping that doesn't reliably match provider
+        // keys from the dashboard. The Connect UI already shows the user which
+        // integrations are available; filtering here adds a failure mode with
+        // no upside (user can pick in the UI).
       }),
     });
 
