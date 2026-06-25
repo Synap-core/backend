@@ -23,6 +23,8 @@ export interface AgentMetadata {
   isPersonalAgent?: boolean;
   parentAgentId?: string;
   writesRequireProposal?: boolean;
+  /** Per-agent auto-approve list — overrides the workspace default when set. */
+  autoApproveFor?: string[];
   activePersonality?: string;
 }
 

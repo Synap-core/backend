@@ -560,7 +560,8 @@ export async function checkPermissionOrPropose(
           agentCapabilities: agentMetadata?.capabilities,
           writesRequireProposal: agentMetadata?.writesRequireProposal === true,
           governanceMode: settings?.governanceMode,
-          autoApproveFor: explicitAutoApproveFor,
+          autoApproveFor:
+            agentMetadata?.autoApproveFor ?? explicitAutoApproveFor,
           isAgentOwnedWorkspace,
           channelCapabilities,
           subjectProfileSlug,

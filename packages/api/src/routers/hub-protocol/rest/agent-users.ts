@@ -190,4 +190,77 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       );
     }
   });
+
+  /**
+   * PATCH /agent-users/:agentUserId/governance
+   *
+   * Set per-agent governance — autoApproveFor + writesRequireProposal.
+   * Only the agent's creator (or an admin) can set this.
+   */
+  app.patch("/agent-users/:agentUserId/governance", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const agentUserId = c.req.param("agentUserId");
+    if (!agentUserId) return c.json({ error: "agentUserId is required" }, 400);
+
+    const body = (await c.req.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    if (!body?.autoApproveFor || !Array.isArray(body.autoApproveFor)) {
+      return c.json({ error: "autoApproveFor (string[]) is required" }, 400);
+    }
+
+    try {
+      const { users } = await import("@synap/database/schema");
+      const [agentUser] = await db
+        .select({ id: users.id, agentMetadata: users.agentMetadata })
+        .from(users)
+        .where(and(eq(users.id, agentUserId), eq(users.userType, "agent")))
+        .limit(1);
+
+      if (!agentUser) {
+        return c.json({ error: "Agent not found" }, 404);
+      }
+
+      const existingMeta = (agentUser.agentMetadata ?? {}) as Record<
+        string,
+        unknown
+      >;
+      const merged = {
+        ...existingMeta,
+        autoApproveFor: body.autoApproveFor,
+        writesRequireProposal: body.writesRequireProposal ?? false,
+        // Remove null/undefined keys so JSONB stays clean
+        ...(body.writesRequireProposal === undefined
+          ? {}
+          : { writesRequireProposal: body.writesRequireProposal }),
+      };
+
+      await db
+        .update(users)
+        .set({ agentMetadata: merged as never })
+        .where(eq(users.id, agentUserId));
+
+      return c.json({
+        ok: true,
+        agentUserId,
+        autoApproveFor: merged.autoApproveFor,
+        writesRequireProposal: merged.writesRequireProposal,
+      });
+    } catch (err) {
+      logger.error(
+        { err, agentUserId },
+        "PATCH /agent-users/:agentUserId/governance failed"
+      );
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
 }
