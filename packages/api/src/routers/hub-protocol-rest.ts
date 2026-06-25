@@ -204,7 +204,12 @@ app.use("/*", async (c, next) => {
   ];
   if (
     skipAuthPaths.some((p) => reqPath === p || reqPath.endsWith(p)) ||
-    reqPath.startsWith("/setup/agent/pending/")
+    // The pending-agent review/approve/reject subtree is token-protected (the
+    // secret keyId IS the capability) and opened in a browser with no auth
+    // header. `c.req.path` carries the mount prefix (/api/hub or
+    // /api/hub-protocol), so match by substring, NOT startsWith — a startsWith
+    // against the unprefixed path never matches the mounted request.
+    reqPath.includes("/setup/agent/pending/")
   ) {
     return next();
   }
