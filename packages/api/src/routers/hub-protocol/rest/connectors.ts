@@ -366,13 +366,12 @@ export function registerConnectorsRoutes(app: HubHono): void {
       const callerUserId = c.get("userId") as string;
       const { providerId, workspaceId, onBehalfOfUserId } = c.req.valid("json");
 
-      // Resolve WHO the connection binds to. Default = the caller (operator for
-      // the bridge key) — behaviour unchanged when onBehalfOfUserId is absent.
+      // Resolve WHO the connection binds to — USER-scoped, not pod-scoped.
+      // A connection belongs to the person, available on all their pods.
+      // Default = the caller (operator for the bridge key).
       let userId = callerUserId;
       if (onBehalfOfUserId && onBehalfOfUserId !== callerUserId) {
         // ── SECURITY GATE (mirrors discord-identity.ts's link gate) ──────────
-        // Bind the acting identity + workspace, then allow on-behalf-of only if
-        // the caller is owner/admin of that workspace OR is acting as themself.
         const acting = await resolveActingContext(c, { workspaceId });
         if (!acting.ok) return c.json({ error: acting.error }, acting.status);
         const isPrivileged = acting.role === "owner" || acting.role === "admin";
@@ -395,8 +394,6 @@ export function registerConnectorsRoutes(app: HubHono): void {
             403
           );
         }
-        // The target MUST be a member of the acting workspace — never bind a
-        // connection to an arbitrary pod user the caller can't actually manage.
         const membership = await db.query.workspaceMembers.findFirst({
           where: and(
             eq(workspaceMembers.workspaceId, acting.workspaceId),
@@ -411,6 +408,57 @@ export function registerConnectorsRoutes(app: HubHono): void {
           );
         }
         userId = onBehalfOfUserId;
+      }
+
+      // ── CP Gateway proxy (user-scoped, centralized Nango) ───────────────────
+      // When a Control Plane is configured, route session creation through the
+      // CP rather than calling Nango directly. The CP authenticates the calling
+      // pod, scopes the connection per-user (not per-pod), and pre-creates
+      // `connector_connections` rows for tracking. Self-hosted pods without CP
+      // access still call Nango directly (the env var fallback below).
+      const cpUrl = process.env.CP_API_URL || process.env.CONTROL_PLANE_URL;
+      if (cpUrl) {
+        try {
+          const body: Record<string, unknown> = { userId };
+          if (providerId) body.providerId = providerId;
+          if (workspaceId) body.workspaceId = workspaceId;
+          const podId = process.env.POD_ID || process.env.POD_URL || "";
+          if (podId) body.podId = podId;
+          const cpRes = await fetch(
+            `${cpUrl.replace(/\/$/, "")}/connectors/session`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${process.env.HUB_PROTOCOL_API_KEY || ""}`,
+              },
+              body: JSON.stringify(body),
+            }
+          );
+          const cpJson = (await cpRes.json().catch(() => ({}))) as Record<
+            string,
+            unknown
+          >;
+          if (cpRes.ok && cpJson.redirectUrl) {
+            return c.json(
+              {
+                redirectUrl: cpJson.redirectUrl,
+                sessionToken: (cpJson.sessionToken || "") as string,
+              },
+              200
+            );
+          }
+          // CP unavailable → fall through to direct Nango
+          logger.warn(
+            { status: cpRes.status, body: cpJson },
+            "CP gateway session failed — falling back to direct Nango"
+          );
+        } catch (err) {
+          logger.warn(
+            { err },
+            "CP gateway session unreachable — falling back to direct Nango"
+          );
+        }
       }
 
       const effectiveProvider = providerId ?? "*";
