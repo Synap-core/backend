@@ -30,7 +30,7 @@ import {
 } from "@synap/database/schema";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { getMessagingConnector } from "./index.js";
-import { syncConnectorRegistry } from "./SyncConnector.js";
+import { resolveNangoConnector } from "./index.js";
 import type { NangoConnector } from "./NangoConnector.js";
 import { resolveVaultSecret } from "../utils/vault-resolver.js";
 import { resolveCapabilityGrant } from "@synap/database";
@@ -44,11 +44,9 @@ import { createPendingProposal } from "../utils/permission-check.js";
  * Single lookup shared by every Nango-scheme handler so the registry key is
  * not hardcoded in multiple places.
  */
-function getNangoConnector(): NangoConnector | undefined {
+async function getNangoConnector(): Promise<NangoConnector | undefined> {
   // TODO(W3/W4): becomes a capability cast (Pushable — proxyRequest/triggerAction).
-  const connector = syncConnectorRegistry.get("nango") as
-    | NangoConnector
-    | undefined;
+  const connector = await resolveNangoConnector();
   return connector && connector.isConfigured() ? connector : undefined;
 }
 
@@ -550,7 +548,7 @@ const SCHEME_ALLOWED_KINDS: Record<string, ReadonlyArray<string>> = {
 const nangoHandler: SchemeHandler = async ({ input, tool }) => {
   const { userId, method, path, body, accountHint } = input;
 
-  const connector = getNangoConnector();
+  const connector = await getNangoConnector();
   if (!connector) {
     return {
       success: false,
@@ -699,7 +697,7 @@ async function vaultDelegatedHandler(ctx: {
   // the Nango proxy (same logic as the nangoHandler, but the providerConfigKey
   // comes from the integration's backendConfig, not the tool config).
   if (prov.backendType === "nango") {
-    const connector = getNangoConnector();
+    const connector = await getNangoConnector();
     if (!connector) {
       return {
         success: false,
