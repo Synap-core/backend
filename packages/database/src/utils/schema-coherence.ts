@@ -530,6 +530,12 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "archived_at",
     addedBy: "0020_workspaces_archived_at.sql",
   },
+  // workspaces — domain self-description (0152)
+  {
+    table: "workspaces",
+    column: "domain",
+    addedBy: "0152_workspace_domain.sql",
+  },
 
   // messaging_accounts — provider-agnostic messaging connector (0022)
   {

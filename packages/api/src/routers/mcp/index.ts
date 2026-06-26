@@ -42,7 +42,7 @@ Two reflexes, on every session:
 - BEFORE any non-trivial task, or before answering anything about the user's own world, call \`synap_ask\` to recall what the pod already knows. Prefer it over your own assumptions. Also ask before creating, to avoid duplicates.
 - AFTER you learn something durable (a fact, a decision, a new person/company/task, a stated preference), call \`synap_capture\` to write it back. Don't wait to be asked — this is how the second brain grows.
 
-Use \`synap_orient\` once to see the available workspaces and entity types. Writes are governed: a 'proposed' response is normal (awaiting the user's review), never an error.`;
+Use \`synap_orient\` once to see the available workspaces, projects, and entity types. Writes are governed: a 'proposed' response is normal (awaiting the user's review), never an error.`;
 
 export function createMCPServer(
   defaultWorkspaceId?: string,

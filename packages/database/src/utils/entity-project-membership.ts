@@ -7,9 +7,11 @@
  * the single place that WRITES it, so the read seam is never hollow.
  *
  * Why a relation, not a column: mirrors how `workspace_id` is the entity's scope —
- * but because a project is itself an entity and membership is many-to-one/graph
+ * but because project membership is many-to-one/graph
  * (hierarchy, multi-project, AI-/user-editable), it is stamped as a graph edge
  * here at materialization time rather than as a column on the entity row.
+ * The `target_entity_id` column on the relations table holds `projects.id`
+ * (the project table primary key), NOT an entity id.
  *
  * Idempotent: relies on the partial unique index
  * `relations_belongs_to_project_unique` (migration 0137); `onConflictDoNothing()`

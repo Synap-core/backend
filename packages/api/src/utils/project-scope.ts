@@ -6,7 +6,7 @@
  * scope keyed on the entity graph: an entity is "exposed to" an anchor iff it IS
  * that anchor entity, or it has a **whitelisted exposure edge** pointing at it
  * (source = exposed row, target = anchor entity). Anchor membership lives in the
- * `project_members` table (keyed on the anchor ENTITY id after the 0134 repoint),
+ * `project_members` table (keyed on the project table id after the 0134 repoint),
  * so it is a fast indexed access-join — exactly like `workspace_members` for the
  * workspace axis.
  *

@@ -37,7 +37,7 @@ export const tools = {
             projectId: {
               type: "string",
               description:
-                "Optional: focus recall on a project (its entity id). Narrows to that project's entities; orthogonal to workspaceId. Usually pre-set by the connection's URL, but pass it to scope a single call.",
+                "Optional: scope recall to a project (its projects table id). Narrows results to entities linked to that project. Orthogonal to workspaceId — compose both lenses.",
             },
             limit: {
               type: "number",
@@ -324,10 +324,26 @@ export const tools = {
       {
         name: "synap_orient",
         description:
-          "Bootstrap context for a new session. Returns the user's identity scopes, accessible workspaces, and available profiles. Call this first in every new session before any other tool.",
+          "Returns the user's identity, accessible workspaces, projects, and profiles. Call first in every session.",
         inputSchema: {
           type: "object",
           properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "synap_list_projects",
+        description:
+          "List all projects for the user, optionally scoped to a workspace. Returns name, description, status, and workspaceId. Projects are a cross-cutting dimension, orthogonal to workspaces — compose both lenses.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional: scope to one workspace. Omit for all projects across all workspaces.",
+            },
+          },
           required: [],
         },
       },

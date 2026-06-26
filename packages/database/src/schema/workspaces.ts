@@ -772,6 +772,7 @@ export const workspaces = pgTable("workspaces", {
   // Metadata
   name: text("name").notNull(),
   description: text("description"),
+  domain: text("domain"),
   type: text("type").default("personal").notNull(), // 'personal' | 'team' | 'enterprise'
 
   // Settings (JSONB for flexibility)

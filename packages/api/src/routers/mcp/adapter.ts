@@ -27,6 +27,7 @@ import {
   knowledgeKeysRepository,
   knowledgeRepository,
   messages,
+  projects,
   workspaceMembers,
   workspaces,
 } from "@synap/database";
@@ -496,7 +497,12 @@ export async function executeMCPToolViaHubProtocol(
       const wsList =
         wsIds.length > 0
           ? await db
-              .select({ id: workspaces.id, name: workspaces.name })
+              .select({
+                id: workspaces.id,
+                name: workspaces.name,
+                description: workspaces.description,
+                domain: workspaces.domain,
+              })
               .from(workspaces)
               .where(inArray(workspaces.id, wsIds))
           : [];
@@ -505,16 +511,47 @@ export async function executeMCPToolViaHubProtocol(
       const profiles = firstWsId
         ? await caller.profiles.listProfiles({ userId, workspaceId: firstWsId })
         : [];
+      // Fetch projects for the user
+      const projectRows = await db
+        .select({
+          id: projects.id,
+          name: projects.name,
+          description: projects.description,
+          workspaceId: projects.workspaceId,
+          status: projects.status,
+        })
+        .from(projects)
+        .where(eq(projects.userId, userId));
       return ok({
         me: { userId, scopes: apiKeyScopes },
         workspaces: wsList,
         workspaceCount: wsList.length,
+        projects: projectRows,
+        projectCount: projectRows.length,
         profiles,
         note:
           wsList.length > 1
-            ? `You have ${wsList.length} workspaces. MCP tools auto-scope to all when no workspaceId is given. Pass workspaceId to narrow to one workspace.`
-            : `Single workspace: ${wsList[0]?.name ?? "none"}. All tools default to this workspace.`,
+            ? `You have ${wsList.length} workspaces and ${projectRows.length} projects. Most read tools auto-scope to all your workspaces when no workspaceId is given. Pass workspaceId to narrow to one workspace; pass projectId to narrow entity reads and recall to a project.`
+            : `Single workspace: ${wsList[0]?.name ?? "none"}. ${projectRows.length > 0 ? `${projectRows.length} project(s). ` : ""}Tools default to this workspace. Pass projectId on entity reads/recall to narrow to a project.`,
       });
+    }
+
+    case "synap_list_projects": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      const conditions = [eq(projects.userId, userId)];
+      if (args.workspaceId)
+        conditions.push(eq(projects.workspaceId, args.workspaceId as string));
+      const projectRows = await db
+        .select({
+          id: projects.id,
+          name: projects.name,
+          description: projects.description,
+          status: projects.status,
+          workspaceId: projects.workspaceId,
+        })
+        .from(projects)
+        .where(and(...conditions));
+      return ok(projectRows);
     }
 
     // ── Focus sessions (work tracking) ──────────────────────────────────────

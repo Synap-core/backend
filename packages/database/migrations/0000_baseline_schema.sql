@@ -88,6 +88,8 @@ CREATE INDEX IF NOT EXISTS "idx_workspaces_workspace_type" ON "workspaces" ("wor
 CREATE INDEX IF NOT EXISTS "idx_workspaces_owner_workspace_type" ON "workspaces" ("owner_id", "workspace_type");
 -- Soft-archive support (mirrors 0020_workspaces_archived_at.sql)
 ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "archived_at" timestamp with time zone;
+-- Domain self-description (mirrors 0152_workspace_domain.sql)
+ALTER TABLE "workspaces" ADD COLUMN IF NOT EXISTS "domain" text;
 CREATE INDEX IF NOT EXISTS "workspaces_active_idx"
   ON "workspaces" ("created_at" DESC)
   WHERE "archived_at" IS NULL;
