@@ -22,12 +22,13 @@ import type { getDb } from "../client-pg.js";
 export const BELONGS_TO_PROJECT = "belongs_to_project";
 
 /**
- * Stamp `entity --belongs_to_project--> project`. Safe to call repeatedly and
- * with the same (entity, project) pair — the unique index dedupes.
+ * Stamp `entity --belongs_to_project--> project`. The project is a row in the
+ * `projects` TABLE (NOT an entity). Safe to call repeatedly — the unique index
+ * dedupes.
  *
  * @param db    a drizzle db (or transaction) instance
  * @param args.entityId   the produced/captured/imported entity
- * @param args.projectId  the project ENTITY id (profileSlug='project')
+ * @param args.projectId  the project TABLE row id (projects.id)
  * @param args.userId     owner stamped on the relation row (NOT NULL)
  * @param args.workspaceId the materializing workspace lens, or null for pod-wide
  */

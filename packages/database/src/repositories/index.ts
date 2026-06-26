@@ -32,6 +32,7 @@ export * from "./profile-relation-repository.js";
 export * from "./message-repository.js";
 export * from "./workspace-member-repository.js";
 export * from "./project-member-repository.js";
+export * from "./project-repository.js";
 export * from "./proposal-repository.js";
 export * from "./role-repository.js";
 export * from "./api-key-repository.js";

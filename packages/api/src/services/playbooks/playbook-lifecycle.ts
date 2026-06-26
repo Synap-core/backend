@@ -54,10 +54,10 @@ export interface InstantiateInput {
   agentIds?: string[];
   /**
    * Project this session is scoped to (project-centric-scope Phase 4).
-   * When provided, the session is anchored to a project (entity with
-   * profileSlug='project') and a `session --targets--> project` link is
-   * written. workspaceId is still required for the channel / workspace
-   * membership context even when projectId is set.
+   * When provided, the session is anchored to a project (projects TABLE row,
+   * NOT an entity) and a `session --targets--> project` link is written.
+   * workspaceId is still required for the channel / workspace membership
+   * context even when projectId is set.
    */
   projectId?: string | null;
   /**

@@ -653,15 +653,8 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           description: "Actionable item with status tracking",
         },
       },
-      {
-        slug: "project",
-        displayName: "Project",
-        uiHints: {
-          icon: "folder",
-          color: "#8B5CF6",
-          description: "Group of related work",
-        },
-      },
+      // "project" profile removed — projects are now first-class table rows
+      // (see schema/projects.ts). Migration 0151 handles the cutover.
       {
         slug: "event",
         displayName: "Event",
@@ -825,7 +818,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
     const POD_WIDE_SLUGS = new Set([
       "note",
       "task",
-      "project",
+      // "project" removed — projects are now first-class table rows (0151)
       "event",
       "person",
       "contact",
@@ -934,20 +927,8 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           { slug: "description", required: false, displayOrder: 7 },
         ],
       },
-      {
-        profileSlug: "project",
-        propertySlugs: [
-          { slug: "title", required: true, displayOrder: 0 },
-          {
-            slug: "status",
-            required: false,
-            defaultValue: "todo",
-            displayOrder: 1,
-          },
-          { slug: "tags", required: false, displayOrder: 2 },
-          { slug: "description", required: false, displayOrder: 3 },
-        ],
-      },
+      // "project" profile removed — projects are now first-class table rows
+      // (see schema/projects.ts). Migration 0151 handles the cutover.
       {
         profileSlug: "event",
         propertySlugs: [

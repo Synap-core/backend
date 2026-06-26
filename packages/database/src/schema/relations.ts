@@ -7,7 +7,6 @@
  */
 
 import { pgTable, uuid, text, timestamp, jsonb } from "drizzle-orm/pg-core";
-import { entities } from "./entities.js";
 import { cellInstances } from "./cell-instances.js";
 import type { ProvenanceKind } from "./provenance.js";
 
@@ -37,12 +36,8 @@ export const relations = pgTable("relations", {
   // Each end is (kind='entity' → entityId) OR (kind='cell' → cellId).
   // Entity columns are NULLABLE now (a cell endpoint leaves them NULL) but every
   // pre-existing row keeps both populated with kind defaulting to 'entity'.
-  sourceEntityId: uuid("source_entity_id").references(() => entities.id, {
-    onDelete: "cascade",
-  }),
-  targetEntityId: uuid("target_entity_id").references(() => entities.id, {
-    onDelete: "cascade",
-  }),
+  sourceEntityId: uuid("source_entity_id"),
+  targetEntityId: uuid("target_entity_id"),
 
   /** Endpoint kind for the source end. Defaults to 'entity' (legacy behavior). */
   sourceKind: text("source_kind")

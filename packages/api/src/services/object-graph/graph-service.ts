@@ -26,6 +26,7 @@ import {
   eq,
   ilike,
   entities,
+  projects,
   views,
   channels,
   focusSessions,
@@ -125,12 +126,11 @@ interface KindSpec {
 }
 
 /**
- * `project` is an `entities` row (profileSlug='project') — same table as entity,
- * different endpoint type. Both map to `entities`.
+ * `project` is a `projects` table row — a first-class table, NOT an entity.
  */
 const KIND_TABLE: Record<string, KindSpec> = {
   entity: { table: entities, name: "title", subtype: "type" },
-  project: { table: entities, name: "title", subtype: "type" },
+  project: { table: projects, name: "name", subtype: "status" },
   view: { table: views, name: "name", subtype: "type" },
   channel: { table: channels, name: "title", subtype: "channelType" },
   session: { table: focusSessions, name: "goal" },
@@ -384,8 +384,6 @@ export async function resolveByName(
     ilike(t[spec.name], name),
   ];
   if (subtype && spec.subtype) conds.push(eq(t[spec.subtype], subtype));
-  // `project` is an entities row discriminated by type='project'.
-  if (kind === "project") conds.push(eq(entities.type, "project"));
 
   const rows = await db
     .select()

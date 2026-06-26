@@ -486,15 +486,8 @@ async function seedProfiles() {
         displayName: "Task",
         uiHints: { icon: "check-square", color: "#3B82F6" },
       },
-      {
-        slug: "project",
-        displayName: "Project",
-        // Pod-wide: a project is the cross-cutting container; it lives above any
-        // single workspace (project-centric-scope). Matches POD_WIDE_SLUGS in
-        // ensure-system-profiles.ts.
-        entityScope: "pod",
-        uiHints: { icon: "folder", color: "#8B5CF6" },
-      },
+      // "project" profile removed — projects are now first-class table rows
+      // (see schema/projects.ts). Migration 0151 handles the cutover.
       {
         slug: "event",
         displayName: "Event",
@@ -707,16 +700,7 @@ async function seedProfiles() {
       { slug: "tags", required: false, displayOrder: 2 },
     ]);
 
-    await linkProps("project", [
-      { slug: "title", required: true, displayOrder: 0 },
-      {
-        slug: "status",
-        required: false,
-        displayOrder: 1,
-        defaultValue: "planning",
-      },
-      { slug: "tags", required: false, displayOrder: 2 },
-    ]);
+    // project profile properties removed — projects use the projects table schema
 
     await linkProps("person", [
       { slug: "title", required: false, displayOrder: 0 },

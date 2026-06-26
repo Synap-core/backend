@@ -635,11 +635,8 @@ async function seedProfiles() {
         displayName: "Task",
         uiHints: { icon: "check-square", color: "#3B82F6" },
       },
-      {
-        slug: "project",
-        displayName: "Project",
-        uiHints: { icon: "folder", color: "#8B5CF6" },
-      },
+      // "project" profile removed — projects are now first-class table rows
+      // (see schema/projects.ts). Migration 0151 handles the cutover.
       {
         slug: "event",
         displayName: "Event",
