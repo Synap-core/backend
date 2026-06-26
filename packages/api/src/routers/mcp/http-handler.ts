@@ -166,7 +166,7 @@ mcpHttpApp.post("/", async (c) => {
   // via createMCPServer() — we only replace the transport layer.
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless — no Mcp-Session-Id header
-    enableJsonResponse: false, // prefer SSE when client accepts it
+    enableJsonResponse: true, // prefer SSE when client accepts it, fall back to JSON otherwise
   });
 
   // Pre-parse body so the transport doesn't have to consume the stream twice.
