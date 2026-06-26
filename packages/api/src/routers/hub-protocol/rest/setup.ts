@@ -159,6 +159,36 @@ async function computePodAdminInvariant(): Promise<{
   }
 }
 
+/**
+ * Map a pod API origin to its pod-admin app origin (`pod.<root>` →
+ * `pod-admin.<root>`). Mirrors the `/admin/connect` redirect host-swap in
+ * `apps/api/src/index.ts` so the agent-approval review URL lands in the
+ * pod-admin SPA — where the operator is already Kratos-authed — instead of a
+ * bare REST page on the API host. Dev (localhost/127.0.0.1) → pod-admin :4040.
+ */
+function toPodAdminOrigin(origin: string): string {
+  try {
+    const u = new URL(origin);
+    const host = u.host; // host:port
+    if (host.startsWith("localhost") || host.startsWith("127.0.0.1")) {
+      return "http://localhost:4040";
+    }
+    if (host.startsWith("pod.")) {
+      const root = host.slice("pod.".length).replace(/:\d+$/, "");
+      return `${u.protocol}//pod-admin.${root}`;
+    }
+    // `<sub>.<root>` → swap the leading label for `pod-admin`.
+    const dot = host.indexOf(".");
+    const root =
+      dot > 0
+        ? host.slice(dot + 1).replace(/:\d+$/, "")
+        : host.replace(/:\d+$/, "");
+    return `${u.protocol}//pod-admin.${root}`;
+  } catch {
+    return origin;
+  }
+}
+
 export function registerSetupRoutes(app: HubHono): void {
   app.post("/setup/agent", async (c) => {
     const flowId = randomUUID();
@@ -638,7 +668,11 @@ export function registerSetupRoutes(app: HubHono): void {
         // Reverse-proxy-safe: prefer the pod's PUBLIC_URL, fall back to request
         // origin. c.req.url picks up the internal (often http://) URL behind nginx.
         const origin = process.env.PUBLIC_URL || new URL(c.req.url).origin;
-        const reviewUrl = `${origin}/api/hub/setup/agent/pending/${apiKey.id}/review?agentType=${encodeURIComponent(agentType)}`;
+        // Approval lives in the pod-admin app (operator is already Kratos-authed
+        // there), NOT a bare REST page on the API origin. Swap pod.<root> →
+        // pod-admin.<root>, mirroring the /admin/connect redirect. The CLI just
+        // opens whatever reviewUrl we return, so no client change is needed.
+        const reviewUrl = `${toPodAdminOrigin(origin)}/approve-agent/${apiKey.id}?agentType=${encodeURIComponent(agentType)}`;
         return c.json({
           agentUserId,
           workspaceId: ws?.id ?? null,
