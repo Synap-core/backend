@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Button, Card, CardBody, CardHeader, Spinner } from "@heroui/react";
+import { Button, Card, CardBody, CardHeader } from "@heroui/react";
 import { Bot, Check, ShieldCheck, X } from "lucide-react";
 
 const POD_URL = process.env.NEXT_PUBLIC_POD_URL ?? "";
