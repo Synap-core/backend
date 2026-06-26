@@ -487,7 +487,6 @@ export async function executeMCPToolViaHubProtocol(
     // ── Session bootstrap & governance ──────────────────────────────────────
     case "synap_orient": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
-      await getDb();
       // Fetch workspaces the user belongs to
       const memberRows = await db
         .select({ workspaceId: workspaceMembers.workspaceId })
