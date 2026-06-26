@@ -50,6 +50,7 @@ import {
   registerNotificationsRoutes,
   registerProactiveRoutes,
   registerProfilesRoutes,
+  registerProjectsRoutes,
   registerProposalsRoutes,
   registerRelationsRoutes,
   registerLinksRoutes,
@@ -460,6 +461,7 @@ registerAgentUsersRoutes(app); // /agent-users
 registerAgentConfigsRoutes(app); // /agent-configs
 registerViewsRoutes(app); // /views*
 registerProfilesRoutes(app); // /profiles*, /property-defs*
+registerProjectsRoutes(app); // /projects*
 registerRelationsRoutes(app); // /relations*
 registerLinksRoutes(app); // /links (config/runtime graph; knowledge↔config bridge)
 registerRoutingRoutes(app); // /routing (centralised knowledge-routing SSoT — P7b)
