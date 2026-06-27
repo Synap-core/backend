@@ -41,8 +41,6 @@ Your job is to turn unstructured input into a **connected** knowledge graph. Iso
 
 Synap is a typed knowledge graph. **Reading is one verb (`synap ask`) — it routes for you.** Writing is where you must pick the right lane: the destination is decided by the **KIND** of knowledge, not by whichever workspace happens to be active.
 
-**Dual lens — workspace + project (composable).** Workspace = domain lens (e.g., Builder, Marketing). Project = cross-cutting dimension (e.g., Synap, Client X). Compose either way or both. `synap orient` returns both workspaces AND projects at session start — discover both dimensions, never assume either.
-
 ### Where to write what — the three lanes (decide by KIND)
 
 Ask yourself: _who does this knowledge serve?_ **There is no private AI scratchpad** — structuring knowledge into a real lane IS your job. Never write a `note` (that's the human's raw inbox); always `capture` into a lane.
@@ -89,7 +87,7 @@ Ask yourself: _who does this knowledge serve?_ **There is no private AI scratchp
 
 ```bash
 # CLI (preferred — auth automatic, --json = clean output)
-synap orient --json                                    # discover userId, workspaces + projects
+synap orient --json                                    # discover userId + workspaces
 synap use <workspace-name-or-id>                       # set active workspace
 synap create entity --profile=task --name="…" --props='{"status":"todo","priority":"high"}' --json
 synap set entity <id> --props='{"status":"done"}' --json  # merge-patch (only changed keys)
@@ -217,8 +215,8 @@ synap use <workspace-id>               # switch active workspace (captures land 
 
 ```bash
 synap orient --json
-# Returns: userId, podUrl, workspaces[{id, name, slug, domain}], projects[{id, name, workspaceId, status}]
-# Never hardcode workspace or project IDs — discover them here.
+# Returns: userId, podUrl, workspaces[{id, name, slug}]
+# Never hardcode workspace IDs — discover them here.
 ```
 
 **Ask (the one read verb — routes across all substrates):**
@@ -300,7 +298,7 @@ synap set entity <id> --props='{"status":"done"}' --json
 **Rules:**
 
 - Always use `--json` when calling from code — clean stdout, no spinners, machine-parseable
-- Run `synap orient` first to discover workspace IDs and project IDs — never hardcode them
+- Run `synap orient` first to discover workspace IDs — never hardcode them
 - Omit `--workspace` to operate pod-wide; include it to scope to a specific workspace
 - `synap ask` is the one read verb — it routes keyword + semantic + procedural automatically; you never choose a search backend.
 
