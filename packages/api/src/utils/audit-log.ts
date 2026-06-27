@@ -18,6 +18,19 @@ export interface AuditLogOpts {
   userId: string;
   /** Pass null for workspace-less (hydration / pod-wide) operations. */
   workspaceId?: string | null;
+  /**
+   * The AI-agent identity when this write is agent-attributed. Stamped onto the
+   * event row's `agent_user_id` column (and drives `is_agent`) so the realtime
+   * presence chain — `domain-event-bridge` → socket → browser ActivityCard /
+   * AgentProposalToast — can show "an *agent* did this". Absent → owner write,
+   * `is_agent` stays null (byte-identical to legacy events).
+   */
+  agentUserId?: string | null;
+  /**
+   * Explicit agent flag. Defaults to `Boolean(agentUserId)` — pass it only to
+   * force the flag independently of an agent-user row (legacy AI-source paths).
+   */
+  isAgent?: boolean;
   data?: Record<string, unknown>;
   source?: string;
   correlationId?: string;
@@ -81,6 +94,10 @@ export async function auditLog(
       data: event.data as Record<string, unknown>,
       metadata: event.metadata as Record<string, unknown>,
       userId: event.userId,
+      // Agent attribution → realtime presence. `is_agent` defaults to whether an
+      // agent-user drove the write; both stay null for owner writes.
+      isAgent: opts.isAgent ?? (opts.agentUserId ? true : undefined),
+      agentUserId: opts.agentUserId ?? undefined,
       // Column is `text` — widen to string for compat between UnifiedEvent and EventRecord source unions
       source: event.source as
         | "api"

@@ -415,6 +415,7 @@ export const entitiesRouter = router({
         phase: "requested",
         subjectId: entityId,
         userId: ctx.userId,
+        agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
         correlationId,
         data: {
@@ -665,6 +666,7 @@ export const entitiesRouter = router({
         phase: "completed",
         subjectId: createdEntity.id,
         userId: ctx.userId,
+        agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
         correlationId,
         data: { profileSlug, title: input.title, global: input.global },
@@ -1385,6 +1387,7 @@ export const entitiesRouter = router({
         phase: "requested",
         subjectId: input.id,
         userId: ctx.userId,
+        agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
         correlationId,
         data: {
@@ -1501,6 +1504,7 @@ export const entitiesRouter = router({
         phase: "completed",
         subjectId: input.id,
         userId: ctx.userId,
+        agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
         correlationId,
       });
@@ -1641,6 +1645,7 @@ export const entitiesRouter = router({
         phase: "requested",
         subjectId: input.id,
         userId: ctx.userId,
+        agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
         correlationId,
         data: { id: input.id },
@@ -1736,6 +1741,7 @@ export const entitiesRouter = router({
         phase: "completed",
         subjectId: input.id,
         userId: ctx.userId,
+        agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
         correlationId,
       });
