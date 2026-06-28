@@ -21,6 +21,7 @@ export { registerSkillsRoutes } from "./skills.js";
 export { registerSkillsCrudRoutes } from "./skills-crud.js";
 export { registerToolsRoutes } from "./tools.js";
 export { registerCapabilitiesRoutes } from "./capabilities.js";
+export { registerCapabilitiesCatalogRoutes } from "./capabilities-catalog.js";
 export { registerCapabilitiesExecuteRoutes } from "./capabilities-execute.js";
 export { registerCapabilityTemplatesRoutes } from "./capability-templates.js";
 export { registerLoopsRoutes } from "./loops.js";
