@@ -11,6 +11,8 @@ import { createRoute, z } from "@hono/zod-openapi";
 import { db, workspaceMembers, eq, and } from "@synap/database";
 import { resolveNangoConnector } from "../../../connectors/index.js";
 import { triggerProviderAction } from "../../../connectors/external-dispatch.js";
+import { materializeConnectorTools } from "../../../connectors/materialize-tools.js";
+import { createHubProtocolCallerContext } from "../utils.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
   hasScope,
@@ -155,6 +157,23 @@ export function registerConnectorsRoutes(app: HubHono): void {
                       })
                     )
                     .optional(),
+                  // Populated for `connected`: the verbs this connection unlocked
+                  // (from the provider's family template), so the caller can show
+                  // "you can now: send email, list calendar, …".
+                  unlocked: z
+                    .array(
+                      z.object({
+                        provider: z.string(),
+                        displayName: z.string(),
+                        skills: z.array(
+                          z.object({
+                            name: z.string(),
+                            description: z.string().optional(),
+                          })
+                        ),
+                      })
+                    )
+                    .optional(),
                 })
                 .openapi("ConnectorConnectResult"),
             },
@@ -277,12 +296,38 @@ export function registerConnectorsRoutes(app: HubHono): void {
           (conn) => conn.provider === match.uniqueKey
         );
         if (existing) {
+          // Self-completing door: the moment a connection is confirmed,
+          // materialize its provider tool + apply the family template (verbs +
+          // skills + grants). Idempotent — safe to re-run on every poll. This is
+          // what lets a CLI/agent connect (no browser) arrive fully wired, and
+          // surfaces what the connection unlocked. Best-effort: a materialize
+          // failure must not break the "you're connected" signal.
+          let unlocked: Awaited<
+            ReturnType<typeof materializeConnectorTools>
+          >["unlocked"] = [];
+          try {
+            const ctx = await createHubProtocolCallerContext(
+              userId,
+              c.get("scopes") as string[],
+              null
+            );
+            const result = await materializeConnectorTools(ctx, connector);
+            unlocked = result.unlocked.filter(
+              (u) => u.provider === match.uniqueKey
+            );
+          } catch (matErr) {
+            logger.warn(
+              { err: matErr, provider: match.uniqueKey },
+              "connect: tool materialization failed (connection still valid)"
+            );
+          }
           return c.json(
             {
               status: "connected" as const,
               provider: match.uniqueKey,
               displayName: match.displayName,
               connectionId: existing.connectionId,
+              unlocked,
             },
             200
           );

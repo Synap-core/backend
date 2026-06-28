@@ -27,18 +27,11 @@ import {
   getDb,
   db,
   eq,
-  and,
-  isNull,
   desc,
   entityExternalLinks,
   drizzleSql,
 } from "@synap/database";
-import {
-  entities,
-  workspaces,
-  workspaceMembers,
-  tools,
-} from "@synap/database/schema";
+import { entities, workspaces, workspaceMembers } from "@synap/database/schema";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
   enrichmentProviderRegistry,
@@ -50,38 +43,7 @@ import {
   syncConnectionToImport,
   pullToImport,
 } from "../services/connector-import-bridge.js";
-import {
-  createCapabilityFromDefinition,
-  loadCapabilityTemplate,
-} from "../services/capabilities/create-from-definition.js";
-import type { Context } from "../types/context.js";
-
-/**
- * Provider → capability-template family key.
- *
- * Closes connect↔apply: when a provider is connected, this names the family
- * `CapabilityDefinition` that gives the connection its VERBS + skills + grants
- * (instead of a verb-less `kind:'provider'` tool). The convention is the on-disk /
- * DB template key per provider family (`templates/capabilities/<key>.capability.json`).
- * A provider with NO family template degrades gracefully — the bare provider tool
- * is kept (today's behavior) and no verbs are applied.
- */
-const PROVIDER_TEMPLATE_KEY: Record<string, string> = {
-  // The unified Google connection: ONE `google` integration (Gmail + Calendar +
-  // Drive via OAuth scopes) → the multi-API `nango-google` family. Gmail calls
-  // ride a Base-Url-Override to gmail.googleapis.com; Calendar/Drive use the
-  // provider-default host. This is the canonical Google path.
-  google: "nango-google",
-  // Back-compat: a dedicated `gmail`-only integration still maps to the
-  // Gmail-only family. Not the default path (the centralized model connects
-  // `google`), but kept so an existing gmail-scoped connection keeps its verbs.
-  gmail: "nango-gmail",
-};
-
-/** Resolve the family template key for a connected provider, or null. */
-function providerTemplateKey(provider: string): string | null {
-  return PROVIDER_TEMPLATE_KEY[provider] ?? null;
-}
+import { materializeConnectorTools } from "../connectors/materialize-tools.js";
 
 /**
  * Returns a configured NangoConnector when self-hosted Nango is available,
@@ -526,132 +488,16 @@ export const connectorsRouter = router({
     .mutation(async ({ ctx }) => {
       const localNango = await getLocalNango();
       if (!localNango) {
-        // CP-mode pods route connectors through the Control Plane and don't own a
-        // local Nango, so there's nothing to materialize here (no-op by design).
+        // No Nango resolves on this pod — nothing to materialize (no-op).
         return { synced: 0, toolIds: [] as string[] };
       }
-
-      const [connections, integrations] = await Promise.all([
-        localNango.listConnections(ctx.userId),
-        localNango.listIntegrations(),
-      ]);
-
-      const displayNameByProvider = new Map(
-        integrations.map((i) => [i.uniqueKey, i.displayName])
+      // Delegate to the ONE shared materializer (also used by the Hub-REST
+      // connect door) so the browser and the CLI/agent take identical paths.
+      const { synced, toolIds } = await materializeConnectorTools(
+        ctx as unknown as Parameters<typeof materializeConnectorTools>[0],
+        localNango
       );
-      const connectedProviders = Array.from(
-        new Set(connections.map((c) => c.provider))
-      );
-
-      const toolIds: string[] = [];
-      for (const provider of connectedProviders) {
-        const credentialRef = `nango://${provider}`;
-        const displayName = displayNameByProvider.get(provider) ?? provider;
-
-        const existing = await db
-          .select({ id: tools.id, capabilities: tools.capabilities })
-          .from(tools)
-          .where(
-            and(
-              eq(tools.credentialRef, credentialRef),
-              isNull(tools.workspaceId)
-            )
-          )
-          .limit(1);
-
-        let toolId: string | null = null;
-        // Whether the resolved tool already carries a verb catalog — gates the
-        // connect↔apply family-template application so re-syncs don't re-run it.
-        let hasVerbs = false;
-
-        if (existing[0]) {
-          toolId = existing[0].id;
-          hasVerbs = Array.isArray(existing[0].capabilities)
-            ? existing[0].capabilities.length > 0
-            : false;
-        } else {
-          const inserted = await db
-            .insert(tools)
-            .values({
-              workspaceId: null, // pod-wide: a connected provider is available everywhere
-              createdBy: ctx.userId,
-              name: displayName,
-              description: `${displayName} connection — credentials routed per account at use time.`,
-              kind: "provider",
-              credentialRef,
-              executor: "is-agent",
-              config: { providerConfigKey: provider },
-              // The user just connected this account → the materialized tool is
-              // born approved (no separate approval step for a connect).
-              approved: true,
-            })
-            // Race backstop: if a concurrent sync inserted this provider first, the
-            // partial unique index (mig 0132) makes this a no-op instead of a dup.
-            .onConflictDoNothing()
-            .returning({ id: tools.id });
-
-          if (inserted[0]) {
-            toolId = inserted[0].id;
-          } else {
-            // Lost the race — the row exists now; pick it up so the caller still
-            // gets its id (and the next sync/refetch surfaces it).
-            const found = await db
-              .select({ id: tools.id, capabilities: tools.capabilities })
-              .from(tools)
-              .where(
-                and(
-                  eq(tools.credentialRef, credentialRef),
-                  isNull(tools.workspaceId)
-                )
-              )
-              .limit(1);
-            if (found[0]) {
-              toolId = found[0].id;
-              hasVerbs = Array.isArray(found[0].capabilities)
-                ? found[0].capabilities.length > 0
-                : false;
-            }
-          }
-        }
-
-        if (!toolId) continue;
-        toolIds.push(toolId);
-
-        // ── Close connect↔apply ──────────────────────────────────────────────
-        // A bare connect materialized a verb-LESS provider tool. If this provider
-        // has a family CapabilityDefinition, apply it (GOVERNED, via the shared
-        // applier) so the connection arrives WITH verbs + skills + grants. The
-        // applier creates the same pod-wide `nango://<provider>` tool — the
-        // partial unique index makes that an idempotent no-op that picks up the
-        // existing row, then derives + writes its verb catalog and seeds skill
-        // grants. We only run it when the tool has NO verbs yet, so a re-connect /
-        // window-focus re-sync never re-applies (no duplicate skills/grants).
-        // Providers WITHOUT a family template degrade gracefully to the bare tool.
-        if (hasVerbs) continue;
-        const templateKey = providerTemplateKey(provider);
-        if (!templateKey) continue;
-        try {
-          const def = await loadCapabilityTemplate(templateKey, {
-            workspaceId: null,
-          });
-          // Pod-wide apply: no workspace lens (the connected provider tool is
-          // pod-wide). The acting user owns the seeded vault/grants.
-          const applyCtx = {
-            ...ctx,
-            workspaceId: null,
-          } as unknown as Context;
-          await createCapabilityFromDefinition(def, {}, applyCtx);
-        } catch (err) {
-          // Graceful degrade — keep the bare tool; the connection still works,
-          // it just lacks the structured verb catalog until applied explicitly.
-          logger.warn(
-            { provider, templateKey, err: String(err) },
-            "connect↔apply: family template apply failed; kept bare provider tool"
-          );
-        }
-      }
-
-      return { synced: toolIds.length, toolIds };
+      return { synced, toolIds };
     }),
 
   /**
