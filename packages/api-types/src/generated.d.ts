@@ -490,14 +490,6 @@ export interface AgentRoutingPolicy {
 	rules?: AgentRoutingRule[];
 }
 /**
- * High-level purpose of a workspace inside a pod.
- *
- * `workspaceType` already exists as a promoted column for legacy operational
- * filtering. `workspacePurpose` is the product-facing contract used by the
- * browser and agents to understand how a workspace should be used.
- */
-export type WorkspacePurpose = "personal" | "project" | "agent" | "library" | "operational";
-/**
  * Discoverability/access mode for a workspace.
  *
  * Write access is still controlled by workspace_members + role permissions.
@@ -537,13 +529,8 @@ export interface WorkspaceSettings {
 	aiEnabled?: boolean;
 	allowExternalSharing?: boolean;
 	/**
-	 * Product-facing purpose used by browser/apps/agents to resolve cross-workspace
-	 * sources (e.g. a brand-library workspace serving artboards in a project).
-	 */
-	workspacePurpose?: WorkspacePurpose;
-	/**
-	 * Free-form subtype within the purpose, e.g. "brand-library",
-	 * "research-library", "agent-lab".
+	 * Free-form subtype, e.g. "brand-library", "research-library", "agent-lab".
+	 * No fixed enum — extensible by templates and agents.
 	 */
 	workspaceSubtype?: string;
 	/**
@@ -10073,7 +10060,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description?: string | undefined;
 				settings?: Record<string, unknown> | undefined;
-				type?: "personal" | "enterprise" | "team" | undefined;
 			};
 			output: {
 				status: "proposed";
@@ -10096,7 +10082,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: ({
 				name: string;
 				id: string;
-				type: string;
 				updatedAt: Date;
 				createdAt: Date;
 				description: string | null;
@@ -10128,7 +10113,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				accessKind: string;
 				name: string;
 				id: string;
-				type: string;
 				updatedAt: Date;
 				createdAt: Date;
 				description: string | null;
@@ -10207,7 +10191,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description: string | null;
 				domain: string | null;
-				type: string;
 				settings: WorkspaceSettings;
 				systemSlug: string | null;
 				packageSlug: string | null;
@@ -10232,7 +10215,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				role: "admin";
 				name: string;
 				id: string;
-				type: string;
 				updatedAt: Date;
 				createdAt: Date;
 				description: string | null;
@@ -10257,7 +10239,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				memberCount: number;
 				name: string;
 				id: string;
-				type: string;
 				updatedAt: Date;
 				createdAt: Date;
 				description: string | null;
@@ -10677,7 +10658,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					profileEntityBentoTemplates?: Record<string, {
 						blocks: Record<string, unknown>[];
 					}> | undefined;
-					workspacePurpose?: "personal" | "agent" | "library" | "project" | "operational" | undefined;
 					workspaceSubtype?: string | undefined;
 					workspaceVisibility?: "members" | "private" | "pod_visible" | "pod_joinable" | "public_link" | undefined;
 					workspaceCapabilities?: string[] | undefined;
@@ -10778,7 +10758,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId: string;
 				definition: {
-					workspacePurpose?: string | undefined;
 					workspaceSubtype?: string | undefined;
 					workspaceVisibility?: string | undefined;
 					workspaceCapabilities?: string[] | undefined;

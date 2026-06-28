@@ -36,7 +36,11 @@ x-backend-env: &backend-env
   # Service credential encryption — REQUIRED for CP provisioning.
   # Rotating invalidates stored IS credentials.
   SYNAP_SERVICE_ENCRYPTION_KEY: ${SYNAP_SERVICE_ENCRYPTION_KEY}
-  VAULT_SERVER_KEY: ${VAULT_SERVER_KEY:-}
+  # REQUIRED — the secret vault is non-functional without it, and an empty value
+  # silently breaks redeem (boots "healthy", fails at use time). `:?` makes
+  # `docker compose up` ERROR on a missing/empty key instead of substituting "".
+  # Generate once and persist in deploy/.env: openssl rand -hex 32
+  VAULT_SERVER_KEY: ${VAULT_SERVER_KEY:?VAULT_SERVER_KEY must be set in deploy/.env (openssl rand -hex 32)}
   PUBLIC_URL: ${PUBLIC_URL:-http://backend:4000}
   # Parent domain for the derived first-party CORS allowlist (see install.sh .env)
   SYNAP_BASE_DOMAIN: ${SYNAP_BASE_DOMAIN:-}

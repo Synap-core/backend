@@ -201,30 +201,54 @@ export const automationsRouter = router({
         }
       }
 
-      // Governance membrane — the trigger layer now matches the playbook/tool/
-      // skill bar. AI callers (agentUserId set) route through
+      // Governance membrane. AI agents (agentUserId set) route through
       // checkPermissionOrPropose; on "proposed" no row is written and the
-      // proposal id is surfaced. The gate keys on the request workspaceId
-      // (nullable = pod-wide), consistent with the create body shape.
-      const perm = await checkPermissionOrPropose({
-        userId: ctx.userId,
-        agentUserId: input.agentUserId,
-        workspaceId: input.workspaceId ?? null,
-        subjectType: "automation",
-        action: "create",
-        source: input.source,
-        data: { name: input.name, triggerType: input.triggerType },
-      });
-      if ("denied" in perm && perm.denied) {
-        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
-      }
-      if ("proposalId" in perm) {
-        return {
-          status: "proposed" as const,
-          id: null as string | null,
-          message: "Automation creation proposed for review",
-          proposalId: perm.proposalId,
-        };
+      // proposal id is surfaced. Operator-initiated creates (no agentUserId) are
+      // DIRECT writes: an automation is operator configuration (a template /
+      // workflow), not AI-authored content. Hub-protocol calls are all branded
+      // source:"intelligence", so without this split an operator's own CLI
+      // install would be gated as AI and routed to a proposal — which the approve
+      // flow can't even materialize for automations. RBAC is still enforced on
+      // the operator path; we just never propose.
+      if (input.agentUserId) {
+        const perm = await checkPermissionOrPropose({
+          userId: ctx.userId,
+          agentUserId: input.agentUserId,
+          workspaceId: input.workspaceId ?? null,
+          subjectType: "automation",
+          action: "create",
+          source: input.source,
+          data: { name: input.name, triggerType: input.triggerType },
+        });
+        if ("denied" in perm && perm.denied) {
+          throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+        }
+        if ("proposalId" in perm) {
+          return {
+            status: "proposed" as const,
+            id: null as string | null,
+            message: "Automation creation proposed for review",
+            proposalId: perm.proposalId,
+          };
+        }
+      } else if (input.workspaceId) {
+        // Operator direct write — enforce workspace RBAC (deny if not permitted),
+        // but never propose. Pod-wide (no workspaceId) is owner-implicit.
+        const { verifyPermission } = await import("@synap/database");
+        const { requiredPermissionFor } =
+          await import("@synap/governance-policy");
+        const result = await verifyPermission({
+          db: database,
+          userId: ctx.userId!,
+          workspace: { id: input.workspaceId },
+          requiredPermission: requiredPermissionFor("create"),
+        });
+        if (!result.allowed) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: result.reason || "Permission denied",
+          });
+        }
       }
 
       const [row] = await database

@@ -216,18 +216,21 @@ const REQUIRED_SECRETS_ALL: string[] = [
   // by docker-compose and not passed as a separate env var to the container.
   "SYNAP_SERVICE_ENCRYPTION_KEY",
   "KRATOS_SECRETS_COOKIE",
+  // VAULT_SERVER_KEY is REQUIRED in production: the secret vault (connector
+  // tokens, API keys) is non-functional without it, and an EMPTY key makes the
+  // pod boot "healthy" with a silently-dead vault — exactly the failure that
+  // turned a config gap into a redeem crash-loop. Fail loud at boot instead.
+  "VAULT_SERVER_KEY",
 ];
 
 const REQUIRED_SECRETS_LOCAL_MODE: string[] = [
   "JWT_SECRET",
   "SYNAP_SERVICE_ENCRYPTION_KEY",
   // KRATOS_SECRETS_COOKIE intentionally omitted — Kratos is not used in local mode
+  // VAULT_SERVER_KEY intentionally omitted — local dev may run without the vault.
 ];
 
-const RECOMMENDED_SECRETS: string[] = [
-  "VAULT_SERVER_KEY",
-  "KRATOS_SECRETS_CIPHER",
-];
+const RECOMMENDED_SECRETS: string[] = ["KRATOS_SECRETS_CIPHER"];
 
 function validateCriticalSecrets(): void {
   // CI smoke tests set this to skip secret validation — they only verify the image starts.
