@@ -83,7 +83,6 @@ function getTableConfigs(): SupplementaryTableConfig[] {
             ownerId: workspaces.ownerId,
             name: workspaces.name,
             description: workspaces.description,
-            type: workspaces.type,
             settings: workspaces.settings,
             systemSlug: workspaces.systemSlug,
             packageSlug: workspaces.packageSlug,
