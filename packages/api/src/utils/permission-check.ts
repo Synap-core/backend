@@ -447,6 +447,14 @@ export async function checkPermissionOrPropose(
           commandRunId,
           sourceMessageId,
           sessionId,
+          // Thread the original subject + data so the proposal card shows
+          // WHAT the agent wanted to do (e.g. create a session with goal X).
+          // Without this, every join proposal looks identical — the reviewer
+          // can't tell if the agent wants to create a session, write an entity,
+          // or execute a capability.
+          requestedSubjectType: subjectType,
+          requestedAction: action,
+          requestedData: data,
         });
         if (join) return join;
         // Not an agent user row (defence-in-depth) → fall through to deny.
@@ -1070,6 +1078,12 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
   commandRunId?: string;
   sourceMessageId?: string;
   sessionId?: string;
+  /** The original subjectType the agent wanted to act on (e.g. "focus_session"). */
+  requestedSubjectType?: string;
+  /** The original action (e.g. "create"). */
+  requestedAction?: string;
+  /** The original data payload (e.g. { goal, templateId } for sessions). */
+  requestedData?: Record<string, unknown>;
 }): Promise<PermissionResult | null> {
   const {
     agentUserId,
@@ -1080,6 +1094,9 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
     commandRunId,
     sourceMessageId,
     sessionId,
+    requestedSubjectType,
+    requestedAction,
+    requestedData,
   } = opts;
 
   // Defence-in-depth: confirm the actor really is an agent user row before
@@ -1099,7 +1116,17 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
     .limit(1);
   const agentName = agentUser.name ?? "Agent";
   const workspaceName = ws?.name ?? workspaceId;
-  const summary = `Agent ${agentName} requests to join workspace ${workspaceName} as ${role}`;
+  // Enrich the summary when we know WHAT the agent wanted to do — a join
+  // proposal for a session carries the goal so the reviewer sees the full
+  // picture before approving workspace access.
+  const summary =
+    requestedSubjectType === "focus_session" && requestedData?.goal
+      ? `Agent ${agentName} wants to create a session in ${workspaceName}: "${String(requestedData.goal)}"`
+      : `Agent ${agentName} requests to join workspace ${workspaceName} as ${role}`;
+  const reasoning =
+    requestedSubjectType === "focus_session"
+      ? `The agent needs workspace access to create a focus session (${requestedAction}). Once joined, it will start working on: ${String(requestedData?.goal ?? "an unspecified goal")}.`
+      : summary;
 
   // DEDUPE: return an existing pending join proposal for this (agent, workspace)
   // rather than stacking duplicates each time the agent retries the write.
@@ -1123,7 +1150,7 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
       proposalId: existing.id,
       proposalType: "join",
       summary,
-      reasoning: summary,
+      reasoning,
       reviewPath: `/proposals/${existing.id}`,
       reviewUrl: `${STUDIO_APP_URL}/proposals/${existing.id}`,
     };
@@ -1150,6 +1177,12 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
       role,
       agentUserId,
       requestedBy: "ai",
+      // Surface WHAT the agent wanted to do so the proposal card renders
+      // rich context (session goal, expected outputs, etc.) instead of a
+      // generic "join workspace" card.
+      ...(requestedSubjectType ? { requestedSubjectType } : {}),
+      ...(requestedAction ? { requestedAction } : {}),
+      ...(requestedData ? { requestedData } : {}),
       source: "agent",
       ...(correlationId ? { correlationId } : {}),
     },
@@ -1160,7 +1193,7 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
     proposalId: row.id,
     proposalType: "join",
     summary,
-    reasoning: summary,
+    reasoning,
     reviewPath: `/proposals/${row.id}`,
     reviewUrl: `${STUDIO_APP_URL}/proposals/${row.id}`,
   };
