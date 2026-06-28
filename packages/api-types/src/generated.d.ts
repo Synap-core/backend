@@ -12671,6 +12671,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				credentialRef?: string | undefined;
 				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
 				config?: Record<string, unknown> | undefined;
+				metadata?: Record<string, unknown> | undefined;
 				workspaceId?: string | undefined;
 				agentUserId?: string | undefined;
 				source?: string | undefined;
@@ -12694,6 +12695,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description?: string | undefined;
 				credentialRef?: string | undefined;
 				config?: Record<string, unknown> | undefined;
+				metadata?: Record<string, unknown> | undefined;
 				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
 				kind?: "provider" | "external" | "builtin" | "api" | "mcp" | "script" | undefined;
 				inputSchema?: Record<string, unknown> | undefined;

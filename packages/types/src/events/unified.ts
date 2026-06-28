@@ -44,6 +44,36 @@ export const SUBJECT_TYPES = [
 export type SubjectType = (typeof SUBJECT_TYPES)[number];
 
 // ============================================================================
+// CONNECTOR / SYSTEM EVENT FAMILIES — outside the CRUD taxonomy
+// ============================================================================
+
+/**
+ * Event families emitted by connectors and system flows (inbound messages,
+ * channel relays, connector syncs, captures, proactive posts, feed items).
+ *
+ * They intentionally live OUTSIDE the CRUD taxonomy: their "action" segment is
+ * a domain verb (`received`, `synced`, …) rather than create/update/delete, so
+ * the strict subject+action+phase rules below do NOT apply. The runtime
+ * automation-trigger matcher (@synap/jobs) matches these as raw string
+ * patterns, so `validateEventPattern` must accept them at create-time too —
+ * otherwise a perfectly matchable automation (e.g. inbound-message →
+ * `external_message.received.*`) is rejected at the API boundary.
+ *
+ * Keep in sync with the prefixes special-cased in
+ * `automation-trigger-matcher.ts` (matchTriggerSpecificFilters).
+ */
+export const CONNECTOR_SUBJECT_TYPES = [
+  "external_message",
+  "channel_message",
+  "connector_sync",
+  "capture",
+  "proactive",
+  "feed",
+] as const;
+
+export type ConnectorSubjectType = (typeof CONNECTOR_SUBJECT_TYPES)[number];
+
+// ============================================================================
 // EVENT ACTIONS
 // ============================================================================
 
@@ -149,6 +179,13 @@ export function validateEventPattern(raw: string): EventPattern {
   }
 
   const [subject, action, phase] = parts;
+
+  // Connector / system event families bypass the strict CRUD action/phase vocab
+  // (their actions are domain verbs like "received"). The structural length
+  // check above already ran; the runtime matcher does the real matching.
+  if ((CONNECTOR_SUBJECT_TYPES as readonly string[]).includes(subject)) {
+    return raw as EventPattern;
+  }
 
   if (!SUBJECT_TYPES.includes(subject as SubjectType)) {
     throw new Error(

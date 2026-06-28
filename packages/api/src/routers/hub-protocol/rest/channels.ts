@@ -34,6 +34,84 @@ import {
   type HubHono,
 } from "./_shared.js";
 
+/**
+ * Shared gate for Discord channel write operations (rename, pin).
+ *
+ * Runs in order:
+ *   1. hub-protocol.write scope check → 403
+ *   2. DiscordConnector.isConfigured() fast-fail → 503
+ *   3. Channel lookup by (externalSource=discord, externalId) → 404
+ *   4. channel.workspaceId present → 403
+ *   5. resolveActingContext on the loaded workspace → 400/403
+ *
+ * Returns `{ ok: true, connector }` when all gates pass, or
+ * `{ ok: false, status, body }` to return directly to the caller.
+ *
+ * The caller is responsible for the provider gate (discord-only guard)
+ * BEFORE invoking this helper, and for the connector action + 429-forwarding
+ * catch AFTER it.
+ */
+async function resolveDiscordChannelForWrite(
+  c: { get: (k: string) => unknown },
+  externalChannelId: string,
+  action: string
+): Promise<
+  | { ok: true; connector: DiscordConnector }
+  | { ok: false; status: number; body: { error: string } }
+> {
+  if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+    return {
+      ok: false,
+      status: 403,
+      body: { error: "Insufficient scope: hub-protocol.write required" },
+    };
+  }
+
+  const connector = new DiscordConnector();
+  if (!connector.isConfigured()) {
+    return {
+      ok: false,
+      status: 503,
+      body: { error: "Discord bot token not configured on this pod" },
+    };
+  }
+
+  const channel = await db.query.channels.findFirst({
+    where: and(
+      eq(channelsTable.externalSource, "discord"),
+      eq(channelsTable.externalId, externalChannelId)
+    ),
+  });
+  if (!channel) {
+    return {
+      ok: false,
+      status: 404,
+      body: { error: `No discord channel with id ${externalChannelId}` },
+    };
+  }
+
+  // Gate the WRITE on the loaded row's workspace (never request-supplied).
+  // A null-workspace channel has no workspace to gate against — passing
+  // `undefined` would let resolveActingContext fall back to the caller's
+  // FIRST workspace and pass regardless of the channel. Refuse outright.
+  if (!channel.workspaceId) {
+    return {
+      ok: false,
+      status: 403,
+      body: { error: `Channel has no workspace; ${action} not permitted` },
+    };
+  }
+
+  const acting = await resolveActingContext(c, {
+    workspaceId: channel.workspaceId,
+  });
+  if (!acting.ok) {
+    return { ok: false, status: acting.status, body: { error: acting.error } };
+  }
+
+  return { ok: true, connector };
+}
+
 export function registerChannelsRoutes(app: HubHono): void {
   // ── GET /channels ────────────────────────────────────────────────────────
   registerOpenApi(app, {
@@ -397,62 +475,27 @@ export function registerChannelsRoutes(app: HubHono): void {
   });
 
   app.post("/channels/:externalChannelId/pins/:messageId", async (c) => {
-    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
-      return c.json(
-        { error: "Insufficient scope: hub-protocol.write required" },
-        403
-      );
-    }
-
     const externalChannelId = c.req.param("externalChannelId");
     const messageId = c.req.param("messageId");
 
-    const provider = "discord";
-
-    // Provider gate BEFORE any DB lookup — don't leak channel existence for
-    // unsupported providers.
-    // (pin is Discord-only in V0; extend provider param here when needed)
-
-    // Fail fast if the pod has no bot token — otherwise we'd hit Discord with an
-    // empty auth header and surface an opaque 500.
-    const connector = new DiscordConnector();
-    if (!connector.isConfigured()) {
+    // Validate path params — Discord IDs must be non-empty strings.
+    if (!externalChannelId || !messageId) {
       return c.json(
-        { error: "Discord bot token not configured on this pod" },
-        503
+        { error: "externalChannelId and messageId must be non-empty strings" },
+        400
       );
     }
 
+    // Run all shared gates (scope, connector config, channel lookup, workspace).
+    const gate = await resolveDiscordChannelForWrite(
+      c,
+      externalChannelId,
+      "pin"
+    );
+    if (!gate.ok) return c.json(gate.body, gate.status as never);
+
     try {
-      const channel = await db.query.channels.findFirst({
-        where: and(
-          eq(channelsTable.externalSource, provider),
-          eq(channelsTable.externalId, externalChannelId)
-        ),
-      });
-      if (!channel) {
-        return c.json(
-          { error: `No ${provider} channel with id ${externalChannelId}` },
-          404
-        );
-      }
-      // Gate the WRITE on the loaded row's workspace (never request-supplied).
-      // A null-workspace channel has no workspace to gate against — passing
-      // `undefined` would let resolveActingContext fall back to the caller's
-      // FIRST workspace and pass regardless of the channel. Refuse outright.
-      if (!channel.workspaceId) {
-        return c.json(
-          { error: "Channel has no workspace; pin not permitted" },
-          403
-        );
-      }
-      const acting = await resolveActingContext(c, {
-        workspaceId: channel.workspaceId,
-      });
-      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-
-      await connector.pinMessage(externalChannelId, messageId);
-
+      await gate.connector.pinMessage(externalChannelId, messageId);
       return c.json({ ok: true as const, pinned: true as const }, 200);
     } catch (err) {
       // Surface Discord's rate-limit as a 429 so callers (IS tool, automations)
@@ -501,13 +544,6 @@ export function registerChannelsRoutes(app: HubHono): void {
   });
 
   app.post("/channels/:externalChannelId/rename", async (c) => {
-    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
-      return c.json(
-        { error: "Insufficient scope: hub-protocol.write required" },
-        403
-      );
-    }
-
     const externalChannelId = c.req.param("externalChannelId");
     let body: { name: string; provider?: string };
     try {
@@ -535,46 +571,16 @@ export function registerChannelsRoutes(app: HubHono): void {
       );
     }
 
-    // Fail fast if the pod has no bot token — otherwise we'd hit Discord with an
-    // empty auth header and surface an opaque 500.
-    const connector = new DiscordConnector();
-    if (!connector.isConfigured()) {
-      return c.json(
-        { error: "Discord bot token not configured on this pod" },
-        503
-      );
-    }
+    // Run all shared gates (scope, connector config, channel lookup, workspace).
+    const gate = await resolveDiscordChannelForWrite(
+      c,
+      externalChannelId,
+      "rename"
+    );
+    if (!gate.ok) return c.json(gate.body, gate.status as never);
 
     try {
-      const channel = await db.query.channels.findFirst({
-        where: and(
-          eq(channelsTable.externalSource, provider),
-          eq(channelsTable.externalId, externalChannelId)
-        ),
-      });
-      if (!channel) {
-        return c.json(
-          { error: `No ${provider} channel with id ${externalChannelId}` },
-          404
-        );
-      }
-      // Gate the WRITE on the loaded row's workspace (never request-supplied).
-      // A null-workspace channel has no workspace to gate against — passing
-      // `undefined` would let resolveActingContext fall back to the caller's
-      // FIRST workspace and pass regardless of the channel. Refuse outright.
-      if (!channel.workspaceId) {
-        return c.json(
-          { error: "Channel has no workspace; rename not permitted" },
-          403
-        );
-      }
-      const acting = await resolveActingContext(c, {
-        workspaceId: channel.workspaceId,
-      });
-      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-
-      await connector.renameChannel(externalChannelId, body.name);
-
+      await gate.connector.renameChannel(externalChannelId, body.name);
       return c.json({ ok: true as const, name: body.name }, 200);
     } catch (err) {
       // Surface Discord's rate-limit as a 429 so callers (IS tool, automations)

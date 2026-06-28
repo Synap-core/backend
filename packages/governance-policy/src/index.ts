@@ -70,8 +70,15 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
   "relation.create",
   "channel.create",
   "terminal.read_logs",
-  // Playbooks & Capability Substrate — reads auto-approve; create/update/archive
-  // intentionally omitted so they route to a proposal in agent workspaces.
+  // Playbooks & Capability Substrate — "creates are instant" platform-wide:
+  // automation/playbook/link/tool/skill creates auto-approve like data creates.
+  // UPDATE/ARCHIVE/DELETE of the substrate still route to a proposal, and
+  // ADMIN_ACTIONS (agent/apiKey/connector/intelligence) always propose.
+  "automation.create",
+  "playbook.create",
+  "link.create",
+  "tool.create",
+  "skill.create",
   "playbook.read",
   "tool.read",
   "link.read",
@@ -125,6 +132,17 @@ export const GOVERNANCE_MODES = {
       "profile.create",
       "property_def.create",
       "channel.create",
+      // Capability-substrate creates. Under Normal "creates are instant": both
+      // behavior-wiring (automation/playbook/link — orchestrate existing
+      // capabilities) AND power-granting (tool/skill — define new abilities)
+      // execute directly. What they DO at runtime is still governed separately,
+      // and ADMIN_ACTIONS (agent/apiKey/connector/intelligence) always propose.
+      // Updates & deletes of the substrate remain proposal-gated.
+      "automation.create",
+      "playbook.create",
+      "link.create",
+      "tool.create",
+      "skill.create",
       "playbook.read",
       "tool.read",
       "link.read",
