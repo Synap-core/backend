@@ -33,6 +33,7 @@ import {
   db,
   agents,
   messages,
+  channels,
   eq,
   and,
   MessageRole,
@@ -86,6 +87,12 @@ const AgentTurnRequestSchema = z
 const AgentTurnResponseSchema = z
   .object({
     reply: z.string(),
+    // FIREWALL: when the @mention came from a client-comms channel, the bot must
+    // not reply there. `deliverToExternalChannelId` = the team channel to post
+    // the reply to instead; `suppressReply` = post nothing (no team channel to
+    // redirect to). Absent on normal (team/unbound) channels → reply in place.
+    deliverToExternalChannelId: z.string().optional(),
+    suppressReply: z.boolean().optional(),
     // Set when the inbound Discord user is NOT yet linked to a Synap identity.
     // The agent ran as the operator (legacy behavior); the bridge can use this
     // signal + discordUserId to prompt the user through onboarding/linking.
@@ -374,9 +381,67 @@ export function registerDiscordRoutes(app: HubHono): void {
         });
       }
 
+      // ── 4b. FIREWALL: the bot's reply must NEVER land in a client-comms
+      // channel (those mirror to the client's Telegram). If the @mention came
+      // from a client-comms channel, redirect the reply to the linked TEAM
+      // channel; if there is no team channel to redirect to, tell the bridge to
+      // suppress it entirely rather than leak. Best-effort: on a lookup error we
+      // fall back to replying in place (the conventional pre-firewall behavior).
+      let deliverToExternalChannelId: string | undefined;
+      let suppressReply = false;
+      try {
+        const here = await db.query.channels.findFirst({
+          where: eq(channels.id, channelId),
+          columns: {
+            branchPurpose: true,
+            contextObjectId: true,
+            parentChannelId: true,
+          },
+        });
+        if (here?.branchPurpose === "client-comms") {
+          // Sibling team channel = same bound entity, else same parent room.
+          let team: { externalId: string | null } | undefined;
+          if (here.contextObjectId) {
+            team = await db.query.channels.findFirst({
+              where: and(
+                eq(channels.branchPurpose, "team"),
+                eq(channels.externalSource, "discord"),
+                eq(channels.contextObjectId, here.contextObjectId)
+              ),
+              columns: { externalId: true },
+            });
+          } else if (here.parentChannelId) {
+            team = await db.query.channels.findFirst({
+              where: and(
+                eq(channels.branchPurpose, "team"),
+                eq(channels.externalSource, "discord"),
+                eq(channels.parentChannelId, here.parentChannelId)
+              ),
+              columns: { externalId: true },
+            });
+          }
+          if (team?.externalId) {
+            deliverToExternalChannelId = team.externalId;
+          } else {
+            suppressReply = true;
+          }
+        }
+      } catch (err) {
+        logger.warn(
+          { err, channelId },
+          "firewall channel-role resolve failed — replying in place"
+        );
+      }
+
       return c.json(
         {
           reply,
+          // FIREWALL directives for the bridge (see 4b). When set, the bridge
+          // must post the reply to `deliverToExternalChannelId` (the team
+          // channel) instead of the source channel, or post nothing at all when
+          // `suppressReply` is true.
+          ...(deliverToExternalChannelId ? { deliverToExternalChannelId } : {}),
+          ...(suppressReply ? { suppressReply: true } : {}),
           // Signal the bridge to prompt onboarding when the caller is unlinked.
           ...(needsConnect
             ? { needsConnect: true, discordUserId: body.discordUserId }

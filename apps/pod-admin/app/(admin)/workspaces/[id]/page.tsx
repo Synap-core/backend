@@ -21,6 +21,7 @@ import { OverviewTab } from "./_lib/overview-tab";
 import { MembersTab } from "./_lib/members-tab";
 import { ApiKeysTab } from "./_lib/api-keys-tab";
 import { ConnectionsTab } from "./_lib/connections-tab";
+import { GovernanceTab } from "./_lib/governance-tab";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -39,8 +40,19 @@ type Workspace = {
   archivedAt?: Date | string | null;
 };
 
-type WorkspaceTab = "overview" | "members" | "api-keys" | "connections";
-const TABS: WorkspaceTab[] = ["overview", "members", "api-keys", "connections"];
+type WorkspaceTab =
+  | "overview"
+  | "members"
+  | "api-keys"
+  | "connections"
+  | "governance";
+const TABS: WorkspaceTab[] = [
+  "overview",
+  "members",
+  "api-keys",
+  "connections",
+  "governance",
+];
 
 // ─── Helpers (same as list page) ──────────────────────────────────────
 
@@ -247,6 +259,15 @@ function WorkspaceDetailInner() {
             <div className="pt-5">
               {ws ? (
                 <ConnectionsTab workspaceId={ws.id} />
+              ) : wsQuery.isLoading ? (
+                <TabSkeleton />
+              ) : null}
+            </div>
+          </Tab>
+          <Tab key="governance" title="Governance">
+            <div className="pt-5">
+              {ws ? (
+                <GovernanceTab ws={ws} />
               ) : wsQuery.isLoading ? (
                 <TabSkeleton />
               ) : null}

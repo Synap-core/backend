@@ -28,6 +28,7 @@ import { searchService } from "@synap/search";
 import { resolveIntelligenceService } from "../../../utils/intelligence-routing.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../../../utils/materialize-composite.js";
+import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
 import { relationsRouter } from "../../relations.js";
 import {
@@ -669,6 +670,163 @@ export function registerCaptureRoutes(app: HubHono): void {
       });
     } catch (err) {
       logger.error({ err, userId }, "POST /import/apply failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /capture/graph
+   *
+   * Propose a whole CRM graph in ONE reviewable composite proposal — the
+   * keystone of the "understand the server → propose entities + relations"
+   * flow. Takes the agent's DESIGNED graph ({ entities, relations }) and creates
+   * a single `import.graph` proposal whose approval materializes everything
+   * atomically via materializeCompositeGraph (the exact path /import/apply uses).
+   * The operator reviews + accepts ONCE instead of approving N single proposals.
+   *
+   * Entities may CREATE (profileSlug + title/properties) or LINK an existing
+   * entity (existingEntityId) so the graph mixes new + known without duplicates.
+   * Relations reference entities by their `ref` (resolved to real ids on approve).
+   */
+  app.post("/capture/graph", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const userId = c.get("userId") as string;
+    const body = (await c.req.json().catch(() => null)) as {
+      workspaceId?: string;
+      entities?: Array<{
+        ref: string;
+        profileSlug: string;
+        title?: string;
+        properties?: Record<string, unknown>;
+        existingEntityId?: string;
+      }>;
+      relations?: Array<{ sourceRef: string; targetRef: string; type: string }>;
+      // Discord channel → entity bindings, applied on APPROVE (after the entities
+      // materialize): each channel is bound to refToRealId[entityRef] with its
+      // firewall role. Lets one accept land entities + relations + channel binds.
+      bindings?: Array<{
+        externalChannelId: string;
+        entityRef: string;
+        branchPurpose?: "client-comms" | "team";
+        title?: string;
+      }>;
+      summary?: string;
+    } | null;
+
+    if (!body || !Array.isArray(body.entities) || body.entities.length === 0) {
+      return c.json({ error: "entities[] is required (at least one)" }, 400);
+    }
+    // Refs must be unique; relations must reference known refs (fail loud — a
+    // dangling ref would silently drop the link at materialization time).
+    const refs = new Set<string>();
+    for (const e of body.entities) {
+      if (!e.ref || !e.profileSlug) {
+        return c.json(
+          { error: "each entity needs a `ref` and a `profileSlug`" },
+          400
+        );
+      }
+      if (refs.has(e.ref)) {
+        return c.json({ error: `duplicate entity ref: ${e.ref}` }, 400);
+      }
+      refs.add(e.ref);
+    }
+    const relations = Array.isArray(body.relations) ? body.relations : [];
+    for (const r of relations) {
+      if (!refs.has(r.sourceRef) || !refs.has(r.targetRef)) {
+        return c.json(
+          {
+            error: `relation references an unknown ref: ${r.sourceRef} -> ${r.targetRef}`,
+          },
+          400
+        );
+      }
+    }
+    const bindings = Array.isArray(body.bindings) ? body.bindings : [];
+    for (const b of bindings) {
+      if (!b.externalChannelId || !b.entityRef) {
+        return c.json(
+          { error: "each binding needs `externalChannelId` and `entityRef`" },
+          400
+        );
+      }
+      if (!refs.has(b.entityRef)) {
+        return c.json(
+          { error: `binding references an unknown entity ref: ${b.entityRef}` },
+          400
+        );
+      }
+    }
+
+    try {
+      const operations: CompositeProposalOperation[] = [
+        ...body.entities.map((e) => ({
+          op: "create_entity" as const,
+          ref: e.ref,
+          profileSlug: e.profileSlug,
+          title: e.title ?? e.ref,
+          properties: e.properties ?? {},
+          ...(e.existingEntityId
+            ? { existingEntityId: e.existingEntityId }
+            : {}),
+        })),
+        ...relations.map((r) => ({
+          op: "create_relation" as const,
+          sourceRef: r.sourceRef,
+          targetRef: r.targetRef,
+          type: r.type,
+        })),
+      ];
+
+      const bindingNote = bindings.length
+        ? `, ${bindings.length} channel bind${bindings.length === 1 ? "" : "s"}`
+        : "";
+      const summary =
+        body.summary ??
+        `Proposed graph: ${body.entities.length} entit${body.entities.length === 1 ? "y" : "ies"}, ${relations.length} link${relations.length === 1 ? "" : "s"}${bindingNote}`;
+
+      const { proposal: created } = await createEventBackedProposal({
+        userId,
+        workspaceId: body.workspaceId ?? null,
+        targetType: "entity",
+        targetId: randomUUID(),
+        proposalType: "import.graph",
+        action: "create",
+        source: "intelligence",
+        summary,
+        // `bindings` rides alongside operations; the approve flow applies them
+        // after materialization (resolving entityRef → real id).
+        data: { operations, source: "graph", bindings },
+      });
+
+      const proposalId = (created as { id?: string })?.id;
+      logger.info(
+        {
+          userId,
+          workspaceId: body.workspaceId,
+          entityCount: body.entities.length,
+          relationCount: relations.length,
+          proposalId,
+        },
+        "POST /capture/graph"
+      );
+      return c.json({
+        proposalId,
+        entityCount: body.entities.length,
+        relationCount: relations.length,
+        bindingCount: bindings.length,
+        summary,
+      });
+    } catch (err) {
+      logger.error({ err, userId }, "POST /capture/graph failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

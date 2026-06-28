@@ -25,6 +25,7 @@ import {
   gt,
   lt,
   entities,
+  channels,
   users,
   getWorkspaceMembership,
   storedVersionValues,
@@ -1332,6 +1333,7 @@ export const proposalsRouter = router({
           linked,
           primaryId,
           entities: createdEntities,
+          refToRealId,
         } = await materializeCompositeGraph(
           payload.operations,
           entityCaller,
@@ -1387,6 +1389,60 @@ export const proposalsRouter = router({
         }
         // Membership: project lens (entity → belongs_to_project → project).
         await stampProjectMembership(proposal, producedEntityIds, userId);
+
+        // ONBOARDING bindings: a graph proposal from /capture/graph may carry
+        // `bindings` (Discord channel → entity ref + firewall role). Now that the
+        // entities are materialized, bind each channel to its real entity id and
+        // stamp its branchPurpose — so /whois + the firewall light up on accept.
+        // Additive: only onboarding graph proposals carry bindings; every other
+        // composite proposal skips this (no bindings) as a no-op.
+        const graphBindings = (
+          payload as {
+            bindings?: Array<{
+              externalChannelId: string;
+              entityRef: string;
+              branchPurpose?: string;
+              title?: string;
+            }>;
+          }
+        ).bindings;
+        if (
+          Array.isArray(graphBindings) &&
+          graphBindings.length > 0 &&
+          proposal.workspaceId
+        ) {
+          const { resolveOrCreateExternalChannel } =
+            await import("../services/connectors/inbound-recorder.js");
+          for (const b of graphBindings) {
+            const entityId = refToRealId[b.entityRef] ?? b.entityRef;
+            if (!b.externalChannelId || !entityId) continue;
+            try {
+              const { channelId } = await resolveOrCreateExternalChannel({
+                provider: "discord",
+                externalId: b.externalChannelId,
+                userId,
+                workspaceId: proposal.workspaceId,
+                title: b.title ?? b.externalChannelId,
+              });
+              await db
+                .update(channels)
+                .set({
+                  contextObjectType: "entity",
+                  contextObjectId: entityId,
+                  ...(b.branchPurpose
+                    ? { branchPurpose: b.branchPurpose }
+                    : {}),
+                  updatedAt: new Date(),
+                })
+                .where(eq(channels.id, channelId));
+            } catch (err) {
+              logger.warn(
+                { err, binding: b },
+                "onboarding: channel bind failed (entities kept)"
+              );
+            }
+          }
+        }
 
         await db
           .update(proposals)

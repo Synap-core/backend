@@ -169,6 +169,18 @@ export function registerChannelsRoutes(app: HubHono): void {
       if (q.contextObjectId) {
         conditions.push(eq(channelsTable.contextObjectId, q.contextObjectId));
       }
+      // Direct lookup by external (provider) channel id — lets callers resolve a
+      // bound channel without scanning the (capped) list. Without this, /whois
+      // client-scans up to `limit` rows and silently misses channels on pods
+      // with more than `limit` external channels.
+      if (q.externalId) {
+        conditions.push(eq(channelsTable.externalId, q.externalId));
+      }
+      if (q.externalSource) {
+        conditions.push(
+          eq(channelsTable.externalSource, q.externalSource as never)
+        );
+      }
       const rows = await db
         .select()
         .from(channelsTable)
@@ -719,6 +731,26 @@ export function registerChannelsRoutes(app: HubHono): void {
             and(
               eq(channelsTable.id, channelId),
               isNull(channelsTable.parentChannelId)
+            )
+          );
+      }
+
+      // 3b. Persist the channel's firewall role (branchPurpose) INDEPENDENTLY of
+      //     the parent/child shape. The explicit-pick and auto-link paths set
+      //     branchPurpose WITHOUT a parentChannelId — a top-level bound channel
+      //     still needs its 'client-comms' / 'team' role for the firewall to
+      //     work. Without this, those channels land branchPurpose=NULL and the
+      //     firewall can't distinguish a client-facing channel from a team one.
+      //     Idempotent: only stamp when not already set (the parent block above
+      //     may have set it), so a re-link never clobbers the role.
+      if (body.branchPurpose) {
+        await db
+          .update(channelsTable)
+          .set({ branchPurpose: body.branchPurpose, updatedAt: new Date() })
+          .where(
+            and(
+              eq(channelsTable.id, channelId),
+              isNull(channelsTable.branchPurpose)
             )
           );
       }

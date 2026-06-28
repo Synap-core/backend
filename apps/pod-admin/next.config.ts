@@ -12,7 +12,7 @@ const nextConfig: NextConfig = {
   // package directly (it ships pre-built `dist/` so transpilation is not
   // required, but listing it keeps Next.js's source-map probe happy when
   // the workspace symlink is followed during dev).
-  transpilePackages: ["@synap-core/api-types"],
+  transpilePackages: ["@synap-core/api-types", "@synap/governance-policy"],
 };
 
 export default nextConfig;
