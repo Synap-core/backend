@@ -87,8 +87,9 @@ Ask yourself: _who does this knowledge serve?_ **There is no private AI scratchp
 
 ```bash
 # CLI (preferred — auth automatic, --json = clean output)
-synap orient --json                                    # discover userId + workspaces
-synap use <workspace-name-or-id>                       # set active workspace
+synap orient --json                                    # discover userId + workspaces + projects
+synap lens                                             # where am I? workspace + project + session (this Claude session)
+synap use <workspace-name-or-id>                       # focus a workspace (this session)
 synap create entity --profile=task --name="…" --props='{"status":"todo","priority":"high"}' --json
 synap set entity <id> --props='{"status":"done"}' --json  # merge-patch (only changed keys)
 synap ask "your question" --json                       # THE read verb — routes to the right store(s) + shows which answered
@@ -150,13 +151,41 @@ Call this once at session start. The response includes every system profile and 
 
 ---
 
+## Lenses — where you are vs. what you can reach
+
+You don't work "inside a workspace" the way you'd work inside a folder. You operate **across the whole pod**, and you **focus** through up to three composable lenses. **Lenses narrow; they never silo.** Omitting them is legal and common — that's pod-wide.
+
+| Lens          | What it is                                                                                                | Granularity                      | How to set (this session)                        |
+| ------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------ |
+| **Workspace** | a **domain** (Builder, Marketing, a client) — the home for domain `knowledge` + workspace-scoped profiles | usually one, **not necessarily** | `synap use <name-or-id>`                         |
+| **Project**   | a **cross-cutting** dimension (a client, an initiative) — orthogonal to workspace, composable with it     | optional                         | `synap project use <id>` / `clear`               |
+| **Session**   | the **work room** for the current goal (holds goal, deliverables, progress)                               | **the day-to-day move**          | `synap session start --goal "…"` / `attach <id>` |
+
+- **The connection is pod-wide by design.** Your MCP/CLI link is _not_ welded to a workspace — reads default pod-wide, writes default to a sensible workspace. Pass a lens to narrow a single call; the lens is a focus, not a fence.
+- **These are per-Claude-session.** Two concurrent Claude sessions can sit on different workspaces/projects/sessions without colliding. `synap use` here rebinds **this** session only.
+- **Inspect anytime:** `synap lens` → the workspace + project + session this session resolves to.
+
+### The "am I in the right place?" reflex
+
+**Before the FIRST write of a new unit of work**, check your lens and orient if you're unsure:
+
+1. `synap lens` — am I scoped where this work belongs?
+2. If unsure what exists → `synap orient` (lists workspaces **and** projects) — never guess IDs.
+3. **Connect or create:** if the right workspace / project / session doesn't exist yet, create it (workspaces/projects are rare; **a session is the normal per-task move**). If it exists, attach to it.
+
+**Don't re-orient mid-flow.** Once you've oriented and you're in a run of related writes, keep going — re-check only when you **start a new piece of work** or switch domains. The reflex guards the _start_ of work, not every call.
+
+> Sessions are the everyday primitive: opening/attaching one is routine. Changing workspace or project is occasional — do it deliberately, when the work's domain genuinely changes.
+
+---
+
 ## Synap-first operating mode
 
 > **MCP clients** (Claude Desktop, Raycast, OpenClaw with MCP): use `synap_*` tool names — they wrap auth and governance automatically. **REST / HTTP clients**: use the endpoints below.
 
 These five rules override default assistant behavior when connected to a Synap pod:
 
-**1. Orient before acting**  
+**1. Orient before acting** _(and check your lens — see "am I in the right place?" above)_  
 Run `scripts/orient.sh` or call these endpoints at the start of every session — before searching, before creating, before answering any question about the user's data:
 
 ```
@@ -204,11 +233,13 @@ When Claude Code (or any agent with Bash access) is using this skill, prefer the
 
 **Session context — set once, never repeat:**
 
-The CLI reads the active pod and workspace from `~/.synap/config.json`. Set context once at the start of a session; all subsequent commands inherit it automatically. Do NOT pass `--pod-url`, `--api-key`, or `--workspace` on every command.
+The CLI inherits your pod + lens automatically; set them once and every later command picks them up. Do NOT pass `--pod-url`, `--api-key`, or `--workspace` on every command. Inside a Claude session, `synap use` / `synap project use` bind **this session's lens** (`~/.synap/lenses/<session_id>.json`) — so concurrent sessions stay independent; outside one, they set the global default (`~/.synap/config.json`).
 
 ```bash
 synap pods use <profile-name>          # switch active pod
-synap use <workspace-id>               # switch active workspace (captures land here — it IS the domain)
+synap use <workspace-id>               # focus a workspace (this session) — captures land here; it IS the domain
+synap project use <id>                 # add the project lens (composable)
+synap lens                             # inspect: workspace + project + session this session resolves to
 ```
 
 **Always orient first:**
