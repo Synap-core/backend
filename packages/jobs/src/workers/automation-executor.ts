@@ -695,7 +695,11 @@ function executeTransformStep(
       case "url_extract": {
         const text =
           typeof current === "string" ? current : String(current ?? "");
-        current = text.match(/https?:\/\/[^\s>]+/g) ?? [];
+        // Strip trailing sentence punctuation/brackets so "see https://x.com."
+        // yields "https://x.com" (not the broken "https://x.com.").
+        current = (text.match(/https?:\/\/[^\s>]+/g) ?? []).map((u) =>
+          u.replace(/[.,!?;:'")\]}>]+$/, "")
+        );
         break;
       }
       default:

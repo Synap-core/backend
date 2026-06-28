@@ -297,6 +297,8 @@ export async function createCapabilityFromDefinition(
         .update(toolsTable)
         .set({
           credentialRef: credentialRef ?? null,
+          config: t.config ?? {},
+          metadata: t.metadata ?? {},
           ...(verbs.length > 0 ? { capabilities: verbs } : {}),
           updatedAt: new Date(),
         })
@@ -318,6 +320,7 @@ export async function createCapabilityFromDefinition(
       credentialRef,
       executor: t.executor ?? "is-agent",
       config: t.config,
+      metadata: t.metadata,
       workspaceId,
     });
 

@@ -27,7 +27,7 @@
         "position": { "x": 0, "y": 120 },
         "data": {
           "label": "Extract URLs",
-          "expression": "{{trigger.payload.content}} | url_extract"
+          "expression": "{{trigger.payload.data.content}} | url_extract"
         }
       },
       {
@@ -50,7 +50,11 @@
           "config": {
             "profileSlug": "bookmark",
             "title": "{{loop.item}}",
-            "properties": { "url": "{{loop.item}}" }
+            "properties": {
+              "url": "{{loop.item}}",
+              "sourceMessageId": "{{trigger.payload.data.messageId}}",
+              "sourceChannelId": "{{trigger.payload.data.threadId}}"
+            }
           }
         }
       }

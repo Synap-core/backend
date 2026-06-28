@@ -153,6 +153,7 @@ export function registerDiscordRoutes(app: HubHono): void {
         idempotencySeed: `${body.discordChannelId}:${body.messageId}`,
         senderExternalId: body.discordUserId,
         senderKeyId: callerKeyId,
+        messageId: body.messageId,
       });
       return c.json({ recorded }, 200);
     } catch (err) {
@@ -270,6 +271,7 @@ export function registerDiscordRoutes(app: HubHono): void {
           // user so the message row carries a sender block in metadata.
           senderExternalId: body.discordUserId,
           senderKeyId: callerKeyId,
+          messageId: body.messageId,
         });
 
       if (!recorded) {

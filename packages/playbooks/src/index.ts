@@ -366,6 +366,8 @@ export interface CapabilityToolDef {
   credentialRef?: string;
   executor?: ExecutorRef;
   config?: Record<string, unknown>;
+  /** Descriptive behavioral config stored in tool.metadata (does NOT reset approval). */
+  metadata?: Record<string, unknown>;
 }
 
 /** A skill the definition creates — mirrors the skills.create body. */

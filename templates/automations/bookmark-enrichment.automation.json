@@ -3,8 +3,8 @@
   "triggerType": "event",
   "status": "active",
   "triggerConfig": {
-    "eventPattern": "entities.create.completed",
-    "filters": { "type": "bookmark" }
+    "eventPattern": "entity.create.completed",
+    "filters": { "profileSlug": "bookmark" }
   },
   "flowDefinition": {
     "nodes": [
@@ -16,8 +16,8 @@
           "triggerType": "event",
           "label": "Bookmark created",
           "config": {
-            "eventPattern": "entities.create.completed",
-            "filters": { "type": "bookmark" }
+            "eventPattern": "entity.create.completed",
+            "filters": { "profileSlug": "bookmark" }
           }
         }
       },
@@ -30,7 +30,7 @@
           "skillName": "bookmark-enrichment",
           "skillTitle": "Bookmark Enrichment",
           "inputMapping": {
-            "entityId": "{{trigger.payload.id}}"
+            "entityId": "{{trigger.payload.subjectId}}"
           }
         }
       }

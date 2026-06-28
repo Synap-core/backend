@@ -98,6 +98,7 @@ export const toolsRouter = router({
         credentialRef: z.string().optional(),
         executor: z.enum(EXECUTORS).default("is-agent"),
         config: z.record(z.string(), z.unknown()).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
         /** Omit (null) for pod-wide. */
         workspaceId: z.string().uuid().optional(),
         agentUserId: z.string().uuid().optional(),
@@ -138,6 +139,7 @@ export const toolsRouter = router({
           credentialRef: input.credentialRef,
           executor: input.executor,
           config: input.config ?? {},
+          metadata: input.metadata ?? {},
         })
         .returning();
       emitSideEffects({
@@ -162,6 +164,7 @@ export const toolsRouter = router({
         description: z.string().optional(),
         credentialRef: z.string().optional(),
         config: z.record(z.string(), z.unknown()).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
         executor: z.enum(EXECUTORS).optional(),
         kind: z.enum(TOOL_KINDS).optional(),
         inputSchema: z.record(z.string(), z.unknown()).optional(),
@@ -221,6 +224,7 @@ export const toolsRouter = router({
           description: input.description ?? existing.description,
           credentialRef: input.credentialRef ?? existing.credentialRef,
           config: input.config ?? existing.config,
+          metadata: input.metadata ?? existing.metadata,
           executor: input.executor ?? existing.executor,
           kind: input.kind ?? existing.kind,
           inputSchema: input.inputSchema ?? existing.inputSchema,

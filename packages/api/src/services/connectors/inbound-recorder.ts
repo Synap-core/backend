@@ -228,6 +228,13 @@ export interface RecordInboundMessageArgs {
    * mapping table.
    */
   senderKeyId?: string;
+  /**
+   * The native message id from the external provider (e.g. Discord snowflake).
+   * Surfaced in the `external_message.received` event data so automations can
+   * read `{{trigger.payload.data.messageId}}` and later pin or reference the
+   * source message.
+   */
+  messageId?: string;
 }
 
 export interface RecordInboundMessageResult {
@@ -349,9 +356,15 @@ export async function recordInboundMessage(
       channelId,
       provider: args.provider,
       threadId: args.externalId,
+      messageId: args.messageId,
       participantName: args.participant,
       messagePreview: preview,
-      content: args.text,
+      // Full text so automations can extract URLs/structure past the 120-char
+      // preview. Bounded to 4k: this `data` blob is persisted verbatim in
+      // automation_runs.trigger_payload (+ forwarded to webhook subscribers), so
+      // an unbounded body would bloat the run log and over-expose message text.
+      // 4k covers any real chat message (Discord caps at 2k/4k); links live early.
+      content: args.text.slice(0, 4000),
     },
   }).catch((err) => {
     logger.warn({ err, channelId }, "emitSideEffects failed (non-fatal)");

@@ -116,6 +116,34 @@ export class DiscordConnector implements MessagingConnector {
     }
   }
 
+  /**
+   * Pin a message in a Discord channel via PUT /channels/{channelId}/pins/{messageId}.
+   * Discord allows ~5 pins per 10 seconds per channel; callers should handle the
+   * 429 (rate-limit) error thrown here.
+   */
+  async pinMessage(channelId: string, messageId: string): Promise<void> {
+    const res = await fetch(
+      `${DISCORD_API_BASE}/channels/${channelId}/pins/${messageId}`,
+      {
+        method: "PUT",
+        headers: this.headers(),
+      }
+    );
+    if (res.status === 429) {
+      const retryAfter = res.headers.get("Retry-After") ?? "unknown";
+      throw new Error(
+        `Discord pinMessage rate limited (429) — retry after ${retryAfter}s`
+      );
+    }
+    if (res.status !== 204 && !res.ok) {
+      const errBody = await res.text().catch(() => "");
+      throw new Error(
+        `Discord pinMessage failed: ${res.status}${errBody ? ` — ${errBody.slice(0, 200)}` : ""}`
+      );
+    }
+    // 204 No Content = success
+  }
+
   // ── Inbound / sync surface: not used in V0 (bot process owns inbound) ───────
 
   async getAuthUrl(): Promise<string> {
