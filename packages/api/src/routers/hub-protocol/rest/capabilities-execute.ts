@@ -25,11 +25,8 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { db, skills, eq, and, or, isNull } from "@synap/database";
 
-import { gateCapabilityExecution } from "../../../services/capabilities/gate-capability-execution.js";
-import { executeSkillViaIS } from "../../../services/skills/execute-skill-via-is.js";
-import { createPendingProposal } from "../../../utils/permission-check.js";
+import { executeCapability } from "../../../services/capabilities/execute-capability.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -127,100 +124,47 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
     const { userId } = acting;
 
     try {
-      // Resolve the backing skill — by id, or by verb NAME scoped exactly like the
-      // capability registry read-model + the worker's `case "capability"`:
-      // pod-wide (NULL workspace) OR this workspace OR owned by the actor.
-      const [skillRow] = await db
-        .select({
-          id: skills.id,
-          approved: skills.approved,
-          userId: skills.userId,
-        })
-        .from(skills)
-        .where(
-          skillId
-            ? eq(skills.id, skillId)
-            : and(
-                eq(skills.name, verbId!),
-                or(
-                  isNull(skills.workspaceId),
-                  eq(skills.workspaceId, workspaceId),
-                  eq(skills.userId, userId)
-                )
-              )
-        )
-        .limit(1);
-
-      if (!skillRow) {
-        return c.json(
-          {
-            error: `Capability ${
-              skillId ? `skill "${skillId}"` : `verb "${verbId}"`
-            } not found in this workspace.`,
-          },
-          404
-        );
-      }
-
-      // SAME gate as the worker + IS doors. Operator/owner run (no agent identity):
-      //   owner-bypass (bearer owns the skill) → run; non-owner unapproved → propose.
-      const decision = await gateCapabilityExecution({
-        capabilityKind: "skill",
-        capabilityId: skillRow.id,
-        skill: skillRow,
-        actorUserId: userId,
-        agentUserId: null,
-        workspaceId,
-        issuer: "hub.capabilities-execute",
-      });
-
-      if (decision.decision === "deny") {
-        return c.json(
-          { error: `Capability refused by gate: ${decision.reason}` },
-          403
-        );
-      }
-
-      if (decision.decision === "dry-run") {
-        return c.json(
-          { status: "dry-run" as const, skillId: skillRow.id, dryRun: true },
-          200
-        );
-      }
-
-      if (decision.decision === "propose") {
-        // Route to a reviewable proposal that, on approval, re-enters the SAME
-        // executeSkillViaIS path via the `capability.run` approve-executor.
-        const proposal = await createPendingProposal({
-          userId,
-          workspaceId,
-          targetType: "capability",
-          targetId: skillRow.id,
-          proposalType: "capability.run",
-          data: {
-            skillId: skillRow.id,
-            verbId: verbId ?? null,
-            parameters: parameters ?? {},
-            workspaceId,
-          },
-          notificationDescription: `Run capability ${verbId ?? skillRow.id}`,
-        });
-        return c.json(
-          { proposed: true as const, proposalId: proposal.id },
-          202
-        );
-      }
-
-      // decision === "run" → execute the backing skill in the IS sandbox.
-      const result = await executeSkillViaIS({
-        skillId: skillRow.id,
-        userId,
+      // ONE shared core (also used by the MCP `run_capability` tool).
+      const outcome = await executeCapability({
+        verbId,
+        skillId,
         parameters,
+        workspaceId,
+        userId,
       });
-      return c.json(
-        { status: "run" as const, skillId: skillRow.id, result },
-        200
-      );
+
+      switch (outcome.kind) {
+        case "not_found":
+          return c.json({ error: outcome.message }, 404);
+        case "deny":
+          return c.json(
+            { error: `Capability refused by gate: ${outcome.reason}` },
+            403
+          );
+        case "dry-run":
+          return c.json(
+            {
+              status: "dry-run" as const,
+              skillId: outcome.skillId,
+              dryRun: true,
+            },
+            200
+          );
+        case "proposed":
+          return c.json(
+            { proposed: true as const, proposalId: outcome.proposalId },
+            202
+          );
+        case "run":
+          return c.json(
+            {
+              status: "run" as const,
+              skillId: outcome.skillId,
+              result: outcome.result,
+            },
+            200
+          );
+      }
     } catch (err) {
       logger.error(
         { err, verbId, skillId },

@@ -615,6 +615,46 @@ export const tools = {
       },
       // (synap_write_knowledge folded into synap_capture's `global` lane — a
       // pod-wide runbook is `synap_capture` with global:true. One write door.)
+
+      // ── Capabilities (connected-service verbs: Gmail, Calendar, Drive, …) ────
+      {
+        name: "synap_list_capabilities",
+        description:
+          "List the runnable capabilities in a workspace — the verbs unlocked by the user's connected services and applied templates (e.g. gmail_send, gmail_search, calendar_list, calendar_create, drive_search). Each entry has its name (the verbId you pass to synap_run_capability), a label, the backing tool, whether it is ENABLED (approved) or still DRAFT, and its governance. Call this to discover what the user can actually DO with their connections before running anything. A DRAFT capability must be enabled by the user (Settings → Capabilities) before it will run.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: { type: "string", description: "Workspace UUID" },
+          },
+          required: ["workspaceId"],
+        },
+      },
+      {
+        name: "synap_run_capability",
+        description:
+          "Run a registered capability verb (from synap_list_capabilities) with dynamic inputs — e.g. send an email, search Gmail, list/create a calendar event, search Drive. Pass verbId (the capability name) + parameters (its args). Responses mirror every governed write: a result on success, or { proposed, proposalId } when the action needs the user's approval (a side-effecting WRITE like sending email) — NEVER treat 'proposed' as an error; tell the user to approve it in Synap. A DRAFT (un-enabled) capability is refused — ask the user to enable it first.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            verbId: {
+              type: "string",
+              description:
+                "The capability name from synap_list_capabilities (e.g. 'gmail_send'). Alternatively pass skillId.",
+            },
+            skillId: {
+              type: "string",
+              description: "Direct backing-skill UUID (alternative to verbId).",
+            },
+            parameters: {
+              type: "object",
+              description:
+                "The capability's inputs — e.g. { to, subject, body } for gmail_send, { query } for gmail_search.",
+            },
+            workspaceId: { type: "string", description: "Workspace UUID" },
+          },
+          required: ["workspaceId"],
+        },
+      },
     ];
   },
 

@@ -843,6 +843,60 @@ export async function executeMCPToolViaHubProtocol(
     // (synap_write_knowledge folded into synap_capture's `global` lane — one
     // write door. A pod-wide runbook is `capture` with global:true.)
 
+    // ── Capabilities (connected-service verbs) ─────────────────────────────────
+    case "synap_list_capabilities": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      const wsId = args.workspaceId as string;
+      const { listCapabilities } =
+        await import("../../services/capabilities/capability-registry.js");
+      const capabilities = await listCapabilities({
+        workspaceId: wsId,
+        userId,
+      });
+      // Flatten to a verb-first list the agent can act on directly: each runnable
+      // verb + whether its owning capability is enabled (approved) or DRAFT.
+      const runnable = (
+        capabilities as Array<{
+          name?: string;
+          kind?: string;
+          approved?: boolean;
+          governance?: unknown;
+          verbs?: Array<{
+            id?: string;
+            label?: string;
+            kind?: string;
+            effectiveExecMode?: string;
+          }>;
+        }>
+      ).flatMap((cap) =>
+        (cap.verbs ?? []).map((v) => ({
+          verbId: v.id,
+          label: v.label ?? v.id,
+          tool: cap.name,
+          enabled: cap.approved === true,
+          execMode: v.effectiveExecMode,
+        }))
+      );
+      return ok({ capabilities, runnable });
+    }
+
+    case "synap_run_capability": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      const wsId = args.workspaceId as string;
+      const { executeCapability } =
+        await import("../../services/capabilities/execute-capability.js");
+      const outcome = await executeCapability({
+        verbId: args.verbId as string | undefined,
+        skillId: args.skillId as string | undefined,
+        parameters: args.parameters as Record<string, unknown> | undefined,
+        workspaceId: wsId,
+        userId,
+      });
+      // Surface the same discriminated outcome the hub door returns, in a shape
+      // the agent reads naturally (proposed is NOT an error).
+      return ok(outcome);
+    }
+
     default:
       throw new Error(`Unknown MCP tool: ${toolName}`);
   }
