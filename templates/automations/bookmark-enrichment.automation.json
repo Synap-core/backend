@@ -1,0 +1,44 @@
+{
+  "name": "Bookmark Enrichment (auto)",
+  "triggerType": "event",
+  "status": "active",
+  "triggerConfig": {
+    "eventPattern": "entities.create.completed",
+    "filters": { "type": "bookmark" }
+  },
+  "flowDefinition": {
+    "nodes": [
+      {
+        "id": "trigger",
+        "type": "trigger",
+        "position": { "x": 0, "y": 0 },
+        "data": {
+          "triggerType": "event",
+          "label": "Bookmark created",
+          "config": {
+            "eventPattern": "entities.create.completed",
+            "filters": { "type": "bookmark" }
+          }
+        }
+      },
+      {
+        "id": "enrich",
+        "type": "skill",
+        "position": { "x": 0, "y": 120 },
+        "data": {
+          "label": "Bookmark Enrichment",
+          "skillName": "bookmark-enrichment",
+          "skillTitle": "Bookmark Enrichment",
+          "inputMapping": {
+            "entityId": "{{trigger.payload.id}}"
+          }
+        }
+      }
+    ],
+    "edges": [{ "id": "e1", "source": "trigger", "target": "enrich" }]
+  },
+  "metadata": {
+    "source": "bridge-template",
+    "note": "The skill node carries `skillName`; the CLI seed command resolves it to the live `skillId` at install time (GET /skills by name)."
+  }
+}

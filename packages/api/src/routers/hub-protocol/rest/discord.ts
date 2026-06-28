@@ -53,6 +53,21 @@ import {
   type HubHono,
 } from "./_shared.js";
 
+const IngestRequestSchema = z
+  .object({
+    workspaceId: z.string().uuid(),
+    discordChannelId: z.string().min(1),
+    discordUserId: z.string().min(1),
+    discordUsername: z.string().min(1).optional(),
+    text: z.string().min(1).max(50_000),
+    messageId: z.string().min(1),
+  })
+  .openapi("DiscordIngestRequest");
+
+const IngestResponseSchema = z
+  .object({ recorded: z.boolean() })
+  .openapi("DiscordIngestResponse");
+
 const AgentTurnRequestSchema = z
   .object({
     workspaceId: z.string().uuid(),
@@ -80,6 +95,79 @@ const AgentTurnResponseSchema = z
   .openapi("DiscordAgentTurnResponse");
 
 export function registerDiscordRoutes(app: HubHono): void {
+  // ── POST /discord/ingest (static; registered before /discord/agent-turn) ──
+  registerOpenApi(app, {
+    method: "post",
+    path: "/discord/ingest",
+    tags: ["Discord"],
+    summary: "Record an inbound Discord message (no IS turn)",
+    description:
+      "Dedup-records the inbound message and fires external_message.received. " +
+      "Does NOT dispatch the orchestrator. Use this for pure automation pipelines " +
+      "where no AI reply is needed.",
+    request: { body: IngestRequestSchema },
+    responses: {
+      200: { description: "Record result", schema: IngestResponseSchema },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/discord/ingest", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    let body: z.infer<typeof IngestRequestSchema>;
+    try {
+      body = IngestRequestSchema.parse(await c.req.json());
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Invalid request body" },
+        400
+      );
+    }
+
+    const acting = await resolveActingContext(c, {
+      workspaceId: body.workspaceId,
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const { userId, workspaceId } = acting;
+
+    const callerKeyId = c.get("apiKeyId") as string | undefined;
+
+    try {
+      const { recorded } = await recordInboundMessage({
+        provider: "discord",
+        externalId: body.discordChannelId,
+        userId,
+        workspaceId,
+        text: body.text,
+        participant: body.discordUsername,
+        participantExternalId: body.discordUserId,
+        title: `Discord · ${body.discordUsername ?? body.discordUserId}`,
+        idempotencySeed: `${body.discordChannelId}:${body.messageId}`,
+        senderExternalId: body.discordUserId,
+        senderKeyId: callerKeyId,
+      });
+      return c.json({ recorded }, 200);
+    } catch (err) {
+      logger.error(
+        { err, discordChannelId: body.discordChannelId },
+        "POST /discord/ingest failed"
+      );
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /discord/agent-turn ───────────────────────────────────────────────
   registerOpenApi(app, {
     method: "post",
     path: "/discord/agent-turn",

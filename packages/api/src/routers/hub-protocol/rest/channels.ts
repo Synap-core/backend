@@ -12,8 +12,10 @@ import {
   desc,
   isNull,
 } from "@synap/database";
+// Note: channelsTable.externalId is the canonical dedup field — same as externalChannelId at insert time.
 
 import { resolveOrCreateExternalChannel } from "../../../services/connectors/inbound-recorder.js";
+import { DiscordConnector } from "../../../connectors/DiscordConnector.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -367,6 +369,105 @@ export function registerChannelsRoutes(app: HubHono): void {
       );
       return c.json(
         { error: err instanceof Error ? err.message : String(err) },
+        500
+      );
+    }
+  });
+
+  // ── POST /channels/:externalChannelId/rename ─────────────────────────────
+  // Static suffix (/rename) disambiguates from a bare /:id route.
+  registerOpenApi(app, {
+    method: "post",
+    path: "/channels/:externalChannelId/rename",
+    tags: ["Channels"],
+    summary: "Rename a Discord channel",
+    description:
+      "Resolves the EXTERNAL channel by (externalSource=provider||'discord', externalId=:externalChannelId) and calls Discord PATCH /channels/{id} to rename it. Rate-limit: ~2 renames per 10 min per channel.",
+    request: {
+      body: z.object({
+        name: z.string().min(1).max(100),
+        provider: z.string().optional(),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Renamed",
+        schema: z.object({ ok: z.literal(true), name: z.string() }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Channel not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/channels/:externalChannelId/rename", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const externalChannelId = c.req.param("externalChannelId");
+    let body: { name: string; provider?: string };
+    try {
+      body = z
+        .object({
+          name: z.string().min(1).max(100),
+          provider: z.string().optional(),
+        })
+        .parse(await c.req.json());
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Invalid request body" },
+        400
+      );
+    }
+
+    const provider = body.provider ?? "discord";
+
+    try {
+      // Resolve the channel to confirm it exists and the caller can access it.
+      const userId = c.get("userId") as string;
+      const channel = await db.query.channels.findFirst({
+        where: and(
+          eq(channelsTable.externalSource, provider),
+          eq(channelsTable.externalId, externalChannelId)
+        ),
+      });
+      if (!channel) {
+        return c.json(
+          { error: `No ${provider} channel with id ${externalChannelId}` },
+          404
+        );
+      }
+      // Confirm the caller owns (or can access) the channel's workspace.
+      if (channel.userId !== userId) {
+        const acting = await resolveActingContext(c, {
+          workspaceId: channel.workspaceId ?? undefined,
+        });
+        if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      }
+
+      if (provider !== "discord") {
+        return c.json(
+          { error: `renameChannel is only supported for provider 'discord'` },
+          400
+        );
+      }
+
+      const connector = new DiscordConnector();
+      await connector.renameChannel(externalChannelId, body.name);
+
+      return c.json({ ok: true as const, name: body.name }, 200);
+    } catch (err) {
+      logger.error(
+        { err, externalChannelId },
+        "POST /channels/:externalChannelId/rename failed"
+      );
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
         500
       );
     }

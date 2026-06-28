@@ -692,6 +692,12 @@ function executeTransformStep(
             ? current.trim()
             : String(current ?? "").trim();
         break;
+      case "url_extract": {
+        const text =
+          typeof current === "string" ? current : String(current ?? "");
+        current = text.match(/https?:\/\/[^\s>]+/g) ?? [];
+        break;
+      }
       default:
         logger.warn({ pipe }, "transform: unknown pipe operation — skipping");
     }

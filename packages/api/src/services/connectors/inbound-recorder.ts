@@ -351,6 +351,7 @@ export async function recordInboundMessage(
       threadId: args.externalId,
       participantName: args.participant,
       messagePreview: preview,
+      content: args.text,
     },
   }).catch((err) => {
     logger.warn({ err, channelId }, "emitSideEffects failed (non-fatal)");

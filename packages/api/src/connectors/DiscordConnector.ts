@@ -91,6 +91,31 @@ export class DiscordConnector implements MessagingConnector {
     }
   }
 
+  /**
+   * Rename a Discord channel via PATCH /channels/{channelId}.
+   * Discord allows ~2 renames per 10 minutes per channel — callers should
+   * debounce and handle the 429 (rate-limit) error thrown here.
+   */
+  async renameChannel(channelId: string, name: string): Promise<void> {
+    const res = await fetch(`${DISCORD_API_BASE}/channels/${channelId}`, {
+      method: "PATCH",
+      headers: this.headers(),
+      body: JSON.stringify({ name }),
+    });
+    if (res.status === 429) {
+      const retryAfter = res.headers.get("Retry-After") ?? "unknown";
+      throw new Error(
+        `Discord renameChannel rate limited (429) — retry after ${retryAfter}s`
+      );
+    }
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
+      throw new Error(
+        `Discord renameChannel failed: ${res.status}${errBody ? ` — ${errBody.slice(0, 200)}` : ""}`
+      );
+    }
+  }
+
   // ── Inbound / sync surface: not used in V0 (bot process owns inbound) ───────
 
   async getAuthUrl(): Promise<string> {
