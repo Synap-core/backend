@@ -272,14 +272,23 @@ export async function createCapabilityFromDefinition(
         ? vaultByRef.get(t.credentialRef)
         : t.credentialRef;
 
-    // Idempotent: reuse an existing tool with the same name in scope. Re-apply
-    // refreshes its credentialRef + verb catalog instead of creating a duplicate.
+    // Idempotent: reuse an existing tool in scope. The match key is the tool's
+    // STABLE IDENTITY: for a credentialed tool that is `credentialRef` (which
+    // carries a pod-wide unique index, mig 0140), NOT the name. This is what lets
+    // a template converge with the verb-less provider tool `connect`/syncToolRows
+    // already materialized for the same `nango://<provider>` ref — whose name is
+    // Nango's integration displayName, which need not equal the template's tool
+    // name. Matching by name there would miss, then the create below would throw
+    // on the unique index. Tools without a credentialRef (builtin/script) fall
+    // back to name-matching. Re-apply refreshes the name + verb catalog.
     const [existingTool] = await db
       .select({ id: toolsTable.id })
       .from(toolsTable)
       .where(
         and(
-          eq(toolsTable.name, t.name),
+          credentialRef
+            ? eq(toolsTable.credentialRef, credentialRef)
+            : eq(toolsTable.name, t.name),
           workspaceId
             ? eq(toolsTable.workspaceId, workspaceId)
             : isNull(toolsTable.workspaceId)
@@ -296,6 +305,10 @@ export async function createCapabilityFromDefinition(
       await db
         .update(toolsTable)
         .set({
+          // Adopt the template's canonical name so skills can address the tool by
+          // a known name (the bare provider tool was named by Nango's displayName).
+          name: t.name,
+          description: t.description,
           credentialRef: credentialRef ?? null,
           config: t.config ?? {},
           metadata: t.metadata ?? {},

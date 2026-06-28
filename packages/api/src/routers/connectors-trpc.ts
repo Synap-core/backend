@@ -67,6 +67,14 @@ import type { Context } from "../types/context.js";
  * is kept (today's behavior) and no verbs are applied.
  */
 const PROVIDER_TEMPLATE_KEY: Record<string, string> = {
+  // The unified Google connection: ONE `google` integration (Gmail + Calendar +
+  // Drive via OAuth scopes) → the multi-API `nango-google` family. Gmail calls
+  // ride a Base-Url-Override to gmail.googleapis.com; Calendar/Drive use the
+  // provider-default host. This is the canonical Google path.
+  google: "nango-google",
+  // Back-compat: a dedicated `gmail`-only integration still maps to the
+  // Gmail-only family. Not the default path (the centralized model connects
+  // `google`), but kept so an existing gmail-scoped connection keeps its verbs.
   gmail: "nango-gmail",
 };
 
