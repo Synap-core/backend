@@ -235,6 +235,14 @@ export class NangoConnector implements SyncConnector {
     method: string;
     path: string;
     body?: unknown;
+    /**
+     * Override the provider's default proxy base URL for THIS call. Needed when
+     * one connection spans multiple API hosts — e.g. a single `google` OAuth
+     * connection reaches Calendar/Drive on www.googleapis.com (the provider
+     * default) but Gmail on gmail.googleapis.com. Maps to Nango's
+     * `Base-Url-Override` proxy header.
+     */
+    baseUrlOverride?: string;
   }): Promise<{
     status: number;
     headers: Record<string, string>;
@@ -246,6 +254,9 @@ export class NangoConnector implements SyncConnector {
         ...this.authHeaders(),
         "Connection-Id": params.connectionId,
         "Provider-Config-Key": params.providerConfigKey,
+        ...(params.baseUrlOverride
+          ? { "Base-Url-Override": params.baseUrlOverride }
+          : {}),
       },
       body: params.body ? JSON.stringify(params.body) : undefined,
     });

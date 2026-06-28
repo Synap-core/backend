@@ -463,6 +463,12 @@ export interface TriggerProviderActionInput {
   /** Optional hint to pick a specific account when multiple connections exist. */
   accountHint?: string;
   /**
+   * Optional per-call proxy base-URL override (Nango `Base-Url-Override`). Lets a
+   * single connection reach multiple API hosts — e.g. a `google` connection uses
+   * gmail.googleapis.com for Gmail but the provider-default host for Calendar/Drive.
+   */
+  baseUrlOverride?: string;
+  /**
    * The AI-agent identity, when this provider call is agent-initiated. Threaded
    * to the capability-execution gate so an agent run (no owner-bypass) routes to
    * `propose` instead of auto. Absent → resolved by the safe-by-default rule
@@ -546,7 +552,7 @@ const SCHEME_ALLOWED_KINDS: Record<string, ReadonlyArray<string>> = {
 // Body is VERBATIM the original nango branch: same providerConfigKey resolution,
 // listConnections, accountHint / most-recent pick, proxyRequest, result shape.
 const nangoHandler: SchemeHandler = async ({ input, tool }) => {
-  const { userId, method, path, body, accountHint } = input;
+  const { userId, method, path, body, accountHint, baseUrlOverride } = input;
 
   const connector = await getNangoConnector();
   if (!connector) {
@@ -599,6 +605,7 @@ const nangoHandler: SchemeHandler = async ({ input, tool }) => {
     method,
     path,
     body,
+    baseUrlOverride,
   });
 
   return {
@@ -663,7 +670,7 @@ async function vaultDelegatedHandler(ctx: {
   providerIntegrationId: string;
 }): Promise<TriggerProviderActionResult> {
   const { input } = ctx;
-  const { userId, method, path, body, accountHint } = input;
+  const { userId, method, path, body, accountHint, baseUrlOverride } = input;
 
   // Resolve the provider integration + its parent provider.
   const integration = await db.query.providerIntegrations.findFirst({
@@ -745,6 +752,7 @@ async function vaultDelegatedHandler(ctx: {
       method: method ?? "GET",
       path: path ?? "/",
       body,
+      baseUrlOverride,
     });
 
     return {
@@ -1442,6 +1450,7 @@ export async function triggerProviderAction(
           path: input.path,
           body: input.body ?? null,
           accountHint: input.accountHint ?? null,
+          baseUrlOverride: input.baseUrlOverride ?? null,
           workspaceId: proposalWorkspaceId,
           agentUserId: input.agentUserId ?? null,
           sessionId: input.sessionId ?? null,

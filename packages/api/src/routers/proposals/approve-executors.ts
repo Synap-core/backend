@@ -769,6 +769,8 @@ export function registerApproveExecutors(): void {
         path,
         body: data.body as Record<string, unknown> | undefined,
         accountHint: data.accountHint as string | undefined,
+        baseUrlOverride:
+          (data.baseUrlOverride as string | undefined) ?? undefined,
         workspaceId: (data.workspaceId as string | undefined) ?? undefined,
         // Governed Door-2 re-entry: a human already approved this proposal, so
         // bypass the capability-execution gate (no re-propose) — exactly once.
@@ -883,6 +885,8 @@ export function registerApproveExecutors(): void {
             path,
             body: data.body as Record<string, unknown> | undefined,
             accountHint: data.accountHint as string | undefined,
+            baseUrlOverride:
+              (data.baseUrlOverride as string | undefined) ?? undefined,
             workspaceId: (data.workspaceId as string | undefined) ?? undefined,
             // BYPASS the capability-execution gate: a human already approved THIS
             // proposal, so this is the governed Door-2 re-entry — dispatch directly,

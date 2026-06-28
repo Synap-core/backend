@@ -791,6 +791,13 @@ export function registerConnectorsRoutes(app: HubHono): void {
                   /** Optional hint to pick a specific account when multiple connections exist. */
                   accountHint: z.string().optional(),
                   /**
+                   * Optional per-call proxy base-URL override (Nango
+                   * `Base-Url-Override`). Lets one connection reach multiple API
+                   * hosts — e.g. a `google` connection uses gmail.googleapis.com
+                   * for Gmail but the provider default for Calendar/Drive.
+                   */
+                  baseUrlOverride: z.string().optional(),
+                  /**
                    * Optional acting workspace — routes a `propose` verdict's
                    * review proposal to the right workspace and scopes the gate.
                    */
@@ -865,6 +872,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         path,
         body,
         accountHint,
+        baseUrlOverride,
         workspaceId,
         agentUserId,
       } = c.req.valid("json");
@@ -893,6 +901,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
           path,
           body,
           accountHint,
+          baseUrlOverride,
           workspaceId,
           agentUserId: resolvedAgentUserId,
         });
