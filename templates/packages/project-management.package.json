@@ -1,0 +1,2043 @@
+{
+  "_meta": {
+    "slug": "project-management",
+    "icon": "kanban-square",
+    "color": "#3B82F6",
+    "tags": ["projects", "tasks", "sprints", "okrs", "agile"]
+  },
+  "workspaceName": "Project Management OS",
+  "description": "OKR-first project management workspace. Objectives, key results, projects, sprints, and tasks as connected entities — navigable from any direction in a relationship graph. Designed for solo founders and small teams who want goal-execution alignment without per-seat overhead.",
+  "workspaceType": "operational",
+  "workspaceSubtype": "project-management",
+  "extends": [
+    {
+      "source": "project-management-pack",
+      "import": {
+        "profiles": ["project", "task", "sprint", "person"],
+        "views": [
+          "sprint-board",
+          "sprint-list",
+          "project-board",
+          "project-timeline",
+          "task-inbox",
+          "weekly-focus",
+          "relationship-graph",
+          "retrospective-board",
+          "backlog",
+          "calendar"
+        ]
+      }
+    }
+  ],
+  "profiles": [
+    {
+      "slug": "okr",
+      "displayName": "OKR",
+      "description": "A quarterly objective with measurable key results",
+      "icon": "target",
+      "color": "#2E4EAD",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "okr-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Planning",
+            "Active",
+            "On Track",
+            "At Risk",
+            "Completed",
+            "Cancelled"
+          ],
+          "constraints": { "defaultValue": "Active" }
+        },
+        {
+          "slug": "okr-quarter",
+          "label": "Quarter",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Q1 2025",
+            "Q2 2025",
+            "Q3 2025",
+            "Q4 2025",
+            "Q1 2026",
+            "Q2 2026",
+            "Q3 2026",
+            "Q4 2026"
+          ]
+        },
+        {
+          "slug": "okr-owner",
+          "label": "Owner",
+          "valueType": "entity_id",
+          "targetProfileSlug": "person"
+        },
+        {
+          "slug": "okr-type",
+          "label": "Type",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["Company", "Team", "Personal"]
+        },
+        { "slug": "kr1-label", "label": "Key Result 1", "valueType": "string" },
+        { "slug": "kr1-target", "label": "KR1 Target", "valueType": "number" },
+        {
+          "slug": "kr1-current",
+          "label": "KR1 Current",
+          "valueType": "number"
+        },
+        { "slug": "kr1-unit", "label": "KR1 Unit", "valueType": "string" },
+        { "slug": "kr2-label", "label": "Key Result 2", "valueType": "string" },
+        { "slug": "kr2-target", "label": "KR2 Target", "valueType": "number" },
+        {
+          "slug": "kr2-current",
+          "label": "KR2 Current",
+          "valueType": "number"
+        },
+        { "slug": "kr2-unit", "label": "KR2 Unit", "valueType": "string" },
+        { "slug": "kr3-label", "label": "Key Result 3", "valueType": "string" },
+        { "slug": "kr3-target", "label": "KR3 Target", "valueType": "number" },
+        {
+          "slug": "kr3-current",
+          "label": "KR3 Current",
+          "valueType": "number"
+        },
+        { "slug": "kr3-unit", "label": "KR3 Unit", "valueType": "string" },
+        {
+          "slug": "okr-confidence",
+          "label": "Confidence",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["High", "Medium", "Low"]
+        },
+        {
+          "slug": "okr-review-date",
+          "label": "Review Date",
+          "valueType": "date"
+        },
+        { "slug": "okr-notes", "label": "Notes", "valueType": "string" }
+      ]
+    },
+    {
+      "slug": "project",
+      "displayName": "Project",
+      "description": "A bounded body of work with a clear scope, owner, and deadline",
+      "icon": "folder",
+      "color": "#7C3AED",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "project-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Backlog",
+            "Planning",
+            "In Progress",
+            "On Hold",
+            "Completed",
+            "Cancelled"
+          ],
+          "constraints": { "defaultValue": "In Progress" }
+        },
+        {
+          "slug": "project-priority",
+          "label": "Priority",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["Critical", "High", "Medium", "Low"]
+        },
+        {
+          "slug": "project-linked-okr",
+          "label": "Linked OKR",
+          "valueType": "entity_id",
+          "targetProfileSlug": "okr"
+        },
+        {
+          "slug": "project-owner",
+          "label": "Owner",
+          "valueType": "entity_id",
+          "targetProfileSlug": "person"
+        },
+        { "slug": "project-start", "label": "Start Date", "valueType": "date" },
+        {
+          "slug": "project-deadline",
+          "label": "Deadline",
+          "valueType": "date"
+        },
+        {
+          "slug": "project-milestone",
+          "label": "Milestone",
+          "valueType": "string"
+        },
+        {
+          "slug": "project-health",
+          "label": "Health",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["Green", "Yellow", "Red"]
+        },
+        {
+          "slug": "project-effort",
+          "label": "Effort (days)",
+          "valueType": "number"
+        },
+        {
+          "slug": "project-tags",
+          "label": "Tags",
+          "valueType": "array",
+          "enumValues": [
+            "Product",
+            "Marketing",
+            "Ops",
+            "Engineering",
+            "Design",
+            "Research"
+          ],
+          "inputType": "select"
+        },
+        {
+          "slug": "project-outcome",
+          "label": "Expected Outcome",
+          "valueType": "string"
+        }
+      ]
+    },
+    {
+      "slug": "task",
+      "displayName": "Task",
+      "description": "An atomic unit of work with a clear owner and due date",
+      "icon": "check-square",
+      "color": "#059669",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "task-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Backlog",
+            "Todo",
+            "In Progress",
+            "Review",
+            "Done",
+            "Cancelled"
+          ],
+          "constraints": { "defaultValue": "Todo" }
+        },
+        {
+          "slug": "task-priority",
+          "label": "Priority",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["Critical", "High", "Medium", "Low"],
+          "constraints": { "defaultValue": "Medium" }
+        },
+        {
+          "slug": "task-assignee",
+          "label": "Assignee",
+          "valueType": "entity_id",
+          "targetProfileSlug": "person"
+        },
+        {
+          "slug": "task-project",
+          "label": "Project",
+          "valueType": "entity_id",
+          "targetProfileSlug": "project"
+        },
+        {
+          "slug": "task-sprint",
+          "label": "Sprint",
+          "valueType": "entity_id",
+          "targetProfileSlug": "sprint"
+        },
+        { "slug": "task-due-date", "label": "Due Date", "valueType": "date" },
+        {
+          "slug": "task-effort",
+          "label": "Effort (hours)",
+          "valueType": "number"
+        },
+        {
+          "slug": "task-type",
+          "label": "Type",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Feature",
+            "Bug",
+            "Research",
+            "Content",
+            "Ops",
+            "Review",
+            "Meeting"
+          ]
+        },
+        {
+          "slug": "task-blocked-by",
+          "label": "Blocked By",
+          "valueType": "string"
+        },
+        {
+          "slug": "task-tags",
+          "label": "Tags",
+          "valueType": "array",
+          "enumValues": [
+            "quick-win",
+            "deep-work",
+            "async",
+            "sync",
+            "waiting",
+            "recurring"
+          ],
+          "inputType": "select"
+        }
+      ]
+    },
+    {
+      "slug": "sprint",
+      "displayName": "Sprint",
+      "description": "A fixed execution cycle with a clear scope, start/end, and retrospective",
+      "icon": "zap",
+      "color": "#D97706",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "sprint-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["Planning", "Active", "Review", "Completed"],
+          "constraints": { "defaultValue": "Active" }
+        },
+        { "slug": "sprint-number", "label": "Sprint #", "valueType": "number" },
+        { "slug": "sprint-start", "label": "Start Date", "valueType": "date" },
+        { "slug": "sprint-end", "label": "End Date", "valueType": "date" },
+        {
+          "slug": "sprint-goal",
+          "label": "Sprint Goal",
+          "valueType": "string"
+        },
+        {
+          "slug": "sprint-capacity",
+          "label": "Capacity (hours)",
+          "valueType": "number"
+        },
+        {
+          "slug": "sprint-velocity",
+          "label": "Velocity (hours completed)",
+          "valueType": "number"
+        },
+        {
+          "slug": "sprint-task-count",
+          "label": "Task Count",
+          "valueType": "number"
+        },
+        {
+          "slug": "sprint-completed-count",
+          "label": "Completed Count",
+          "valueType": "number"
+        },
+        {
+          "slug": "sprint-linked-okr",
+          "label": "Linked OKR",
+          "valueType": "entity_id",
+          "targetProfileSlug": "okr"
+        }
+      ]
+    },
+    {
+      "slug": "person",
+      "displayName": "Person",
+      "description": "Team member or stakeholder",
+      "icon": "user",
+      "color": "#0891B2",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "person-role",
+          "label": "Role",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Founder",
+            "Engineer",
+            "Designer",
+            "PM",
+            "Marketing",
+            "Ops",
+            "Advisor",
+            "Stakeholder"
+          ]
+        },
+        { "slug": "person-email", "label": "Email", "valueType": "string" },
+        {
+          "slug": "person-focus",
+          "label": "Current Focus",
+          "valueType": "string"
+        },
+        {
+          "slug": "person-okr-owner",
+          "label": "OKR Owner",
+          "valueType": "boolean"
+        },
+        {
+          "slug": "person-availability",
+          "label": "Availability (hrs/week)",
+          "valueType": "number"
+        },
+        {
+          "slug": "person-timezone",
+          "label": "Timezone",
+          "valueType": "string"
+        }
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "OKR Dashboard",
+      "slug": "okr-dashboard",
+      "type": "kanban",
+      "scopeProfileSlug": "okr",
+      "config": { "groupByField": "okr-status" },
+      "description": "All OKRs by status with progress indicators"
+    },
+    {
+      "name": "OKR → Projects → Tasks",
+      "slug": "okr-hierarchy",
+      "type": "graph",
+      "scopeProfileSlugs": ["okr", "project", "task"],
+      "config": {
+        "hierarchyEdges": [
+          { "parent": "okr", "child": "project", "via": "project-linked-okr" },
+          { "parent": "project", "child": "task", "via": "task-project" }
+        ]
+      },
+      "description": "Three-level drill-down: OKR expands to linked projects, projects expand to tasks"
+    },
+    {
+      "name": "Sprint Board",
+      "slug": "sprint-board",
+      "type": "kanban",
+      "scopeProfileSlug": "task",
+      "config": {
+        "groupByField": "task-status",
+        "filterBy": { "field": "task-sprint", "operator": "is_active" }
+      },
+      "description": "Active sprint tasks in Backlog / Todo / In Progress / Review / Done lanes"
+    },
+    {
+      "name": "All Sprints",
+      "slug": "sprint-list",
+      "type": "table",
+      "scopeProfileSlug": "sprint",
+      "config": {
+        "visibleColumns": [
+          "sprint-number",
+          "sprint-status",
+          "sprint-start",
+          "sprint-end",
+          "sprint-goal",
+          "sprint-velocity",
+          "sprint-completed-count"
+        ],
+        "defaultSort": { "field": "sprint-number", "direction": "desc" }
+      },
+      "description": "Table of all sprints with velocity and completion stats"
+    },
+    {
+      "name": "Project Timeline",
+      "slug": "project-timeline",
+      "type": "timeline",
+      "scopeProfileSlug": "project",
+      "config": {
+        "startField": "project-start",
+        "endField": "project-deadline",
+        "colorBy": "project-status"
+      },
+      "description": "Gantt-style timeline of all active projects"
+    },
+    {
+      "name": "Project Board",
+      "slug": "project-board",
+      "type": "kanban",
+      "scopeProfileSlug": "project",
+      "config": { "groupByField": "project-status" },
+      "description": "Projects by status lane"
+    },
+    {
+      "name": "Task Inbox",
+      "slug": "task-inbox",
+      "type": "table",
+      "scopeProfileSlug": "task",
+      "config": {
+        "visibleColumns": [
+          "task-status",
+          "task-priority",
+          "task-type",
+          "task-project",
+          "task-assignee",
+          "task-due-date",
+          "task-sprint"
+        ],
+        "defaultSort": { "field": "task-priority", "direction": "desc" },
+        "filterBy": {
+          "field": "task-status",
+          "operator": "not_in",
+          "value": ["Done", "Cancelled"]
+        }
+      },
+      "description": "All open tasks sorted by priority"
+    },
+    {
+      "name": "Weekly Focus",
+      "slug": "weekly-focus",
+      "type": "table",
+      "scopeProfileSlug": "task",
+      "config": {
+        "filterBy": { "field": "task-due-date", "operator": "this_week" },
+        "defaultSort": { "field": "task-priority", "direction": "desc" }
+      },
+      "description": "Tasks due this week — your daily planning view"
+    },
+    {
+      "name": "Relationship Graph",
+      "slug": "relationship-graph",
+      "type": "graph",
+      "scopeProfileSlugs": ["okr", "project", "task", "sprint", "person"],
+      "config": { "layout": "force", "showRelations": true },
+      "description": "Full entity graph: OKR → Project → Task → Sprint → Person"
+    },
+    {
+      "name": "Team Workload",
+      "slug": "team-workload",
+      "type": "table",
+      "scopeProfileSlug": "person",
+      "config": {
+        "visibleColumns": [
+          "person-role",
+          "person-focus",
+          "person-availability",
+          "person-okr-owner"
+        ]
+      },
+      "description": "Team members with linked task count, sprint assignment, and availability"
+    },
+    {
+      "name": "Retrospective Board",
+      "slug": "retrospective-board",
+      "type": "kanban",
+      "scopeProfileSlug": "sprint",
+      "config": { "groupByField": "sprint-status" },
+      "description": "Sprint retrospectives — completed sprints with retrospective notes attached as documents"
+    },
+    {
+      "name": "OKR Progress Table",
+      "slug": "okr-progress",
+      "type": "table",
+      "scopeProfileSlug": "okr",
+      "config": {
+        "visibleColumns": [
+          "okr-status",
+          "okr-quarter",
+          "okr-type",
+          "okr-owner",
+          "okr-confidence",
+          "okr-review-date"
+        ],
+        "defaultSort": { "field": "okr-quarter", "direction": "desc" }
+      },
+      "description": "All OKRs with key result progress bars for quarterly review"
+    },
+    {
+      "name": "Backlog",
+      "slug": "backlog",
+      "type": "table",
+      "scopeProfileSlug": "task",
+      "config": {
+        "filterBy": {
+          "field": "task-status",
+          "operator": "is",
+          "value": "Backlog"
+        },
+        "defaultSort": { "field": "task-priority", "direction": "desc" }
+      },
+      "description": "Unscheduled tasks awaiting sprint assignment"
+    },
+    {
+      "name": "Calendar",
+      "slug": "calendar",
+      "type": "calendar",
+      "scopeProfileSlugs": ["task", "sprint", "project"],
+      "config": { "dateField": "task-due-date" },
+      "description": "Unified calendar of task due dates, sprint cycles, and project deadlines"
+    },
+    {
+      "name": "OKRs by Quarter",
+      "slug": "okr-by-quarter",
+      "type": "table",
+      "scopeProfileSlug": "okr",
+      "config": {
+        "visibleColumns": [
+          "okr-status",
+          "okr-quarter",
+          "okr-type",
+          "okr-owner",
+          "okr-confidence"
+        ],
+        "groupByField": "okr-quarter"
+      },
+      "description": "Historical OKRs organized by quarter for retrospective planning"
+    },
+    {
+      "name": "OKR Dashboard",
+      "displayName": "OKR Dashboard",
+      "type": "bento",
+      "scopeProfileSlug": "okr",
+      "config": {
+        "layout": "bento",
+        "blocks": [
+          {
+            "id": "okr-header",
+            "kind": "widget",
+            "widgetType": "section-header",
+            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "config": {
+              "title": "OKRs",
+              "icon": "Target",
+              "color": "#14B8A6",
+              "profileSlug": "okr"
+            }
+          },
+          {
+            "id": "okr-count-active",
+            "kind": "widget",
+            "widgetType": "stat-card",
+            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "label": "Active OKRs",
+              "aggregation": "count",
+              "profileSlug": "okr",
+              "color": "#14B8A6",
+              "icon": "Target"
+            }
+          },
+          {
+            "id": "okr-count-on-track",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "okr",
+              "label": "On Track",
+              "icon": "TrendingUp",
+              "filter": { "status": "on-track" },
+              "color": "#10B981"
+            }
+          },
+          {
+            "id": "okr-count-at-risk",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "okr",
+              "label": "At Risk",
+              "icon": "AlertTriangle",
+              "filter": { "status": "at-risk" },
+              "color": "#F59E0B"
+            }
+          },
+          {
+            "id": "okr-count-completed",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 9, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "okr",
+              "label": "Completed",
+              "icon": "CheckCircle",
+              "filter": { "status": "completed" },
+              "color": "#6366F1"
+            }
+          },
+          {
+            "id": "okr-spotlight",
+            "kind": "widget",
+            "widgetType": "entity-spotlight",
+            "pos": { "x": 0, "y": 5, "w": 5, "h": 4 },
+            "config": {
+              "profileSlug": "okr",
+              "seed": "daily",
+              "layout": "detail",
+              "subtitleField": "owner",
+              "color": "#14B8A6"
+            }
+          },
+          {
+            "id": "okr-projects",
+            "kind": "widget",
+            "widgetType": "entity-list",
+            "pos": { "x": 5, "y": 5, "w": 7, "h": 4 },
+            "config": {
+              "profileSlug": "project",
+              "title": "Active Projects",
+              "limit": 8,
+              "variant": "compact"
+            }
+          },
+          {
+            "id": "okr-table",
+            "kind": "view",
+            "viewName": "OKR Progress Table",
+            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Project Dashboard",
+      "displayName": "Project Dashboard",
+      "type": "bento",
+      "scopeProfileSlug": "project",
+      "config": {
+        "layout": "bento",
+        "blocks": [
+          {
+            "id": "proj-header",
+            "kind": "widget",
+            "widgetType": "section-header",
+            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "config": {
+              "title": "Projects",
+              "icon": "FolderOpen",
+              "color": "#F97316",
+              "profileSlug": "project"
+            }
+          },
+          {
+            "id": "proj-active",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "project",
+              "label": "Active",
+              "icon": "Play",
+              "filter": { "status": "active" },
+              "color": "#10B981"
+            }
+          },
+          {
+            "id": "proj-planning",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "project",
+              "label": "Planning",
+              "icon": "Map",
+              "filter": { "status": "planning" },
+              "color": "#3B82F6"
+            }
+          },
+          {
+            "id": "proj-hold",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "project",
+              "label": "On Hold",
+              "icon": "PauseCircle",
+              "filter": { "status": "on-hold" },
+              "color": "#F59E0B"
+            }
+          },
+          {
+            "id": "proj-done",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 9, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "project",
+              "label": "Completed",
+              "icon": "CheckCircle",
+              "filter": { "status": "completed" },
+              "color": "#8B5CF6"
+            }
+          },
+          {
+            "id": "proj-spotlight",
+            "kind": "widget",
+            "widgetType": "entity-spotlight",
+            "pos": { "x": 0, "y": 5, "w": 5, "h": 4 },
+            "config": {
+              "profileSlug": "project",
+              "seed": "daily",
+              "layout": "detail",
+              "subtitleField": "area",
+              "color": "#F97316"
+            }
+          },
+          {
+            "id": "proj-tasks",
+            "kind": "widget",
+            "widgetType": "entity-list",
+            "pos": { "x": 5, "y": 5, "w": 7, "h": 4 },
+            "config": {
+              "profileSlug": "task",
+              "title": "Open Tasks",
+              "limit": 8,
+              "variant": "compact"
+            }
+          },
+          {
+            "id": "proj-board",
+            "kind": "view",
+            "viewName": "Project Board",
+            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Task Dashboard",
+      "displayName": "Task Dashboard",
+      "type": "bento",
+      "scopeProfileSlug": "task",
+      "config": {
+        "layout": "bento",
+        "blocks": [
+          {
+            "id": "task-header",
+            "kind": "widget",
+            "widgetType": "section-header",
+            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "config": {
+              "title": "Tasks",
+              "icon": "CheckSquare",
+              "color": "#6366F1",
+              "profileSlug": "task"
+            }
+          },
+          {
+            "id": "task-todo",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "task",
+              "label": "To Do",
+              "icon": "Circle",
+              "filter": { "status": "todo" },
+              "color": "#6B7280"
+            }
+          },
+          {
+            "id": "task-progress",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "task",
+              "label": "In Progress",
+              "icon": "Loader",
+              "filter": { "status": "in-progress" },
+              "color": "#3B82F6"
+            }
+          },
+          {
+            "id": "task-review",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "task",
+              "label": "In Review",
+              "icon": "Eye",
+              "filter": { "status": "review" },
+              "color": "#F59E0B"
+            }
+          },
+          {
+            "id": "task-done",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 9, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "task",
+              "label": "Done",
+              "icon": "CheckCircle",
+              "filter": { "status": "done" },
+              "color": "#10B981"
+            }
+          },
+          {
+            "id": "task-capture",
+            "kind": "widget",
+            "widgetType": "quick-capture",
+            "pos": { "x": 0, "y": 5, "w": 4, "h": 3 },
+            "config": { "presetProfileSlug": "task" }
+          },
+          {
+            "id": "task-list",
+            "kind": "widget",
+            "widgetType": "entity-list",
+            "pos": { "x": 4, "y": 5, "w": 8, "h": 3 },
+            "config": {
+              "profileSlug": "task",
+              "title": "Recent Tasks",
+              "limit": 6,
+              "variant": "compact"
+            }
+          },
+          {
+            "id": "task-sprint-board",
+            "kind": "view",
+            "viewName": "Sprint Board",
+            "pos": { "x": 0, "y": 8, "w": 12, "h": 8 }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Sprint Dashboard",
+      "displayName": "Sprint Dashboard",
+      "type": "bento",
+      "scopeProfileSlug": "sprint",
+      "config": {
+        "layout": "bento",
+        "blocks": [
+          {
+            "id": "sprint-header",
+            "kind": "widget",
+            "widgetType": "section-header",
+            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "config": {
+              "title": "Sprints",
+              "icon": "Zap",
+              "color": "#8B5CF6",
+              "profileSlug": "sprint"
+            }
+          },
+          {
+            "id": "sprint-total",
+            "kind": "widget",
+            "widgetType": "stat-card",
+            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "label": "Total Sprints",
+              "aggregation": "count",
+              "profileSlug": "sprint",
+              "color": "#8B5CF6",
+              "icon": "Zap"
+            }
+          },
+          {
+            "id": "sprint-active",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "sprint",
+              "label": "Active",
+              "icon": "Play",
+              "filter": { "status": "active" },
+              "color": "#10B981"
+            }
+          },
+          {
+            "id": "sprint-tasks",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "task",
+              "label": "Sprint Tasks",
+              "icon": "CheckSquare",
+              "color": "#6366F1"
+            }
+          },
+          {
+            "id": "sprint-velocity",
+            "kind": "widget",
+            "widgetType": "entity-list",
+            "pos": { "x": 0, "y": 5, "w": 12, "h": 4 },
+            "config": {
+              "profileSlug": "sprint",
+              "title": "Recent Sprints",
+              "limit": 6,
+              "variant": "detailed"
+            }
+          },
+          {
+            "id": "sprint-board",
+            "kind": "view",
+            "viewName": "Sprint Board",
+            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+          }
+        ]
+      }
+    }
+  ],
+  "displayTemplates": [
+    {
+      "name": "OKR Card",
+      "description": "",
+      "entityType": "okr",
+      "targetType": "entity",
+      "isDefault": true,
+      "config": {
+        "layout": {
+          "structure": {
+            "header": {
+              "enabled": true,
+              "slots": ["okr-status", "okr-quarter", "okr-type"],
+              "layout": "horizontal"
+            },
+            "sidebar": {
+              "enabled": true,
+              "slots": ["okr-owner", "okr-confidence", "okr-review-date"],
+              "position": "right",
+              "width": "260px",
+              "layout": "vertical"
+            },
+            "content": {
+              "enabled": true,
+              "slots": [
+                "kr1-label",
+                "kr1-current",
+                "kr2-label",
+                "kr2-current",
+                "kr3-label",
+                "kr3-current"
+              ],
+              "layout": "vertical"
+            }
+          },
+          "fieldMapping": {
+            "okr-status": {
+              "slot": "okr-status",
+              "renderer": { "type": "badge" },
+              "order": 1
+            },
+            "okr-quarter": {
+              "slot": "okr-quarter",
+              "renderer": { "type": "badge" },
+              "order": 2
+            },
+            "okr-type": {
+              "slot": "okr-type",
+              "renderer": { "type": "badge" },
+              "order": 3
+            },
+            "okr-owner": {
+              "slot": "okr-owner",
+              "renderer": { "type": "avatar" },
+              "order": 4
+            },
+            "okr-confidence": {
+              "slot": "okr-confidence",
+              "renderer": { "type": "badge" },
+              "order": 5
+            },
+            "okr-review-date": {
+              "slot": "okr-review-date",
+              "renderer": { "type": "date", "format": "relative" },
+              "order": 6
+            },
+            "kr1-label": {
+              "slot": "kr1-label",
+              "renderer": { "type": "text" },
+              "order": 7,
+              "label": "KR1",
+              "showLabel": true
+            },
+            "kr1-current": {
+              "slot": "kr1-current",
+              "renderer": { "type": "progress" },
+              "order": 8
+            },
+            "kr2-label": {
+              "slot": "kr2-label",
+              "renderer": { "type": "text" },
+              "order": 9,
+              "label": "KR2",
+              "showLabel": true
+            },
+            "kr2-current": {
+              "slot": "kr2-current",
+              "renderer": { "type": "progress" },
+              "order": 10
+            },
+            "kr3-label": {
+              "slot": "kr3-label",
+              "renderer": { "type": "text" },
+              "order": 11,
+              "label": "KR3",
+              "showLabel": true
+            },
+            "kr3-current": {
+              "slot": "kr3-current",
+              "renderer": { "type": "progress" },
+              "order": 12
+            }
+          }
+        },
+        "colors": { "accent": "#2E4EAD" }
+      }
+    },
+    {
+      "name": "Project Card",
+      "description": "",
+      "entityType": "project",
+      "targetType": "entity",
+      "isDefault": true,
+      "config": {
+        "layout": {
+          "structure": {
+            "header": {
+              "enabled": true,
+              "slots": ["project-status", "project-priority", "project-health"],
+              "layout": "horizontal"
+            },
+            "sidebar": {
+              "enabled": true,
+              "slots": [
+                "project-linked-okr",
+                "project-owner",
+                "project-deadline",
+                "project-effort"
+              ],
+              "position": "right",
+              "width": "260px",
+              "layout": "vertical"
+            },
+            "content": {
+              "enabled": true,
+              "slots": ["project-milestone", "project-outcome", "project-tags"],
+              "layout": "vertical"
+            }
+          },
+          "fieldMapping": {
+            "project-status": {
+              "slot": "project-status",
+              "renderer": { "type": "badge" },
+              "order": 1
+            },
+            "project-priority": {
+              "slot": "project-priority",
+              "renderer": { "type": "badge" },
+              "order": 2
+            },
+            "project-health": {
+              "slot": "project-health",
+              "renderer": { "type": "badge" },
+              "order": 3
+            },
+            "project-linked-okr": {
+              "slot": "project-linked-okr",
+              "renderer": { "type": "link" },
+              "order": 4
+            },
+            "project-owner": {
+              "slot": "project-owner",
+              "renderer": { "type": "avatar" },
+              "order": 5
+            },
+            "project-deadline": {
+              "slot": "project-deadline",
+              "renderer": { "type": "date", "format": "relative" },
+              "order": 6
+            },
+            "project-effort": {
+              "slot": "project-effort",
+              "renderer": { "type": "number" },
+              "order": 7
+            },
+            "project-milestone": {
+              "slot": "project-milestone",
+              "renderer": { "type": "text" },
+              "order": 8,
+              "label": "Milestone",
+              "showLabel": true
+            },
+            "project-outcome": {
+              "slot": "project-outcome",
+              "renderer": { "type": "text" },
+              "order": 9,
+              "label": "Expected Outcome",
+              "showLabel": true
+            },
+            "project-tags": {
+              "slot": "project-tags",
+              "renderer": { "type": "badge" },
+              "order": 10
+            }
+          }
+        },
+        "colors": { "accent": "#7C3AED" }
+      }
+    },
+    {
+      "name": "Task Card",
+      "description": "",
+      "entityType": "task",
+      "targetType": "entity",
+      "isDefault": true,
+      "config": {
+        "layout": {
+          "structure": {
+            "header": {
+              "enabled": true,
+              "slots": ["task-status", "task-priority", "task-type"],
+              "layout": "horizontal"
+            },
+            "sidebar": {
+              "enabled": true,
+              "slots": [
+                "task-project",
+                "task-sprint",
+                "task-assignee",
+                "task-due-date",
+                "task-effort"
+              ],
+              "position": "right",
+              "width": "260px",
+              "layout": "vertical"
+            },
+            "content": {
+              "enabled": true,
+              "slots": ["task-blocked-by", "task-tags"],
+              "layout": "vertical"
+            }
+          },
+          "fieldMapping": {
+            "task-status": {
+              "slot": "task-status",
+              "renderer": { "type": "badge" },
+              "order": 1
+            },
+            "task-priority": {
+              "slot": "task-priority",
+              "renderer": { "type": "badge" },
+              "order": 2
+            },
+            "task-type": {
+              "slot": "task-type",
+              "renderer": { "type": "badge" },
+              "order": 3
+            },
+            "task-project": {
+              "slot": "task-project",
+              "renderer": { "type": "link" },
+              "order": 4
+            },
+            "task-sprint": {
+              "slot": "task-sprint",
+              "renderer": { "type": "link" },
+              "order": 5
+            },
+            "task-assignee": {
+              "slot": "task-assignee",
+              "renderer": { "type": "avatar" },
+              "order": 6
+            },
+            "task-due-date": {
+              "slot": "task-due-date",
+              "renderer": { "type": "date", "format": "relative" },
+              "order": 7
+            },
+            "task-effort": {
+              "slot": "task-effort",
+              "renderer": { "type": "number" },
+              "order": 8
+            },
+            "task-blocked-by": {
+              "slot": "task-blocked-by",
+              "renderer": { "type": "text" },
+              "order": 9,
+              "label": "Blocked By",
+              "showLabel": true
+            },
+            "task-tags": {
+              "slot": "task-tags",
+              "renderer": { "type": "badge" },
+              "order": 10
+            }
+          }
+        },
+        "colors": { "accent": "#059669" }
+      }
+    },
+    {
+      "name": "Sprint Card",
+      "description": "",
+      "entityType": "sprint",
+      "targetType": "entity",
+      "isDefault": true,
+      "config": {
+        "layout": {
+          "structure": {
+            "header": {
+              "enabled": true,
+              "slots": ["sprint-status", "sprint-number"],
+              "layout": "horizontal"
+            },
+            "sidebar": {
+              "enabled": true,
+              "slots": [
+                "sprint-linked-okr",
+                "sprint-start",
+                "sprint-end",
+                "sprint-capacity"
+              ],
+              "position": "right",
+              "width": "260px",
+              "layout": "vertical"
+            },
+            "content": {
+              "enabled": true,
+              "slots": [
+                "sprint-goal",
+                "sprint-velocity",
+                "sprint-completed-count"
+              ],
+              "layout": "vertical"
+            }
+          },
+          "fieldMapping": {
+            "sprint-status": {
+              "slot": "sprint-status",
+              "renderer": { "type": "badge" },
+              "order": 1
+            },
+            "sprint-number": {
+              "slot": "sprint-number",
+              "renderer": { "type": "number" },
+              "order": 2
+            },
+            "sprint-linked-okr": {
+              "slot": "sprint-linked-okr",
+              "renderer": { "type": "link" },
+              "order": 3
+            },
+            "sprint-start": {
+              "slot": "sprint-start",
+              "renderer": { "type": "date" },
+              "order": 4
+            },
+            "sprint-end": {
+              "slot": "sprint-end",
+              "renderer": { "type": "date", "format": "relative" },
+              "order": 5
+            },
+            "sprint-capacity": {
+              "slot": "sprint-capacity",
+              "renderer": { "type": "number" },
+              "order": 6
+            },
+            "sprint-goal": {
+              "slot": "sprint-goal",
+              "renderer": { "type": "text" },
+              "order": 7,
+              "label": "Sprint Goal",
+              "showLabel": true
+            },
+            "sprint-velocity": {
+              "slot": "sprint-velocity",
+              "renderer": { "type": "progress" },
+              "order": 8,
+              "label": "Velocity",
+              "showLabel": true
+            },
+            "sprint-completed-count": {
+              "slot": "sprint-completed-count",
+              "renderer": { "type": "number" },
+              "order": 9,
+              "label": "Tasks",
+              "showLabel": true
+            }
+          }
+        },
+        "colors": { "accent": "#D97706" }
+      }
+    }
+  ],
+  "suggestedEntities": [
+    {
+      "profileSlug": "person",
+      "title": "Antoine",
+      "properties": {
+        "person-role": "Founder",
+        "person-email": "antoine@synap.io",
+        "person-focus": "Synap template stack and PM OS launch",
+        "person-okr-owner": true,
+        "person-availability": 40,
+        "person-timezone": "Europe/Paris"
+      }
+    },
+    {
+      "profileSlug": "person",
+      "title": "Lea Moreau",
+      "properties": {
+        "person-role": "Engineer",
+        "person-email": "lea@synap.io",
+        "person-focus": "Display template rendering and entity graph view",
+        "person-okr-owner": false,
+        "person-availability": 35,
+        "person-timezone": "Europe/Paris"
+      }
+    },
+    {
+      "profileSlug": "okr",
+      "title": "Launch Synap PM OS — Q1 2026",
+      "properties": {
+        "okr-status": "Active",
+        "okr-quarter": "Q1 2026",
+        "okr-owner": "ref:person:Antoine",
+        "okr-type": "Company",
+        "kr1-label": "Template validated and live in staging",
+        "kr1-target": 1,
+        "kr1-current": 0,
+        "kr1-unit": "milestone",
+        "kr2-label": "Onboarding guide published (1,000 words min)",
+        "kr2-target": 1,
+        "kr2-current": 0,
+        "kr2-unit": "doc",
+        "kr3-label": "Demo video recorded and embedded on landing page",
+        "kr3-target": 1,
+        "kr3-current": 0,
+        "kr3-unit": "video",
+        "okr-confidence": "High",
+        "okr-review-date": "2026-03-28"
+      }
+    },
+    {
+      "profileSlug": "okr",
+      "title": "Grow Template Activations — Q1 2026",
+      "properties": {
+        "okr-status": "Active",
+        "okr-quarter": "Q1 2026",
+        "okr-owner": "ref:person:Antoine",
+        "okr-type": "Company",
+        "kr1-label": "Template activations (installs)",
+        "kr1-target": 500,
+        "kr1-current": 0,
+        "kr1-unit": "activations",
+        "kr2-label": "Newsletter subscribers from PM OS launch campaign",
+        "kr2-target": 300,
+        "kr2-current": 0,
+        "kr2-unit": "subscribers",
+        "kr3-label": "LinkedIn post impressions on PM OS launch thread",
+        "kr3-target": 15000,
+        "kr3-current": 0,
+        "kr3-unit": "impressions",
+        "okr-confidence": "Medium",
+        "okr-review-date": "2026-03-28"
+      }
+    },
+    {
+      "profileSlug": "project",
+      "title": "Build PM OS Template",
+      "properties": {
+        "project-status": "In Progress",
+        "project-priority": "Critical",
+        "project-linked-okr": "ref:okr:Launch Synap PM OS — Q1 2026",
+        "project-owner": "ref:person:Antoine",
+        "project-start": "2026-02-17",
+        "project-deadline": "2026-03-07",
+        "project-milestone": "Template JSON validated in staging",
+        "project-health": "Green",
+        "project-effort": 12,
+        "project-tags": ["Product", "Engineering"],
+        "project-outcome": "A fully functional PM OS workspace template demonstrating the OKR → Project → Task entity graph"
+      }
+    },
+    {
+      "profileSlug": "project",
+      "title": "Publish PM OS Onboarding Guide",
+      "properties": {
+        "project-status": "Backlog",
+        "project-priority": "High",
+        "project-linked-okr": "ref:okr:Launch Synap PM OS — Q1 2026",
+        "project-owner": "ref:person:Antoine",
+        "project-start": "2026-03-03",
+        "project-deadline": "2026-03-21",
+        "project-milestone": "Guide live at synap.io/templates/pm-os",
+        "project-health": "Green",
+        "project-effort": 4,
+        "project-tags": ["Product", "Marketing"],
+        "project-outcome": "Founders and small teams can install and configure the PM OS in under 15 minutes"
+      }
+    },
+    {
+      "profileSlug": "project",
+      "title": "PM OS Distribution Campaign",
+      "properties": {
+        "project-status": "Planning",
+        "project-priority": "High",
+        "project-linked-okr": "ref:okr:Grow Template Activations — Q1 2026",
+        "project-owner": "ref:person:Antoine",
+        "project-start": "2026-03-10",
+        "project-deadline": "2026-03-31",
+        "project-milestone": "Launch LinkedIn thread + Newsletter Issue 14",
+        "project-health": "Green",
+        "project-effort": 5,
+        "project-tags": ["Marketing"],
+        "project-outcome": "500 template activations and 300 newsletter subs"
+      }
+    },
+    {
+      "profileSlug": "project",
+      "title": "Waitlist Landing Page",
+      "properties": {
+        "project-status": "Planning",
+        "project-priority": "Medium",
+        "project-linked-okr": "ref:okr:Grow Template Activations — Q1 2026",
+        "project-owner": "ref:person:Antoine",
+        "project-start": "2026-03-01",
+        "project-deadline": "2026-03-14",
+        "project-milestone": "Landing page live with waitlist form",
+        "project-health": "Yellow",
+        "project-effort": 3,
+        "project-tags": ["Product", "Marketing"],
+        "project-outcome": "Dedicated landing page with activation count display and waitlist CTA"
+      }
+    },
+    {
+      "profileSlug": "sprint",
+      "title": "Sprint 3 — Content OS & Second Brain Final",
+      "properties": {
+        "sprint-status": "Completed",
+        "sprint-number": 3,
+        "sprint-start": "2026-02-03",
+        "sprint-end": "2026-02-14",
+        "sprint-goal": "Ship Content OS and Second Brain templates with full schema upgrade",
+        "sprint-capacity": 60,
+        "sprint-velocity": 58,
+        "sprint-task-count": 14,
+        "sprint-completed-count": 13
+      }
+    },
+    {
+      "profileSlug": "sprint",
+      "title": "Sprint 4 — Template Validation",
+      "properties": {
+        "sprint-status": "Active",
+        "sprint-number": 4,
+        "sprint-start": "2026-02-17",
+        "sprint-end": "2026-02-28",
+        "sprint-goal": "Complete PM OS template JSON, CRM display template polish, and begin onboarding guide outline",
+        "sprint-capacity": 55,
+        "sprint-velocity": 22,
+        "sprint-task-count": 10,
+        "sprint-completed-count": 4,
+        "sprint-linked-okr": "ref:okr:Launch Synap PM OS — Q1 2026"
+      }
+    },
+    {
+      "profileSlug": "sprint",
+      "title": "Sprint 5 — Docs & Distribution",
+      "properties": {
+        "sprint-status": "Planning",
+        "sprint-number": 5,
+        "sprint-start": "2026-03-03",
+        "sprint-end": "2026-03-14",
+        "sprint-goal": "Ship onboarding guide, record demo video, build landing page, draft launch content",
+        "sprint-capacity": 55,
+        "sprint-linked-okr": "ref:okr:Grow Template Activations — Q1 2026"
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Define 5 profile schemas",
+      "properties": {
+        "task-status": "Done",
+        "task-priority": "Critical",
+        "task-assignee": "ref:person:Antoine",
+        "task-project": "ref:project:Build PM OS Template",
+        "task-sprint": "ref:sprint:Sprint 4 — Template Validation",
+        "task-due-date": "2026-02-21",
+        "task-effort": 4,
+        "task-type": "Feature",
+        "task-tags": ["deep-work"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Configure 15 views",
+      "properties": {
+        "task-status": "Done",
+        "task-priority": "Critical",
+        "task-assignee": "ref:person:Antoine",
+        "task-project": "ref:project:Build PM OS Template",
+        "task-sprint": "ref:sprint:Sprint 4 — Template Validation",
+        "task-due-date": "2026-02-24",
+        "task-effort": 3,
+        "task-type": "Feature",
+        "task-tags": ["deep-work"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Write seed entity content",
+      "properties": {
+        "task-status": "In Progress",
+        "task-priority": "High",
+        "task-assignee": "ref:person:Antoine",
+        "task-project": "ref:project:Build PM OS Template",
+        "task-sprint": "ref:sprint:Sprint 4 — Template Validation",
+        "task-due-date": "2026-02-27",
+        "task-effort": 5,
+        "task-type": "Feature",
+        "task-tags": ["deep-work"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Validate relationship graph",
+      "properties": {
+        "task-status": "Todo",
+        "task-priority": "High",
+        "task-assignee": "ref:person:Lea Moreau",
+        "task-project": "ref:project:Build PM OS Template",
+        "task-sprint": "ref:sprint:Sprint 4 — Template Validation",
+        "task-due-date": "2026-02-28",
+        "task-effort": 3,
+        "task-type": "Feature",
+        "task-blocked-by": "Seed entity content must be complete first",
+        "task-tags": ["deep-work", "waiting"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Write OKR setup walkthrough",
+      "properties": {
+        "task-status": "Backlog",
+        "task-priority": "High",
+        "task-assignee": "ref:person:Antoine",
+        "task-project": "ref:project:Publish PM OS Onboarding Guide",
+        "task-sprint": "ref:sprint:Sprint 5 — Docs & Distribution",
+        "task-due-date": "2026-03-10",
+        "task-effort": 3,
+        "task-type": "Content",
+        "task-tags": ["deep-work", "async"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Record demo video",
+      "properties": {
+        "task-status": "Backlog",
+        "task-priority": "High",
+        "task-assignee": "ref:person:Antoine",
+        "task-project": "ref:project:Publish PM OS Onboarding Guide",
+        "task-sprint": "ref:sprint:Sprint 5 — Docs & Distribution",
+        "task-due-date": "2026-03-14",
+        "task-effort": 4,
+        "task-type": "Content",
+        "task-blocked-by": "Template must be live in staging before recording",
+        "task-tags": ["deep-work"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Draft LinkedIn launch thread",
+      "properties": {
+        "task-status": "Backlog",
+        "task-priority": "Medium",
+        "task-assignee": "ref:person:Antoine",
+        "task-project": "ref:project:PM OS Distribution Campaign",
+        "task-sprint": "ref:sprint:Sprint 5 — Docs & Distribution",
+        "task-due-date": "2026-03-12",
+        "task-effort": 2,
+        "task-type": "Content",
+        "task-tags": ["async"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Schedule newsletter Issue 14 teaser",
+      "properties": {
+        "task-status": "Backlog",
+        "task-priority": "Medium",
+        "task-assignee": "ref:person:Antoine",
+        "task-project": "ref:project:PM OS Distribution Campaign",
+        "task-sprint": "ref:sprint:Sprint 5 — Docs & Distribution",
+        "task-due-date": "2026-03-10",
+        "task-effort": 1,
+        "task-type": "Content",
+        "task-tags": ["async", "quick-win"]
+      }
+    },
+    {
+      "profileSlug": "task",
+      "title": "Design hero section copy",
+      "properties": {
+        "task-status": "Backlog",
+        "task-priority": "Medium",
+        "task-assignee": "ref:person:Antoine",
+        "task-project": "ref:project:Waitlist Landing Page",
+        "task-due-date": "2026-03-07",
+        "task-effort": 2,
+        "task-type": "Content",
+        "task-tags": ["async", "quick-win"]
+      }
+    }
+  ],
+  "suggestedRelations": [
+    {
+      "sourceRef": "okr:Launch Synap PM OS — Q1 2026",
+      "targetRef": "project:Build PM OS Template",
+      "type": "parent_of"
+    },
+    {
+      "sourceRef": "okr:Launch Synap PM OS — Q1 2026",
+      "targetRef": "project:Publish PM OS Onboarding Guide",
+      "type": "parent_of"
+    },
+    {
+      "sourceRef": "okr:Grow Template Activations — Q1 2026",
+      "targetRef": "project:PM OS Distribution Campaign",
+      "type": "parent_of"
+    },
+    {
+      "sourceRef": "okr:Grow Template Activations — Q1 2026",
+      "targetRef": "project:Waitlist Landing Page",
+      "type": "parent_of"
+    },
+    {
+      "sourceRef": "project:Build PM OS Template",
+      "targetRef": "task:Define 5 profile schemas",
+      "type": "parent_of"
+    },
+    {
+      "sourceRef": "project:Build PM OS Template",
+      "targetRef": "task:Configure 15 views",
+      "type": "parent_of"
+    },
+    {
+      "sourceRef": "project:Build PM OS Template",
+      "targetRef": "task:Write seed entity content",
+      "type": "parent_of"
+    },
+    {
+      "sourceRef": "project:Build PM OS Template",
+      "targetRef": "task:Validate relationship graph",
+      "type": "parent_of"
+    },
+    {
+      "sourceRef": "project:Publish PM OS Onboarding Guide",
+      "targetRef": "task:Write OKR setup walkthrough",
+      "type": "parent_of"
+    },
+    {
+      "sourceRef": "project:Publish PM OS Onboarding Guide",
+      "targetRef": "task:Record demo video",
+      "type": "parent_of"
+    },
+    {
+      "sourceRef": "project:PM OS Distribution Campaign",
+      "targetRef": "task:Draft LinkedIn launch thread",
+      "type": "parent_of"
+    },
+    {
+      "sourceRef": "project:PM OS Distribution Campaign",
+      "targetRef": "task:Schedule newsletter Issue 14 teaser",
+      "type": "parent_of"
+    },
+    {
+      "sourceRef": "project:Waitlist Landing Page",
+      "targetRef": "task:Design hero section copy",
+      "type": "parent_of"
+    },
+    {
+      "sourceRef": "sprint:Sprint 4 — Template Validation",
+      "targetRef": "task:Define 5 profile schemas",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "sprint:Sprint 4 — Template Validation",
+      "targetRef": "task:Configure 15 views",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "sprint:Sprint 4 — Template Validation",
+      "targetRef": "task:Write seed entity content",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "sprint:Sprint 4 — Template Validation",
+      "targetRef": "task:Validate relationship graph",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "sprint:Sprint 5 — Docs & Distribution",
+      "targetRef": "task:Write OKR setup walkthrough",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "sprint:Sprint 5 — Docs & Distribution",
+      "targetRef": "task:Record demo video",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "sprint:Sprint 5 — Docs & Distribution",
+      "targetRef": "task:Draft LinkedIn launch thread",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "sprint:Sprint 5 — Docs & Distribution",
+      "targetRef": "task:Schedule newsletter Issue 14 teaser",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "task:Define 5 profile schemas",
+      "targetRef": "person:Antoine",
+      "type": "assigned_to"
+    },
+    {
+      "sourceRef": "task:Configure 15 views",
+      "targetRef": "person:Antoine",
+      "type": "assigned_to"
+    },
+    {
+      "sourceRef": "task:Write OKR setup walkthrough",
+      "targetRef": "person:Antoine",
+      "type": "assigned_to"
+    },
+    {
+      "sourceRef": "task:Draft LinkedIn launch thread",
+      "targetRef": "person:Antoine",
+      "type": "assigned_to"
+    },
+    {
+      "sourceRef": "okr:Launch Synap PM OS — Q1 2026",
+      "targetRef": "person:Antoine",
+      "type": "assigned_to"
+    },
+    {
+      "sourceRef": "okr:Grow Template Activations — Q1 2026",
+      "targetRef": "person:Antoine",
+      "type": "assigned_to"
+    }
+  ],
+  "bentoLayout": [
+    {
+      "widgetType": "welcome-header",
+      "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+      "config": {
+        "title": "Project Management OS",
+        "subtitle": "OKRs → Projects → Tasks — all connected."
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 0, "y": 2, "w": 2, "h": 3 },
+      "config": {
+        "profileSlug": "okr",
+        "label": "Active OKRs",
+        "icon": "target"
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 2, "y": 2, "w": 2, "h": 3 },
+      "config": {
+        "profileSlug": "project",
+        "label": "Active Projects",
+        "icon": "folder"
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 4, "y": 2, "w": 2, "h": 3 },
+      "config": {
+        "profileSlug": "task",
+        "label": "Open Tasks",
+        "icon": "check-square"
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 6, "y": 2, "w": 2, "h": 3 },
+      "config": {
+        "profileSlug": "sprint",
+        "label": "Active Sprints",
+        "icon": "zap"
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 8, "y": 2, "w": 2, "h": 3 },
+      "config": {
+        "profileSlug": "person",
+        "label": "Team Members",
+        "icon": "users"
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 10, "y": 2, "w": 2, "h": 3 },
+      "config": {
+        "profileSlug": "task",
+        "label": "Due This Week",
+        "icon": "calendar"
+      }
+    },
+    {
+      "kind": "view",
+      "viewName": "OKR Progress Table",
+      "pos": { "x": 0, "y": 5, "w": 7, "h": 8 }
+    },
+    {
+      "kind": "view",
+      "viewName": "Sprint Board",
+      "pos": { "x": 7, "y": 5, "w": 5, "h": 8 }
+    },
+    {
+      "kind": "view",
+      "viewName": "Project Timeline",
+      "pos": { "x": 0, "y": 13, "w": 8, "h": 6 }
+    },
+    {
+      "kind": "view",
+      "viewName": "Weekly Focus",
+      "pos": { "x": 8, "y": 13, "w": 4, "h": 6 }
+    }
+  ],
+  "profileEntityBentoTemplates": {
+    "okr": {
+      "blocks": [
+        {
+          "id": "okr-eb-header",
+          "kind": "widget",
+          "widgetType": "entity-header",
+          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+        },
+        {
+          "id": "okr-eb-props",
+          "kind": "widget",
+          "widgetType": "entity-properties",
+          "pos": { "x": 0, "y": 2, "w": 4, "h": 8 }
+        },
+        {
+          "id": "okr-eb-projects",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 4, "y": 2, "w": 8, "h": 4 },
+          "config": {
+            "profileSlug": "project",
+            "title": "Projects",
+            "limit": 6,
+            "variant": "compact"
+          }
+        },
+        {
+          "id": "okr-eb-content",
+          "kind": "widget",
+          "widgetType": "entity-content",
+          "pos": { "x": 4, "y": 6, "w": 8, "h": 4 }
+        }
+      ]
+    },
+    "project": {
+      "blocks": [
+        {
+          "id": "proj-eb-header",
+          "kind": "widget",
+          "widgetType": "entity-header",
+          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+        },
+        {
+          "id": "proj-eb-props",
+          "kind": "widget",
+          "widgetType": "entity-properties",
+          "pos": { "x": 0, "y": 2, "w": 4, "h": 8 }
+        },
+        {
+          "id": "proj-eb-tasks",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 4, "y": 2, "w": 8, "h": 4 },
+          "config": {
+            "profileSlug": "task",
+            "title": "Tasks",
+            "limit": 8,
+            "variant": "compact"
+          }
+        },
+        {
+          "id": "proj-eb-content",
+          "kind": "widget",
+          "widgetType": "entity-content",
+          "pos": { "x": 4, "y": 6, "w": 8, "h": 4 }
+        }
+      ]
+    },
+    "task": {
+      "blocks": [
+        {
+          "id": "task-eb-header",
+          "kind": "widget",
+          "widgetType": "entity-header",
+          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+        },
+        {
+          "id": "task-eb-props",
+          "kind": "widget",
+          "widgetType": "entity-properties",
+          "pos": { "x": 0, "y": 2, "w": 5, "h": 8 }
+        },
+        {
+          "id": "task-eb-content",
+          "kind": "widget",
+          "widgetType": "entity-content",
+          "pos": { "x": 5, "y": 2, "w": 7, "h": 8 }
+        }
+      ]
+    },
+    "sprint": {
+      "blocks": [
+        {
+          "id": "sprint-eb-header",
+          "kind": "widget",
+          "widgetType": "entity-header",
+          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+        },
+        {
+          "id": "sprint-eb-props",
+          "kind": "widget",
+          "widgetType": "entity-properties",
+          "pos": { "x": 0, "y": 2, "w": 4, "h": 6 }
+        },
+        {
+          "id": "sprint-eb-tasks",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 4, "y": 2, "w": 8, "h": 6 },
+          "config": {
+            "profileSlug": "task",
+            "title": "Sprint Tasks",
+            "limit": 10,
+            "variant": "compact"
+          }
+        }
+      ]
+    }
+  },
+  "capabilities": [],
+  "playbooks": [
+    {
+      "name": "Sprint Retrospective",
+      "goalTemplate": "Run a retrospective for {sprint} to review what went well, what didn't, and what to improve next sprint."
+    }
+  ]
+}

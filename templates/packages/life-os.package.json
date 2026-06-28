@@ -1,0 +1,2215 @@
+{
+  "_meta": {
+    "slug": "life-os",
+    "icon": "brain",
+    "color": "#8B5CF6",
+    "tags": ["pkm", "second-brain", "knowledge", "reading", "life-os", "notes"]
+  },
+  "workspaceName": "Second Brain — Knowledge OS",
+  "description": "A sovereign personal knowledge management workspace. Capture everything, connect ideas, build your external brain.",
+  "workspaceType": "personal",
+  "workspaceSubtype": "knowledge-management",
+  "profiles": [
+    {
+      "slug": "note",
+      "displayName": "Note",
+      "icon": "FileText",
+      "color": "#6366F1",
+      "description": "Atomic knowledge units — your core thinking medium.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "title",
+          "label": "Title",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "content",
+          "label": "Content",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["inbox", "processing", "evergreen", "archived"]
+        },
+        { "slug": "tags", "label": "Tags", "valueType": "array" },
+        {
+          "slug": "source-url",
+          "label": "Source URL",
+          "valueType": "string",
+          "inputType": "url"
+        },
+        {
+          "slug": "created-at",
+          "label": "Created At",
+          "valueType": "date",
+          "inputType": "date"
+        }
+      ]
+    },
+    {
+      "slug": "highlight",
+      "displayName": "Highlight",
+      "icon": "Highlighter",
+      "color": "#FBBF24",
+      "description": "Captured passages from books, articles and web content.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "text",
+          "label": "Text",
+          "valueType": "string",
+          "inputType": "textarea",
+          "required": true
+        },
+        {
+          "slug": "my-note",
+          "label": "My Note",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "color",
+          "label": "Color",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["yellow", "green", "blue", "pink", "orange"]
+        },
+        {
+          "slug": "location",
+          "label": "Location",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    },
+    {
+      "slug": "concept",
+      "displayName": "Concept",
+      "icon": "Lightbulb",
+      "color": "#8B5CF6",
+      "description": "Evergreen ideas and mental models you're building over time.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "title",
+          "label": "Title",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "definition",
+          "label": "Definition",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "domain",
+          "label": "Domain",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        { "slug": "tags", "label": "Tags", "valueType": "array" },
+        {
+          "slug": "maturity",
+          "label": "Maturity",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["seed", "growing", "evergreen"]
+        }
+      ]
+    },
+    {
+      "slug": "quote",
+      "displayName": "Quote",
+      "icon": "Quote",
+      "color": "#EC4899",
+      "description": "Memorable words worth preserving and revisiting.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "text",
+          "label": "Text",
+          "valueType": "string",
+          "inputType": "textarea",
+          "required": true
+        },
+        {
+          "slug": "author",
+          "label": "Author",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "source",
+          "label": "Source",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        { "slug": "tags", "label": "Tags", "valueType": "array" },
+        {
+          "slug": "resonance",
+          "label": "Resonance",
+          "valueType": "number",
+          "inputType": "number",
+          "constraints": { "min": 1, "max": 5 }
+        }
+      ]
+    },
+    {
+      "slug": "book",
+      "displayName": "Book",
+      "icon": "BookOpen",
+      "color": "#F59E0B",
+      "description": "Your reading library — track books, progress and insights.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "title",
+          "label": "Title",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "author",
+          "label": "Author",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["want-to-read", "reading", "completed", "abandoned"]
+        },
+        {
+          "slug": "rating",
+          "label": "Rating",
+          "valueType": "number",
+          "inputType": "number",
+          "constraints": { "min": 1, "max": 5 }
+        },
+        {
+          "slug": "cover-url",
+          "label": "Cover URL",
+          "valueType": "string",
+          "inputType": "url"
+        },
+        {
+          "slug": "genre",
+          "label": "Genre",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "pages",
+          "label": "Pages",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "current-page",
+          "label": "Current Page",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "date-started",
+          "label": "Date Started",
+          "valueType": "date",
+          "inputType": "date"
+        },
+        {
+          "slug": "date-finished",
+          "label": "Date Finished",
+          "valueType": "date",
+          "inputType": "date"
+        },
+        {
+          "slug": "isbn",
+          "label": "ISBN",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "summary",
+          "label": "Summary",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "key-takeaways",
+          "label": "Key Takeaways",
+          "valueType": "string",
+          "inputType": "textarea"
+        }
+      ]
+    },
+    {
+      "slug": "person",
+      "displayName": "Person",
+      "icon": "User",
+      "color": "#06B6D4",
+      "description": "People in your intellectual and professional world.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "name",
+          "label": "Name",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "role",
+          "label": "Role",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "company",
+          "label": "Company",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "email",
+          "label": "Email",
+          "valueType": "string",
+          "inputType": "email"
+        },
+        {
+          "slug": "relationship",
+          "label": "Relationship",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "mentor",
+            "colleague",
+            "friend",
+            "family",
+            "acquaintance",
+            "author",
+            "collaborator"
+          ]
+        },
+        {
+          "slug": "last-contact",
+          "label": "Last Contact",
+          "valueType": "date",
+          "inputType": "date"
+        },
+        {
+          "slug": "notes",
+          "label": "Notes",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "avatar-url",
+          "label": "Avatar URL",
+          "valueType": "string",
+          "inputType": "url"
+        }
+      ]
+    },
+    {
+      "slug": "project",
+      "displayName": "Project",
+      "icon": "FolderOpen",
+      "color": "#F97316",
+      "description": "Bounded efforts with a defined outcome and timeline.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "title",
+          "label": "Title",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "idea",
+            "planning",
+            "active",
+            "on-hold",
+            "completed",
+            "archived"
+          ]
+        },
+        {
+          "slug": "outcome",
+          "label": "Outcome",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "due-date",
+          "label": "Due Date",
+          "valueType": "date",
+          "inputType": "date"
+        },
+        {
+          "slug": "progress",
+          "label": "Progress",
+          "valueType": "number",
+          "inputType": "number",
+          "constraints": { "min": 0, "max": 100 }
+        },
+        {
+          "slug": "area",
+          "label": "Area",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    },
+    {
+      "slug": "area",
+      "displayName": "Area",
+      "icon": "Compass",
+      "color": "#64748B",
+      "description": "Ongoing domains of your life you want to maintain standards in.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "title",
+          "label": "Title",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "description",
+          "label": "Description",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["active", "on-hold", "archived"]
+        },
+        {
+          "slug": "standard",
+          "label": "Standard",
+          "valueType": "string",
+          "inputType": "textarea"
+        }
+      ]
+    },
+    {
+      "slug": "article",
+      "displayName": "Article",
+      "icon": "Newspaper",
+      "color": "#10B981",
+      "description": "Web articles and blog posts worth saving and processing.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "title",
+          "label": "Title",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "url",
+          "label": "URL",
+          "valueType": "string",
+          "inputType": "url"
+        },
+        {
+          "slug": "author",
+          "label": "Author",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["inbox", "reading", "read", "archived"]
+        },
+        { "slug": "tags", "label": "Tags", "valueType": "array" },
+        {
+          "slug": "summary",
+          "label": "Summary",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "published-date",
+          "label": "Published Date",
+          "valueType": "date",
+          "inputType": "date"
+        }
+      ]
+    },
+    {
+      "slug": "bookmark",
+      "displayName": "Bookmark",
+      "icon": "Bookmark",
+      "color": "#3B82F6",
+      "description": "Quick links to valuable resources and pages.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "title",
+          "label": "Title",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "url",
+          "label": "URL",
+          "valueType": "string",
+          "inputType": "url",
+          "required": true
+        },
+        {
+          "slug": "description",
+          "label": "Description",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        { "slug": "tags", "label": "Tags", "valueType": "array" },
+        {
+          "slug": "status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["inbox", "saved", "archived"]
+        }
+      ]
+    },
+    {
+      "slug": "idea",
+      "displayName": "Idea",
+      "icon": "Zap",
+      "color": "#EF4444",
+      "description": "Raw sparks and early-stage thinking.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "title",
+          "label": "Title",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "description",
+          "label": "Description",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["raw", "exploring", "validated", "shelved"]
+        },
+        { "slug": "tags", "label": "Tags", "valueType": "array" },
+        {
+          "slug": "excitement",
+          "label": "Excitement",
+          "valueType": "number",
+          "inputType": "number",
+          "constraints": { "min": 1, "max": 5 }
+        }
+      ]
+    },
+    {
+      "slug": "goal",
+      "displayName": "Goal",
+      "icon": "Target",
+      "color": "#14B8A6",
+      "description": "Intentions with a target state and measurable progress.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "title",
+          "label": "Title",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "description",
+          "label": "Description",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["active", "achieved", "abandoned"]
+        },
+        {
+          "slug": "target-date",
+          "label": "Target Date",
+          "valueType": "date",
+          "inputType": "date"
+        },
+        {
+          "slug": "progress",
+          "label": "Progress",
+          "valueType": "number",
+          "inputType": "number",
+          "constraints": { "min": 0, "max": 100 }
+        },
+        {
+          "slug": "area",
+          "label": "Area",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    },
+    {
+      "slug": "video",
+      "displayName": "Video",
+      "icon": "Video",
+      "color": "#8B5CF6",
+      "description": "Video content from YouTube, courses, and other platforms.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "title",
+          "label": "Title",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "url",
+          "label": "URL",
+          "valueType": "string",
+          "inputType": "url"
+        },
+        {
+          "slug": "channel",
+          "label": "Channel",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["want-to-watch", "watching", "watched"]
+        },
+        { "slug": "tags", "label": "Tags", "valueType": "array" },
+        {
+          "slug": "summary",
+          "label": "Summary",
+          "valueType": "string",
+          "inputType": "textarea"
+        }
+      ]
+    },
+    {
+      "slug": "podcast",
+      "displayName": "Podcast",
+      "icon": "Mic",
+      "color": "#EC4899",
+      "description": "Episodes and shows worth listening to or already consumed.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "title",
+          "label": "Title",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "show",
+          "label": "Show",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "url",
+          "label": "URL",
+          "valueType": "string",
+          "inputType": "url"
+        },
+        {
+          "slug": "status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["want-to-listen", "listening", "done"]
+        },
+        { "slug": "tags", "label": "Tags", "valueType": "array" },
+        {
+          "slug": "summary",
+          "label": "Summary",
+          "valueType": "string",
+          "inputType": "textarea"
+        }
+      ]
+    },
+    {
+      "slug": "event",
+      "displayName": "Event",
+      "icon": "Calendar",
+      "color": "#F97316",
+      "description": "Events and experiences in your life timeline.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "title",
+          "label": "Title",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "date",
+          "label": "Date",
+          "valueType": "date",
+          "inputType": "date"
+        },
+        {
+          "slug": "location",
+          "label": "Location",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "description",
+          "label": "Description",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["upcoming", "attending", "done", "cancelled"]
+        }
+      ]
+    },
+    {
+      "slug": "place",
+      "displayName": "Place",
+      "icon": "MapPin",
+      "color": "#10B981",
+      "description": "Places you've visited or want to visit.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "name",
+          "label": "Name",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "type",
+          "label": "Type",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["city", "country", "venue", "restaurant", "nature"]
+        },
+        {
+          "slug": "description",
+          "label": "Description",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "visited",
+          "label": "Visited",
+          "valueType": "boolean",
+          "inputType": "checkbox"
+        },
+        {
+          "slug": "visit-date",
+          "label": "Visit Date",
+          "valueType": "date",
+          "inputType": "date"
+        }
+      ]
+    },
+    {
+      "slug": "organization",
+      "displayName": "Organization",
+      "icon": "Building2",
+      "color": "#64748B",
+      "description": "Companies, institutions, and communities in your network.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "name",
+          "label": "Name",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "type",
+          "label": "Type",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["company", "school", "nonprofit", "community"]
+        },
+        {
+          "slug": "website",
+          "label": "Website",
+          "valueType": "string",
+          "inputType": "url"
+        },
+        {
+          "slug": "description",
+          "label": "Description",
+          "valueType": "string",
+          "inputType": "textarea"
+        }
+      ]
+    },
+    {
+      "slug": "course",
+      "displayName": "Course",
+      "icon": "GraduationCap",
+      "color": "#6366F1",
+      "description": "Educational courses you're taking or have completed.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "title",
+          "label": "Title",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "instructor",
+          "label": "Instructor",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "platform",
+          "label": "Platform",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "url",
+          "label": "URL",
+          "valueType": "string",
+          "inputType": "url"
+        },
+        {
+          "slug": "status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["want-to-take", "in-progress", "completed"]
+        },
+        {
+          "slug": "progress",
+          "label": "Progress",
+          "valueType": "number",
+          "inputType": "number",
+          "constraints": { "min": 0, "max": 100 }
+        }
+      ]
+    },
+    {
+      "slug": "newsletter",
+      "displayName": "Newsletter",
+      "icon": "Mail",
+      "color": "#F59E0B",
+      "description": "Newsletters you're subscribed to or tracking.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "name",
+          "label": "Name",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "url",
+          "label": "URL",
+          "valueType": "string",
+          "inputType": "url"
+        },
+        {
+          "slug": "author",
+          "label": "Author",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["subscribed", "unsubscribed", "paused"]
+        },
+        {
+          "slug": "frequency",
+          "label": "Frequency",
+          "valueType": "string",
+          "inputType": "text"
+        },
+        {
+          "slug": "notes",
+          "label": "Notes",
+          "valueType": "string",
+          "inputType": "textarea"
+        }
+      ]
+    },
+    {
+      "slug": "voice-memo",
+      "displayName": "Voice Memo",
+      "icon": "Mic2",
+      "color": "#06B6D4",
+      "description": "Voice recordings and their transcripts.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "title",
+          "label": "Title",
+          "valueType": "string",
+          "inputType": "text",
+          "required": true
+        },
+        {
+          "slug": "transcript",
+          "label": "Transcript",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        {
+          "slug": "duration",
+          "label": "Duration (seconds)",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["raw", "processed", "archived"]
+        },
+        { "slug": "tags", "label": "Tags", "valueType": "array" }
+      ]
+    },
+    {
+      "slug": "question",
+      "displayName": "Question",
+      "icon": "HelpCircle",
+      "color": "#EF4444",
+      "description": "Open questions driving your curiosity and research.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "text",
+          "label": "Text",
+          "valueType": "string",
+          "inputType": "textarea",
+          "required": true
+        },
+        {
+          "slug": "status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["open", "exploring", "answered"]
+        },
+        {
+          "slug": "answer",
+          "label": "Answer",
+          "valueType": "string",
+          "inputType": "textarea"
+        },
+        { "slug": "tags", "label": "Tags", "valueType": "array" },
+        {
+          "slug": "domain",
+          "label": "Domain",
+          "valueType": "string",
+          "inputType": "text"
+        }
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "All Notes",
+      "type": "table",
+      "scopeProfileSlug": "note",
+      "config": {}
+    },
+    {
+      "name": "Notes Board",
+      "type": "kanban",
+      "scopeProfileSlug": "note",
+      "config": { "groupByField": "status" }
+    },
+    {
+      "name": "Inbox Notes",
+      "type": "list",
+      "scopeProfileSlug": "note",
+      "config": {
+        "filter": { "status": "inbox" },
+        "sort": { "field": "created-at", "direction": "desc" }
+      }
+    },
+    {
+      "name": "All Concepts",
+      "type": "table",
+      "scopeProfileSlug": "concept",
+      "config": {}
+    },
+    {
+      "name": "Concept Map",
+      "type": "graph",
+      "scopeProfileSlug": "concept",
+      "config": {}
+    },
+    {
+      "name": "Book Library",
+      "type": "list",
+      "scopeProfileSlug": "book",
+      "config": { "coverField": "cover-url", "groupByField": "status" }
+    },
+    {
+      "name": "Reading List",
+      "type": "table",
+      "scopeProfileSlug": "book",
+      "config": {
+        "filter": { "status": ["reading", "want-to-read"] },
+        "sort": { "field": "date-started", "direction": "desc" }
+      }
+    },
+    {
+      "name": "All Highlights",
+      "type": "table",
+      "scopeProfileSlug": "highlight",
+      "config": {}
+    },
+    {
+      "name": "People Network",
+      "type": "table",
+      "scopeProfileSlug": "person",
+      "config": {}
+    },
+    {
+      "name": "Active Projects",
+      "type": "kanban",
+      "scopeProfileSlug": "project",
+      "config": { "groupByField": "status" }
+    },
+    {
+      "name": "All Projects",
+      "type": "table",
+      "scopeProfileSlug": "project",
+      "config": {}
+    },
+    {
+      "name": "All Areas",
+      "type": "table",
+      "scopeProfileSlug": "area",
+      "config": {}
+    },
+    {
+      "name": "All Quotes",
+      "type": "table",
+      "scopeProfileSlug": "quote",
+      "config": {}
+    },
+    {
+      "name": "Article Board",
+      "type": "kanban",
+      "scopeProfileSlug": "article",
+      "config": { "groupByField": "status" }
+    },
+    {
+      "name": "All Articles",
+      "type": "table",
+      "scopeProfileSlug": "article",
+      "config": {}
+    },
+    {
+      "name": "All Bookmarks",
+      "type": "table",
+      "scopeProfileSlug": "bookmark",
+      "config": {}
+    },
+    {
+      "name": "All Ideas",
+      "type": "kanban",
+      "scopeProfileSlug": "idea",
+      "config": { "groupByField": "status" }
+    },
+    {
+      "name": "All Goals",
+      "type": "table",
+      "scopeProfileSlug": "goal",
+      "config": {}
+    },
+    {
+      "name": "Notes Dashboard",
+      "type": "bento",
+      "scopeProfileSlug": "note",
+      "config": {
+        "blocks": [
+          {
+            "id": "nd-b1",
+            "kind": "widget",
+            "widgetType": "welcome-header",
+            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "config": {
+              "title": "Notes",
+              "subtitle": "Your atomic knowledge base"
+            }
+          },
+          {
+            "id": "nd-b2",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 0, "y": 2, "w": 3, "h": 2 },
+            "config": {
+              "profileSlug": "note",
+              "label": "Total Notes",
+              "icon": "FileText"
+            }
+          },
+          {
+            "id": "nd-b3",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 3, "y": 2, "w": 3, "h": 2 },
+            "config": {
+              "profileSlug": "note",
+              "label": "In Inbox",
+              "icon": "Inbox",
+              "filter": { "status": "inbox" },
+              "color": "amber"
+            }
+          },
+          {
+            "id": "nd-b4",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 6, "y": 2, "w": 3, "h": 2 },
+            "config": {
+              "profileSlug": "note",
+              "label": "Evergreen",
+              "icon": "Leaf",
+              "filter": { "status": "evergreen" },
+              "color": "green"
+            }
+          },
+          {
+            "id": "nd-b5",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 9, "y": 2, "w": 3, "h": 2 },
+            "config": {
+              "profileSlug": "note",
+              "label": "This Week",
+              "icon": "TrendingUp"
+            }
+          },
+          {
+            "id": "nd-b6",
+            "kind": "view",
+            "viewName": "All Notes",
+            "pos": { "x": 0, "y": 4, "w": 12, "h": 6 }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Books Dashboard",
+      "type": "bento",
+      "scopeProfileSlug": "book",
+      "config": {
+        "blocks": [
+          {
+            "id": "bd-b1",
+            "kind": "widget",
+            "widgetType": "welcome-header",
+            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "config": { "title": "Books", "subtitle": "Your reading journey" }
+          },
+          {
+            "id": "bd-b2",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 0, "y": 2, "w": 3, "h": 2 },
+            "config": {
+              "profileSlug": "book",
+              "label": "Currently Reading",
+              "icon": "BookOpen",
+              "filter": { "status": "reading" },
+              "color": "blue"
+            }
+          },
+          {
+            "id": "bd-b3",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 3, "y": 2, "w": 3, "h": 2 },
+            "config": {
+              "profileSlug": "book",
+              "label": "Books Read",
+              "icon": "CheckCircle",
+              "filter": { "status": "completed" },
+              "color": "green"
+            }
+          },
+          {
+            "id": "bd-b4",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 6, "y": 2, "w": 3, "h": 2 },
+            "config": {
+              "profileSlug": "book",
+              "label": "To Read",
+              "icon": "List",
+              "filter": { "status": "want-to-read" },
+              "color": "purple"
+            }
+          },
+          {
+            "id": "bd-b5",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 9, "y": 2, "w": 3, "h": 2 },
+            "config": {
+              "profileSlug": "highlight",
+              "label": "Total Highlights",
+              "icon": "Highlighter"
+            }
+          },
+          {
+            "id": "bd-b6",
+            "kind": "widget",
+            "widgetType": "entity-gallery",
+            "pos": { "x": 0, "y": 4, "w": 8, "h": 4 },
+            "config": {
+              "profileSlug": "book",
+              "filter": { "status": "reading" },
+              "coverField": "cover-url",
+              "title": "Currently Reading",
+              "limit": 8
+            }
+          },
+          {
+            "id": "bd-b7",
+            "kind": "widget",
+            "widgetType": "quote-card",
+            "pos": { "x": 8, "y": 4, "w": 4, "h": 4 },
+            "config": {
+              "profileSlug": "quote",
+              "textField": "text",
+              "authorField": "author",
+              "seed": "daily"
+            }
+          },
+          {
+            "id": "bd-b8",
+            "kind": "view",
+            "viewName": "Reading List",
+            "pos": { "x": 0, "y": 8, "w": 12, "h": 4 }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Concepts Dashboard",
+      "type": "bento",
+      "scopeProfileSlug": "concept",
+      "config": {
+        "blocks": [
+          {
+            "id": "cd-b1",
+            "kind": "widget",
+            "widgetType": "welcome-header",
+            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "config": {
+              "title": "Concepts",
+              "subtitle": "Your growing knowledge graph"
+            }
+          },
+          {
+            "id": "cd-b2",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 0, "y": 2, "w": 4, "h": 2 },
+            "config": {
+              "profileSlug": "concept",
+              "label": "All Concepts",
+              "icon": "Lightbulb"
+            }
+          },
+          {
+            "id": "cd-b3",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 4, "y": 2, "w": 4, "h": 2 },
+            "config": {
+              "profileSlug": "concept",
+              "label": "Evergreen",
+              "icon": "Leaf",
+              "filter": { "maturity": "evergreen" },
+              "color": "green"
+            }
+          },
+          {
+            "id": "cd-b4",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 8, "y": 2, "w": 4, "h": 2 },
+            "config": {
+              "profileSlug": "concept",
+              "label": "Seeds",
+              "icon": "Sprout",
+              "filter": { "maturity": "seed" },
+              "color": "amber"
+            }
+          },
+          {
+            "id": "cd-b5",
+            "kind": "view",
+            "viewName": "All Concepts",
+            "pos": { "x": 0, "y": 4, "w": 12, "h": 6 }
+          }
+        ]
+      }
+    },
+    {
+      "name": "People Dashboard",
+      "type": "bento",
+      "scopeProfileSlug": "person",
+      "config": {
+        "blocks": [
+          {
+            "id": "pd-b1",
+            "kind": "widget",
+            "widgetType": "welcome-header",
+            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "config": {
+              "title": "People",
+              "subtitle": "Your network and relationships"
+            }
+          },
+          {
+            "id": "pd-b2",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 0, "y": 2, "w": 4, "h": 2 },
+            "config": {
+              "profileSlug": "person",
+              "label": "All People",
+              "icon": "Users"
+            }
+          },
+          {
+            "id": "pd-b3",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 4, "y": 2, "w": 4, "h": 2 },
+            "config": {
+              "profileSlug": "person",
+              "label": "Mentors",
+              "icon": "Star",
+              "filter": { "relationship": "mentor" }
+            }
+          },
+          {
+            "id": "pd-b4",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 8, "y": 2, "w": 4, "h": 2 },
+            "config": {
+              "profileSlug": "person",
+              "label": "Authors",
+              "icon": "BookOpen",
+              "filter": { "relationship": "author" }
+            }
+          },
+          {
+            "id": "pd-b5",
+            "kind": "view",
+            "viewName": "People Network",
+            "pos": { "x": 0, "y": 4, "w": 12, "h": 6 }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Projects Dashboard",
+      "type": "bento",
+      "scopeProfileSlug": "project",
+      "config": {
+        "blocks": [
+          {
+            "id": "prd-b1",
+            "kind": "widget",
+            "widgetType": "welcome-header",
+            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "config": {
+              "title": "Projects",
+              "subtitle": "Your active initiatives"
+            }
+          },
+          {
+            "id": "prd-b2",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 0, "y": 2, "w": 3, "h": 2 },
+            "config": {
+              "profileSlug": "project",
+              "label": "Active",
+              "icon": "Play",
+              "filter": { "status": "active" },
+              "color": "green"
+            }
+          },
+          {
+            "id": "prd-b3",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 3, "y": 2, "w": 3, "h": 2 },
+            "config": {
+              "profileSlug": "project",
+              "label": "Planning",
+              "icon": "Map",
+              "filter": { "status": "planning" },
+              "color": "blue"
+            }
+          },
+          {
+            "id": "prd-b4",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 6, "y": 2, "w": 3, "h": 2 },
+            "config": {
+              "profileSlug": "project",
+              "label": "On Hold",
+              "icon": "PauseCircle",
+              "filter": { "status": "on-hold" },
+              "color": "amber"
+            }
+          },
+          {
+            "id": "prd-b5",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 9, "y": 2, "w": 3, "h": 2 },
+            "config": {
+              "profileSlug": "project",
+              "label": "Completed",
+              "icon": "CheckCircle",
+              "filter": { "status": "completed" },
+              "color": "purple"
+            }
+          },
+          {
+            "id": "prd-b6",
+            "kind": "view",
+            "viewName": "Active Projects",
+            "pos": { "x": 0, "y": 4, "w": 12, "h": 6 }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Quotes Dashboard",
+      "type": "bento",
+      "scopeProfileSlug": "quote",
+      "config": {
+        "blocks": [
+          {
+            "id": "qd-b1",
+            "kind": "widget",
+            "widgetType": "welcome-header",
+            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "config": {
+              "title": "Quotes",
+              "subtitle": "Wisdom from your reading"
+            }
+          },
+          {
+            "id": "qd-b2",
+            "kind": "widget",
+            "widgetType": "quote-card",
+            "pos": { "x": 0, "y": 2, "w": 6, "h": 4 },
+            "config": {
+              "profileSlug": "quote",
+              "textField": "text",
+              "authorField": "author",
+              "seed": "daily"
+            }
+          },
+          {
+            "id": "qd-b3",
+            "kind": "widget",
+            "widgetType": "entity-list",
+            "pos": { "x": 6, "y": 2, "w": 6, "h": 4 },
+            "config": {
+              "profileSlug": "quote",
+              "title": "Latest Quotes",
+              "limit": 6,
+              "sort": { "field": "created-at", "direction": "desc" }
+            }
+          },
+          {
+            "id": "qd-b4",
+            "kind": "view",
+            "viewName": "All Quotes",
+            "pos": { "x": 0, "y": 6, "w": 12, "h": 4 }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Areas Dashboard",
+      "type": "bento",
+      "scopeProfileSlug": "area",
+      "config": {
+        "blocks": [
+          {
+            "id": "ad-b1",
+            "kind": "widget",
+            "widgetType": "welcome-header",
+            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "config": {
+              "title": "Areas",
+              "subtitle": "The domains of your life"
+            }
+          },
+          {
+            "id": "ad-b2",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 0, "y": 2, "w": 6, "h": 2 },
+            "config": {
+              "profileSlug": "area",
+              "label": "Active Areas",
+              "icon": "Compass",
+              "filter": { "status": "active" }
+            }
+          },
+          {
+            "id": "ad-b3",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 6, "y": 2, "w": 6, "h": 2 },
+            "config": {
+              "profileSlug": "project",
+              "label": "Total Projects",
+              "icon": "FolderOpen"
+            }
+          },
+          {
+            "id": "ad-b4",
+            "kind": "view",
+            "viewName": "All Areas",
+            "pos": { "x": 0, "y": 4, "w": 12, "h": 6 }
+          }
+        ]
+      }
+    }
+  ],
+  "bentoLayout": [
+    {
+      "widgetType": "welcome-header",
+      "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+      "config": {
+        "title": "Good morning — Your Second Brain",
+        "subtitle": "Everything you know, connected.",
+        "showDate": true
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 0, "y": 2, "w": 3, "h": 2 },
+      "config": { "profileSlug": "note", "label": "Notes", "icon": "FileText" }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 3, "y": 2, "w": 3, "h": 2 },
+      "config": { "profileSlug": "book", "label": "Books", "icon": "BookOpen" }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 6, "y": 2, "w": 3, "h": 2 },
+      "config": {
+        "profileSlug": "concept",
+        "label": "Concepts",
+        "icon": "Lightbulb"
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 9, "y": 2, "w": 3, "h": 2 },
+      "config": { "profileSlug": "person", "label": "People", "icon": "Users" }
+    },
+    {
+      "widgetType": "feed",
+      "pos": { "x": 0, "y": 4, "w": 8, "h": 4 },
+      "config": {}
+    },
+    {
+      "widgetType": "quick-access",
+      "pos": { "x": 8, "y": 4, "w": 4, "h": 4 },
+      "config": {
+        "links": [
+          { "label": "New Note", "icon": "FileText", "profileSlug": "note" },
+          { "label": "Add Book", "icon": "BookOpen", "profileSlug": "book" },
+          { "label": "Capture Idea", "icon": "Zap", "profileSlug": "idea" },
+          {
+            "label": "Concepts",
+            "icon": "Lightbulb",
+            "profileSlug": "concept"
+          },
+          {
+            "label": "Projects",
+            "icon": "FolderOpen",
+            "profileSlug": "project"
+          },
+          { "label": "People", "icon": "Users", "profileSlug": "person" }
+        ]
+      }
+    },
+    {
+      "widgetType": "calendar",
+      "pos": { "x": 0, "y": 8, "w": 4, "h": 4 },
+      "config": { "title": "Schedule" }
+    },
+    {
+      "widgetType": "reading-progress",
+      "pos": { "x": 4, "y": 8, "w": 4, "h": 4 },
+      "config": {
+        "profileSlug": "book",
+        "pageField": "current-page",
+        "totalPagesField": "pages"
+      }
+    },
+    {
+      "widgetType": "entity-spotlight",
+      "pos": { "x": 0, "y": 12, "w": 4, "h": 4 },
+      "config": {
+        "profileSlug": "note",
+        "seed": "daily",
+        "layout": "detail",
+        "color": "#6366F1"
+      }
+    },
+    {
+      "widgetType": "random-highlight",
+      "pos": { "x": 4, "y": 12, "w": 4, "h": 4 },
+      "config": { "title": "From the Library" }
+    },
+    {
+      "widgetType": "quick-capture",
+      "pos": { "x": 8, "y": 12, "w": 4, "h": 4 },
+      "config": { "presetProfileSlug": "note" }
+    }
+  ],
+  "bentoViewBlocks": [
+    {
+      "kind": "view",
+      "viewName": "Inbox Notes",
+      "pos": { "x": 8, "y": 8, "w": 4, "h": 4 }
+    }
+  ],
+  "profileEntityBentoTemplates": {
+    "note": {
+      "blocks": [
+        {
+          "id": "note-eb-b1",
+          "kind": "widget",
+          "widgetType": "entity-spotlight",
+          "pos": { "x": 0, "y": 0, "w": 12, "h": 3 },
+          "config": { "seed": "pinned", "layout": "detail" }
+        },
+        {
+          "id": "note-eb-b2",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 0, "y": 3, "w": 6, "h": 4 },
+          "config": {
+            "profileSlug": "note",
+            "title": "Related Notes",
+            "limit": 8
+          }
+        },
+        {
+          "id": "note-eb-b3",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 6, "y": 3, "w": 6, "h": 4 },
+          "config": {
+            "profileSlug": "concept",
+            "title": "Concepts",
+            "limit": 8
+          }
+        }
+      ]
+    },
+    "book": {
+      "blocks": [
+        {
+          "id": "book-eb-b1",
+          "kind": "widget",
+          "widgetType": "entity-spotlight",
+          "pos": { "x": 0, "y": 0, "w": 8, "h": 3 },
+          "config": { "seed": "pinned", "layout": "detail" }
+        },
+        {
+          "id": "book-eb-b2",
+          "kind": "widget",
+          "widgetType": "reading-progress",
+          "pos": { "x": 8, "y": 0, "w": 4, "h": 3 },
+          "config": {
+            "profileSlug": "book",
+            "pageField": "current-page",
+            "totalPagesField": "pages",
+            "label": "Progress"
+          }
+        },
+        {
+          "id": "book-eb-b3",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 0, "y": 3, "w": 12, "h": 4 },
+          "config": {
+            "profileSlug": "highlight",
+            "title": "Highlights",
+            "limit": 10
+          }
+        },
+        {
+          "id": "book-eb-b4",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 0, "y": 7, "w": 8, "h": 3 },
+          "config": { "profileSlug": "note", "title": "Notes", "limit": 6 }
+        },
+        {
+          "id": "book-eb-b5",
+          "kind": "widget",
+          "widgetType": "quote-card",
+          "pos": { "x": 8, "y": 7, "w": 4, "h": 3 },
+          "config": { "profileSlug": "quote", "seed": "random" }
+        }
+      ]
+    },
+    "concept": {
+      "blocks": [
+        {
+          "id": "concept-eb-b1",
+          "kind": "widget",
+          "widgetType": "entity-spotlight",
+          "pos": { "x": 0, "y": 0, "w": 12, "h": 3 },
+          "config": { "seed": "pinned", "layout": "detail" }
+        },
+        {
+          "id": "concept-eb-b2",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 0, "y": 3, "w": 6, "h": 4 },
+          "config": {
+            "profileSlug": "note",
+            "title": "Notes exploring this",
+            "limit": 8
+          }
+        },
+        {
+          "id": "concept-eb-b3",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 6, "y": 3, "w": 6, "h": 4 },
+          "config": {
+            "profileSlug": "concept",
+            "title": "Related Concepts",
+            "limit": 8
+          }
+        }
+      ]
+    },
+    "person": {
+      "blocks": [
+        {
+          "id": "person-eb-b1",
+          "kind": "widget",
+          "widgetType": "entity-spotlight",
+          "pos": { "x": 0, "y": 0, "w": 8, "h": 3 },
+          "config": { "seed": "pinned", "layout": "detail" }
+        },
+        {
+          "id": "person-eb-b2",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 8, "y": 0, "w": 4, "h": 3 },
+          "config": {
+            "profileSlug": "note",
+            "title": "Notes about",
+            "limit": 5
+          }
+        },
+        {
+          "id": "person-eb-b3",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 0, "y": 3, "w": 6, "h": 4 },
+          "config": { "profileSlug": "book", "title": "Books by", "limit": 8 }
+        },
+        {
+          "id": "person-eb-b4",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 6, "y": 3, "w": 6, "h": 4 },
+          "config": {
+            "profileSlug": "article",
+            "title": "Articles by",
+            "limit": 8
+          }
+        }
+      ]
+    },
+    "project": {
+      "blocks": [
+        {
+          "id": "project-eb-b1",
+          "kind": "widget",
+          "widgetType": "entity-spotlight",
+          "pos": { "x": 0, "y": 0, "w": 8, "h": 3 },
+          "config": { "seed": "pinned", "layout": "detail" }
+        },
+        {
+          "id": "project-eb-b2",
+          "kind": "widget",
+          "widgetType": "entity-count",
+          "pos": { "x": 8, "y": 0, "w": 4, "h": 3 },
+          "config": { "profileSlug": "idea", "label": "Ideas", "icon": "Zap" }
+        },
+        {
+          "id": "project-eb-b3",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 0, "y": 3, "w": 6, "h": 4 },
+          "config": {
+            "profileSlug": "note",
+            "title": "Project Notes",
+            "limit": 8
+          }
+        },
+        {
+          "id": "project-eb-b4",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 6, "y": 3, "w": 6, "h": 4 },
+          "config": { "profileSlug": "idea", "title": "Ideas", "limit": 8 }
+        }
+      ]
+    },
+    "area": {
+      "blocks": [
+        {
+          "id": "area-eb-b1",
+          "kind": "widget",
+          "widgetType": "entity-spotlight",
+          "pos": { "x": 0, "y": 0, "w": 8, "h": 3 },
+          "config": { "seed": "pinned", "layout": "detail" }
+        },
+        {
+          "id": "area-eb-b2",
+          "kind": "widget",
+          "widgetType": "entity-count",
+          "pos": { "x": 8, "y": 0, "w": 4, "h": 3 },
+          "config": {
+            "profileSlug": "project",
+            "label": "Projects",
+            "icon": "FolderOpen",
+            "color": "green"
+          }
+        },
+        {
+          "id": "area-eb-b3",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 0, "y": 3, "w": 12, "h": 4 },
+          "config": {
+            "profileSlug": "project",
+            "title": "Projects",
+            "limit": 10
+          }
+        }
+      ]
+    },
+    "goal": {
+      "blocks": [
+        {
+          "id": "goal-eb-b1",
+          "kind": "widget",
+          "widgetType": "entity-spotlight",
+          "pos": { "x": 0, "y": 0, "w": 8, "h": 3 },
+          "config": { "seed": "pinned", "layout": "detail" }
+        },
+        {
+          "id": "goal-eb-b2",
+          "kind": "widget",
+          "widgetType": "metrics-summary",
+          "pos": { "x": 8, "y": 0, "w": 4, "h": 3 },
+          "config": {
+            "profileSlug": "project",
+            "property": "progress",
+            "aggregation": "average",
+            "title": "Avg Project Progress"
+          }
+        },
+        {
+          "id": "goal-eb-b3",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 0, "y": 3, "w": 12, "h": 4 },
+          "config": {
+            "profileSlug": "project",
+            "title": "Related Projects",
+            "limit": 8
+          }
+        }
+      ]
+    }
+  },
+  "entityLinks": [
+    {
+      "sourceProfileSlug": "note",
+      "targetProfileSlug": "concept",
+      "type": "explores",
+      "label": "Explores"
+    },
+    {
+      "sourceProfileSlug": "note",
+      "targetProfileSlug": "note",
+      "type": "related-to",
+      "label": "Related to"
+    },
+    {
+      "sourceProfileSlug": "note",
+      "targetProfileSlug": "book",
+      "type": "references",
+      "label": "References"
+    },
+    {
+      "sourceProfileSlug": "note",
+      "targetProfileSlug": "project",
+      "type": "feeds-into",
+      "label": "Feeds into"
+    },
+    {
+      "sourceProfileSlug": "highlight",
+      "targetProfileSlug": "book",
+      "type": "from",
+      "label": "From"
+    },
+    {
+      "sourceProfileSlug": "highlight",
+      "targetProfileSlug": "article",
+      "type": "from",
+      "label": "From"
+    },
+    {
+      "sourceProfileSlug": "book",
+      "targetProfileSlug": "person",
+      "type": "authored-by",
+      "label": "Authored by"
+    },
+    {
+      "sourceProfileSlug": "article",
+      "targetProfileSlug": "person",
+      "type": "written-by",
+      "label": "Written by"
+    },
+    {
+      "sourceProfileSlug": "idea",
+      "targetProfileSlug": "project",
+      "type": "feeds-into",
+      "label": "Feeds into"
+    },
+    {
+      "sourceProfileSlug": "project",
+      "targetProfileSlug": "area",
+      "type": "belongs-to",
+      "label": "Belongs to"
+    },
+    {
+      "sourceProfileSlug": "goal",
+      "targetProfileSlug": "area",
+      "type": "in-area",
+      "label": "In area"
+    },
+    {
+      "sourceProfileSlug": "concept",
+      "targetProfileSlug": "concept",
+      "type": "related-to",
+      "label": "Related to"
+    },
+    {
+      "sourceProfileSlug": "quote",
+      "targetProfileSlug": "book",
+      "type": "from",
+      "label": "From"
+    },
+    {
+      "sourceProfileSlug": "quote",
+      "targetProfileSlug": "person",
+      "type": "said-by",
+      "label": "Said by"
+    }
+  ],
+  "layoutConfig": {
+    "pinnedApps": ["dashboard", "data", "intelligence"],
+    "defaultApp": "dashboard",
+    "sidebarItems": [
+      {
+        "kind": "app",
+        "appId": "dashboard",
+        "label": "Brain Home",
+        "icon": "Home"
+      },
+      {
+        "kind": "profile",
+        "profileSlug": "note",
+        "label": "Notes",
+        "icon": "FileText"
+      },
+      {
+        "kind": "profile",
+        "profileSlug": "highlight",
+        "label": "Highlights",
+        "icon": "Highlighter"
+      },
+      {
+        "kind": "profile",
+        "profileSlug": "bookmark",
+        "label": "Bookmarks",
+        "icon": "Bookmark"
+      },
+      {
+        "kind": "profile",
+        "profileSlug": "concept",
+        "label": "Concepts",
+        "icon": "Lightbulb"
+      },
+      {
+        "kind": "profile",
+        "profileSlug": "quote",
+        "label": "Quotes",
+        "icon": "Quote"
+      },
+      {
+        "kind": "profile",
+        "profileSlug": "book",
+        "label": "Books",
+        "icon": "BookOpen"
+      },
+      {
+        "kind": "profile",
+        "profileSlug": "article",
+        "label": "Articles",
+        "icon": "Newspaper"
+      },
+      {
+        "kind": "profile",
+        "profileSlug": "person",
+        "label": "People",
+        "icon": "Users"
+      },
+      {
+        "kind": "profile",
+        "profileSlug": "project",
+        "label": "Projects",
+        "icon": "FolderOpen"
+      },
+      {
+        "kind": "profile",
+        "profileSlug": "area",
+        "label": "Areas",
+        "icon": "Compass"
+      },
+      {
+        "kind": "app",
+        "appId": "intelligence",
+        "label": "Agent",
+        "icon": "Sparkles"
+      }
+    ]
+  },
+  "suggestedEntities": [
+    {
+      "profileSlug": "area",
+      "title": "Learning & Growth",
+      "properties": {
+        "description": "Continuous learning, skill building, reading.",
+        "status": "active"
+      }
+    },
+    {
+      "profileSlug": "area",
+      "title": "Work & Career",
+      "properties": {
+        "description": "Professional projects, skills, and relationships.",
+        "status": "active"
+      }
+    },
+    {
+      "profileSlug": "area",
+      "title": "Health & Wellbeing",
+      "properties": {
+        "description": "Physical health, mental clarity, energy.",
+        "status": "active"
+      }
+    },
+    {
+      "profileSlug": "project",
+      "title": "Build My Second Brain",
+      "properties": {
+        "status": "active",
+        "outcome": "Have a fully functional PKM system capturing and connecting my knowledge.",
+        "area": "Learning & Growth"
+      }
+    },
+    {
+      "profileSlug": "concept",
+      "title": "Zettelkasten",
+      "properties": {
+        "definition": "A note-taking method using atomic, interconnected notes.",
+        "domain": "Knowledge Management",
+        "maturity": "evergreen"
+      }
+    },
+    {
+      "profileSlug": "concept",
+      "title": "Progressive Summarization",
+      "properties": {
+        "definition": "Highlighting and condensing notes in multiple passes.",
+        "domain": "Knowledge Management",
+        "maturity": "growing"
+      }
+    },
+    {
+      "profileSlug": "book",
+      "title": "Building a Second Brain",
+      "properties": {
+        "author": "Tiago Forte",
+        "status": "reading",
+        "genre": "Productivity",
+        "pages": 272
+      }
+    },
+    {
+      "profileSlug": "book",
+      "title": "How to Take Smart Notes",
+      "properties": {
+        "author": "Sonke Ahrens",
+        "status": "want-to-read",
+        "genre": "Learning",
+        "pages": 170
+      }
+    },
+    {
+      "profileSlug": "person",
+      "title": "Tiago Forte",
+      "properties": {
+        "role": "Author & Creator",
+        "relationship": "author",
+        "notes": "Creator of the Second Brain methodology."
+      }
+    },
+    {
+      "profileSlug": "person",
+      "title": "Sonke Ahrens",
+      "properties": {
+        "role": "Author & Researcher",
+        "relationship": "author",
+        "notes": "Author of How to Take Smart Notes."
+      }
+    },
+    {
+      "profileSlug": "quote",
+      "title": "Your mind is for having ideas",
+      "properties": {
+        "text": "Your mind is for having ideas, not holding them.",
+        "author": "David Allen",
+        "resonance": 5
+      }
+    },
+    {
+      "profileSlug": "note",
+      "title": "Why I'm building a Second Brain",
+      "properties": {
+        "status": "inbox",
+        "content": "Capture everything. Review regularly. Connect the dots."
+      }
+    }
+  ],
+  "suggestedRelations": [
+    {
+      "sourceRef": "book:Building a Second Brain",
+      "targetRef": "person:Tiago Forte",
+      "type": "authored-by"
+    },
+    {
+      "sourceRef": "book:How to Take Smart Notes",
+      "targetRef": "person:Sonke Ahrens",
+      "type": "authored-by"
+    },
+    {
+      "sourceRef": "note:Why I'm building a Second Brain",
+      "targetRef": "project:Build My Second Brain",
+      "type": "feeds-into"
+    },
+    {
+      "sourceRef": "concept:Zettelkasten",
+      "targetRef": "concept:Progressive Summarization",
+      "type": "related-to"
+    },
+    {
+      "sourceRef": "project:Build My Second Brain",
+      "targetRef": "area:Learning & Growth",
+      "type": "belongs-to"
+    }
+  ],
+  "capabilities": [],
+  "playbooks": []
+}

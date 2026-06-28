@@ -1,0 +1,2120 @@
+{
+  "_meta": {
+    "slug": "content-os",
+    "icon": "file-edit",
+    "color": "#6366F1",
+    "tags": ["content", "creator", "social-media", "newsletter", "campaigns"]
+  },
+  "workspaceName": "Content OS — Creator Operations Hub",
+  "description": "A sovereign content operating system. Plan campaigns, manage posts across platforms, track brand deals, and own your newsletter audience — all in one relational workspace you control forever.",
+  "workspaceType": "operational",
+  "workspaceSubtype": "content-studio",
+  "profiles": [
+    {
+      "slug": "post",
+      "displayName": "Post",
+      "icon": "file-edit",
+      "color": "#6366F1",
+      "description": "Your atomic content unit. One idea, multiple platform formats — tracked from spark to publication.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "post-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Idea",
+            "Briefed",
+            "In Draft",
+            "Review",
+            "Scheduled",
+            "Published",
+            "Archived"
+          ]
+        },
+        {
+          "slug": "post-format",
+          "label": "Format",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Article",
+            "Thread",
+            "Short Video",
+            "Long Video",
+            "Carousel",
+            "Image Post",
+            "Story",
+            "Newsletter Section",
+            "Podcast Episode",
+            "Other"
+          ]
+        },
+        {
+          "slug": "post-platform",
+          "label": "Platform",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "LinkedIn",
+            "Instagram",
+            "TikTok",
+            "YouTube",
+            "Twitter / X",
+            "Threads",
+            "Bluesky",
+            "Newsletter",
+            "Podcast",
+            "Blog",
+            "Other"
+          ]
+        },
+        { "slug": "post-pillar", "label": "Pillar", "valueType": "entity_id" },
+        {
+          "slug": "post-campaign",
+          "label": "Campaign",
+          "valueType": "entity_id"
+        },
+        {
+          "slug": "post-sponsor",
+          "label": "Sponsor",
+          "valueType": "entity_id"
+        },
+        {
+          "slug": "publish-date",
+          "label": "Publish Date",
+          "valueType": "date"
+        },
+        {
+          "slug": "post-hook",
+          "label": "Hook / Headline",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "Opening line or headline that stops the scroll"
+        },
+        {
+          "slug": "post-cta",
+          "label": "CTA",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "What should the audience do?"
+        },
+        { "slug": "post-tags", "label": "Tags", "valueType": "array" },
+        {
+          "slug": "engagement-score",
+          "label": "Engagement Score",
+          "valueType": "number",
+          "inputType": "number",
+          "placeholder": "Numeric performance metric (likes + comments + shares)"
+        },
+        {
+          "slug": "post-reach",
+          "label": "Reach / Views",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "repurposed-from",
+          "label": "Repurposed From",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "Source post or content this was adapted from"
+        },
+        {
+          "slug": "post-url",
+          "label": "Published URL",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "https://...",
+          "constraints": { "format": "url" }
+        }
+      ]
+    },
+    {
+      "slug": "campaign",
+      "displayName": "Campaign",
+      "icon": "target",
+      "color": "#F59E0B",
+      "description": "A grouped content initiative — product launch, editorial series, seasonal push, or challenge.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "campaign-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Planned",
+            "Active",
+            "Completed",
+            "Paused",
+            "Cancelled"
+          ]
+        },
+        {
+          "slug": "campaign-type",
+          "label": "Type",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Product Launch",
+            "Editorial Series",
+            "Seasonal",
+            "Brand Partnership",
+            "Challenge",
+            "Evergreen",
+            "Awareness",
+            "Other"
+          ]
+        },
+        {
+          "slug": "campaign-pillar",
+          "label": "Primary Pillar",
+          "valueType": "entity_id"
+        },
+        {
+          "slug": "campaign-start",
+          "label": "Start Date",
+          "valueType": "date"
+        },
+        { "slug": "campaign-end", "label": "End Date", "valueType": "date" },
+        {
+          "slug": "campaign-goal",
+          "label": "Goal",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "What does success look like? Followers, sign-ups, revenue..."
+        },
+        {
+          "slug": "campaign-kpi",
+          "label": "Primary KPI",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Follower Growth",
+            "Newsletter Sign-ups",
+            "Engagement Rate",
+            "Revenue",
+            "Reach",
+            "Brand Deals Closed",
+            "Link Clicks",
+            "Other"
+          ]
+        },
+        {
+          "slug": "kpi-target",
+          "label": "KPI Target",
+          "valueType": "number",
+          "inputType": "number",
+          "placeholder": "Numeric target for the primary KPI"
+        },
+        {
+          "slug": "kpi-result",
+          "label": "KPI Result",
+          "valueType": "number",
+          "inputType": "number",
+          "placeholder": "Fill when complete"
+        },
+        {
+          "slug": "campaign-budget",
+          "label": "Budget (€)",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "post-count",
+          "label": "Post Count",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        { "slug": "campaign-tags", "label": "Tags", "valueType": "array" }
+      ]
+    },
+    {
+      "slug": "pillar",
+      "displayName": "Pillar",
+      "icon": "columns",
+      "color": "#8B5CF6",
+      "description": "A recurring content theme — the lens through which your audience knows you. The organizing principle of your brand.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "pillar-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["Active", "Developing", "Paused", "Retired"]
+        },
+        {
+          "slug": "pillar-audience",
+          "label": "Audience Segment",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "Who does this pillar speak to?"
+        },
+        {
+          "slug": "pillar-goal",
+          "label": "Audience Goal",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "What should the audience think, feel, or do after consuming this pillar?"
+        },
+        {
+          "slug": "pillar-formats",
+          "label": "Primary Formats",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Articles + Threads",
+            "Short Video",
+            "Long Video",
+            "Newsletter",
+            "Podcast",
+            "Carousel",
+            "Mixed"
+          ]
+        },
+        {
+          "slug": "post-count-pillar",
+          "label": "Total Posts Published",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "avg-engagement",
+          "label": "Avg Engagement Score",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "top-post",
+          "label": "Top Performing Post",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "Title of best performing post in this pillar"
+        },
+        {
+          "slug": "posting-frequency",
+          "label": "Target Frequency",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Daily",
+            "3x / week",
+            "2x / week",
+            "Weekly",
+            "Bi-weekly",
+            "Monthly",
+            "Ad hoc"
+          ]
+        },
+        { "slug": "pillar-tags", "label": "Tags", "valueType": "array" }
+      ]
+    },
+    {
+      "slug": "platform",
+      "displayName": "Platform",
+      "icon": "share-2",
+      "color": "#06B6D4",
+      "description": "A social account, newsletter publication, or podcast channel. Each platform has its own audience metrics and publishing rhythm.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "platform-type",
+          "label": "Type",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "LinkedIn",
+            "Instagram",
+            "TikTok",
+            "YouTube",
+            "Twitter / X",
+            "Threads",
+            "Bluesky",
+            "Newsletter",
+            "Podcast",
+            "Blog / Website",
+            "Other"
+          ]
+        },
+        {
+          "slug": "platform-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": ["Active", "Building", "Maintenance Mode", "Inactive"]
+        },
+        {
+          "slug": "platform-url",
+          "label": "Profile URL",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "https://...",
+          "constraints": { "format": "url" }
+        },
+        {
+          "slug": "follower-count",
+          "label": "Follower / Subscriber Count",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "follower-target",
+          "label": "Target Count",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "avg-engagement-rate",
+          "label": "Avg Engagement Rate (%)",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "platform-posting-freq",
+          "label": "Posting Frequency",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Daily",
+            "3x / week",
+            "2x / week",
+            "Weekly",
+            "Bi-weekly",
+            "Monthly",
+            "As Needed"
+          ]
+        },
+        {
+          "slug": "last-post-date",
+          "label": "Last Post Date",
+          "valueType": "date"
+        },
+        {
+          "slug": "platform-notes",
+          "label": "Notes",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "What works here? Tone, format, best times..."
+        },
+        { "slug": "platform-tags", "label": "Tags", "valueType": "array" }
+      ]
+    },
+    {
+      "slug": "newsletter",
+      "displayName": "Newsletter",
+      "icon": "mail",
+      "color": "#10B981",
+      "description": "A newsletter issue — your direct channel to an owned audience. No algorithm, no platform fee, no intermediary.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "newsletter-status",
+          "label": "Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Idea",
+            "Drafting",
+            "Editing",
+            "Scheduled",
+            "Sent",
+            "Archived"
+          ]
+        },
+        {
+          "slug": "newsletter-series",
+          "label": "Series",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "Which newsletter series is this issue part of?"
+        },
+        {
+          "slug": "issue-number",
+          "label": "Issue Number",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "subject-line",
+          "label": "Subject Line",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "The subject line — your most important copy"
+        },
+        {
+          "slug": "preview-text",
+          "label": "Preview Text",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "45-character preview shown in inbox (after subject)"
+        },
+        { "slug": "send-date", "label": "Send Date", "valueType": "date" },
+        {
+          "slug": "subscriber-count",
+          "label": "Subscriber Count at Send",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "open-rate",
+          "label": "Open Rate (%)",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "click-rate",
+          "label": "Click Rate (%)",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "newsletter-sponsor",
+          "label": "Sponsor",
+          "valueType": "entity_id"
+        },
+        {
+          "slug": "newsletter-campaign",
+          "label": "Campaign",
+          "valueType": "entity_id"
+        },
+        {
+          "slug": "newsletter-pillar",
+          "label": "Primary Pillar",
+          "valueType": "entity_id"
+        },
+        { "slug": "newsletter-tags", "label": "Tags", "valueType": "array" }
+      ]
+    },
+    {
+      "slug": "sponsor",
+      "displayName": "Sponsor",
+      "icon": "briefcase",
+      "color": "#F43F5E",
+      "description": "A brand deal or sponsorship — from first contact to final payment. Track deliverables, deadlines, and performance in one place.",
+      "scope": "WORKSPACE",
+      "properties": [
+        {
+          "slug": "deal-status",
+          "label": "Deal Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Prospecting",
+            "Outreach Sent",
+            "In Negotiation",
+            "Contract Signed",
+            "Active",
+            "Deliverables Pending",
+            "Completed",
+            "Invoiced",
+            "Paid",
+            "Declined"
+          ]
+        },
+        {
+          "slug": "sponsor-type",
+          "label": "Deal Type",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Newsletter Sponsorship",
+            "Social Post",
+            "Podcast Ad",
+            "Video Integration",
+            "Affiliate",
+            "Product Review",
+            "Ambassador",
+            "Event",
+            "Other"
+          ]
+        },
+        {
+          "slug": "contact-name",
+          "label": "Contact Name",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "Brand contact / campaign manager"
+        },
+        {
+          "slug": "contact-email",
+          "label": "Contact Email",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "contact@brand.com",
+          "constraints": { "format": "email" }
+        },
+        {
+          "slug": "deal-value",
+          "label": "Deal Value (€)",
+          "valueType": "number",
+          "inputType": "number"
+        },
+        {
+          "slug": "payment-status",
+          "label": "Payment Status",
+          "valueType": "string",
+          "inputType": "select",
+          "enumValues": [
+            "Not Yet Due",
+            "Invoice Sent",
+            "Paid",
+            "Overdue",
+            "Disputed"
+          ]
+        },
+        {
+          "slug": "contract-date",
+          "label": "Contract Date",
+          "valueType": "date"
+        },
+        {
+          "slug": "deliverable-deadline",
+          "label": "Deliverable Deadline",
+          "valueType": "date"
+        },
+        {
+          "slug": "exclusivity-end",
+          "label": "Exclusivity End Date",
+          "valueType": "date"
+        },
+        {
+          "slug": "deliverables",
+          "label": "Deliverables",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "What exactly was promised? (2 posts, 1 newsletter mention, story, etc.)"
+        },
+        {
+          "slug": "talking-points",
+          "label": "Key Talking Points",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "Brand messages, required mentions, do-not-say list"
+        },
+        {
+          "slug": "performance-notes",
+          "label": "Performance Notes",
+          "valueType": "string",
+          "inputType": "text",
+          "placeholder": "What results did you report to the brand?"
+        },
+        { "slug": "sponsor-tags", "label": "Tags", "valueType": "array" }
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "Content Calendar",
+      "type": "calendar",
+      "scopeProfileSlug": "post",
+      "config": { "dateField": "publish-date", "colorField": "post-platform" }
+    },
+    {
+      "name": "Post Pipeline",
+      "type": "kanban",
+      "scopeProfileSlug": "post",
+      "config": {
+        "groupByField": "post-status",
+        "cardFields": [
+          "post-format",
+          "post-platform",
+          "post-pillar",
+          "publish-date"
+        ]
+      }
+    },
+    {
+      "name": "All Posts",
+      "type": "table",
+      "scopeProfileSlug": "post",
+      "config": {
+        "visibleColumns": [
+          "post-status",
+          "post-format",
+          "post-platform",
+          "post-pillar",
+          "publish-date",
+          "engagement-score",
+          "post-reach"
+        ],
+        "defaultSort": { "field": "publish-date", "direction": "desc" },
+        "rowHeight": "default"
+      }
+    },
+    {
+      "name": "Ideas Inbox",
+      "type": "kanban",
+      "scopeProfileSlug": "post",
+      "config": {
+        "groupByField": "post-format",
+        "cardFields": ["post-format", "post-status", "post-hook", "post-tags"]
+      }
+    },
+    {
+      "name": "Repurposing Queue",
+      "type": "table",
+      "scopeProfileSlug": "post",
+      "config": {
+        "visibleColumns": [
+          "post-status",
+          "post-format",
+          "post-platform",
+          "post-pillar",
+          "repurposed-from",
+          "publish-date"
+        ],
+        "defaultSort": { "field": "post-platform", "direction": "asc" },
+        "rowHeight": "default"
+      }
+    },
+    {
+      "name": "Content Graph",
+      "type": "graph",
+      "scopeProfileSlugs": [
+        "post",
+        "campaign",
+        "pillar",
+        "newsletter",
+        "sponsor"
+      ],
+      "config": { "layout": "force", "showRelations": true }
+    },
+    {
+      "name": "Campaigns",
+      "type": "kanban",
+      "scopeProfileSlug": "campaign",
+      "config": {
+        "groupByField": "campaign-status",
+        "cardFields": [
+          "campaign-type",
+          "campaign-pillar",
+          "campaign-start",
+          "campaign-end",
+          "campaign-kpi"
+        ]
+      }
+    },
+    {
+      "name": "Campaign Timeline",
+      "type": "timeline",
+      "scopeProfileSlug": "campaign",
+      "config": {
+        "timeField": "campaign-end",
+        "groupByField": "campaign-status"
+      }
+    },
+    {
+      "name": "Pillars",
+      "type": "table",
+      "scopeProfileSlug": "pillar",
+      "config": {
+        "visibleColumns": [
+          "pillar-status",
+          "pillar-audience",
+          "pillar-goal",
+          "pillar-formats",
+          "posting-frequency",
+          "post-count-pillar",
+          "avg-engagement"
+        ],
+        "defaultSort": { "field": "pillar-status", "direction": "asc" },
+        "rowHeight": "default"
+      }
+    },
+    {
+      "name": "Platforms",
+      "type": "table",
+      "scopeProfileSlug": "platform",
+      "config": {
+        "visibleColumns": [
+          "platform-type",
+          "platform-status",
+          "follower-count",
+          "follower-target",
+          "avg-engagement-rate",
+          "platform-posting-freq",
+          "last-post-date"
+        ],
+        "defaultSort": { "field": "follower-count", "direction": "desc" },
+        "rowHeight": "default"
+      }
+    },
+    {
+      "name": "Newsletter Issues",
+      "type": "table",
+      "scopeProfileSlug": "newsletter",
+      "config": {
+        "visibleColumns": [
+          "newsletter-status",
+          "newsletter-series",
+          "issue-number",
+          "subject-line",
+          "send-date",
+          "subscriber-count",
+          "open-rate",
+          "click-rate",
+          "newsletter-sponsor"
+        ],
+        "defaultSort": { "field": "send-date", "direction": "desc" },
+        "rowHeight": "default"
+      }
+    },
+    {
+      "name": "Newsletter Pipeline",
+      "type": "kanban",
+      "scopeProfileSlug": "newsletter",
+      "config": {
+        "groupByField": "newsletter-status",
+        "cardFields": [
+          "newsletter-series",
+          "issue-number",
+          "subject-line",
+          "send-date",
+          "newsletter-sponsor"
+        ]
+      }
+    },
+    {
+      "name": "Newsletter Calendar",
+      "type": "calendar",
+      "scopeProfileSlug": "newsletter",
+      "config": { "dateField": "send-date", "colorField": "newsletter-status" }
+    },
+    {
+      "name": "Sponsor Tracker",
+      "type": "kanban",
+      "scopeProfileSlug": "sponsor",
+      "config": {
+        "groupByField": "deal-status",
+        "cardFields": [
+          "sponsor-type",
+          "deal-value",
+          "deliverable-deadline",
+          "payment-status"
+        ]
+      }
+    },
+    {
+      "name": "Sponsors Table",
+      "type": "table",
+      "scopeProfileSlug": "sponsor",
+      "config": {
+        "visibleColumns": [
+          "deal-status",
+          "sponsor-type",
+          "contact-name",
+          "deal-value",
+          "payment-status",
+          "deliverable-deadline",
+          "exclusivity-end"
+        ],
+        "defaultSort": { "field": "deliverable-deadline", "direction": "asc" },
+        "rowHeight": "default"
+      }
+    },
+    {
+      "name": "Sponsor Deadlines",
+      "type": "calendar",
+      "scopeProfileSlug": "sponsor",
+      "config": {
+        "dateField": "deliverable-deadline",
+        "colorField": "payment-status"
+      }
+    },
+    {
+      "name": "Post",
+      "type": "bento",
+      "scopeProfileSlug": "post",
+      "config": {
+        "layout": "bento",
+        "blocks": [
+          {
+            "id": "post-header",
+            "kind": "widget",
+            "widgetType": "section-header",
+            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "config": {
+              "title": "Posts",
+              "icon": "FileEdit",
+              "color": "#6366F1",
+              "profileSlug": "post"
+            }
+          },
+          {
+            "id": "post-count",
+            "kind": "widget",
+            "widgetType": "stat-card",
+            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "label": "Total Posts",
+              "aggregation": "count",
+              "profileSlug": "post",
+              "color": "#6366F1"
+            }
+          },
+          {
+            "id": "post-pipeline",
+            "kind": "view",
+            "viewName": "Post Pipeline",
+            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+          },
+          {
+            "id": "post-cal",
+            "kind": "view",
+            "viewName": "Content Calendar",
+            "pos": { "x": 0, "y": 19, "w": 12, "h": 8 }
+          },
+          {
+            "id": "post-published",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "post",
+              "label": "Published",
+              "icon": "Globe",
+              "filter": { "status": "published" },
+              "color": "#10B981"
+            }
+          },
+          {
+            "id": "post-drafts",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "post",
+              "label": "Drafts",
+              "icon": "FileEdit",
+              "filter": { "status": "draft" },
+              "color": "#6B7280"
+            }
+          },
+          {
+            "id": "post-scheduled",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 9, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "post",
+              "label": "Scheduled",
+              "icon": "Clock",
+              "filter": { "status": "scheduled" },
+              "color": "#F59E0B"
+            }
+          },
+          {
+            "id": "post-spotlight",
+            "kind": "widget",
+            "widgetType": "entity-spotlight",
+            "pos": { "x": 0, "y": 5, "w": 5, "h": 4 },
+            "config": {
+              "profileSlug": "post",
+              "seed": "daily",
+              "layout": "detail",
+              "subtitleField": "platform",
+              "color": "#EC4899"
+            }
+          },
+          {
+            "id": "post-gallery",
+            "kind": "widget",
+            "widgetType": "entity-gallery",
+            "pos": { "x": 5, "y": 5, "w": 7, "h": 4 },
+            "config": {
+              "profileSlug": "post",
+              "coverField": "thumbnail-url",
+              "title": "Recent Posts",
+              "limit": 6
+            }
+          }
+        ],
+        "breakpoints": {
+          "lg": { "cols": 12, "rowHeight": 60, "gap": 12 },
+          "md": { "cols": 10, "rowHeight": 60, "gap": 12 },
+          "sm": { "cols": 6, "rowHeight": 60, "gap": 12 },
+          "xs": { "cols": 4, "rowHeight": 60, "gap": 12 },
+          "xxs": { "cols": 2, "rowHeight": 60, "gap": 12 }
+        }
+      }
+    },
+    {
+      "name": "Campaign",
+      "type": "bento",
+      "scopeProfileSlug": "campaign",
+      "config": {
+        "layout": "bento",
+        "blocks": [
+          {
+            "id": "campaign-header",
+            "kind": "widget",
+            "widgetType": "section-header",
+            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "config": {
+              "title": "Campaigns",
+              "icon": "Target",
+              "color": "#F59E0B",
+              "profileSlug": "campaign"
+            }
+          },
+          {
+            "id": "campaign-count",
+            "kind": "widget",
+            "widgetType": "stat-card",
+            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "label": "Total Campaigns",
+              "aggregation": "count",
+              "profileSlug": "campaign",
+              "color": "#F59E0B"
+            }
+          },
+          {
+            "id": "campaign-board",
+            "kind": "view",
+            "viewName": "Campaigns",
+            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+          },
+          {
+            "id": "campaign-timeline",
+            "kind": "view",
+            "viewName": "Campaign Timeline",
+            "pos": { "x": 0, "y": 19, "w": 12, "h": 8 }
+          },
+          {
+            "id": "campaign-active",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "campaign",
+              "label": "Active",
+              "icon": "Play",
+              "filter": { "status": "active" },
+              "color": "#10B981"
+            }
+          },
+          {
+            "id": "campaign-posts",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "post",
+              "label": "Campaign Posts",
+              "icon": "FileText",
+              "color": "#EC4899"
+            }
+          },
+          {
+            "id": "campaign-spotlight",
+            "kind": "widget",
+            "widgetType": "entity-spotlight",
+            "pos": { "x": 0, "y": 5, "w": 5, "h": 4 },
+            "config": {
+              "profileSlug": "campaign",
+              "seed": "daily",
+              "layout": "detail",
+              "subtitleField": "status",
+              "color": "#8B5CF6"
+            }
+          },
+          {
+            "id": "campaign-post-list",
+            "kind": "widget",
+            "widgetType": "entity-list",
+            "pos": { "x": 5, "y": 5, "w": 7, "h": 4 },
+            "config": {
+              "profileSlug": "post",
+              "title": "Campaign Posts",
+              "limit": 6,
+              "variant": "compact"
+            }
+          }
+        ],
+        "breakpoints": {
+          "lg": { "cols": 12, "rowHeight": 60, "gap": 12 },
+          "md": { "cols": 10, "rowHeight": 60, "gap": 12 },
+          "sm": { "cols": 6, "rowHeight": 60, "gap": 12 },
+          "xs": { "cols": 4, "rowHeight": 60, "gap": 12 },
+          "xxs": { "cols": 2, "rowHeight": 60, "gap": 12 }
+        }
+      }
+    },
+    {
+      "name": "Newsletter",
+      "type": "bento",
+      "scopeProfileSlug": "newsletter",
+      "config": {
+        "layout": "bento",
+        "blocks": [
+          {
+            "id": "nl-header",
+            "kind": "widget",
+            "widgetType": "section-header",
+            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "config": {
+              "title": "Newsletters",
+              "icon": "Mail",
+              "color": "#10B981",
+              "profileSlug": "newsletter"
+            }
+          },
+          {
+            "id": "nl-count",
+            "kind": "widget",
+            "widgetType": "stat-card",
+            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "label": "Total Issues",
+              "aggregation": "count",
+              "profileSlug": "newsletter",
+              "color": "#10B981"
+            }
+          },
+          {
+            "id": "nl-pipeline",
+            "kind": "view",
+            "viewName": "Newsletter Pipeline",
+            "pos": { "x": 0, "y": 5, "w": 12, "h": 10 }
+          },
+          {
+            "id": "nl-table",
+            "kind": "view",
+            "viewName": "Newsletter Issues",
+            "pos": { "x": 0, "y": 15, "w": 12, "h": 8 }
+          }
+        ],
+        "breakpoints": {
+          "lg": { "cols": 12, "rowHeight": 60, "gap": 12 },
+          "md": { "cols": 10, "rowHeight": 60, "gap": 12 },
+          "sm": { "cols": 6, "rowHeight": 60, "gap": 12 },
+          "xs": { "cols": 4, "rowHeight": 60, "gap": 12 },
+          "xxs": { "cols": 2, "rowHeight": 60, "gap": 12 }
+        }
+      }
+    },
+    {
+      "name": "Pillar",
+      "displayName": "Pillar",
+      "type": "bento",
+      "scopeProfileSlug": "pillar",
+      "config": {
+        "layout": "bento",
+        "blocks": [
+          {
+            "id": "pillar-header",
+            "kind": "widget",
+            "widgetType": "section-header",
+            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "config": {
+              "title": "Content Pillars",
+              "icon": "Layers",
+              "color": "#3B82F6",
+              "profileSlug": "pillar"
+            }
+          },
+          {
+            "id": "pillar-count",
+            "kind": "widget",
+            "widgetType": "stat-card",
+            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "label": "Pillars",
+              "aggregation": "count",
+              "profileSlug": "pillar",
+              "color": "#3B82F6",
+              "icon": "Layers"
+            }
+          },
+          {
+            "id": "pillar-posts-count",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "post",
+              "label": "Posts in Pillar",
+              "icon": "FileText",
+              "color": "#EC4899"
+            }
+          },
+          {
+            "id": "pillar-campaigns",
+            "kind": "widget",
+            "widgetType": "entity-count",
+            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "config": {
+              "profileSlug": "campaign",
+              "label": "Campaigns",
+              "icon": "Target",
+              "color": "#8B5CF6"
+            }
+          },
+          {
+            "id": "pillar-spotlight",
+            "kind": "widget",
+            "widgetType": "entity-spotlight",
+            "pos": { "x": 0, "y": 5, "w": 6, "h": 4 },
+            "config": {
+              "profileSlug": "pillar",
+              "seed": "daily",
+              "layout": "detail",
+              "color": "#3B82F6"
+            }
+          },
+          {
+            "id": "pillar-post-list",
+            "kind": "widget",
+            "widgetType": "entity-list",
+            "pos": { "x": 6, "y": 5, "w": 6, "h": 4 },
+            "config": {
+              "profileSlug": "post",
+              "title": "Posts in this Pillar",
+              "limit": 6,
+              "variant": "compact"
+            }
+          },
+          {
+            "id": "pillar-table",
+            "kind": "view",
+            "viewName": "Pillars",
+            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+          }
+        ]
+      }
+    }
+  ],
+  "suggestedEntities": [
+    {
+      "profileSlug": "pillar",
+      "title": "Data Sovereignty",
+      "properties": {
+        "pillar-status": "Active",
+        "pillar-audience": "Founders, developers, and privacy-conscious professionals",
+        "pillar-goal": "Position Synap as the infrastructure layer for personal data ownership",
+        "pillar-formats": "Articles + Threads",
+        "post-count-pillar": 12,
+        "avg-engagement": 340,
+        "top-post": "Why your data is not yours — and how to fix that",
+        "posting-frequency": "2x / week",
+        "pillar-tags": ["sovereignty", "synap", "infrastructure"]
+      }
+    },
+    {
+      "profileSlug": "pillar",
+      "title": "Product Building",
+      "properties": {
+        "pillar-status": "Active",
+        "pillar-audience": "Indie hackers, founders, and early-stage builders",
+        "pillar-goal": "Share the authentic journey of building Synap",
+        "pillar-formats": "Articles + Threads",
+        "post-count-pillar": 8,
+        "avg-engagement": 210,
+        "top-post": "How we designed Synap's entity model from scratch",
+        "posting-frequency": "Weekly",
+        "pillar-tags": ["building-in-public", "synap", "product"]
+      }
+    },
+    {
+      "profileSlug": "pillar",
+      "title": "Creator Economy",
+      "properties": {
+        "pillar-status": "Developing",
+        "pillar-audience": "Creators, solopreneurs, and content entrepreneurs",
+        "pillar-goal": "Establish Synap's authority in the creator tools space",
+        "pillar-formats": "Articles + Threads",
+        "post-count-pillar": 4,
+        "avg-engagement": 180,
+        "posting-frequency": "Weekly",
+        "pillar-tags": ["creator-economy", "content-os", "tools"]
+      }
+    },
+    {
+      "profileSlug": "platform",
+      "title": "LinkedIn",
+      "properties": {
+        "platform-status": "Active",
+        "platform-url": "https://linkedin.com/in/your-handle",
+        "follower-count": 3200,
+        "follower-target": 10000,
+        "avg-engagement-rate": 4.2,
+        "platform-posting-freq": "3x / week",
+        "last-post-date": "2026-02-23",
+        "platform-notes": "Long-form articles perform 3x better than short posts. Best engagement on Monday 8am and Thursday 6pm.",
+        "platform-tags": ["linkedin", "b2b", "professional"]
+      }
+    },
+    {
+      "profileSlug": "platform",
+      "title": "Twitter / X",
+      "properties": {
+        "platform-status": "Active",
+        "platform-url": "https://x.com/your-handle",
+        "follower-count": 1800,
+        "follower-target": 5000,
+        "avg-engagement-rate": 2.1,
+        "platform-posting-freq": "Daily",
+        "last-post-date": "2026-02-23",
+        "platform-notes": "Threads outperform single tweets 4:1. Tech and sovereignty threads go viral occasionally.",
+        "platform-tags": ["twitter", "threads", "tech"]
+      }
+    },
+    {
+      "profileSlug": "platform",
+      "title": "Synap Newsletter",
+      "properties": {
+        "platform-type": "Newsletter",
+        "platform-status": "Building",
+        "follower-count": 420,
+        "follower-target": 2000,
+        "avg-engagement-rate": 38,
+        "platform-posting-freq": "Weekly",
+        "last-post-date": "2026-02-17",
+        "platform-notes": "35-40% open rate. Audience is tech-adjacent, values depth over brevity.",
+        "platform-tags": ["newsletter", "owned", "sovereign"]
+      }
+    },
+    {
+      "profileSlug": "campaign",
+      "title": "Synap Template Launch — Q1 2026",
+      "properties": {
+        "campaign-status": "Active",
+        "campaign-type": "Product Launch",
+        "campaign-pillar": "ref:pillar:Product Building",
+        "campaign-start": "2026-02-01",
+        "campaign-end": "2026-03-31",
+        "campaign-goal": "Drive 500 new workspace template activations and grow newsletter to 1,000 subscribers",
+        "campaign-kpi": "Newsletter Sign-ups",
+        "kpi-target": 500,
+        "post-count": 12,
+        "campaign-tags": ["launch", "templates", "q1-2026"]
+      }
+    },
+    {
+      "profileSlug": "campaign",
+      "title": "Data Sovereignty Series",
+      "properties": {
+        "campaign-status": "Active",
+        "campaign-type": "Editorial Series",
+        "campaign-pillar": "ref:pillar:Data Sovereignty",
+        "campaign-start": "2026-01-15",
+        "campaign-end": "2026-04-30",
+        "campaign-goal": "Establish Synap's thought leadership in the sovereignty space",
+        "campaign-kpi": "Follower Growth",
+        "kpi-target": 1000,
+        "post-count": 6,
+        "campaign-tags": ["sovereignty", "series", "thought-leadership"]
+      }
+    },
+    {
+      "profileSlug": "post",
+      "title": "Why your subscriber list is not yours — and what to do about it",
+      "properties": {
+        "post-status": "Published",
+        "post-format": "Article",
+        "post-platform": "LinkedIn",
+        "post-pillar": "ref:pillar:Data Sovereignty",
+        "post-campaign": "ref:campaign:Data Sovereignty Series",
+        "publish-date": "2026-02-10",
+        "post-hook": "You have 3,000 newsletter subscribers. If Substack disappears tomorrow, how many of them can you reach?",
+        "post-cta": "Download our free guide to migrating your subscriber list to sovereign infrastructure",
+        "post-tags": ["sovereignty", "newsletter", "substack"],
+        "engagement-score": 520,
+        "post-reach": 12400
+      }
+    },
+    {
+      "profileSlug": "post",
+      "title": "Synap's entity model: why we ditched the database-first approach",
+      "properties": {
+        "post-status": "In Draft",
+        "post-format": "Article",
+        "post-platform": "LinkedIn",
+        "post-pillar": "ref:pillar:Product Building",
+        "post-campaign": "ref:campaign:Synap Template Launch — Q1 2026",
+        "publish-date": "2026-03-03",
+        "post-hook": "Every other tool gives you a database. We built a network of entities — and the difference is everything.",
+        "post-cta": "Try the Second Brain template in Synap — free",
+        "post-tags": ["product", "synap", "architecture"]
+      }
+    },
+    {
+      "profileSlug": "post",
+      "title": "Thread: The creator tool stack is broken — here is why",
+      "properties": {
+        "post-status": "Scheduled",
+        "post-format": "Thread",
+        "post-platform": "Twitter / X",
+        "post-pillar": "ref:pillar:Creator Economy",
+        "post-campaign": "ref:campaign:Synap Template Launch — Q1 2026",
+        "publish-date": "2026-02-25",
+        "post-hook": "I talked to 40 creators this month. Every single one uses 5+ tools that don't talk to each other.",
+        "post-cta": "Follow for the full Creator Economy report",
+        "post-tags": ["creator-economy", "tools", "research"]
+      }
+    },
+    {
+      "profileSlug": "post",
+      "title": "Content OS template — what's included and why we built it",
+      "properties": {
+        "post-status": "Idea",
+        "post-format": "Short Video",
+        "post-platform": "LinkedIn",
+        "post-pillar": "ref:pillar:Product Building",
+        "post-campaign": "ref:campaign:Synap Template Launch — Q1 2026",
+        "post-hook": "We spent 3 weeks researching 8 creator tools before building Synap's Content OS template.",
+        "post-tags": ["content-os", "templates", "synap", "research"]
+      }
+    },
+    {
+      "profileSlug": "post",
+      "title": "Data sovereignty is not a technical concept — it is a political one",
+      "properties": {
+        "post-status": "Idea",
+        "post-format": "Article",
+        "post-platform": "LinkedIn",
+        "post-pillar": "ref:pillar:Data Sovereignty",
+        "post-campaign": "ref:campaign:Data Sovereignty Series",
+        "post-hook": "The Sovereign Individual was published in 1997. It predicted exactly what is happening right now with AI and personal data.",
+        "post-tags": ["sovereignty", "philosophy", "ai"]
+      }
+    },
+    {
+      "profileSlug": "post",
+      "title": "How Synap templates are seeded: the JSON-first approach",
+      "properties": {
+        "post-status": "Review",
+        "post-format": "Article",
+        "post-platform": "LinkedIn",
+        "post-pillar": "ref:pillar:Product Building",
+        "post-campaign": "ref:campaign:Synap Template Launch — Q1 2026",
+        "publish-date": "2026-03-10",
+        "post-hook": "Most SaaS products show you an empty database on day one. Synap shows you a fully functional workspace.",
+        "post-cta": "Read the full technical deep-dive on our blog",
+        "post-tags": ["engineering", "synap", "templates", "onboarding"]
+      }
+    },
+    {
+      "profileSlug": "newsletter",
+      "title": "The Sovereign Stack — Issue 12",
+      "properties": {
+        "newsletter-status": "Sent",
+        "newsletter-series": "The Sovereign Stack",
+        "issue-number": 12,
+        "subject-line": "The 3 databases that own your content career (and how to escape)",
+        "preview-text": "Your Substack list, your Buffer posts, your Notion brain...",
+        "send-date": "2026-02-17",
+        "subscriber-count": 390,
+        "open-rate": 39.2,
+        "click-rate": 6.8,
+        "newsletter-sponsor": "ref:sponsor:Mintlify",
+        "newsletter-campaign": "ref:campaign:Data Sovereignty Series",
+        "newsletter-pillar": "ref:pillar:Data Sovereignty",
+        "newsletter-tags": ["sovereignty", "creator-tools", "newsletter"]
+      }
+    },
+    {
+      "profileSlug": "newsletter",
+      "title": "The Sovereign Stack — Issue 13",
+      "properties": {
+        "newsletter-status": "Scheduled",
+        "newsletter-series": "The Sovereign Stack",
+        "issue-number": 13,
+        "subject-line": "Inside Synap's Content OS template — what we built and why",
+        "preview-text": "6 profiles, 16 views, 1 relational graph you own forever",
+        "send-date": "2026-02-24",
+        "newsletter-campaign": "ref:campaign:Synap Template Launch — Q1 2026",
+        "newsletter-pillar": "ref:pillar:Product Building",
+        "newsletter-tags": ["content-os", "templates", "synap"]
+      }
+    },
+    {
+      "profileSlug": "newsletter",
+      "title": "The Sovereign Stack — Issue 14",
+      "properties": {
+        "newsletter-status": "Drafting",
+        "newsletter-series": "The Sovereign Stack",
+        "issue-number": 14,
+        "subject-line": "Why we picked Ghost over Substack (and what it cost us)",
+        "preview-text": "Honest numbers: subscriber growth, open rates, and the SEO truth",
+        "send-date": "2026-03-03",
+        "newsletter-pillar": "ref:pillar:Data Sovereignty",
+        "newsletter-tags": ["ghost", "substack", "sovereignty", "newsletter"],
+        "newsletter-campaign": "ref:campaign:Data Sovereignty Series"
+      }
+    },
+    {
+      "profileSlug": "sponsor",
+      "title": "Mintlify",
+      "properties": {
+        "deal-status": "Active",
+        "sponsor-type": "Newsletter Sponsorship",
+        "contact-name": "Alex Chen",
+        "contact-email": "alex@mintlify.com",
+        "deal-value": 800,
+        "payment-status": "Invoice Sent",
+        "contract-date": "2026-02-10",
+        "deliverable-deadline": "2026-02-28",
+        "exclusivity-end": "2026-03-15",
+        "deliverables": "1 newsletter mention in Issue 12 (primary placement, 80-100 words). 1 LinkedIn post tagging Mintlify.",
+        "talking-points": "Mintlify writes beautiful docs from your codebase. For developer-facing teams.",
+        "performance-notes": "Issue 12: 39.2% open rate, 6.8% click rate. Sponsor link received 47 clicks.",
+        "sponsor-tags": ["developer-tools", "newsletter", "q1-2026"]
+      }
+    },
+    {
+      "profileSlug": "sponsor",
+      "title": "Anytype",
+      "properties": {
+        "deal-status": "Prospecting",
+        "sponsor-type": "Social Post",
+        "contact-name": "Pavel K.",
+        "deal-value": 600,
+        "payment-status": "Not Yet Due",
+        "deliverables": "1 LinkedIn post (honest review format). 1 Twitter thread. Not exclusive.",
+        "talking-points": "Anytype is open-source, local-first, object-based PKM. Philosophically aligned with Synap audience.",
+        "sponsor-tags": ["pkm", "local-first", "sovereignty"]
+      }
+    }
+  ],
+  "suggestedRelations": [
+    {
+      "sourceRef": "post:Why your subscriber list is not yours — and what to do about it",
+      "targetRef": "campaign:Data Sovereignty Series",
+      "type": "belongs_to_project"
+    },
+    {
+      "sourceRef": "post:Synap's entity model: why we ditched the database-first approach",
+      "targetRef": "campaign:Synap Template Launch — Q1 2026",
+      "type": "belongs_to_project"
+    },
+    {
+      "sourceRef": "post:Thread: The creator tool stack is broken — here is why",
+      "targetRef": "campaign:Synap Template Launch — Q1 2026",
+      "type": "belongs_to_project"
+    },
+    {
+      "sourceRef": "post:Content OS template — what's included and why we built it",
+      "targetRef": "campaign:Synap Template Launch — Q1 2026",
+      "type": "belongs_to_project"
+    },
+    {
+      "sourceRef": "post:Data sovereignty is not a technical concept — it is a political one",
+      "targetRef": "campaign:Data Sovereignty Series",
+      "type": "belongs_to_project"
+    },
+    {
+      "sourceRef": "post:How Synap templates are seeded: the JSON-first approach",
+      "targetRef": "campaign:Synap Template Launch — Q1 2026",
+      "type": "belongs_to_project"
+    },
+    {
+      "sourceRef": "post:Why your subscriber list is not yours — and what to do about it",
+      "targetRef": "pillar:Data Sovereignty",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "post:Synap's entity model: why we ditched the database-first approach",
+      "targetRef": "pillar:Product Building",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "post:Thread: The creator tool stack is broken — here is why",
+      "targetRef": "pillar:Creator Economy",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "post:Content OS template — what's included and why we built it",
+      "targetRef": "pillar:Product Building",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "post:Data sovereignty is not a technical concept — it is a political one",
+      "targetRef": "pillar:Data Sovereignty",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "post:How Synap templates are seeded: the JSON-first approach",
+      "targetRef": "pillar:Product Building",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "newsletter:The Sovereign Stack — Issue 12",
+      "targetRef": "campaign:Data Sovereignty Series",
+      "type": "belongs_to_project"
+    },
+    {
+      "sourceRef": "newsletter:The Sovereign Stack — Issue 13",
+      "targetRef": "campaign:Synap Template Launch — Q1 2026",
+      "type": "belongs_to_project"
+    },
+    {
+      "sourceRef": "newsletter:The Sovereign Stack — Issue 12",
+      "targetRef": "pillar:Data Sovereignty",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "newsletter:The Sovereign Stack — Issue 13",
+      "targetRef": "pillar:Product Building",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "newsletter:The Sovereign Stack — Issue 14",
+      "targetRef": "pillar:Data Sovereignty",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "newsletter:The Sovereign Stack — Issue 12",
+      "targetRef": "sponsor:Mintlify",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "campaign:Data Sovereignty Series",
+      "targetRef": "pillar:Data Sovereignty",
+      "type": "relates_to"
+    },
+    {
+      "sourceRef": "campaign:Synap Template Launch — Q1 2026",
+      "targetRef": "pillar:Product Building",
+      "type": "relates_to"
+    }
+  ],
+  "displayTemplates": [
+    {
+      "name": "Post Card",
+      "description": "Content unit with status, format, platform, and performance metrics",
+      "entityType": "post",
+      "targetType": "entity",
+      "isDefault": true,
+      "config": {
+        "layout": {
+          "structure": {
+            "header": {
+              "enabled": true,
+              "slots": ["post-status", "post-format", "post-platform"],
+              "layout": "horizontal",
+              "align": "left"
+            },
+            "sidebar": {
+              "enabled": true,
+              "slots": [
+                "post-pillar",
+                "post-campaign",
+                "post-sponsor",
+                "publish-date"
+              ],
+              "position": "right",
+              "width": "260px",
+              "layout": "vertical"
+            },
+            "content": {
+              "enabled": true,
+              "slots": [
+                "post-hook",
+                "post-cta",
+                "engagement-score",
+                "post-reach"
+              ],
+              "layout": "vertical"
+            }
+          },
+          "fieldMapping": {
+            "post-status": {
+              "slot": "post-status",
+              "renderer": { "type": "badge", "size": "md" },
+              "showLabel": false,
+              "order": 1
+            },
+            "post-format": {
+              "slot": "post-format",
+              "renderer": { "type": "badge", "variant": "muted", "size": "sm" },
+              "showLabel": false,
+              "order": 2
+            },
+            "post-platform": {
+              "slot": "post-platform",
+              "renderer": { "type": "badge", "variant": "muted", "size": "sm" },
+              "showLabel": false,
+              "order": 3
+            },
+            "engagement-score": {
+              "slot": "engagement-score",
+              "renderer": { "type": "number", "size": "md" },
+              "label": "Engagement",
+              "showLabel": true,
+              "order": 4
+            },
+            "post-reach": {
+              "slot": "post-reach",
+              "renderer": { "type": "number", "size": "md" },
+              "label": "Reach",
+              "showLabel": true,
+              "order": 5
+            },
+            "publish-date": {
+              "slot": "publish-date",
+              "renderer": { "type": "date", "format": "relative" },
+              "order": 6
+            }
+          }
+        },
+        "colors": { "accent": "#8B5CF6" },
+        "styling": { "borderRadius": "10px" }
+      }
+    },
+    {
+      "name": "Sponsor Deal",
+      "description": "Brand deal with status, financials, and deliverable tracking",
+      "entityType": "sponsor",
+      "targetType": "entity",
+      "isDefault": true,
+      "config": {
+        "layout": {
+          "structure": {
+            "header": {
+              "enabled": true,
+              "slots": ["deal-status", "deal-value"],
+              "layout": "horizontal"
+            },
+            "sidebar": {
+              "enabled": true,
+              "slots": [
+                "payment-status",
+                "deliverable-deadline",
+                "exclusivity-end",
+                "contact-name",
+                "contact-email"
+              ],
+              "position": "right",
+              "width": "280px",
+              "layout": "vertical"
+            },
+            "content": {
+              "enabled": true,
+              "slots": ["deliverables", "talking-points", "performance-notes"],
+              "layout": "vertical"
+            }
+          },
+          "fieldMapping": {
+            "deal-status": {
+              "slot": "deal-status",
+              "renderer": { "type": "badge", "size": "md" },
+              "showLabel": false,
+              "order": 1
+            },
+            "deal-value": {
+              "slot": "deal-value",
+              "renderer": {
+                "type": "number",
+                "format": "currency",
+                "size": "lg"
+              },
+              "label": "Deal Value",
+              "order": 2
+            },
+            "payment-status": {
+              "slot": "payment-status",
+              "renderer": { "type": "badge", "variant": "muted", "size": "sm" },
+              "showLabel": true,
+              "order": 3
+            },
+            "deliverable-deadline": {
+              "slot": "deliverable-deadline",
+              "renderer": { "type": "date", "format": "relative" },
+              "label": "Deadline",
+              "showLabel": true,
+              "order": 4
+            }
+          }
+        },
+        "colors": { "accent": "#F59E0B" },
+        "styling": { "borderRadius": "10px" }
+      }
+    },
+    {
+      "name": "Campaign Brief",
+      "description": "Campaign with timeline, KPI progress, and linked content",
+      "entityType": "campaign",
+      "targetType": "entity",
+      "isDefault": true,
+      "config": {
+        "layout": {
+          "structure": {
+            "header": {
+              "enabled": true,
+              "slots": ["campaign-status", "campaign-type"],
+              "layout": "horizontal"
+            },
+            "sidebar": {
+              "enabled": true,
+              "slots": [
+                "campaign-pillar",
+                "campaign-start",
+                "campaign-end",
+                "kpi-target",
+                "kpi-result",
+                "post-count"
+              ],
+              "position": "right",
+              "width": "260px",
+              "layout": "vertical"
+            },
+            "content": {
+              "enabled": true,
+              "slots": ["campaign-goal", "campaign-kpi", "campaign-budget"],
+              "layout": "vertical"
+            }
+          },
+          "fieldMapping": {
+            "campaign-status": {
+              "slot": "campaign-status",
+              "renderer": { "type": "badge", "size": "md" },
+              "showLabel": false,
+              "order": 1
+            },
+            "campaign-type": {
+              "slot": "campaign-type",
+              "renderer": { "type": "badge", "variant": "muted", "size": "sm" },
+              "showLabel": false,
+              "order": 2
+            },
+            "kpi-target": {
+              "slot": "kpi-target",
+              "renderer": { "type": "number", "size": "md" },
+              "label": "KPI Target",
+              "showLabel": true,
+              "order": 3
+            },
+            "kpi-result": {
+              "slot": "kpi-result",
+              "renderer": { "type": "number", "size": "md" },
+              "label": "KPI Result",
+              "showLabel": true,
+              "order": 4
+            },
+            "campaign-start": {
+              "slot": "campaign-start",
+              "renderer": { "type": "date", "format": "relative" },
+              "label": "Start",
+              "showLabel": true,
+              "order": 5
+            },
+            "campaign-end": {
+              "slot": "campaign-end",
+              "renderer": { "type": "date", "format": "relative" },
+              "label": "End",
+              "showLabel": true,
+              "order": 6
+            }
+          }
+        },
+        "colors": { "accent": "#EC4899" },
+        "styling": { "borderRadius": "10px" }
+      }
+    },
+    {
+      "name": "Newsletter Issue",
+      "description": "Newsletter issue with open/click rates and sponsor linkage",
+      "entityType": "newsletter",
+      "targetType": "entity",
+      "isDefault": true,
+      "config": {
+        "layout": {
+          "structure": {
+            "header": {
+              "enabled": true,
+              "slots": ["newsletter-status", "issue-number"],
+              "layout": "horizontal"
+            },
+            "sidebar": {
+              "enabled": true,
+              "slots": [
+                "newsletter-sponsor",
+                "newsletter-campaign",
+                "newsletter-pillar",
+                "send-date",
+                "subscriber-count"
+              ],
+              "position": "right",
+              "width": "260px",
+              "layout": "vertical"
+            },
+            "content": {
+              "enabled": true,
+              "slots": [
+                "subject-line",
+                "preview-text",
+                "open-rate",
+                "click-rate"
+              ],
+              "layout": "vertical"
+            }
+          },
+          "fieldMapping": {
+            "newsletter-status": {
+              "slot": "newsletter-status",
+              "renderer": { "type": "badge", "size": "md" },
+              "showLabel": false,
+              "order": 1
+            },
+            "open-rate": {
+              "slot": "open-rate",
+              "renderer": {
+                "type": "number",
+                "format": "percent",
+                "size": "md"
+              },
+              "label": "Open Rate",
+              "showLabel": true,
+              "order": 2
+            },
+            "click-rate": {
+              "slot": "click-rate",
+              "renderer": {
+                "type": "number",
+                "format": "percent",
+                "size": "md"
+              },
+              "label": "Click Rate",
+              "showLabel": true,
+              "order": 3
+            },
+            "send-date": {
+              "slot": "send-date",
+              "renderer": { "type": "date", "format": "relative" },
+              "label": "Sent",
+              "showLabel": true,
+              "order": 4
+            }
+          }
+        },
+        "colors": { "accent": "#14B8A6" },
+        "styling": { "borderRadius": "10px" }
+      }
+    }
+  ],
+  "entityLinks": [
+    {
+      "sourceProfileSlug": "post",
+      "targetProfileSlug": "pillar",
+      "type": "under"
+    },
+    {
+      "sourceProfileSlug": "post",
+      "targetProfileSlug": "campaign",
+      "type": "part_of"
+    },
+    {
+      "sourceProfileSlug": "post",
+      "targetProfileSlug": "sponsor",
+      "type": "sponsored_by"
+    },
+    {
+      "sourceProfileSlug": "campaign",
+      "targetProfileSlug": "pillar",
+      "type": "under"
+    },
+    {
+      "sourceProfileSlug": "newsletter",
+      "targetProfileSlug": "campaign",
+      "type": "part_of"
+    },
+    {
+      "sourceProfileSlug": "newsletter",
+      "targetProfileSlug": "pillar",
+      "type": "under"
+    },
+    {
+      "sourceProfileSlug": "newsletter",
+      "targetProfileSlug": "sponsor",
+      "type": "sponsored_by"
+    },
+    {
+      "sourceProfileSlug": "platform",
+      "targetProfileSlug": "post",
+      "type": "publishes"
+    }
+  ],
+  "bentoLayout": [
+    {
+      "widgetType": "welcome-header",
+      "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 0, "y": 2, "w": 2, "h": 2 },
+      "config": { "profileSlug": "post", "label": "Posts" }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 2, "y": 2, "w": 2, "h": 2 },
+      "config": { "profileSlug": "campaign", "label": "Campaigns" }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 4, "y": 2, "w": 2, "h": 2 },
+      "config": { "profileSlug": "pillar", "label": "Pillars" }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 6, "y": 2, "w": 2, "h": 2 },
+      "config": { "profileSlug": "newsletter", "label": "Newsletters" }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 8, "y": 2, "w": 2, "h": 2 },
+      "config": { "profileSlug": "platform", "label": "Platforms" }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": { "x": 10, "y": 2, "w": 2, "h": 2 },
+      "config": { "profileSlug": "sponsor", "label": "Sponsors" }
+    },
+    {
+      "widgetType": "entity-list",
+      "pos": { "x": 0, "y": 4, "w": 5, "h": 4 },
+      "config": {
+        "profileSlug": "post",
+        "title": "Post Pipeline",
+        "limit": 8,
+        "variant": "compact"
+      }
+    },
+    {
+      "widgetType": "entity-list",
+      "pos": { "x": 5, "y": 4, "w": 4, "h": 4 },
+      "config": {
+        "profileSlug": "campaign",
+        "title": "Active Campaigns",
+        "limit": 5,
+        "variant": "detailed"
+      }
+    },
+    {
+      "widgetType": "entity-list",
+      "pos": { "x": 9, "y": 4, "w": 3, "h": 4 },
+      "config": {
+        "profileSlug": "sponsor",
+        "title": "Sponsor Tracker",
+        "limit": 5,
+        "variant": "compact"
+      }
+    },
+    { "widgetType": "calendar", "pos": { "x": 0, "y": 8, "w": 5, "h": 4 } },
+    {
+      "widgetType": "entity-list",
+      "pos": { "x": 5, "y": 8, "w": 4, "h": 4 },
+      "config": {
+        "profileSlug": "newsletter",
+        "title": "Newsletter Issues",
+        "limit": 5,
+        "variant": "compact"
+      }
+    },
+    { "widgetType": "feed", "pos": { "x": 9, "y": 8, "w": 3, "h": 4 } }
+  ],
+  "profileEntityBentoTemplates": {
+    "post": {
+      "blocks": [
+        {
+          "id": "post-eb-header",
+          "kind": "widget",
+          "widgetType": "entity-header",
+          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+        },
+        {
+          "id": "post-eb-props",
+          "kind": "widget",
+          "widgetType": "entity-properties",
+          "pos": { "x": 0, "y": 2, "w": 4, "h": 8 }
+        },
+        {
+          "id": "post-eb-content",
+          "kind": "widget",
+          "widgetType": "entity-content",
+          "pos": { "x": 4, "y": 2, "w": 8, "h": 4 }
+        },
+        {
+          "id": "post-eb-similar",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 4, "y": 6, "w": 8, "h": 4 },
+          "config": {
+            "profileSlug": "post",
+            "title": "Similar Posts",
+            "limit": 6,
+            "variant": "compact"
+          }
+        }
+      ]
+    },
+    "campaign": {
+      "blocks": [
+        {
+          "id": "camp-eb-header",
+          "kind": "widget",
+          "widgetType": "entity-header",
+          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+        },
+        {
+          "id": "camp-eb-props",
+          "kind": "widget",
+          "widgetType": "entity-properties",
+          "pos": { "x": 0, "y": 2, "w": 4, "h": 8 }
+        },
+        {
+          "id": "camp-eb-posts",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 4, "y": 2, "w": 8, "h": 4 },
+          "config": {
+            "profileSlug": "post",
+            "title": "Campaign Posts",
+            "limit": 8,
+            "variant": "compact"
+          }
+        },
+        {
+          "id": "camp-eb-content",
+          "kind": "widget",
+          "widgetType": "entity-content",
+          "pos": { "x": 4, "y": 6, "w": 8, "h": 4 }
+        }
+      ]
+    },
+    "pillar": {
+      "blocks": [
+        {
+          "id": "pillar-eb-header",
+          "kind": "widget",
+          "widgetType": "entity-header",
+          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+        },
+        {
+          "id": "pillar-eb-props",
+          "kind": "widget",
+          "widgetType": "entity-properties",
+          "pos": { "x": 0, "y": 2, "w": 4, "h": 8 }
+        },
+        {
+          "id": "pillar-eb-posts",
+          "kind": "widget",
+          "widgetType": "entity-list",
+          "pos": { "x": 4, "y": 2, "w": 8, "h": 8 },
+          "config": {
+            "profileSlug": "post",
+            "title": "Posts in Pillar",
+            "limit": 10,
+            "variant": "compact"
+          }
+        }
+      ]
+    }
+  },
+  "capabilities": [{ "templateKey": "nango-gdrive" }],
+  "playbooks": []
+}
