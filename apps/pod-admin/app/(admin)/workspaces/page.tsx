@@ -677,7 +677,6 @@ function CreateWorkspaceModal({
     createMutation.mutate({
       name: name.trim(),
       description: description.trim() || undefined,
-      type: "team",
     });
   }
 

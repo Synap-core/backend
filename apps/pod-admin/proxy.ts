@@ -1,6 +1,9 @@
 /**
  * Pod Admin auth gate.
  *
+ * Next.js 16 renamed the `middleware` file convention to `proxy` — same
+ * request-interception semantics, new filename + export name.
+ *
  * Two checks for every page request below `(admin)/`:
  *
  *   1. Kratos session — `${POD_URL}/.ory/kratos/public/sessions/whoami`.
@@ -39,7 +42,7 @@ export const config = {
   ],
 };
 
-export async function middleware(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const cookie = req.headers.get("cookie") ?? "";
   const currentUrl = req.nextUrl.pathname + req.nextUrl.search;
 
