@@ -4,11 +4,13 @@ When Claude Code (or any agent with Bash access) is using this skill, prefer the
 
 **Session context — set once, never repeat:**
 
-The CLI reads the active pod and workspace from `~/.synap/config.json`. Set context once at the start of a session; all subsequent commands inherit it automatically. Do NOT pass `--pod-url`, `--api-key`, or `--workspace` on every command.
+The CLI inherits your pod + lens automatically; set them once and every later command picks them up. Do NOT pass `--pod-url`, `--api-key`, or `--workspace` on every command. Inside a Claude session, `synap use` / `synap project use` bind **this session's lens** (`~/.synap/lenses/<session_id>.json`) — so concurrent sessions stay independent; outside one, they set the global default (`~/.synap/config.json`).
 
 ```bash
 synap pods use <profile-name>          # switch active pod
-synap use <workspace-id>               # switch active workspace (captures land here — it IS the domain)
+synap use <workspace-id>               # focus a workspace (this session) — captures land here; it IS the domain
+synap project use <id>                 # add the project lens (composable)
+synap lens                             # inspect: workspace + project + session this session resolves to
 ```
 
 **Always orient first:**

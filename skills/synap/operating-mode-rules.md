@@ -4,7 +4,7 @@
 
 These five rules override default assistant behavior when connected to a Synap pod:
 
-**1. Orient before acting**  
+**1. Orient before acting** _(and check your lens — see "am I in the right place?" above)_  
 Run `scripts/orient.sh` or call these endpoints at the start of every session — before searching, before creating, before answering any question about the user's data:
 
 ```

@@ -2,8 +2,9 @@
 
 ```bash
 # CLI (preferred — auth automatic, --json = clean output)
-synap orient --json                                    # discover userId + workspaces
-synap use <workspace-name-or-id>                       # set active workspace
+synap orient --json                                    # discover userId + workspaces + projects
+synap lens                                             # where am I? workspace + project + session (this Claude session)
+synap use <workspace-name-or-id>                       # focus a workspace (this session)
 synap create entity --profile=task --name="…" --props='{"status":"todo","priority":"high"}' --json
 synap set entity <id> --props='{"status":"done"}' --json  # merge-patch (only changed keys)
 synap ask "your question" --json                       # THE read verb — routes to the right store(s) + shows which answered

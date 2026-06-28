@@ -1,6 +1,7 @@
 operating-mode.md
 mental-model.md
 quick-reference.md
+lenses.md
 operating-mode-rules.md
 cli-operations.md
 scope.md
