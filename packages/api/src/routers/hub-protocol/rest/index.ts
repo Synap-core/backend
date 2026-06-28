@@ -32,6 +32,7 @@ export { registerAgentConfigsRoutes } from "./agent-configs.js";
 export { registerViewsRoutes } from "./views.js";
 export { registerProfilesRoutes } from "./profiles.js";
 export { registerProjectsRoutes } from "./projects.js";
+export { registerPackagesRoutes } from "./packages.js";
 export { registerRelationsRoutes } from "./relations.js";
 export { registerLinksRoutes } from "./links.js";
 export { registerRoutingRoutes } from "./routing.js";
