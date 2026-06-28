@@ -109,7 +109,7 @@ export class NangoConnector implements SyncConnector {
 
   async createSession(
     userId: string,
-    _provider: string,
+    provider: string,
     _workspaceId: string
   ): Promise<SyncConnectorSession> {
     const res = await fetch(`${this.host}/connect/sessions`, {
@@ -117,11 +117,14 @@ export class NangoConnector implements SyncConnector {
       headers: this.authHeaders(),
       body: JSON.stringify({
         end_user: { id: userId, display_name: userId },
-        // Always show ALL configured integrations — Nango's allowed_integrations
-        // filter uses an internal mapping that doesn't reliably match provider
-        // keys from the dashboard. The Connect UI already shows the user which
-        // integrations are available; filtering here adds a failure mode with
-        // no upside (user can pick in the UI).
+        // Pre-select the provider so Nango's Connect UI skips its integration
+        // picker and goes straight to the provider's OAuth consent screen.
+        // `*` means "no specific provider" → show all available integrations.
+        // Nango validates these against the environment's configured integrations
+        // (so the secret key MUST match the environment that owns them).
+        ...(provider && provider !== "*"
+          ? { allowed_integrations: [provider] }
+          : {}),
       }),
     });
 
