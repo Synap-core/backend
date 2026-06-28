@@ -87,6 +87,29 @@ function templateDirCandidates(): string[] {
 }
 
 /**
+ * List every on-disk capability template KEY (filename stem of
+ * `<key>.capability.json`) from the first resolvable template dir. This is what
+ * makes the FULL template library discoverable in the catalog — not just the
+ * provider-family subset. Returns [] when no dir resolves (deployed image must
+ * bundle `templates/` — see deploy/Dockerfile.api). The containment is implicit:
+ * we only read names within the resolved dir, never a caller-supplied path.
+ */
+export function listOnDiskTemplateKeys(): string[] {
+  for (const dir of templateDirCandidates()) {
+    try {
+      if (!fs.existsSync(dir)) continue;
+      return fs
+        .readdirSync(dir)
+        .filter((f) => f.endsWith(".capability.json"))
+        .map((f) => f.replace(/\.capability\.json$/, ""));
+    } catch {
+      // Unreadable candidate — try the next.
+    }
+  }
+  return [];
+}
+
+/**
  * Load a `CapabilityDefinition` by templateKey — DB-first.
  *
  * Resolution order:

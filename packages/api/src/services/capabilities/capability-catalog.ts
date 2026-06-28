@@ -33,8 +33,10 @@ import type { CapabilityDefinition } from "@synap/playbooks";
 
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { resolveNangoConnector } from "../../connectors/index.js";
-import { PROVIDER_TEMPLATE_KEY } from "../../connectors/materialize-tools.js";
-import { loadCapabilityTemplate } from "./create-from-definition.js";
+import {
+  loadCapabilityTemplate,
+  listOnDiskTemplateKeys,
+} from "./create-from-definition.js";
 
 // ── Contract (matched verbatim by the CLI being built in parallel) ────────────
 
@@ -335,10 +337,11 @@ async function loadTemplates(workspaceId: string): Promise<TemplateEntry[]> {
     // Degrade: no DB templates — the on-disk family set below still applies.
   }
 
-  // On-disk family templates (PROVIDER_TEMPLATE_KEY) — only those not already
-  // resolved from the DB. Each load is independently guarded so one missing file
-  // never sinks the rest.
-  for (const templateKey of new Set(Object.values(PROVIDER_TEMPLATE_KEY))) {
+  // On-disk template LIBRARY — every `<key>.capability.json` on disk, not just the
+  // provider families. This is what makes the full catalog discoverable instead
+  // of a hidden door. Only keys not already resolved from the DB are loaded; each
+  // load is independently guarded so one bad file never sinks the rest.
+  for (const templateKey of listOnDiskTemplateKeys()) {
     if (byKey.has(templateKey)) continue;
     try {
       const def = await loadCapabilityTemplate(templateKey, { workspaceId });
@@ -349,7 +352,7 @@ async function loadTemplates(workspaceId: string): Promise<TemplateEntry[]> {
         def,
       });
     } catch {
-      // No such on-disk template — skip.
+      // Unparseable / missing — skip.
     }
   }
 
