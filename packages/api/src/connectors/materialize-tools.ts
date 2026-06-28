@@ -19,11 +19,14 @@
 
 import { db, eq, and, isNull } from "@synap/database";
 import { tools } from "@synap/database/schema";
+import { createLogger } from "@synap-core/core";
 import {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,
 } from "../services/capabilities/create-from-definition.js";
 import type { Context } from "../types/context.js";
+
+const logger = createLogger({ module: "materialize-tools" });
 
 /**
  * The narrow connector surface materialization needs — satisfied by
@@ -218,9 +221,9 @@ export async function materializeConnectorTools(
     } catch (err) {
       // Graceful degrade — keep the bare tool; the connection still works, it
       // just lacks the structured verb catalog until applied explicitly.
-      // eslint-disable-next-line no-console
-      console.warn(
-        `connect↔apply: family template apply failed for provider "${provider}" (template "${templateKey}"): ${String(err)}`
+      logger.warn(
+        { provider, templateKey, err: String(err) },
+        "connect↔apply: family template apply failed; kept bare provider tool"
       );
     }
   }

@@ -459,29 +459,21 @@ export const connectorsRouter = router({
     }),
 
   /**
-   * Materialize the user's connected providers into canonical `tools` rows.
+   * Materialize the user's connected providers into canonical `tools` rows
+   * (+ apply each provider's family capability template).
    *
    * A provider connection (Nango) IS a capability the AI/user can wield, so it
-   * belongs in the `tools` table like every other capability. This is the ONE
-   * place a Nango connection becomes a tool row.
-   *
-   * Idempotent upsert keyed on `credentialRef = nango://{provider}`:
-   *   - ONE pod-wide tool row per distinct provider (not per connection).
-   *   - Multiple connections of the same provider (e.g. 2 Gmail accounts) share
-   *     that single tool row; the per-user/per-account credential is resolved at
-   *     use time via listConnections(userId) → connectionId. The tool is the
-   *     capability; the connection is the routing.
-   *
-   * There is no Nango webhook, so the frontend calls this on the Capabilities
-   * mount and after returning from the external Connect flow.
+   * belongs in the `tools` table like every other capability. The actual logic
+   * lives in the shared `materializeConnectorTools` (also called by the Hub-REST
+   * connect door) — this procedure is the browser's trigger: the frontend calls
+   * it on the Capabilities mount and after returning from the Connect flow.
    *
    * Intentionally NOT routed through checkPermissionOrPropose(): that gate exists
    * for AI/agent mutations. This is an operator-triggered reconciliation that only
    * materializes facts Nango already holds (the OAuth connection already happened),
    * and it runs on every window-focus — gating it would spam proposals for a no-op.
-   * Races are made safe at the DB layer by the partial unique index on
-   * (credential_ref) WHERE credential_ref LIKE 'nango://%' (mig 0132), via
-   * onConflictDoNothing below — never by the check-then-insert alone.
+   * Race-safety + idempotency live in the materializer (pod-wide unique index on
+   * `credential_ref`, mig 0132/0140; `hasVerbs` guard on template re-apply).
    */
   syncToolRows: protectedProcedure
     .input(cpUrlInput)
