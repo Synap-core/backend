@@ -62,6 +62,9 @@ export class WorkspaceRepository extends BaseRepository<
         packageSlug: s.packageSlug ?? null,
         provisioningProposalId: s.proposalId ?? null,
         provisioningStatus: s.provisioningStatus ?? null,
+        // workspace_type column (0042) — promote from settings so templates'
+        // declared type ("agent"/"operational") reaches the column, not just JSONB.
+        ...(s.workspaceType ? { workspaceType: s.workspaceType } : {}),
       } as NewWorkspace)
       .returning();
 

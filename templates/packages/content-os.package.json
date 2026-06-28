@@ -5,8 +5,8 @@
     "color": "#6366F1",
     "tags": ["content", "creator", "social-media", "newsletter", "campaigns"]
   },
-  "workspaceName": "Content OS — Creator Operations Hub",
-  "description": "A sovereign content operating system. Plan campaigns, manage posts across platforms, track brand deals, and own your newsletter audience — all in one relational workspace you control forever.",
+  "workspaceName": "Content OS \u2014 Creator Operations Hub",
+  "description": "A sovereign content operating system. Plan campaigns, manage posts across platforms, track brand deals, and own your newsletter audience \u2014 all in one relational workspace you control forever.",
   "workspaceType": "operational",
   "workspaceSubtype": "content-studio",
   "profiles": [
@@ -15,7 +15,7 @@
       "displayName": "Post",
       "icon": "file-edit",
       "color": "#6366F1",
-      "description": "Your atomic content unit. One idea, multiple platform formats — tracked from spark to publication.",
+      "description": "Your atomic content unit. One idea, multiple platform formats \u2014 tracked from spark to publication.",
       "scope": "WORKSPACE",
       "properties": [
         {
@@ -70,7 +70,11 @@
             "Other"
           ]
         },
-        { "slug": "post-pillar", "label": "Pillar", "valueType": "entity_id" },
+        {
+          "slug": "post-pillar",
+          "label": "Pillar",
+          "valueType": "entity_id"
+        },
         {
           "slug": "post-campaign",
           "label": "Campaign",
@@ -100,7 +104,11 @@
           "inputType": "text",
           "placeholder": "What should the audience do?"
         },
-        { "slug": "post-tags", "label": "Tags", "valueType": "array" },
+        {
+          "slug": "post-tags",
+          "label": "Tags",
+          "valueType": "array"
+        },
         {
           "slug": "engagement-score",
           "label": "Engagement Score",
@@ -127,7 +135,9 @@
           "valueType": "string",
           "inputType": "text",
           "placeholder": "https://...",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         }
       ]
     },
@@ -136,7 +146,7 @@
       "displayName": "Campaign",
       "icon": "target",
       "color": "#F59E0B",
-      "description": "A grouped content initiative — product launch, editorial series, seasonal push, or challenge.",
+      "description": "A grouped content initiative \u2014 product launch, editorial series, seasonal push, or challenge.",
       "scope": "WORKSPACE",
       "properties": [
         {
@@ -178,7 +188,11 @@
           "label": "Start Date",
           "valueType": "date"
         },
-        { "slug": "campaign-end", "label": "End Date", "valueType": "date" },
+        {
+          "slug": "campaign-end",
+          "label": "End Date",
+          "valueType": "date"
+        },
         {
           "slug": "campaign-goal",
           "label": "Goal",
@@ -218,7 +232,7 @@
         },
         {
           "slug": "campaign-budget",
-          "label": "Budget (€)",
+          "label": "Budget (\u20ac)",
           "valueType": "number",
           "inputType": "number"
         },
@@ -228,7 +242,11 @@
           "valueType": "number",
           "inputType": "number"
         },
-        { "slug": "campaign-tags", "label": "Tags", "valueType": "array" }
+        {
+          "slug": "campaign-tags",
+          "label": "Tags",
+          "valueType": "array"
+        }
       ]
     },
     {
@@ -236,7 +254,7 @@
       "displayName": "Pillar",
       "icon": "columns",
       "color": "#8B5CF6",
-      "description": "A recurring content theme — the lens through which your audience knows you. The organizing principle of your brand.",
+      "description": "A recurring content theme \u2014 the lens through which your audience knows you. The organizing principle of your brand.",
       "scope": "WORKSPACE",
       "properties": [
         {
@@ -309,7 +327,11 @@
             "Ad hoc"
           ]
         },
-        { "slug": "pillar-tags", "label": "Tags", "valueType": "array" }
+        {
+          "slug": "pillar-tags",
+          "label": "Tags",
+          "valueType": "array"
+        }
       ]
     },
     {
@@ -352,7 +374,9 @@
           "valueType": "string",
           "inputType": "text",
           "placeholder": "https://...",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "follower-count",
@@ -399,7 +423,11 @@
           "inputType": "text",
           "placeholder": "What works here? Tone, format, best times..."
         },
-        { "slug": "platform-tags", "label": "Tags", "valueType": "array" }
+        {
+          "slug": "platform-tags",
+          "label": "Tags",
+          "valueType": "array"
+        }
       ]
     },
     {
@@ -407,7 +435,7 @@
       "displayName": "Newsletter",
       "icon": "mail",
       "color": "#10B981",
-      "description": "A newsletter issue — your direct channel to an owned audience. No algorithm, no platform fee, no intermediary.",
+      "description": "A newsletter issue \u2014 your direct channel to an owned audience. No algorithm, no platform fee, no intermediary.",
       "scope": "WORKSPACE",
       "properties": [
         {
@@ -442,7 +470,7 @@
           "label": "Subject Line",
           "valueType": "string",
           "inputType": "text",
-          "placeholder": "The subject line — your most important copy"
+          "placeholder": "The subject line \u2014 your most important copy"
         },
         {
           "slug": "preview-text",
@@ -451,7 +479,11 @@
           "inputType": "text",
           "placeholder": "45-character preview shown in inbox (after subject)"
         },
-        { "slug": "send-date", "label": "Send Date", "valueType": "date" },
+        {
+          "slug": "send-date",
+          "label": "Send Date",
+          "valueType": "date"
+        },
         {
           "slug": "subscriber-count",
           "label": "Subscriber Count at Send",
@@ -485,7 +517,11 @@
           "label": "Primary Pillar",
           "valueType": "entity_id"
         },
-        { "slug": "newsletter-tags", "label": "Tags", "valueType": "array" }
+        {
+          "slug": "newsletter-tags",
+          "label": "Tags",
+          "valueType": "array"
+        }
       ]
     },
     {
@@ -493,7 +529,7 @@
       "displayName": "Sponsor",
       "icon": "briefcase",
       "color": "#F43F5E",
-      "description": "A brand deal or sponsorship — from first contact to final payment. Track deliverables, deadlines, and performance in one place.",
+      "description": "A brand deal or sponsorship \u2014 from first contact to final payment. Track deliverables, deadlines, and performance in one place.",
       "scope": "WORKSPACE",
       "properties": [
         {
@@ -544,11 +580,13 @@
           "valueType": "string",
           "inputType": "text",
           "placeholder": "contact@brand.com",
-          "constraints": { "format": "email" }
+          "constraints": {
+            "format": "email"
+          }
         },
         {
           "slug": "deal-value",
-          "label": "Deal Value (€)",
+          "label": "Deal Value (\u20ac)",
           "valueType": "number",
           "inputType": "number"
         },
@@ -601,7 +639,11 @@
           "inputType": "text",
           "placeholder": "What results did you report to the brand?"
         },
-        { "slug": "sponsor-tags", "label": "Tags", "valueType": "array" }
+        {
+          "slug": "sponsor-tags",
+          "label": "Tags",
+          "valueType": "array"
+        }
       ]
     }
   ],
@@ -610,7 +652,10 @@
       "name": "Content Calendar",
       "type": "calendar",
       "scopeProfileSlug": "post",
-      "config": { "dateField": "publish-date", "colorField": "post-platform" }
+      "config": {
+        "dateField": "publish-date",
+        "colorField": "post-platform"
+      }
     },
     {
       "name": "Post Pipeline",
@@ -640,7 +685,10 @@
           "engagement-score",
           "post-reach"
         ],
-        "defaultSort": { "field": "publish-date", "direction": "desc" },
+        "defaultSort": {
+          "field": "publish-date",
+          "direction": "desc"
+        },
         "rowHeight": "default"
       }
     },
@@ -666,7 +714,10 @@
           "repurposed-from",
           "publish-date"
         ],
-        "defaultSort": { "field": "post-platform", "direction": "asc" },
+        "defaultSort": {
+          "field": "post-platform",
+          "direction": "asc"
+        },
         "rowHeight": "default"
       }
     },
@@ -680,7 +731,10 @@
         "newsletter",
         "sponsor"
       ],
-      "config": { "layout": "force", "showRelations": true }
+      "config": {
+        "layout": "force",
+        "showRelations": true
+      }
     },
     {
       "name": "Campaigns",
@@ -720,7 +774,10 @@
           "post-count-pillar",
           "avg-engagement"
         ],
-        "defaultSort": { "field": "pillar-status", "direction": "asc" },
+        "defaultSort": {
+          "field": "pillar-status",
+          "direction": "asc"
+        },
         "rowHeight": "default"
       }
     },
@@ -738,7 +795,10 @@
           "platform-posting-freq",
           "last-post-date"
         ],
-        "defaultSort": { "field": "follower-count", "direction": "desc" },
+        "defaultSort": {
+          "field": "follower-count",
+          "direction": "desc"
+        },
         "rowHeight": "default"
       }
     },
@@ -758,7 +818,10 @@
           "click-rate",
           "newsletter-sponsor"
         ],
-        "defaultSort": { "field": "send-date", "direction": "desc" },
+        "defaultSort": {
+          "field": "send-date",
+          "direction": "desc"
+        },
         "rowHeight": "default"
       }
     },
@@ -781,7 +844,10 @@
       "name": "Newsletter Calendar",
       "type": "calendar",
       "scopeProfileSlug": "newsletter",
-      "config": { "dateField": "send-date", "colorField": "newsletter-status" }
+      "config": {
+        "dateField": "send-date",
+        "colorField": "newsletter-status"
+      }
     },
     {
       "name": "Sponsor Tracker",
@@ -811,7 +877,10 @@
           "deliverable-deadline",
           "exclusivity-end"
         ],
-        "defaultSort": { "field": "deliverable-deadline", "direction": "asc" },
+        "defaultSort": {
+          "field": "deliverable-deadline",
+          "direction": "asc"
+        },
         "rowHeight": "default"
       }
     },
@@ -835,7 +904,12 @@
             "id": "post-header",
             "kind": "widget",
             "widgetType": "section-header",
-            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
             "config": {
               "title": "Posts",
               "icon": "FileEdit",
@@ -847,7 +921,12 @@
             "id": "post-count",
             "kind": "widget",
             "widgetType": "stat-card",
-            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "label": "Total Posts",
               "aggregation": "count",
@@ -859,24 +938,41 @@
             "id": "post-pipeline",
             "kind": "view",
             "viewName": "Post Pipeline",
-            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 9,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "post-cal",
             "kind": "view",
             "viewName": "Content Calendar",
-            "pos": { "x": 0, "y": 19, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 19,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "post-published",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 3,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "post",
               "label": "Published",
               "icon": "Globe",
-              "filter": { "status": "published" },
+              "filter": {
+                "status": "published"
+              },
               "color": "#10B981"
             }
           },
@@ -884,12 +980,19 @@
             "id": "post-drafts",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 6,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "post",
               "label": "Drafts",
               "icon": "FileEdit",
-              "filter": { "status": "draft" },
+              "filter": {
+                "status": "draft"
+              },
               "color": "#6B7280"
             }
           },
@@ -897,12 +1000,19 @@
             "id": "post-scheduled",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 9, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 9,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "post",
               "label": "Scheduled",
               "icon": "Clock",
-              "filter": { "status": "scheduled" },
+              "filter": {
+                "status": "scheduled"
+              },
               "color": "#F59E0B"
             }
           },
@@ -910,7 +1020,12 @@
             "id": "post-spotlight",
             "kind": "widget",
             "widgetType": "entity-spotlight",
-            "pos": { "x": 0, "y": 5, "w": 5, "h": 4 },
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 5,
+              "h": 4
+            },
             "config": {
               "profileSlug": "post",
               "seed": "daily",
@@ -923,7 +1038,12 @@
             "id": "post-gallery",
             "kind": "widget",
             "widgetType": "entity-gallery",
-            "pos": { "x": 5, "y": 5, "w": 7, "h": 4 },
+            "pos": {
+              "x": 5,
+              "y": 5,
+              "w": 7,
+              "h": 4
+            },
             "config": {
               "profileSlug": "post",
               "coverField": "thumbnail-url",
@@ -933,11 +1053,31 @@
           }
         ],
         "breakpoints": {
-          "lg": { "cols": 12, "rowHeight": 60, "gap": 12 },
-          "md": { "cols": 10, "rowHeight": 60, "gap": 12 },
-          "sm": { "cols": 6, "rowHeight": 60, "gap": 12 },
-          "xs": { "cols": 4, "rowHeight": 60, "gap": 12 },
-          "xxs": { "cols": 2, "rowHeight": 60, "gap": 12 }
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
         }
       }
     },
@@ -952,7 +1092,12 @@
             "id": "campaign-header",
             "kind": "widget",
             "widgetType": "section-header",
-            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
             "config": {
               "title": "Campaigns",
               "icon": "Target",
@@ -964,7 +1109,12 @@
             "id": "campaign-count",
             "kind": "widget",
             "widgetType": "stat-card",
-            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "label": "Total Campaigns",
               "aggregation": "count",
@@ -976,24 +1126,41 @@
             "id": "campaign-board",
             "kind": "view",
             "viewName": "Campaigns",
-            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 9,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "campaign-timeline",
             "kind": "view",
             "viewName": "Campaign Timeline",
-            "pos": { "x": 0, "y": 19, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 19,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "campaign-active",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 3,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "campaign",
               "label": "Active",
               "icon": "Play",
-              "filter": { "status": "active" },
+              "filter": {
+                "status": "active"
+              },
               "color": "#10B981"
             }
           },
@@ -1001,7 +1168,12 @@
             "id": "campaign-posts",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 6,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "post",
               "label": "Campaign Posts",
@@ -1013,7 +1185,12 @@
             "id": "campaign-spotlight",
             "kind": "widget",
             "widgetType": "entity-spotlight",
-            "pos": { "x": 0, "y": 5, "w": 5, "h": 4 },
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 5,
+              "h": 4
+            },
             "config": {
               "profileSlug": "campaign",
               "seed": "daily",
@@ -1026,7 +1203,12 @@
             "id": "campaign-post-list",
             "kind": "widget",
             "widgetType": "entity-list",
-            "pos": { "x": 5, "y": 5, "w": 7, "h": 4 },
+            "pos": {
+              "x": 5,
+              "y": 5,
+              "w": 7,
+              "h": 4
+            },
             "config": {
               "profileSlug": "post",
               "title": "Campaign Posts",
@@ -1036,11 +1218,31 @@
           }
         ],
         "breakpoints": {
-          "lg": { "cols": 12, "rowHeight": 60, "gap": 12 },
-          "md": { "cols": 10, "rowHeight": 60, "gap": 12 },
-          "sm": { "cols": 6, "rowHeight": 60, "gap": 12 },
-          "xs": { "cols": 4, "rowHeight": 60, "gap": 12 },
-          "xxs": { "cols": 2, "rowHeight": 60, "gap": 12 }
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
         }
       }
     },
@@ -1055,7 +1257,12 @@
             "id": "nl-header",
             "kind": "widget",
             "widgetType": "section-header",
-            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
             "config": {
               "title": "Newsletters",
               "icon": "Mail",
@@ -1067,7 +1274,12 @@
             "id": "nl-count",
             "kind": "widget",
             "widgetType": "stat-card",
-            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "label": "Total Issues",
               "aggregation": "count",
@@ -1079,21 +1291,51 @@
             "id": "nl-pipeline",
             "kind": "view",
             "viewName": "Newsletter Pipeline",
-            "pos": { "x": 0, "y": 5, "w": 12, "h": 10 }
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 12,
+              "h": 10
+            }
           },
           {
             "id": "nl-table",
             "kind": "view",
             "viewName": "Newsletter Issues",
-            "pos": { "x": 0, "y": 15, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 15,
+              "w": 12,
+              "h": 8
+            }
           }
         ],
         "breakpoints": {
-          "lg": { "cols": 12, "rowHeight": 60, "gap": 12 },
-          "md": { "cols": 10, "rowHeight": 60, "gap": 12 },
-          "sm": { "cols": 6, "rowHeight": 60, "gap": 12 },
-          "xs": { "cols": 4, "rowHeight": 60, "gap": 12 },
-          "xxs": { "cols": 2, "rowHeight": 60, "gap": 12 }
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
         }
       }
     },
@@ -1109,7 +1351,12 @@
             "id": "pillar-header",
             "kind": "widget",
             "widgetType": "section-header",
-            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
             "config": {
               "title": "Content Pillars",
               "icon": "Layers",
@@ -1121,7 +1368,12 @@
             "id": "pillar-count",
             "kind": "widget",
             "widgetType": "stat-card",
-            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "label": "Pillars",
               "aggregation": "count",
@@ -1134,7 +1386,12 @@
             "id": "pillar-posts-count",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 3,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "post",
               "label": "Posts in Pillar",
@@ -1146,7 +1403,12 @@
             "id": "pillar-campaigns",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 6,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "campaign",
               "label": "Campaigns",
@@ -1158,7 +1420,12 @@
             "id": "pillar-spotlight",
             "kind": "widget",
             "widgetType": "entity-spotlight",
-            "pos": { "x": 0, "y": 5, "w": 6, "h": 4 },
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 6,
+              "h": 4
+            },
             "config": {
               "profileSlug": "pillar",
               "seed": "daily",
@@ -1170,7 +1437,12 @@
             "id": "pillar-post-list",
             "kind": "widget",
             "widgetType": "entity-list",
-            "pos": { "x": 6, "y": 5, "w": 6, "h": 4 },
+            "pos": {
+              "x": 6,
+              "y": 5,
+              "w": 6,
+              "h": 4
+            },
             "config": {
               "profileSlug": "post",
               "title": "Posts in this Pillar",
@@ -1182,7 +1454,12 @@
             "id": "pillar-table",
             "kind": "view",
             "viewName": "Pillars",
-            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 9,
+              "w": 12,
+              "h": 8
+            }
           }
         ]
       }
@@ -1199,7 +1476,7 @@
         "pillar-formats": "Articles + Threads",
         "post-count-pillar": 12,
         "avg-engagement": 340,
-        "top-post": "Why your data is not yours — and how to fix that",
+        "top-post": "Why your data is not yours \u2014 and how to fix that",
         "posting-frequency": "2x / week",
         "pillar-tags": ["sovereignty", "synap", "infrastructure"]
       }
@@ -1280,7 +1557,7 @@
     },
     {
       "profileSlug": "campaign",
-      "title": "Synap Template Launch — Q1 2026",
+      "title": "Synap Template Launch \u2014 Q1 2026",
       "properties": {
         "campaign-status": "Active",
         "campaign-type": "Product Launch",
@@ -1312,7 +1589,7 @@
     },
     {
       "profileSlug": "post",
-      "title": "Why your subscriber list is not yours — and what to do about it",
+      "title": "Why your subscriber list is not yours \u2014 and what to do about it",
       "properties": {
         "post-status": "Published",
         "post-format": "Article",
@@ -1335,22 +1612,22 @@
         "post-format": "Article",
         "post-platform": "LinkedIn",
         "post-pillar": "ref:pillar:Product Building",
-        "post-campaign": "ref:campaign:Synap Template Launch — Q1 2026",
+        "post-campaign": "ref:campaign:Synap Template Launch \u2014 Q1 2026",
         "publish-date": "2026-03-03",
-        "post-hook": "Every other tool gives you a database. We built a network of entities — and the difference is everything.",
-        "post-cta": "Try the Second Brain template in Synap — free",
+        "post-hook": "Every other tool gives you a database. We built a network of entities \u2014 and the difference is everything.",
+        "post-cta": "Try the Second Brain template in Synap \u2014 free",
         "post-tags": ["product", "synap", "architecture"]
       }
     },
     {
       "profileSlug": "post",
-      "title": "Thread: The creator tool stack is broken — here is why",
+      "title": "Thread: The creator tool stack is broken \u2014 here is why",
       "properties": {
         "post-status": "Scheduled",
         "post-format": "Thread",
         "post-platform": "Twitter / X",
         "post-pillar": "ref:pillar:Creator Economy",
-        "post-campaign": "ref:campaign:Synap Template Launch — Q1 2026",
+        "post-campaign": "ref:campaign:Synap Template Launch \u2014 Q1 2026",
         "publish-date": "2026-02-25",
         "post-hook": "I talked to 40 creators this month. Every single one uses 5+ tools that don't talk to each other.",
         "post-cta": "Follow for the full Creator Economy report",
@@ -1359,20 +1636,20 @@
     },
     {
       "profileSlug": "post",
-      "title": "Content OS template — what's included and why we built it",
+      "title": "Content OS template \u2014 what's included and why we built it",
       "properties": {
         "post-status": "Idea",
         "post-format": "Short Video",
         "post-platform": "LinkedIn",
         "post-pillar": "ref:pillar:Product Building",
-        "post-campaign": "ref:campaign:Synap Template Launch — Q1 2026",
+        "post-campaign": "ref:campaign:Synap Template Launch \u2014 Q1 2026",
         "post-hook": "We spent 3 weeks researching 8 creator tools before building Synap's Content OS template.",
         "post-tags": ["content-os", "templates", "synap", "research"]
       }
     },
     {
       "profileSlug": "post",
-      "title": "Data sovereignty is not a technical concept — it is a political one",
+      "title": "Data sovereignty is not a technical concept \u2014 it is a political one",
       "properties": {
         "post-status": "Idea",
         "post-format": "Article",
@@ -1391,7 +1668,7 @@
         "post-format": "Article",
         "post-platform": "LinkedIn",
         "post-pillar": "ref:pillar:Product Building",
-        "post-campaign": "ref:campaign:Synap Template Launch — Q1 2026",
+        "post-campaign": "ref:campaign:Synap Template Launch \u2014 Q1 2026",
         "publish-date": "2026-03-10",
         "post-hook": "Most SaaS products show you an empty database on day one. Synap shows you a fully functional workspace.",
         "post-cta": "Read the full technical deep-dive on our blog",
@@ -1400,7 +1677,7 @@
     },
     {
       "profileSlug": "newsletter",
-      "title": "The Sovereign Stack — Issue 12",
+      "title": "The Sovereign Stack \u2014 Issue 12",
       "properties": {
         "newsletter-status": "Sent",
         "newsletter-series": "The Sovereign Stack",
@@ -1419,22 +1696,22 @@
     },
     {
       "profileSlug": "newsletter",
-      "title": "The Sovereign Stack — Issue 13",
+      "title": "The Sovereign Stack \u2014 Issue 13",
       "properties": {
         "newsletter-status": "Scheduled",
         "newsletter-series": "The Sovereign Stack",
         "issue-number": 13,
-        "subject-line": "Inside Synap's Content OS template — what we built and why",
+        "subject-line": "Inside Synap's Content OS template \u2014 what we built and why",
         "preview-text": "6 profiles, 16 views, 1 relational graph you own forever",
         "send-date": "2026-02-24",
-        "newsletter-campaign": "ref:campaign:Synap Template Launch — Q1 2026",
+        "newsletter-campaign": "ref:campaign:Synap Template Launch \u2014 Q1 2026",
         "newsletter-pillar": "ref:pillar:Product Building",
         "newsletter-tags": ["content-os", "templates", "synap"]
       }
     },
     {
       "profileSlug": "newsletter",
-      "title": "The Sovereign Stack — Issue 14",
+      "title": "The Sovereign Stack \u2014 Issue 14",
       "properties": {
         "newsletter-status": "Drafting",
         "newsletter-series": "The Sovereign Stack",
@@ -1483,37 +1760,37 @@
   ],
   "suggestedRelations": [
     {
-      "sourceRef": "post:Why your subscriber list is not yours — and what to do about it",
+      "sourceRef": "post:Why your subscriber list is not yours \u2014 and what to do about it",
       "targetRef": "campaign:Data Sovereignty Series",
       "type": "belongs_to_project"
     },
     {
       "sourceRef": "post:Synap's entity model: why we ditched the database-first approach",
-      "targetRef": "campaign:Synap Template Launch — Q1 2026",
+      "targetRef": "campaign:Synap Template Launch \u2014 Q1 2026",
       "type": "belongs_to_project"
     },
     {
-      "sourceRef": "post:Thread: The creator tool stack is broken — here is why",
-      "targetRef": "campaign:Synap Template Launch — Q1 2026",
+      "sourceRef": "post:Thread: The creator tool stack is broken \u2014 here is why",
+      "targetRef": "campaign:Synap Template Launch \u2014 Q1 2026",
       "type": "belongs_to_project"
     },
     {
-      "sourceRef": "post:Content OS template — what's included and why we built it",
-      "targetRef": "campaign:Synap Template Launch — Q1 2026",
+      "sourceRef": "post:Content OS template \u2014 what's included and why we built it",
+      "targetRef": "campaign:Synap Template Launch \u2014 Q1 2026",
       "type": "belongs_to_project"
     },
     {
-      "sourceRef": "post:Data sovereignty is not a technical concept — it is a political one",
+      "sourceRef": "post:Data sovereignty is not a technical concept \u2014 it is a political one",
       "targetRef": "campaign:Data Sovereignty Series",
       "type": "belongs_to_project"
     },
     {
       "sourceRef": "post:How Synap templates are seeded: the JSON-first approach",
-      "targetRef": "campaign:Synap Template Launch — Q1 2026",
+      "targetRef": "campaign:Synap Template Launch \u2014 Q1 2026",
       "type": "belongs_to_project"
     },
     {
-      "sourceRef": "post:Why your subscriber list is not yours — and what to do about it",
+      "sourceRef": "post:Why your subscriber list is not yours \u2014 and what to do about it",
       "targetRef": "pillar:Data Sovereignty",
       "type": "relates_to"
     },
@@ -1523,17 +1800,17 @@
       "type": "relates_to"
     },
     {
-      "sourceRef": "post:Thread: The creator tool stack is broken — here is why",
+      "sourceRef": "post:Thread: The creator tool stack is broken \u2014 here is why",
       "targetRef": "pillar:Creator Economy",
       "type": "relates_to"
     },
     {
-      "sourceRef": "post:Content OS template — what's included and why we built it",
+      "sourceRef": "post:Content OS template \u2014 what's included and why we built it",
       "targetRef": "pillar:Product Building",
       "type": "relates_to"
     },
     {
-      "sourceRef": "post:Data sovereignty is not a technical concept — it is a political one",
+      "sourceRef": "post:Data sovereignty is not a technical concept \u2014 it is a political one",
       "targetRef": "pillar:Data Sovereignty",
       "type": "relates_to"
     },
@@ -1543,32 +1820,32 @@
       "type": "relates_to"
     },
     {
-      "sourceRef": "newsletter:The Sovereign Stack — Issue 12",
+      "sourceRef": "newsletter:The Sovereign Stack \u2014 Issue 12",
       "targetRef": "campaign:Data Sovereignty Series",
       "type": "belongs_to_project"
     },
     {
-      "sourceRef": "newsletter:The Sovereign Stack — Issue 13",
-      "targetRef": "campaign:Synap Template Launch — Q1 2026",
+      "sourceRef": "newsletter:The Sovereign Stack \u2014 Issue 13",
+      "targetRef": "campaign:Synap Template Launch \u2014 Q1 2026",
       "type": "belongs_to_project"
     },
     {
-      "sourceRef": "newsletter:The Sovereign Stack — Issue 12",
+      "sourceRef": "newsletter:The Sovereign Stack \u2014 Issue 12",
       "targetRef": "pillar:Data Sovereignty",
       "type": "relates_to"
     },
     {
-      "sourceRef": "newsletter:The Sovereign Stack — Issue 13",
+      "sourceRef": "newsletter:The Sovereign Stack \u2014 Issue 13",
       "targetRef": "pillar:Product Building",
       "type": "relates_to"
     },
     {
-      "sourceRef": "newsletter:The Sovereign Stack — Issue 14",
+      "sourceRef": "newsletter:The Sovereign Stack \u2014 Issue 14",
       "targetRef": "pillar:Data Sovereignty",
       "type": "relates_to"
     },
     {
-      "sourceRef": "newsletter:The Sovereign Stack — Issue 12",
+      "sourceRef": "newsletter:The Sovereign Stack \u2014 Issue 12",
       "targetRef": "sponsor:Mintlify",
       "type": "relates_to"
     },
@@ -1578,7 +1855,7 @@
       "type": "relates_to"
     },
     {
-      "sourceRef": "campaign:Synap Template Launch — Q1 2026",
+      "sourceRef": "campaign:Synap Template Launch \u2014 Q1 2026",
       "targetRef": "pillar:Product Building",
       "type": "relates_to"
     }
@@ -1625,45 +1902,69 @@
           "fieldMapping": {
             "post-status": {
               "slot": "post-status",
-              "renderer": { "type": "badge", "size": "md" },
+              "renderer": {
+                "type": "badge",
+                "size": "md"
+              },
               "showLabel": false,
               "order": 1
             },
             "post-format": {
               "slot": "post-format",
-              "renderer": { "type": "badge", "variant": "muted", "size": "sm" },
+              "renderer": {
+                "type": "badge",
+                "variant": "muted",
+                "size": "sm"
+              },
               "showLabel": false,
               "order": 2
             },
             "post-platform": {
               "slot": "post-platform",
-              "renderer": { "type": "badge", "variant": "muted", "size": "sm" },
+              "renderer": {
+                "type": "badge",
+                "variant": "muted",
+                "size": "sm"
+              },
               "showLabel": false,
               "order": 3
             },
             "engagement-score": {
               "slot": "engagement-score",
-              "renderer": { "type": "number", "size": "md" },
+              "renderer": {
+                "type": "number",
+                "size": "md"
+              },
               "label": "Engagement",
               "showLabel": true,
               "order": 4
             },
             "post-reach": {
               "slot": "post-reach",
-              "renderer": { "type": "number", "size": "md" },
+              "renderer": {
+                "type": "number",
+                "size": "md"
+              },
               "label": "Reach",
               "showLabel": true,
               "order": 5
             },
             "publish-date": {
               "slot": "publish-date",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "order": 6
             }
           }
         },
-        "colors": { "accent": "#8B5CF6" },
-        "styling": { "borderRadius": "10px" }
+        "colors": {
+          "accent": "#8B5CF6"
+        },
+        "styling": {
+          "borderRadius": "10px"
+        }
       }
     },
     {
@@ -1702,7 +2003,10 @@
           "fieldMapping": {
             "deal-status": {
               "slot": "deal-status",
-              "renderer": { "type": "badge", "size": "md" },
+              "renderer": {
+                "type": "badge",
+                "size": "md"
+              },
               "showLabel": false,
               "order": 1
             },
@@ -1718,21 +2022,32 @@
             },
             "payment-status": {
               "slot": "payment-status",
-              "renderer": { "type": "badge", "variant": "muted", "size": "sm" },
+              "renderer": {
+                "type": "badge",
+                "variant": "muted",
+                "size": "sm"
+              },
               "showLabel": true,
               "order": 3
             },
             "deliverable-deadline": {
               "slot": "deliverable-deadline",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "label": "Deadline",
               "showLabel": true,
               "order": 4
             }
           }
         },
-        "colors": { "accent": "#F59E0B" },
-        "styling": { "borderRadius": "10px" }
+        "colors": {
+          "accent": "#F59E0B"
+        },
+        "styling": {
+          "borderRadius": "10px"
+        }
       }
     },
     {
@@ -1772,48 +2087,71 @@
           "fieldMapping": {
             "campaign-status": {
               "slot": "campaign-status",
-              "renderer": { "type": "badge", "size": "md" },
+              "renderer": {
+                "type": "badge",
+                "size": "md"
+              },
               "showLabel": false,
               "order": 1
             },
             "campaign-type": {
               "slot": "campaign-type",
-              "renderer": { "type": "badge", "variant": "muted", "size": "sm" },
+              "renderer": {
+                "type": "badge",
+                "variant": "muted",
+                "size": "sm"
+              },
               "showLabel": false,
               "order": 2
             },
             "kpi-target": {
               "slot": "kpi-target",
-              "renderer": { "type": "number", "size": "md" },
+              "renderer": {
+                "type": "number",
+                "size": "md"
+              },
               "label": "KPI Target",
               "showLabel": true,
               "order": 3
             },
             "kpi-result": {
               "slot": "kpi-result",
-              "renderer": { "type": "number", "size": "md" },
+              "renderer": {
+                "type": "number",
+                "size": "md"
+              },
               "label": "KPI Result",
               "showLabel": true,
               "order": 4
             },
             "campaign-start": {
               "slot": "campaign-start",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "label": "Start",
               "showLabel": true,
               "order": 5
             },
             "campaign-end": {
               "slot": "campaign-end",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "label": "End",
               "showLabel": true,
               "order": 6
             }
           }
         },
-        "colors": { "accent": "#EC4899" },
-        "styling": { "borderRadius": "10px" }
+        "colors": {
+          "accent": "#EC4899"
+        },
+        "styling": {
+          "borderRadius": "10px"
+        }
       }
     },
     {
@@ -1857,7 +2195,10 @@
           "fieldMapping": {
             "newsletter-status": {
               "slot": "newsletter-status",
-              "renderer": { "type": "badge", "size": "md" },
+              "renderer": {
+                "type": "badge",
+                "size": "md"
+              },
               "showLabel": false,
               "order": 1
             },
@@ -1885,15 +2226,22 @@
             },
             "send-date": {
               "slot": "send-date",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "label": "Sent",
               "showLabel": true,
               "order": 4
             }
           }
         },
-        "colors": { "accent": "#14B8A6" },
-        "styling": { "borderRadius": "10px" }
+        "colors": {
+          "accent": "#14B8A6"
+        },
+        "styling": {
+          "borderRadius": "10px"
+        }
       }
     }
   ],
@@ -1942,41 +2290,99 @@
   "bentoLayout": [
     {
       "widgetType": "welcome-header",
-      "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+      "pos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 2
+      }
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 0, "y": 2, "w": 2, "h": 2 },
-      "config": { "profileSlug": "post", "label": "Posts" }
+      "pos": {
+        "x": 0,
+        "y": 2,
+        "w": 2,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "post",
+        "label": "Posts"
+      }
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 2, "y": 2, "w": 2, "h": 2 },
-      "config": { "profileSlug": "campaign", "label": "Campaigns" }
+      "pos": {
+        "x": 2,
+        "y": 2,
+        "w": 2,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "campaign",
+        "label": "Campaigns"
+      }
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 4, "y": 2, "w": 2, "h": 2 },
-      "config": { "profileSlug": "pillar", "label": "Pillars" }
+      "pos": {
+        "x": 4,
+        "y": 2,
+        "w": 2,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "pillar",
+        "label": "Pillars"
+      }
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 6, "y": 2, "w": 2, "h": 2 },
-      "config": { "profileSlug": "newsletter", "label": "Newsletters" }
+      "pos": {
+        "x": 6,
+        "y": 2,
+        "w": 2,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "newsletter",
+        "label": "Newsletters"
+      }
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 8, "y": 2, "w": 2, "h": 2 },
-      "config": { "profileSlug": "platform", "label": "Platforms" }
+      "pos": {
+        "x": 8,
+        "y": 2,
+        "w": 2,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "platform",
+        "label": "Platforms"
+      }
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 10, "y": 2, "w": 2, "h": 2 },
-      "config": { "profileSlug": "sponsor", "label": "Sponsors" }
+      "pos": {
+        "x": 10,
+        "y": 2,
+        "w": 2,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "sponsor",
+        "label": "Sponsors"
+      }
     },
     {
       "widgetType": "entity-list",
-      "pos": { "x": 0, "y": 4, "w": 5, "h": 4 },
+      "pos": {
+        "x": 0,
+        "y": 4,
+        "w": 5,
+        "h": 4
+      },
       "config": {
         "profileSlug": "post",
         "title": "Post Pipeline",
@@ -1986,7 +2392,12 @@
     },
     {
       "widgetType": "entity-list",
-      "pos": { "x": 5, "y": 4, "w": 4, "h": 4 },
+      "pos": {
+        "x": 5,
+        "y": 4,
+        "w": 4,
+        "h": 4
+      },
       "config": {
         "profileSlug": "campaign",
         "title": "Active Campaigns",
@@ -1996,7 +2407,12 @@
     },
     {
       "widgetType": "entity-list",
-      "pos": { "x": 9, "y": 4, "w": 3, "h": 4 },
+      "pos": {
+        "x": 9,
+        "y": 4,
+        "w": 3,
+        "h": 4
+      },
       "config": {
         "profileSlug": "sponsor",
         "title": "Sponsor Tracker",
@@ -2004,10 +2420,23 @@
         "variant": "compact"
       }
     },
-    { "widgetType": "calendar", "pos": { "x": 0, "y": 8, "w": 5, "h": 4 } },
+    {
+      "widgetType": "calendar",
+      "pos": {
+        "x": 0,
+        "y": 8,
+        "w": 5,
+        "h": 4
+      }
+    },
     {
       "widgetType": "entity-list",
-      "pos": { "x": 5, "y": 8, "w": 4, "h": 4 },
+      "pos": {
+        "x": 5,
+        "y": 8,
+        "w": 4,
+        "h": 4
+      },
       "config": {
         "profileSlug": "newsletter",
         "title": "Newsletter Issues",
@@ -2015,7 +2444,15 @@
         "variant": "compact"
       }
     },
-    { "widgetType": "feed", "pos": { "x": 9, "y": 8, "w": 3, "h": 4 } }
+    {
+      "widgetType": "feed",
+      "pos": {
+        "x": 9,
+        "y": 8,
+        "w": 3,
+        "h": 4
+      }
+    }
   ],
   "profileEntityBentoTemplates": {
     "post": {
@@ -2024,25 +2461,45 @@
           "id": "post-eb-header",
           "kind": "widget",
           "widgetType": "entity-header",
-          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+          "pos": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 2
+          }
         },
         {
           "id": "post-eb-props",
           "kind": "widget",
           "widgetType": "entity-properties",
-          "pos": { "x": 0, "y": 2, "w": 4, "h": 8 }
+          "pos": {
+            "x": 0,
+            "y": 2,
+            "w": 4,
+            "h": 8
+          }
         },
         {
           "id": "post-eb-content",
           "kind": "widget",
           "widgetType": "entity-content",
-          "pos": { "x": 4, "y": 2, "w": 8, "h": 4 }
+          "pos": {
+            "x": 4,
+            "y": 2,
+            "w": 8,
+            "h": 4
+          }
         },
         {
           "id": "post-eb-similar",
           "kind": "widget",
           "widgetType": "entity-list",
-          "pos": { "x": 4, "y": 6, "w": 8, "h": 4 },
+          "pos": {
+            "x": 4,
+            "y": 6,
+            "w": 8,
+            "h": 4
+          },
           "config": {
             "profileSlug": "post",
             "title": "Similar Posts",
@@ -2058,19 +2515,34 @@
           "id": "camp-eb-header",
           "kind": "widget",
           "widgetType": "entity-header",
-          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+          "pos": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 2
+          }
         },
         {
           "id": "camp-eb-props",
           "kind": "widget",
           "widgetType": "entity-properties",
-          "pos": { "x": 0, "y": 2, "w": 4, "h": 8 }
+          "pos": {
+            "x": 0,
+            "y": 2,
+            "w": 4,
+            "h": 8
+          }
         },
         {
           "id": "camp-eb-posts",
           "kind": "widget",
           "widgetType": "entity-list",
-          "pos": { "x": 4, "y": 2, "w": 8, "h": 4 },
+          "pos": {
+            "x": 4,
+            "y": 2,
+            "w": 8,
+            "h": 4
+          },
           "config": {
             "profileSlug": "post",
             "title": "Campaign Posts",
@@ -2082,7 +2554,12 @@
           "id": "camp-eb-content",
           "kind": "widget",
           "widgetType": "entity-content",
-          "pos": { "x": 4, "y": 6, "w": 8, "h": 4 }
+          "pos": {
+            "x": 4,
+            "y": 6,
+            "w": 8,
+            "h": 4
+          }
         }
       ]
     },
@@ -2092,19 +2569,34 @@
           "id": "pillar-eb-header",
           "kind": "widget",
           "widgetType": "entity-header",
-          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+          "pos": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 2
+          }
         },
         {
           "id": "pillar-eb-props",
           "kind": "widget",
           "widgetType": "entity-properties",
-          "pos": { "x": 0, "y": 2, "w": 4, "h": 8 }
+          "pos": {
+            "x": 0,
+            "y": 2,
+            "w": 4,
+            "h": 8
+          }
         },
         {
           "id": "pillar-eb-posts",
           "kind": "widget",
           "widgetType": "entity-list",
-          "pos": { "x": 4, "y": 2, "w": 8, "h": 8 },
+          "pos": {
+            "x": 4,
+            "y": 2,
+            "w": 8,
+            "h": 8
+          },
           "config": {
             "profileSlug": "post",
             "title": "Posts in Pillar",
@@ -2115,6 +2607,10 @@
       ]
     }
   },
-  "capabilities": [{ "templateKey": "nango-gdrive" }],
+  "capabilities": [
+    {
+      "templateKey": "nango-google"
+    }
+  ],
   "playbooks": []
 }

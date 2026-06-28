@@ -9,7 +9,10 @@
 import { z } from "zod";
 import type { HubHono } from "./_shared.js";
 import { createWorkspaceFromDefinitionIdempotent } from "../../../services/workspace-creation-service.js";
-import { createCapabilityFromDefinition } from "../../../services/capabilities/create-from-definition.js";
+import {
+  createCapabilityFromDefinition,
+  loadCapabilityTemplate,
+} from "../../../services/capabilities/create-from-definition.js";
 import { createLoopFromDefinition } from "../../../services/loops/create-from-definition.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { auditLog } from "../../../utils/audit-log.js";
@@ -79,7 +82,16 @@ const PackageApplySchema = z.object({
   // Workspace fields — passthrough to WorkspaceDefinitionInput
   workspaceName: z.string().optional(),
   description: z.string().optional(),
+  workspaceType: z
+    .enum(["personal", "agent", "project", "operational"])
+    .optional(),
   workspaceSubtype: z.string().optional(),
+  /**
+   * Optional project to link this workspace's seed entities to. When provided,
+   * every seed entity is stamped `belongs_to_project` so the project lens sees
+   * the workspace's data. This is what unifies an Agent OS under one project.
+   */
+  projectId: z.string().uuid().optional(),
   workspaceVisibility: z
     .enum(["private", "members", "pod_visible", "pod_joinable", "public_link"])
     .optional(),
@@ -154,6 +166,7 @@ export function registerPackagesRoutes(app: HubHono): void {
         workspaceName: body.workspaceName,
         templateId: body._meta?.slug ?? undefined,
         packageSlug: body._meta?.slug,
+        workspaceType: body.workspaceType,
       });
       workspaceId = ws.workspaceId;
       result.workspace = { status: "created", workspaceId };
@@ -184,8 +197,25 @@ export function registerPackagesRoutes(app: HubHono): void {
       const caps: unknown[] = [];
       for (const cap of body.capabilities) {
         try {
+          // Resolve a templateKey to its full CapabilityDefinition (DB-first,
+          // file fallback) — createCapabilityFromDefinition needs a full def,
+          // not a bare {key} stub. Mirrors the /capabilities/apply route.
+          const definition =
+            cap.definition ??
+            (cap.templateKey
+              ? await loadCapabilityTemplate(cap.templateKey, { workspaceId })
+              : undefined);
+          if (!definition) {
+            caps.push({
+              key: cap.templateKey ?? "inline",
+              status: "error",
+              message:
+                "capability requires a definition or a valid templateKey",
+            });
+            continue;
+          }
           const r = await createCapabilityFromDefinition(
-            (cap.definition ?? { key: cap.templateKey }) as any,
+            definition as any,
             cap.params ?? {},
             ctx
           );
@@ -292,6 +322,38 @@ export function registerPackagesRoutes(app: HubHono): void {
         }
       }
       result.loops = loops;
+    }
+
+    // ── Step 6: Link workspace entities to the project ────────────────────
+    // When a projectId is supplied (e.g. by `synap launch agent-os`), stamp
+    // every seed entity in the new workspace with `belongs_to_project` so the
+    // project lens unifies the workspace's data. Idempotent (unique index).
+    if (body.projectId && workspaceId) {
+      try {
+        const { db, entities, eq, linkEntityToProject } =
+          await import("@synap/database");
+        const rows = await db
+          .select({ id: entities.id })
+          .from(entities)
+          .where(eq(entities.workspaceId, workspaceId));
+        let linked = 0;
+        for (const row of rows) {
+          await linkEntityToProject(db, {
+            entityId: row.id,
+            projectId: body.projectId,
+            userId,
+            workspaceId,
+          });
+          linked++;
+        }
+        result.projectLink = {
+          status: "linked",
+          projectId: body.projectId,
+          entities: linked,
+        };
+      } catch (e) {
+        result.projectLink = { status: "error", message: (e as Error).message };
+      }
     }
 
     return c.json(result, 201);
