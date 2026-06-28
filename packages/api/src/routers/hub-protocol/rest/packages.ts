@@ -79,9 +79,6 @@ const PackageApplySchema = z.object({
   // Workspace fields — passthrough to WorkspaceDefinitionInput
   workspaceName: z.string().optional(),
   description: z.string().optional(),
-  workspacePurpose: z
-    .enum(["personal", "project", "agent", "library", "operational"])
-    .optional(),
   workspaceSubtype: z.string().optional(),
   workspaceVisibility: z
     .enum(["private", "members", "pod_visible", "pod_joinable", "public_link"])

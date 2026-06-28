@@ -137,7 +137,7 @@ export async function seedAdminUser(
       .values({
         ownerId: identityId,
         name: workspaceName,
-        type: "personal",
+        workspaceType: "personal",
         settings: {
           createdBy: "provisioning",
           provisionedAt: new Date().toISOString(),

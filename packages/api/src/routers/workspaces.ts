@@ -171,7 +171,6 @@ export const workspacesRouter = router({
         name: z.string().trim().min(1).max(100),
         description: z.string().optional(),
         settings: z.record(z.string(), z.unknown()).optional(),
-        type: z.enum(["personal", "team", "enterprise"]).default("personal"),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -187,7 +186,6 @@ export const workspacesRouter = router({
           id: workspaceId,
           name: input.name,
           description: input.description,
-          type: input.type,
         },
       });
 
@@ -245,7 +243,6 @@ export const workspacesRouter = router({
           id: workspaceId,
           name: input.name,
           description: input.description,
-          type: input.type,
         },
       });
 
@@ -2321,9 +2318,6 @@ export const workspacesRouter = router({
                 z.object({ blocks: z.array(z.record(z.string(), z.unknown())) })
               )
               .optional(),
-            workspacePurpose: z
-              .enum(["personal", "project", "agent", "library", "operational"])
-              .optional(),
             workspaceSubtype: z.string().optional(),
             workspaceVisibility: z
               .enum([
@@ -3045,7 +3039,6 @@ export const workspacesRouter = router({
         workspaceId: z.string().uuid(),
         dryRun: z.boolean().optional(),
         definition: z.object({
-          workspacePurpose: z.string().optional(),
           workspaceSubtype: z.string().optional(),
           workspaceVisibility: z.string().optional(),
           workspaceCapabilities: z.array(z.string()).optional(),

@@ -353,20 +353,6 @@ export interface AgentRoutingPolicy {
 }
 
 /**
- * High-level purpose of a workspace inside a pod.
- *
- * `workspaceType` already exists as a promoted column for legacy operational
- * filtering. `workspacePurpose` is the product-facing contract used by the
- * browser and agents to understand how a workspace should be used.
- */
-export type WorkspacePurpose =
-  | "personal"
-  | "project"
-  | "agent"
-  | "library"
-  | "operational";
-
-/**
  * Discoverability/access mode for a workspace.
  *
  * Write access is still controlled by workspace_members + role permissions.
@@ -418,13 +404,8 @@ export interface WorkspaceSettings {
 
   // ─── Workspace Directory / Capability Source Contract ───────────────────────
   /**
-   * Product-facing purpose used by browser/apps/agents to resolve cross-workspace
-   * sources (e.g. a brand-library workspace serving artboards in a project).
-   */
-  workspacePurpose?: WorkspacePurpose;
-  /**
-   * Free-form subtype within the purpose, e.g. "brand-library",
-   * "research-library", "agent-lab".
+   * Free-form subtype, e.g. "brand-library", "research-library", "agent-lab".
+   * No fixed enum — extensible by templates and agents.
    */
   workspaceSubtype?: string;
   /**
@@ -773,7 +754,7 @@ export const workspaces = pgTable("workspaces", {
   name: text("name").notNull(),
   description: text("description"),
   domain: text("domain"),
-  type: text("type").default("personal").notNull(), // 'personal' | 'team' | 'enterprise'
+  // type column removed (migration 0153) — workspace_type is canonical
 
   // Settings (JSONB for flexibility)
   settings: jsonb("settings").$type<WorkspaceSettings>().default({}).notNull(),

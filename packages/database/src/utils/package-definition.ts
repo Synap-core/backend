@@ -132,7 +132,7 @@ export interface PackageDefinition {
   // ── Core: workspace (existing WorkspaceDefinitionInput) ──────────────────
   workspaceName?: string;
   description?: string;
-  workspacePurpose?: WorkspaceDefinitionInput["workspacePurpose"];
+  // workspacePurpose removed — redundant with workspace_type, fixed enums are bad engineering
   workspaceSubtype?: string;
   workspaceVisibility?: WorkspaceDefinitionInput["workspaceVisibility"];
   workspaceCapabilities?: string[];

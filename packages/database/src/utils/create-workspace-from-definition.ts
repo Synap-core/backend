@@ -30,7 +30,6 @@ import { entityTemplates } from "../schema/entity-templates.js";
 import type {
   WorkspaceDefaultSource,
   WorkspaceLayoutConfig,
-  WorkspacePurpose,
   WorkspaceSettings,
   WorkspaceSourceRole,
   WorkspaceVisibility,
@@ -112,9 +111,7 @@ function buildDefaultProfileBentoBlocks(profile: {
 export interface WorkspaceDefinitionInput {
   workspaceName?: string;
   description?: string;
-  /** Product-facing workspace purpose, e.g. "library" for shared source workspaces. */
-  workspacePurpose?: WorkspacePurpose;
-  /** Purpose subtype, e.g. "brand-library", "research-library". */
+  /** Free-form subtype, e.g. "brand-library", "research-library". No fixed enum. */
   workspaceSubtype?: string;
   /** Discovery/read visibility. Write access remains role-based. */
   workspaceVisibility?: WorkspaceVisibility;
@@ -391,7 +388,6 @@ const WorkspaceDefinitionSchema = z
     displayTemplates: z.array(z.record(z.string(), z.unknown())).optional(),
     profileEntityBentoTemplates: z.record(z.string(), z.unknown()).optional(),
     layoutConfig: z.record(z.string(), z.unknown()).optional(),
-    workspacePurpose: z.string().optional(),
     workspaceSubtype: z.string().optional(),
     workspaceVisibility: z.string().optional(),
     workspaceCapabilities: z.array(z.string()).optional(),
@@ -556,9 +552,6 @@ export async function createWorkspaceFromDefinition(
 
   if (definition.layoutConfig) {
     settings.layout = definition.layoutConfig;
-  }
-  if (definition.workspacePurpose) {
-    settings.workspacePurpose = definition.workspacePurpose;
   }
   if (definition.workspaceSubtype) {
     settings.workspaceSubtype = definition.workspaceSubtype;

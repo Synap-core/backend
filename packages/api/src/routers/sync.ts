@@ -396,7 +396,6 @@ const SUPPLEMENTARY_TABLES: Record<
           ownerId: row.ownerId as string,
           name: (row.name as string) ?? "Synced Workspace",
           description: (row.description as string) ?? null,
-          type: (row.type as string) ?? "personal",
           settings:
             (row.settings as typeof workspaces.$inferInsert.settings) ?? {},
           systemSlug: (row.systemSlug as string) ?? null,
@@ -422,7 +421,6 @@ const SUPPLEMENTARY_TABLES: Record<
         const updateSet: Partial<typeof workspaces.$inferInsert> = {
           name: values.name,
           description: values.description,
-          type: values.type,
           settings: values.settings,
           systemSlug: values.systemSlug,
           packageSlug: values.packageSlug,

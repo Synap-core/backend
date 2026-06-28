@@ -116,10 +116,8 @@ export async function reconcileWorkspaceFromDefinition(
     views: { added: [], skipped: [], deferred: [] },
   };
 
-  // ── 1. Settings merge (capabilities / subtype / purpose / visibility) ───────
+  // ── 1. Settings merge (capabilities / subtype / visibility) ────────────────
   const settingsPatch: Partial<WorkspaceSettings> = {};
-  if (definition.workspacePurpose)
-    settingsPatch.workspacePurpose = definition.workspacePurpose;
   if (definition.workspaceSubtype)
     settingsPatch.workspaceSubtype = definition.workspaceSubtype;
   if (definition.workspaceVisibility)

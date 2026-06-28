@@ -33,7 +33,7 @@ async function ensurePodAdminWorkspace(
       .values({
         ownerId: identityId,
         name: "Pod Admin",
-        type: "personal",
+        workspaceType: "personal",
         systemSlug: "pod-admin",
         settings: { systemSlug: "pod-admin" },
       })
@@ -296,7 +296,7 @@ export async function ensureWorkspaceForUser(
     .values({
       ownerId: identityId,
       name: name ? `${name}'s Workspace` : "My Workspace",
-      type: "personal",
+      workspaceType: "personal",
       settings: {},
     })
     .returning();

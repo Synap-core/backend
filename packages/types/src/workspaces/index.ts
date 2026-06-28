@@ -26,7 +26,7 @@ export type {
 // Derived types for API convenience
 import type { Workspace, WorkspaceMember } from "@synap/database";
 
-export type WorkspaceType = Workspace["type"];
+export type WorkspaceType = Workspace["workspaceType"];
 export type WorkspaceRole = WorkspaceMember["role"];
 
 // Input types for API operations
