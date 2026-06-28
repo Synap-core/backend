@@ -1,18 +1,70 @@
 /**
  * Hub REST — Packages (unified template provisioning)
  *
- * ONE endpoint that provisions a complete workspace from a PackageDefinition.
- * Phase 1: workspace (profiles, views, entities, relations, sidebar, bento).
- * Phase 2+: capabilities, automations, playbooks, loops, agents, channels.
- *
- * Composes the existing createWorkspaceFromDefinitionIdempotent — no duplication.
+ * ONE endpoint that provisions a complete workspace from a PackageDefinition:
+ * workspace (Phase 1) + capabilities, automations, playbooks, loops (Phase 2).
+ * Each layer delegates to its existing canonical service — pure composition.
  */
 
 import { z } from "zod";
 import type { HubHono } from "./_shared.js";
 import { createWorkspaceFromDefinitionIdempotent } from "../../../services/workspace-creation-service.js";
+import { createCapabilityFromDefinition } from "../../../services/capabilities/create-from-definition.js";
+import { createLoopFromDefinition } from "../../../services/loops/create-from-definition.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { auditLog } from "../../../utils/audit-log.js";
+import { createHubProtocolCallerContext } from "../utils.js";
+
+// ─── Zod schemas ──────────────────────────────────────────────────────────────
+
+const ParamSpecSchema = z.object({
+  name: z.string(),
+  type: z.enum(["text", "number", "entity", "choice", "boolean"]),
+  label: z.string().optional(),
+  required: z.boolean().optional(),
+  default: z.unknown().optional(),
+});
+
+const CapabilitySchema = z.object({
+  templateKey: z.string().optional(),
+  definition: z.record(z.string(), z.unknown()).optional(),
+  params: z.record(z.string(), z.unknown()).optional(),
+});
+
+const AutomationSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  triggerType: z.enum(["event", "cron", "webhook", "manual"]),
+  triggerConfig: z.record(z.string(), z.unknown()).default({}),
+  flowDefinition: z
+    .object({
+      nodes: z.array(z.record(z.string(), z.unknown())),
+      edges: z.array(z.record(z.string(), z.unknown())),
+    })
+    .optional(),
+  status: z.enum(["draft", "active", "paused"]).default("active"),
+});
+
+const PlaybookSchema = z.object({
+  name: z.string().min(1).max(500),
+  description: z.string().optional(),
+  goalTemplate: z.string(),
+  params: z.array(ParamSpecSchema).optional(),
+  executor: z
+    .enum(["is-agent", "external-agent", "hybrid"])
+    .default("is-agent"),
+  inputStrategy: z.record(z.string(), z.unknown()).optional(),
+  channelSpec: z.record(z.string(), z.unknown()).optional(),
+  schedule: z.unknown().optional(),
+  grants: z.array(z.string()).optional(),
+  status: z.enum(["draft", "active", "paused"]).default("active"),
+});
+
+const LoopSchema = z.object({
+  templateKey: z.string().optional(),
+  definition: z.record(z.string(), z.unknown()).optional(),
+  params: z.record(z.string(), z.unknown()).optional(),
+});
 
 const PackageApplySchema = z.object({
   _meta: z
@@ -21,8 +73,6 @@ const PackageApplySchema = z.object({
       icon: z.string().optional(),
       color: z.string().optional(),
       tags: z.array(z.string()).optional(),
-      requiredTier: z.string().nullable().optional(),
-      isPublic: z.boolean().optional(),
       version: z.string().optional(),
     })
     .optional(),
@@ -37,6 +87,12 @@ const PackageApplySchema = z.object({
     .enum(["private", "members", "pod_visible", "pod_joinable", "public_link"])
     .optional(),
   workspaceCapabilities: z.array(z.string()).optional(),
+  sourceRoles: z
+    .record(z.string(), z.enum(["provider", "consumer", "provider-consumer"]))
+    .optional(),
+  defaultSources: z
+    .record(z.string(), z.record(z.string(), z.unknown()))
+    .optional(),
   icon: z.string().optional(),
   color: z.string().optional(),
   profiles: z.array(z.record(z.string(), z.unknown())).optional(),
@@ -63,27 +119,21 @@ const PackageApplySchema = z.object({
       })
     )
     .optional(),
-  // Future layers (Phase 2+) — accepted but not yet provisioned
-  capabilities: z.array(z.record(z.string(), z.unknown())).optional(),
-  automations: z.array(z.record(z.string(), z.unknown())).optional(),
-  playbooks: z.array(z.record(z.string(), z.unknown())).optional(),
-  loops: z.array(z.record(z.string(), z.unknown())).optional(),
-  agents: z.array(z.record(z.string(), z.unknown())).optional(),
-  channels: z.array(z.record(z.string(), z.unknown())).optional(),
+  // Phase 2 layers
+  capabilities: z.array(CapabilitySchema).optional(),
+  automations: z.array(AutomationSchema).optional(),
+  playbooks: z.array(PlaybookSchema).optional(),
+  loops: z.array(LoopSchema).optional(),
 });
 
+// ─── Route registration ──────────────────────────────────────────────────────
+
 export function registerPackagesRoutes(app: HubHono): void {
-  /**
-   * POST /api/hub/packages/apply
-   *
-   * Provisions a complete workspace from a PackageDefinition. Phase 1 handles
-   * the workspace layer (profiles, views, entities, relations, sidebar, bento).
-   * Future layers (capabilities, automations, playbooks, etc.) are accepted in
-   * the schema but return `{ status: "skipped" }` until implemented.
-   */
   app.post("/api/hub/packages/apply", async (c) => {
     const userId = c.get("userId");
+    const agentUserId = c.get("agentUserId") ?? undefined;
     const body = PackageApplySchema.parse(await c.req.json());
+    const result: Record<string, unknown> = {};
 
     // ── Permission check ──────────────────────────────────────────────────
     const perm = await checkPermissionOrPropose({
@@ -92,19 +142,15 @@ export function registerPackagesRoutes(app: HubHono): void {
       action: "create",
       data: { name: body.workspaceName ?? body._meta?.slug ?? "untitled" },
     });
-
-    if ("denied" in perm && perm.denied) {
+    if ("denied" in perm && perm.denied)
       return c.json({ error: perm.reason }, 403);
-    }
-    if ("proposalId" in perm) {
+    if ("proposalId" in perm)
       return c.json({ status: "proposed", proposalId: perm.proposalId }, 202);
-    }
 
     // ── Step 1: Create workspace ──────────────────────────────────────────
-    const result: Record<string, unknown> = {};
-
+    let workspaceId: string | undefined;
     try {
-      const workspace = await createWorkspaceFromDefinitionIdempotent({
+      const ws = await createWorkspaceFromDefinitionIdempotent({
         definition: body as any,
         userId,
         proposalId: body._meta?.slug ?? undefined,
@@ -112,23 +158,15 @@ export function registerPackagesRoutes(app: HubHono): void {
         templateId: body._meta?.slug ?? undefined,
         packageSlug: body._meta?.slug,
       });
-
-      result.workspace = {
-        status: "created",
-        workspaceId: workspace.workspaceId,
-      };
-
+      workspaceId = ws.workspaceId;
+      result.workspace = { status: "created", workspaceId };
       auditLog({
         subjectType: "workspace",
-        subjectId: workspace.workspaceId,
+        subjectId: workspaceId,
         action: "create",
         phase: "completed",
         userId,
-        data: {
-          templateSlug: body._meta?.slug,
-          profiles: body.profiles?.length ?? 0,
-          views: body.views?.length ?? 0,
-        },
+        data: { templateSlug: body._meta?.slug },
       });
     } catch (e) {
       return c.json(
@@ -137,25 +175,126 @@ export function registerPackagesRoutes(app: HubHono): void {
       );
     }
 
-    // ── Future layers: report skipped until Phase 2+ ──────────────────────
-    const futureLayers = [
-      "capabilities",
-      "automations",
-      "playbooks",
-      "loops",
-      "agents",
-      "channels",
-    ] as const;
+    const ctx = await createHubProtocolCallerContext(
+      userId,
+      c.get("scopes") ?? [],
+      workspaceId,
+      agentUserId
+    );
 
-    for (const layer of futureLayers) {
-      const items = (body as any)[layer];
-      if (items?.length) {
-        result[layer] = {
-          status: "skipped",
-          count: items.length,
-          reason: `${layer} provisioning not yet implemented (Phase 2+)`,
-        };
+    // ── Step 2: Capabilities ──────────────────────────────────────────────
+    if (body.capabilities?.length) {
+      const caps: unknown[] = [];
+      for (const cap of body.capabilities) {
+        try {
+          const r = await createCapabilityFromDefinition(
+            (cap.definition ?? { key: cap.templateKey }) as any,
+            cap.params ?? {},
+            ctx
+          );
+          caps.push({
+            key: r.capabilityKey,
+            status: "created",
+            created: r.created,
+          });
+        } catch (e) {
+          caps.push({
+            key: cap.templateKey ?? "inline",
+            status: "error",
+            message: (e as Error).message,
+          });
+        }
       }
+      result.capabilities = caps;
+    }
+
+    // ── Step 3: Automations ───────────────────────────────────────────────
+    if (body.automations?.length) {
+      const { automationsRouter } = await import("../../automations.js");
+      const caller = automationsRouter.createCaller(ctx as never);
+      const autos: unknown[] = [];
+      for (const a of body.automations) {
+        try {
+          const r = await caller.create({
+            workspaceId,
+            name: a.name,
+            description: a.description,
+            triggerType: a.triggerType,
+            triggerConfig: a.triggerConfig,
+            flowDefinition: a.flowDefinition ?? { nodes: [], edges: [] },
+            status: a.status,
+            agentUserId,
+            source: agentUserId ? "agent" : "intelligence",
+          } as any);
+          autos.push({ name: a.name, status: "created", id: (r as any).id });
+        } catch (e) {
+          autos.push({
+            name: a.name,
+            status: "error",
+            message: (e as Error).message,
+          });
+        }
+      }
+      result.automations = autos;
+    }
+
+    // ── Step 4: Playbooks ─────────────────────────────────────────────────
+    if (body.playbooks?.length) {
+      const { playbooksRouter } = await import("../../playbooks.js");
+      const caller = playbooksRouter.createCaller(ctx as never);
+      const pbs: unknown[] = [];
+      for (const p of body.playbooks) {
+        try {
+          const r = await caller.create({
+            name: p.name,
+            description: p.description,
+            goalTemplate: p.goalTemplate,
+            params: p.params as any,
+            executor: p.executor,
+            inputStrategy: p.inputStrategy as any,
+            channelSpec: p.channelSpec as any,
+            schedule: p.schedule,
+            status: p.status,
+            agentUserId,
+            source: agentUserId ? "agent" : "intelligence",
+          } as any);
+          pbs.push({
+            name: p.name,
+            status: (r as any).status,
+            playbookId: (r as any).playbook?.id,
+            proposalId: (r as any).proposalId,
+          });
+        } catch (e) {
+          pbs.push({
+            name: p.name,
+            status: "error",
+            message: (e as Error).message,
+          });
+        }
+      }
+      result.playbooks = pbs;
+    }
+
+    // ── Step 5: Loops ─────────────────────────────────────────────────────
+    if (body.loops?.length) {
+      const loops: unknown[] = [];
+      for (const loop of body.loops) {
+        try {
+          const r = await createLoopFromDefinition(
+            (loop.definition ?? { key: loop.templateKey }) as any,
+            loop.params ?? {},
+            ctx
+          );
+          loops.push({ key: r.loopKey, status: "created", created: r.created });
+        } catch (e) {
+          loops.push({
+            key: loop.templateKey ?? "inline",
+            status: "error",
+            message: (e as Error).message,
+          });
+        }
+      }
+      result.loops = loops;
     }
 
     return c.json(result, 201);
