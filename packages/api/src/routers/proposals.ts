@@ -1414,7 +1414,10 @@ export const proposalsRouter = router({
           const { resolveOrCreateExternalChannel } =
             await import("../services/connectors/inbound-recorder.js");
           for (const b of graphBindings) {
-            const entityId = refToRealId[b.entityRef] ?? b.entityRef;
+            // Resolve the binding's entity ref to the materialized id. Skip (not
+            // fall back to the raw ref) if the entity didn't materialize — binding
+            // a channel to a non-id ref string would set a bogus contextObjectId.
+            const entityId = refToRealId[b.entityRef];
             if (!b.externalChannelId || !entityId) continue;
             try {
               const { channelId } = await resolveOrCreateExternalChannel({
