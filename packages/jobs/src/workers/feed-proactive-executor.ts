@@ -17,6 +17,7 @@
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
 import { db, eq, eventRepository } from "@synap/database";
+import { getDefaultActiveService } from "@synap/intelligence-client";
 import { channels, messages } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
@@ -139,8 +140,8 @@ async function generateDigestWithIS(
   data: WorkspaceData,
   config: ProactiveFeedConfig
 ): Promise<string> {
-  const isUrl = process.env.INTELLIGENCE_HUB_URL;
-  const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY;
+  // Canonical IS credential resolution (decrypted DB key), not stale env.
+  const { endpoint: isUrl, apiKey: isApiKey } = await getDefaultActiveService();
 
   if (!isUrl || !isApiKey) {
     logger.warn("IS not configured, using basic digest fallback");

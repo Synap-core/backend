@@ -17,6 +17,8 @@
  * worker's two skill calls were fixed to match this same contract.
  */
 
+import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
+
 /** Mirrors the Intelligence Hub `SkillExecutionResult`. */
 export interface SkillExecutionResult {
   success: boolean;
@@ -31,8 +33,15 @@ export async function executeSkillViaIS(args: {
   parameters?: Record<string, unknown>;
   timeoutMs?: number;
 }): Promise<SkillExecutionResult> {
-  const isUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
-  const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY || "";
+  // Resolve the IS endpoint + key the CANONICAL way: from the registered
+  // `intelligence_services` row (credential decrypted via resolveServiceKey),
+  // exactly like every other IS-outbound path (channels, capture, agents).
+  // The raw env vars are a STALE fallback — re-provisioning (CP → pod) rotates
+  // the key into the DB but never rewrites the container env, so reading
+  // process.env.INTELLIGENCE_HUB_API_KEY here was sending a dead key and the IS
+  // gateway rejected it with 401. getDefaultActiveService() returns the live DB
+  // credential and only falls back to env when no service row exists.
+  const { endpoint: isUrl, apiKey: isApiKey } = await getDefaultActiveService();
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), args.timeoutMs ?? 60_000);

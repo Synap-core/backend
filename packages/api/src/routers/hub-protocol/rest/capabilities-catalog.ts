@@ -132,7 +132,9 @@ export function registerCapabilitiesCatalogRoutes(app: HubHono): void {
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
       const capabilities = await buildCapabilityCatalog({
-        workspaceId: acting.workspaceId,
+        // workspaceId is a required, validated query param here (wsCheck above),
+        // so the membership branch of resolveActingContext returns it non-null.
+        workspaceId: wsCheck.data,
         userId: acting.userId,
       });
       return c.json({ capabilities }, 200);

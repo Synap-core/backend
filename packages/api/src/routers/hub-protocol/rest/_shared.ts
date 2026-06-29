@@ -97,16 +97,19 @@ export function hasScope(scopes: string[], required: string): boolean {
  *     for on-behalf-of (trusted infra; workspace-scoped keys are header-pinned).
  * Then the workspace is bound to that identity: if `body.workspaceId` is given it
  * is membership-checked for the RESOLVED user (no cross-workspace write); if
- * omitted, the user's first accessible workspace is used.
+ * omitted, the write is POD-PERSONAL — `workspaceId` is `null` (an owner-personal
+ * resource), with NO first-workspace fallback. The security boundary is preserved:
+ * a workspace write still requires membership; a no-workspace write is owner-personal.
  *
- * Returns the bound `{ userId, workspaceId, role }` or a `{ status, error }` to
- * return directly. Use this instead of reading `body.userId` / `body.workspaceId`.
+ * Returns the bound `{ userId, workspaceId, role }` (where `workspaceId` is `null`
+ * for pod-personal writes) or a `{ status, error }` to return directly. Use this
+ * instead of reading `body.userId` / `body.workspaceId`.
  */
 export async function resolveActingContext(
   c: { get: (k: string) => unknown },
   body: { userId?: string; workspaceId?: string }
 ): Promise<
-  | { ok: true; userId: string; workspaceId: string; role: string }
+  | { ok: true; userId: string; workspaceId: string | null; role: string }
   | { ok: false; status: 400 | 403; error: string }
 > {
   const authUserId = c.get("userId") as string | undefined;
@@ -127,17 +130,12 @@ export async function resolveActingContext(
     userId = authUserId;
   }
 
-  let workspaceId = body.workspaceId;
+  const workspaceId = body.workspaceId;
   if (!workspaceId) {
-    const wsIds = await getUserAccessibleWorkspaceIds(userId);
-    workspaceId = wsIds[0];
-    if (!workspaceId) {
-      return {
-        ok: false,
-        status: 400,
-        error: "No accessible workspace found for this user",
-      };
-    }
+    // Founder decision: a write with NO workspace lands pod-personal (an
+    // owner-personal resource) instead of being forced into the user's first
+    // workspace. NO first-workspace fallback, NO 400.
+    return { ok: true, userId, workspaceId: null, role: "owner" };
   }
   const membership = await getWorkspaceMembership(db, workspaceId, userId);
   if (!membership) {

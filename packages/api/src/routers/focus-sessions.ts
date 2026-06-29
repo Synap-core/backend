@@ -14,6 +14,8 @@ import {
   eq,
   and,
   desc,
+  inArray,
+  isNull,
   focusSessions,
   capabilities,
   vaultGrants,
@@ -28,6 +30,12 @@ import {
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { emitSideEffects } from "@synap/events";
+import {
+  ScopeFilterShape,
+  resolveScope,
+  type ResolvedScope,
+} from "../utils/scope-filter.js";
+import { requireUserId } from "../utils/user-scoped.js";
 
 // ── Shared input fragment ──────────────────────────────────────────────────
 
@@ -87,63 +95,89 @@ const sessionLinksRouter = router({
     }),
 });
 
+// ── Shared read body ─────────────────────────────────────────────────────────
+
+/**
+ * THE one query body for the focus-sessions read door. focus_sessions is
+ * user-owned (`userId`), so the floor is `eq(userId)` — every door starts there.
+ * The lenses then only NARROW within the user's own rows:
+ *   - workspace lens: `null` → pod-personal (workspaceId IS NULL); `"<id>"` →
+ *     that workspace; `string[]` (non-empty) → that SET; `undefined`/`[]` → no
+ *     narrow (the floor — all the user's sessions across workspaces).
+ *   - project lens: `"<id>"`/`string[]` narrows on the session's own projectId
+ *     column (sessions carry projectId directly — a simple eq/inArray, NOT
+ *     exposureLensWhere); `null`/`undefined`/`[]` → no narrow.
+ * An empty array never narrows (never matches-zero); a lens can only restrict.
+ */
+function queryUserSessions(
+  userId: string | null | undefined,
+  { workspaceLens, projectLens }: ResolvedScope,
+  status: z.infer<typeof statusFilterSchema>,
+  limit: number
+) {
+  const conditions = [eq(focusSessions.userId, requireUserId(userId))];
+
+  // Workspace lens narrows within the user's own rows (the floor is userId).
+  if (workspaceLens === null) {
+    conditions.push(isNull(focusSessions.workspaceId));
+  } else if (Array.isArray(workspaceLens)) {
+    if (workspaceLens.length > 0) {
+      conditions.push(inArray(focusSessions.workspaceId, workspaceLens));
+    }
+  } else if (typeof workspaceLens === "string") {
+    conditions.push(eq(focusSessions.workspaceId, workspaceLens));
+  }
+
+  // Project lens narrows on the session's own projectId column.
+  if (Array.isArray(projectLens)) {
+    if (projectLens.length > 0) {
+      conditions.push(inArray(focusSessions.projectId, projectLens));
+    }
+  } else if (typeof projectLens === "string") {
+    conditions.push(eq(focusSessions.projectId, projectLens));
+  }
+
+  if (status !== "all") {
+    conditions.push(eq(focusSessions.status, status));
+  }
+
+  return db
+    .select()
+    .from(focusSessions)
+    .where(and(...conditions))
+    .orderBy(desc(focusSessions.startedAt))
+    .limit(limit);
+}
+
 // ── Router ─────────────────────────────────────────────────────────────────
 
 export const focusSessionsRouter = router({
   links: sessionLinksRouter,
   /**
-   * List focus sessions for a specific workspace (most recent first).
+   * THE one door for focus sessions (collapses the old list/listAll split).
+   *
+   * Floor = `eq(userId)` (sessions are user-owned). No lens → ALL the user's
+   * sessions across workspaces, INCLUDING project-only sessions (null
+   * workspaceId). A workspace and/or project lens only NARROWS:
+   *   - no `workspaceId` (and no active-ws header) → all my sessions
+   *   - active-ws header / a `workspaceId` → that workspace's sessions
+   *   - `workspaceId: null` → pod-personal (workspaceId IS NULL) sessions
+   *   - `workspaceId: [a, b]` → those workspaces (union)
+   *   - `projectId: "<id>"` / `[a, b]` → that project (across workspaces)
+   * Most recent first.
    */
   list: protectedProcedure
     .input(
       z.object({
-        workspaceId: z.string(),
+        workspaceId: ScopeFilterShape.workspaceId,
+        projectId: ScopeFilterShape.projectId,
         status: statusFilterSchema,
         limit: z.number().int().min(1).max(50).default(20),
       })
     )
     .query(async ({ ctx, input }) => {
-      const conditions = [
-        eq(focusSessions.workspaceId, input.workspaceId),
-        eq(focusSessions.userId, ctx.userId),
-      ];
-
-      if (input.status !== "all") {
-        conditions.push(eq(focusSessions.status, input.status));
-      }
-
-      return db
-        .select()
-        .from(focusSessions)
-        .where(and(...conditions))
-        .orderBy(desc(focusSessions.startedAt))
-        .limit(input.limit);
-    }),
-
-  /**
-   * List focus sessions across ALL workspaces for the authenticated user.
-   * Used by Eve OS and cross-workspace surfaces.
-   */
-  listAll: protectedProcedure
-    .input(
-      z.object({
-        status: statusFilterSchema,
-        limit: z.number().int().min(1).max(50).default(20),
-      })
-    )
-    .query(async ({ ctx, input }) => {
-      const conditions = [eq(focusSessions.userId, ctx.userId)];
-
-      if (input.status !== "all") {
-        conditions.push(eq(focusSessions.status, input.status));
-      }
-
-      return db
-        .select()
-        .from(focusSessions)
-        .where(and(...conditions))
-        .orderBy(desc(focusSessions.startedAt))
-        .limit(input.limit);
+      const scope = resolveScope(ctx, input);
+      return queryUserSessions(ctx.userId, scope, input.status, input.limit);
     }),
 
   /**

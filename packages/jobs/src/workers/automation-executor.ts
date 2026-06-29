@@ -69,7 +69,10 @@ import {
 } from "../utils/vault-resolver.js";
 import { checkAutomationWriteOrPropose } from "../utils/automation-governance.js";
 import { gateCapabilityExecution } from "@synap/capability-gate";
-import { resolveIntelligenceService } from "@synap/intelligence-client";
+import {
+  resolveIntelligenceService,
+  getDefaultActiveService,
+} from "@synap/intelligence-client";
 import { createLogger } from "@synap-core/core";
 import {
   A2AI_TRIGGER_QUEUE,
@@ -266,8 +269,8 @@ async function executeCommandStep(
     prompt += `\n\nInputs:\n${inputSummary}`;
   }
 
-  const isUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
-  const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY || "";
+  // Canonical IS credential resolution (decrypted DB key), not stale env.
+  const { endpoint: isUrl, apiKey: isApiKey } = await getDefaultActiveService();
 
   // ── Generic command execution ──────────────────────────────────────────
   try {
@@ -1595,9 +1598,9 @@ async function executeAutomationFlow(params: {
               .set({ resolvedInputs })
               .where(eq(automationStepRuns.id, stepRun.id));
 
-            const isUrl =
-              process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
-            const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY || "";
+            // Canonical IS credential resolution (decrypted DB key), not stale env.
+            const { endpoint: isUrl, apiKey: isApiKey } =
+              await getDefaultActiveService();
 
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), 60_000);
@@ -1740,9 +1743,9 @@ async function executeAutomationFlow(params: {
               .set({ resolvedInputs: capResolvedInputs })
               .where(eq(automationStepRuns.id, stepRun.id));
 
-            const capIsUrl =
-              process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
-            const capIsApiKey = process.env.INTELLIGENCE_HUB_API_KEY || "";
+            // Canonical IS credential resolution (decrypted DB key), not stale env.
+            const { endpoint: capIsUrl, apiKey: capIsApiKey } =
+              await getDefaultActiveService();
 
             const capController = new AbortController();
             const capTimer = setTimeout(() => capController.abort(), 60_000);

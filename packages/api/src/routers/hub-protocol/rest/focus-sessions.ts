@@ -234,7 +234,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
 
     try {
       const conditions = [
-        eq(focusSessions.workspaceId, acting.workspaceId),
+        eq(focusSessions.workspaceId, workspaceIdParam),
         eq(focusSessions.userId, acting.userId),
       ];
       if (status !== "all") {
@@ -287,7 +287,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       const row = await db.query.focusSessions.findFirst({
         where: and(
           eq(focusSessions.id, id),
-          eq(focusSessions.workspaceId, acting.workspaceId),
+          eq(focusSessions.workspaceId, workspaceIdParam),
           eq(focusSessions.userId, acting.userId)
         ),
       });

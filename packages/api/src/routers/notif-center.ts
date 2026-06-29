@@ -8,7 +8,7 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import {
   db,
   notifications,
@@ -17,17 +17,30 @@ import {
   and,
   desc,
   count,
+  inArray,
+  isNull,
 } from "@synap/database";
 import { NotificationStatus } from "@synap/database";
+import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
+import { requireUserId } from "../utils/user-scoped.js";
 
 export const notifCenterRouter = router({
   /**
-   * List notifications for the current user in the current workspace.
-   * Default: unread only, newest first, max 50.
+   * THE one door for notifications (collapses the old list/listAll split).
+   *
+   * Notifications are user-owned (the `userId` field is the recipient), so the
+   * floor is `eq(userId)` — every door for this table starts there. The
+   * workspace lens then NARROWS within the user's own rows:
+   *   - no `workspaceId` (and no active-ws header) → ALL my notifications
+   *   - active-ws header / a `workspaceId` → that workspace's notifications
+   *   - `workspaceId: null` → pod-wide (workspaceId IS NULL) notifications
+   *   - `workspaceId: [a, b]` → those workspaces (union)
+   * No project axis (notifications aren't project-scoped). Default: unread only.
    */
-  list: workspaceProcedure
+  list: protectedProcedure
     .input(
       z.object({
+        workspaceId: ScopeFilterShape.workspaceId,
         status: z
           .enum(["unread", "read", "dismissed", "all"])
           .default("unread"),
@@ -39,59 +52,19 @@ export const notifCenterRouter = router({
       })
     )
     .query(async ({ ctx, input }) => {
-      const conditions = [
-        eq(notifications.workspaceId, ctx.workspaceId),
-        eq(notifications.userId, ctx.userId),
-      ];
+      const { workspaceLens } = resolveScope(ctx, input);
+      const conditions = [eq(notifications.userId, requireUserId(ctx.userId))];
 
-      if (input.status !== "all") {
-        conditions.push(eq(notifications.status, input.status));
+      // Workspace lens narrows within the user's own rows (the floor is userId).
+      if (workspaceLens === null) {
+        conditions.push(isNull(notifications.workspaceId));
+      } else if (Array.isArray(workspaceLens)) {
+        if (workspaceLens.length > 0) {
+          conditions.push(inArray(notifications.workspaceId, workspaceLens));
+        }
+      } else if (typeof workspaceLens === "string") {
+        conditions.push(eq(notifications.workspaceId, workspaceLens));
       }
-
-      if (input.category) {
-        conditions.push(eq(notifications.category, input.category));
-      }
-
-      const rows = await db
-        .select()
-        .from(notifications)
-        .where(and(...conditions))
-        .orderBy(desc(notifications.createdAt))
-        .limit(input.limit)
-        .offset(input.offset);
-
-      return { notifications: rows, total: rows.length };
-    }),
-
-  /**
-   * List notifications for the current user across EVERY workspace they
-   * belong to, plus any pod-wide ones. User-wide sibling of `list`.
-   *
-   * Used by Eve OS and other pod-level surfaces — see synap-app CLAUDE.md
-   * for the "workspaces are lenses, not scopes" principle. Notifications
-   * are inherently user-addressed (the `userId` field is the recipient),
-   * so filtering by `userId === ctx.userId` is the natural cross-workspace
-   * predicate. No workspace-membership check needed: if the row exists
-   * with your userId, it was for you regardless of workspace lifecycle.
-   *
-   * Same shape as `list` so consumers can swap variants without
-   * restructuring the call site.
-   */
-  listAll: protectedProcedure
-    .input(
-      z.object({
-        status: z
-          .enum(["unread", "read", "dismissed", "all"])
-          .default("unread"),
-        category: z
-          .enum(["governance", "data", "ai", "system", "inbox"])
-          .optional(),
-        limit: z.number().min(1).max(100).default(50),
-        offset: z.number().min(0).default(0),
-      })
-    )
-    .query(async ({ ctx, input }) => {
-      const conditions = [eq(notifications.userId, ctx.userId)];
 
       if (input.status !== "all") {
         conditions.push(eq(notifications.status, input.status));

@@ -1326,6 +1326,15 @@ export function registerMessagingRoutes(app: HubHono): void {
 
       const acting = await resolveActingContext(c, { workspaceId });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      // Importing a messaging thread lands entities into a workspace — the
+      // connector import bridge requires one. A no-workspace import is not
+      // supported on this door.
+      if (!acting.workspaceId) {
+        return c.json(
+          { error: "workspaceId is required to import a messaging thread" },
+          400
+        );
+      }
 
       // Messaging connectors are resolved PER CALL (DB/vault/env), so we hand the
       // bridge the live `Readable` instance rather than a registry type string

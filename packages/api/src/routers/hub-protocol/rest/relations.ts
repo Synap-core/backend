@@ -99,6 +99,10 @@ export function registerRelationsRoutes(app: HubHono): void {
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId, workspaceId } = acting;
+    // The hub-protocol listRelations procedure requires a workspace.
+    if (!workspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
+    }
     try {
       const caller = await getCaller(c, { userId, workspaceId });
       const result = await caller.relations.listRelations({
@@ -140,6 +144,10 @@ export function registerRelationsRoutes(app: HubHono): void {
     const acting = await resolveActingContext(c, body);
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId, workspaceId } = acting;
+    // The hub-protocol createRelation procedure requires a workspace.
+    if (!workspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
+    }
     try {
       const actorResolution = await resolveActorId(body.agentUserId, userId);
       if ("error" in actorResolution)
@@ -213,7 +221,7 @@ export function registerRelationsRoutes(app: HubHono): void {
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       userId = acting.userId;
-      effectiveWorkspaceId = acting.workspaceId;
+      effectiveWorkspaceId = acting.workspaceId ?? undefined;
     }
     try {
       const actorId = body.agentUserId || userId;

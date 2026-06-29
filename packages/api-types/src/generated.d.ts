@@ -4807,68 +4807,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
-		listAll: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				limit?: number | undefined;
-				offset?: number | undefined;
-				profileSlug?: string | undefined;
-				includeDescendants?: boolean | undefined;
-				projectId?: string | undefined;
-			};
-			output: {
-				items: {
-					id: string;
-					userId: string;
-					workspaceId: string | null;
-					type: string;
-					profileId: string | null;
-					title: string | null;
-					preview: string | null;
-					documentId: string | null;
-					properties: Record<string, unknown>;
-					fileUrl: string | null;
-					filePath: string | null;
-					fileSize: number | null;
-					fileType: string | null;
-					checksum: string | null;
-					version: number;
-					createdAt: Date;
-					updatedAt: Date;
-					deletedAt: Date | null;
-					systemData?: Record<string, unknown> | undefined;
-				}[];
-				pagination: {
-					hasMore: boolean;
-					total?: number;
-					limit: number;
-					offset: number;
-				};
-				total: number;
-				entities: {
-					id: string;
-					userId: string;
-					workspaceId: string | null;
-					type: string;
-					profileId: string | null;
-					title: string | null;
-					preview: string | null;
-					documentId: string | null;
-					properties: Record<string, unknown>;
-					fileUrl: string | null;
-					filePath: string | null;
-					fileSize: number | null;
-					fileType: string | null;
-					checksum: string | null;
-					version: number;
-					createdAt: Date;
-					updatedAt: Date;
-					deletedAt: Date | null;
-					systemData?: Record<string, unknown> | undefined;
-				}[];
-				hasMore: boolean;
-			};
-			meta: object;
-		}>;
 		listGlobal: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				profileSlug?: string | undefined;
@@ -6714,7 +6652,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			output: {
 				env: {
-					key: "NODE_ENV" | "PUBLIC_URL" | "DOMAIN" | "CONTROL_PLANE_URL" | "INTELLIGENCE_HUB_URL" | "OPENCLAW_DOMAIN" | "ALLOWED_ORIGINS" | "EMBEDDING_PROVIDER";
+					key: "NODE_ENV" | "PUBLIC_URL" | "DOMAIN" | "CONTROL_PLANE_URL" | "OPENCLAW_DOMAIN" | "INTELLIGENCE_HUB_URL" | "ALLOWED_ORIGINS" | "EMBEDDING_PROVIDER";
 					value: string | null;
 				}[];
 				files: {
@@ -13805,7 +13743,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				workspaceId: string;
+				workspaceId?: string | string[] | null | undefined;
 			};
 			output: {
 				role: string | null;
@@ -13814,18 +13752,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string | null;
 				email: string;
 				agentMetadata: AgentMetadata | null;
-			}[];
-			meta: object;
-		}>;
-		listAll: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
-			output: {
-				id: string;
-				name: string | null;
-				email: string;
-				agentMetadata: AgentMetadata | null;
-				role: string;
-				joinedAt: Date;
 			}[];
 			meta: object;
 		}>;
@@ -15128,38 +15054,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				status?: "read" | "unread" | "dismissed" | "all" | undefined;
-				category?: "data" | "system" | "ai" | "governance" | "inbox" | undefined;
-				limit?: number | undefined;
-				offset?: number | undefined;
-			};
-			output: {
-				notifications: {
-					id: string;
-					workspaceId: string | null;
-					userId: string;
-					type: string;
-					category: "data" | "system" | "ai" | "governance" | "inbox";
-					priority: "normal" | "low" | "high" | "urgent";
-					title: string;
-					body: string;
-					icon: string | null;
-					sourceType: string;
-					sourceId: string | null;
-					workspaceUrl: string | null;
-					actions: unknown;
-					groupKey: string | null;
-					status: "read" | "unread" | "dismissed" | "actioned";
-					readAt: Date | null;
-					expiresAt: Date | null;
-					createdAt: Date;
-				}[];
-				total: number;
-			};
-			meta: object;
-		}>;
-		listAll: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
+				workspaceId?: string | string[] | null | undefined;
 				status?: "read" | "unread" | "dismissed" | "all" | undefined;
 				category?: "data" | "system" | "ai" | "governance" | "inbox" | undefined;
 				limit?: number | undefined;
@@ -16872,38 +16767,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				workspaceId: string;
-				status?: "active" | "paused" | "closed" | "all" | undefined;
-				limit?: number | undefined;
-			};
-			output: {
-				id: string;
-				workspaceId: string | null;
-				projectId: string | null;
-				subjectEntityId: string | null;
-				userId: string;
-				correlationId: string | null;
-				goal: string;
-				status: "active" | "paused" | "closed";
-				templateId: string | null;
-				playbookId: string | null;
-				expectedOutputs: unknown;
-				channelId: string | null;
-				progress: number | null;
-				agentIds: string[] | null;
-				closedAt: Date | null;
-				contextReport: unknown;
-				planReport: unknown;
-				executionLog: unknown;
-				verificationReport: unknown;
-				startedAt: Date;
-				createdAt: Date;
-				updatedAt: Date;
-			}[];
-			meta: object;
-		}>;
-		listAll: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
+				workspaceId?: string | string[] | null | undefined;
+				projectId?: string | string[] | null | undefined;
 				status?: "active" | "paused" | "closed" | "all" | undefined;
 				limit?: number | undefined;
 			};
@@ -17614,34 +17479,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				placement?: "library" | "desk" | "home" | "sidebar" | undefined;
 				sessionId?: string | undefined;
 				limit?: number | undefined;
-			};
-			output: {
-				id: string;
-				workspaceId: string;
-				userId: string;
-				kind: "url" | "entity" | "cell" | "view" | "document";
-				refId: string | null;
-				cellKey: string | null;
-				props: unknown;
-				title: string;
-				originKind: "user" | "system" | "agent" | "deeplink";
-				actorId: string | null;
-				sessionId: string | null;
-				state: "working" | "kept" | "swept";
-				placement: "library" | "desk" | "home" | "sidebar";
-				keptAt: Date | null;
-				sweptAt: Date | null;
-				createdAt: Date;
-				updatedAt: Date;
-			}[];
-			meta: object;
-		}>;
-		listAll: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				state?: "working" | "kept" | "swept" | undefined;
-				placement?: "library" | "desk" | "home" | "sidebar" | undefined;
-				sessionId?: string | undefined;
-				limit?: number | undefined;
+				workspaceId?: string | string[] | null | undefined;
 			};
 			output: {
 				id: string;

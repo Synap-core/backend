@@ -527,6 +527,24 @@ const FALLBACK_SKILL_PACKAGES: SkillPackage[] = [
   },
 ];
 
+/**
+ * Read the deliverable skill slugs from skills/manifest.json (baseline +
+ * workflow). The manifest is the single source of truth shared with the CLI
+ * installer + sync-skills.sh. Falls back to the three baseline slugs if the
+ * manifest is absent or malformed, so a missing file degrades gracefully.
+ */
+function readManifestSlugs(skillsDir: string): string[] {
+  try {
+    const raw = fs.readFileSync(path.join(skillsDir, "manifest.json"), "utf-8");
+    const m = JSON.parse(raw) as { baseline?: string[]; workflow?: string[] };
+    const slugs = [...(m.baseline ?? []), ...(m.workflow ?? [])];
+    if (slugs.length) return slugs;
+  } catch {
+    /* fall through to the baseline default */
+  }
+  return ["synap", "synap-schema", "synap-ui"];
+}
+
 function loadSkillPackagesFromDisk(): SkillPackage[] | null {
   const candidates = [
     path.join(process.cwd(), "skills"),
@@ -538,12 +556,15 @@ function loadSkillPackagesFromDisk(): SkillPackage[] | null {
   const skillsDir = candidates.find((d) => fs.existsSync(d));
   if (!skillsDir) return null;
 
-  // The 3 baseline skill packages. Topic files are the source of truth and the
-  // monolithic SKILL.md is a generated build artifact (see skills/build.mjs).
-  // Enumerate every `*.md` in each package dynamically so adding a topic file
-  // does not require editing this list. SKILL.md is always served first (it is
-  // the `?scope=core` payload); the remaining topic files follow, sorted.
-  const SKILL_SLUGS = ["synap", "synap-schema", "synap-ui"];
+  // Which packages to serve: read the shared skills manifest (skills/manifest.json,
+  // the single source of truth shared with the CLI installer + sync-skills.sh).
+  // baseline = always-on, workflow = intent-triggered; both are delivered to
+  // agents. Topic files are the source of truth and the monolithic SKILL.md is a
+  // generated build artifact (see skills/build.mjs). Enumerate every `*.md` in
+  // each package dynamically so adding a topic file does not require editing a
+  // list. SKILL.md is always served first (the `?scope=core` payload); the
+  // remaining topic files follow, sorted.
+  const SKILL_SLUGS = readManifestSlugs(skillsDir);
 
   const packages: SkillPackage[] = [];
   for (const slug of SKILL_SLUGS) {
@@ -619,10 +640,10 @@ export function registerSkillsRoutes(app: HubHono): void {
     tags: ["Skills"],
     summary: "List system skill packages",
     description:
-      "Returns static SKILL.md documentation for the built-in synap, synap-schema, " +
-      "and synap-ui packages. Called by ensureEveSkillsLayout() to populate " +
-      "~/.eve/skills/ for Claude Code and other text-based agents. " +
-      "Requires hub-protocol.read scope.",
+      "Returns static SKILL.md documentation for the built-in skill packages " +
+      "listed in skills/manifest.json (baseline + workflow). Called by " +
+      "ensureEveSkillsLayout() to populate ~/.eve/skills/ for Claude Code and " +
+      "other text-based agents. Requires hub-protocol.read scope.",
     responses: {
       200: {
         description: "Array of skill packages with file contents",
