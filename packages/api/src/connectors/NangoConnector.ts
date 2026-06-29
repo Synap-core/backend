@@ -35,7 +35,13 @@ const NangoConnectionSchema = z.object({
   // filter is broken on the self-hosted version — it returns 0 even when a
   // connection with that exact end_user exists.
   end_user: z
-    .object({ id: z.string().nullable().optional() })
+    .object({
+      id: z.string().nullable().optional(),
+      // Object-scope: a connection bound to a specific pod object (entity/project)
+      // carries it here. Such connections are NEVER deduped — a user can hold
+      // several accounts of the same provider for different entities/projects.
+      tags: z.record(z.string(), z.unknown()).nullable().optional(),
+    })
     .nullable()
     .optional(),
 });
@@ -212,6 +218,60 @@ export class NangoConnector implements SyncConnector {
       method: "DELETE",
       headers: this.authHeaders(),
     });
+  }
+
+  /**
+   * Idempotency for `(user, provider)`: keep ONE connection, revoke stale dups.
+   *
+   * Reconnecting a provider creates a brand-new Nango connection without clearing
+   * the old one (we saw a user accumulate two `google` connections). This keeps
+   * the MOST RECENT un-scoped connection and revokes the older un-scoped ones —
+   * EXCEPT connections bound to a specific pod object (an `end_user.tags.entityId`
+   * or `.projectId`), which are deliberately preserved (a user may hold several
+   * accounts of the same provider, one per entity/project).
+   *
+   * Returns the connectionIds it revoked.
+   */
+  async dedupeConnections(userId: string, provider: string): Promise<string[]> {
+    const res = await fetch(`${this.host}/connection`, {
+      headers: this.authHeaders(),
+    });
+    if (!res.ok) return [];
+    const parsed = NangoConnectionsResponseSchema.safeParse(await res.json());
+    if (!parsed.success) return [];
+
+    const isObjectScoped = (c: { end_user?: { tags?: unknown } | null }) => {
+      const t = c.end_user?.tags;
+      return (
+        !!t &&
+        typeof t === "object" &&
+        ((t as Record<string, unknown>).entityId != null ||
+          (t as Record<string, unknown>).projectId != null)
+      );
+    };
+
+    // This user's connections for this provider that are NOT object-scoped.
+    const plain = parsed.data.connections
+      .filter(
+        (c) =>
+          c.end_user?.id === userId &&
+          c.provider_config_key === provider &&
+          !isObjectScoped(c)
+      )
+      // Most recent first (created_at may be absent → treat as oldest).
+      .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
+
+    // Keep [0] (newest); revoke the rest.
+    const revoked: string[] = [];
+    for (const c of plain.slice(1)) {
+      try {
+        await this.revokeConnection(c.connection_id);
+        revoked.push(c.connection_id);
+      } catch {
+        // Best-effort — a failed revoke must not break the connect flow.
+      }
+    }
+    return revoked;
   }
 
   async listIntegrations(): Promise<

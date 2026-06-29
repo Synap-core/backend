@@ -58,6 +58,8 @@ export interface CapabilityCardConnection {
 export interface CapabilityCardVerb {
   /** Backing skill NAME — the verbId the execute door resolves. */
   verbId: string;
+  /** Backing skill UUID (installed verbs only; null for an available template). */
+  skillId: string | null;
   label: string;
   /** read/write by name heuristic. TODO: promote to explicit skill metadata. */
   type: "read" | "write";
@@ -436,6 +438,7 @@ export async function buildCapabilityCatalog(
           !connection.required || connection.state === "connected";
         return {
           verbId: s.name,
+          skillId: s.id,
           label: s.name,
           type,
           enabled,
@@ -480,6 +483,7 @@ export async function buildCapabilityCatalog(
       const type = verbType(s.name);
       return {
         verbId: s.name,
+        skillId: null,
         label: s.name,
         type,
         enabled: false,

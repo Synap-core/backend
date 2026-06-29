@@ -321,6 +321,27 @@ export function registerConnectorsRoutes(app: HubHono): void {
               "connect: tool materialization failed (connection still valid)"
             );
           }
+          // Idempotency: a reconnect leaves stale Nango connections behind. Keep
+          // the most-recent un-scoped connection for this (user, provider) and
+          // revoke the older dups — object-scoped (entity/project) connections are
+          // preserved. Best-effort; never breaks the "connected" signal.
+          try {
+            const revoked = await connector.dedupeConnections(
+              userId,
+              match.uniqueKey
+            );
+            if (revoked.length > 0) {
+              logger.info(
+                { provider: match.uniqueKey, revoked: revoked.length },
+                "connect: revoked stale duplicate connections"
+              );
+            }
+          } catch (dedupErr) {
+            logger.warn(
+              { err: dedupErr, provider: match.uniqueKey },
+              "connect: connection dedup failed (non-fatal)"
+            );
+          }
           return c.json(
             {
               status: "connected" as const,
