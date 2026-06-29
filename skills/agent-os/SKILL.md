@@ -78,16 +78,24 @@ Capture the returned `id` — that's the `projectId`.
 
 ### 5. Provision each chosen workspace
 
-For each domain slug, POST the template to the packages endpoint. The templates
-live in `synap-backend/templates/packages/<slug>.package.json`:
+For each domain slug, POST the template to the packages endpoint, **injecting
+the `projectId` from Step 4** so the workspace's seed entities link to the
+project (`belongs_to_project`). Without `projectId`, the workspaces are created
+but orphaned from the project — breaking the lens. The templates live in
+`synap-backend/templates/packages/<slug>.package.json`:
 
 ```bash
-curl -s -X POST "$SYNAP_POD_URL/api/hub/packages/apply" \
+# Merge projectId into the template body (jq), then POST:
+jq --arg pid "$PROJECT_ID" '. + {projectId: $pid}' \
+  synap-backend/templates/packages/crm.package.json \
+| curl -s -X POST "$SYNAP_POD_URL/api/hub/packages/apply" \
   -H "Authorization: Bearer $SYNAP_HUB_API_KEY" -H "Content-Type: application/json" \
-  --data @synap-backend/templates/packages/crm.package.json
+  --data @-
 ```
 
-Each returns `{ workspace: { workspaceId }, capabilities: [...], playbooks: [...] }`.
+(No `jq`? Read the template, add `"projectId": "<id>"` to the JSON object, POST
+that.) Each returns `{ workspace: { workspaceId }, projectLink: {...},
+capabilities: [...], playbooks: [...] }`.
 
 ### 6. Capabilities — OFFER, never silently install
 
