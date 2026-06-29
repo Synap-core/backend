@@ -693,6 +693,139 @@ EOF
 # INSTALL COMMAND
 # ============================================================================
 
+# ─── Canary-gated backend swap (near-zero-downtime, safe rollback) ────────────
+# Validates the NEW backend image in a sidecar `backend-canary` container BEFORE
+# the live production backend is ever touched. Used by BOTH cmd_install (eve's
+# `synap install` path) and cmd_update so there is ONE swap implementation.
+#
+# Self-gating: if no backend is currently running (fresh install / cold start),
+# there is nothing to protect — it just brings backend + realtime up directly,
+# preserving the original behavior. The canary path only engages when a live
+# backend exists.
+#
+# Contract / assumptions (caller's responsibility):
+#   • cwd is the deploy dir (docker-compose.yml + .env present)
+#   • images are already pulled or built
+#   • .env's BACKEND_VERSION already points at the NEW version
+# It runs backend migrations itself (idempotent) so the canary always validates
+# against the migrated schema while the old backend keeps serving.
+#
+# Relies on the `backend-canary` service (profile: canary, container_name
+# synap-backend-canary) and `backend-migrate` defined in docker-compose.yml.
+#
+# Returns 0 on success, non-zero on failure. On any pre-swap failure the live
+# backend is never touched and keeps serving.
+_swap_backend_canary() {
+    local canary_name="synap-backend-canary"
+    local health_probe="const r=require('http').get('http://localhost:4000/health',(s)=>{process.exit(s.statusCode===200?0:1)});r.setTimeout(4000,()=>{r.destroy();process.exit(1)});r.on('error',()=>process.exit(1))"
+
+    # Is a production backend already running? (container present)
+    local backend_cid
+    backend_cid=$(docker compose ps -q backend 2>/dev/null | head -1)
+
+    if [ -z "$backend_cid" ]; then
+        # Cold start / fresh install — nothing to protect. Bring up directly;
+        # compose pulls in postgres / minio / backend-migrate via depends_on.
+        echo -e "${BLUE}  No running backend to protect — starting backend + realtime directly...${NC}"
+        docker compose up -d --remove-orphans backend realtime
+        return $?
+    fi
+
+    # Capture the live image tag for rollback BEFORE we change anything.
+    local prev_image prev_tag new_tag
+    prev_image=$(docker inspect --format '{{.Config.Image}}' "$backend_cid" 2>/dev/null || echo "")
+    prev_tag="${prev_image##*:}"
+    new_tag=$(grep "^BACKEND_VERSION=" .env 2>/dev/null | cut -d'=' -f2- || echo "")
+
+    echo -e "${BLUE}🐤 Canary-gated swap — validating the new image before touching the live backend...${NC}"
+
+    # Migrations must land while the OLD backend is still serving (expand-contract).
+    echo -e "${BLUE}  Running backend migrations (live backend still serving)...${NC}"
+    if ! docker compose run --rm backend-migrate; then
+        echo -e "${RED}  ✗ Migration failed — live backend untouched. Aborting update.${NC}"
+        return 1
+    fi
+
+    # Clean any leftover canary, then start it on the NEW image.
+    docker rm -f "$canary_name" >/dev/null 2>&1 || true
+    if ! docker compose --profile canary up -d backend-canary; then
+        echo -e "${RED}  ✗ Canary failed to start — live backend untouched, still serving.${NC}"
+        docker rm -f "$canary_name" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    # Health-check the canary from inside its own container (no curl/wget in the
+    # alpine image; localhost avoids DNS collision with the prod `backend` alias).
+    # Up to 3 minutes (18 × 10s).
+    echo -e "${BLUE}  Waiting for canary health (up to 3 min)...${NC}"
+    local canary_ok=false i
+    for i in $(seq 1 18); do
+        sleep 10
+        if docker exec "$canary_name" node -e "$health_probe" >/dev/null 2>&1; then
+            canary_ok=true
+            echo -e "${GREEN}  ✓ Canary healthy after ${i}0s — image is good${NC}"
+            break
+        fi
+        echo -e "${BLUE}    canary health attempt ${i}/18...${NC}"
+    done
+
+    docker rm -f "$canary_name" >/dev/null 2>&1 || true
+
+    if [ "$canary_ok" != true ]; then
+        echo -e "${RED}  ✗ Canary failed health check after 3 min — live backend untouched, still serving.${NC}"
+        echo -e "${YELLOW}    The new image is broken; nothing was swapped. Investigate, then re-run.${NC}"
+        return 1
+    fi
+
+    # Image proven good — swap production (~2-3s gap on a single pod, unavoidable
+    # because one container can't hold port 4000 twice).
+    echo -e "${BLUE}  Swapping production backend + realtime to the new image (~2-3s)...${NC}"
+    docker compose up -d --force-recreate --remove-orphans backend realtime
+
+    # Verify production. Image already validated by the canary → should pass
+    # within the first attempt or two. 2 min budget (12 × 10s).
+    echo -e "${BLUE}  Verifying production health (up to 2 min)...${NC}"
+    local prod_ok=false new_cid
+    for i in $(seq 1 12); do
+        sleep 10
+        new_cid=$(docker compose ps -q backend 2>/dev/null | head -1)
+        if [ -n "$new_cid" ] && docker exec "$new_cid" node -e "$health_probe" >/dev/null 2>&1; then
+            prod_ok=true
+            echo -e "${GREEN}  ✓ Production healthy after ${i}0s${NC}"
+            break
+        fi
+        echo -e "${BLUE}    production health attempt ${i}/12...${NC}"
+    done
+
+    if [ "$prod_ok" = true ]; then
+        return 0
+    fi
+
+    # Unexpected: the canary passed but production didn't (env diff / race). Roll
+    # back to the prior tag when it's a distinct, real version tag. A `latest` or
+    # `local` tag can't be rolled back by tag (same/sentinel tag), so we can only
+    # surface logs in that case — but the canary already caught the common case.
+    echo -e "${RED}  ✗ Production health failed after swap (unexpected — the canary had passed).${NC}"
+    if [ -n "$prev_tag" ] && [ -n "$new_tag" ] && [ "$prev_tag" != "$new_tag" ]; then
+        echo -e "${YELLOW}  ↩ Rolling back to ${prev_tag}...${NC}"
+        sed -i.bak "s/^BACKEND_VERSION=.*/BACKEND_VERSION=${prev_tag}/" .env && rm -f .env.bak
+        docker compose up -d --force-recreate --remove-orphans backend realtime
+        for i in $(seq 1 12); do
+            sleep 10
+            new_cid=$(docker compose ps -q backend 2>/dev/null | head -1)
+            if [ -n "$new_cid" ] && docker exec "$new_cid" node -e "$health_probe" >/dev/null 2>&1; then
+                echo -e "${GREEN}  ✓ Rolled back to ${prev_tag} successfully — pod is serving the previous version.${NC}"
+                return 1
+            fi
+        done
+        echo -e "${RED}  ✗ Rollback also failed — pod may be down. Inspect: docker compose logs backend${NC}"
+    else
+        echo -e "${YELLOW}    Prior tag (${prev_tag:-unknown}) equals the new tag or is unknown — cannot roll back by tag.${NC}"
+        echo -e "${YELLOW}    Inspect: docker compose logs backend${NC}"
+    fi
+    return 1
+}
+
 cmd_install() {
     local FROM_IMAGE=""
     local FROM_SOURCE=""
@@ -1343,8 +1476,31 @@ EOF
         profile_args=(--profile pod-agent)
     fi
 
+    # Detect whether this "install" is really an update of an already-running
+    # pod. When a backend is already serving, protect it with a canary swap so a
+    # broken new image can't take the pod down. Fresh installs keep the original
+    # one-shot full-stack bring-up (nothing to protect).
+    local _existing_backend
+    _existing_backend=$(docker compose ps -q backend 2>/dev/null | head -1)
+
     echo -e "${BLUE}🚀 Starting Synap...${NC}"
-    if [ "${SYNAP_SKIP_EDGE:-}" = "1" ]; then
+    if [ -n "$_existing_backend" ]; then
+        echo -e "${BLUE}  Existing pod detected — bringing up support services, then canary-swapping the backend...${NC}"
+        # Support services first (idempotent: compose only recreates what
+        # changed). Backend + realtime are handled by the canary swap below.
+        if [ "${SYNAP_SKIP_EDGE:-}" = "1" ]; then
+            echo -e "${BLUE}  (SYNAP_SKIP_EDGE=1: skipping Caddy — external edge proxy assumed)${NC}"
+            docker compose "${profile_args[@]}" up -d --remove-orphans \
+                postgres redis minio typesense "${pod_agent_args[@]}" pod-admin hydra kratos
+        else
+            docker compose "${profile_args[@]}" up -d --remove-orphans \
+                postgres redis minio typesense "${pod_agent_args[@]}" pod-admin hydra kratos caddy
+        fi
+        if ! _swap_backend_canary; then
+            echo -e "${RED}❌ Backend update aborted — the previous version is still running.${NC}"
+            exit 1
+        fi
+    elif [ "${SYNAP_SKIP_EDGE:-}" = "1" ]; then
         echo -e "${BLUE}  (SYNAP_SKIP_EDGE=1: skipping Caddy — external edge proxy assumed)${NC}"
         docker compose "${profile_args[@]}" up -d --remove-orphans \
             postgres redis minio typesense \
@@ -2038,14 +2194,22 @@ cmd_update() {
         profile_args=(--profile pod-agent)
     fi
 
+    # Bring up support services (pod-admin, caddy, pod-agent), force-recreate
+    # kratos for its new image + regenerated config, then swap the backend
+    # through the canary gate so a broken new image can't down the live pod.
     echo -e "${BLUE}🔄 Restarting services...${NC}"
     if [ "${SYNAP_SKIP_EDGE:-}" = "1" ]; then
         echo -e "${BLUE}  (SYNAP_SKIP_EDGE=1: skipping Caddy — external edge proxy assumed)${NC}"
-        docker compose "${profile_args[@]}" up -d --remove-orphans backend realtime "${pod_agent_args[@]}" pod-admin
+        docker compose "${profile_args[@]}" up -d --remove-orphans "${pod_agent_args[@]}" pod-admin
     else
-        docker compose "${profile_args[@]}" up -d --remove-orphans backend realtime caddy "${pod_agent_args[@]}" pod-admin
+        docker compose "${profile_args[@]}" up -d --remove-orphans caddy "${pod_agent_args[@]}" pod-admin
     fi
     docker compose up -d --force-recreate kratos
+
+    if ! _swap_backend_canary; then
+        echo -e "${RED}❌ Backend update aborted — the previous version is still running.${NC}"
+        exit 1
+    fi
 
     # Idempotent admin seed — ensures the users/workspace rows exist after
     # every update. create-admin-cli.js is a no-op when the admin already

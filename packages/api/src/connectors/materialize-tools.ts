@@ -59,10 +59,6 @@ export const PROVIDER_TEMPLATE_KEY: Record<string, string> = {
   // ride a Base-Url-Override to gmail.googleapis.com; Calendar/Drive use the
   // provider-default host. This is the canonical Google path.
   google: "nango-google",
-  // Back-compat: a dedicated `gmail`-only integration still maps to the
-  // Gmail-only family. Not the default path (the centralized model connects
-  // `google`), but kept so an existing gmail-scoped connection keeps its verbs.
-  gmail: "nango-gmail",
 };
 
 /** Resolve the family template key for a connected provider, or null. */

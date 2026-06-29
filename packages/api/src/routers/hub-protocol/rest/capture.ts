@@ -39,6 +39,12 @@ import {
   getDb,
   ProfileResolutionService,
   eq,
+  and,
+  or,
+  asc,
+  isNull,
+  entities,
+  profiles,
   workspaces,
   workspaceMembers,
 } from "@synap/database";
@@ -770,6 +776,73 @@ export function registerCaptureRoutes(app: HubHono): void {
       }
     }
 
+    // IDEMPOTENCY: dedup against existing entities by (profileSlug, title) so a
+    // re-run of /onboard (or accepting two proposals) LINKS to the existing
+    // company/client/contact instead of creating a duplicate. We only resolve
+    // entities the agent didn't already pin via existingEntityId. Defense-in-depth
+    // on top of the agent's own "reuse existing" instruction.
+    const toResolve = body.entities.filter((e) => !e.existingEntityId);
+    if (toResolve.length > 0 && body.workspaceId) {
+      const wantTitles = new Set(
+        toResolve.map((e) => (e.title ?? e.ref).trim().toLowerCase())
+      );
+      try {
+        // Fetch the workspace's live entities (capped) + their profile slug, then
+        // match in JS case-insensitively on (slug, title). Fetch-and-filter
+        // avoids a case-insensitive SQL IN; the cap keeps it bounded.
+        const DEDUP_CAP = 5000;
+        const existing = await db
+          .select({
+            id: entities.id,
+            title: entities.title,
+            slug: profiles.slug,
+          })
+          .from(entities)
+          .innerJoin(profiles, eq(entities.profileId, profiles.id))
+          .where(
+            and(
+              // Match BOTH workspace-scoped AND pod-wide entities — a pod-wide
+              // company must dedup too, else /onboard re-runs shadow it with a
+              // workspace-scoped duplicate.
+              or(
+                eq(entities.workspaceId, body.workspaceId),
+                isNull(entities.workspaceId)
+              ),
+              isNull(entities.deletedAt)
+            )
+          )
+          // Earliest-created wins, so dedup is deterministic when two rows share
+          // a (slug, title).
+          .orderBy(asc(entities.createdAt))
+          .limit(DEDUP_CAP);
+        if (existing.length >= DEDUP_CAP) {
+          logger.warn(
+            { workspaceId: body.workspaceId, cap: DEDUP_CAP },
+            "capture/graph: dedup match pool hit the cap — some duplicates may slip through"
+          );
+        }
+        const byKey = new Map<string, string>();
+        for (const r of existing) {
+          const key = `${r.slug}::${(r.title ?? "").trim().toLowerCase()}`;
+          if (
+            wantTitles.has((r.title ?? "").trim().toLowerCase()) &&
+            !byKey.has(key)
+          ) {
+            byKey.set(key, r.id);
+          }
+        }
+        for (const e of toResolve) {
+          const hit = byKey.get(
+            `${e.profileSlug}::${(e.title ?? e.ref).trim().toLowerCase()}`
+          );
+          if (hit) e.existingEntityId = hit; // link, don't create
+        }
+      } catch (err) {
+        // Dedup is best-effort — never block the proposal on a lookup failure.
+        logger.warn({ err }, "capture/graph: entity dedup lookup failed");
+      }
+    }
+
     try {
       const operations: CompositeProposalOperation[] = [
         ...body.entities.map((e) => ({
@@ -812,6 +885,15 @@ export function registerCaptureRoutes(app: HubHono): void {
       });
 
       const proposalId = (created as { id?: string })?.id;
+      // Clickable review link: the pod's public /open/:type/:id route serves an
+      // https page that redirects to synap://open/proposal/<id> (opens the app).
+      // https is what Discord linkifies — synap:// alone is not clickable there.
+      const pub = process.env.PUBLIC_URL?.replace(/^http:/, "https:").replace(
+        /\/$/,
+        ""
+      );
+      const reviewUrl =
+        pub && proposalId ? `${pub}/open/proposal/${proposalId}` : undefined;
       logger.info(
         {
           userId,
@@ -827,6 +909,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         entityCount: body.entities.length,
         relationCount: relations.length,
         bindingCount: bindings.length,
+        reviewUrl,
         summary,
       });
     } catch (err) {

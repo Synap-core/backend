@@ -2427,7 +2427,7 @@
   },
   "capabilities": [
     {
-      "templateKey": "nango-gmail"
+      "templateKey": "nango-google"
     }
   ],
   "playbooks": [],
