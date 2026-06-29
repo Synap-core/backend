@@ -16,6 +16,12 @@ import { db, intelligenceServices, eq, drizzleSql } from "@synap/database";
 import { MessageAuthorType } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { capabilityContainersRouter } from "./capability-containers.js";
+import { buildCapabilityCatalog } from "../services/capabilities/capability-catalog.js";
+import {
+  createCapabilityFromDefinition,
+  loadCapabilityTemplate,
+} from "../services/capabilities/create-from-definition.js";
+import { executeCapability } from "../services/capabilities/execute-capability.js";
 
 const logger = createLogger({ module: "capabilities" });
 
@@ -120,6 +126,82 @@ export const capabilitiesRouter = router({
       })),
     };
   }),
+
+  /**
+   * Pack-grouped, status-computed capability CATALOG for a workspace.
+   *
+   * tRPC mirror of the Hub REST `GET /capabilities/catalog` door. Delegates to
+   * the SAME `buildCapabilityCatalog` service: deriving the acting userId from
+   * the authenticated ctx and the workspace from input. Returns one
+   * `CapabilityCard` per pack (installed containers + available templates).
+   */
+  catalog: protectedProcedure
+    .input(z.object({ workspaceId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      return buildCapabilityCatalog({
+        workspaceId: input.workspaceId,
+        userId: ctx.userId,
+      });
+    }),
+
+  /**
+   * Apply a capability template — instantiate {vault · tools · skills · playbooks}
+   * from an inline `definition` or a seed `templateKey`.
+   *
+   * tRPC mirror of the Hub REST `POST /capabilities/apply` door. Resolves the
+   * definition the same way (inline body wins, else load the seed template) then
+   * delegates to the GOVERNED `createCapabilityFromDefinition` service, scoping it
+   * to `input.workspaceId` via the ctx.
+   */
+  apply: protectedProcedure
+    .input(
+      z.object({
+        templateKey: z.string().optional(),
+        definition: z.any().optional(),
+        workspaceId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const definition =
+        input.definition ??
+        (await loadCapabilityTemplate(input.templateKey!, {
+          workspaceId: input.workspaceId,
+        }));
+
+      return createCapabilityFromDefinition(
+        definition,
+        {},
+        {
+          ...ctx,
+          workspaceId: input.workspaceId,
+        }
+      );
+    }),
+
+  /**
+   * Execute a registered capability — resolve a verb (= backing skill name) and
+   * run it through the SAME governance gate every capability path uses.
+   *
+   * tRPC mirror of the Hub REST `POST /capabilities/execute` door. Delegates to
+   * the shared `executeCapability` core (acting as the authenticated operator) and
+   * returns its discriminated result verbatim (run / proposed / deny / not_found).
+   */
+  execute: protectedProcedure
+    .input(
+      z.object({
+        verbId: z.string(),
+        parameters: z.record(z.string(), z.unknown()).optional(),
+        workspaceId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      return executeCapability({
+        verbId: input.verbId,
+        parameters: input.parameters,
+        workspaceId: input.workspaceId,
+        userId: ctx.userId,
+      });
+    }),
 
   /**
    * Ping a specific intelligence service's /health endpoint.
