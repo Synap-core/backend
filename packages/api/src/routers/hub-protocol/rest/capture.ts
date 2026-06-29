@@ -25,7 +25,10 @@ import {
   makeGraphResolver,
 } from "../../../import/import-deep.js";
 import { searchService } from "@synap/search";
-import { resolveIntelligenceService } from "../../../utils/intelligence-routing.js";
+import {
+  resolveIntelligenceService,
+  getDefaultActiveService,
+} from "../../../utils/intelligence-routing.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../../../utils/materialize-composite.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
@@ -145,8 +148,9 @@ export function registerCaptureRoutes(app: HubHono): void {
       return c.json({ error: "tabs array required" }, 400);
     }
 
-    const isUrl = process.env.INTELLIGENCE_HUB_URL ?? "http://localhost:3002";
-    const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY ?? "";
+    // Canonical IS credential resolution (decrypted DB key), not stale env.
+    const { endpoint: isUrl, apiKey: isApiKey } =
+      await getDefaultActiveService();
 
     try {
       const simplifiedTabs = body.tabs.map(({ url, title }) => ({
@@ -423,7 +427,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         try {
           const { client } = await resolveIntelligenceService({
             userId,
-            workspaceId,
+            workspaceId: workspaceId ?? undefined,
             capability: "default",
           });
           const deep = await deepStructureImportItems(
@@ -435,7 +439,7 @@ export function registerCaptureRoutes(app: HubHono): void {
               availableWorkspaces,
               resolveExisting: makeGraphResolver(searchService, {
                 userId,
-                workspaceId,
+                workspaceId: workspaceId ?? undefined,
               }),
             },
             { logger }
@@ -598,7 +602,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         try {
           const { client } = await resolveIntelligenceService({
             userId,
-            workspaceId,
+            workspaceId: workspaceId ?? undefined,
             capability: "default",
           });
           const enriched = await aiEnrichImportItems(

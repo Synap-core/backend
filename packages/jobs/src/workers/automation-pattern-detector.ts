@@ -24,6 +24,7 @@ import {
 } from "@synap/database";
 import { count } from "drizzle-orm";
 import { createLogger } from "@synap-core/core";
+import { getDefaultActiveService } from "@synap/intelligence-client";
 
 const logger = createLogger({ module: "automation-pattern-detector" });
 
@@ -129,8 +130,8 @@ async function callDetectPatterns(
   activitySummary: Array<{ type: string; count: number }>,
   existingTriggerTypes: string[]
 ): Promise<PatternProposal[]> {
-  const isUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
-  const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY || "";
+  // Canonical IS credential resolution (decrypted DB key), not stale env.
+  const { endpoint: isUrl, apiKey: isApiKey } = await getDefaultActiveService();
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), IS_TIMEOUT_MS);

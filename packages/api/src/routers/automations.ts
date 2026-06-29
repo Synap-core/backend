@@ -10,6 +10,7 @@ import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
 // validateEventPattern from the main index.js and events/index.js bundles.
 import { validateEventPattern } from "@synap-core/types/events/unified";
@@ -595,8 +596,9 @@ export const automationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const isUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
-      const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY || "";
+      // Canonical IS credential resolution (decrypted DB key), not stale env.
+      const { endpoint: isUrl, apiKey: isApiKey } =
+        await getDefaultActiveService();
 
       const response = await fetch(`${isUrl}/api/automations/diagnose-run`, {
         method: "POST",
@@ -634,8 +636,9 @@ export const automationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const isUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
-      const isApiKey = process.env.INTELLIGENCE_HUB_API_KEY || "";
+      // Canonical IS credential resolution (decrypted DB key), not stale env.
+      const { endpoint: isUrl, apiKey: isApiKey } =
+        await getDefaultActiveService();
 
       const response = await fetch(`${isUrl}/api/automations/generate-flow`, {
         method: "POST",
