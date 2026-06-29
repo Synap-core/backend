@@ -306,12 +306,14 @@ interface TemplateEntry {
 }
 
 /**
- * Load every available capability template definition from the Control Plane
- * catalog — the SINGLE source of truth. The pod stores none of its own.
+ * Load every available capability template definition. Reads from the pod-local
+ * `capability_template_cache` (fast DB read, no network) — a stale-while-revalidate
+ * mirror of the Control-Plane catalog, kept fresh by the background sync job. The
+ * CP remains the SINGLE source of truth; the cache only ensures the catalog NEVER
+ * blocks on the CP. On a cold first boot (empty cache) `fetchCPCapabilityTemplates`
+ * does ONE inline CP fetch to populate it. Never throws — returns [] worst case.
  */
 async function loadTemplates(): Promise<TemplateEntry[]> {
-  // CONTROL PLANE catalog — the SINGLE source of truth. The pod stores no
-  // templates of its own (no table, no files, no bundle).
   const cpItems = await fetchCPCapabilityTemplates();
   return cpItems.map((item) => ({
     key: item.key,

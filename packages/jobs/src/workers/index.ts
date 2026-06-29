@@ -93,6 +93,10 @@ import {
   PROPOSAL_REVIEWED_NOTIFY_QUEUE,
 } from "./proposal-reviewed-notifier.js";
 import { handleMemoryDecay, MEMORY_DECAY_QUEUE } from "./memory-decay.js";
+import {
+  handleCapabilityTemplateSync,
+  CAPABILITY_TEMPLATE_SYNC_QUEUE,
+} from "./capability-template-sync.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -143,6 +147,7 @@ const ALL_QUEUES = [
   PROACTIVE_SCAN_QUEUE,
   PROPOSAL_REVIEWED_NOTIFY_QUEUE,
   MEMORY_DECAY_QUEUE,
+  CAPABILITY_TEMPLATE_SYNC_QUEUE,
 ];
 
 /**
@@ -399,6 +404,14 @@ export async function registerAllWorkers(): Promise<void> {
   // Memory decay (cron: daily at 03:30 UTC — applies Ebbinghaus decay to knowledge_facts)
   await boss.work(MEMORY_DECAY_QUEUE, async () => handleMemoryDecay());
   logger.info("Registered worker: memory-decay");
+
+  // Capability template sync (cron: every 10min + on startup — refreshes the
+  // pod-local capability_template_cache from the Control Plane so the catalog
+  // never blocks on the CP).
+  await boss.work(CAPABILITY_TEMPLATE_SYNC_QUEUE, async () =>
+    handleCapabilityTemplateSync()
+  );
+  logger.info("Registered worker: capability-template-sync");
 
   logger.info("All workers registered");
 }

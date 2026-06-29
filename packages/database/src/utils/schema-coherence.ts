@@ -663,6 +663,20 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
   // (capability_templates removed in 0154 — templates live on the Control Plane
   // only; the pod stores none, so there is nothing to assert here.)
 
+  // capability_template_cache — pod-local CACHE of the CP catalog (0155). Absence
+  // means a pod is on a pre-0155 schema where the catalog read would fail to find
+  // the cache and fall back to a blocking CP fetch on every request.
+  {
+    table: "capability_template_cache",
+    column: "definition",
+    addedBy: "0155_capability_template_cache.sql",
+  },
+  {
+    table: "capability_template_cache",
+    column: "synced_at",
+    addedBy: "0155_capability_template_cache.sql",
+  },
+
   // playbook_runs — the run ledger / executor spine (0127)
   {
     table: "playbook_runs",

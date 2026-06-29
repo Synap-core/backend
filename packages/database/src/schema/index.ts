@@ -184,6 +184,10 @@ export * from "./playbook-runs.js";
 
 // (capability_templates removed in migration 0154 — capability templates live on
 // the Control Plane only; the pod stores none.)
+//
+// Capability Template CACHE (0155) — a pod-local stale-while-revalidate mirror of
+// the CP catalog so the catalog NEVER blocks on the CP. NOT a source of truth.
+export * from "./capability-template-cache.js";
 
 // Provenance vocabulary (createdByKind column type — must be public so tsc
 // can name router return types without referencing internal dist paths)

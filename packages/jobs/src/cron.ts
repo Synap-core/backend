@@ -7,6 +7,10 @@
 
 import { getBoss } from "@synap/events";
 import { createLogger } from "@synap-core/core";
+import {
+  CAPABILITY_TEMPLATE_SYNC_QUEUE,
+  CAPABILITY_TEMPLATE_SYNC_CRON,
+} from "./workers/capability-template-sync.js";
 
 const logger = createLogger({ module: "cron-scheduler" });
 
@@ -88,6 +92,19 @@ export async function registerCronSchedules(): Promise<void> {
   // Memory decay (daily at 03:30 UTC — applies Ebbinghaus decay to knowledge_facts)
   await boss.schedule("memory-decay", "30 3 * * *", {});
   logger.info("Registered cron: memory-decay (daily at 03:30 UTC)");
+
+  // Capability template sync — refresh the pod-local capability_template_cache
+  // from the Control Plane every 10 minutes, AND once now (on startup) so a cold
+  // pod populates its cache without waiting for the first cron tick. The catalog
+  // read path serves from this cache, so it never blocks on a slow/down CP.
+  await boss.schedule(
+    CAPABILITY_TEMPLATE_SYNC_QUEUE,
+    CAPABILITY_TEMPLATE_SYNC_CRON,
+    {}
+  );
+  logger.info("Registered cron: capability-template-sync (every 10min)");
+  await boss.send(CAPABILITY_TEMPLATE_SYNC_QUEUE, {});
+  logger.info("Enqueued startup run: capability-template-sync");
 
   logger.info("All cron schedules registered");
 }

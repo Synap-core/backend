@@ -3496,3 +3496,14 @@ CREATE INDEX IF NOT EXISTS "idx_provider_integrations_provider_id"
   ON "provider_integrations" ("provider_id");
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_provider_integrations_provider_slug"
   ON "provider_integrations" ("provider_id", "slug");
+
+-- capability_template_cache — pod-local CACHE of the CP capability-template
+-- catalog (0155). Stale-while-revalidate mirror so the catalog never blocks on
+-- the CP. NOT a source of truth — the Control Plane owns the catalog.
+CREATE TABLE IF NOT EXISTS "capability_template_cache" (
+  "key"         text        PRIMARY KEY,
+  "name"        text        NOT NULL,
+  "description" text,
+  "definition"  jsonb       NOT NULL,
+  "synced_at"   timestamptz NOT NULL DEFAULT now()
+);
