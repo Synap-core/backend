@@ -2439,7 +2439,7 @@
         "profileSlug": "pipeline",
         "what": "Their real deal stages in order (e.g. Lead \u2192 Qualified \u2192 Demo \u2192 Proposal \u2192 Won/Lost)",
         "cardinality": "one",
-        "keyFields": ["title", "stages"]
+        "keyFields": ["title", "pipeline-type", "quarter-target"]
       },
       {
         "profileSlug": "company",
@@ -2451,13 +2451,13 @@
         "profileSlug": "contact",
         "what": "Key people at those accounts",
         "cardinality": "several",
-        "keyFields": ["title", "email", "role", "company"]
+        "keyFields": ["title", "email", "contact-role", "company-name"]
       },
       {
         "profileSlug": "deal",
         "what": "Open opportunities worth tracking now",
         "cardinality": "few",
-        "keyFields": ["title", "stage", "value", "company"]
+        "keyFields": ["title", "stage", "deal-value", "deal-company"]
       }
     ],
     "openingQuestions": [
