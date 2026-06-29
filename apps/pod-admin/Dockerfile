@@ -1,4 +1,7 @@
-FROM node:20-alpine AS base
+# Debian (glibc), NOT alpine (musl): Next.js' SWC native binary segfaults
+# (SIGSEGV in the build worker) under musl libc. glibc is Next.js' most-tested
+# native target. The backend image stays on alpine because it ships no Next app.
+FROM node:20-slim AS base
 RUN npm install -g pnpm@10.28.0
 WORKDIR /app
 
@@ -14,7 +17,9 @@ WORKDIR /app
 # ============================================================================
 FROM base AS builder
 
-RUN apk add --no-cache python3 make g++
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 make g++ \
+ && rm -rf /var/lib/apt/lists/*
 
 # ── Layer 1: dependency manifests (cached unless lockfile or package.json changes) ──
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.json ./
@@ -56,12 +61,14 @@ RUN NODE_OPTIONS=--max-old-space-size=4096 NEXT_TELEMETRY_DISABLED=1 \
 # ============================================================================
 # Runner — Next.js standalone output
 # ============================================================================
-FROM node:20-alpine AS runner
+FROM node:20-slim AS runner
 
-RUN apk add --no-cache dumb-init
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends dumb-init \
+ && rm -rf /var/lib/apt/lists/*
 
-RUN addgroup -g 10001 -S nodejs && \
-    adduser -S nodejs -u 10001
+RUN groupadd --system --gid 10001 nodejs && \
+    useradd --system --uid 10001 --gid nodejs nodejs
 
 WORKDIR /app
 USER nodejs
