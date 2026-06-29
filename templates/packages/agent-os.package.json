@@ -6,14 +6,14 @@
     "tags": ["ai", "agents", "automation", "openclaw", "fleet"]
   },
   "workspaceName": "OpenClaw Agent OS",
-  "description": "The sovereign control plane for your OpenClaw agent fleet. Agents, projects, tasks, skills, and providers as connected entities \u2014 not daemon logs.",
+  "description": "The sovereign control plane for your OpenClaw agent fleet. Agents, projects, tasks, skills, and providers as connected entities — not daemon logs.",
   "workspaceType": "agent",
   "workspaceSubtype": "agent-fleet",
   "profiles": [
     {
       "slug": "agent",
       "displayName": "Agent",
-      "description": "A deployed OpenClaw agent \u2014 your running AI entity",
+      "description": "A deployed OpenClaw agent — your running AI entity",
       "icon": "bot",
       "color": "#1A3A5C",
       "scope": "WORKSPACE",
@@ -165,109 +165,6 @@
       ]
     },
     {
-      "slug": "project",
-      "displayName": "Project",
-      "description": "A bounded body of work delegated to one or more agents",
-      "icon": "folder",
-      "color": "#2E6DA4",
-      "scope": "WORKSPACE",
-      "properties": [
-        {
-          "slug": "project-status",
-          "label": "Status",
-          "valueType": "string",
-          "inputType": "select",
-          "enumValues": [
-            "Backlog",
-            "Queued",
-            "In Progress",
-            "Blocked",
-            "Completed",
-            "Cancelled"
-          ],
-          "constraints": {
-            "defaultValue": "Queued"
-          }
-        },
-        {
-          "slug": "project-priority",
-          "label": "Priority",
-          "valueType": "string",
-          "inputType": "select",
-          "enumValues": ["Critical", "High", "Medium", "Low"]
-        },
-        {
-          "slug": "project-assigned-agent",
-          "label": "Assigned Agent",
-          "valueType": "entity_id",
-          "targetProfileSlug": "agent"
-        },
-        {
-          "slug": "project-owner",
-          "label": "Human Owner",
-          "valueType": "entity_id",
-          "targetProfileSlug": "person"
-        },
-        {
-          "slug": "project-start",
-          "label": "Start Date",
-          "valueType": "date"
-        },
-        {
-          "slug": "project-deadline",
-          "label": "Deadline",
-          "valueType": "date"
-        },
-        {
-          "slug": "project-health",
-          "label": "Health",
-          "valueType": "string",
-          "inputType": "select",
-          "enumValues": ["Green", "Yellow", "Red"]
-        },
-        {
-          "slug": "project-type",
-          "label": "Type",
-          "valueType": "string",
-          "inputType": "select",
-          "enumValues": [
-            "Development",
-            "Research",
-            "Content",
-            "Automation",
-            "DevOps",
-            "Data",
-            "Outreach",
-            "Monitoring"
-          ]
-        },
-        {
-          "slug": "project-goal",
-          "label": "Goal",
-          "valueType": "string"
-        },
-        {
-          "slug": "project-outcome",
-          "label": "Expected Outcome",
-          "valueType": "string"
-        },
-        {
-          "slug": "project-tags",
-          "label": "Tags",
-          "valueType": "array",
-          "inputType": "select",
-          "enumValues": [
-            "recurring",
-            "one-off",
-            "long-running",
-            "client",
-            "internal",
-            "experimental"
-          ]
-        }
-      ]
-    },
-    {
       "slug": "task",
       "displayName": "Task",
       "description": "An atomic work item assigned to an agent",
@@ -308,12 +205,6 @@
           "label": "Assigned Agent",
           "valueType": "entity_id",
           "targetProfileSlug": "agent"
-        },
-        {
-          "slug": "task-project",
-          "label": "Project",
-          "valueType": "entity_id",
-          "targetProfileSlug": "project"
         },
         {
           "slug": "task-type",
@@ -381,7 +272,7 @@
     {
       "slug": "skill",
       "displayName": "Skill",
-      "description": "An installed agent capability \u2014 a ClawHub skill, custom script, or API integration",
+      "description": "An installed agent capability — a ClawHub skill, custom script, or API integration",
       "icon": "zap",
       "color": "#7C3AED",
       "scope": "WORKSPACE",
@@ -461,7 +352,7 @@
     {
       "slug": "provider",
       "displayName": "Provider",
-      "description": "An LLM or API provider \u2014 tracks cost, key health, and agent usage",
+      "description": "An LLM or API provider — tracks cost, key health, and agent usage",
       "icon": "database",
       "color": "#B5451B",
       "scope": "WORKSPACE",
@@ -576,28 +467,7 @@
       "config": {
         "groupByField": "agent-status"
       },
-      "description": "All agents by status \u2014 the mission control view."
-    },
-    {
-      "name": "Agent \u2192 Projects \u2192 Tasks",
-      "slug": "agent-project-task-hierarchy",
-      "type": "graph",
-      "scopeProfileSlugs": ["agent", "project", "task"],
-      "config": {
-        "hierarchyEdges": [
-          {
-            "parent": "agent",
-            "child": "project",
-            "via": "project-assigned-agent"
-          },
-          {
-            "parent": "project",
-            "child": "task",
-            "via": "task-project"
-          }
-        ]
-      },
-      "description": "3-level drill-down: Agent expands to linked Projects, Projects expand to Tasks."
+      "description": "All agents by status — the mission control view."
     },
     {
       "name": "Task Board",
@@ -607,29 +477,7 @@
       "config": {
         "groupByField": "task-status"
       },
-      "description": "All tasks by status: Backlog \u2192 Queued \u2192 Running \u2192 Review \u2192 Done."
-    },
-    {
-      "name": "Project Command Center",
-      "slug": "project-command-center",
-      "type": "table",
-      "scopeProfileSlug": "project",
-      "config": {
-        "visibleColumns": [
-          "project-status",
-          "project-priority",
-          "project-type",
-          "project-assigned-agent",
-          "project-owner",
-          "project-deadline",
-          "project-health"
-        ],
-        "defaultSort": {
-          "field": "project-priority",
-          "direction": "desc"
-        }
-      },
-      "description": "All projects with assigned agent, status, deadline, health."
+      "description": "All tasks by status: Backlog → Queued → Running → Review → Done."
     },
     {
       "name": "Skill Registry",
@@ -672,31 +520,12 @@
       "name": "Relationship Graph",
       "slug": "relationship-graph",
       "type": "graph",
-      "scopeProfileSlugs": [
-        "agent",
-        "project",
-        "task",
-        "skill",
-        "provider",
-        "person"
-      ],
+      "scopeProfileSlugs": ["agent", "task", "skill", "provider", "person"],
       "config": {
         "layout": "force",
         "showRelations": true
       },
-      "description": "Full sovereign topology: Agent \u2190 Project \u2190 Task + Skill + Provider."
-    },
-    {
-      "name": "Agent Timeline",
-      "slug": "agent-timeline",
-      "type": "timeline",
-      "scopeProfileSlug": "project",
-      "config": {
-        "startField": "project-start",
-        "endField": "project-deadline",
-        "colorBy": "project-assigned-agent"
-      },
-      "description": "Projects as timeline bars, color-coded by assigned agent."
+      "description": "Full sovereign topology: Agent ← Project ← Task + Skill + Provider."
     },
     {
       "name": "Cost View",
@@ -795,7 +624,7 @@
           "operator": "is_not_empty"
         }
       },
-      "description": "Tasks with session keys \u2014 the audit trail."
+      "description": "Tasks with session keys — the audit trail."
     },
     {
       "name": "Provider Key Health",
@@ -818,7 +647,6 @@
           "task-priority",
           "task-type",
           "task-assigned-agent",
-          "task-project",
           "task-due-date"
         ],
         "filterBy": {
@@ -1153,99 +981,6 @@
               "title": "Active Tasks",
               "limit": 8,
               "variant": "detailed"
-            }
-          }
-        ],
-        "breakpoints": {
-          "lg": {
-            "cols": 12,
-            "rowHeight": 60,
-            "gap": 12
-          },
-          "md": {
-            "cols": 10,
-            "rowHeight": 60,
-            "gap": 12
-          },
-          "sm": {
-            "cols": 6,
-            "rowHeight": 60,
-            "gap": 12
-          },
-          "xs": {
-            "cols": 4,
-            "rowHeight": 60,
-            "gap": 12
-          },
-          "xxs": {
-            "cols": 2,
-            "rowHeight": 60,
-            "gap": 12
-          }
-        }
-      }
-    },
-    {
-      "name": "Project",
-      "type": "bento",
-      "scopeProfileSlug": "project",
-      "config": {
-        "layout": "bento",
-        "blocks": [
-          {
-            "id": "project-header",
-            "kind": "widget",
-            "widgetType": "section-header",
-            "pos": {
-              "x": 0,
-              "y": 0,
-              "w": 12,
-              "h": 2
-            },
-            "config": {
-              "title": "Projects",
-              "icon": "Folder",
-              "color": "#F59E0B",
-              "profileSlug": "project"
-            }
-          },
-          {
-            "id": "project-count",
-            "kind": "widget",
-            "widgetType": "stat-card",
-            "pos": {
-              "x": 0,
-              "y": 2,
-              "w": 3,
-              "h": 3
-            },
-            "config": {
-              "label": "Total Projects",
-              "aggregation": "count",
-              "profileSlug": "project",
-              "color": "#F59E0B"
-            }
-          },
-          {
-            "id": "project-cmd",
-            "kind": "view",
-            "viewName": "Project Command Center",
-            "pos": {
-              "x": 0,
-              "y": 5,
-              "w": 12,
-              "h": 10
-            }
-          },
-          {
-            "id": "project-timeline",
-            "kind": "view",
-            "viewName": "Agent Timeline",
-            "pos": {
-              "x": 0,
-              "y": 15,
-              "w": 12,
-              "h": 8
             }
           }
         ],
@@ -1756,132 +1491,6 @@
       }
     },
     {
-      "name": "Project Card",
-      "entityType": "project",
-      "targetType": "entity",
-      "isDefault": true,
-      "config": {
-        "layout": {
-          "structure": {
-            "header": {
-              "enabled": true,
-              "slots": [
-                "project-status",
-                "project-priority",
-                "project-health",
-                "project-type"
-              ],
-              "layout": "horizontal"
-            },
-            "sidebar": {
-              "enabled": true,
-              "slots": [
-                "project-assigned-agent",
-                "project-owner",
-                "project-deadline",
-                "project-start"
-              ],
-              "position": "right",
-              "width": "260px",
-              "layout": "vertical"
-            },
-            "content": {
-              "enabled": true,
-              "slots": ["project-goal", "project-outcome", "project-tags"],
-              "layout": "vertical"
-            }
-          },
-          "fieldMapping": {
-            "project-status": {
-              "slot": "project-status",
-              "renderer": {
-                "type": "badge"
-              },
-              "order": 1
-            },
-            "project-priority": {
-              "slot": "project-priority",
-              "renderer": {
-                "type": "badge"
-              },
-              "order": 2
-            },
-            "project-health": {
-              "slot": "project-health",
-              "renderer": {
-                "type": "badge"
-              },
-              "order": 3
-            },
-            "project-type": {
-              "slot": "project-type",
-              "renderer": {
-                "type": "badge"
-              },
-              "order": 4
-            },
-            "project-assigned-agent": {
-              "slot": "project-assigned-agent",
-              "renderer": {
-                "type": "link"
-              },
-              "order": 5
-            },
-            "project-owner": {
-              "slot": "project-owner",
-              "renderer": {
-                "type": "avatar"
-              },
-              "order": 6
-            },
-            "project-deadline": {
-              "slot": "project-deadline",
-              "renderer": {
-                "type": "date",
-                "format": "relative"
-              },
-              "order": 7
-            },
-            "project-start": {
-              "slot": "project-start",
-              "renderer": {
-                "type": "date"
-              },
-              "order": 8
-            },
-            "project-goal": {
-              "slot": "project-goal",
-              "renderer": {
-                "type": "text"
-              },
-              "order": 9,
-              "label": "Goal",
-              "showLabel": true
-            },
-            "project-outcome": {
-              "slot": "project-outcome",
-              "renderer": {
-                "type": "text"
-              },
-              "order": 10,
-              "label": "Expected Outcome",
-              "showLabel": true
-            },
-            "project-tags": {
-              "slot": "project-tags",
-              "renderer": {
-                "type": "badge"
-              },
-              "order": 11
-            }
-          }
-        },
-        "colors": {
-          "accent": "#2E6DA4"
-        }
-      }
-    },
-    {
       "name": "Task Card",
       "entityType": "task",
       "targetType": "entity",
@@ -2315,7 +1924,7 @@
         "skill-virustotal": "Clean",
         "skill-maintainer": "OpenClaw core team",
         "skill-requires-api": true,
-        "skill-notes": "Official MCP server for GitHub. Audit Feb 15 \u2014 clean."
+        "skill-notes": "Official MCP server for GitHub. Audit Feb 15 — clean."
       }
     },
     {
@@ -2395,7 +2004,7 @@
         "skill-virustotal": "Flagged",
         "skill-maintainer": "unknown",
         "skill-requires-api": true,
-        "skill-notes": "FLAGGED \u2014 VirusTotal scan Feb 22 returned 3 detections. Immediately disable."
+        "skill-notes": "FLAGGED — VirusTotal scan Feb 22 returned 3 detections. Immediately disable."
       }
     },
     {
@@ -2462,79 +2071,12 @@
       }
     },
     {
-      "profileSlug": "project",
-      "title": "Synap CI/CD Pipeline",
-      "properties": {
-        "project-status": "In Progress",
-        "project-priority": "High",
-        "project-assigned-agent": "ref:agent:Mira",
-        "project-owner": "ref:person:Antoine",
-        "project-start": "2026-02-10",
-        "project-deadline": "2026-03-15",
-        "project-health": "Green",
-        "project-type": "DevOps",
-        "project-goal": "Automate test execution on every PR merge and deploy to staging on green CI",
-        "project-outcome": "Mira handles full CI/CD loop",
-        "project-tags": ["recurring", "internal"]
-      }
-    },
-    {
-      "profileSlug": "project",
-      "title": "Competitive Research Sprint",
-      "properties": {
-        "project-status": "In Progress",
-        "project-priority": "High",
-        "project-assigned-agent": "ref:agent:Lore",
-        "project-owner": "ref:person:Antoine",
-        "project-start": "2026-02-17",
-        "project-deadline": "2026-03-07",
-        "project-health": "Green",
-        "project-type": "Research",
-        "project-goal": "Map the full OpenClaw alternative ecosystem",
-        "project-outcome": "Comprehensive market audit doc",
-        "project-tags": ["one-off", "internal"]
-      }
-    },
-    {
-      "profileSlug": "project",
-      "title": "Client Onboarding Automation",
-      "properties": {
-        "project-status": "In Progress",
-        "project-priority": "Critical",
-        "project-assigned-agent": "ref:agent:Tact",
-        "project-owner": "ref:person:Antoine",
-        "project-start": "2026-02-01",
-        "project-deadline": "2026-03-31",
-        "project-health": "Yellow",
-        "project-type": "Automation",
-        "project-goal": "Eliminate manual onboarding steps",
-        "project-outcome": "New clients fully onboarded within 5 minutes",
-        "project-tags": ["recurring", "client"]
-      }
-    },
-    {
-      "profileSlug": "project",
-      "title": "Template Stack Documentation",
-      "properties": {
-        "project-status": "Backlog",
-        "project-priority": "Medium",
-        "project-owner": "ref:person:Antoine",
-        "project-deadline": "2026-03-31",
-        "project-health": "Green",
-        "project-type": "Content",
-        "project-goal": "Write comprehensive documentation for all 4 Synap workspace templates",
-        "project-outcome": "Self-service docs at synap.io/templates",
-        "project-tags": ["one-off", "internal"]
-      }
-    },
-    {
       "profileSlug": "task",
       "title": "Automate test suite on PR merge",
       "properties": {
         "task-status": "Running",
         "task-priority": "High",
         "task-assigned-agent": "ref:agent:Mira",
-        "task-project": "ref:project:Synap CI/CD Pipeline",
         "task-type": "Code",
         "task-due-date": "2026-03-01",
         "task-effort-hours": 6,
@@ -2551,7 +2093,6 @@
         "task-status": "Queued",
         "task-priority": "High",
         "task-assigned-agent": "ref:agent:Mira",
-        "task-project": "ref:project:Synap CI/CD Pipeline",
         "task-type": "DevOps",
         "task-due-date": "2026-03-01",
         "task-effort-hours": 3,
@@ -2567,7 +2108,6 @@
         "task-status": "Done",
         "task-priority": "High",
         "task-assigned-agent": "ref:agent:Lore",
-        "task-project": "ref:project:Competitive Research Sprint",
         "task-type": "Research",
         "task-due-date": "2026-02-20",
         "task-effort-hours": 4,
@@ -2584,7 +2124,6 @@
         "task-status": "Running",
         "task-priority": "High",
         "task-assigned-agent": "ref:agent:Lore",
-        "task-project": "ref:project:Competitive Research Sprint",
         "task-type": "Research",
         "task-due-date": "2026-02-26",
         "task-effort-hours": 5,
@@ -2601,7 +2140,6 @@
         "task-status": "Running",
         "task-priority": "Critical",
         "task-assigned-agent": "ref:agent:Tact",
-        "task-project": "ref:project:Client Onboarding Automation",
         "task-type": "Ops",
         "task-due-date": "2026-03-31",
         "task-effort-hours": 1,
@@ -2618,7 +2156,6 @@
         "task-status": "Running",
         "task-priority": "Critical",
         "task-assigned-agent": "ref:agent:Tact",
-        "task-project": "ref:project:Client Onboarding Automation",
         "task-type": "Ops",
         "task-due-date": "2026-03-31",
         "task-effort-hours": 1,
@@ -2635,7 +2172,6 @@
         "task-status": "Queued",
         "task-priority": "Critical",
         "task-assigned-agent": "ref:person:Antoine",
-        "task-project": "ref:project:Client Onboarding Automation",
         "task-type": "Review",
         "task-due-date": "2026-02-25",
         "task-effort-hours": 2,
@@ -2648,7 +2184,6 @@
       "properties": {
         "task-status": "Backlog",
         "task-priority": "Medium",
-        "task-project": "ref:project:Template Stack Documentation",
         "task-type": "Content",
         "task-due-date": "2026-03-21",
         "task-effort-hours": 3,
@@ -2719,34 +2254,9 @@
       "type": "links_to"
     },
     {
-      "sourceRef": "project:Synap CI/CD Pipeline",
-      "targetRef": "agent:Mira",
-      "type": "assigned_to"
-    },
-    {
-      "sourceRef": "project:Competitive Research Sprint",
-      "targetRef": "agent:Lore",
-      "type": "assigned_to"
-    },
-    {
-      "sourceRef": "project:Client Onboarding Automation",
-      "targetRef": "agent:Tact",
-      "type": "assigned_to"
-    },
-    {
-      "sourceRef": "task:Automate test suite on PR merge",
-      "targetRef": "project:Synap CI/CD Pipeline",
-      "type": "belongs_to_project"
-    },
-    {
       "sourceRef": "task:Automate test suite on PR merge",
       "targetRef": "agent:Mira",
       "type": "assigned_to"
-    },
-    {
-      "sourceRef": "task:Deploy staging on green CI",
-      "targetRef": "project:Synap CI/CD Pipeline",
-      "type": "belongs_to_project"
     },
     {
       "sourceRef": "task:Deploy staging on green CI",
@@ -2755,38 +2265,18 @@
     },
     {
       "sourceRef": "task:Research OpenClaw alternatives landscape",
-      "targetRef": "project:Competitive Research Sprint",
-      "type": "belongs_to_project"
-    },
-    {
-      "sourceRef": "task:Research OpenClaw alternatives landscape",
       "targetRef": "agent:Lore",
       "type": "assigned_to"
     },
     {
       "sourceRef": "task:Compile pain points from GitHub issues",
-      "targetRef": "project:Competitive Research Sprint",
-      "type": "belongs_to_project"
-    },
-    {
-      "sourceRef": "task:Compile pain points from GitHub issues",
       "targetRef": "agent:Lore",
       "type": "assigned_to"
-    },
-    {
-      "sourceRef": "task:Send welcome email sequence on signup",
-      "targetRef": "project:Client Onboarding Automation",
-      "type": "belongs_to_project"
     },
     {
       "sourceRef": "task:Send welcome email sequence on signup",
       "targetRef": "agent:Tact",
       "type": "assigned_to"
-    },
-    {
-      "sourceRef": "task:Create CRM record and Slack intro",
-      "targetRef": "project:Client Onboarding Automation",
-      "type": "belongs_to_project"
     },
     {
       "sourceRef": "task:Create CRM record and Slack intro",
@@ -2990,12 +2480,6 @@
       },
       {
         "kind": "profile",
-        "profileSlug": "project",
-        "label": "Projects",
-        "icon": "folder"
-      },
-      {
-        "kind": "profile",
         "profileSlug": "provider",
         "label": "Providers",
         "icon": "database"
@@ -3121,7 +2605,7 @@
     }
   ],
   "onboarding": {
-    "goal": "Capture the agent fleet the user runs \u2014 the agents themselves, the model providers behind them, the skills they carry, and the projects they work \u2014 so the workspace reflects their real AI operation.",
+    "goal": "Capture the agent fleet the user runs — the agents themselves, the model providers behind them, the skills they carry, and the projects they work — so the workspace reflects their real AI operation.",
     "framing": "Act as a pragmatic AI ops lead. Tease out which agents are live, what models and providers power them, what each agent can do, and what work they're pointed at. Translate that into agents, providers, skills, and projects.",
     "collect": [
       {
@@ -3151,12 +2635,6 @@
           "skill-trust",
           "skill-source-url"
         ]
-      },
-      {
-        "profileSlug": "project",
-        "what": "The projects the agents are working on",
-        "cardinality": "few",
-        "keyFields": ["title", "project-status", "project-assigned-agent"]
       }
     ],
     "openingQuestions": [
