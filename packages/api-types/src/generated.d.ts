@@ -55,6 +55,13 @@ export interface Context {
 	req?: Request;
 	socketIO?: any;
 	workspaceId?: string | null;
+	/**
+	 * Project ID from the X-Project-Id header — the cross-cutting PROJECT lens,
+	 * orthogonal to the workspace lens. Optional narrowing only: it is intersected
+	 * with the user-access floor, so a stale/forged id can never widen access.
+	 * `undefined`/`null` = no project narrowing. See `AccessContext.projectLens`.
+	 */
+	projectId?: string | null;
 	workspaceRole?: string | null;
 	/**
 	 * Request source — "intelligence" when the request comes from the Intelligence Hub
@@ -6227,6 +6234,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				items: {
 					viewerCanReview: boolean;
 					workspaceId: string | null;
+					projectId: string | null;
 					agentUserId: string | null;
 					sourceMessageId: string | null;
 					sessionId: string | null;
@@ -6239,7 +6247,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					expiresAt: Date | null;
 					createdBy: string | null;
 					threadId: string | null;
-					projectId: string | null;
 					targetType: string;
 					targetId: string;
 					proposalType: string;
@@ -6264,6 +6271,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposals: {
 					viewerCanReview: boolean;
 					workspaceId: string | null;
+					projectId: string | null;
 					agentUserId: string | null;
 					sourceMessageId: string | null;
 					sessionId: string | null;
@@ -6276,7 +6284,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					expiresAt: Date | null;
 					createdBy: string | null;
 					threadId: string | null;
-					projectId: string | null;
 					targetType: string;
 					targetId: string;
 					proposalType: string;
@@ -6300,6 +6307,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				workspaceId: string | null;
+				projectId: string | null;
 				agentUserId: string | null;
 				sourceMessageId: string | null;
 				sessionId: string | null;
@@ -6312,7 +6320,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expiresAt: Date | null;
 				createdBy: string | null;
 				threadId: string | null;
-				projectId: string | null;
 				targetType: string;
 				targetId: string;
 				proposalType: string;
@@ -9717,6 +9724,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "proposed";
 				proposalId: string;
 				id?: undefined;
+			} | {
+				id: string;
+				status: "exists";
+				proposalId?: undefined;
 			} | {
 				id: string;
 				status: "created";
@@ -16869,6 +16880,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				userId: string;
 				workspaceId: string | null;
+				projectId: string | null;
 				id: string;
 				updatedAt: Date;
 				createdAt: Date;
@@ -16876,7 +16888,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				channelId: string | null;
 				startedAt: Date;
 				status: "active" | "paused" | "closed";
-				projectId: string | null;
 				subjectEntityId: string | null;
 				goal: string;
 				templateId: string | null;
@@ -16896,6 +16907,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				userId: string;
 				workspaceId: string | null;
+				projectId: string | null;
 				id: string;
 				updatedAt: Date;
 				createdAt: Date;
@@ -16903,7 +16915,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				channelId: string | null;
 				startedAt: Date;
 				status: "active" | "paused" | "closed";
-				projectId: string | null;
 				subjectEntityId: string | null;
 				goal: string;
 				templateId: string | null;
@@ -16933,6 +16944,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				userId: string;
 				workspaceId: string | null;
+				projectId: string | null;
 				id: string;
 				updatedAt: Date;
 				createdAt: Date;
@@ -16940,7 +16952,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				channelId: string | null;
 				startedAt: Date;
 				status: "active" | "paused" | "closed";
-				projectId: string | null;
 				subjectEntityId: string | null;
 				goal: string;
 				templateId: string | null;
@@ -16971,6 +16982,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				userId: string;
 				workspaceId: string | null;
+				projectId: string | null;
 				id: string;
 				updatedAt: Date;
 				createdAt: Date;
@@ -16978,7 +16990,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				channelId: string | null;
 				startedAt: Date;
 				status: "active" | "paused" | "closed";
-				projectId: string | null;
 				subjectEntityId: string | null;
 				goal: string;
 				templateId: string | null;
@@ -16998,6 +17009,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				userId: string;
 				workspaceId: string | null;
+				projectId: string | null;
 				id: string;
 				updatedAt: Date;
 				createdAt: Date;
@@ -17005,7 +17017,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				channelId: string | null;
 				startedAt: Date;
 				status: "active" | "paused" | "closed";
-				projectId: string | null;
 				subjectEntityId: string | null;
 				goal: string;
 				templateId: string | null;
@@ -17274,6 +17285,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				session: {
 					userId: string;
 					workspaceId: string | null;
+					projectId: string | null;
 					id: string;
 					updatedAt: Date;
 					createdAt: Date;
@@ -17281,7 +17293,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelId: string | null;
 					startedAt: Date;
 					status: "active" | "paused" | "closed";
-					projectId: string | null;
 					subjectEntityId: string | null;
 					goal: string;
 					templateId: string | null;
@@ -17373,6 +17384,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				session: {
 					userId: string;
 					workspaceId: string | null;
+					projectId: string | null;
 					id: string;
 					updatedAt: Date;
 					createdAt: Date;
@@ -17380,7 +17392,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelId: string | null;
 					startedAt: Date;
 					status: "active" | "paused" | "closed";
-					projectId: string | null;
 					subjectEntityId: string | null;
 					goal: string;
 					templateId: string | null;
