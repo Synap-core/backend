@@ -56,6 +56,13 @@ export interface Context {
   req?: Request;
   socketIO?: any; // Socket.IO server instance (type: Server from 'socket.io')
   workspaceId?: string | null; // Workspace ID from X-Workspace-Id header
+  /**
+   * Project ID from the X-Project-Id header — the cross-cutting PROJECT lens,
+   * orthogonal to the workspace lens. Optional narrowing only: it is intersected
+   * with the user-access floor, so a stale/forged id can never widen access.
+   * `undefined`/`null` = no project narrowing. See `AccessContext.projectLens`.
+   */
+  projectId?: string | null;
   workspaceRole?: string | null; // User's role in the workspace (set by workspaceProcedure)
   /**
    * Request source — "intelligence" when the request comes from the Intelligence Hub

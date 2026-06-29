@@ -151,3 +151,32 @@ export class AccessContext {
     return this.actor === "agent";
   }
 }
+
+/**
+ * THE single lens seam — derive a fully-lensed AccessContext from a request
+ * context in ONE place, so routers stop hand-rolling
+ * `AccessContext.from(ctx).withLens(ctx.workspaceId ?? null)` (and forgetting the
+ * project lens). Picks the right boundary factory, then applies BOTH lenses:
+ *
+ *   - workspace lens ← `ctx.workspaceId` (`?? null`: an absent workspace =
+ *     globals-only, the established CONFIG-table default these callers used).
+ *   - project lens   ← `ctx.projectId` (`?? undefined`: an absent project = no
+ *     project narrowing).
+ *
+ * Both only narrow within the user floor (see `withLens` / `withProjectLens`), so
+ * this is purely a convenience seam — no widening. DATA-table readers that want
+ * the FULL floor when no workspace is active (all member workspaces, not just
+ * globals) should narrow with `ctx.workspaceId ?? undefined` themselves rather
+ * than this helper.
+ */
+export function accessFor(ctx: {
+  userId?: string | null;
+  agentUserId?: string | null;
+  isHubProtocol?: boolean;
+  workspaceId?: string | null;
+  projectId?: string | null;
+}): AccessContext {
+  return AccessContext.from(ctx)
+    .withLens(ctx.workspaceId ?? null)
+    .withProjectLens(ctx.projectId ?? undefined);
+}

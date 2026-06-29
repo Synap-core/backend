@@ -24,7 +24,6 @@ import {
   and,
   or,
   isNull,
-  isNotNull,
   inArray,
   getDb,
   ProfileResolutionService,
@@ -55,33 +54,27 @@ import { randomUUID } from "crypto";
 import { syncPropertyToRelations } from "../utils/property-relation-sync.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { dispatchWebhooksForEvent } from "../utils/webhook-delivery.js";
-import {
-  userVisibleWhere,
-  workspaceLensWhere,
-} from "../utils/user-visible-where.js";
-import {
-  exposureMemberWhere,
-  projectLensWhere,
-} from "../utils/project-scope.js";
+import { workspaceLensWhere } from "../utils/user-visible-where.js";
+import { accessScopeWhere, projectLensWhere } from "../utils/project-scope.js";
 import { resolveContentTarget } from "../import/materialize-document.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "entities-router" });
 
+// The entity user floor = the canonical DATA-table resolver (`accessScopeWhere`,
+// no lens): pod-personal (NULL workspace, owner-gated) OR workspace-member access
+// OR exposure membership (a PROJECT member via belongs_to_project OR a CLIENT via
+// visible_to sees their anchor's exposed entities across workspaces). Delegating
+// here converges entities onto the SAME resolver documents/the registry use —
+// behaviour-identical to the prior hand-rolled union (proven equivalent: same
+// three branches, same default EXPOSURE_RELATION_TYPES whitelist).
 function entityVisibleWhere(userId: string) {
-  return or(
-    and(isNull(entities.workspaceId), eq(entities.userId, userId)),
-    and(
-      isNotNull(entities.workspaceId),
-      userVisibleWhere(entities.workspaceId, userId)
-    ),
-    // Exposure-membership access (chantier α): an anchor member — a PROJECT member
-    // (belongs_to_project) OR a CLIENT (visible_to) — sees their anchor's exposed
-    // entities ACROSS workspaces, and nothing else there. The third access source
-    // in the user floor. Dormant until visible_to edges + anchor members exist
-    // (belongs_to_project behaviour is unchanged — it's in the default whitelist).
-    exposureMemberWhere(entities.id, userId)
-  )!;
+  return accessScopeWhere({
+    workspaceIdColumn: entities.workspaceId,
+    entityIdColumn: entities.id,
+    ownerColumn: entities.userId,
+    userId,
+  });
 }
 
 function entityLensWhere(

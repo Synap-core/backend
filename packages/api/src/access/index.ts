@@ -21,7 +21,7 @@
 // Importing registry.ts runs its registration side effects.
 import "./registry.js";
 
-export { AccessContext, type Actor } from "./context.js";
+export { AccessContext, accessFor, type Actor } from "./context.js";
 export { scopedDb, ScopedDb, type ScopedFindOptions } from "./scoped-db.js";
 export {
   registerVisibility,

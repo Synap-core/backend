@@ -199,10 +199,18 @@ describe("registry — declaration is mandatory", () => {
     expect(isRegistered(channels)).toBe(true);
   });
 
-  it("a scoped table NOT read through scopedDb is intentionally unregistered", () => {
-    // entities uses its own scoping (workspaceProcedure / userVisibleWhere), so
-    // it's deliberately absent — the registry holds only scopedDb-read tables.
-    expect(isRegistered(entities)).toBe(false);
+  it("the converged DATA tables are registered (custom→accessScopeWhere)", () => {
+    // entities/documents now declare a `custom` rule delegating to the canonical
+    // DATA-table resolver, so a scopedDb read floors identically to the
+    // hand-rolled entityVisibleWhere / documents.list path.
+    expect(isRegistered(entities)).toBe(true);
+  });
+
+  it("a table with bespoke conditional scoping stays intentionally unregistered", () => {
+    // entityTemplates keeps its own scoping (templates.list's conditional
+    // includePublic semantics don't fit a uniform rule), so it's deliberately
+    // absent — the registry holds only tables with a uniform declared rule.
+    expect(isRegistered(entityTemplates)).toBe(false);
   });
 
   it("an unregistered table throws (the structural guarantee)", () => {

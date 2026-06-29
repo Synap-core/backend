@@ -24,9 +24,14 @@ import {
   relationDefs,
   widgetDefinitions,
   intelligenceCommands,
+  entities,
+  documents,
+  relations,
+  proposals,
 } from "@synap/database/schema";
 import { registerVisibility } from "./visibility.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
+import { accessScopeWhere } from "../utils/project-scope.js";
 
 // ── Workspace-scoped: visible = pod-wide (NULL) OR a workspace the user is in ──
 registerVisibility({
@@ -131,7 +136,65 @@ registerVisibility({
   },
 });
 
-// NOTE: only tables actually READ through scopedDb() are registered here.
-// entities/proposals (own scoping) and entityTemplates (bespoke userVisibleWhere
-// in templates.list — its conditional includePublic semantics don't match a
-// uniform rule) are intentionally NOT registered.
+// ── DATA tables (nullable workspace_id → pod-wide-capable) ────────────────────
+// These converge on ONE resolver: the user floor is the union of pod-personal
+// (NULL workspace, owner-gated), workspace-member access, and exposure
+// membership; both lenses only narrow. entities/documents declare a `custom`
+// rule delegating to `accessScopeWhere` (the canonical DATA-table resolver —
+// the same predicate documents.list / entities' entityVisibleWhere now use), so
+// a scopedDb read of either table is floored identically to the hand-rolled
+// path. relations/proposals carry a nullable workspace_id with no entity-graph
+// exposure axis of their own, so they use the flat `workspace` floor (pod-wide
+// NULL OR a member workspace) — the same predicate relations.list / proposals
+// .list reach for via userVisibleWhere.
+
+registerVisibility({
+  table: entities,
+  query: () => db.query.entities,
+  rule: {
+    kind: "custom",
+    predicate: (access) =>
+      accessScopeWhere({
+        workspaceIdColumn: entities.workspaceId,
+        entityIdColumn: entities.id,
+        ownerColumn: entities.userId,
+        userId: access.userId,
+        workspaceLens: access.workspaceLens,
+        projectLens: access.projectLens,
+      }),
+  },
+});
+registerVisibility({
+  table: documents,
+  query: () => db.query.documents,
+  rule: {
+    kind: "custom",
+    predicate: (access) =>
+      accessScopeWhere({
+        workspaceIdColumn: documents.workspaceId,
+        entityIdColumn: documents.id,
+        ownerColumn: documents.userId,
+        userId: access.userId,
+        workspaceLens: access.workspaceLens,
+        projectLens: access.projectLens,
+      }),
+  },
+});
+registerVisibility({
+  table: relations,
+  query: () => db.query.relations,
+  rule: { kind: "workspace", workspaceColumn: relations.workspaceId },
+});
+registerVisibility({
+  table: proposals,
+  query: () => db.query.proposals,
+  rule: { kind: "workspace", workspaceColumn: proposals.workspaceId },
+});
+
+// NOTE: entityTemplates (bespoke userVisibleWhere in templates.list — its
+// conditional includePublic semantics don't match a uniform rule) and `profiles`
+// (a 4-way scope enum + grant-table EXISTS, still read through
+// ProfileRepository.getAccessibleProfiles, NOT scopedDb) are intentionally NOT
+// registered yet — see the `custom`-rule note in visibility.ts. Register
+// `profiles` only once its reads actually flow through scopedDb, with a
+// predicate co-located with its repo.

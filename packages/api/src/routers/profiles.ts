@@ -112,7 +112,7 @@ export const profilesRouter = router({
   /**
    * List accessible profiles (system + workspace + user)
    */
-  list: workspaceProcedure
+  list: podProcedure
     .input(
       z
         .object({
@@ -125,9 +125,16 @@ export const profilesRouter = router({
       const db = await getDb();
       const profileRepo = new ProfileRepository(db);
 
+      // podProcedure tolerates a workspace-less caller (pod-wide / cross-workspace
+      // surfaces, onboarding). `?? ""` routes through getAccessibleProfiles'
+      // workspace-less branch (SYSTEM + USER profiles) instead of binding null
+      // into a uuid column. NOTE: this pod-wide path does NOT yet union the
+      // caller's member-workspace / shared profiles (that broader floor is what
+      // `listMulti` does) — broadening it is a deliberate follow-up, kept out
+      // here so the documented workspace-less contract is unchanged.
       let profiles = await profileRepo.getAccessibleProfiles(
         ctx.userId,
-        ctx.workspaceId
+        ctx.workspaceId ?? ""
       );
 
       if (input?.creatableOnly) {
@@ -142,7 +149,7 @@ export const profilesRouter = router({
   /**
    * Get profile by slug or ID
    */
-  get: workspaceProcedure
+  get: podProcedure
     .input(
       z.object({
         identifier: z.string(), // slug or ID
@@ -152,6 +159,10 @@ export const profilesRouter = router({
       const db = await getDb();
       const resolutionService = new ProfileResolutionService(db);
 
+      // podProcedure: ctx.workspaceId may be null (pod-wide / onboarding). Both
+      // resolveProfile and getEffectiveProperties tolerate a null workspace lens
+      // (null → base props, no workspace overlay) — same contract the workspace-
+      // less `getEffectiveRenderers` already relies on.
       const profile = await resolutionService.resolveProfile(
         input.identifier,
         ctx.userId,

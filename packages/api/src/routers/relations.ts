@@ -41,6 +41,7 @@ import {
   eq,
   and,
   or,
+  asc,
   desc,
   getDb,
   EventRepository,
@@ -54,6 +55,7 @@ import {
 } from "@synap/database";
 import {
   relations,
+  relationDefs,
   entities,
   entityPropertyIndex,
   propertyDefs,
@@ -63,6 +65,7 @@ import {
   focusSessions,
   projectMembers,
 } from "@synap/database/schema";
+import { scopedDb, AccessContext } from "../access/index.js";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { getLinksFor } from "../services/links/links-service.js";
@@ -145,17 +148,16 @@ export const relationsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      if (!ctx.workspaceId) {
-        return { relations: [] };
-      }
-
-      const whereClause = and(
-        eq(relations.workspaceId, ctx.workspaceId),
-        input.type ? eq(relations.type, input.type) : undefined
-      );
-
-      const results = await db.query.relations.findMany({
-        where: whereClause,
+      // Pod-wide-by-default through the access seam: the registered `workspace`
+      // rule applies the user floor (every workspace the caller belongs to +
+      // pod-wide globals); an active workspace header NARROWS to that workspace
+      // (== the prior `eq(workspaceId)`), no header = the full floor (instead of
+      // the old empty list that hung the cross-workspace graph). `?? undefined`
+      // (not `?? null`) so a workspace-less caller gets the floor, not globals-only.
+      const results = await scopedDb(
+        AccessContext.from(ctx).withLens(ctx.workspaceId ?? undefined)
+      ).findMany<typeof relations.$inferSelect>(relations, {
+        where: input.type ? eq(relations.type, input.type) : undefined,
         orderBy: [desc(relations.createdAt)],
         limit: input.limit,
         offset: input.offset,
@@ -171,13 +173,15 @@ export const relationsRouter = router({
    * Default types (assigned_to, depends_on, etc.) are seeded during workspace creation.
    */
   listTypes: protectedProcedure.query(async ({ ctx }) => {
-    if (!ctx.workspaceId) {
-      return { types: [] };
-    }
-
-    const database = await getDb();
-    const relDefRepo = new RelationDefRepository(database);
-    const defs = await relDefRepo.list(ctx.workspaceId);
+    // Pod-wide-by-default: relation_defs is the registered substrate `workspace`
+    // rule (includeGlobalsInLens) — an active workspace → its defs + pod-wide
+    // base defs; no workspace → the floor (all member workspaces' defs + base
+    // defs) instead of the old empty list. `?? undefined` = the full floor.
+    const defs = await scopedDb(
+      AccessContext.from(ctx).withLens(ctx.workspaceId ?? undefined)
+    ).findMany<typeof relationDefs.$inferSelect>(relationDefs, {
+      orderBy: [asc(relationDefs.slug)],
+    });
 
     const types = defs.map((def) => ({
       type: def.slug,

@@ -16,7 +16,7 @@ import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { getDb, and, eq, or, isNull, asc } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
-import { scopedDb, AccessContext } from "../access/index.js";
+import { scopedDb, accessFor } from "../access/index.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { compileWidgetSource } from "../utils/widget-compiler.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
@@ -115,9 +115,9 @@ export const widgetDefinitionsRouter = router({
   // registered `workspace` rule applied by scopedDb — behaviour-identical to the
   // prior hand-rolled `or(isNull, eq(ws))` / `isNull` branch.
   list: podProcedure.query(async ({ ctx }) => {
-    const rows = await scopedDb(
-      AccessContext.from(ctx).withLens(ctx.workspaceId ?? null)
-    ).findMany<typeof widgetDefinitions.$inferSelect>(widgetDefinitions, {
+    const rows = await scopedDb(accessFor(ctx)).findMany<
+      typeof widgetDefinitions.$inferSelect
+    >(widgetDefinitions, {
       where: eq(widgetDefinitions.isActive, true),
       orderBy: [
         // Builtins first (workspaceId null sorts before UUIDs)

@@ -84,6 +84,13 @@ export async function createContext(
       req.headers.get("x-workspace-id") ||
       null;
 
+    // Extract the PROJECT lens from its header (orthogonal to the workspace
+    // lens; an optional cross-cutting narrowing). Same case-insensitive read.
+    const projectId =
+      req.headers.get("X-Project-Id") ||
+      req.headers.get("x-project-id") ||
+      null;
+
     // Kratos session structure: { identity: { id, traits: { email, name } } }
     if (session && session.identity) {
       return {
@@ -98,6 +105,7 @@ export async function createContext(
         session,
         req,
         workspaceId, // Add workspace ID to context
+        projectId, // Add project lens to context
       };
     }
 
@@ -110,6 +118,7 @@ export async function createContext(
       session: null,
       req,
       workspaceId, // Add workspace ID even for unauthenticated (for public routes)
+      projectId,
     };
   } catch (error) {
     contextLogger.error(

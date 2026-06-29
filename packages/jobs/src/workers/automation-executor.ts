@@ -339,6 +339,48 @@ async function executeOutputStep(
       const title = config.title as string;
       const properties = (config.properties ?? {}) as Record<string, unknown>;
 
+      // Idempotency + empty-guard. When the node declares `dedupeBy` (a property
+      // key, e.g. "url" for bookmarks) we (1) SKIP when that value is empty — so a
+      // message with no real link never spawns a blank entity — and (2) SKIP when
+      // an entity of this profile already carries that value — so the same link in
+      // many messages (or a backfill replay, or the digest re-embedding the
+      // conversation) never creates duplicates. We skip BEFORE the governance gate,
+      // so a duplicate isn't even proposed. Pod-scoped profiles (bookmark is one)
+      // can live with workspaceId NULL, so match either.
+      const dedupeBy = config.dedupeBy as string | undefined;
+      if (dedupeBy) {
+        const rawVal = properties[dedupeBy];
+        const dedupeStr = rawVal == null ? "" : String(rawVal).trim();
+        if (!dedupeStr) {
+          return {
+            status: "skipped",
+            reason: `empty ${dedupeBy} — not creating`,
+          };
+        }
+        const [existing] = await db
+          .select({ id: entities.id })
+          .from(entities)
+          .where(
+            and(
+              or(
+                eq(entities.workspaceId, workspaceId),
+                isNull(entities.workspaceId)
+              ),
+              eq(entities.type, profileSlug),
+              isNull(entities.deletedAt),
+              drizzleSql`${entities.properties}->>${dedupeBy} = ${dedupeStr}`
+            )
+          )
+          .limit(1);
+        if (existing) {
+          return {
+            status: "skipped",
+            reason: "duplicate",
+            entityId: existing.id,
+          };
+        }
+      }
+
       // Governed by the same policy as chat-AI writes (see automation-governance.ts):
       // auto-approve, or a PENDING proposal attributed to the owning agent.
       const gate = await checkAutomationWriteOrPropose({

@@ -50,6 +50,7 @@
           "config": {
             "profileSlug": "bookmark",
             "title": "{{loop.item}}",
+            "dedupeBy": "url",
             "properties": {
               "url": "{{loop.item}}",
               "sourceMessageId": "{{trigger.payload.data.messageId}}",
