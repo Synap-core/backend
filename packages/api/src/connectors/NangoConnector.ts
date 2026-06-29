@@ -26,8 +26,18 @@ const NangoRecordsResponseSchema = z.object({
 const NangoConnectionSchema = z.object({
   connection_id: z.string(),
   provider_config_key: z.string(),
-  created_at: z.string(),
+  // `created_at` is absent on some self-hosted list shapes — keep it optional so
+  // a present-but-unfiltered connection still parses.
+  created_at: z.string().optional(),
   last_fetched_at: z.string().optional(),
+  // The Connect end-user the connection belongs to. We filter on this
+  // CLIENT-SIDE (see listConnections) because Nango's `?end_user_id=` query
+  // filter is broken on the self-hosted version — it returns 0 even when a
+  // connection with that exact end_user exists.
+  end_user: z
+    .object({ id: z.string().nullable().optional() })
+    .nullable()
+    .optional(),
 });
 
 const NangoConnectionsResponseSchema = z.object({
@@ -172,7 +182,12 @@ export class NangoConnector implements SyncConnector {
   }
 
   async listConnections(userId: string): Promise<SyncConnectorConnection[]> {
-    const res = await fetch(`${this.host}/connection?end_user_id=${userId}`, {
+    // Fetch the env's connections and filter by end_user CLIENT-SIDE. We do NOT
+    // pass `?end_user_id=` because that filter is BROKEN on the self-hosted Nango
+    // (it returns 0 even when a connection with that exact end_user exists). The
+    // unfiltered list carries `end_user.id`, so we match on it ourselves. Scope is
+    // the env (the secret key's environment) — i.e. this pod's own connections.
+    const res = await fetch(`${this.host}/connection`, {
       headers: this.authHeaders(),
     });
 
@@ -181,13 +196,15 @@ export class NangoConnector implements SyncConnector {
     const parsed = NangoConnectionsResponseSchema.safeParse(await res.json());
     if (!parsed.success) return [];
 
-    return parsed.data.connections.map((c) => ({
-      connectionId: c.connection_id,
-      provider: c.provider_config_key,
-      userId,
-      createdAt: new Date(c.created_at),
-      lastSyncAt: c.last_fetched_at ? new Date(c.last_fetched_at) : undefined,
-    }));
+    return parsed.data.connections
+      .filter((c) => c.end_user?.id === userId)
+      .map((c) => ({
+        connectionId: c.connection_id,
+        provider: c.provider_config_key,
+        userId,
+        createdAt: c.created_at ? new Date(c.created_at) : new Date(),
+        lastSyncAt: c.last_fetched_at ? new Date(c.last_fetched_at) : undefined,
+      }));
   }
 
   async revokeConnection(connectionId: string): Promise<void> {
