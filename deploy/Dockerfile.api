@@ -79,16 +79,6 @@ COPY --from=builder --chown=nodejs:nodejs /app/deploy .
 COPY --chown=nodejs:nodejs kratos ./kratos
 COPY --chown=nodejs:nodejs hydra ./hydra
 
-# Capability seed templates — the FILE FALLBACK for loadCapabilityTemplate.
-# pnpm deploy doesn't vendor these JSONs and the bundle reads them via fs (not
-# import), so without this COPY a deployed pod has NO templates at all (the
-# capability_templates DB table starts empty + there is no seed step), and every
-# connect↔apply family-template apply silently degrades to a verb-less tool.
-# The DB path still wins when a row exists (workspace overlays, runtime edits);
-# this is purely the bootstrap floor. CAPABILITY_TEMPLATES_DIR pins the lookup
-# so it never depends on cwd / __dirname inside the esbuild bundle.
-COPY --chown=nodejs:nodejs templates ./templates
-ENV CAPABILITY_TEMPLATES_DIR=/app/templates/capabilities
 
 # Copy migrations (SQL files not included in pnpm deploy)
 COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations/*.sql ./migrations/

@@ -48,10 +48,10 @@ export interface MaterializableConnector {
  *
  * When a provider is connected, this names the family `CapabilityDefinition` that
  * gives the connection its VERBS + skills + grants (instead of a verb-less
- * `kind:'provider'` tool). The convention is the on-disk / DB template key per
- * provider family (`templates/capabilities/<key>.capability.json`). A provider
- * with NO family template degrades gracefully — the bare provider tool is kept
- * and no verbs are applied.
+ * `kind:'provider'` tool). The key resolves through `loadCapabilityTemplate`,
+ * which fetches the definition from the Control Plane catalog (the source of
+ * truth). A provider with NO family template degrades gracefully — the bare
+ * provider tool is kept and no verbs are applied.
  */
 export const PROVIDER_TEMPLATE_KEY: Record<string, string> = {
   // The unified Google connection: ONE `google` integration (Gmail + Calendar +

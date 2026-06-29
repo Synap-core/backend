@@ -24,10 +24,6 @@
  * Design doc: team/platform/playbooks-capability-substrate.mdx
  */
 
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
-
 import {
   encryptServerSide,
   db,
@@ -55,10 +51,7 @@ import type {
   CapabilityVaultDef,
   ToolVerbKind,
 } from "@synap/playbooks";
-import {
-  BUNDLED_TEMPLATES,
-  BUNDLED_TEMPLATE_KEYS,
-} from "./bundled-templates.generated.js";
+import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
 
 import { playbooksRouter } from "../../routers/playbooks.js";
 import { toolsRouter } from "../../routers/tools.js";
@@ -68,78 +61,30 @@ import type { Context } from "../../types/context.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { interpolateDeep } from "../_shared/interpolate.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 // Param interpolation (`{{var}}` scheme) is shared via services/_shared/interpolate.
 
-// ── templateKey → JSON loader ─────────────────────────────────────────────────
-
-/** Candidate roots for the seed-template directory (dev + built + env). */
-function templateDirCandidates(): string[] {
-  const dirs: string[] = [];
-  if (process.env.CAPABILITY_TEMPLATES_DIR) {
-    dirs.push(process.env.CAPABILITY_TEMPLATES_DIR);
-  }
-  // From packages/api/src/services/capabilities → synap-backend/templates/capabilities
-  dirs.push(path.resolve(__dirname, "../../../../../templates/capabilities"));
-  // Built layout: packages/api/dist/services/capabilities → same backend root.
-  dirs.push(path.resolve(__dirname, "../../../../templates/capabilities"));
-  // cwd fallbacks (backend root or packages/api).
-  dirs.push(path.resolve(process.cwd(), "templates/capabilities"));
-  dirs.push(path.resolve(process.cwd(), "../../templates/capabilities"));
-  return dirs;
-}
+// ── templateKey → definition loader ───────────────────────────────────────────
 
 /**
- * List every on-disk capability template KEY (filename stem of
- * `<key>.capability.json`) from the first resolvable template dir. This is what
- * makes the FULL template library discoverable in the catalog — not just the
- * provider-family subset. Returns [] when no dir resolves (deployed image must
- * bundle `templates/` — see deploy/Dockerfile.api). The containment is implicit:
- * we only read names within the resolved dir, never a caller-supplied path.
- */
-export function listOnDiskTemplateKeys(): string[] {
-  // The BUNDLED registry is the reliable floor (compiled in — always present).
-  // Union it with any on-disk files (a template dropped on disk but not yet
-  // regenerated into the bundle), so neither path alone can hide a template.
-  const keys = new Set<string>(BUNDLED_TEMPLATE_KEYS);
-  for (const dir of templateDirCandidates()) {
-    try {
-      if (!fs.existsSync(dir)) continue;
-      for (const f of fs.readdirSync(dir)) {
-        if (f.endsWith(".capability.json")) {
-          keys.add(f.replace(/\.capability\.json$/, ""));
-        }
-      }
-      break; // first resolvable dir wins for the on-disk set
-    } catch {
-      // Unreadable candidate — try the next.
-    }
-  }
-  return [...keys];
-}
-
-/**
- * Load a `CapabilityDefinition` by templateKey — DB-first.
+ * Load a `CapabilityDefinition` by templateKey.
  *
  * Resolution order:
- *   1. DB: a live `capability_templates` row whose key matches and whose scope is
- *      the requested workspace OR pod-wide (`workspace_id IS NULL`). A workspace
- *      overlay wins over the pod-wide row (ORDER BY workspace_id NULLS LAST).
- *   2. File fallback: the on-disk seed JSONs (templateDirCandidates) — kept for
- *      local-dev ergonomics and as the bootstrap before `eve capabilities sync`
- *      has populated the DB. The containment guard is a security control, not a
- *      workaround — it stays.
+ *   1. DB: a live `capability_templates` row (a WORKSPACE OVERLAY — a local
+ *      customization of an installed pack). Workspace overlay wins over a
+ *      pod-wide row.
+ *   2. CONTROL PLANE catalog: the single source of truth for the template
+ *      library (GET {CP}/api/marketplace/capabilities). The pod carries NO
+ *      templates of its own — discovery + definitions come from the CP, exactly
+ *      like workspace packages.
  *
- * Making this DB-first is what closes the deployed-pod `templateKey` 404: the
- * JSONs are NOT bundled into the @synap/api image, so on a deployed pod only the
- * DB path resolves.
+ * Throws when neither resolves (unknown key, or the CP is unreachable AND no DB
+ * overlay exists).
  */
 export async function loadCapabilityTemplate(
   templateKey: string,
   opts?: { workspaceId?: string | null }
 ): Promise<CapabilityDefinition> {
-  // 1. DB-first: workspace overlay (if any) wins over the pod-wide row.
+  // 1. DB overlay: workspace customization (if any) wins over a pod-wide row.
   const workspaceId = opts?.workspaceId ?? null;
   const scopePredicate = workspaceId
     ? or(
@@ -165,31 +110,13 @@ export async function loadCapabilityTemplate(
     return row.definition as CapabilityDefinition;
   }
 
-  // 2. BUNDLED registry — the vendored library compiled INTO the server binary
-  //    (bundled-templates.generated.ts). This is the reliable floor: it does not
-  //    depend on the deploy image bundling the templates/ directory (a fragile
-  //    COPY that produced empty catalogs). DB overlays still win above.
-  if (BUNDLED_TEMPLATES[templateKey]) {
-    return BUNDLED_TEMPLATES[templateKey]!;
-  }
+  // 2. Control Plane catalog — the source of truth.
+  const cpDef = await fetchCPCapabilityTemplate(templateKey);
+  if (cpDef) return cpDef;
 
-  // 3. File fallback (dev ergonomics / a template dropped on disk but not yet
-  //    regenerated into the bundle).
-  const fileName = `${templateKey}.capability.json`;
-  for (const dir of templateDirCandidates()) {
-    const filePath = path.join(dir, fileName);
-    // Containment guard: a crafted key (e.g. "../../etc/passwd") must never
-    // escape the candidate dir. Resolve both and require the file to live
-    // strictly inside the dir.
-    if (!path.resolve(filePath).startsWith(path.resolve(dir) + path.sep)) {
-      throw new Error("invalid template key");
-    }
-    if (fs.existsSync(filePath)) {
-      const raw = fs.readFileSync(filePath, "utf-8");
-      return JSON.parse(raw) as CapabilityDefinition;
-    }
-  }
-  throw new Error(`Capability template not found: ${templateKey}`);
+  throw new Error(
+    `Capability template "${templateKey}" not found (no workspace overlay; not in the Control Plane catalog — is the CP reachable + seeded?).`
+  );
 }
 
 // ── Playbook template shape ───────────────────────────────────────────────────

@@ -33,10 +33,7 @@ import type { CapabilityDefinition } from "@synap/playbooks";
 
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { resolveNangoConnector } from "../../connectors/index.js";
-import {
-  loadCapabilityTemplate,
-  listOnDiskTemplateKeys,
-} from "./create-from-definition.js";
+import { fetchCPCapabilityTemplates } from "./cp-template-client.js";
 
 // ── Contract (matched verbatim by the CLI being built in parallel) ────────────
 
@@ -293,10 +290,9 @@ interface TemplateEntry {
 
 /**
  * Load every available capability template definition: the live DB rows
- * (`capability_templates`, pod-wide + workspace overlays) PLUS the on-disk family
- * templates named by `PROVIDER_TEMPLATE_KEY` (so a provider family the user could
- * connect surfaces even before its row is synced into the DB). De-duped by key
- * (DB rows win — a workspace overlay or pod-wide row beats the on-disk seed).
+ * (`capability_templates` — local workspace overlays) PLUS the Control Plane
+ * catalog (the source of truth for the template library; the pod carries no
+ * templates of its own). De-duped by key — a DB overlay wins over the CP entry.
  */
 async function loadTemplates(workspaceId: string): Promise<TemplateEntry[]> {
   const byKey = new Map<string, TemplateEntry>();
@@ -334,26 +330,20 @@ async function loadTemplates(workspaceId: string): Promise<TemplateEntry[]> {
       }
     }
   } catch {
-    // Degrade: no DB templates — the on-disk family set below still applies.
+    // Degrade: no DB overlays — the CP catalog below still applies.
   }
 
-  // On-disk template LIBRARY — every `<key>.capability.json` on disk, not just the
-  // provider families. This is what makes the full catalog discoverable instead
-  // of a hidden door. Only keys not already resolved from the DB are loaded; each
-  // load is independently guarded so one bad file never sinks the rest.
-  for (const templateKey of listOnDiskTemplateKeys()) {
-    if (byKey.has(templateKey)) continue;
-    try {
-      const def = await loadCapabilityTemplate(templateKey, { workspaceId });
-      byKey.set(templateKey, {
-        key: def.key ?? templateKey,
-        name: def.name,
-        description: def.description ?? null,
-        def,
-      });
-    } catch {
-      // Unparseable / missing — skip.
-    }
+  // CONTROL PLANE catalog — the single source of truth for the template library
+  // (the pod carries no templates of its own). DB overlays above win per key.
+  const cpItems = await fetchCPCapabilityTemplates();
+  for (const item of cpItems) {
+    if (byKey.has(item.key)) continue;
+    byKey.set(item.key, {
+      key: item.key,
+      name: item.name,
+      description: item.description ?? null,
+      def: item.definition,
+    });
   }
 
   return Array.from(byKey.values());
