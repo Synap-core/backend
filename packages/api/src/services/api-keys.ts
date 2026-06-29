@@ -7,7 +7,7 @@
  * Based on industry best practices from GitHub, Stripe, and AWS.
  */
 
-import { randomBytes } from "crypto";
+import { randomBytes, createHash } from "crypto";
 import bcrypt from "bcrypt";
 import { TRPCError } from "@trpc/server";
 import { db, sql as pgSql, drizzleSql as sql } from "@synap/database"; // pgSql = postgres.js, sql = Drizzle
@@ -51,6 +51,32 @@ const rateLimiter = new Map<string, { count: number; resetAt: number }>();
  */
 const lastUsedAtWriteCache = new Map<string, number>();
 const LAST_USED_AT_DEBOUNCE_MS = 60_000; // 1 minute
+
+/**
+ * Short-TTL verification cache (in-memory).
+ *
+ * Auth runs on EVERY `/api/hub/*` request and bcrypt.compare is intentionally
+ * expensive (cost 12 ≈ ~0.7s each). With many candidates sharing one prefix
+ * this dominated request latency. This cache lets repeated requests with the
+ * SAME key skip bcrypt entirely.
+ *
+ * Invariants (security-critical):
+ *   • Keyed by sha256(plaintext key) — the plaintext key is NEVER stored.
+ *   • ONLY successful ("valid") verifications are cached. invalid / not_found /
+ *     revoked / expired / null results are never cached, so an unknown or
+ *     revoked key is never served from cache and revocation surfaces quickly.
+ *   • TTL = 30s. TRADEOFF: a revoked key may remain accepted for up to the TTL
+ *     unless the cache is invalidated — revokeApiKey / rotateApiKey clear the
+ *     entire cache to bound this (see those methods).
+ *   • Expiry is never bypassed: on a cache hit the stored record's expiresAt is
+ *     re-checked against the current time and falls through to full validation
+ *     if it has since passed.
+ */
+const verificationCache = new Map<
+  string,
+  { record: ApiKeyRecord; expiresAtMs: number }
+>();
+const VERIFICATION_CACHE_TTL_MS = 30_000; // 30 seconds
 
 /**
  * API Key Service
@@ -242,6 +268,47 @@ export class ApiKeyService {
   }
 
   /**
+   * Compute the verification-cache key for a plaintext API key.
+   * sha256 of the plaintext — the plaintext itself is NEVER stored anywhere.
+   */
+  private verificationCacheKey(apiKey: string): string {
+    return createHash("sha256").update(apiKey).digest("hex");
+  }
+
+  /**
+   * Return a cached, still-valid record for this key, or null on a miss.
+   * Prunes lazily: drops the entry if the TTL elapsed OR the key has since
+   * expired (we never serve an expired key from cache).
+   */
+  private getCachedValidRecord(apiKey: string): ApiKeyRecord | null {
+    const cacheKey = this.verificationCacheKey(apiKey);
+    const entry = verificationCache.get(cacheKey);
+    if (!entry) return null;
+
+    if (Date.now() >= entry.expiresAtMs) {
+      verificationCache.delete(cacheKey);
+      return null;
+    }
+    // Never bypass key expiry, even within the cache TTL.
+    if (entry.record.expiresAt && entry.record.expiresAt <= new Date()) {
+      verificationCache.delete(cacheKey);
+      return null;
+    }
+    return entry.record;
+  }
+
+  /**
+   * Cache a successfully-verified record. Callers MUST only pass records that
+   * verified as "valid" (active + not expired) — positive results only.
+   */
+  private cacheValidRecord(apiKey: string, record: ApiKeyRecord): void {
+    verificationCache.set(this.verificationCacheKey(apiKey), {
+      record,
+      expiresAtMs: Date.now() + VERIFICATION_CACHE_TTL_MS,
+    });
+  }
+
+  /**
    * Inspect an API key's status WITHOUT enforcing it.
    *
    * Unlike `validateApiKey`, this method distinguishes between the various
@@ -271,6 +338,11 @@ export class ApiKeyService {
     const prefix = this.extractPrefix(apiKey);
     if (!prefix) return { status: "invalid_format" };
 
+    // Fast path: short-TTL verification cache (positive results only). Lets
+    // repeated requests with the same key skip bcrypt entirely.
+    const cachedRecord = this.getCachedValidRecord(apiKey);
+    if (cachedRecord) return { status: "valid", record: cachedRecord };
+
     // Look up ALL keys with the matching prefix (no active/expiry filter).
     // We need the row to disambiguate revoked vs expired vs unknown.
     const candidates = await db
@@ -278,19 +350,28 @@ export class ApiKeyService {
       .from(apiKeys)
       .where(eq(apiKeys.keyPrefix, prefix));
 
-    for (const candidate of candidates) {
-      // Use bcrypt.compare only on the rows whose prefix matches — bcrypt is
-      // expensive (~200ms each), but the prefix narrows the search space
-      // significantly in practice (one prefix per key class).
-      const isMatch = await bcrypt.compare(apiKey, candidate.keyHash);
-      if (!isMatch) continue;
+    // Compare hashes for all prefix-matching candidates IN PARALLEL — bcrypt is
+    // expensive (~0.7s each at cost 12), so running them concurrently bounds
+    // latency at one comparison instead of N. Hashes are unique, so there is at
+    // most one real match; picking the first truthy result is correct.
+    const comparisons = await Promise.all(
+      candidates.map((candidate) =>
+        bcrypt
+          .compare(apiKey, candidate.keyHash)
+          .then((ok) => (ok ? candidate : null))
+      )
+    );
+    const candidate = comparisons.find((c): c is ApiKeyRecord => c !== null);
 
+    if (candidate) {
       if (!candidate.isActive) {
         return { status: "revoked", record: candidate };
       }
       if (candidate.expiresAt && candidate.expiresAt <= new Date()) {
         return { status: "expired", record: candidate };
       }
+      // Cache positive results only.
+      this.cacheValidRecord(apiKey, candidate);
       return { status: "valid", record: candidate };
     }
 
@@ -313,6 +394,13 @@ export class ApiKeyService {
       return null;
     }
 
+    // 1b. Fast path: short-TTL verification cache (positive results only).
+    const cachedRecord = this.getCachedValidRecord(apiKey);
+    if (cachedRecord) {
+      this.recordKeyUse(cachedRecord.id);
+      return cachedRecord;
+    }
+
     // 2. Find active keys with this prefix
     const candidates = await db
       .select()
@@ -325,13 +413,23 @@ export class ApiKeyService {
         )
       );
 
-    // 3. Compare hash for each candidate
-    for (const candidate of candidates) {
-      const isValid = await bcrypt.compare(apiKey, candidate.keyHash);
-      if (isValid) {
-        this.recordKeyUse(candidate.id);
-        return candidate;
-      }
+    // 3. Compare hashes for all candidates IN PARALLEL — bcrypt is expensive
+    // (~0.7s each at cost 12), so concurrency bounds latency at one comparison
+    // instead of N. Hashes are unique → at most one match; take the first.
+    const comparisons = await Promise.all(
+      candidates.map((candidate) =>
+        bcrypt
+          .compare(apiKey, candidate.keyHash)
+          .then((ok) => (ok ? candidate : null))
+      )
+    );
+    const candidate = comparisons.find((c): c is ApiKeyRecord => c !== null);
+
+    if (candidate) {
+      // The query already filtered to active + non-expired, so this is valid.
+      this.cacheValidRecord(apiKey, candidate);
+      this.recordKeyUse(candidate.id);
+      return candidate;
     }
 
     return null;
@@ -358,6 +456,12 @@ export class ApiKeyService {
         revokedReason: reason || "Revoked by user",
       })
       .where(eq(apiKeys.id, keyId));
+
+    // Invalidate the verification cache. The cache is keyed by sha256(plaintext)
+    // and we only have the keyId here, so clear it entirely — revocations are
+    // rare and correctness (a revoked key must stop validating) beats the
+    // micro-cost of repopulating other keys' cache entries.
+    verificationCache.clear();
   }
 
   /**
@@ -414,6 +518,11 @@ export class ApiKeyService {
 
     // 4. Revoke the old key
     await this.revokeApiKey(keyId, userId, "Rotated to new key");
+
+    // Invalidate the verification cache so the rotated-away key stops
+    // validating immediately. (revokeApiKey already clears it; kept explicit so
+    // rotation remains correct independent of that call path.)
+    verificationCache.clear();
 
     return {
       newKey,
