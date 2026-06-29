@@ -213,7 +213,7 @@ export const captureRouter = router({
           // Knowledge profile requires ek_type — infer from the leading text
           // when IS omitted it (see inferEkType).
           if (profileSlug === "knowledge" && !properties.ek_type) {
-            const ek = inferEkType(input.content.slice(0, 30));
+            const ek = inferEkType(input.content.slice(0, 200));
             if (ek) properties.ek_type = ek;
           }
 

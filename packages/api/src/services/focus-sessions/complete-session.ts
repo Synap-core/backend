@@ -83,16 +83,18 @@ export async function completeFocusSession(
     .set({
       status: "closed",
       closedAt: new Date(),
-      ...(verificationReport !== undefined
+      ...(verificationReport != null
         ? {
             verificationReport: {
               ...(summary !== undefined ? { summary } : {}),
-              ...((verificationReport as Record<string, unknown>) ?? {}),
+              ...(verificationReport as Record<string, unknown>),
             },
           }
         : summary !== undefined
           ? { verificationReport: { summary } }
-          : {}),
+          : verificationReport === null
+            ? { verificationReport: null } // explicit null clears the field
+            : {}),
     })
     .where(eq(focusSessions.id, sessionId))
     .returning();

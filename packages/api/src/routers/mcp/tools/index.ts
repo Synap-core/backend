@@ -422,7 +422,7 @@ export const tools = {
       {
         name: "synap_update_session",
         description:
-          "Update an in-flight focus session — change its goal, lifecycle status (active|paused|closed), 0-100 progress, or its expected deliverables. Use this WHILE working: bump progress, pause/resume, refine the goal, or mark a deliverable done. Two convenience modes for the per-item deliverable lifecycle: `addOutput` appends a new deliverable (status 'pending'); `completeOutput` marks a deliverable 'done' by exact label match. (Closing a session with a summary is still synap_complete_session.)",
+          "Update an in-flight focus session — change its goal, lifecycle status (active|paused), 0-100 progress, or its expected deliverables. Use this WHILE working: bump progress, pause/resume, refine the goal, or mark a deliverable done. Two convenience modes for the per-item deliverable lifecycle: `addOutput` appends a new deliverable (status 'pending'); `completeOutput` marks a deliverable 'done' by exact label match. To CLOSE a session (with a summary, closing any running playbook) use synap_complete_session — update_session intentionally cannot close.",
         inputSchema: {
           type: "object",
           properties: {
@@ -436,8 +436,9 @@ export const tools = {
             },
             status: {
               type: "string",
-              enum: ["active", "paused", "closed"],
-              description: "New lifecycle status (optional).",
+              enum: ["active", "paused"],
+              description:
+                "New lifecycle status (optional). To CLOSE a session use synap_complete_session — update_session cannot close, since a raw close would orphan a running playbook_run.",
             },
             progress: {
               type: "number",
@@ -477,7 +478,7 @@ export const tools = {
             completeOutput: {
               type: "string",
               description:
-                "Mark the deliverable with this exact label as 'done'.",
+                "Mark the deliverable with this exact label as 'done'. No-op if no deliverable matches the label exactly.",
             },
           },
           required: ["sessionId"],

@@ -674,57 +674,70 @@ export async function executeMCPToolViaHubProtocol(
         });
       }
 
-      // Read-modify-write expectedOutputs for the addOutput / completeOutput
-      // modes (per-item lifecycle). A full expectedOutputs array still wins.
+      // Build the field set. status is constrained to active|paused — closing a
+      // session is synap_complete_session's job (it also closes the running
+      // playbook_run); a raw status='closed' here would orphan that run.
+      const set: Partial<typeof focusSessions.$inferInsert> = {
+        updatedAt: new Date(),
+      };
+      if (args.goal !== undefined) set.goal = args.goal as string;
+      if (args.status !== undefined)
+        set.status = args.status as "active" | "paused";
+      if (args.progress !== undefined) set.progress = args.progress as number;
+
+      // addOutput / completeOutput / a full expectedOutputs replace mutate the
+      // JSONB deliverables array. Do the read-modify-write inside a transaction
+      // with a row lock (`FOR UPDATE`) so two concurrent edits can't both read
+      // the same base array and lose one's item (TOCTOU).
       type OutputItem = {
         kind: string;
         label: string;
         icon?: string;
         status?: "pending" | "done";
       };
-      const currentOutputs: OutputItem[] = Array.isArray(
-        existing.expectedOutputs
-      )
-        ? (existing.expectedOutputs as OutputItem[])
-        : [];
-      let nextOutputs: OutputItem[] | undefined =
-        (args.expectedOutputs as OutputItem[] | undefined) ?? undefined;
-      if (args.addOutput) {
-        const add = args.addOutput as OutputItem;
-        nextOutputs = [
-          ...(nextOutputs ?? currentOutputs),
-          {
-            kind: add.kind,
-            label: add.label,
-            icon: add.icon,
-            status: "pending",
-          },
-        ];
-      }
-      if (typeof args.completeOutput === "string") {
-        const label = args.completeOutput;
-        nextOutputs = (nextOutputs ?? currentOutputs).map((o) =>
-          o.label === label ? { ...o, status: "done" as const } : o
-        );
-      }
+      const mutatesOutputs =
+        args.addOutput !== undefined ||
+        typeof args.completeOutput === "string" ||
+        args.expectedOutputs !== undefined;
 
-      const set: Partial<typeof focusSessions.$inferInsert> = {
-        updatedAt: new Date(),
-      };
-      if (args.goal !== undefined) set.goal = args.goal as string;
-      if (args.status !== undefined)
-        set.status = args.status as "active" | "paused" | "closed";
-      if (args.progress !== undefined) set.progress = args.progress as number;
-      if (nextOutputs !== undefined) set.expectedOutputs = nextOutputs;
-      if (args.status === "closed" && existing.status !== "closed") {
-        set.closedAt = new Date();
-      }
-
-      const [updated] = await db
-        .update(focusSessions)
-        .set(set)
-        .where(eq(focusSessions.id, sessionId))
-        .returning();
+      const [updated] = await db.transaction(async (tx) => {
+        if (mutatesOutputs) {
+          const [locked] = await tx
+            .select({ expectedOutputs: focusSessions.expectedOutputs })
+            .from(focusSessions)
+            .where(eq(focusSessions.id, sessionId))
+            .for("update");
+          const current: OutputItem[] = Array.isArray(locked?.expectedOutputs)
+            ? (locked.expectedOutputs as OutputItem[])
+            : [];
+          let next: OutputItem[] =
+            (args.expectedOutputs as OutputItem[] | undefined) ?? current;
+          if (args.addOutput) {
+            const add = args.addOutput as OutputItem;
+            next = [
+              ...next,
+              {
+                kind: add.kind,
+                label: add.label,
+                icon: add.icon,
+                status: "pending",
+              },
+            ];
+          }
+          if (typeof args.completeOutput === "string") {
+            const label = args.completeOutput;
+            next = next.map((o) =>
+              o.label === label ? { ...o, status: "done" as const } : o
+            );
+          }
+          set.expectedOutputs = next;
+        }
+        return tx
+          .update(focusSessions)
+          .set(set)
+          .where(eq(focusSessions.id, sessionId))
+          .returning();
+      });
       return ok({ status: "updated", session: updated });
     }
 
