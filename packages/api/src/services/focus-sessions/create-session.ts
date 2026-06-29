@@ -10,7 +10,14 @@ import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 
 export interface CreateFocusSessionParams {
   userId: string;
-  workspaceId: string;
+  /**
+   * Workspace the session belongs to. Optional — a session may instead be
+   * anchored to a project (or the user floor). At least one of workspaceId /
+   * projectId must be provided. When null/undefined the governance membrane
+   * treats it as a personal resource and auto-grants (no membership needed).
+   */
+  workspaceId?: string | null;
+  projectId?: string | null;
   goal: string;
   agentUserId?: string;
   correlationId?: string;
@@ -37,7 +44,8 @@ export async function createFocusSession(
 ): Promise<CreateFocusSessionResult> {
   const {
     userId,
-    workspaceId,
+    workspaceId = null,
+    projectId = null,
     goal,
     agentUserId,
     correlationId,
@@ -47,23 +55,33 @@ export async function createFocusSession(
     expectedOutputs = [],
   } = params;
 
-  // Idempotency: correlationId returns the existing session for this user+workspace.
+  if (!workspaceId && !projectId) {
+    throw Object.assign(
+      new Error("A focus session requires a workspaceId or a projectId"),
+      { code: "BAD_REQUEST" }
+    );
+  }
+
+  // Idempotency: correlationId returns the existing session for this user,
+  // scoped to the same workspace when one is given.
   if (correlationId) {
     const existing = await db.query.focusSessions.findFirst({
       where: and(
         eq(focusSessions.correlationId, correlationId),
         eq(focusSessions.userId, userId),
-        eq(focusSessions.workspaceId, workspaceId)
+        ...(workspaceId ? [eq(focusSessions.workspaceId, workspaceId)] : [])
       ),
     });
     if (existing) return { status: "created", session: existing };
   }
 
-  // Governance membrane — AI callers route through proposals.
+  // Governance membrane — AI callers route through proposals. A session with no
+  // workspace is a personal resource and auto-grants via checkPermissionOrPropose.
   const perm = await checkPermissionOrPropose({
     userId,
     agentUserId,
-    workspaceId,
+    workspaceId: workspaceId ?? undefined,
+    projectId: projectId ?? undefined,
     subjectType: "focus_session",
     action: "create",
     source: "intelligence",
@@ -89,6 +107,7 @@ export async function createFocusSession(
     .insert(focusSessions)
     .values({
       workspaceId,
+      projectId,
       userId,
       goal,
       correlationId: correlationId ?? null,

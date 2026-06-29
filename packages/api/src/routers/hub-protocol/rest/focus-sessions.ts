@@ -46,7 +46,8 @@ const ExpectedOutputItemSchema = z.object({
 
 const FocusSessionWireSchema = z.object({
   id: z.string(),
-  workspaceId: z.string(),
+  workspaceId: z.string().nullable(),
+  projectId: z.string().nullable(),
   userId: z.string(),
   correlationId: z.string().nullable(),
   goal: z.string(),
@@ -66,16 +67,23 @@ const FocusSessionWireSchema = z.object({
   updatedAt: z.string(),
 });
 
-const CreateBodySchema = z.object({
-  workspaceId: z.string().min(1),
-  userId: z.string().min(1),
-  goal: z.string().min(1).max(2000),
-  correlationId: z.string().optional(),
-  templateId: z.string().optional(),
-  expectedOutputs: z.array(ExpectedOutputItemSchema).optional(),
-  channelId: z.string().uuid().optional(),
-  agentIds: z.array(z.string()).optional(),
-});
+const CreateBodySchema = z
+  .object({
+    // workspaceId OR projectId — a session may be scoped to either (or both).
+    workspaceId: z.string().min(1).optional(),
+    projectId: z.string().min(1).optional(),
+    userId: z.string().min(1),
+    goal: z.string().min(1).max(2000),
+    correlationId: z.string().optional(),
+    templateId: z.string().optional(),
+    expectedOutputs: z.array(ExpectedOutputItemSchema).optional(),
+    channelId: z.string().uuid().optional(),
+    agentIds: z.array(z.string()).optional(),
+  })
+  .refine((b) => !!b.workspaceId || !!b.projectId, {
+    message: "Provide a workspaceId or a projectId",
+    path: ["workspaceId"],
+  });
 
 // workspaceId is accepted for back-compat with CLI callers that still send it,
 // but the authoritative workspace comes from the LOADED ROW (write-gate rule:
@@ -324,13 +332,16 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     const body = parsed.data;
 
     // Bind the acting identity to the authenticated principal and verify
-    // workspace membership — mirrors artifacts.ts POST pattern.
+    // workspace membership — mirrors artifacts.ts POST pattern. For a
+    // project-scoped session (no workspaceId) we still bind the user but keep
+    // the session's workspace null — we do NOT stamp the membership fallback.
     const acting = await resolveActingContext(c, {
       userId: body.userId,
       workspaceId: body.workspaceId,
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-    const { userId, workspaceId } = acting;
+    const { userId } = acting;
+    const workspaceId = body.workspaceId ? acting.workspaceId : null;
 
     try {
       // Delegate to the shared service (used by both Hub REST and MCP adapter).
@@ -338,6 +349,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       const result = await createFocusSession({
         userId,
         workspaceId,
+        projectId: body.projectId ?? null,
         goal: body.goal,
         agentUserId: ctxAgentUserId,
         correlationId: body.correlationId,

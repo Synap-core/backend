@@ -350,7 +350,7 @@ export const tools = {
       {
         name: "synap_start_session",
         description:
-          "Create a focus session — a goal-bound work session tracked in Synap. Use this to declare 'I'm starting work on X'. The session appears in the browser SessionRoom. After creating, use synap_get_channel to get a personal channel, then synap_post_message with triggerAI=true to dispatch the IS agent for autonomous work. The agent's produced entities are linked to the session via the graph.",
+          "Create a focus session — a goal-bound work session tracked in Synap. Use this to declare 'I'm starting work on X'. A session can be scoped to a project (projectId) OR a workspace (workspaceId) — provide at least one; a project-scoped session needs no workspace membership. The session appears in the browser SessionRoom. After creating, use synap_get_channel to get a personal channel, then synap_post_message with triggerAI=true to dispatch the IS agent for autonomous work. The agent's produced entities are linked to the session via the graph.",
         inputSchema: {
           type: "object",
           properties: {
@@ -362,7 +362,12 @@ export const tools = {
             workspaceId: {
               type: "string",
               description:
-                "Workspace ID the session belongs to. Required — sessions are workspace-scoped.",
+                "Workspace ID the session belongs to. Optional — provide this OR projectId (at least one is required).",
+            },
+            projectId: {
+              type: "string",
+              description:
+                "Project ID the session belongs to. Optional — provide this OR workspaceId (at least one is required). A project-scoped session needs no workspace membership.",
             },
             correlationId: {
               type: "string",
@@ -400,7 +405,7 @@ export const tools = {
                 "Optional expected deliverables — what the session should produce.",
             },
           },
-          required: ["goal", "workspaceId"],
+          required: ["goal"],
         },
       },
       {

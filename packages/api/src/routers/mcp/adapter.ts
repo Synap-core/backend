@@ -577,7 +577,8 @@ export async function executeMCPToolViaHubProtocol(
         await import("../../services/focus-sessions/create-session.js");
       const result = await createFocusSession({
         userId,
-        workspaceId: args.workspaceId as string,
+        workspaceId: args.workspaceId as string | undefined,
+        projectId: args.projectId as string | undefined,
         goal: args.goal as string,
         agentUserId,
         correlationId: args.correlationId as string | undefined,
