@@ -10,6 +10,8 @@ import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, inArray, drizzleSql } from "@synap/database";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
+import type { Lens } from "../access/context.js";
 import {
   users,
   workspaceMembers,
@@ -22,6 +24,79 @@ import { randomUUID } from "crypto";
 import { auditLog } from "../utils/audit-log.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import type { AgentMetadata } from "@synap/database/schema";
+
+/**
+ * Floor-first agent-user fetch shared by `list` and `listAll`.
+ *
+ * Floor = (every agent that is a member of a workspace the caller can see —
+ * `userVisibleWhere` is the security boundary) UNION (pod-wide agents — agent
+ * users with NO membership row anywhere, which belong to the whole pod and so
+ * surface in every lens state). The workspace lens only NARROWS the
+ * membership-tied half; pod-wide agents are ALWAYS included, except when the
+ * lens is `null` (= pod-wide only). The lens can never widen past the floor.
+ */
+async function queryAgentUsers(ctx: { userId: string }, workspaceLens: Lens) {
+  // Membership-tied agents — the caller's accessible agents. `userVisibleWhere`
+  // is the structural floor (only workspaces the caller can see); the lens
+  // narrows within it. `null` lens = no tied rows (pod-wide only).
+  const tiedConditions = [
+    eq(users.userType, "agent"),
+    userVisibleWhere(workspaceMembers.workspaceId, ctx.userId),
+  ];
+
+  let includeTied = true;
+  if (workspaceLens === null) {
+    includeTied = false;
+  } else if (Array.isArray(workspaceLens)) {
+    // Empty array = no narrow (the floor) — never silently match zero rows.
+    if (workspaceLens.length > 0) {
+      tiedConditions.push(inArray(workspaceMembers.workspaceId, workspaceLens));
+    }
+  } else if (typeof workspaceLens === "string") {
+    tiedConditions.push(eq(workspaceMembers.workspaceId, workspaceLens));
+  }
+
+  const tied = includeTied
+    ? await db
+        .select({
+          id: users.id,
+          name: users.name,
+          email: users.email,
+          agentMetadata: users.agentMetadata,
+          role: workspaceMembers.role,
+          joinedAt: workspaceMembers.joinedAt,
+        })
+        .from(users)
+        .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
+        .where(and(...tiedConditions))
+    : [];
+
+  // Pod-wide agents — agent users with NO workspace membership anywhere. These
+  // shared helpers (e.g. a pod-level Twin) belong to the whole pod and appear
+  // in every workspace; their role/joinedAt are null (no membership row).
+  const podWideRows = await db
+    .select({
+      id: users.id,
+      name: users.name,
+      email: users.email,
+      agentMetadata: users.agentMetadata,
+    })
+    .from(users)
+    .where(
+      and(
+        eq(users.userType, "agent"),
+        drizzleSql`NOT EXISTS (SELECT 1 FROM ${workspaceMembers} WHERE ${workspaceMembers.userId} = ${users.id})`
+      )
+    );
+
+  const podWide = podWideRows.map((r) => ({
+    ...r,
+    role: null as string | null,
+    joinedAt: null as Date | null,
+  }));
+
+  return [...tied, ...podWide];
+}
 
 export const agentUsersRouter = router({
   /**
@@ -197,103 +272,36 @@ export const agentUsersRouter = router({
     }),
 
   /**
-   * List AI agent users in a workspace
+   * THE one door for agent users (collapses the old list/listAll split).
+   *
+   * Floor = the caller's accessible agents (members of any workspace the caller
+   * can see, via `userVisibleWhere`) UNION pod-wide agents (no membership row —
+   * pod-level helpers that appear everywhere). The workspace lens then NARROWS
+   * the membership-tied half; pod-wide agents are always included:
+   *   - no `workspaceId` (and no active-ws header) → ALL my agents + pod-wide
+   *   - active-ws header / a `workspaceId` → that workspace's agents + pod-wide
+   *   - `workspaceId: null` → pod-wide agents only
+   *   - `workspaceId: [a, b]` → those workspaces' agents (union) + pod-wide
+   * No project axis (agents aren't project-scoped). This replaces the old
+   * upfront membership gate with `userVisibleWhere` as the structural floor —
+   * a stale/forged workspace id can only narrow, never widen access.
    */
   list: protectedProcedure
-    .input(z.object({ workspaceId: z.string().uuid() }))
+    .input(z.object({ workspaceId: ScopeFilterShape.workspaceId }))
     .query(async ({ input, ctx }) => {
-      // Gate on workspace membership — otherwise any authenticated user could
-      // enumerate the agents of any workspace by guessing its id.
-      const perm = await verifyPermission({
-        db,
-        userId: ctx.userId,
-        workspace: { id: input.workspaceId },
-        requiredPermission: "read",
-      });
-      if (!perm.allowed) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message:
-            perm.reason ?? "You must be a workspace member to view its agents",
-        });
-      }
-
-      // Agents tied to THIS workspace.
-      const tied = await db
-        .select({
-          id: users.id,
-          name: users.name,
-          email: users.email,
-          agentMetadata: users.agentMetadata,
-          role: workspaceMembers.role,
-          joinedAt: workspaceMembers.joinedAt,
-        })
-        .from(users)
-        .innerJoin(
-          workspaceMembers,
-          and(
-            eq(workspaceMembers.userId, users.id),
-            eq(workspaceMembers.workspaceId, input.workspaceId)
-          )
-        )
-        .where(eq(users.userType, "agent"));
-
-      // Pod-wide agents — agent users with NO workspace membership anywhere.
-      // These shared helpers (e.g. a pod-level Twin) belong to the whole pod and
-      // should appear in every workspace; their role/joinedAt are null (no
-      // membership row). Agents tied to OTHER workspaces are excluded by design.
-      const podWideRows = await db
-        .select({
-          id: users.id,
-          name: users.name,
-          email: users.email,
-          agentMetadata: users.agentMetadata,
-        })
-        .from(users)
-        .where(
-          and(
-            eq(users.userType, "agent"),
-            drizzleSql`NOT EXISTS (SELECT 1 FROM ${workspaceMembers} WHERE ${workspaceMembers.userId} = ${users.id})`
-          )
-        );
-
-      const podWide = podWideRows.map((r) => ({
-        ...r,
-        role: null as string | null,
-        joinedAt: null as Date | null,
-      }));
-
-      return [...tied, ...podWide];
+      const { workspaceLens } = resolveScope(ctx, input);
+      return queryAgentUsers(ctx, workspaceLens);
     }),
 
   /**
-   * List AI agent users across ALL workspaces the caller belongs to.
-   *
-   * Same output shape as `list` — consumers can swap variants freely.
-   * Returns every agent user that is a member of any workspace the caller
-   * is also a member of (pod-wide agents have no workspace membership row
-   * and are therefore not surfaced here by design — add to a workspace first).
+   * @deprecated Use `list` (the canonical scope-aware door) instead. Thin alias
+   * kept for existing call sites: same logic with NO workspace lens, so it reads
+   * the user floor — every accessible agent across all the caller's workspaces
+   * PLUS pod-wide agents. NOTE: this now ALSO includes pod-wide agents (the old
+   * listAll omitted them), per the "agents are pod-wide actors" decision.
    */
   listAll: protectedProcedure.query(async ({ ctx }) => {
-    const results = await db
-      .select({
-        id: users.id,
-        name: users.name,
-        email: users.email,
-        agentMetadata: users.agentMetadata,
-        role: workspaceMembers.role,
-        joinedAt: workspaceMembers.joinedAt,
-      })
-      .from(users)
-      .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
-      .where(
-        and(
-          eq(users.userType, "agent"),
-          userVisibleWhere(workspaceMembers.workspaceId, ctx.userId)
-        )
-      );
-
-    return results;
+    return queryAgentUsers(ctx, undefined);
   }),
 
   /**
