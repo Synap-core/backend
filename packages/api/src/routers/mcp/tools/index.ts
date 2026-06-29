@@ -369,6 +369,11 @@ export const tools = {
               description:
                 "Project ID the session belongs to. Optional — provide this OR workspaceId (at least one is required). A project-scoped session needs no workspace membership.",
             },
+            subjectEntityId: {
+              type: "string",
+              description:
+                "Optional UUID of the entity this session is ABOUT — the subject-spine anchor (e.g. a person, company, or deal). Ties the session to that entity so it surfaces in the entity's neighborhood.",
+            },
             correlationId: {
               type: "string",
               description:
@@ -398,6 +403,12 @@ export const tools = {
                   kind: { type: "string" },
                   label: { type: "string" },
                   icon: { type: "string" },
+                  status: {
+                    type: "string",
+                    enum: ["pending", "done"],
+                    description:
+                      "Per-item lifecycle. Defaults to 'pending' when omitted.",
+                  },
                 },
                 required: ["kind", "label"],
               },
@@ -406,6 +417,70 @@ export const tools = {
             },
           },
           required: ["goal"],
+        },
+      },
+      {
+        name: "synap_update_session",
+        description:
+          "Update an in-flight focus session — change its goal, lifecycle status (active|paused|closed), 0-100 progress, or its expected deliverables. Use this WHILE working: bump progress, pause/resume, refine the goal, or mark a deliverable done. Two convenience modes for the per-item deliverable lifecycle: `addOutput` appends a new deliverable (status 'pending'); `completeOutput` marks a deliverable 'done' by exact label match. (Closing a session with a summary is still synap_complete_session.)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: {
+              type: "string",
+              description: "The focus session UUID to update.",
+            },
+            goal: {
+              type: "string",
+              description: "New one-line goal (optional).",
+            },
+            status: {
+              type: "string",
+              enum: ["active", "paused", "closed"],
+              description: "New lifecycle status (optional).",
+            },
+            progress: {
+              type: "number",
+              description: "0-100 integer progress (optional).",
+            },
+            expectedOutputs: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  kind: { type: "string" },
+                  label: { type: "string" },
+                  icon: { type: "string" },
+                  status: {
+                    type: "string",
+                    enum: ["pending", "done"],
+                    description:
+                      "Per-item lifecycle. Defaults to 'pending' when omitted.",
+                  },
+                },
+                required: ["kind", "label"],
+              },
+              description:
+                "Replace the full deliverable list (optional). For incremental edits prefer addOutput / completeOutput.",
+            },
+            addOutput: {
+              type: "object",
+              properties: {
+                kind: { type: "string" },
+                label: { type: "string" },
+                icon: { type: "string" },
+              },
+              required: ["kind", "label"],
+              description:
+                "Append ONE new deliverable (stored with status 'pending').",
+            },
+            completeOutput: {
+              type: "string",
+              description:
+                "Mark the deliverable with this exact label as 'done'.",
+            },
+          },
+          required: ["sessionId"],
         },
       },
       {

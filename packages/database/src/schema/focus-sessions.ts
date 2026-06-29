@@ -82,7 +82,9 @@ export const focusSessions = pgTable(
     playbookId: uuid("playbook_id"),
     /**
      * Expected deliverables declared at session start.
-     * Shape: [{ kind: string, label: string, icon?: string }]
+     * Shape: [{ kind: string, label: string, icon?: string, status?: "pending" | "done" }]
+     * `status` is a per-item lifecycle flag (defaults to "pending" when omitted)
+     * — a shape-within-jsonb addition, no column/migration change.
      */
     expectedOutputs: jsonb("expected_outputs").default([]),
     /**

@@ -24,6 +24,7 @@ import { type ProfileCatalogEntry } from "../../services/retrieval/index.js";
 import { getDb } from "@synap/database";
 import {
   db,
+  focusSessions,
   knowledgeKeysRepository,
   knowledgeRepository,
   messages,
@@ -320,14 +321,22 @@ export async function executeMCPToolViaHubProtocol(
       const fact = args.fact as string;
       const factUserId = (args.userId as string) || userId;
 
-      // Store fact with a zero embedding (keyword search still works;
-      // semantic search will rank it low, which is acceptable for MCP-sourced facts).
-      const zeroEmbedding = new Array(1536).fill(0);
+      // Embed the fact through the SAME path entity/recall writes use
+      // (`@synap/ai-embeddings`), so semantic search can actually rank it.
+      // Best-effort: if embedding is unavailable, fall back to a zero vector
+      // (keyword search still works) rather than failing the write.
+      let embedding: number[];
+      try {
+        const { generateEmbedding } = await import("@synap/ai-embeddings");
+        embedding = await generateEmbedding(fact);
+      } catch {
+        embedding = new Array(1536).fill(0);
+      }
       await knowledgeRepository.saveFact({
         userId: factUserId,
         fact,
         confidence: 0.8,
-        embedding: zeroEmbedding,
+        embedding,
       });
       return ok({ success: true, message: "Fact stored successfully" });
     }
@@ -579,6 +588,7 @@ export async function executeMCPToolViaHubProtocol(
         userId,
         workspaceId: args.workspaceId as string | undefined,
         projectId: args.projectId as string | undefined,
+        subjectEntityId: args.subjectEntityId as string | undefined,
         goal: args.goal as string,
         agentUserId,
         correlationId: args.correlationId as string | undefined,
@@ -586,7 +596,12 @@ export async function executeMCPToolViaHubProtocol(
         agentIds: args.agentIds as string[] | undefined,
         templateId: args.templateId as string | undefined,
         expectedOutputs: args.expectedOutputs as
-          | Array<{ kind: string; label: string; icon?: string }>
+          | Array<{
+              kind: string;
+              label: string;
+              icon?: string;
+              status?: "pending" | "done";
+            }>
           | undefined,
       });
       return ok(result);
@@ -614,6 +629,108 @@ export async function executeMCPToolViaHubProtocol(
         return ok({ error: `Focus session ${args.sessionId} not found` });
       }
       return ok({ status: "closed", session });
+    }
+
+    case "synap_update_session": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      const sessionId = args.sessionId as string;
+
+      // Load scoped by the operator userId — the floor that stops an agent key
+      // from touching another user's session (mirrors completeFocusSession).
+      const existing = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, sessionId),
+          eq(focusSessions.userId, userId)
+        ),
+      });
+      if (!existing) {
+        return ok({ error: `Focus session ${sessionId} not found` });
+      }
+
+      // Governance membrane — AI callers route through proposals (same gate the
+      // Hub PATCH /focus-sessions/:id and synap_complete_session use).
+      const { checkPermissionOrPropose } =
+        await import("../../utils/permission-check.js");
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId,
+        workspaceId: existing.workspaceId ?? undefined,
+        subjectType: "focus_session",
+        action: "update",
+        source: "intelligence",
+        data: {
+          id: sessionId,
+          status: args.status as string | undefined,
+          progress: args.progress as number | undefined,
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        return ok({ error: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return ok({
+          status: "proposed",
+          message: "Focus session update proposed for review",
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+          session: null,
+        });
+      }
+
+      // Read-modify-write expectedOutputs for the addOutput / completeOutput
+      // modes (per-item lifecycle). A full expectedOutputs array still wins.
+      type OutputItem = {
+        kind: string;
+        label: string;
+        icon?: string;
+        status?: "pending" | "done";
+      };
+      const currentOutputs: OutputItem[] = Array.isArray(
+        existing.expectedOutputs
+      )
+        ? (existing.expectedOutputs as OutputItem[])
+        : [];
+      let nextOutputs: OutputItem[] | undefined =
+        (args.expectedOutputs as OutputItem[] | undefined) ?? undefined;
+      if (args.addOutput) {
+        const add = args.addOutput as OutputItem;
+        nextOutputs = [
+          ...(nextOutputs ?? currentOutputs),
+          {
+            kind: add.kind,
+            label: add.label,
+            icon: add.icon,
+            status: "pending",
+          },
+        ];
+      }
+      if (typeof args.completeOutput === "string") {
+        const label = args.completeOutput;
+        nextOutputs = (nextOutputs ?? currentOutputs).map((o) =>
+          o.label === label ? { ...o, status: "done" as const } : o
+        );
+      }
+
+      const set: Partial<typeof focusSessions.$inferInsert> = {
+        updatedAt: new Date(),
+      };
+      if (args.goal !== undefined) set.goal = args.goal as string;
+      if (args.status !== undefined)
+        set.status = args.status as "active" | "paused" | "closed";
+      if (args.progress !== undefined) set.progress = args.progress as number;
+      if (nextOutputs !== undefined) set.expectedOutputs = nextOutputs;
+      if (args.status === "closed" && existing.status !== "closed") {
+        set.closedAt = new Date();
+      }
+
+      const [updated] = await db
+        .update(focusSessions)
+        .set(set)
+        .where(eq(focusSessions.id, sessionId))
+        .returning();
+      return ok({ status: "updated", session: updated });
     }
 
     case "synap_governance": {

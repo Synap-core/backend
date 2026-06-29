@@ -42,6 +42,8 @@ const ExpectedOutputItemSchema = z.object({
   kind: z.string(),
   label: z.string(),
   icon: z.string().optional(),
+  // Per-item lifecycle (defaults to "pending" when omitted). Shape-within-jsonb.
+  status: z.enum(["pending", "done"]).optional(),
 });
 
 const FocusSessionWireSchema = z.object({

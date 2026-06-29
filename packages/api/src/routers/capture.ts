@@ -54,6 +54,23 @@ const logger = createLogger({ module: "capture-router" });
 
 const FALLBACK_RELATION_TYPE = "relates_to";
 
+// ── ek_type inference (knowledge profile discriminator) ────────────────────
+// The `knowledge` profile requires an ek_type (gotcha|lesson|decision|reference).
+// IS structuring identifies the profile but does not always set ek_type — infer
+// it from the text via a keyword sniff so entity creation succeeds instead of
+// degrading to a note. ONE helper, called by both the single-entity (thought)
+// and multi-entity (structure) paths.
+function inferEkType(
+  text: string
+): "gotcha" | "lesson" | "decision" | "reference" | undefined {
+  const haystack = text.toLowerCase();
+  if (haystack.includes("gotcha")) return "gotcha";
+  if (haystack.includes("lesson")) return "lesson";
+  if (haystack.includes("decision")) return "decision";
+  if (haystack.includes("reference")) return "reference";
+  return undefined;
+}
+
 // ── Schema-complete profile hints for the structuring LLM ──────────────────
 // "Read before write": the one-shot /structure call has no tool loop, so the
 // caller pre-reads each profile's real property schema and hands it to the model.
@@ -193,17 +210,11 @@ export const captureRouter = router({
           title = entity.title || title;
           properties = entity.properties ?? {};
 
-          // Knowledge profile requires ek_type discriminator (gotcha|lesson|decision|reference).
-          // The IS structuring correctly identifies the profile but does not always set
-          // ek_type — infer it from the text when missing so the entity creation succeeds.
+          // Knowledge profile requires ek_type — infer from the leading text
+          // when IS omitted it (see inferEkType).
           if (profileSlug === "knowledge" && !properties.ek_type) {
-            const prefix = input.content.slice(0, 30).toLowerCase();
-            if (prefix.includes("gotcha")) properties.ek_type = "gotcha";
-            else if (prefix.includes("lesson")) properties.ek_type = "lesson";
-            else if (prefix.includes("decision"))
-              properties.ek_type = "decision";
-            else if (prefix.includes("reference"))
-              properties.ek_type = "reference";
+            const ek = inferEkType(input.content.slice(0, 30));
+            if (ek) properties.ek_type = ek;
           }
 
           mode = "ai";
@@ -591,25 +602,16 @@ export const captureRouter = router({
         return degradedFallback("is_empty_result");
       }
 
-      // Knowledge profile requires ek_type discriminator (gotcha|lesson|decision|reference).
-      // The IS structuring correctly identifies the profile but does not always set
-      // ek_type — infer it from each entity's title/text when missing so entity creation
-      // succeeds instead of degrading to note.
+      // Knowledge profile requires ek_type — infer from each entity's title when
+      // IS omitted it (see inferEkType), so entity creation succeeds instead of
+      // degrading to note.
       for (const entity of structureResult.entities) {
         if (
           entity.profileSlug === "knowledge" &&
           !(entity.properties as Record<string, unknown>).ek_type
         ) {
-          const prefix = (entity.title || "").toLowerCase();
-          if (prefix.includes("gotcha"))
-            (entity.properties as Record<string, unknown>).ek_type = "gotcha";
-          else if (prefix.includes("lesson"))
-            (entity.properties as Record<string, unknown>).ek_type = "lesson";
-          else if (prefix.includes("decision"))
-            (entity.properties as Record<string, unknown>).ek_type = "decision";
-          else if (prefix.includes("reference"))
-            (entity.properties as Record<string, unknown>).ek_type =
-              "reference";
+          const ek = inferEkType(entity.title || "");
+          if (ek) (entity.properties as Record<string, unknown>).ek_type = ek;
         }
       }
 

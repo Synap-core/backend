@@ -18,13 +18,23 @@ export interface CreateFocusSessionParams {
    */
   workspaceId?: string | null;
   projectId?: string | null;
+  /**
+   * The entity this session is "about" — the subject-spine anchor. Written on
+   * the ad-hoc start path so a session can be tied to a person/company/deal.
+   */
+  subjectEntityId?: string | null;
   goal: string;
   agentUserId?: string;
   correlationId?: string;
   channelId?: string | null;
   agentIds?: string[];
   templateId?: string | null;
-  expectedOutputs?: Array<{ kind: string; label: string; icon?: string }>;
+  expectedOutputs?: Array<{
+    kind: string;
+    label: string;
+    icon?: string;
+    status?: "pending" | "done";
+  }>;
 }
 
 export type CreateFocusSessionResult =
@@ -46,6 +56,7 @@ export async function createFocusSession(
     userId,
     workspaceId = null,
     projectId = null,
+    subjectEntityId = null,
     goal,
     agentUserId,
     correlationId,
@@ -108,6 +119,7 @@ export async function createFocusSession(
     .values({
       workspaceId,
       projectId,
+      subjectEntityId,
       userId,
       goal,
       correlationId: correlationId ?? null,
