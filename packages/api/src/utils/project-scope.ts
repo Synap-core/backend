@@ -40,7 +40,11 @@ import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "@synap/database";
 import { projectMembers, relations } from "@synap/database/schema";
-import { userVisibleWhere, workspaceLensWhere } from "./user-visible-where.js";
+import {
+  userVisibleWhere,
+  workspaceLensWhere,
+  type WorkspaceLens,
+} from "./user-visible-where.js";
 
 /** The canonical relation type that expresses project membership of an entity. */
 export const BELONGS_TO_PROJECT = "belongs_to_project";
@@ -154,20 +158,23 @@ export function exposureMemberWhere(
  */
 export function exposureLensWhere(
   entityIdColumn: AnyPgColumn,
-  anchorLens: string,
+  anchorLens: string | string[],
   relationTypes: readonly ExposureRelationType[] = EXPOSURE_RELATION_TYPES
 ): SQL {
+  // Multi-valued: a SET of anchors = OR (union) — match any of them, plus
+  // anything exposed to any of them. A single id keeps the original eq path.
+  const anchors = Array.isArray(anchorLens) ? anchorLens : [anchorLens];
   const exposedToAnchor = db
     .select({ id: relations.sourceEntityId })
     .from(relations)
     .where(
       and(
         inArray(relations.type, [...relationTypes]),
-        eq(relations.targetEntityId, anchorLens)
+        inArray(relations.targetEntityId, anchors)
       )
     );
   return or(
-    eq(entityIdColumn, anchorLens),
+    inArray(entityIdColumn, anchors),
     inArray(entityIdColumn, exposedToAnchor)
   )!;
 }
@@ -190,7 +197,7 @@ export function projectMemberWhere(
  */
 export function projectLensWhere(
   entityIdColumn: AnyPgColumn,
-  projectLens: string
+  projectLens: string | string[]
 ): SQL {
   return exposureLensWhere(entityIdColumn, projectLens, [BELONGS_TO_PROJECT]);
 }
@@ -230,8 +237,13 @@ export function accessScopeWhere(args: {
   entityIdColumn: AnyPgColumn;
   ownerColumn: AnyPgColumn;
   userId: string;
-  workspaceLens?: string | null | undefined;
-  projectLens?: string | null | undefined;
+  workspaceLens?: WorkspaceLens;
+  /**
+   * `undefined`/`null` = no narrow · `"<id>"` or `string[]` = that anchor (or
+   * SET of anchors, OR/union) — the anchor entity(s) + everything exposed to
+   * them. Multi-valued so a caller can fetch across several projects at once.
+   */
+  projectLens?: string | string[] | null | undefined;
 }): SQL {
   const {
     workspaceIdColumn,
@@ -258,11 +270,13 @@ export function accessScopeWhere(args: {
   )!;
 
   // ── Workspace lens (optional narrow) ──────────────────────────────────────
+  // `null` = globals-only (pod-personal rows). An empty array = no narrow (the
+  // floor), matching workspaceLensWhere — an empty filter must never match zero.
+  const wsEmpty = Array.isArray(workspaceLens) && workspaceLens.length === 0;
   let workspaceNarrow: SQL | undefined;
   if (workspaceLens === null) {
-    // Globals-only, for entities, means the pod-personal rows.
     workspaceNarrow = podPersonal;
-  } else if (workspaceLens !== undefined) {
+  } else if (workspaceLens !== undefined && !wsEmpty) {
     workspaceNarrow = workspaceLensWhere(
       workspaceIdColumn,
       userId,
@@ -271,8 +285,9 @@ export function accessScopeWhere(args: {
   }
 
   // ── Project/anchor lens (optional narrow) ─────────────────────────────────
+  const projEmpty = Array.isArray(projectLens) && projectLens.length === 0;
   const projectNarrow =
-    projectLens == null
+    projectLens == null || projEmpty
       ? undefined
       : exposureLensWhere(entityIdColumn, projectLens, EXPOSURE_RELATION_TYPES);
 

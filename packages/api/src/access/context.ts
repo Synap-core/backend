@@ -29,6 +29,14 @@
 
 export type Actor = "operator" | "agent";
 
+/**
+ * A scope-lens dimension: `undefined` = no narrowing (the user floor) · `null` =
+ * globals-only · `"<id>"` = that one · `string[]` = that SET (OR/union; `[]` ==
+ * `undefined`). Multi-valued so a caller can fetch across several workspaces or
+ * projects in one request — the composable-fetch model.
+ */
+export type Lens = string | string[] | null | undefined;
+
 export class AccessContext {
   private constructor(
     /** The human whose data is in scope (attribution owner on AI actions). */
@@ -43,7 +51,7 @@ export class AccessContext {
      * (see `workspaceLensWhere`). 3-state: `undefined` = all my workspaces +
      * globals · `null` = globals only · `"<id>"` = that workspace + globals.
      */
-    readonly workspaceLens: string | null | undefined = undefined,
+    readonly workspaceLens: Lens = undefined,
     /**
      * The active project LENS — the cross-cutting data scope, orthogonal to the
      * workspace lens. Same 3-state contract: `undefined` = no project narrowing
@@ -55,7 +63,7 @@ export class AccessContext {
      * third access source); this lens is the optional narrowing on top.
      * See `projectLensWhere` / the project-centric-scope design doc.
      */
-    readonly projectLens: string | null | undefined = undefined
+    readonly projectLens: Lens = undefined
   ) {}
 
   /** Operator/UI boundary — built from the tRPC context (Kratos cookie). */
@@ -111,7 +119,7 @@ export class AccessContext {
    * existing scopedDb consumers are unchanged. Pass `undefined` for user-wide,
    * `null` for globals-only, a workspace id to narrow to it (+ globals).
    */
-  withLens(workspaceLens: string | null | undefined): AccessContext {
+  withLens(workspaceLens: Lens): AccessContext {
     return new AccessContext(
       this.userId,
       this.agentUserId,
@@ -128,7 +136,7 @@ export class AccessContext {
    * project lens stays project-wide, so existing consumers are unchanged. Pass
    * `undefined` for no project narrowing, a project entity id to narrow to it.
    */
-  withProjectLens(projectLens: string | null | undefined): AccessContext {
+  withProjectLens(projectLens: Lens): AccessContext {
     return new AccessContext(
       this.userId,
       this.agentUserId,

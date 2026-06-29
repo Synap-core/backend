@@ -8,6 +8,8 @@ import {
 } from "./index.js";
 // withVisibility is an internal composer (not part of the public barrel).
 import { withVisibility } from "./visibility.js";
+import { workspaceLensWhere } from "../utils/user-visible-where.js";
+import { accessScopeWhere } from "../utils/project-scope.js";
 
 describe("AccessContext — the two boundary factories", () => {
   it("operator() builds a non-agent context", () => {
@@ -142,6 +144,53 @@ describe("AccessContext.withLens — the optional workspace lens", () => {
     const lensed = op.withLens("ws-1");
     expect(lensed.userId).toBe("u1");
     expect(lensed.actor).toBe("operator");
+  });
+
+  it("withLens / withProjectLens accept a SET (multi-valued composable fetch)", () => {
+    expect(op.withLens(["ws-1", "ws-2"]).workspaceLens).toEqual([
+      "ws-1",
+      "ws-2",
+    ]);
+    expect(op.withProjectLens(["p1", "p2"]).projectLens).toEqual(["p1", "p2"]);
+    // both lenses compose, identity preserved
+    const both = op.withLens(["ws-1"]).withProjectLens(["p1"]);
+    expect(both.workspaceLens).toEqual(["ws-1"]);
+    expect(both.projectLens).toEqual(["p1"]);
+    expect(both.userId).toBe("u1");
+  });
+});
+
+describe("lens predicates — multi-valued + empty-array=floor invariant", () => {
+  it("workspaceLensWhere: array, single, null, undefined, [] all return a defined SQL", () => {
+    const col = entities.workspaceId;
+    // All four shapes produce a predicate (the floor for undefined/[]).
+    expect(workspaceLensWhere(col, "u1")).toBeDefined(); // undefined → floor
+    expect(workspaceLensWhere(col, "u1", [])).toBeDefined(); // [] → floor (NOT zero)
+    expect(workspaceLensWhere(col, "u1", "ws-1")).toBeDefined();
+    expect(workspaceLensWhere(col, "u1", ["ws-1", "ws-2"])).toBeDefined();
+    expect(workspaceLensWhere(col, "u1", null)).toBeDefined();
+  });
+
+  it("accessScopeWhere: multi-valued workspace + project lenses compose to a defined SQL", () => {
+    const sql = accessScopeWhere({
+      workspaceIdColumn: entities.workspaceId,
+      entityIdColumn: entities.id,
+      ownerColumn: entities.userId,
+      userId: "u1",
+      workspaceLens: ["ws-1", "ws-2"],
+      projectLens: ["p1", "p2"],
+    });
+    expect(sql).toBeDefined();
+    // Empty arrays = no narrow (the floor) — must not collapse to match-zero.
+    const floor = accessScopeWhere({
+      workspaceIdColumn: entities.workspaceId,
+      entityIdColumn: entities.id,
+      ownerColumn: entities.userId,
+      userId: "u1",
+      workspaceLens: [],
+      projectLens: [],
+    });
+    expect(floor).toBeDefined();
   });
 });
 

@@ -31,6 +31,16 @@ import { db } from "@synap/database";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 
 /**
+ * The workspace lens, as a composable scope dimension:
+ *   - `undefined`  → no narrowing (all the user's workspaces + globals — the floor)
+ *   - `null`       → globals only (`workspaceId IS NULL`)
+ *   - `"<id>"`     → that one workspace (+ globals per opts)
+ *   - `string[]`   → that SET of workspaces (OR/union); `[]` == `undefined` (floor)
+ * Multi-valued so a caller can fetch across several workspaces in one query.
+ */
+export type WorkspaceLens = string | string[] | null | undefined;
+
+/**
  * Returns a Drizzle predicate matching rows visible to `userId`:
  *   - rows where `workspaceIdColumn IS NULL` (pod-wide globals), OR
  *   - rows whose `workspaceId` is in any workspace the user is a member of.
@@ -104,21 +114,28 @@ export function userVisibleWhere(
 export function workspaceLensWhere(
   workspaceIdColumn: AnyPgColumn,
   userId: string,
-  lens?: string | null,
+  lens?: WorkspaceLens,
   opts?: { includeGlobals?: boolean }
 ): SQL {
   const floor = userVisibleWhere(workspaceIdColumn, userId);
   // No lens = the pod-wide / user-focused view → globals ARE visible (the floor
-  // already includes `IS NULL`).
-  if (lens === undefined) return floor;
+  // already includes `IS NULL`). An EMPTY array is treated identically (no
+  // constraint specified) — an empty filter must never silently match zero rows.
+  if (lens === undefined || (Array.isArray(lens) && lens.length === 0)) {
+    return floor;
+  }
   if (lens === null) return isNull(workspaceIdColumn);
-  // A SPECIFIC workspace is selected → show THAT workspace only; pod-wide globals
-  // do NOT bleed into a focused workspace (product decision 2026-06-15). The
-  // exception is SUBSTRATE config (builtin widgets, base relation-defs, SYSTEM
-  // profiles) which must stay visible inside every workspace — those rules pass
-  // `includeGlobals: true`. Either way it's intersected with the user floor so
-  // the lens can only narrow.
+  // A SPECIFIC workspace (or set of workspaces) is selected → show THOSE
+  // workspaces only; pod-wide globals do NOT bleed into a focused workspace
+  // (product decision 2026-06-15). The exception is SUBSTRATE config (builtin
+  // widgets, base relation-defs, SYSTEM profiles) which must stay visible inside
+  // every workspace — those rules pass `includeGlobals: true`. Either way it's
+  // intersected with the user floor so the lens can only narrow.
+  // Multiple ids = OR (union) within the dimension.
+  const lensMatch = Array.isArray(lens)
+    ? inArray(workspaceIdColumn, lens)
+    : eq(workspaceIdColumn, lens);
   return opts?.includeGlobals
-    ? and(or(isNull(workspaceIdColumn), eq(workspaceIdColumn, lens)), floor)!
-    : and(eq(workspaceIdColumn, lens), floor)!;
+    ? and(or(isNull(workspaceIdColumn), lensMatch), floor)!
+    : and(lensMatch, floor)!;
 }
