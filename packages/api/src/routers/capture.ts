@@ -726,6 +726,17 @@ export const captureRouter = router({
         // can distinguish "checked, no duplicates" from "didn't check". Omitted
         // when all searches succeeded.
         ...(dedupSkipped ? { dedupSkipped: true as const } : {}),
+        // Forward the degraded signal from IS so callers can distinguish a
+        // real classification from a confidence-0.3 fallback note. The note is
+        // still written (preserving user text), but callers now know WHY.
+        degraded: (structureResult as { degraded?: boolean }).degraded ?? false,
+        ...((structureResult as { degradedReason?: string }).degradedReason !==
+        undefined
+          ? {
+              degradedReason: (structureResult as { degradedReason?: string })
+                .degradedReason,
+            }
+          : {}),
         ...extractionPassThrough,
       };
     }),

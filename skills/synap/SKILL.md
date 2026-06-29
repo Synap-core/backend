@@ -45,6 +45,8 @@ Synap is a typed knowledge graph. **Reading is one verb (`synap ask`) — it rou
 
 Ask yourself: _who does this knowledge serve?_ **There is no private AI scratchpad** — structuring knowledge into a real lane IS your job. Never write a `note` (that's the human's raw inbox); always `capture` into a lane.
 
+**Known fields → typed create.** If you already know the profileSlug and the values, use `synap create entity` / `synap_create_entity` (or typed `capture --type` for a knowledge entry). Reach for free-text `capture "…"` only for an unstructured blob you haven't parsed — it runs an AI pipeline that can degrade to one flat `note`. 'Always capture into a lane' means *don't leave it unstructured*, not *always use the free-text pipeline*.
+
 | If it…                                                                                                                          | Lane                 | Where it goes                                                                            | Governance                                                                                                 |
 | ------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | **is about the CURRENT WORK** — domain know-how for the project/task you're on (incl. a domain-specific gotcha/lesson/decision) | **Work** _(default)_ | a `knowledge` entity in the **active workspace** (`synap capture --type …`)              | proposal-gated (it's the user's real data; the workspace IS the domain — Builder ≠ marketing)              |
@@ -1011,6 +1013,8 @@ This model enables renewals (new deal linking to existing client), multi-stakeho
 6. **Not knowing your userId.** Use `{SYNAP_USER_ID}` from the env (set by `synap connect`). Or call `GET /api/hub/users/me` → `.id` once and cache it. Never hardcode or guess.
 7. **Skipping the search step.** Duplicates degrade the graph more than missing data.
 8. **Forgetting that `GET /channels/personal` needs `hub-protocol.write`** scope — it's get-or-create, not a pure read.
+9. **Routing known-structure data through free-text capture.** If you already know the profileSlug + fields, create the entity directly — smart capture can degrade to a single flat note.
+10. **Paragraph session goals.** The goal is one line; put detail and deliverables in expectedOutputs.
 
 ---
 
