@@ -30,6 +30,8 @@ import { MessageAuthorType } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
+import { requireUserId } from "../utils/user-scoped.js";
+import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { capabilityContainersRouter } from "./capability-containers.js";
 import { buildCapabilityCatalog } from "../services/capabilities/capability-catalog.js";
 import {
@@ -157,6 +159,47 @@ export const capabilitiesRouter = router({
         workspaceId: input.workspaceId,
         userId: ctx.userId,
       });
+    }),
+
+  /**
+   * Enable / disable (approve) a single capability verb (its backing skill) —
+   * the capability-scoped counterpart to `skills.setApproved`. Gated on the
+   * CONTAINER the skill belongs to: a pod-scoped (null-workspace) skill requires
+   * pod-admin (the pod owner/operator); a workspace-scoped skill requires the
+   * workspace owner. Leaves `skills.setApproved` intact — this is the
+   * capability-surface enable path so the legitimate operator can flip a verb on
+   * without the (intentionally separate) skills-router gate.
+   */
+  setToolEnabled: protectedProcedure
+    .input(z.object({ skillId: z.string().uuid(), enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const skill = await db.query.skills.findFirst({
+        where: eq(skills.id, input.skillId),
+      });
+      if (!skill) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Skill not found" });
+      }
+      if (skill.workspaceId) {
+        const role = await getWorkspaceRole(userId, skill.workspaceId);
+        if (role !== "owner") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only workspace owners can enable capability verbs.",
+          });
+        }
+      } else {
+        // Pod-scoped (null-workspace) verb — visible in every workspace, so
+        // flipping it is a pod-level privileged action.
+        await requirePodAdmin(userId);
+      }
+
+      await db
+        .update(skills)
+        .set({ approved: input.enabled, updatedAt: new Date() })
+        .where(eq(skills.id, input.skillId));
+
+      return { success: true };
     }),
 
   /**
@@ -328,7 +371,8 @@ export const capabilitiesRouter = router({
       // Operator direct write — enforce workspace RBAC (deny if not permitted),
       // but never propose. Mirrors the operator branch of automations.create.
       const { verifyPermission } = await import("@synap/database");
-      const { requiredPermissionFor } = await import("@synap/governance-policy");
+      const { requiredPermissionFor } =
+        await import("@synap/governance-policy");
       const result = await verifyPermission({
         db: database,
         userId: ctx.userId!,
@@ -344,7 +388,12 @@ export const capabilitiesRouter = router({
 
       const flowDefinition = {
         nodes: [
-          { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+          {
+            id: "trigger",
+            type: "trigger",
+            position: { x: 0, y: 0 },
+            data: {},
+          },
           {
             id: "step-1",
             type: "capability",

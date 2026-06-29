@@ -4656,6 +4656,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				followUp: string | null;
 				targetWorkspaceId: string | null;
 				targetProjectId: string | null;
+				formSpec: null;
 				dedupCandidates: Record<string, Array<{
 					entityId: string;
 					title: string;
@@ -4691,6 +4692,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
+				formSpec: {
+					title?: string;
+					note?: string;
+					fields: Array<{
+						key: string;
+						label: string;
+						type: string;
+						constraints?: {
+							enum?: string[];
+							min?: number;
+							max?: number;
+							pattern?: string;
+						};
+						required?: boolean;
+						help?: string;
+					}>;
+				} | null;
 				dedupCandidates: Record<string, Array<{
 					entityId: string;
 					title: string;
@@ -4719,6 +4737,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
+				formSpec: {
+					title?: string;
+					note?: string;
+					fields: Array<{
+						key: string;
+						label: string;
+						type: string;
+						constraints?: {
+							enum?: string[];
+							min?: number;
+							max?: number;
+							pattern?: string;
+						};
+						required?: boolean;
+						help?: string;
+					}>;
+				} | null;
 				dedupCandidates: Record<string, Array<{
 					entityId: string;
 					title: string;
@@ -4755,6 +4790,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
+				formSpec: {
+					title?: string;
+					note?: string;
+					fields: Array<{
+						key: string;
+						label: string;
+						type: string;
+						constraints?: {
+							enum?: string[];
+							min?: number;
+							max?: number;
+							pattern?: string;
+						};
+						required?: boolean;
+						help?: string;
+					}>;
+				} | null;
 				dedupCandidates: Record<string, {
 					entityId: string;
 					title: string;
@@ -4786,6 +4838,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
+				formSpec: {
+					title?: string;
+					note?: string;
+					fields: Array<{
+						key: string;
+						label: string;
+						type: string;
+						constraints?: {
+							enum?: string[];
+							min?: number;
+							max?: number;
+							pattern?: string;
+						};
+						required?: boolean;
+						help?: string;
+					}>;
+				} | null;
 				dedupCandidates: Record<string, {
 					entityId: string;
 					title: string;

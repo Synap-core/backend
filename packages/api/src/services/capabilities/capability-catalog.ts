@@ -53,6 +53,12 @@ export interface CapabilityCardConnection {
   state: "connected" | "missing" | "expired";
   /** connectionId (or display account) when connected. */
   account?: string;
+  /**
+   * True for a pod-internal credential (a `vault://<id>` secret the operator
+   * holds) rather than a third-party OAuth (nango://) connection. Lets surfaces
+   * distinguish "internal key" from "external account" without re-parsing refs.
+   */
+  internal?: boolean;
 }
 
 /** A single declared parameter of a verb (richer than `params: string[]`). */
@@ -274,6 +280,8 @@ function deriveConnection(
         required: true,
         kind: "vault",
         state: conn.vaultExists.has(secretId) ? "connected" : "missing",
+        account: secretId,
+        internal: true,
       };
     }
   }
