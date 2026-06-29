@@ -772,20 +772,29 @@ export const entitiesRouter = router({
       // callers are unaffected (they already resolve to pod-wide-only below).
       const lensWorkspaceId =
         input.workspaceId !== undefined ? input.workspaceId : ctx.workspaceId;
-      // When a PROJECT lens is selected it becomes the primary scope: use the full
-      // user floor (`entityVisibleWhere`, which includes the project-membership
-      // branch) instead of the workspace-only lens, so a project member sees the
-      // project's data ACROSS workspaces — even ones they aren't a member of. The
-      // `projectLensWhere` narrow below then restricts to that project. (Parity
-      // with `listAll`, which already uses the project-aware floor.) Without a
-      // project, the normal workspace lens applies.
-      const workspaceScopeCondition = input.projectId
-        ? entityVisibleWhere(ctx.userId)
-        : input.globalOnly || !lensWorkspaceId
-          ? entityLensWhere(ctx.userId, null)
-          : entityLensWhere(ctx.userId, lensWorkspaceId, {
-              includePodWide: input.includePodWide,
-            });
+      // The scope rule (unified, floor-first):
+      //   • PROJECT lens → the full user floor (incl. the project-membership
+      //     branch, so a member sees the project ACROSS workspaces); the
+      //     `projectLensWhere` narrow below restricts to that project.
+      //   • EXPLICIT globals-only (`globalOnly`, or an explicit `workspaceId:
+      //     null`) → pod-wide globals only.
+      //   • a SPECIFIC workspace (input or the active-ws header) → that workspace.
+      //   • NO lens at all (no input workspaceId AND no header) → the USER FLOOR
+      //     (all the user's workspaces + globals), NOT globals-only. This is the
+      //     "no lens = everything you can access" rule and makes `.list` with no
+      //     lens a strict superset of (and the replacement for) `.listAll`.
+      let workspaceScopeCondition;
+      if (input.projectId) {
+        workspaceScopeCondition = entityVisibleWhere(ctx.userId);
+      } else if (input.globalOnly || input.workspaceId === null) {
+        workspaceScopeCondition = entityLensWhere(ctx.userId, null);
+      } else if (lensWorkspaceId) {
+        workspaceScopeCondition = entityLensWhere(ctx.userId, lensWorkspaceId, {
+          includePodWide: input.includePodWide,
+        });
+      } else {
+        workspaceScopeCondition = entityVisibleWhere(ctx.userId);
+      }
       // Visibility is enforced at QUERY level — `list` is a `podProcedure`, so there
       // is NO procedure-level workspace gate. `workspaceScopeCondition` delegates to
       // `entityLensWhere`/`entityVisibleWhere`, which restrict rows to the user floor
