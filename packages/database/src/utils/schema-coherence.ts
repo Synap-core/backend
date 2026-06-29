@@ -82,6 +82,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0150_skills_body_document.sql",
   },
   {
+    table: "skills",
+    column: "provider_spec",
+    addedBy: "0156_skill_provider_spec.sql",
+  },
+  {
     table: "relations",
     column: "created_by_kind",
     addedBy: "0107_provenance_columns.sql",

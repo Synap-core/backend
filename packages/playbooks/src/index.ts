@@ -370,15 +370,78 @@ export interface CapabilityToolDef {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Declarative spec for a `kind:'provider'` capability verb — a deterministic
+ * provider HTTP call the POD executes IN-PROCESS via `triggerProviderAction`
+ * (Tier-1: no Intelligence Service, no sandbox isolate). The canonical copy of
+ * this contract; `@synap/database`'s `ProviderVerbSpec` mirrors it (re-declared
+ * there to keep the schema package dependency-free).
+ *
+ * `{{param}}` tokens in `pathTemplate`/`query`/`body` are filled from the
+ * (param-mapped) call parameters. `default:"@now"` ⇒ current ISO timestamp.
+ * Dot-paths in `responseShape` index into the response body.
+ */
+export interface ProviderVerbSpec {
+  /** Tool NAME — passed verbatim to `triggerProviderAction.provider`. */
+  tool: string;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  /** Path with `{{param}}` interpolation. */
+  pathTemplate: string;
+  /** Query params; values may be `{{param}}`; arrays → repeated query keys. */
+  query?: Record<string, string | string[]>;
+  body?: Record<string, unknown>;
+  baseUrlOverride?: string;
+  paramMapping?: Record<
+    string,
+    {
+      required?: boolean;
+      default?: unknown;
+      clampMin?: number;
+      clampMax?: number;
+      encode?: "uri";
+    }
+  >;
+  responseShape?: {
+    /** Dot-path to the collection array in the response body. */
+    collectionPath?: string;
+    /** Output key for the mapped collection (default "results"). */
+    collectionAs?: string;
+    /** outField → dot-path within each collection element. */
+    item?: Record<string, string>;
+    /** outField → dot-path on the root body (value may be `{{param}}` or `@count`). */
+    scalar?: Record<string, string>;
+    /** outField → header-name (case-insensitive) — extracts `payload.headers:[{name,value}]`. */
+    headers?: Record<string, string>;
+  };
+  expand?: {
+    /** Dot-path (in the shaped list result) to the array of items to expand. */
+    forEachIdFrom: string;
+    /** Per-id detail call (its own responseShape merged into each list item). */
+    detail: Omit<ProviderVerbSpec, "tool" | "expand">;
+    /** Bounded parallelism for the detail fan-out (default 5). */
+    concurrency?: number;
+    merge: "detail-into-list-item";
+  };
+}
+
 /** A skill the definition creates — mirrors the skills.create body. */
 export interface CapabilitySkillDef {
   name: string;
-  kind?: "instruction" | "code";
+  /**
+   * instruction — prompt text · code — JS run in the IS isolate (Tier-2) ·
+   * provider — declarative verb run in-process on the pod (Tier-1).
+   */
+  kind?: "instruction" | "code" | "provider";
   scope?: "pod" | "user" | "workspace";
   agentTypes?: string[];
   description?: string;
-  /** Executable source (kind="code") or instruction text (kind="instruction"). */
-  code: string;
+  /**
+   * Executable source (kind="code") or instruction text (kind="instruction").
+   * Optional — a `kind:'provider'` skill carries `providerSpec` instead.
+   */
+  code?: string;
+  /** Declarative provider-verb spec (kind="provider"). */
+  providerSpec?: ProviderVerbSpec;
   parameters?: Record<string, unknown>;
   category?: string;
   executionMode?: "sync" | "async";

@@ -1667,6 +1667,8 @@ ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'active';
 -- Per-capability approval gate (mig 0143).
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "document_ids" text[] DEFAULT '{}';
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "body_document_id" uuid REFERENCES "documents"("id") ON DELETE SET NULL;
+-- Two-tier capability execution: declarative provider-verb spec (mig 0156).
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "provider_spec" jsonb;
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "approved" boolean NOT NULL DEFAULT false;
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "error_message" text;
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';

@@ -19,6 +19,7 @@ import { db, skills, eq, and, or, isNull } from "@synap/database";
 
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
 import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
+import { executeProviderVerb } from "./execute-provider-verb.js";
 import { createPendingProposal } from "../../utils/permission-check.js";
 
 export type ExecuteCapabilityResult =
@@ -51,7 +52,13 @@ export async function executeCapability(input: {
   // Resolve the backing skill — by id, or by verb NAME scoped exactly like the
   // capability registry read-model: pod-wide OR this workspace OR owned by actor.
   const [skillRow] = await db
-    .select({ id: skills.id, approved: skills.approved, userId: skills.userId })
+    .select({
+      id: skills.id,
+      approved: skills.approved,
+      userId: skills.userId,
+      kind: skills.kind,
+      providerSpec: skills.providerSpec,
+    })
     .from(skills)
     .where(
       skillId
@@ -110,7 +117,25 @@ export async function executeCapability(input: {
     return { kind: "proposed", proposalId: proposal.id };
   }
 
-  // decision === "run" → execute the backing skill in the IS sandbox.
+  // decision === "run" → execute the backing skill.
+  //
+  // TIER 1 (provider verb): a `kind:'provider'` skill is a DECLARATIVE spec the
+  // pod runs IN-PROCESS via triggerProviderAction — no IS, no isolate. The
+  // skill-level gate above already ran; the engine passes `alreadyApproved:true`
+  // so the tool gate does not double-propose.
+  if (skillRow.kind === "provider" && skillRow.providerSpec) {
+    const result = await executeProviderVerb(
+      skillRow.providerSpec,
+      parameters,
+      {
+        userId,
+        workspaceId,
+      }
+    );
+    return { kind: "run", skillId: skillRow.id, result };
+  }
+
+  // TIER 2 (code/instruction): execute the backing skill in the IS sandbox.
   const result = await executeSkillViaIS({
     skillId: skillRow.id,
     userId,

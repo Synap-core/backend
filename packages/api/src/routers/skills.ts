@@ -11,6 +11,7 @@ import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and, or, desc, inArray, type SQL } from "@synap/database";
 import { skills, tools } from "@synap/database/schema";
+import type { ProviderVerbSpec } from "@synap/database/schema";
 import {
   getLinksFor,
   createLinks,
@@ -146,7 +147,8 @@ export const skillsRouter = router({
         workspaceId: z.string().uuid().optional(),
         // A skill is Documentation (always) + optional Code. `kind` is derived
         // from whether code is present; still accepted for back-compat.
-        kind: z.enum(["instruction", "code"]).optional(),
+        // `provider` = a declarative Tier-1 verb (carries `providerSpec`).
+        kind: z.enum(["instruction", "code", "provider"]).optional(),
         scope: z.enum(["pod", "user", "workspace"]).default("pod"),
         agentTypes: z.array(z.string()).optional(),
         name: z.string().min(1).max(255),
@@ -155,6 +157,8 @@ export const skillsRouter = router({
         body: z.string().optional(),
         /** Optional executable — present ⇒ the skill is runnable (sandboxed). */
         code: z.string().optional(),
+        /** Declarative provider-verb spec (kind="provider"). */
+        providerSpec: z.record(z.string(), z.unknown()).optional(),
         parameters: z.record(z.string(), z.unknown()).optional(),
         category: z.string().optional(),
         executionMode: z.enum(["sync", "async"]).default("sync"),
@@ -169,7 +173,9 @@ export const skillsRouter = router({
       // input.kind still honored). A skill must carry documentation or code.
       const hasCode = !!input.code?.trim();
       const kind = input.kind ?? (hasCode ? "code" : "instruction");
-      if (!input.body?.trim() && !hasCode) {
+      // A `provider` skill carries a declarative `providerSpec` instead of
+      // body/code, so it is exempt from the documentation-or-code requirement.
+      if (kind !== "provider" && !input.body?.trim() && !hasCode) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "A skill needs documentation or code.",
@@ -214,6 +220,8 @@ export const skillsRouter = router({
           description: input.description,
           body: input.body ?? null,
           code: input.code ?? null,
+          providerSpec:
+            (input.providerSpec as ProviderVerbSpec | undefined) ?? null,
           parameters: input.parameters || {},
           category: input.category,
           executionMode: input.executionMode,

@@ -29,7 +29,64 @@ import { workspaces } from "./workspaces.js";
 import { documents } from "./documents.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
-export type SkillKind = "instruction" | "code";
+export type SkillKind = "instruction" | "code" | "provider";
+
+/**
+ * Declarative spec for a `kind:'provider'` capability verb — a deterministic
+ * provider HTTP call the POD executes IN-PROCESS via `triggerProviderAction`
+ * (no Intelligence Service, no sandbox isolate). The Tier-1 counterpart to a
+ * `kind:'code'` skill (which runs untrusted JS in the IS isolate).
+ *
+ * Re-declared here (NOT imported) so the schema package stays dependency-free,
+ * exactly like `ToolVerbCatalogEntry` in `schema/tools.ts`. The canonical copy
+ * lives in `@synap/playbooks` and is kept in lock-step.
+ *
+ * Interpolation: `{{param}}` tokens in `pathTemplate`/`query`/`body` are filled
+ * from the (param-mapped) call parameters. `default:"@now"` ⇒ current ISO
+ * timestamp. Dot-paths in `responseShape` index into the response body.
+ */
+export type ProviderVerbSpec = {
+  /** Tool NAME — passed verbatim to `triggerProviderAction.provider`. */
+  tool: string;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  /** Path with `{{param}}` interpolation, e.g. "/calendar/v3/calendars/{{calendarId}}/events". */
+  pathTemplate: string;
+  /** Query params; values may be `{{param}}`; arrays → repeated query keys. */
+  query?: Record<string, string | string[]>;
+  body?: Record<string, unknown>;
+  baseUrlOverride?: string;
+  paramMapping?: Record<
+    string,
+    {
+      required?: boolean;
+      default?: unknown;
+      clampMin?: number;
+      clampMax?: number;
+      encode?: "uri";
+    }
+  >;
+  responseShape?: {
+    /** Dot-path to the collection array in the response body. */
+    collectionPath?: string;
+    /** Output key for the mapped collection (default "results"). */
+    collectionAs?: string;
+    /** outField → dot-path within each collection element. */
+    item?: Record<string, string>;
+    /** outField → dot-path on the root body (value may be `{{param}}` or `@count`). */
+    scalar?: Record<string, string>;
+    /** outField → header-name (case-insensitive) — extracts Gmail `payload.headers:[{name,value}]`. */
+    headers?: Record<string, string>;
+  };
+  expand?: {
+    /** Dot-path (in the shaped list result) to the array of items to expand. */
+    forEachIdFrom: string;
+    /** Per-id detail call (its own responseShape merged into each list item). */
+    detail: Omit<ProviderVerbSpec, "tool" | "expand">;
+    /** Bounded parallelism for the detail fan-out (default 5). */
+    concurrency?: number;
+    merge: "detail-into-list-item";
+  };
+};
 /**
  * pod       — visible to all users on the data pod (default)
  * user      — visible only to the owning user
@@ -60,7 +117,7 @@ export const skills = pgTable(
      * instruction — text appended to the agent system prompt
      * code        — JS/TS function executed in the sandbox
      */
-    kind: text("kind", { enum: ["instruction", "code"] })
+    kind: text("kind", { enum: ["instruction", "code", "provider"] })
       .notNull()
       .default("code")
       .$type<SkillKind>(),
@@ -115,6 +172,13 @@ export const skills = pgTable(
      * Nullable — doc-style skills (kind='instruction') have no code.
      */
     code: text("code"),
+
+    /**
+     * For kind='provider': the DECLARATIVE provider-verb spec the pod executes
+     * IN-PROCESS via `triggerProviderAction` (Tier-1, no IS isolate). Nullable —
+     * only `provider` skills populate it.
+     */
+    providerSpec: jsonb("provider_spec").$type<ProviderVerbSpec | null>(),
 
     /** Parameter schema (code skills only) — describes callable arguments */
     parameters: jsonb("parameters"),

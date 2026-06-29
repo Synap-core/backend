@@ -325,7 +325,12 @@ export async function createCapabilityFromDefinition(
     if (existingSkill) {
       await db
         .update(skillsTable)
-        .set({ code: s.code, updatedAt: new Date() })
+        .set({
+          kind: s.kind ?? "code",
+          code: s.code ?? null,
+          providerSpec: s.providerSpec ?? null,
+          updatedAt: new Date(),
+        })
         .where(eq(skillsTable.id, existingSkill.id));
       if (s.requires && s.requires.length > 0) {
         const toolIds = s.requires
@@ -354,6 +359,7 @@ export async function createCapabilityFromDefinition(
       agentTypes: s.agentTypes,
       description: s.description,
       code: s.code,
+      providerSpec: s.providerSpec as Record<string, unknown> | undefined,
       parameters: s.parameters,
       category: s.category,
       executionMode: s.executionMode ?? "sync",
