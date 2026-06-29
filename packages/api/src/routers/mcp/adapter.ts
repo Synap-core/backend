@@ -619,11 +619,6 @@ export async function executeMCPToolViaHubProtocol(
         verificationReport: args.verificationReport as
           | Record<string, unknown>
           | undefined,
-        planReport: args.planReport as Record<string, unknown> | undefined,
-        contextReport: args.contextReport as
-          | Record<string, unknown>
-          | undefined,
-        executionLog: args.executionLog as Record<string, unknown> | undefined,
       });
       if (!session) {
         return ok({ error: `Focus session ${args.sessionId} not found` });

@@ -60,9 +60,6 @@ const FocusSessionWireSchema = z.object({
   progress: z.number().nullable(),
   agentIds: z.array(z.string()),
   closedAt: z.string().nullable(),
-  contextReport: z.unknown().nullable(),
-  planReport: z.unknown().nullable(),
-  executionLog: z.unknown().nullable(),
   verificationReport: z.unknown().nullable(),
   startedAt: z.string(),
   createdAt: z.string(),
@@ -99,9 +96,6 @@ const UpdateBodySchema = z.object({
   goal: z.string().min(1).max(2000).optional(),
   agentIds: z.array(z.string()).optional(),
   expectedOutputs: z.array(ExpectedOutputItemSchema).optional(),
-  contextReport: z.unknown().optional(),
-  planReport: z.unknown().optional(),
-  executionLog: z.unknown().optional(),
   verificationReport: z.unknown().optional(),
   agentUserId: z.string().uuid().optional(),
   reasoning: z.string().optional(),
@@ -486,11 +480,6 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (patch.agentIds !== undefined) set.agentIds = patch.agentIds;
       if (patch.expectedOutputs !== undefined)
         set.expectedOutputs = patch.expectedOutputs;
-      if (patch.contextReport !== undefined)
-        set.contextReport = patch.contextReport;
-      if (patch.planReport !== undefined) set.planReport = patch.planReport;
-      if (patch.executionLog !== undefined)
-        set.executionLog = patch.executionLog;
       if (patch.verificationReport !== undefined)
         set.verificationReport = patch.verificationReport;
 

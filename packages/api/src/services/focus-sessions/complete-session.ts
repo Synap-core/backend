@@ -16,22 +16,12 @@ export interface CompleteFocusSessionParams {
   /** Short human-readable outcome — surfaced in session lists. */
   summary?: string;
   verificationReport?: Record<string, unknown> | null;
-  planReport?: Record<string, unknown> | null;
-  contextReport?: Record<string, unknown> | null;
-  executionLog?: Record<string, unknown> | null;
 }
 
 export async function completeFocusSession(
   params: CompleteFocusSessionParams
 ): Promise<FocusSession | null> {
-  const {
-    sessionId,
-    summary,
-    verificationReport,
-    planReport,
-    contextReport,
-    executionLog,
-  } = params;
+  const { sessionId, summary, verificationReport } = params;
 
   // Load the session — scoping is the caller's responsibility (REST resolves
   // acting context; MCP passes the operator userId).
@@ -93,17 +83,16 @@ export async function completeFocusSession(
     .set({
       status: "closed",
       closedAt: new Date(),
-      ...(summary !== undefined || executionLog !== undefined
+      ...(verificationReport !== undefined
         ? {
-            executionLog: {
+            verificationReport: {
               ...(summary !== undefined ? { summary } : {}),
-              ...((executionLog as Record<string, unknown>) ?? {}),
+              ...((verificationReport as Record<string, unknown>) ?? {}),
             },
           }
-        : {}),
-      ...(verificationReport !== undefined ? { verificationReport } : {}),
-      ...(planReport !== undefined ? { planReport } : {}),
-      ...(contextReport !== undefined ? { contextReport } : {}),
+        : summary !== undefined
+          ? { verificationReport: { summary } }
+          : {}),
     })
     .where(eq(focusSessions.id, sessionId))
     .returning();

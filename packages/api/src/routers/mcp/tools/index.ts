@@ -502,20 +502,7 @@ export const tools = {
             verificationReport: {
               type: "object",
               description:
-                "Optional structured verification report (e.g. what was checked, confidence levels).",
-            },
-            planReport: {
-              type: "object",
-              description: "Optional plan report detailing the approach taken.",
-            },
-            contextReport: {
-              type: "object",
-              description: "Optional context gathered before starting.",
-            },
-            executionLog: {
-              type: "object",
-              description:
-                "Optional structured execution log — step-by-step transcript of what happened.",
+                "Optional structured verification report (e.g. what was checked, confidence levels, summary of what was accomplished).",
             },
           },
           required: ["sessionId"],
