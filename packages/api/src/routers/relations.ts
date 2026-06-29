@@ -704,18 +704,36 @@ export const relationsRouter = router({
       const eventRepo = new EventRepository(sql);
       const relationRepo = new RelationRepository(database, eventRepo);
 
-      const relation = await relationRepo.create(
-        {
-          id,
-          sourceEntityId: input.sourceEntityId,
-          targetEntityId: input.targetEntityId,
-          type: input.type,
-          workspaceId: effectiveWorkspaceId,
-          userId: ctx.userId,
-          metadata: input.metadata,
-        },
-        ctx.userId
-      );
+      let relation: { id: string };
+      try {
+        relation = await relationRepo.create(
+          {
+            id,
+            sourceEntityId: input.sourceEntityId,
+            targetEntityId: input.targetEntityId,
+            type: input.type,
+            workspaceId: effectiveWorkspaceId,
+            userId: ctx.userId,
+            metadata: input.metadata,
+          },
+          ctx.userId
+        );
+      } catch (err) {
+        // Idempotency: uniquely-indexed edges (e.g. belongs_to_project) must not
+        // 500 on a re-link. On a unique violation, return the existing edge
+        // instead of throwing — re-filing an entity into a project is a no-op.
+        if ((err as { code?: string })?.code === "23505") {
+          const existing = await database.query.relations.findFirst({
+            where: and(
+              eq(relations.sourceEntityId, input.sourceEntityId),
+              eq(relations.targetEntityId, input.targetEntityId),
+              eq(relations.type, input.type)
+            ),
+          });
+          if (existing) return { id: existing.id, status: "exists" as const };
+        }
+        throw err;
+      }
 
       // 2b. Reverse-sync: if this relation type maps to an entity_id property, auto-set it
       syncRelationToPropertyOnCreate(
