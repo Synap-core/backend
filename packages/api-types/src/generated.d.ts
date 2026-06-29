@@ -3979,6 +3979,71 @@ export interface ExecutionStats {
 	[key: string]: unknown;
 }
 /**
+ * Capability CATALOG read-model — the pack-grouped, status-computed view that is
+ * the keystone of the capability UX consolidation (see CAPABILITIES-NORTH-STAR.md).
+ *
+ * Where `listCapabilities` (capability-registry.ts) returns a FLAT list — every
+ * tool and every skill as its own (duplicated) entry — this builder returns ONE
+ * `CapabilityCard` per PACK:
+ *   - one card per installed capability CONTAINER (`capabilities` table), with its
+ *     member tools (→ connection) and member skills (→ verbs) folded in, plus
+ *   - one card per AVAILABLE template (from the Control Plane catalog — the
+ *     single source of truth) that has NO matching installed container.
+ *
+ * The single computed `status` per card drives every surface (CLI / browser /
+ * Raycast): each card carries exactly one `nextAction`. De-dup is by pack
+ * identity (a container's NAME, which the applier sets to the template's name) —
+ * fixing today's read-model that surfaces duplicate bare tools/skills.
+ *
+ * Read-only. No writes, no governance (reads are auto-approved). Resilient: a
+ * connector-resolver failure degrades a connection to `state:"missing"`, never a
+ * 500 — the catalog always renders.
+ */
+export type CapabilityCardStatus = "available" | "needs_connection" | "connected" | "draft" | "ready" | "partial";
+export interface CapabilityCardConnection {
+	required: boolean;
+	/** nango:// => "provider", vault:// => "vault". null when none/unknown. */
+	kind: "provider" | "vault" | null;
+	/** providerConfigKey, e.g. "google" — present for provider connections. */
+	provider?: string;
+	state: "connected" | "missing" | "expired";
+	/** connectionId (or display account) when connected. */
+	account?: string;
+}
+export interface CapabilityCardVerb {
+	/** Backing skill NAME — the verbId the execute door resolves. */
+	verbId: string;
+	/** Backing skill UUID (installed verbs only; null for an available template). */
+	skillId: string | null;
+	label: string;
+	/** read/write by name heuristic. TODO: promote to explicit skill metadata. */
+	type: "read" | "write";
+	/** Backing skill `approved === true`. */
+	enabled: boolean;
+	governance: "auto" | "propose";
+	/** enabled AND (no connection required OR connection connected). */
+	runnable: boolean;
+	/** Parameter names the verb accepts — for `cap run <verb> --<param> …` hints. */
+	params: string[];
+}
+export interface CapabilityCard {
+	/** Container id; null for an available-only template. */
+	id: string | null;
+	/** Stable identity: template key if known, else container id/slug. */
+	key: string;
+	/** Pack display name, e.g. "Nango — Google Workspace". */
+	name: string;
+	description?: string | null;
+	source: "installed" | "available";
+	status: CapabilityCardStatus;
+	connection?: CapabilityCardConnection;
+	verbs: CapabilityCardVerb[];
+	nextAction: {
+		kind: "add" | "connect" | "enable" | "run" | "none";
+		hint: string;
+	};
+}
+/**
  * @synap/playbooks — Playbooks & Capability Substrate contracts
  *
  * The pure, I/O-free DOMAIN contracts for the autonomous-capability spine:
@@ -4090,6 +4155,74 @@ export interface CapabilityVerbState extends ToolVerb {
 	 */
 	effectiveExecMode: ExecMode;
 }
+export interface CreateCapabilityResult {
+	capabilityKey: string;
+	created: {
+		/** The capability CONTAINER the seeded tools + skills are grouped under. */
+		container: {
+			id: string;
+			name: string;
+			status: "created" | "reused";
+		} | null;
+		vault: {
+			ref: string;
+			vaultRef: string;
+			secretId: string;
+		}[];
+		tools: {
+			name: string;
+			status: "created" | "proposed";
+			toolId: string | null;
+			proposalId: string | null;
+		}[];
+		skills: {
+			name: string;
+			status: "created" | "proposed";
+			skillId: string | null;
+			proposalId: string | null;
+		}[];
+		playbooks: {
+			name: string;
+			status: "created" | "reused" | "proposed";
+			playbookId: string | null;
+			proposalId: string | null;
+		}[];
+	};
+	proposals: string[];
+}
+/**
+ * Capability execution — ONE shared core for "launch a registered capability".
+ *
+ * Resolves a capability VERB (verbId = backing skill name) or a skillId to its
+ * skill, runs `gateCapabilityExecution`, and on `run` delegates to the IS sandbox
+ * via `executeSkillViaIS`. Returns a discriminated result the callers map to their
+ * own shape:
+ *   - Hub REST `POST /capabilities/execute` → HTTP 200/202/403/404
+ *   - MCP tool `run_capability` → a text result
+ *
+ * Identity: OPERATOR/owner run (no agentUserId) — the bearer who applied the
+ * capability owns the skill → owner-bypass runs it; a non-owner/unapproved skill
+ * routes to `propose`. (Agent-initiated runs flow through the IS agent loop, not
+ * this door.) A DRAFT skill is denied for everyone (approval gate) — enable it
+ * first via `POST /skills/:id/approve`.
+ */
+export type ExecuteCapabilityResult = {
+	kind: "run";
+	skillId: string;
+	result: unknown;
+} | {
+	kind: "dry-run";
+	skillId: string;
+} | {
+	kind: "proposed";
+	proposalId: string;
+} | {
+	kind: "deny";
+	reason: string;
+} | {
+	kind: "not_found";
+	message: string;
+};
 /** A node in the pod graph — uniform across every object kind. */
 export interface GraphNode {
 	/** The object's table/kind (the link-endpoint type). */
@@ -9412,6 +9545,31 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					lastHealthStatus: string | null;
 				}[];
 			};
+			meta: object;
+		}>;
+		catalog: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			output: CapabilityCard[];
+			meta: object;
+		}>;
+		apply: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				workspaceId: string;
+				templateKey?: string | undefined;
+				definition?: any;
+			};
+			output: CreateCapabilityResult;
+			meta: object;
+		}>;
+		execute: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				verbId: string;
+				workspaceId: string;
+				parameters?: Record<string, unknown> | undefined;
+			};
+			output: ExecuteCapabilityResult;
 			meta: object;
 		}>;
 		checkHealth: import("@trpc/server").TRPCMutationProcedure<{
