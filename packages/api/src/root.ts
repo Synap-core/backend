@@ -64,6 +64,7 @@ import { playbooksRouter } from "./routers/playbooks.js";
 import { playbookRunsRouter } from "./routers/playbook-runs.js";
 import { agentRunsRouter } from "./routers/agent-runs.js";
 import { artifactsRouter } from "./routers/artifacts.js";
+import { projectsRouter } from "./routers/projects.js";
 
 /**
  * Core API Router
@@ -135,6 +136,7 @@ export const coreRouter = router({
   playbookRuns: playbookRunsRouter,
   agentRuns: agentRunsRouter,
   artifacts: artifactsRouter,
+  projects: projectsRouter,
 });
 
 export type AppRouter = typeof coreRouter;
