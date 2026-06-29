@@ -320,6 +320,13 @@ export class NangoConnector implements SyncConnector {
      * `Base-Url-Override` proxy header.
      */
     baseUrlOverride?: string;
+    /**
+     * Optional static custom request headers (e.g. Cal.com's `cal-api-version`).
+     * SECURITY: spread FIRST below so Nango's auth + structural headers
+     * (Connection-Id / Provider-Config-Key / Base-Url-Override) always WIN — a
+     * custom header can never override auth or smuggle a different connection.
+     */
+    headers?: Record<string, string>;
   }): Promise<{
     status: number;
     headers: Record<string, string>;
@@ -328,6 +335,7 @@ export class NangoConnector implements SyncConnector {
     const res = await fetch(`${this.host}/proxy${params.path}`, {
       method: params.method.toUpperCase(),
       headers: {
+        ...(params.headers ?? {}),
         ...this.authHeaders(),
         "Connection-Id": params.connectionId,
         "Provider-Config-Key": params.providerConfigKey,

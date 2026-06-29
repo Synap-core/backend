@@ -234,6 +234,7 @@ async function executeSingleCall(
     path,
     body,
     baseUrlOverride: spec.baseUrlOverride,
+    headers: spec.headers,
     workspaceId: ctx.workspaceId,
     // Skill-level gate already ran in executeCapability → skip the tool gate so
     // this Tier-1 dispatch does not double-propose (same contract as Door-2).

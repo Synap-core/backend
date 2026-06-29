@@ -469,6 +469,14 @@ export interface TriggerProviderActionInput {
    */
   baseUrlOverride?: string;
   /**
+   * Optional static custom request headers to merge into the outbound request
+   * (e.g. Cal.com's `cal-api-version`). SECURITY: these are spread FIRST so the
+   * handler's auth + structural headers (Nango Connection-Id / Provider-Config-Key
+   * / Base-Url-Override, the vault auth header, Content-Type) always WIN — a custom
+   * header can never override auth or smuggle a different connection.
+   */
+  headers?: Record<string, string>;
+  /**
    * The AI-agent identity, when this provider call is agent-initiated. Threaded
    * to the capability-execution gate so an agent run (no owner-bypass) routes to
    * `propose` instead of auto. Absent → resolved by the safe-by-default rule
@@ -606,6 +614,7 @@ const nangoHandler: SchemeHandler = async ({ input, tool }) => {
     path,
     body,
     baseUrlOverride,
+    headers: input.headers,
   });
 
   return {
@@ -910,7 +919,10 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
 
   const url = checked.url;
   const auth = resolveVaultAuthConfig(toolConfig.auth);
-  const headers: Record<string, string> = {};
+  // SECURITY: spread caller-supplied custom headers FIRST so the fixed
+  // Content-Type and the auth header set below always WIN — a custom header can
+  // never override auth or the structural Content-Type.
+  const headers: Record<string, string> = { ...(input.headers ?? {}) };
   if (body !== undefined) headers["Content-Type"] = "application/json";
 
   // Inject the secret per config — header or query. Never logged.

@@ -55,6 +55,8 @@ export type ProviderVerbSpec = {
   query?: Record<string, string | string[]>;
   body?: Record<string, unknown>;
   baseUrlOverride?: string;
+  /** Static custom request headers (e.g. Cal.com's `cal-api-version`). Auth wins. */
+  headers?: Record<string, string>;
   paramMapping?: Record<
     string,
     {

@@ -886,6 +886,12 @@ export function registerConnectorsRoutes(app: HubHono): void {
                    */
                   baseUrlOverride: z.string().optional(),
                   /**
+                   * Optional static custom request headers merged into the
+                   * outbound request (e.g. Cal.com's `cal-api-version`). Spread
+                   * FIRST in the dispatcher so auth + structural headers win.
+                   */
+                  headers: z.record(z.string(), z.string()).optional(),
+                  /**
                    * Optional acting workspace — routes a `propose` verdict's
                    * review proposal to the right workspace and scopes the gate.
                    */
@@ -961,6 +967,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
         body,
         accountHint,
         baseUrlOverride,
+        headers,
         workspaceId,
         agentUserId,
       } = c.req.valid("json");
@@ -990,6 +997,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
           body,
           accountHint,
           baseUrlOverride,
+          headers,
           workspaceId,
           agentUserId: resolvedAgentUserId,
         });
