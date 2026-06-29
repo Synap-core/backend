@@ -397,4 +397,59 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       );
     }
   });
+
+  // ── DELETE /capabilities/containers/:id ──────────────────────────────────
+  // Remove a capability CONTAINER (and its member_of links). The member parts
+  // (tools/skills) themselves are untouched — only the bundle grouping is dropped.
+  // Used by `synap cap rm` to clean up stale/duplicate containers. Delegates to
+  // the tRPC `containers.delete`, which gates write access on the loaded row's
+  // workspaceId (assertWorkspaceWrite) — so a pod-wide or owned container deletes,
+  // a foreign-workspace one is refused.
+  registerOpenApi(app, {
+    method: "delete",
+    path: "/capabilities/containers/{id}",
+    tags: ["Capabilities"],
+    summary: "Delete a capability container by id (member parts untouched)",
+    request: { params: z.object({ id: z.string().uuid() }) },
+    responses: {
+      200: { description: "Deleted", schema: z.object({ ok: z.boolean() }) },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.delete("/capabilities/containers/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const id = c.req.param("id");
+    if (!z.string().uuid().safeParse(id).success) {
+      return c.json({ error: "id path param (UUID) is required" }, 400);
+    }
+    try {
+      const acting = await resolveActingContext(c, {
+        workspaceId: c.req.query("workspaceId"),
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      const ctx = await createHubProtocolCallerContext(
+        acting.userId,
+        c.get("scopes") as string[],
+        null
+      );
+      const caller = capabilitiesRouter.createCaller(ctx as never);
+      const result = await caller.containers.delete({ id });
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err }, "capabilities container delete failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
 }
