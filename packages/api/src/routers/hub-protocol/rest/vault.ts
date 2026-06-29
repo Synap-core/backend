@@ -687,7 +687,11 @@ export function registerVaultRoutes(app: HubHono): void {
       const rows = await db.query.secrets.findMany({
         where: and(
           eq(secrets.userId, acting.userId),
-          eq(secrets.workspaceId, acting.workspaceId),
+          // No workspace → pod-personal secrets (workspaceId IS NULL), mirroring
+          // the nullable-workspace filter used for vault grants above.
+          acting.workspaceId
+            ? eq(secrets.workspaceId, acting.workspaceId)
+            : isNull(secrets.workspaceId),
           isNull(secrets.deletedAt)
         ),
         columns: {

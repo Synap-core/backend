@@ -143,7 +143,10 @@ export function registerDiscordRoutes(app: HubHono): void {
       workspaceId: body.workspaceId,
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-    const { userId, workspaceId } = acting;
+    const { userId } = acting;
+    // workspaceId is a required field on IngestRequestSchema, so the membership
+    // branch of resolveActingContext returns it non-null.
+    const workspaceId = body.workspaceId;
 
     const callerKeyId = c.get("apiKeyId") as string | undefined;
 
@@ -215,7 +218,10 @@ export function registerDiscordRoutes(app: HubHono): void {
       workspaceId: body.workspaceId,
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-    const { userId, workspaceId } = acting;
+    const { userId } = acting;
+    // workspaceId is a required field on AgentTurnRequestSchema, so the membership
+    // branch of resolveActingContext returns it non-null.
+    const workspaceId = body.workspaceId;
 
     // ── Caller identity resolution (Option B) ──────────────────────────────────
     // The bridge authenticates with the OPERATOR key; `userId` above is the

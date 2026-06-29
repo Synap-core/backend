@@ -185,6 +185,10 @@ export function registerDiscordIdentityRoutes(app: HubHono): void {
       workspaceId: rawWorkspaceId,
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    // Listing linkable members is workspace-scoped — a workspace is required.
+    if (!acting.workspaceId) {
+      return c.json({ error: "workspaceId is required" }, 400);
+    }
 
     try {
       const memberRows = await db
@@ -275,6 +279,16 @@ export function registerDiscordIdentityRoutes(app: HubHono): void {
       workspaceId: body.workspaceId,
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    // Linking a Discord identity is a workspace owner/admin action. A workspace
+    // is required — and the guard MUST precede the role check below, since the
+    // no-workspace (pod-personal) default returns role "owner" and would
+    // otherwise spuriously satisfy the owner/admin gate.
+    if (!acting.workspaceId) {
+      return c.json(
+        { error: "workspaceId is required to link a Discord identity" },
+        400
+      );
+    }
     if (acting.role !== "owner" && acting.role !== "admin") {
       logger.warn(
         {

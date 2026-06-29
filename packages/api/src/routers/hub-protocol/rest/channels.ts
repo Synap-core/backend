@@ -664,6 +664,15 @@ export function registerChannelsRoutes(app: HubHono): void {
     });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId, workspaceId } = acting;
+    // Linking an EXTERNAL channel binds it to a workspace (and usually a client
+    // entity); the shared upsert requires a workspace. A no-workspace link is not
+    // supported on this door.
+    if (!workspaceId) {
+      return c.json(
+        { error: "workspaceId is required to link an external channel" },
+        400
+      );
+    }
 
     try {
       // 1. Create-or-find the canonical EXTERNAL channel (race-safe upsert on the

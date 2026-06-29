@@ -210,6 +210,17 @@ export function registerConnectorsRoutes(app: HubHono): void {
       if (onBehalfOfUserId && onBehalfOfUserId !== userId) {
         const acting = await resolveActingContext(c, { workspaceId });
         if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+        // On-behalf-of binds to another WORKSPACE member, so a workspace is
+        // required here (no pod-personal delegation).
+        if (!acting.workspaceId) {
+          return c.json(
+            {
+              error:
+                "workspaceId is required to connect on behalf of another member",
+            },
+            400
+          );
+        }
         const isPrivileged = acting.role === "owner" || acting.role === "admin";
         if (!isPrivileged) {
           return c.json(
@@ -460,6 +471,17 @@ export function registerConnectorsRoutes(app: HubHono): void {
         // ── SECURITY GATE (mirrors discord-identity.ts's link gate) ──────────
         const acting = await resolveActingContext(c, { workspaceId });
         if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+        // On-behalf-of binds to another WORKSPACE member, so a workspace is
+        // required here (no pod-personal delegation).
+        if (!acting.workspaceId) {
+          return c.json(
+            {
+              error:
+                "workspaceId is required to create a connection on behalf of another member",
+            },
+            400
+          );
+        }
         const isPrivileged = acting.role === "owner" || acting.role === "admin";
         const isSelf = onBehalfOfUserId === acting.userId;
         if (!isPrivileged && !isSelf) {

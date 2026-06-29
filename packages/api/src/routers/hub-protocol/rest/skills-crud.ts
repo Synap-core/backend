@@ -463,7 +463,7 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       try {
         const resolved = await resolveIntelligenceService({
           userId: acting.userId,
-          workspaceId: acting.workspaceId,
+          workspaceId: acting.workspaceId ?? undefined,
         });
         endpoint = resolved.endpoint;
         serviceApiKey = resolved.serviceApiKey;

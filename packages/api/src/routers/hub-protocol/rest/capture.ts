@@ -465,7 +465,7 @@ export function registerCaptureRoutes(app: HubHono): void {
           try {
             const { client } = await resolveIntelligenceService({
               userId,
-              workspaceId,
+              workspaceId: workspaceId ?? undefined,
               capability: "default",
             });
             const enriched = await aiEnrichImportItems(

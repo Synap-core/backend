@@ -296,7 +296,9 @@ export function registerArtifactsRoutes(app: HubHono): void {
       const [created] = await db
         .insert(artifacts)
         .values({
-          workspaceId,
+          // CreateBodySchema requires workspaceId (z.string().min(1)); artifacts
+          // are workspace-scoped (artifacts.workspaceId is NOT NULL).
+          workspaceId: body.workspaceId,
           userId,
           kind: body.kind,
           refId: body.refId ?? null,
