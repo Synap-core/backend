@@ -741,17 +741,22 @@ export function registerChannelsRoutes(app: HubHono): void {
       //     still needs its 'client-comms' / 'team' role for the firewall to
       //     work. Without this, those channels land branchPurpose=NULL and the
       //     firewall can't distinguish a client-facing channel from a team one.
-      //     Idempotent: only stamp when not already set (the parent block above
-      //     may have set it), so a re-link never clobbers the role.
+      //     Idempotent by default: only stamp when not already set, so a normal
+      //     re-link never clobbers the role. An EXPLICIT `relink` DOES overwrite
+      //     it — the firewall keys entirely on branchPurpose, so a wrong role
+      //     (fat-fingered /link-channel, mis-inferred auto-link) must be
+      //     correctable, exactly like the workspace/entity self-heal above.
       if (body.branchPurpose) {
         await db
           .update(channelsTable)
           .set({ branchPurpose: body.branchPurpose, updatedAt: new Date() })
           .where(
-            and(
-              eq(channelsTable.id, channelId),
-              isNull(channelsTable.branchPurpose)
-            )
+            body.relink
+              ? eq(channelsTable.id, channelId)
+              : and(
+                  eq(channelsTable.id, channelId),
+                  isNull(channelsTable.branchPurpose)
+                )
           );
       }
 

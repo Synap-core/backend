@@ -361,32 +361,14 @@ export function registerDiscordRoutes(app: HubHono): void {
           "The AI service is temporarily unavailable. Please try again in a moment.";
       }
 
-      // ── 4. Persist the assistant reply so channel history stays complete ─────
-      // Only persist a genuine IS turn — never the friendly fallback.
-      if (assistantContent) {
-        const assistantId = randomUUID();
-        const assistantHash = createHash("sha256")
-          .update(`${assistantId}${assistantContent}${inboundHash}`)
-          .digest("hex");
-        await db.insert(messages).values({
-          id: assistantId,
-          channelId,
-          userId,
-          role: MessageRole.ASSISTANT,
-          authorType: MessageAuthorType.AI_AGENT,
-          messageCategory: MessageCategory.CHAT,
-          content: assistantContent,
-          previousHash: inboundHash,
-          hash: assistantHash,
-        });
-      }
-
-      // ── 4b. FIREWALL: the bot's reply must NEVER land in a client-comms
-      // channel (those mirror to the client's Telegram). If the @mention came
-      // from a client-comms channel, redirect the reply to the linked TEAM
-      // channel; if there is no team channel to redirect to, tell the bridge to
-      // suppress it entirely rather than leak. Best-effort: on a lookup error we
-      // fall back to replying in place (the conventional pre-firewall behavior).
+      // ── 4. FIREWALL (resolved BEFORE persisting): the bot's reply must NEVER
+      // land in — or be recorded under — a client-comms channel (those mirror to
+      // the client's Telegram). If the @mention came from a client-comms channel,
+      // redirect the Discord delivery to the linked TEAM channel; if there is no
+      // team channel, tell the bridge to suppress it. We resolve this first so
+      // the persist step below can SKIP recording the assistant turn under the
+      // client-comms channel (otherwise that reply would leak into the
+      // client-facing AI's thread context on a later turn).
       let deliverToExternalChannelId: string | undefined;
       let suppressReply = false;
       try {
@@ -431,6 +413,30 @@ export function registerDiscordRoutes(app: HubHono): void {
           { err, channelId },
           "firewall channel-role resolve failed — replying in place"
         );
+      }
+
+      // ── 4b. Persist the assistant reply so channel history stays complete —
+      // but NEVER under a client-comms channel. When the firewall redirected or
+      // suppressed the reply, the genuine answer is delivered to the TEAM channel
+      // on Discord by the bridge; we skip the pod-side record here so a later IS
+      // turn reading the client-comms thread can't pick up an internal reply.
+      const firewalled = !!deliverToExternalChannelId || suppressReply;
+      if (assistantContent && !firewalled) {
+        const assistantId = randomUUID();
+        const assistantHash = createHash("sha256")
+          .update(`${assistantId}${assistantContent}${inboundHash}`)
+          .digest("hex");
+        await db.insert(messages).values({
+          id: assistantId,
+          channelId,
+          userId,
+          role: MessageRole.ASSISTANT,
+          authorType: MessageAuthorType.AI_AGENT,
+          messageCategory: MessageCategory.CHAT,
+          content: assistantContent,
+          previousHash: inboundHash,
+          hash: assistantHash,
+        });
       }
 
       return c.json(
