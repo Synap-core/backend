@@ -831,14 +831,60 @@ export async function executeMCPToolViaHubProtocol(
           note: "Nothing to capture.",
         });
       }
+      // Dedup → merge: when structure found a high-confidence SAME-PROFILE
+      // duplicate, point the proposal at the existing entity so execute MERGES
+      // into it (via existingEntityId) instead of creating a near-duplicate.
+      // The same-profileSlug guard is load-bearing — the dedup search is
+      // cross-profile (semantic), so without it a `person` could merge into a
+      // `note`. ≥0.95 auto-merges; anything lower is left to create (the
+      // candidates are still surfaced to the caller in `structured`).
+      const dedup =
+        (
+          structured as {
+            dedupCandidates?: Record<
+              string,
+              Array<{ entityId: string; profileSlug: string; score: number }>
+            >;
+          }
+        ).dedupCandidates ?? {};
+      const mergedProposals = (
+        captureProposals as Array<{
+          tempId: string;
+          profileSlug: string;
+          existingEntityId?: string;
+        }>
+      ).map((p) => {
+        const top = dedup[p.tempId]?.[0];
+        if (
+          top &&
+          top.score >= 0.95 &&
+          top.profileSlug === p.profileSlug &&
+          !p.existingEntityId
+        ) {
+          return { ...p, existingEntityId: top.entityId };
+        }
+        return p;
+      });
       const executed = await captureCaller.execute({
-        entities: captureProposals as Parameters<
+        entities: mergedProposals as Parameters<
           typeof captureCaller.execute
         >[0]["entities"],
         relations:
           ((structured as { relations?: unknown[] }).relations as Parameters<
             typeof captureCaller.execute
           >[0]["relations"]) ?? [],
+        // File into the active project lens (belongs_to_project) when the caller
+        // passed a projectId, OR when structure resolved a target project — so
+        // capture fills the lens it was invoked in (execute already stamps the
+        // edge; the adapter just never wired it through).
+        ...(() => {
+          const pid =
+            (args.projectId as string | undefined) ??
+            ((structured as { targetProjectId?: string | null })
+              .targetProjectId ||
+              undefined);
+          return pid ? { projectId: pid } : {};
+        })(),
       });
       return ok({ structured, executed });
     }
