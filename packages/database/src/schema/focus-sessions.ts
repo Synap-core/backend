@@ -82,7 +82,9 @@ export const focusSessions = pgTable(
     playbookId: uuid("playbook_id"),
     /**
      * Expected deliverables declared at session start.
-     * Shape: [{ kind: string, label: string, icon?: string }]
+     * Shape: [{ kind: string, label: string, icon?: string, status?: "pending" | "done" }]
+     * `status` is a per-item lifecycle flag (defaults to "pending" when omitted)
+     * — a shape-within-jsonb addition, no column/migration change.
      */
     expectedOutputs: jsonb("expected_outputs").default([]),
     /**
@@ -96,13 +98,7 @@ export const focusSessions = pgTable(
     agentIds: text("agent_ids").array().default([]),
     /** Set when the session transitions to `closed`. */
     closedAt: timestamp("closed_at", { withTimezone: true }),
-    /** Context report: AI's understanding of task, domain, constraints. */
-    contextReport: jsonb("context_report"),
-    /** Plan report: Decomposed plan and execution approach. */
-    planReport: jsonb("plan_report"),
-    /** Execution log: Step-by-step execution transcript. */
-    executionLog: jsonb("execution_log"),
-    /** Verification report: Test results and verification outcomes. */
+    /** Verification report: Test results and verification outcomes (single closing report). */
     verificationReport: jsonb("verification_report"),
     startedAt: timestamp("started_at", { withTimezone: true })
       .notNull()

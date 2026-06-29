@@ -993,9 +993,6 @@ const SUPPLEMENTARY_TABLES: Record<
           progress: (row.progress as number) ?? null,
           agentIds: (row.agentIds as string[]) ?? [],
           closedAt: row.closedAt ? new Date(row.closedAt as string) : null,
-          contextReport: (row.contextReport as Record<string, unknown>) ?? null,
-          planReport: (row.planReport as Record<string, unknown>) ?? null,
-          executionLog: (row.executionLog as Record<string, unknown>) ?? null,
           verificationReport:
             (row.verificationReport as Record<string, unknown>) ?? null,
           startedAt: row.startedAt
@@ -1013,9 +1010,6 @@ const SUPPLEMENTARY_TABLES: Record<
           progress: values.progress,
           agentIds: values.agentIds,
           closedAt: values.closedAt,
-          contextReport: values.contextReport,
-          planReport: values.planReport,
-          executionLog: values.executionLog,
           verificationReport: values.verificationReport,
           updatedAt: values.updatedAt,
         };

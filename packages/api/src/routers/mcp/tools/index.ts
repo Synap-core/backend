@@ -215,7 +215,7 @@ export const tools = {
       {
         name: "synap_create_entity",
         description:
-          "Create a typed entity directly when you already know the exact profileSlug + fields (the precise sibling of synap_capture, which structures free text). Use synap_list_profiles to discover profileSlugs. ALWAYS call synap_ask first to avoid duplicates. Response may be 'approved' (created, id returned) or 'proposed' (awaiting human review, proposalId returned). NEVER treat 'proposed' as an error — store proposalId and tell the user to review it in Synap.",
+          "Create a typed entity directly when you already know the exact profileSlug + fields (the precise sibling of synap_capture, which structures free text). Use synap_list_profiles to discover profileSlugs. ALWAYS call synap_ask first to avoid duplicates. Response may be 'approved' (created, id returned) or 'proposed' (awaiting human review, proposalId returned). NEVER treat 'proposed' as an error — store proposalId and tell the user to review it in Synap. PREFER THIS over synap_capture whenever you already know the profileSlug + fields (a task with status/dueDate, a decision with claim/rationale, a person with role/company). It is the structured, deterministic write. Reach for synap_capture only for unstructured blobs you haven't parsed yet.",
         inputSchema: {
           type: "object",
           properties: {
@@ -357,7 +357,7 @@ export const tools = {
             goal: {
               type: "string",
               description:
-                "The goal of the session — what work is being done. Be specific and outcome-oriented (e.g. 'Research best web scraping approaches for social media', not 'do research').",
+                "ONE short line — a single outcome-oriented sentence (e.g. 'Research best web-scraping approaches for social media'). NOT a paragraph. Put detail, scope, and deliverables in expectedOutputs, never in the goal.",
             },
             workspaceId: {
               type: "string",
@@ -368,6 +368,11 @@ export const tools = {
               type: "string",
               description:
                 "Project ID the session belongs to. Optional — provide this OR workspaceId (at least one is required). A project-scoped session needs no workspace membership.",
+            },
+            subjectEntityId: {
+              type: "string",
+              description:
+                "Optional UUID of the entity this session is ABOUT — the subject-spine anchor (e.g. a person, company, or deal). Ties the session to that entity so it surfaces in the entity's neighborhood.",
             },
             correlationId: {
               type: "string",
@@ -398,14 +403,84 @@ export const tools = {
                   kind: { type: "string" },
                   label: { type: "string" },
                   icon: { type: "string" },
+                  status: {
+                    type: "string",
+                    enum: ["pending", "done"],
+                    description:
+                      "Per-item lifecycle. Defaults to 'pending' when omitted.",
+                  },
                 },
                 required: ["kind", "label"],
               },
               description:
-                "Optional expected deliverables — what the session should produce.",
+                "Where the detail goes — list each concrete deliverable here so the goal can stay one line. Optional expected deliverables — what the session should produce.",
             },
           },
           required: ["goal"],
+        },
+      },
+      {
+        name: "synap_update_session",
+        description:
+          "Update an in-flight focus session — change its goal, lifecycle status (active|paused|closed), 0-100 progress, or its expected deliverables. Use this WHILE working: bump progress, pause/resume, refine the goal, or mark a deliverable done. Two convenience modes for the per-item deliverable lifecycle: `addOutput` appends a new deliverable (status 'pending'); `completeOutput` marks a deliverable 'done' by exact label match. (Closing a session with a summary is still synap_complete_session.)",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: {
+              type: "string",
+              description: "The focus session UUID to update.",
+            },
+            goal: {
+              type: "string",
+              description: "New one-line goal (optional).",
+            },
+            status: {
+              type: "string",
+              enum: ["active", "paused", "closed"],
+              description: "New lifecycle status (optional).",
+            },
+            progress: {
+              type: "number",
+              description: "0-100 integer progress (optional).",
+            },
+            expectedOutputs: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  kind: { type: "string" },
+                  label: { type: "string" },
+                  icon: { type: "string" },
+                  status: {
+                    type: "string",
+                    enum: ["pending", "done"],
+                    description:
+                      "Per-item lifecycle. Defaults to 'pending' when omitted.",
+                  },
+                },
+                required: ["kind", "label"],
+              },
+              description:
+                "Replace the full deliverable list (optional). For incremental edits prefer addOutput / completeOutput.",
+            },
+            addOutput: {
+              type: "object",
+              properties: {
+                kind: { type: "string" },
+                label: { type: "string" },
+                icon: { type: "string" },
+              },
+              required: ["kind", "label"],
+              description:
+                "Append ONE new deliverable (stored with status 'pending').",
+            },
+            completeOutput: {
+              type: "string",
+              description:
+                "Mark the deliverable with this exact label as 'done'.",
+            },
+          },
+          required: ["sessionId"],
         },
       },
       {
@@ -427,20 +502,7 @@ export const tools = {
             verificationReport: {
               type: "object",
               description:
-                "Optional structured verification report (e.g. what was checked, confidence levels).",
-            },
-            planReport: {
-              type: "object",
-              description: "Optional plan report detailing the approach taken.",
-            },
-            contextReport: {
-              type: "object",
-              description: "Optional context gathered before starting.",
-            },
-            executionLog: {
-              type: "object",
-              description:
-                "Optional structured execution log — step-by-step transcript of what happened.",
+                "Optional structured verification report (e.g. what was checked, confidence levels, summary of what was accomplished).",
             },
           },
           required: ["sessionId"],
@@ -464,7 +526,7 @@ export const tools = {
         name: "synap_capture",
         description:
           "THE write door. Hand it any free text — a fact you learned, a decision, a person/company/task mentioned, something worth remembering — and the AI capture pipeline structures it into the right entities and files them in the pod. " +
-          "PROACTIVE RULE: call this AFTER you learn something durable about the user, their work, or their preferences, or whenever the user says something worth keeping (\"remember that…\", a new contact, a decision made). Don't wait to be asked — capturing is how the user's second brain grows. It writes directly (no approval wait) and records an auto-approved, revertible proposal; the created entities come back in the result. Hint a profileSlug to guide extraction, or set global:true to store a pod-wide runbook (knowledge_keys) instead of entities.",
+          "PROACTIVE RULE: call this AFTER you learn something durable about the user, their work, or their preferences, or whenever the user says something worth keeping (\"remember that…\", a new contact, a decision made). Don't wait to be asked — capturing is how the user's second brain grows. It writes directly (no approval wait) and records an auto-approved, revertible proposal; the created entities come back in the result. Hint a profileSlug to guide extraction, or set global:true to store a pod-wide runbook (knowledge_keys) instead of entities. WHEN NOT TO USE: if you already know the exact profileSlug and the field values, call synap_create_entity instead — it is deterministic and writes the typed entity directly. synap_capture routes free text through an AI structuring pipeline that, when it fails or finds nothing, degrades to a single flat note carrying your raw text. Use capture only for genuinely unstructured input (a pasted email, transcript, bio) where you do not yet know the entities.",
         inputSchema: {
           type: "object",
           properties: {
