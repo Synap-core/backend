@@ -6,14 +6,14 @@
     "tags": ["ai", "agents", "automation", "openclaw", "fleet"]
   },
   "workspaceName": "OpenClaw Agent OS",
-  "description": "The sovereign control plane for your OpenClaw agent fleet. Agents, projects, tasks, skills, and providers as connected entities — not daemon logs.",
+  "description": "The sovereign control plane for your OpenClaw agent fleet. Agents, projects, tasks, skills, and providers as connected entities \u2014 not daemon logs.",
   "workspaceType": "agent",
   "workspaceSubtype": "agent-fleet",
   "profiles": [
     {
       "slug": "agent",
       "displayName": "Agent",
-      "description": "A deployed OpenClaw agent — your running AI entity",
+      "description": "A deployed OpenClaw agent \u2014 your running AI entity",
       "icon": "bot",
       "color": "#1A3A5C",
       "scope": "WORKSPACE",
@@ -24,7 +24,9 @@
           "valueType": "string",
           "inputType": "select",
           "enumValues": ["Offline", "Idle", "Active", "Error", "Maintenance"],
-          "constraints": { "defaultValue": "Idle" }
+          "constraints": {
+            "defaultValue": "Idle"
+          }
         },
         {
           "slug": "agent-health",
@@ -40,7 +42,11 @@
           "inputType": "select",
           "enumValues": ["OpenClaw", "Custom"]
         },
-        { "slug": "agent-version", "label": "Version", "valueType": "string" },
+        {
+          "slug": "agent-version",
+          "label": "Version",
+          "valueType": "string"
+        },
         {
           "slug": "agent-model",
           "label": "Primary Model",
@@ -179,7 +185,9 @@
             "Completed",
             "Cancelled"
           ],
-          "constraints": { "defaultValue": "Queued" }
+          "constraints": {
+            "defaultValue": "Queued"
+          }
         },
         {
           "slug": "project-priority",
@@ -200,7 +208,11 @@
           "valueType": "entity_id",
           "targetProfileSlug": "person"
         },
-        { "slug": "project-start", "label": "Start Date", "valueType": "date" },
+        {
+          "slug": "project-start",
+          "label": "Start Date",
+          "valueType": "date"
+        },
         {
           "slug": "project-deadline",
           "label": "Deadline",
@@ -229,7 +241,11 @@
             "Monitoring"
           ]
         },
-        { "slug": "project-goal", "label": "Goal", "valueType": "string" },
+        {
+          "slug": "project-goal",
+          "label": "Goal",
+          "valueType": "string"
+        },
         {
           "slug": "project-outcome",
           "label": "Expected Outcome",
@@ -273,7 +289,9 @@
             "Failed",
             "Cancelled"
           ],
-          "constraints": { "defaultValue": "Queued" }
+          "constraints": {
+            "defaultValue": "Queued"
+          }
         },
         {
           "slug": "task-priority",
@@ -281,7 +299,9 @@
           "valueType": "string",
           "inputType": "select",
           "enumValues": ["Critical", "High", "Medium", "Low"],
-          "constraints": { "defaultValue": "Medium" }
+          "constraints": {
+            "defaultValue": "Medium"
+          }
         },
         {
           "slug": "task-assigned-agent",
@@ -312,7 +332,11 @@
             "Custom"
           ]
         },
-        { "slug": "task-due-date", "label": "Due Date", "valueType": "date" },
+        {
+          "slug": "task-due-date",
+          "label": "Due Date",
+          "valueType": "date"
+        },
         {
           "slug": "task-effort-hours",
           "label": "Effort Estimate (hrs)",
@@ -357,7 +381,7 @@
     {
       "slug": "skill",
       "displayName": "Skill",
-      "description": "An installed agent capability — a ClawHub skill, custom script, or API integration",
+      "description": "An installed agent capability \u2014 a ClawHub skill, custom script, or API integration",
       "icon": "zap",
       "color": "#7C3AED",
       "scope": "WORKSPACE",
@@ -368,7 +392,9 @@
           "valueType": "string",
           "inputType": "select",
           "enumValues": ["Trusted", "Review", "Untrusted", "Blocked"],
-          "constraints": { "defaultValue": "Review" }
+          "constraints": {
+            "defaultValue": "Review"
+          }
         },
         {
           "slug": "skill-category",
@@ -393,7 +419,11 @@
           "label": "Source URL",
           "valueType": "string"
         },
-        { "slug": "skill-version", "label": "Version", "valueType": "string" },
+        {
+          "slug": "skill-version",
+          "label": "Version",
+          "valueType": "string"
+        },
         {
           "slug": "skill-install-date",
           "label": "Install Date",
@@ -431,7 +461,7 @@
     {
       "slug": "provider",
       "displayName": "Provider",
-      "description": "An LLM or API provider — tracks cost, key health, and agent usage",
+      "description": "An LLM or API provider \u2014 tracks cost, key health, and agent usage",
       "icon": "database",
       "color": "#B5451B",
       "scope": "WORKSPACE",
@@ -456,7 +486,9 @@
           "valueType": "string",
           "inputType": "select",
           "enumValues": ["Valid", "Expiring", "Expired", "No Key (Local)"],
-          "constraints": { "defaultValue": "Valid" }
+          "constraints": {
+            "defaultValue": "Valid"
+          }
         },
         {
           "slug": "provider-model",
@@ -488,7 +520,11 @@
           "label": "Base URL / Endpoint",
           "valueType": "string"
         },
-        { "slug": "provider-notes", "label": "Notes", "valueType": "string" }
+        {
+          "slug": "provider-notes",
+          "label": "Notes",
+          "valueType": "string"
+        }
       ]
     },
     {
@@ -513,7 +549,11 @@
             "Advisor"
           ]
         },
-        { "slug": "person-email", "label": "Email", "valueType": "string" },
+        {
+          "slug": "person-email",
+          "label": "Email",
+          "valueType": "string"
+        },
         {
           "slug": "person-telegram",
           "label": "Telegram Handle",
@@ -533,11 +573,13 @@
       "slug": "agent-fleet",
       "type": "kanban",
       "scopeProfileSlug": "agent",
-      "config": { "groupByField": "agent-status" },
-      "description": "All agents by status — the mission control view."
+      "config": {
+        "groupByField": "agent-status"
+      },
+      "description": "All agents by status \u2014 the mission control view."
     },
     {
-      "name": "Agent → Projects → Tasks",
+      "name": "Agent \u2192 Projects \u2192 Tasks",
       "slug": "agent-project-task-hierarchy",
       "type": "graph",
       "scopeProfileSlugs": ["agent", "project", "task"],
@@ -548,7 +590,11 @@
             "child": "project",
             "via": "project-assigned-agent"
           },
-          { "parent": "project", "child": "task", "via": "task-project" }
+          {
+            "parent": "project",
+            "child": "task",
+            "via": "task-project"
+          }
         ]
       },
       "description": "3-level drill-down: Agent expands to linked Projects, Projects expand to Tasks."
@@ -558,8 +604,10 @@
       "slug": "task-board",
       "type": "kanban",
       "scopeProfileSlug": "task",
-      "config": { "groupByField": "task-status" },
-      "description": "All tasks by status: Backlog → Queued → Running → Review → Done."
+      "config": {
+        "groupByField": "task-status"
+      },
+      "description": "All tasks by status: Backlog \u2192 Queued \u2192 Running \u2192 Review \u2192 Done."
     },
     {
       "name": "Project Command Center",
@@ -576,7 +624,10 @@
           "project-deadline",
           "project-health"
         ],
-        "defaultSort": { "field": "project-priority", "direction": "desc" }
+        "defaultSort": {
+          "field": "project-priority",
+          "direction": "desc"
+        }
       },
       "description": "All projects with assigned agent, status, deadline, health."
     },
@@ -629,8 +680,11 @@
         "provider",
         "person"
       ],
-      "config": { "layout": "force", "showRelations": true },
-      "description": "Full sovereign topology: Agent ← Project ← Task + Skill + Provider."
+      "config": {
+        "layout": "force",
+        "showRelations": true
+      },
+      "description": "Full sovereign topology: Agent \u2190 Project \u2190 Task + Skill + Provider."
     },
     {
       "name": "Agent Timeline",
@@ -658,7 +712,10 @@
           "task-actual-tokens",
           "task-effort-hours"
         ],
-        "defaultSort": { "field": "task-actual-tokens", "direction": "desc" }
+        "defaultSort": {
+          "field": "task-actual-tokens",
+          "direction": "desc"
+        }
       },
       "description": "Tasks ranked by actual token usage."
     },
@@ -703,7 +760,10 @@
           "operator": "is",
           "value": "Backlog"
         },
-        "defaultSort": { "field": "task-priority", "direction": "desc" }
+        "defaultSort": {
+          "field": "task-priority",
+          "direction": "desc"
+        }
       },
       "description": "Unqueued tasks awaiting agent assignment."
     },
@@ -712,7 +772,9 @@
       "slug": "agent-health-monitor",
       "type": "kanban",
       "scopeProfileSlug": "agent",
-      "config": { "groupByField": "agent-health" },
+      "config": {
+        "groupByField": "agent-health"
+      },
       "description": "Agents grouped by health: Healthy / Degraded / Error."
     },
     {
@@ -728,16 +790,21 @@
           "task-actual-tokens",
           "task-type"
         ],
-        "filterBy": { "field": "task-session-key", "operator": "is_not_empty" }
+        "filterBy": {
+          "field": "task-session-key",
+          "operator": "is_not_empty"
+        }
       },
-      "description": "Tasks with session keys — the audit trail."
+      "description": "Tasks with session keys \u2014 the audit trail."
     },
     {
       "name": "Provider Key Health",
       "slug": "provider-key-health",
       "type": "kanban",
       "scopeProfileSlug": "provider",
-      "config": { "groupByField": "provider-key-health" },
+      "config": {
+        "groupByField": "provider-key-health"
+      },
       "description": "Providers by credential status."
     },
     {
@@ -759,7 +826,10 @@
           "operator": "in",
           "value": ["Queued", "Running", "Review"]
         },
-        "defaultSort": { "field": "task-due-date", "direction": "asc" }
+        "defaultSort": {
+          "field": "task-due-date",
+          "direction": "asc"
+        }
       },
       "description": "Tasks currently in flight."
     },
@@ -774,7 +844,12 @@
             "id": "agent-header",
             "kind": "widget",
             "widgetType": "section-header",
-            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
             "config": {
               "title": "Agent Fleet",
               "icon": "Bot",
@@ -786,7 +861,12 @@
             "id": "agent-count",
             "kind": "widget",
             "widgetType": "stat-card",
-            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "label": "Active Agents",
               "aggregation": "count",
@@ -798,24 +878,41 @@
             "id": "agent-fleet",
             "kind": "view",
             "viewName": "Agent Fleet",
-            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 9,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "agent-health",
             "kind": "view",
             "viewName": "Agent Health Monitor",
-            "pos": { "x": 0, "y": 19, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 19,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "agent-active",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 3,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "agent",
               "label": "Active",
               "icon": "CheckCircle",
-              "filter": { "status": "active" },
+              "filter": {
+                "status": "active"
+              },
               "color": "#10B981"
             }
           },
@@ -823,7 +920,12 @@
             "id": "agent-running-tasks",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 6,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "task",
               "label": "Running Tasks",
@@ -835,7 +937,12 @@
             "id": "agent-skills-avail",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 9, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 9,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "skill",
               "label": "Skills Available",
@@ -847,7 +954,12 @@
             "id": "agent-spotlight",
             "kind": "widget",
             "widgetType": "entity-spotlight",
-            "pos": { "x": 0, "y": 5, "w": 5, "h": 4 },
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 5,
+              "h": 4
+            },
             "config": {
               "profileSlug": "agent",
               "seed": "daily",
@@ -860,7 +972,12 @@
             "id": "agent-recent-tasks",
             "kind": "widget",
             "widgetType": "entity-list",
-            "pos": { "x": 5, "y": 5, "w": 7, "h": 4 },
+            "pos": {
+              "x": 5,
+              "y": 5,
+              "w": 7,
+              "h": 4
+            },
             "config": {
               "profileSlug": "task",
               "title": "Recent Tasks",
@@ -870,11 +987,31 @@
           }
         ],
         "breakpoints": {
-          "lg": { "cols": 12, "rowHeight": 60, "gap": 12 },
-          "md": { "cols": 10, "rowHeight": 60, "gap": 12 },
-          "sm": { "cols": 6, "rowHeight": 60, "gap": 12 },
-          "xs": { "cols": 4, "rowHeight": 60, "gap": 12 },
-          "xxs": { "cols": 2, "rowHeight": 60, "gap": 12 }
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
         }
       }
     },
@@ -889,7 +1026,12 @@
             "id": "task-header",
             "kind": "widget",
             "widgetType": "section-header",
-            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
             "config": {
               "title": "Tasks",
               "icon": "CheckSquare",
@@ -901,7 +1043,12 @@
             "id": "task-count",
             "kind": "widget",
             "widgetType": "stat-card",
-            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "label": "Total Tasks",
               "aggregation": "count",
@@ -913,24 +1060,41 @@
             "id": "task-board",
             "kind": "view",
             "viewName": "Task Board",
-            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 9,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "task-backlog",
             "kind": "view",
             "viewName": "Backlog",
-            "pos": { "x": 0, "y": 19, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 19,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "task-in-progress",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 3,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "task",
               "label": "In Progress",
               "icon": "Loader",
-              "filter": { "status": "in-progress" },
+              "filter": {
+                "status": "in-progress"
+              },
               "color": "#3B82F6"
             }
           },
@@ -938,12 +1102,19 @@
             "id": "task-completed",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 6,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "task",
               "label": "Completed",
               "icon": "CheckCircle",
-              "filter": { "status": "completed" },
+              "filter": {
+                "status": "completed"
+              },
               "color": "#10B981"
             }
           },
@@ -951,12 +1122,19 @@
             "id": "task-failed",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 9, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 9,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "task",
               "label": "Failed",
               "icon": "XCircle",
-              "filter": { "status": "failed" },
+              "filter": {
+                "status": "failed"
+              },
               "color": "#EF4444"
             }
           },
@@ -964,7 +1142,12 @@
             "id": "task-active-list",
             "kind": "widget",
             "widgetType": "entity-list",
-            "pos": { "x": 0, "y": 5, "w": 12, "h": 4 },
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 12,
+              "h": 4
+            },
             "config": {
               "profileSlug": "task",
               "title": "Active Tasks",
@@ -974,11 +1157,31 @@
           }
         ],
         "breakpoints": {
-          "lg": { "cols": 12, "rowHeight": 60, "gap": 12 },
-          "md": { "cols": 10, "rowHeight": 60, "gap": 12 },
-          "sm": { "cols": 6, "rowHeight": 60, "gap": 12 },
-          "xs": { "cols": 4, "rowHeight": 60, "gap": 12 },
-          "xxs": { "cols": 2, "rowHeight": 60, "gap": 12 }
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
         }
       }
     },
@@ -993,7 +1196,12 @@
             "id": "project-header",
             "kind": "widget",
             "widgetType": "section-header",
-            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
             "config": {
               "title": "Projects",
               "icon": "Folder",
@@ -1005,7 +1213,12 @@
             "id": "project-count",
             "kind": "widget",
             "widgetType": "stat-card",
-            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "label": "Total Projects",
               "aggregation": "count",
@@ -1017,21 +1230,51 @@
             "id": "project-cmd",
             "kind": "view",
             "viewName": "Project Command Center",
-            "pos": { "x": 0, "y": 5, "w": 12, "h": 10 }
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 12,
+              "h": 10
+            }
           },
           {
             "id": "project-timeline",
             "kind": "view",
             "viewName": "Agent Timeline",
-            "pos": { "x": 0, "y": 15, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 15,
+              "w": 12,
+              "h": 8
+            }
           }
         ],
         "breakpoints": {
-          "lg": { "cols": 12, "rowHeight": 60, "gap": 12 },
-          "md": { "cols": 10, "rowHeight": 60, "gap": 12 },
-          "sm": { "cols": 6, "rowHeight": 60, "gap": 12 },
-          "xs": { "cols": 4, "rowHeight": 60, "gap": 12 },
-          "xxs": { "cols": 2, "rowHeight": 60, "gap": 12 }
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
         }
       }
     },
@@ -1046,7 +1289,12 @@
             "id": "skill-header",
             "kind": "widget",
             "widgetType": "section-header",
-            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
             "config": {
               "title": "Skills",
               "icon": "Zap",
@@ -1058,7 +1306,12 @@
             "id": "skill-count",
             "kind": "widget",
             "widgetType": "stat-card",
-            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "label": "Total Skills",
               "aggregation": "count",
@@ -1070,18 +1323,30 @@
             "id": "skill-registry",
             "kind": "view",
             "viewName": "Skill Registry",
-            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 9,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "skill-trusted",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 3,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "skill",
               "label": "Trusted",
               "icon": "Shield",
-              "filter": { "trusted": true },
+              "filter": {
+                "trusted": true
+              },
               "color": "#10B981"
             }
           },
@@ -1089,12 +1354,19 @@
             "id": "skill-untrusted",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 6,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "skill",
               "label": "Untrusted",
               "icon": "AlertTriangle",
-              "filter": { "trusted": false },
+              "filter": {
+                "trusted": false
+              },
               "color": "#EF4444"
             }
           },
@@ -1102,7 +1374,12 @@
             "id": "skill-spotlight",
             "kind": "widget",
             "widgetType": "entity-spotlight",
-            "pos": { "x": 0, "y": 5, "w": 6, "h": 4 },
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 6,
+              "h": 4
+            },
             "config": {
               "profileSlug": "skill",
               "seed": "random",
@@ -1115,7 +1392,12 @@
             "id": "skill-agents-using",
             "kind": "widget",
             "widgetType": "entity-list",
-            "pos": { "x": 6, "y": 5, "w": 6, "h": 4 },
+            "pos": {
+              "x": 6,
+              "y": 5,
+              "w": 6,
+              "h": 4
+            },
             "config": {
               "profileSlug": "agent",
               "title": "Agents Using",
@@ -1125,11 +1407,31 @@
           }
         ],
         "breakpoints": {
-          "lg": { "cols": 12, "rowHeight": 60, "gap": 12 },
-          "md": { "cols": 10, "rowHeight": 60, "gap": 12 },
-          "sm": { "cols": 6, "rowHeight": 60, "gap": 12 },
-          "xs": { "cols": 4, "rowHeight": 60, "gap": 12 },
-          "xxs": { "cols": 2, "rowHeight": 60, "gap": 12 }
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
         }
       }
     },
@@ -1144,7 +1446,12 @@
             "id": "provider-header",
             "kind": "widget",
             "widgetType": "section-header",
-            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
             "config": {
               "title": "Providers",
               "icon": "Database",
@@ -1156,7 +1463,12 @@
             "id": "provider-count",
             "kind": "widget",
             "widgetType": "stat-card",
-            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "label": "Total Providers",
               "aggregation": "count",
@@ -1168,24 +1480,41 @@
             "id": "provider-dash",
             "kind": "view",
             "viewName": "Provider Dashboard",
-            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 9,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "provider-keys",
             "kind": "view",
             "viewName": "Provider Key Health",
-            "pos": { "x": 0, "y": 19, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 19,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "provider-healthy",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 3,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "provider",
               "label": "Healthy",
               "icon": "CheckCircle",
-              "filter": { "status": "healthy" },
+              "filter": {
+                "status": "healthy"
+              },
               "color": "#10B981"
             }
           },
@@ -1193,12 +1522,19 @@
             "id": "provider-degraded",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 6,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "provider",
               "label": "Degraded",
               "icon": "AlertTriangle",
-              "filter": { "status": "degraded" },
+              "filter": {
+                "status": "degraded"
+              },
               "color": "#F59E0B"
             }
           },
@@ -1206,7 +1542,12 @@
             "id": "provider-all",
             "kind": "widget",
             "widgetType": "entity-list",
-            "pos": { "x": 0, "y": 5, "w": 12, "h": 4 },
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 12,
+              "h": 4
+            },
             "config": {
               "profileSlug": "provider",
               "title": "All Providers",
@@ -1216,11 +1557,31 @@
           }
         ],
         "breakpoints": {
-          "lg": { "cols": 12, "rowHeight": 60, "gap": 12 },
-          "md": { "cols": 10, "rowHeight": 60, "gap": 12 },
-          "sm": { "cols": 6, "rowHeight": 60, "gap": 12 },
-          "xs": { "cols": 4, "rowHeight": 60, "gap": 12 },
-          "xxs": { "cols": 2, "rowHeight": 60, "gap": 12 }
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
         }
       }
     }
@@ -1269,96 +1630,129 @@
           "fieldMapping": {
             "agent-status": {
               "slot": "agent-status",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 1
             },
             "agent-health": {
               "slot": "agent-health",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 2
             },
             "agent-runtime": {
               "slot": "agent-runtime",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 3
             },
             "agent-role": {
               "slot": "agent-role",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 4
             },
             "agent-owner": {
               "slot": "agent-owner",
-              "renderer": { "type": "avatar" },
+              "renderer": {
+                "type": "avatar"
+              },
               "order": 5
             },
             "agent-provider": {
               "slot": "agent-provider",
-              "renderer": { "type": "link" },
+              "renderer": {
+                "type": "link"
+              },
               "order": 6
             },
             "agent-channel": {
               "slot": "agent-channel",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 7,
               "label": "Primary Channel",
               "showLabel": true
             },
             "agent-model": {
               "slot": "agent-model",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 8,
               "label": "Model",
               "showLabel": true
             },
             "agent-version": {
               "slot": "agent-version",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 9,
               "label": "Version",
               "showLabel": true
             },
             "agent-last-seen": {
               "slot": "agent-last-seen",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "order": 10
             },
             "agent-deployment": {
               "slot": "agent-deployment",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 11,
               "label": "Deployment",
               "showLabel": true
             },
             "agent-heartbeat": {
               "slot": "agent-heartbeat",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 12,
               "label": "Heartbeat",
               "showLabel": true
             },
             "agent-workspace": {
               "slot": "agent-workspace",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 13,
               "label": "Workspace Path",
               "showLabel": true
             },
             "agent-channels": {
               "slot": "agent-channels",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 14,
               "label": "All Channels",
               "showLabel": true
             },
             "agent-tags": {
               "slot": "agent-tags",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 15
             }
           }
         },
-        "colors": { "accent": "#1A3A5C" }
+        "colors": {
+          "accent": "#1A3A5C"
+        }
       }
     },
     {
@@ -1400,66 +1794,91 @@
           "fieldMapping": {
             "project-status": {
               "slot": "project-status",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 1
             },
             "project-priority": {
               "slot": "project-priority",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 2
             },
             "project-health": {
               "slot": "project-health",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 3
             },
             "project-type": {
               "slot": "project-type",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 4
             },
             "project-assigned-agent": {
               "slot": "project-assigned-agent",
-              "renderer": { "type": "link" },
+              "renderer": {
+                "type": "link"
+              },
               "order": 5
             },
             "project-owner": {
               "slot": "project-owner",
-              "renderer": { "type": "avatar" },
+              "renderer": {
+                "type": "avatar"
+              },
               "order": 6
             },
             "project-deadline": {
               "slot": "project-deadline",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "order": 7
             },
             "project-start": {
               "slot": "project-start",
-              "renderer": { "type": "date" },
+              "renderer": {
+                "type": "date"
+              },
               "order": 8
             },
             "project-goal": {
               "slot": "project-goal",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 9,
               "label": "Goal",
               "showLabel": true
             },
             "project-outcome": {
               "slot": "project-outcome",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 10,
               "label": "Expected Outcome",
               "showLabel": true
             },
             "project-tags": {
               "slot": "project-tags",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 11
             }
           }
         },
-        "colors": { "accent": "#2E6DA4" }
+        "colors": {
+          "accent": "#2E6DA4"
+        }
       }
     },
     {
@@ -1498,71 +1917,98 @@
           "fieldMapping": {
             "task-status": {
               "slot": "task-status",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 1
             },
             "task-priority": {
               "slot": "task-priority",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 2
             },
             "task-type": {
               "slot": "task-type",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 3
             },
             "task-assigned-agent": {
               "slot": "task-assigned-agent",
-              "renderer": { "type": "link" },
+              "renderer": {
+                "type": "link"
+              },
               "order": 4
             },
             "task-project": {
               "slot": "task-project",
-              "renderer": { "type": "link" },
+              "renderer": {
+                "type": "link"
+              },
               "order": 5
             },
             "task-due-date": {
               "slot": "task-due-date",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "order": 6
             },
             "task-token-estimate": {
               "slot": "task-token-estimate",
-              "renderer": { "type": "number" },
+              "renderer": {
+                "type": "number"
+              },
               "order": 7
             },
             "task-actual-tokens": {
               "slot": "task-actual-tokens",
-              "renderer": { "type": "number" },
+              "renderer": {
+                "type": "number"
+              },
               "order": 8
             },
             "task-effort-hours": {
               "slot": "task-effort-hours",
-              "renderer": { "type": "number" },
+              "renderer": {
+                "type": "number"
+              },
               "order": 9
             },
             "task-blocked-by": {
               "slot": "task-blocked-by",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 10,
               "label": "Blocked By",
               "showLabel": true
             },
             "task-session-key": {
               "slot": "task-session-key",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 11,
               "label": "Session Key",
               "showLabel": true
             },
             "task-tags": {
               "slot": "task-tags",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 12
             }
           }
         },
-        "colors": { "accent": "#1B6E45" }
+        "colors": {
+          "accent": "#1B6E45"
+        }
       }
     },
     {
@@ -1600,69 +2046,92 @@
           "fieldMapping": {
             "skill-trust": {
               "slot": "skill-trust",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 1
             },
             "skill-virustotal": {
               "slot": "skill-virustotal",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 2
             },
             "skill-category": {
               "slot": "skill-category",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 3
             },
             "skill-version": {
               "slot": "skill-version",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 4,
               "label": "Version",
               "showLabel": true
             },
             "skill-install-date": {
               "slot": "skill-install-date",
-              "renderer": { "type": "date" },
+              "renderer": {
+                "type": "date"
+              },
               "order": 5
             },
             "skill-last-audit": {
               "slot": "skill-last-audit",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "order": 6,
               "label": "Last Audit",
               "showLabel": true
             },
             "skill-maintainer": {
               "slot": "skill-maintainer",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 7,
               "label": "Maintainer",
               "showLabel": true
             },
             "skill-requires-api": {
               "slot": "skill-requires-api",
-              "renderer": { "type": "checkbox" },
+              "renderer": {
+                "type": "checkbox"
+              },
               "order": 8,
               "label": "Requires API Key",
               "showLabel": true
             },
             "skill-source-url": {
               "slot": "skill-source-url",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 9,
               "label": "Source",
               "showLabel": true
             },
             "skill-notes": {
               "slot": "skill-notes",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 10,
               "label": "Security Notes",
               "showLabel": true
             }
           }
         },
-        "colors": { "accent": "#7C3AED" }
+        "colors": {
+          "accent": "#7C3AED"
+        }
       }
     },
     {
@@ -1700,60 +2169,80 @@
           "fieldMapping": {
             "provider-key-health": {
               "slot": "provider-key-health",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 1
             },
             "provider-type": {
               "slot": "provider-type",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "order": 2
             },
             "provider-model": {
               "slot": "provider-model",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 3,
               "label": "Model",
               "showLabel": true
             },
             "provider-cost-input": {
               "slot": "provider-cost-input",
-              "renderer": { "type": "number" },
+              "renderer": {
+                "type": "number"
+              },
               "order": 4
             },
             "provider-cost-output": {
               "slot": "provider-cost-output",
-              "renderer": { "type": "number" },
+              "renderer": {
+                "type": "number"
+              },
               "order": 5
             },
             "provider-budget-day": {
               "slot": "provider-budget-day",
-              "renderer": { "type": "number" },
+              "renderer": {
+                "type": "number"
+              },
               "order": 6
             },
             "provider-spend-week": {
               "slot": "provider-spend-week",
-              "renderer": { "type": "progress" },
+              "renderer": {
+                "type": "progress"
+              },
               "order": 7,
               "label": "Weekly Spend",
               "showLabel": true
             },
             "provider-base-url": {
               "slot": "provider-base-url",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 8,
               "label": "Endpoint",
               "showLabel": true
             },
             "provider-notes": {
               "slot": "provider-notes",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "order": 9,
               "label": "Notes",
               "showLabel": true
             }
           }
         },
-        "colors": { "accent": "#B5451B" }
+        "colors": {
+          "accent": "#B5451B"
+        }
       }
     }
   ],
@@ -1826,7 +2315,7 @@
         "skill-virustotal": "Clean",
         "skill-maintainer": "OpenClaw core team",
         "skill-requires-api": true,
-        "skill-notes": "Official MCP server for GitHub. Audit Feb 15 — clean."
+        "skill-notes": "Official MCP server for GitHub. Audit Feb 15 \u2014 clean."
       }
     },
     {
@@ -1906,7 +2395,7 @@
         "skill-virustotal": "Flagged",
         "skill-maintainer": "unknown",
         "skill-requires-api": true,
-        "skill-notes": "FLAGGED — VirusTotal scan Feb 22 returned 3 detections. Immediately disable."
+        "skill-notes": "FLAGGED \u2014 VirusTotal scan Feb 22 returned 3 detections. Immediately disable."
       }
     },
     {
@@ -2323,7 +2812,12 @@
   "bentoLayout": [
     {
       "widgetType": "welcome-header",
-      "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+      "pos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 2
+      },
       "config": {
         "title": "Agent OS",
         "subtitle": "Your sovereign control plane for the agent fleet."
@@ -2331,12 +2825,26 @@
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 0, "y": 2, "w": 3, "h": 2 },
-      "config": { "profileSlug": "agent", "label": "Agents", "icon": "bot" }
+      "pos": {
+        "x": 0,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "agent",
+        "label": "Agents",
+        "icon": "bot"
+      }
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 3, "y": 2, "w": 3, "h": 2 },
+      "pos": {
+        "x": 3,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
       "config": {
         "profileSlug": "task",
         "label": "Tasks",
@@ -2345,12 +2853,26 @@
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 6, "y": 2, "w": 3, "h": 2 },
-      "config": { "profileSlug": "skill", "label": "Skills", "icon": "zap" }
+      "pos": {
+        "x": 6,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "skill",
+        "label": "Skills",
+        "icon": "zap"
+      }
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 9, "y": 2, "w": 3, "h": 2 },
+      "pos": {
+        "x": 9,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
       "config": {
         "profileSlug": "provider",
         "label": "Providers",
@@ -2359,7 +2881,12 @@
     },
     {
       "widgetType": "entity-spotlight",
-      "pos": { "x": 0, "y": 4, "w": 4, "h": 4 },
+      "pos": {
+        "x": 0,
+        "y": 4,
+        "w": 4,
+        "h": 4
+      },
       "config": {
         "profileSlug": "agent",
         "seed": "random",
@@ -2370,7 +2897,12 @@
     },
     {
       "widgetType": "entity-list",
-      "pos": { "x": 4, "y": 4, "w": 4, "h": 4 },
+      "pos": {
+        "x": 4,
+        "y": 4,
+        "w": 4,
+        "h": 4
+      },
       "config": {
         "profileSlug": "task",
         "title": "Active Tasks",
@@ -2380,7 +2912,12 @@
     },
     {
       "widgetType": "entity-list",
-      "pos": { "x": 8, "y": 4, "w": 4, "h": 4 },
+      "pos": {
+        "x": 8,
+        "y": 4,
+        "w": 4,
+        "h": 4
+      },
       "config": {
         "profileSlug": "skill",
         "title": "Top Skills",
@@ -2391,22 +2928,42 @@
     {
       "kind": "view",
       "viewName": "Agent Fleet",
-      "pos": { "x": 0, "y": 8, "w": 8, "h": 4 }
+      "pos": {
+        "x": 0,
+        "y": 8,
+        "w": 8,
+        "h": 4
+      }
     },
     {
       "kind": "view",
       "viewName": "Provider Key Health",
-      "pos": { "x": 8, "y": 8, "w": 4, "h": 4 }
+      "pos": {
+        "x": 8,
+        "y": 8,
+        "w": 4,
+        "h": 4
+      }
     },
     {
       "kind": "view",
       "viewName": "Task Board",
-      "pos": { "x": 0, "y": 12, "w": 7, "h": 4 }
+      "pos": {
+        "x": 0,
+        "y": 12,
+        "w": 7,
+        "h": 4
+      }
     },
     {
       "kind": "view",
       "viewName": "Untrusted Skills Alert",
-      "pos": { "x": 7, "y": 12, "w": 5, "h": 4 }
+      "pos": {
+        "x": 7,
+        "y": 12,
+        "w": 5,
+        "h": 4
+      }
     }
   ],
   "layoutConfig": {
@@ -2443,7 +3000,11 @@
         "label": "Providers",
         "icon": "database"
       },
-      { "kind": "app", "appId": "intelligence", "label": "Intelligence" }
+      {
+        "kind": "app",
+        "appId": "intelligence",
+        "label": "Intelligence"
+      }
     ]
   },
   "profileEntityBentoTemplates": {
@@ -2453,25 +3014,45 @@
           "id": "entity-header",
           "kind": "widget",
           "widgetType": "entity-header",
-          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+          "pos": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 2
+          }
         },
         {
           "id": "entity-props",
           "kind": "widget",
           "widgetType": "entity-properties",
-          "pos": { "x": 0, "y": 2, "w": 4, "h": 8 }
+          "pos": {
+            "x": 0,
+            "y": 2,
+            "w": 4,
+            "h": 8
+          }
         },
         {
           "id": "entity-content",
           "kind": "widget",
           "widgetType": "entity-content",
-          "pos": { "x": 4, "y": 2, "w": 8, "h": 4 }
+          "pos": {
+            "x": 4,
+            "y": 2,
+            "w": 8,
+            "h": 4
+          }
         },
         {
           "id": "entity-rel",
           "kind": "widget",
           "widgetType": "entity-content",
-          "pos": { "x": 4, "y": 6, "w": 8, "h": 4 }
+          "pos": {
+            "x": 4,
+            "y": 6,
+            "w": 8,
+            "h": 4
+          }
         }
       ]
     },
@@ -2481,30 +3062,54 @@
           "id": "entity-header",
           "kind": "widget",
           "widgetType": "entity-header",
-          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+          "pos": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 2
+          }
         },
         {
           "id": "entity-props",
           "kind": "widget",
           "widgetType": "entity-properties",
-          "pos": { "x": 0, "y": 2, "w": 4, "h": 8 }
+          "pos": {
+            "x": 0,
+            "y": 2,
+            "w": 4,
+            "h": 8
+          }
         },
         {
           "id": "entity-content",
           "kind": "widget",
           "widgetType": "entity-content",
-          "pos": { "x": 4, "y": 2, "w": 8, "h": 4 }
+          "pos": {
+            "x": 4,
+            "y": 2,
+            "w": 8,
+            "h": 4
+          }
         },
         {
           "id": "entity-rel",
           "kind": "widget",
           "widgetType": "entity-content",
-          "pos": { "x": 4, "y": 6, "w": 8, "h": 4 }
+          "pos": {
+            "x": 4,
+            "y": 6,
+            "w": 8,
+            "h": 4
+          }
         }
       ]
     }
   },
-  "capabilities": [{ "templateKey": "agency-skills" }],
+  "capabilities": [
+    {
+      "templateKey": "agency-skills"
+    }
+  ],
   "playbooks": [
     {
       "name": "Agent Health Check",
@@ -2514,5 +3119,51 @@
       "name": "Security Audit",
       "goalTemplate": "Review the skill registry for any Untrusted or Review status skills. Check VirusTotal results and rotation dates of all provider keys."
     }
-  ]
+  ],
+  "onboarding": {
+    "goal": "Capture the agent fleet the user runs \u2014 the agents themselves, the model providers behind them, the skills they carry, and the projects they work \u2014 so the workspace reflects their real AI operation.",
+    "framing": "Act as a pragmatic AI ops lead. Tease out which agents are live, what models and providers power them, what each agent can do, and what work they're pointed at. Translate that into agents, providers, skills, and projects.",
+    "collect": [
+      {
+        "profileSlug": "agent",
+        "what": "The agents they run and what powers each",
+        "cardinality": "several",
+        "keyFields": ["title", "agent-model", "agent-provider", "agent-status"]
+      },
+      {
+        "profileSlug": "provider",
+        "what": "The model providers behind those agents and their budgets",
+        "cardinality": "few",
+        "keyFields": [
+          "title",
+          "provider-type",
+          "provider-model",
+          "provider-budget-day"
+        ]
+      },
+      {
+        "profileSlug": "skill",
+        "what": "The skills/capabilities each agent carries and how trusted they are",
+        "cardinality": "several",
+        "keyFields": [
+          "title",
+          "skill-category",
+          "skill-trust",
+          "skill-source-url"
+        ]
+      },
+      {
+        "profileSlug": "project",
+        "what": "The projects the agents are working on",
+        "cardinality": "few",
+        "keyFields": ["title", "project-status", "project-assigned-agent"]
+      }
+    ],
+    "openingQuestions": [
+      "Which agents are you running right now, and what's each one for?",
+      "What models and providers power them, and are there budget limits?",
+      "What skills do your agents carry, and which projects are they pointed at?"
+    ],
+    "doneWhen": "The live agents exist with their model/provider, the providers are captured with budgets, key skills are catalogued, and agents are linked to active projects."
+  }
 }

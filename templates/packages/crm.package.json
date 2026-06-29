@@ -5,7 +5,7 @@
     "color": "#10B981",
     "tags": ["crm", "sales", "contacts", "deals", "pipeline"]
   },
-  "workspaceName": "CRM — Sales & Relationship Hub",
+  "workspaceName": "CRM \u2014 Sales & Relationship Hub",
   "description": "A next-generation CRM workspace for managing contacts, companies, deals, and activities. Full pipeline visibility, relationship graph, and revenue tracking in one sovereign data pod.",
   "workspaceType": "operational",
   "workspaceSubtype": "crm",
@@ -59,7 +59,7 @@
         },
         {
           "slug": "arr",
-          "label": "ARR (€)",
+          "label": "ARR (\u20ac)",
           "valueType": "number",
           "inputType": "number",
           "placeholder": "Annual recurring revenue"
@@ -70,7 +70,9 @@
           "valueType": "string",
           "inputType": "text",
           "placeholder": "https://...",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "location",
@@ -84,7 +86,10 @@
           "label": "Health Score",
           "valueType": "number",
           "inputType": "number",
-          "constraints": { "min": 0, "max": 100 }
+          "constraints": {
+            "min": 0,
+            "max": 100
+          }
         },
         {
           "slug": "account-owner",
@@ -98,7 +103,11 @@
           "label": "Last Contact",
           "valueType": "date"
         },
-        { "slug": "company-tags", "label": "Tags", "valueType": "array" },
+        {
+          "slug": "company-tags",
+          "label": "Tags",
+          "valueType": "array"
+        },
         {
           "slug": "notes",
           "label": "Notes",
@@ -113,7 +122,7 @@
       "displayName": "Contact",
       "icon": "user",
       "color": "#6366F1",
-      "description": "People you interact with — leads, champions, decision-makers, partners.",
+      "description": "People you interact with \u2014 leads, champions, decision-makers, partners.",
       "scope": "WORKSPACE",
       "properties": [
         {
@@ -163,7 +172,9 @@
           "valueType": "string",
           "inputType": "text",
           "placeholder": "name@company.com",
-          "constraints": { "format": "email" }
+          "constraints": {
+            "format": "email"
+          }
         },
         {
           "slug": "phone",
@@ -178,14 +189,19 @@
           "valueType": "string",
           "inputType": "text",
           "placeholder": "https://linkedin.com/in/...",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "lead-score",
           "label": "Lead Score",
           "valueType": "number",
           "inputType": "number",
-          "constraints": { "min": 0, "max": 100 }
+          "constraints": {
+            "min": 0,
+            "max": 100
+          }
         },
         {
           "slug": "contact-source",
@@ -214,7 +230,11 @@
           "label": "Last Interaction",
           "valueType": "date"
         },
-        { "slug": "contact-tags", "label": "Tags", "valueType": "array" }
+        {
+          "slug": "contact-tags",
+          "label": "Tags",
+          "valueType": "array"
+        }
       ]
     },
     {
@@ -241,17 +261,22 @@
         },
         {
           "slug": "deal-value",
-          "label": "Value (€)",
+          "label": "Value (\u20ac)",
           "valueType": "number",
           "inputType": "number",
-          "constraints": { "min": 0 }
+          "constraints": {
+            "min": 0
+          }
         },
         {
           "slug": "probability",
           "label": "Win Probability (%)",
           "valueType": "number",
           "inputType": "number",
-          "constraints": { "min": 0, "max": 100 }
+          "constraints": {
+            "min": 0,
+            "max": 100
+          }
         },
         {
           "slug": "close-date",
@@ -323,7 +348,11 @@
             "Other"
           ]
         },
-        { "slug": "deal-tags", "label": "Tags", "valueType": "array" }
+        {
+          "slug": "deal-tags",
+          "label": "Tags",
+          "valueType": "array"
+        }
       ]
     },
     {
@@ -331,7 +360,7 @@
       "displayName": "Activity",
       "icon": "message-square",
       "color": "#06B6D4",
-      "description": "Interactions and touchpoints — calls, emails, meetings, notes.",
+      "description": "Interactions and touchpoints \u2014 calls, emails, meetings, notes.",
       "scope": "WORKSPACE",
       "properties": [
         {
@@ -350,7 +379,11 @@
             "Contract Sent"
           ]
         },
-        { "slug": "activity-date", "label": "Date", "valueType": "date" },
+        {
+          "slug": "activity-date",
+          "label": "Date",
+          "valueType": "date"
+        },
         {
           "slug": "activity-status",
           "label": "Status",
@@ -375,7 +408,11 @@
           "label": "Contact",
           "valueType": "entity_id"
         },
-        { "slug": "related-deal", "label": "Deal", "valueType": "entity_id" },
+        {
+          "slug": "related-deal",
+          "label": "Deal",
+          "valueType": "entity_id"
+        },
         {
           "slug": "activity-owner",
           "label": "Owner",
@@ -395,7 +432,9 @@
           "label": "Duration (min)",
           "valueType": "number",
           "inputType": "number",
-          "constraints": { "min": 0 }
+          "constraints": {
+            "min": 0
+          }
         }
       ]
     },
@@ -423,7 +462,7 @@
         },
         {
           "slug": "total-value",
-          "label": "Total Pipeline Value (€)",
+          "label": "Total Pipeline Value (\u20ac)",
           "valueType": "number",
           "inputType": "number"
         },
@@ -444,7 +483,10 @@
           "label": "Win Rate (%)",
           "valueType": "number",
           "inputType": "number",
-          "constraints": { "min": 0, "max": 100 }
+          "constraints": {
+            "min": 0,
+            "max": 100
+          }
         },
         {
           "slug": "pipeline-owner",
@@ -454,7 +496,7 @@
         },
         {
           "slug": "quarter-target",
-          "label": "Quarter Target (€)",
+          "label": "Quarter Target (\u20ac)",
           "valueType": "number",
           "inputType": "number"
         }
@@ -492,7 +534,10 @@
           "next-action",
           "deal-type"
         ],
-        "defaultSort": { "field": "close-date", "direction": "asc" },
+        "defaultSort": {
+          "field": "close-date",
+          "direction": "asc"
+        },
         "rowHeight": "default"
       }
     },
@@ -500,7 +545,10 @@
       "name": "Deal Timeline",
       "type": "timeline",
       "scopeProfileSlug": "deal",
-      "config": { "timeField": "close-date", "groupByField": "stage" }
+      "config": {
+        "timeField": "close-date",
+        "groupByField": "stage"
+      }
     },
     {
       "name": "Contacts",
@@ -517,7 +565,10 @@
           "last-interaction",
           "contact-owner"
         ],
-        "defaultSort": { "field": "lead-score", "direction": "desc" },
+        "defaultSort": {
+          "field": "lead-score",
+          "direction": "desc"
+        },
         "rowHeight": "default"
       }
     },
@@ -550,7 +601,10 @@
           "last-contact-date",
           "location"
         ],
-        "defaultSort": { "field": "arr", "direction": "desc" },
+        "defaultSort": {
+          "field": "arr",
+          "direction": "desc"
+        },
         "rowHeight": "default"
       }
     },
@@ -578,7 +632,10 @@
           "related-deal",
           "activity-owner"
         ],
-        "defaultSort": { "field": "activity-date", "direction": "desc" },
+        "defaultSort": {
+          "field": "activity-date",
+          "direction": "desc"
+        },
         "rowHeight": "compact"
       }
     },
@@ -586,13 +643,19 @@
       "name": "Activity Calendar",
       "type": "calendar",
       "scopeProfileSlug": "activity",
-      "config": { "dateField": "activity-date", "colorField": "activity-type" }
+      "config": {
+        "dateField": "activity-date",
+        "colorField": "activity-type"
+      }
     },
     {
       "name": "Relationship Graph",
       "type": "graph",
       "scopeProfileSlugs": ["company", "contact", "deal"],
-      "config": { "layout": "force", "showRelations": true }
+      "config": {
+        "layout": "force",
+        "showRelations": true
+      }
     },
     {
       "name": "Pipelines",
@@ -623,7 +686,12 @@
             "id": "deal-header",
             "kind": "widget",
             "widgetType": "section-header",
-            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
             "config": {
               "title": "Deals",
               "icon": "TrendingUp",
@@ -635,7 +703,12 @@
             "id": "deal-count",
             "kind": "widget",
             "widgetType": "stat-card",
-            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "label": "Total Deals",
               "aggregation": "count",
@@ -647,7 +720,12 @@
             "id": "deal-value",
             "kind": "widget",
             "widgetType": "stat-card",
-            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 3,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "label": "Pipeline Value",
               "aggregation": "sum",
@@ -660,19 +738,34 @@
             "id": "deal-pipeline",
             "kind": "view",
             "viewName": "Pipeline Board",
-            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 9,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "deal-all",
             "kind": "view",
             "viewName": "All Deals",
-            "pos": { "x": 0, "y": 19, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 19,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "deal-spotlight",
             "kind": "widget",
             "widgetType": "entity-spotlight",
-            "pos": { "x": 0, "y": 5, "w": 5, "h": 4 },
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 5,
+              "h": 4
+            },
             "config": {
               "profileSlug": "deal",
               "seed": "daily",
@@ -685,7 +778,12 @@
             "id": "deal-activities",
             "kind": "widget",
             "widgetType": "entity-list",
-            "pos": { "x": 5, "y": 5, "w": 7, "h": 4 },
+            "pos": {
+              "x": 5,
+              "y": 5,
+              "w": 7,
+              "h": 4
+            },
             "config": {
               "profileSlug": "activity",
               "title": "Recent Activities",
@@ -695,11 +793,31 @@
           }
         ],
         "breakpoints": {
-          "lg": { "cols": 12, "rowHeight": 60, "gap": 12 },
-          "md": { "cols": 10, "rowHeight": 60, "gap": 12 },
-          "sm": { "cols": 6, "rowHeight": 60, "gap": 12 },
-          "xs": { "cols": 4, "rowHeight": 60, "gap": 12 },
-          "xxs": { "cols": 2, "rowHeight": 60, "gap": 12 }
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
         }
       }
     },
@@ -714,7 +832,12 @@
             "id": "contact-header",
             "kind": "widget",
             "widgetType": "section-header",
-            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
             "config": {
               "title": "Contacts",
               "icon": "User",
@@ -726,7 +849,12 @@
             "id": "contact-count",
             "kind": "widget",
             "widgetType": "stat-card",
-            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "label": "Total Contacts",
               "aggregation": "count",
@@ -738,24 +866,41 @@
             "id": "contact-board",
             "kind": "view",
             "viewName": "Contacts Board",
-            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 9,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "contact-table",
             "kind": "view",
             "viewName": "Contacts",
-            "pos": { "x": 0, "y": 19, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 19,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "contact-mentors",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 3,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "contact",
               "label": "Mentors",
               "icon": "Star",
-              "filter": { "relationship": "mentor" },
+              "filter": {
+                "relationship": "mentor"
+              },
               "color": "#6366F1"
             }
           },
@@ -763,12 +908,19 @@
             "id": "contact-colleagues",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 6,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "contact",
               "label": "Colleagues",
               "icon": "Users",
-              "filter": { "relationship": "colleague" },
+              "filter": {
+                "relationship": "colleague"
+              },
               "color": "#8B5CF6"
             }
           },
@@ -776,7 +928,12 @@
             "id": "contact-spotlight",
             "kind": "widget",
             "widgetType": "entity-spotlight",
-            "pos": { "x": 0, "y": 5, "w": 6, "h": 4 },
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 6,
+              "h": 4
+            },
             "config": {
               "profileSlug": "contact",
               "seed": "random",
@@ -789,7 +946,12 @@
             "id": "contact-deals",
             "kind": "widget",
             "widgetType": "entity-list",
-            "pos": { "x": 6, "y": 5, "w": 6, "h": 4 },
+            "pos": {
+              "x": 6,
+              "y": 5,
+              "w": 6,
+              "h": 4
+            },
             "config": {
               "profileSlug": "deal",
               "title": "Recent Deals",
@@ -799,11 +961,31 @@
           }
         ],
         "breakpoints": {
-          "lg": { "cols": 12, "rowHeight": 60, "gap": 12 },
-          "md": { "cols": 10, "rowHeight": 60, "gap": 12 },
-          "sm": { "cols": 6, "rowHeight": 60, "gap": 12 },
-          "xs": { "cols": 4, "rowHeight": 60, "gap": 12 },
-          "xxs": { "cols": 2, "rowHeight": 60, "gap": 12 }
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
         }
       }
     },
@@ -818,7 +1000,12 @@
             "id": "company-header",
             "kind": "widget",
             "widgetType": "section-header",
-            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
             "config": {
               "title": "Companies",
               "icon": "Building2",
@@ -830,7 +1017,12 @@
             "id": "company-count",
             "kind": "widget",
             "widgetType": "stat-card",
-            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "label": "Total Companies",
               "aggregation": "count",
@@ -842,24 +1034,41 @@
             "id": "company-board",
             "kind": "view",
             "viewName": "Companies Board",
-            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 9,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "company-table",
             "kind": "view",
             "viewName": "Companies",
-            "pos": { "x": 0, "y": 19, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 19,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "company-active-deals",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 3,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "deal",
               "label": "Active Deals",
               "icon": "TrendingUp",
-              "filter": { "stage": "negotiation" },
+              "filter": {
+                "stage": "negotiation"
+              },
               "color": "#10B981"
             }
           },
@@ -867,7 +1076,12 @@
             "id": "company-key-contacts",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 6,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "contact",
               "label": "Key Contacts",
@@ -879,7 +1093,12 @@
             "id": "company-contacts",
             "kind": "widget",
             "widgetType": "entity-list",
-            "pos": { "x": 0, "y": 5, "w": 6, "h": 4 },
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 6,
+              "h": 4
+            },
             "config": {
               "profileSlug": "contact",
               "title": "Contacts",
@@ -891,7 +1110,12 @@
             "id": "company-deals",
             "kind": "widget",
             "widgetType": "entity-list",
-            "pos": { "x": 6, "y": 5, "w": 6, "h": 4 },
+            "pos": {
+              "x": 6,
+              "y": 5,
+              "w": 6,
+              "h": 4
+            },
             "config": {
               "profileSlug": "deal",
               "title": "Deals",
@@ -901,11 +1125,31 @@
           }
         ],
         "breakpoints": {
-          "lg": { "cols": 12, "rowHeight": 60, "gap": 12 },
-          "md": { "cols": 10, "rowHeight": 60, "gap": 12 },
-          "sm": { "cols": 6, "rowHeight": 60, "gap": 12 },
-          "xs": { "cols": 4, "rowHeight": 60, "gap": 12 },
-          "xxs": { "cols": 2, "rowHeight": 60, "gap": 12 }
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
         }
       }
     },
@@ -920,7 +1164,12 @@
             "id": "activity-header",
             "kind": "widget",
             "widgetType": "section-header",
-            "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 2
+            },
             "config": {
               "title": "Activities",
               "icon": "MessageSquare",
@@ -932,7 +1181,12 @@
             "id": "activity-count",
             "kind": "widget",
             "widgetType": "stat-card",
-            "pos": { "x": 0, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 0,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "label": "Total Activities",
               "aggregation": "count",
@@ -944,19 +1198,34 @@
             "id": "activity-log",
             "kind": "view",
             "viewName": "Activity Log",
-            "pos": { "x": 0, "y": 9, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 9,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "activity-cal",
             "kind": "view",
             "viewName": "Activity Calendar",
-            "pos": { "x": 0, "y": 19, "w": 12, "h": 8 }
+            "pos": {
+              "x": 0,
+              "y": 19,
+              "w": 12,
+              "h": 8
+            }
           },
           {
             "id": "activity-this-week",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 3, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 3,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "activity",
               "label": "This Week",
@@ -968,7 +1237,12 @@
             "id": "activity-overdue",
             "kind": "widget",
             "widgetType": "entity-count",
-            "pos": { "x": 6, "y": 2, "w": 3, "h": 3 },
+            "pos": {
+              "x": 6,
+              "y": 2,
+              "w": 3,
+              "h": 3
+            },
             "config": {
               "profileSlug": "activity",
               "label": "Overdue",
@@ -980,7 +1254,12 @@
             "id": "activity-recent",
             "kind": "widget",
             "widgetType": "entity-list",
-            "pos": { "x": 0, "y": 5, "w": 12, "h": 4 },
+            "pos": {
+              "x": 0,
+              "y": 5,
+              "w": 12,
+              "h": 4
+            },
             "config": {
               "profileSlug": "activity",
               "title": "Recent Activities",
@@ -990,11 +1269,31 @@
           }
         ],
         "breakpoints": {
-          "lg": { "cols": 12, "rowHeight": 60, "gap": 12 },
-          "md": { "cols": 10, "rowHeight": 60, "gap": 12 },
-          "sm": { "cols": 6, "rowHeight": 60, "gap": 12 },
-          "xs": { "cols": 4, "rowHeight": 60, "gap": 12 },
-          "xxs": { "cols": 2, "rowHeight": 60, "gap": 12 }
+          "lg": {
+            "cols": 12,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "md": {
+            "cols": 10,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "sm": {
+            "cols": 6,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xs": {
+            "cols": 4,
+            "rowHeight": 60,
+            "gap": 12
+          },
+          "xxs": {
+            "cols": 2,
+            "rowHeight": 60,
+            "gap": 12
+          }
         }
       }
     }
@@ -1105,7 +1404,7 @@
     },
     {
       "profileSlug": "deal",
-      "title": "Lumio — Data Pod Enterprise Licence",
+      "title": "Lumio \u2014 Data Pod Enterprise Licence",
       "properties": {
         "stage": "Proposal",
         "deal-value": 36000,
@@ -1123,7 +1422,7 @@
     },
     {
       "profileSlug": "deal",
-      "title": "Meridian Finance — 2026 Renewal + Expansion",
+      "title": "Meridian Finance \u2014 2026 Renewal + Expansion",
       "properties": {
         "stage": "Negotiation",
         "deal-value": 72000,
@@ -1141,7 +1440,7 @@
     },
     {
       "profileSlug": "deal",
-      "title": "Arko Health — Starter Workspace",
+      "title": "Arko Health \u2014 Starter Workspace",
       "properties": {
         "stage": "Qualified",
         "deal-value": 9600,
@@ -1159,7 +1458,7 @@
     },
     {
       "profileSlug": "deal",
-      "title": "Vanta Labs — Pilot Evaluation",
+      "title": "Vanta Labs \u2014 Pilot Evaluation",
       "properties": {
         "stage": "Prospecting",
         "deal-value": 24000,
@@ -1177,7 +1476,7 @@
     },
     {
       "profileSlug": "activity",
-      "title": "Product demo — Lumio CTO",
+      "title": "Product demo \u2014 Lumio CTO",
       "properties": {
         "activity-type": "Demo",
         "activity-date": "2026-02-10",
@@ -1185,7 +1484,7 @@
         "activity-outcome": "Positive",
         "related-company": "ref:company:Lumio Technologies",
         "related-contact": "ref:contact:Camille Renard",
-        "related-deal": "ref:deal:Lumio — Data Pod Enterprise Licence",
+        "related-deal": "ref:deal:Lumio \u2014 Data Pod Enterprise Licence",
         "activity-owner": "Antoine",
         "summary": "Ran full platform demo. Strong reaction to the relationship graph and pod sovereignty model. Asked for compliance documentation.",
         "duration-min": 60
@@ -1193,7 +1492,7 @@
     },
     {
       "profileSlug": "activity",
-      "title": "Renewal negotiation call — Meridian",
+      "title": "Renewal negotiation call \u2014 Meridian",
       "properties": {
         "activity-type": "Call",
         "activity-date": "2026-02-18",
@@ -1201,7 +1500,7 @@
         "activity-outcome": "Positive",
         "related-company": "ref:company:Meridian Finance",
         "related-contact": "ref:contact:Marcus Holt",
-        "related-deal": "ref:deal:Meridian Finance — 2026 Renewal + Expansion",
+        "related-deal": "ref:deal:Meridian Finance \u2014 2026 Renewal + Expansion",
         "activity-owner": "Antoine",
         "summary": "Aligned on price and new module scope. Final contract to be sent by Feb 26.",
         "duration-min": 45
@@ -1209,7 +1508,7 @@
     },
     {
       "profileSlug": "activity",
-      "title": "Follow-up email — Arko Health",
+      "title": "Follow-up email \u2014 Arko Health",
       "properties": {
         "activity-type": "Follow-up",
         "activity-date": "2026-03-01",
@@ -1217,7 +1516,7 @@
         "activity-outcome": "Pending",
         "related-company": "ref:company:Arko Health",
         "related-contact": "ref:contact:Isabelle Moreau",
-        "related-deal": "ref:deal:Arko Health — Starter Workspace",
+        "related-deal": "ref:deal:Arko Health \u2014 Starter Workspace",
         "activity-owner": "Sophie",
         "summary": "Send healthcare sector case study to re-engage.",
         "duration-min": 0
@@ -1225,7 +1524,7 @@
     },
     {
       "profileSlug": "pipeline",
-      "title": "New Business — Q1 2026",
+      "title": "New Business \u2014 Q1 2026",
       "properties": {
         "pipeline-status": "Active",
         "pipeline-type": "New Business",
@@ -1239,7 +1538,7 @@
     },
     {
       "profileSlug": "pipeline",
-      "title": "Renewals & Expansion — Q1 2026",
+      "title": "Renewals & Expansion \u2014 Q1 2026",
       "properties": {
         "pipeline-status": "Active",
         "pipeline-type": "Renewal",
@@ -1305,93 +1604,93 @@
       "type": "belongs_to_project"
     },
     {
-      "sourceRef": "deal:Lumio — Data Pod Enterprise Licence",
+      "sourceRef": "deal:Lumio \u2014 Data Pod Enterprise Licence",
       "targetRef": "company:Lumio Technologies",
       "type": "belongs_to_project"
     },
     {
-      "sourceRef": "deal:Meridian Finance — 2026 Renewal + Expansion",
+      "sourceRef": "deal:Meridian Finance \u2014 2026 Renewal + Expansion",
       "targetRef": "company:Meridian Finance",
       "type": "belongs_to_project"
     },
     {
-      "sourceRef": "deal:Arko Health — Starter Workspace",
+      "sourceRef": "deal:Arko Health \u2014 Starter Workspace",
       "targetRef": "company:Arko Health",
       "type": "belongs_to_project"
     },
     {
-      "sourceRef": "deal:Vanta Labs — Pilot Evaluation",
+      "sourceRef": "deal:Vanta Labs \u2014 Pilot Evaluation",
       "targetRef": "company:Vanta Labs",
       "type": "belongs_to_project"
     },
     {
-      "sourceRef": "deal:Lumio — Data Pod Enterprise Licence",
+      "sourceRef": "deal:Lumio \u2014 Data Pod Enterprise Licence",
       "targetRef": "contact:Camille Renard",
       "type": "relates_to"
     },
     {
-      "sourceRef": "deal:Meridian Finance — 2026 Renewal + Expansion",
+      "sourceRef": "deal:Meridian Finance \u2014 2026 Renewal + Expansion",
       "targetRef": "contact:Marcus Holt",
       "type": "relates_to"
     },
     {
-      "sourceRef": "deal:Arko Health — Starter Workspace",
+      "sourceRef": "deal:Arko Health \u2014 Starter Workspace",
       "targetRef": "contact:Isabelle Moreau",
       "type": "relates_to"
     },
     {
-      "sourceRef": "deal:Vanta Labs — Pilot Evaluation",
+      "sourceRef": "deal:Vanta Labs \u2014 Pilot Evaluation",
       "targetRef": "contact:Thomas Geiger",
       "type": "relates_to"
     },
     {
-      "sourceRef": "activity:Product demo — Lumio CTO",
-      "targetRef": "deal:Lumio — Data Pod Enterprise Licence",
+      "sourceRef": "activity:Product demo \u2014 Lumio CTO",
+      "targetRef": "deal:Lumio \u2014 Data Pod Enterprise Licence",
       "type": "relates_to"
     },
     {
-      "sourceRef": "activity:Renewal negotiation call — Meridian",
-      "targetRef": "deal:Meridian Finance — 2026 Renewal + Expansion",
+      "sourceRef": "activity:Renewal negotiation call \u2014 Meridian",
+      "targetRef": "deal:Meridian Finance \u2014 2026 Renewal + Expansion",
       "type": "relates_to"
     },
     {
-      "sourceRef": "activity:Follow-up email — Arko Health",
-      "targetRef": "deal:Arko Health — Starter Workspace",
+      "sourceRef": "activity:Follow-up email \u2014 Arko Health",
+      "targetRef": "deal:Arko Health \u2014 Starter Workspace",
       "type": "relates_to"
     },
     {
-      "sourceRef": "activity:Product demo — Lumio CTO",
+      "sourceRef": "activity:Product demo \u2014 Lumio CTO",
       "targetRef": "contact:Camille Renard",
       "type": "attended_by"
     },
     {
-      "sourceRef": "activity:Renewal negotiation call — Meridian",
+      "sourceRef": "activity:Renewal negotiation call \u2014 Meridian",
       "targetRef": "contact:Marcus Holt",
       "type": "attended_by"
     },
     {
-      "sourceRef": "activity:Follow-up email — Arko Health",
+      "sourceRef": "activity:Follow-up email \u2014 Arko Health",
       "targetRef": "contact:Isabelle Moreau",
       "type": "attended_by"
     },
     {
-      "sourceRef": "deal:Lumio — Data Pod Enterprise Licence",
-      "targetRef": "pipeline:New Business — Q1 2026",
+      "sourceRef": "deal:Lumio \u2014 Data Pod Enterprise Licence",
+      "targetRef": "pipeline:New Business \u2014 Q1 2026",
       "type": "belongs_to_project"
     },
     {
-      "sourceRef": "deal:Arko Health — Starter Workspace",
-      "targetRef": "pipeline:New Business — Q1 2026",
+      "sourceRef": "deal:Arko Health \u2014 Starter Workspace",
+      "targetRef": "pipeline:New Business \u2014 Q1 2026",
       "type": "belongs_to_project"
     },
     {
-      "sourceRef": "deal:Vanta Labs — Pilot Evaluation",
-      "targetRef": "pipeline:New Business — Q1 2026",
+      "sourceRef": "deal:Vanta Labs \u2014 Pilot Evaluation",
+      "targetRef": "pipeline:New Business \u2014 Q1 2026",
       "type": "belongs_to_project"
     },
     {
-      "sourceRef": "deal:Meridian Finance — 2026 Renewal + Expansion",
-      "targetRef": "pipeline:Renewals & Expansion — Q1 2026",
+      "sourceRef": "deal:Meridian Finance \u2014 2026 Renewal + Expansion",
+      "targetRef": "pipeline:Renewals & Expansion \u2014 Q1 2026",
       "type": "belongs_to_project"
     }
   ],
@@ -1437,7 +1736,10 @@
           "fieldMapping": {
             "stage": {
               "slot": "stage",
-              "renderer": { "type": "badge", "size": "md" },
+              "renderer": {
+                "type": "badge",
+                "size": "md"
+              },
               "showLabel": false,
               "order": 1
             },
@@ -1453,29 +1755,42 @@
             },
             "probability": {
               "slot": "probability",
-              "renderer": { "type": "progress", "size": "sm" },
+              "renderer": {
+                "type": "progress",
+                "size": "sm"
+              },
               "label": "Win probability",
               "showLabel": true,
               "order": 3
             },
             "close-date": {
               "slot": "close-date",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "label": "Close date",
               "showLabel": true,
               "order": 4
             },
             "next-action-date": {
               "slot": "next-action-date",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "label": "Next action",
               "showLabel": true,
               "order": 5
             }
           }
         },
-        "colors": { "accent": "#F59E0B" },
-        "styling": { "borderRadius": "10px" }
+        "colors": {
+          "accent": "#F59E0B"
+        },
+        "styling": {
+          "borderRadius": "10px"
+        }
       }
     },
     {
@@ -1514,13 +1829,20 @@
           "fieldMapping": {
             "company-status": {
               "slot": "company-status",
-              "renderer": { "type": "badge", "size": "md" },
+              "renderer": {
+                "type": "badge",
+                "size": "md"
+              },
               "showLabel": false,
               "order": 1
             },
             "industry": {
               "slot": "industry",
-              "renderer": { "type": "badge", "variant": "muted", "size": "sm" },
+              "renderer": {
+                "type": "badge",
+                "variant": "muted",
+                "size": "sm"
+              },
               "showLabel": false,
               "order": 2
             },
@@ -1537,22 +1859,32 @@
             },
             "health-score": {
               "slot": "health-score",
-              "renderer": { "type": "progress", "size": "sm" },
+              "renderer": {
+                "type": "progress",
+                "size": "sm"
+              },
               "label": "Health score",
               "showLabel": true,
               "order": 4
             },
             "last-contact-date": {
               "slot": "last-contact-date",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "label": "Last contact",
               "showLabel": true,
               "order": 5
             }
           }
         },
-        "colors": { "accent": "#10B981" },
-        "styling": { "borderRadius": "10px" }
+        "colors": {
+          "accent": "#10B981"
+        },
+        "styling": {
+          "borderRadius": "10px"
+        }
       }
     },
     {
@@ -1596,40 +1928,60 @@
           "fieldMapping": {
             "contact-role": {
               "slot": "contact-role",
-              "renderer": { "type": "badge", "size": "md" },
+              "renderer": {
+                "type": "badge",
+                "size": "md"
+              },
               "showLabel": false,
               "order": 1
             },
             "contact-status": {
               "slot": "contact-status",
-              "renderer": { "type": "badge", "variant": "muted", "size": "sm" },
+              "renderer": {
+                "type": "badge",
+                "variant": "muted",
+                "size": "sm"
+              },
               "showLabel": false,
               "order": 2
             },
             "lead-score": {
               "slot": "lead-score",
-              "renderer": { "type": "progress", "size": "sm" },
+              "renderer": {
+                "type": "progress",
+                "size": "sm"
+              },
               "label": "Lead score",
               "showLabel": true,
               "order": 3
             },
             "last-interaction": {
               "slot": "last-interaction",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "label": "Last interaction",
               "showLabel": true,
               "order": 4
             },
             "email": {
               "slot": "email",
-              "renderer": { "type": "link", "size": "sm" },
+              "renderer": {
+                "type": "link",
+                "size": "sm"
+              },
               "showLabel": false,
               "order": 5
             }
           }
         },
-        "colors": { "accent": "#6366F1" },
-        "styling": { "borderRadius": "10px" }
+        "colors": {
+          "accent": "#6366F1"
+        },
+        "styling": {
+          "borderRadius": "10px"
+        }
       }
     },
     {
@@ -1668,41 +2020,62 @@
           "fieldMapping": {
             "activity-type": {
               "slot": "activity-type",
-              "renderer": { "type": "badge", "size": "md" },
+              "renderer": {
+                "type": "badge",
+                "size": "md"
+              },
               "showLabel": false,
               "order": 1
             },
             "activity-status": {
               "slot": "activity-status",
-              "renderer": { "type": "badge", "variant": "muted", "size": "sm" },
+              "renderer": {
+                "type": "badge",
+                "variant": "muted",
+                "size": "sm"
+              },
               "showLabel": false,
               "order": 2
             },
             "activity-outcome": {
               "slot": "activity-outcome",
-              "renderer": { "type": "badge", "variant": "muted", "size": "sm" },
+              "renderer": {
+                "type": "badge",
+                "variant": "muted",
+                "size": "sm"
+              },
               "label": "Outcome",
               "showLabel": true,
               "order": 3
             },
             "activity-date": {
               "slot": "activity-date",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "label": "Date",
               "showLabel": true,
               "order": 4
             },
             "duration-min": {
               "slot": "duration-min",
-              "renderer": { "type": "number", "size": "sm" },
+              "renderer": {
+                "type": "number",
+                "size": "sm"
+              },
               "label": "Duration (min)",
               "showLabel": true,
               "order": 5
             }
           }
         },
-        "colors": { "accent": "#06B6D4" },
-        "styling": { "borderRadius": "10px" }
+        "colors": {
+          "accent": "#06B6D4"
+        },
+        "styling": {
+          "borderRadius": "10px"
+        }
       }
     }
   ],
@@ -1746,31 +2119,73 @@
   "bentoLayout": [
     {
       "widgetType": "welcome-header",
-      "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+      "pos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 2
+      }
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 0, "y": 2, "w": 3, "h": 2 },
-      "config": { "profileSlug": "deal", "label": "Open Deals" }
+      "pos": {
+        "x": 0,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "deal",
+        "label": "Open Deals"
+      }
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 3, "y": 2, "w": 3, "h": 2 },
-      "config": { "profileSlug": "contact", "label": "Contacts" }
+      "pos": {
+        "x": 3,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "contact",
+        "label": "Contacts"
+      }
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 6, "y": 2, "w": 3, "h": 2 },
-      "config": { "profileSlug": "company", "label": "Companies" }
+      "pos": {
+        "x": 6,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "company",
+        "label": "Companies"
+      }
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 9, "y": 2, "w": 3, "h": 2 },
-      "config": { "profileSlug": "activity", "label": "Activities" }
+      "pos": {
+        "x": 9,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "activity",
+        "label": "Activities"
+      }
     },
     {
       "widgetType": "entity-list",
-      "pos": { "x": 0, "y": 4, "w": 6, "h": 4 },
+      "pos": {
+        "x": 0,
+        "y": 4,
+        "w": 6,
+        "h": 4
+      },
       "config": {
         "profileSlug": "deal",
         "title": "Hot Deals",
@@ -1780,7 +2195,12 @@
     },
     {
       "widgetType": "entity-list",
-      "pos": { "x": 6, "y": 4, "w": 6, "h": 4 },
+      "pos": {
+        "x": 6,
+        "y": 4,
+        "w": 6,
+        "h": 4
+      },
       "config": {
         "profileSlug": "contact",
         "title": "Top Contacts",
@@ -1790,7 +2210,12 @@
     },
     {
       "widgetType": "entity-list",
-      "pos": { "x": 0, "y": 8, "w": 4, "h": 4 },
+      "pos": {
+        "x": 0,
+        "y": 8,
+        "w": 4,
+        "h": 4
+      },
       "config": {
         "profileSlug": "company",
         "title": "Key Accounts",
@@ -1798,8 +2223,24 @@
         "variant": "compact"
       }
     },
-    { "widgetType": "feed", "pos": { "x": 4, "y": 8, "w": 4, "h": 4 } },
-    { "widgetType": "calendar", "pos": { "x": 8, "y": 8, "w": 4, "h": 4 } }
+    {
+      "widgetType": "feed",
+      "pos": {
+        "x": 4,
+        "y": 8,
+        "w": 4,
+        "h": 4
+      }
+    },
+    {
+      "widgetType": "calendar",
+      "pos": {
+        "x": 8,
+        "y": 8,
+        "w": 4,
+        "h": 4
+      }
+    }
   ],
   "profileEntityBentoTemplates": {
     "deal": {
@@ -1808,25 +2249,45 @@
           "id": "entity-header",
           "kind": "widget",
           "widgetType": "entity-header",
-          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+          "pos": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 2
+          }
         },
         {
           "id": "entity-props",
           "kind": "widget",
           "widgetType": "entity-properties",
-          "pos": { "x": 0, "y": 2, "w": 4, "h": 8 }
+          "pos": {
+            "x": 0,
+            "y": 2,
+            "w": 4,
+            "h": 8
+          }
         },
         {
           "id": "entity-content",
           "kind": "widget",
           "widgetType": "entity-content",
-          "pos": { "x": 4, "y": 2, "w": 8, "h": 4 }
+          "pos": {
+            "x": 4,
+            "y": 2,
+            "w": 8,
+            "h": 4
+          }
         },
         {
           "id": "entity-rel",
           "kind": "widget",
           "widgetType": "entity-content",
-          "pos": { "x": 4, "y": 6, "w": 8, "h": 4 }
+          "pos": {
+            "x": 4,
+            "y": 6,
+            "w": 8,
+            "h": 4
+          }
         }
       ]
     },
@@ -1836,25 +2297,45 @@
           "id": "entity-header",
           "kind": "widget",
           "widgetType": "entity-header",
-          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+          "pos": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 2
+          }
         },
         {
           "id": "entity-props",
           "kind": "widget",
           "widgetType": "entity-properties",
-          "pos": { "x": 0, "y": 2, "w": 4, "h": 8 }
+          "pos": {
+            "x": 0,
+            "y": 2,
+            "w": 4,
+            "h": 8
+          }
         },
         {
           "id": "entity-content",
           "kind": "widget",
           "widgetType": "entity-content",
-          "pos": { "x": 4, "y": 2, "w": 8, "h": 4 }
+          "pos": {
+            "x": 4,
+            "y": 2,
+            "w": 8,
+            "h": 4
+          }
         },
         {
           "id": "entity-rel",
           "kind": "widget",
           "widgetType": "entity-content",
-          "pos": { "x": 4, "y": 6, "w": 8, "h": 4 }
+          "pos": {
+            "x": 4,
+            "y": 6,
+            "w": 8,
+            "h": 4
+          }
         }
       ]
     },
@@ -1864,25 +2345,45 @@
           "id": "entity-header",
           "kind": "widget",
           "widgetType": "entity-header",
-          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+          "pos": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 2
+          }
         },
         {
           "id": "entity-props",
           "kind": "widget",
           "widgetType": "entity-properties",
-          "pos": { "x": 0, "y": 2, "w": 4, "h": 8 }
+          "pos": {
+            "x": 0,
+            "y": 2,
+            "w": 4,
+            "h": 8
+          }
         },
         {
           "id": "entity-content",
           "kind": "widget",
           "widgetType": "entity-content",
-          "pos": { "x": 4, "y": 2, "w": 8, "h": 4 }
+          "pos": {
+            "x": 4,
+            "y": 2,
+            "w": 8,
+            "h": 4
+          }
         },
         {
           "id": "entity-rel",
           "kind": "widget",
           "widgetType": "entity-content",
-          "pos": { "x": 4, "y": 6, "w": 8, "h": 4 }
+          "pos": {
+            "x": 4,
+            "y": 6,
+            "w": 8,
+            "h": 4
+          }
         }
       ]
     },
@@ -1892,23 +2393,78 @@
           "id": "entity-header",
           "kind": "widget",
           "widgetType": "entity-header",
-          "pos": { "x": 0, "y": 0, "w": 12, "h": 2 }
+          "pos": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 2
+          }
         },
         {
           "id": "entity-props",
           "kind": "widget",
           "widgetType": "entity-properties",
-          "pos": { "x": 0, "y": 2, "w": 4, "h": 6 }
+          "pos": {
+            "x": 0,
+            "y": 2,
+            "w": 4,
+            "h": 6
+          }
         },
         {
           "id": "entity-content",
           "kind": "widget",
           "widgetType": "entity-content",
-          "pos": { "x": 4, "y": 2, "w": 8, "h": 6 }
+          "pos": {
+            "x": 4,
+            "y": 2,
+            "w": 8,
+            "h": 6
+          }
         }
       ]
     }
   },
-  "capabilities": [{ "templateKey": "nango-gmail" }],
-  "playbooks": []
+  "capabilities": [
+    {
+      "templateKey": "nango-gmail"
+    }
+  ],
+  "playbooks": [],
+  "onboarding": {
+    "goal": "Capture the user's sales pipeline shape, their key accounts/contacts, and how they qualify and move deals \u2014 so the CRM reflects their real revenue motion, not a generic template.",
+    "framing": "Act as a sharp revenue/sales-ops lead. Tease out how they actually sell: who they sell to, what stages a deal moves through, where leads come from, and what 'qualified' means to them. Translate their words into pipeline config, companies, contacts, and deals.",
+    "collect": [
+      {
+        "profileSlug": "pipeline",
+        "what": "Their real deal stages in order (e.g. Lead \u2192 Qualified \u2192 Demo \u2192 Proposal \u2192 Won/Lost)",
+        "cardinality": "one",
+        "keyFields": ["title", "stages"]
+      },
+      {
+        "profileSlug": "company",
+        "what": "Their most important active accounts/prospects",
+        "cardinality": "several",
+        "keyFields": ["title", "industry", "website"]
+      },
+      {
+        "profileSlug": "contact",
+        "what": "Key people at those accounts",
+        "cardinality": "several",
+        "keyFields": ["title", "email", "role", "company"]
+      },
+      {
+        "profileSlug": "deal",
+        "what": "Open opportunities worth tracking now",
+        "cardinality": "few",
+        "keyFields": ["title", "stage", "value", "company"]
+      }
+    ],
+    "openingQuestions": [
+      "What does a deal go through from first contact to closed \u2014 what are your stages?",
+      "Who are your 3-5 most important active accounts right now?",
+      "Where do most of your leads come from?"
+    ],
+    "doneWhen": "Pipeline stages reflect their real motion, their top accounts + key contacts exist, and at least a couple of live deals are placed on the pipeline."
+  }
 }

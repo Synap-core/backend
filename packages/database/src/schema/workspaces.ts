@@ -409,6 +409,25 @@ export interface WorkspaceSettings {
    */
   workspaceSubtype?: string;
   /**
+   * Per-workspace onboarding context — the dynamic "what this workspace needs"
+   * that the shared `onboard` skill reads to run an adaptive interview when the
+   * workspace is sparse. Declared by the template; goal + framing + data shape.
+   * Typed loosely here (the OnboardingSpec shape lives in package-definition.ts)
+   * to avoid a settings→utils import cycle.
+   */
+  onboarding?: {
+    goal: string;
+    framing: string;
+    collect: Array<{
+      profileSlug: string;
+      what: string;
+      cardinality?: "one" | "few" | "several";
+      keyFields?: string[];
+    }>;
+    openingQuestions?: string[];
+    doneWhen?: string;
+  };
+  /**
    * Discovery/read visibility. Defaults to "members" when absent.
    */
   workspaceVisibility?: WorkspaceVisibility;

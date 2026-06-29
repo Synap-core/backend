@@ -123,6 +123,49 @@ export interface PackageChannel {
   memberAgentRefs?: string[]; // references PackageAgent.name
 }
 
+// ─── Onboarding spec (the per-workspace dynamic onboarding CONTEXT) ──────────
+//
+// Stored on `workspace.settings.onboarding`. The SHARED `onboard` skill (the
+// reusable adaptive interview PROCESS) reads this to know WHAT a given
+// workspace needs — without a per-domain skill file. The skill stays generic;
+// the domain knowledge lives here as data, declared by each template.
+//
+// This is NOT a rigid questionnaire. It's a GOAL + the data shape to collect +
+// domain framing the agent uses to ask good questions and adapt as it learns
+// about the user. The agent keeps interviewing until the goal is satisfied.
+
+export interface OnboardingCollectTarget {
+  /** Profile slug to populate (e.g. "brand_guidelines", "repository"). */
+  profileSlug: string;
+  /** Human description of what to capture for this target. */
+  what: string;
+  /** Roughly how many to expect ("one", "a few", "several") — guides depth. */
+  cardinality?: "one" | "few" | "several";
+  /** Key fields the agent should make sure to fill. */
+  keyFields?: string[];
+}
+
+export interface OnboardingSpec {
+  /** The outcome this onboarding achieves, in one sentence. */
+  goal: string;
+  /**
+   * Domain framing the agent uses to ask good, adaptive questions. Free text —
+   * the voice/expertise the agent adopts for THIS workspace (e.g. "act as a
+   * brand strategist; tease out voice, audience, and cadence").
+   */
+  framing: string;
+  /** What structured data to collect (entities to create + their key fields). */
+  collect: OnboardingCollectTarget[];
+  /** A few opening questions — the agent adapts from here, never rigid. */
+  openingQuestions?: string[];
+  /**
+   * "Done" signal: when the agent can consider onboarding complete. Free text
+   * the agent self-evaluates against (e.g. "voice + 2 audience segments + a
+   * first month of content cadence captured").
+   */
+  doneWhen?: string;
+}
+
 // ─── The unified definition ──────────────────────────────────────────────────
 
 export interface PackageDefinition {
@@ -173,4 +216,9 @@ export interface PackageDefinition {
   agents?: PackageAgent[];
   /** Channels/rooms to create */
   channels?: PackageChannel[];
+  /**
+   * Per-workspace onboarding context (the dynamic "what this workspace needs"
+   * the shared `onboard` skill reads). Written to workspace.settings.onboarding.
+   */
+  onboarding?: OnboardingSpec;
 }

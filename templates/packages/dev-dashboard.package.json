@@ -12,7 +12,7 @@
       "credentials"
     ]
   },
-  "workspaceName": "Synap Dev — Infrastructure Command Center",
+  "workspaceName": "Synap Dev \u2014 Infrastructure Command Center",
   "description": "Internal DevOps dashboard for monitoring Synap infrastructure. Tracks services, vendors, and environments with health status, architecture flow map, and quick access to admin panels.",
   "workspaceType": "operational",
   "workspaceSubtype": "infrastructure",
@@ -43,28 +43,36 @@
           "label": "Service URL",
           "valueType": "string",
           "placeholder": "https://...",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "github-url",
           "label": "GitHub URL",
           "valueType": "string",
           "placeholder": "https://github.com/...",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "health-endpoint",
           "label": "Health Check URL",
           "valueType": "string",
           "placeholder": "https://.../health",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "deploy-url",
           "label": "Deploy Dashboard URL",
           "valueType": "string",
           "placeholder": "https://...",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "server-host",
@@ -77,21 +85,27 @@
           "label": "Admin Panel URL",
           "valueType": "string",
           "placeholder": "https://...",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "monitoring-url",
           "label": "Monitoring URL",
           "valueType": "string",
           "placeholder": "https://...",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "docs-url",
           "label": "Documentation URL",
           "valueType": "string",
           "placeholder": "https://...",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "health-status",
@@ -100,7 +114,11 @@
           "inputType": "select",
           "enumValues": ["Healthy", "Degraded", "Down", "Unknown"]
         },
-        { "slug": "tech-stack", "label": "Tech Stack", "valueType": "array" },
+        {
+          "slug": "tech-stack",
+          "label": "Tech Stack",
+          "valueType": "array"
+        },
         {
           "slug": "port",
           "label": "Port",
@@ -120,7 +138,11 @@
           "valueType": "string",
           "placeholder": "main"
         },
-        { "slug": "last-deploy", "label": "Last Deploy", "valueType": "date" },
+        {
+          "slug": "last-deploy",
+          "label": "Last Deploy",
+          "valueType": "date"
+        },
         {
           "slug": "service-notes",
           "label": "Notes",
@@ -159,30 +181,42 @@
           "label": "Vendor URL",
           "valueType": "string",
           "placeholder": "https://...",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "admin-url",
           "label": "Admin Console URL",
           "valueType": "string",
           "placeholder": "https://...",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "docs-url",
           "label": "Documentation URL",
           "valueType": "string",
           "placeholder": "https://...",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "status-page-url",
           "label": "Status Page URL",
           "valueType": "string",
           "placeholder": "https://status.example.com",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
-        { "slug": "api-key-ref", "label": "API Key", "valueType": "string" },
+        {
+          "slug": "api-key-ref",
+          "label": "API Key",
+          "valueType": "string"
+        },
         {
           "slug": "pricing-model",
           "label": "Pricing Model",
@@ -192,7 +226,7 @@
         },
         {
           "slug": "monthly-cost",
-          "label": "Monthly Cost (€)",
+          "label": "Monthly Cost (\u20ac)",
           "valueType": "number",
           "placeholder": "0"
         },
@@ -231,7 +265,9 @@
           "label": "Base URL",
           "valueType": "string",
           "placeholder": "https://...",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "branch",
@@ -239,7 +275,11 @@
           "valueType": "string",
           "placeholder": "main"
         },
-        { "slug": "last-deploy", "label": "Last Deploy", "valueType": "date" },
+        {
+          "slug": "last-deploy",
+          "label": "Last Deploy",
+          "valueType": "date"
+        },
         {
           "slug": "env-status",
           "label": "Status",
@@ -268,7 +308,9 @@
           "label": "Repository URL",
           "valueType": "string",
           "placeholder": "https://github.com/...",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "main-branch",
@@ -293,7 +335,9 @@
           "label": "CI Dashboard URL",
           "valueType": "string",
           "placeholder": "https://github.com/.../actions",
-          "constraints": { "format": "url" }
+          "constraints": {
+            "format": "url"
+          }
         },
         {
           "slug": "last-commit",
@@ -326,7 +370,11 @@
           "inputType": "select",
           "enumValues": ["pnpm", "npm", "yarn", "bun", "cargo", "pip"]
         },
-        { "slug": "monorepo", "label": "Monorepo", "valueType": "boolean" },
+        {
+          "slug": "monorepo",
+          "label": "Monorepo",
+          "valueType": "boolean"
+        },
         {
           "slug": "repo-notes",
           "label": "Notes",
@@ -411,65 +459,110 @@
           {
             "id": "browser",
             "type": "entity",
-            "position": { "x": 0, "y": 0 },
+            "position": {
+              "x": 0,
+              "y": 0
+            },
             "label": "Browser",
-            "data": { "entityIndex": 8 }
+            "data": {
+              "entityIndex": 8
+            }
           },
           {
             "id": "control-plane",
             "type": "entity",
-            "position": { "x": 0, "y": 250 },
+            "position": {
+              "x": 0,
+              "y": 250
+            },
             "label": "Control Plane",
-            "data": { "entityIndex": 3 }
+            "data": {
+              "entityIndex": 3
+            }
           },
           {
             "id": "synap-app",
             "type": "entity",
-            "position": { "x": 400, "y": 0 },
+            "position": {
+              "x": 400,
+              "y": 0
+            },
             "label": "Synap App",
-            "data": { "entityIndex": 0 }
+            "data": {
+              "entityIndex": 0
+            }
           },
           {
             "id": "control-plane-api",
             "type": "entity",
-            "position": { "x": 400, "y": 250 },
+            "position": {
+              "x": 400,
+              "y": 250
+            },
             "label": "Control Plane API",
-            "data": { "entityIndex": 2 }
+            "data": {
+              "entityIndex": 2
+            }
           },
           {
             "id": "synap-backend",
             "type": "entity",
-            "position": { "x": 400, "y": 500 },
+            "position": {
+              "x": 400,
+              "y": 500
+            },
             "label": "Synap Backend",
-            "data": { "entityIndex": 1 }
+            "data": {
+              "entityIndex": 1
+            }
           },
           {
             "id": "intelligence-service",
             "type": "entity",
-            "position": { "x": 800, "y": 0 },
+            "position": {
+              "x": 800,
+              "y": 0
+            },
             "label": "Intelligence Service",
-            "data": { "entityIndex": 4 }
+            "data": {
+              "entityIndex": 4
+            }
           },
           {
             "id": "zeroclaw-bridge",
             "type": "entity",
-            "position": { "x": 800, "y": 250 },
+            "position": {
+              "x": 800,
+              "y": 250
+            },
             "label": "ZeroClaw Bridge",
-            "data": { "entityIndex": 7 }
+            "data": {
+              "entityIndex": 7
+            }
           },
           {
             "id": "life-feed",
             "type": "entity",
-            "position": { "x": 800, "y": 500 },
+            "position": {
+              "x": 800,
+              "y": 500
+            },
             "label": "Life Feed",
-            "data": { "entityIndex": 6 }
+            "data": {
+              "entityIndex": 6
+            }
           },
           {
             "id": "landing-page",
             "type": "entity",
-            "position": { "x": 400, "y": 750 },
+            "position": {
+              "x": 400,
+              "y": 750
+            },
             "label": "Landing Page",
-            "data": { "entityIndex": 5 }
+            "data": {
+              "entityIndex": 5
+            }
           }
         ],
         "edges": [
@@ -483,7 +576,7 @@
             "id": "e-cp-cpapi",
             "source": "control-plane",
             "target": "control-plane-api",
-            "label": "frontend → API"
+            "label": "frontend \u2192 API"
           },
           {
             "id": "e-app-backend",
@@ -537,13 +630,18 @@
       "name": "Service Health",
       "type": "kanban",
       "scopeProfileSlug": "service",
-      "config": { "groupByField": "health-status" }
+      "config": {
+        "groupByField": "health-status"
+      }
     },
     {
       "name": "Architecture Graph",
       "type": "graph",
       "scopeProfileSlugs": ["service", "vendor", "repository"],
-      "config": { "layout": "force", "showRelations": true }
+      "config": {
+        "layout": "force",
+        "showRelations": true
+      }
     },
     {
       "name": "Deploy Timeline",
@@ -580,7 +678,9 @@
       "name": "Services by Type",
       "type": "kanban",
       "scopeProfileSlug": "service",
-      "config": { "groupByField": "service-type" }
+      "config": {
+        "groupByField": "service-type"
+      }
     },
     {
       "name": "All Services",
@@ -588,13 +688,26 @@
       "scopeProfileSlug": "service",
       "config": {
         "columns": [
-          { "key": "service-type" },
-          { "key": "environment" },
-          { "key": "health-status" },
-          { "key": "tech-stack" },
-          { "key": "service-url" }
+          {
+            "key": "service-type"
+          },
+          {
+            "key": "environment"
+          },
+          {
+            "key": "health-status"
+          },
+          {
+            "key": "tech-stack"
+          },
+          {
+            "key": "service-url"
+          }
         ],
-        "sort": { "field": "service-type", "direction": "asc" }
+        "sort": {
+          "field": "service-type",
+          "direction": "asc"
+        }
       }
     },
     {
@@ -603,13 +716,26 @@
       "scopeProfileSlug": "vendor",
       "config": {
         "columns": [
-          { "key": "vendor-type" },
-          { "key": "pricing-model" },
-          { "key": "monthly-cost" },
-          { "key": "vendor-status" },
-          { "key": "vendor-url" }
+          {
+            "key": "vendor-type"
+          },
+          {
+            "key": "pricing-model"
+          },
+          {
+            "key": "monthly-cost"
+          },
+          {
+            "key": "vendor-status"
+          },
+          {
+            "key": "vendor-url"
+          }
         ],
-        "sort": { "field": "monthly-cost", "direction": "desc" }
+        "sort": {
+          "field": "monthly-cost",
+          "direction": "desc"
+        }
       }
     },
     {
@@ -618,13 +744,26 @@
       "scopeProfileSlug": "repository",
       "config": {
         "columns": [
-          { "key": "language" },
-          { "key": "package-manager" },
-          { "key": "monorepo" },
-          { "key": "ci-status" },
-          { "key": "main-branch" }
+          {
+            "key": "language"
+          },
+          {
+            "key": "package-manager"
+          },
+          {
+            "key": "monorepo"
+          },
+          {
+            "key": "ci-status"
+          },
+          {
+            "key": "main-branch"
+          }
         ],
-        "sort": { "field": "language", "direction": "asc" }
+        "sort": {
+          "field": "language",
+          "direction": "asc"
+        }
       }
     },
     {
@@ -637,49 +776,84 @@
             "id": "platform-metrics",
             "kind": "widget",
             "widgetType": "dev-platform-metrics",
-            "pos": { "x": 0, "y": 0, "w": 12, "h": 3 },
+            "pos": {
+              "x": 0,
+              "y": 0,
+              "w": 12,
+              "h": 3
+            },
             "config": {}
           },
           {
             "id": "intelligence-usage",
             "kind": "widget",
             "widgetType": "dev-intelligence-usage",
-            "pos": { "x": 0, "y": 3, "w": 6, "h": 4 },
+            "pos": {
+              "x": 0,
+              "y": 3,
+              "w": 6,
+              "h": 4
+            },
             "config": {}
           },
           {
             "id": "service-health",
             "kind": "widget",
             "widgetType": "dev-service-health",
-            "pos": { "x": 6, "y": 3, "w": 6, "h": 4 },
+            "pos": {
+              "x": 6,
+              "y": 3,
+              "w": 6,
+              "h": 4
+            },
             "config": {}
           },
           {
             "id": "agent-activity",
             "kind": "widget",
             "widgetType": "dev-agent-activity",
-            "pos": { "x": 0, "y": 7, "w": 4, "h": 5 },
+            "pos": {
+              "x": 0,
+              "y": 7,
+              "w": 4,
+              "h": 5
+            },
             "config": {}
           },
           {
             "id": "pod-status",
             "kind": "widget",
             "widgetType": "dev-pod-status",
-            "pos": { "x": 4, "y": 7, "w": 4, "h": 5 },
+            "pos": {
+              "x": 4,
+              "y": 7,
+              "w": 4,
+              "h": 5
+            },
             "config": {}
           },
           {
             "id": "quick-links",
             "kind": "widget",
             "widgetType": "dev-quick-links",
-            "pos": { "x": 8, "y": 7, "w": 4, "h": 5 },
+            "pos": {
+              "x": 8,
+              "y": 7,
+              "w": 4,
+              "h": 5
+            },
             "config": {}
           },
           {
             "id": "cost-summary",
             "kind": "widget",
             "widgetType": "dev-cost-summary",
-            "pos": { "x": 0, "y": 12, "w": 12, "h": 3 },
+            "pos": {
+              "x": 0,
+              "y": 12,
+              "w": 12,
+              "h": 3
+            },
             "config": {}
           }
         ]
@@ -695,46 +869,97 @@
   "bentoLayout": [
     {
       "widgetType": "welcome-header",
-      "pos": { "x": 0, "y": 0, "w": 12, "h": 2 },
+      "pos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 2
+      },
       "config": {}
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 0, "y": 2, "w": 3, "h": 2 },
-      "config": { "profileSlug": "service", "label": "Services" }
-    },
-    {
-      "widgetType": "entity-count",
-      "pos": { "x": 3, "y": 2, "w": 3, "h": 2 },
-      "config": { "profileSlug": "vendor", "label": "Vendors" }
-    },
-    {
-      "widgetType": "entity-count",
-      "pos": { "x": 6, "y": 2, "w": 3, "h": 2 },
+      "pos": {
+        "x": 0,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
       "config": {
         "profileSlug": "service",
-        "label": "Healthy",
-        "filter": { "health-status": "Healthy" }
+        "label": "Services"
       }
     },
     {
       "widgetType": "entity-count",
-      "pos": { "x": 9, "y": 2, "w": 3, "h": 2 },
-      "config": { "profileSlug": "environment", "label": "Environments" }
+      "pos": {
+        "x": 3,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "vendor",
+        "label": "Vendors"
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": {
+        "x": 6,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "service",
+        "label": "Healthy",
+        "filter": {
+          "health-status": "Healthy"
+        }
+      }
+    },
+    {
+      "widgetType": "entity-count",
+      "pos": {
+        "x": 9,
+        "y": 2,
+        "w": 3,
+        "h": 2
+      },
+      "config": {
+        "profileSlug": "environment",
+        "label": "Environments"
+      }
     },
     {
       "widgetType": "dev-service-health",
-      "pos": { "x": 0, "y": 4, "w": 3, "h": 3 },
+      "pos": {
+        "x": 0,
+        "y": 4,
+        "w": 3,
+        "h": 3
+      },
       "config": {}
     },
     {
       "widgetType": "dev-cost-summary",
-      "pos": { "x": 3, "y": 4, "w": 3, "h": 3 },
+      "pos": {
+        "x": 3,
+        "y": 4,
+        "w": 3,
+        "h": 3
+      },
       "config": {}
     },
     {
       "widgetType": "dev-quick-links",
-      "pos": { "x": 6, "y": 4, "w": 6, "h": 3 },
+      "pos": {
+        "x": 6,
+        "y": 4,
+        "w": 6,
+        "h": 3
+      },
       "config": {
         "title": "Quick Links",
         "links": [
@@ -773,7 +998,12 @@
     },
     {
       "widgetType": "entity-list",
-      "pos": { "x": 0, "y": 7, "w": 6, "h": 5 },
+      "pos": {
+        "x": 0,
+        "y": 7,
+        "w": 6,
+        "h": 5
+      },
       "config": {
         "profileSlug": "service",
         "title": "All Services",
@@ -782,28 +1012,57 @@
     },
     {
       "widgetType": "entity-list",
-      "pos": { "x": 6, "y": 7, "w": 3, "h": 5 },
-      "config": { "profileSlug": "vendor", "title": "Vendors", "limit": 8 }
+      "pos": {
+        "x": 6,
+        "y": 7,
+        "w": 3,
+        "h": 5
+      },
+      "config": {
+        "profileSlug": "vendor",
+        "title": "Vendors",
+        "limit": 8
+      }
     },
     {
       "widgetType": "feed",
-      "pos": { "x": 9, "y": 7, "w": 3, "h": 5 },
+      "pos": {
+        "x": 9,
+        "y": 7,
+        "w": 3,
+        "h": 5
+      },
       "config": {}
     },
     {
       "kind": "view",
       "viewName": "Deploy Timeline",
-      "pos": { "x": 0, "y": 12, "w": 12, "h": 4 }
+      "pos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 4
+      }
     },
     {
       "kind": "view",
       "viewName": "Vendor Costs",
-      "pos": { "x": 0, "y": 16, "w": 6, "h": 4 }
+      "pos": {
+        "x": 0,
+        "y": 16,
+        "w": 6,
+        "h": 4
+      }
     },
     {
       "kind": "view",
       "viewName": "Service Health",
-      "pos": { "x": 6, "y": 16, "w": 6, "h": 4 }
+      "pos": {
+        "x": 6,
+        "y": 16,
+        "w": 6,
+        "h": 4
+      }
     }
   ],
   "suggestedEntities": [
@@ -1355,68 +1614,96 @@
           "fieldMapping": {
             "health-status": {
               "slot": "health-status",
-              "renderer": { "type": "badge", "size": "md" },
+              "renderer": {
+                "type": "badge",
+                "size": "md"
+              },
               "showLabel": false,
               "order": 1
             },
             "service-type": {
               "slot": "service-type",
-              "renderer": { "type": "badge", "size": "sm" },
+              "renderer": {
+                "type": "badge",
+                "size": "sm"
+              },
               "showLabel": false,
               "order": 2
             },
             "environment": {
               "slot": "environment",
-              "renderer": { "type": "badge", "size": "sm" },
+              "renderer": {
+                "type": "badge",
+                "size": "sm"
+              },
               "label": "Environment",
               "order": 3
             },
             "port": {
               "slot": "port",
-              "renderer": { "type": "number" },
+              "renderer": {
+                "type": "number"
+              },
               "label": "Port",
               "order": 4
             },
             "deployment-branch": {
               "slot": "deployment-branch",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "label": "Branch",
               "order": 5
             },
             "last-deploy": {
               "slot": "last-deploy",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "label": "Last Deploy",
               "order": 6
             },
             "tech-stack": {
               "slot": "tech-stack",
-              "renderer": { "type": "badge" },
+              "renderer": {
+                "type": "badge"
+              },
               "label": "Tech Stack",
               "order": 7
             },
             "service-url": {
               "slot": "service-url",
-              "renderer": { "type": "link" },
+              "renderer": {
+                "type": "link"
+              },
               "label": "Service URL",
               "order": 8
             },
             "github-url": {
               "slot": "github-url",
-              "renderer": { "type": "link" },
+              "renderer": {
+                "type": "link"
+              },
               "label": "GitHub",
               "order": 9
             },
             "health-endpoint": {
               "slot": "health-endpoint",
-              "renderer": { "type": "link" },
+              "renderer": {
+                "type": "link"
+              },
               "label": "Health Check",
               "order": 10
             }
           }
         },
-        "colors": { "accent": "#3B82F6" },
-        "styling": { "borderRadius": "10px" }
+        "colors": {
+          "accent": "#3B82F6"
+        },
+        "styling": {
+          "borderRadius": "10px"
+        }
       }
     },
     {
@@ -1453,56 +1740,80 @@
           "fieldMapping": {
             "vendor-status": {
               "slot": "vendor-status",
-              "renderer": { "type": "badge", "size": "md" },
+              "renderer": {
+                "type": "badge",
+                "size": "md"
+              },
               "showLabel": false,
               "order": 1
             },
             "vendor-type": {
               "slot": "vendor-type",
-              "renderer": { "type": "badge", "size": "sm" },
+              "renderer": {
+                "type": "badge",
+                "size": "sm"
+              },
               "showLabel": false,
               "order": 2
             },
             "pricing-model": {
               "slot": "pricing-model",
-              "renderer": { "type": "badge", "size": "sm" },
+              "renderer": {
+                "type": "badge",
+                "size": "sm"
+              },
               "label": "Pricing",
               "order": 3
             },
             "monthly-cost": {
               "slot": "monthly-cost",
-              "renderer": { "type": "number", "format": "currency" },
+              "renderer": {
+                "type": "number",
+                "format": "currency"
+              },
               "label": "Monthly Cost",
               "order": 4
             },
             "vendor-url": {
               "slot": "vendor-url",
-              "renderer": { "type": "link" },
+              "renderer": {
+                "type": "link"
+              },
               "label": "Website",
               "order": 5
             },
             "admin-url": {
               "slot": "admin-url",
-              "renderer": { "type": "link" },
+              "renderer": {
+                "type": "link"
+              },
               "label": "Admin Console",
               "order": 6
             },
             "docs-url": {
               "slot": "docs-url",
-              "renderer": { "type": "link" },
+              "renderer": {
+                "type": "link"
+              },
               "label": "Documentation",
               "order": 7
             },
             "status-page-url": {
               "slot": "status-page-url",
-              "renderer": { "type": "link" },
+              "renderer": {
+                "type": "link"
+              },
               "label": "Status Page",
               "order": 8
             }
           }
         },
-        "colors": { "accent": "#8B5CF6" },
-        "styling": { "borderRadius": "10px" }
+        "colors": {
+          "accent": "#8B5CF6"
+        },
+        "styling": {
+          "borderRadius": "10px"
+        }
       }
     },
     {
@@ -1534,38 +1845,55 @@
           "fieldMapping": {
             "env-status": {
               "slot": "env-status",
-              "renderer": { "type": "badge", "size": "md" },
+              "renderer": {
+                "type": "badge",
+                "size": "md"
+              },
               "showLabel": false,
               "order": 1
             },
             "env-type": {
               "slot": "env-type",
-              "renderer": { "type": "badge", "size": "sm" },
+              "renderer": {
+                "type": "badge",
+                "size": "sm"
+              },
               "showLabel": false,
               "order": 2
             },
             "branch": {
               "slot": "branch",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "label": "Branch",
               "order": 3
             },
             "last-deploy": {
               "slot": "last-deploy",
-              "renderer": { "type": "date", "format": "relative" },
+              "renderer": {
+                "type": "date",
+                "format": "relative"
+              },
               "label": "Last Deploy",
               "order": 4
             },
             "env-url": {
               "slot": "env-url",
-              "renderer": { "type": "link" },
+              "renderer": {
+                "type": "link"
+              },
               "label": "URL",
               "order": 5
             }
           }
         },
-        "colors": { "accent": "#10B981" },
-        "styling": { "borderRadius": "10px" }
+        "colors": {
+          "accent": "#10B981"
+        },
+        "styling": {
+          "borderRadius": "10px"
+        }
       }
     },
     {
@@ -1597,50 +1925,71 @@
           "fieldMapping": {
             "ci-status": {
               "slot": "ci-status",
-              "renderer": { "type": "badge", "size": "md" },
+              "renderer": {
+                "type": "badge",
+                "size": "md"
+              },
               "showLabel": false,
               "order": 1
             },
             "language": {
               "slot": "language",
-              "renderer": { "type": "badge", "size": "sm" },
+              "renderer": {
+                "type": "badge",
+                "size": "sm"
+              },
               "showLabel": false,
               "order": 2
             },
             "main-branch": {
               "slot": "main-branch",
-              "renderer": { "type": "text" },
+              "renderer": {
+                "type": "text"
+              },
               "label": "Main Branch",
               "order": 3
             },
             "package-manager": {
               "slot": "package-manager",
-              "renderer": { "type": "badge", "size": "sm" },
+              "renderer": {
+                "type": "badge",
+                "size": "sm"
+              },
               "label": "Package Manager",
               "order": 4
             },
             "monorepo": {
               "slot": "monorepo",
-              "renderer": { "type": "checkbox" },
+              "renderer": {
+                "type": "checkbox"
+              },
               "label": "Monorepo",
               "order": 5
             },
             "repo-url": {
               "slot": "repo-url",
-              "renderer": { "type": "link" },
+              "renderer": {
+                "type": "link"
+              },
               "label": "Repository",
               "order": 6
             },
             "ci-url": {
               "slot": "ci-url",
-              "renderer": { "type": "link" },
+              "renderer": {
+                "type": "link"
+              },
               "label": "CI Dashboard",
               "order": 7
             }
           }
         },
-        "colors": { "accent": "#F97316" },
-        "styling": { "borderRadius": "10px" }
+        "colors": {
+          "accent": "#F97316"
+        },
+        "styling": {
+          "borderRadius": "10px"
+        }
       }
     }
   ],
@@ -1677,5 +2026,47 @@
     }
   ],
   "capabilities": [],
-  "playbooks": []
+  "playbooks": [],
+  "onboarding": {
+    "goal": "Capture the user's infrastructure surface \u2014 the services they run, the repositories behind them, their environments, the vendors they depend on, and their credentials inventory \u2014 so the command center reflects their real stack.",
+    "framing": "Act as a staff platform engineer doing an infra walkthrough. Tease out what's running in production, where the code lives, how environments are laid out, which third parties they depend on, and what secrets need tracking. Translate that into services, repositories, environments, vendors, and credentials.",
+    "collect": [
+      {
+        "profileSlug": "service",
+        "what": "The services / apps they run and their stack",
+        "cardinality": "several",
+        "keyFields": ["title", "service-type", "service-url", "tech-stack"]
+      },
+      {
+        "profileSlug": "repository",
+        "what": "The repositories behind those services",
+        "cardinality": "several",
+        "keyFields": ["title", "repo-url", "main-branch", "language"]
+      },
+      {
+        "profileSlug": "environment",
+        "what": "Their deployment environments (prod, staging, etc.)",
+        "cardinality": "few",
+        "keyFields": ["title", "env-type", "env-url", "branch"]
+      },
+      {
+        "profileSlug": "vendor",
+        "what": "The third-party vendors / SaaS they depend on and their cost",
+        "cardinality": "several",
+        "keyFields": ["title", "vendor-type", "monthly-cost", "vendor-url"]
+      },
+      {
+        "profileSlug": "credential",
+        "what": "The credentials / secrets that need tracking and rotation",
+        "cardinality": "few",
+        "keyFields": ["title", "credential-type", "service-name", "expires-at"]
+      }
+    ],
+    "openingQuestions": [
+      "What services are running in production right now, and what's each built on?",
+      "Where does the code live, and how are your environments laid out?",
+      "Which vendors do you depend on, and what credentials need tracking?"
+    ],
+    "doneWhen": "Their running services and repositories exist, environments are mapped, key vendors are captured with cost, and the credentials inventory is started."
+  }
 }

@@ -113,6 +113,8 @@ export interface WorkspaceDefinitionInput {
   description?: string;
   /** Free-form subtype, e.g. "brand-library", "research-library". No fixed enum. */
   workspaceSubtype?: string;
+  /** Per-workspace onboarding context — written to settings.onboarding. */
+  onboarding?: WorkspaceSettings["onboarding"];
   /** Discovery/read visibility. Write access remains role-based. */
   workspaceVisibility?: WorkspaceVisibility;
   /** Capability ids this workspace provides or consumes. */
@@ -388,6 +390,7 @@ const WorkspaceDefinitionSchema = z
     displayTemplates: z.array(z.record(z.string(), z.unknown())).optional(),
     profileEntityBentoTemplates: z.record(z.string(), z.unknown()).optional(),
     layoutConfig: z.record(z.string(), z.unknown()).optional(),
+    onboarding: z.record(z.string(), z.unknown()).optional(),
     workspaceSubtype: z.string().optional(),
     workspaceVisibility: z.string().optional(),
     workspaceCapabilities: z.array(z.string()).optional(),
@@ -555,6 +558,10 @@ export async function createWorkspaceFromDefinition(
   }
   if (definition.workspaceSubtype) {
     settings.workspaceSubtype = definition.workspaceSubtype;
+  }
+  if (definition.onboarding) {
+    settings.onboarding =
+      definition.onboarding as WorkspaceSettings["onboarding"];
   }
   if (definition.workspaceVisibility) {
     settings.workspaceVisibility = definition.workspaceVisibility;

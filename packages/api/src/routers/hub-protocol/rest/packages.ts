@@ -115,6 +115,7 @@ const PackageApplySchema = z.object({
     .record(z.string(), z.record(z.string(), z.unknown()))
     .optional(),
   layoutConfig: z.record(z.string(), z.unknown()).optional(),
+  onboarding: z.record(z.string(), z.unknown()).optional(),
   extends: z
     .array(
       z.object({

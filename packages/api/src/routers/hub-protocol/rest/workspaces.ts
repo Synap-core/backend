@@ -405,6 +405,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
             accessKind: membership ? "member" : "pod_visible",
             workspaceType: workspace.workspaceType,
             workspaceSubtype: settings.workspaceSubtype ?? null,
+            onboarding: settings.onboarding ?? null,
             workspaceVisibility: settings.workspaceVisibility ?? "members",
             workspaceCapabilities: settings.workspaceCapabilities ?? [],
             sourceRoles: settings.sourceRoles ?? {},

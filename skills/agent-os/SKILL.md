@@ -96,10 +96,30 @@ credentials (OAuth/API key), so **ask before connecting**: "CRM can connect to
 Gmail for email sync. Connect now or skip?" Skipped capabilities can be added
 later via `POST /api/hub/capabilities/apply`.
 
-### 7. Summarize
+### 7. Hand off to per-workspace onboarding (Tier 2)
+
+The templates create the _structure_ (profiles, views, dashboards) — but the
+workspaces start empty. Now populate them with real data by running the shared
+**`onboard`** skill once per workspace, in sensible order (foundational domain
+first — e.g. Brand/Content before Marketing campaigns, so later workspaces can
+reference earlier data).
+
+For each newly created workspace:
+
+1. Switch scope to it (`synap use <workspaceId>` or pass workspaceId).
+2. Run the `onboard` skill — it reads that workspace's `settings.onboarding`
+   (declared by its template) and runs an adaptive interview to collect the
+   right structured data.
+3. Finish that workspace, tell the user what's captured, then move to the next.
+
+Don't dump all interviews at once. One workspace, complete it, then the next.
+The user can also defer: "set up CRM now, the rest later" is fine.
+
+### 8. Summarize
 
 "Your Agent OS is ready: **CRM, Dev Dashboard, Project Management** — all under
-the **<project>** project. Run `synap orient` to see them."
+the **<project>** project. I've onboarded CRM (pipeline + 4 accounts). Want to
+onboard the others now, or later?"
 
 ## Principles
 

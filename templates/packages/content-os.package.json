@@ -2612,5 +2612,51 @@
       "templateKey": "nango-google"
     }
   ],
-  "playbooks": []
+  "playbooks": [],
+  "onboarding": {
+    "goal": "Capture the user's brand voice, audience, content pillars, and publishing rhythm across channels \u2014 so the workspace reflects how they actually create and distribute content, not a generic calendar.",
+    "framing": "Act as a seasoned content strategist. Tease out their voice and positioning, who they're talking to, the recurring themes they own, the channels they publish on, and how often. Translate that into pillars, platforms, and a seeded content calendar.",
+    "collect": [
+      {
+        "profileSlug": "pillar",
+        "what": "Their recurring content themes / brand voice \u2014 the lenses their audience knows them for, and who each speaks to",
+        "cardinality": "few",
+        "keyFields": [
+          "title",
+          "pillar-audience",
+          "pillar-goal",
+          "posting-frequency"
+        ]
+      },
+      {
+        "profileSlug": "platform",
+        "what": "The channels they publish on and the rhythm of each",
+        "cardinality": "several",
+        "keyFields": [
+          "title",
+          "platform-type",
+          "platform-posting-freq",
+          "follower-count"
+        ]
+      },
+      {
+        "profileSlug": "post",
+        "what": "A few real or upcoming pieces to seed the content calendar",
+        "cardinality": "few",
+        "keyFields": ["title", "post-platform", "post-pillar", "publish-date"]
+      },
+      {
+        "profileSlug": "campaign",
+        "what": "Any active initiative or launch the content ladders up to",
+        "cardinality": "one",
+        "keyFields": ["title", "campaign-type", "campaign-kpi"]
+      }
+    ],
+    "openingQuestions": [
+      "How would you describe your voice, and who are you really creating for?",
+      "What are the 3-4 themes you keep coming back to \u2014 the things your audience knows you for?",
+      "Which channels do you publish on, and how often on each?"
+    ],
+    "doneWhen": "Their pillars and primary platforms exist with a realistic cadence, and a handful of posts sit on the content calendar."
+  }
 }

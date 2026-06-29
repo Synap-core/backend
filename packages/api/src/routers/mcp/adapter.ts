@@ -493,7 +493,7 @@ export async function executeMCPToolViaHubProtocol(
         .from(workspaceMembers)
         .where(eq(workspaceMembers.userId, userId));
       const wsIds = memberRows.map((r) => r.workspaceId);
-      const wsList =
+      const wsRaw =
         wsIds.length > 0
           ? await db
               .select({
@@ -501,10 +501,27 @@ export async function executeMCPToolViaHubProtocol(
                 name: workspaces.name,
                 description: workspaces.description,
                 domain: workspaces.domain,
+                settings: workspaces.settings,
               })
               .from(workspaces)
               .where(inArray(workspaces.id, wsIds))
           : [];
+      // Surface an onboarding hint: a workspace declares an onboarding spec
+      // (settings.onboarding) the shared `onboard` skill can run. The skill
+      // itself checks sparseness before interviewing.
+      const wsList = wsRaw.map((w) => ({
+        id: w.id,
+        name: w.name,
+        description: w.description,
+        domain: w.domain,
+        onboarding: (w.settings as { onboarding?: { goal?: string } } | null)
+          ?.onboarding
+          ? {
+              goal: (w.settings as { onboarding: { goal?: string } }).onboarding
+                .goal,
+            }
+          : undefined,
+      }));
       // Fetch profiles for first workspace as a representative sample
       const firstWsId = wsIds[0];
       const profiles = firstWsId
