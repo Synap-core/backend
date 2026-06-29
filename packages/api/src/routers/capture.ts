@@ -1148,10 +1148,12 @@ export const captureRouter = router({
       // approval), so the membership write lands here — the project mirror of
       // how `workspaceId` is stamped on the entity. Idempotent, best-effort.
       if (input.projectId) {
-        const newEntityIds = created
-          .filter((c) => !c.linked)
-          .map((c) => c.entityId);
-        for (const entityId of newEntityIds) {
+        // Link ALL captured entities — fresh AND dedup-merged. If you capture
+        // something into a project and it merges into an existing entity, that
+        // entity now belongs to the project too (linkEntityToProject is
+        // idempotent + best-effort, so re-linking an existing member is a no-op).
+        const entityIdsToLink = created.map((c) => c.entityId);
+        for (const entityId of entityIdsToLink) {
           await linkEntityToProject(database, {
             entityId,
             projectId: input.projectId,
