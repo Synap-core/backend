@@ -66,6 +66,22 @@ export interface CapabilityCardVerb {
   governance: "auto" | "propose";
   /** enabled AND (no connection required OR connection connected). */
   runnable: boolean;
+  /** Parameter names the verb accepts — for `cap run <verb> --<param> …` hints. */
+  params: string[];
+}
+
+/** Extract parameter NAMES from a skill `parameters` blob (JSON-schema or flat). */
+function extractParamNames(schema: unknown): string[] {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return [];
+  const obj = schema as Record<string, unknown>;
+  if (
+    obj.properties &&
+    typeof obj.properties === "object" &&
+    !Array.isArray(obj.properties)
+  ) {
+    return Object.keys(obj.properties as Record<string, unknown>);
+  }
+  return Object.keys(obj);
 }
 
 export interface CapabilityCard {
@@ -371,6 +387,7 @@ export async function buildCapabilityCatalog(
             id: skills.id,
             name: skills.name,
             approved: skills.approved,
+            parameters: skills.parameters,
           })
           .from(skills)
           .where(inArray(skills.id, memberSkillIds))
@@ -424,6 +441,7 @@ export async function buildCapabilityCatalog(
           enabled,
           governance: verbGovernance(type),
           runnable: enabled && connectionOk,
+          params: extractParamNames(s.parameters),
         };
       });
 
@@ -467,6 +485,7 @@ export async function buildCapabilityCatalog(
         enabled: false,
         governance: verbGovernance(type),
         runnable: false,
+        params: extractParamNames((s as { parameters?: unknown }).parameters),
       };
     });
 
