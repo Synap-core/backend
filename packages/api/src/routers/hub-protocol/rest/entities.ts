@@ -328,6 +328,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
               "Pure-narrowing; cannot widen access past the user floor."
           ),
         limit: z.string().optional(),
+        offset: z
+          .string()
+          .optional()
+          .describe(
+            "Zero-based offset for cursor-free pagination (default 0)."
+          ),
         sort: z.string().optional().describe("e.g. `updatedAt:desc`."),
         scope: z
           .enum(["pod", "workspace", "all"])
@@ -387,8 +393,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const limitRaw = query.limit;
     const limit = Math.min(
       Math.max(parseInt(limitRaw ?? "20", 10) || 20, 1),
-      100
+      1000
     );
+    const offset = Math.max(parseInt(query.offset ?? "0", 10) || 0, 0);
     const sortParam = (query.sort ?? "").trim();
     const scope = query.scope;
     // Default TRUE: a workspace lens should include pod-wide globals (the caller's
@@ -493,6 +500,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         workspaceId: workspaceIdParam || undefined,
         profileSlug: profileSlug || undefined,
         limit,
+        offset,
         includePodWide,
         ...(projectIdParam ? { projectId: projectIdParam } : {}),
       });

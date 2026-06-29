@@ -35,6 +35,7 @@ export const entitiesRouter = router({
          */
         type: z.string().optional(),
         limit: z.number().optional(),
+        offset: z.number().min(0).optional(),
         /**
          * Project focus lens — narrows to the project (its entity + everything
          * that belongs_to it). Pure-narrowing, orthogonal to workspaceId.
@@ -68,6 +69,7 @@ export const entitiesRouter = router({
       const result = await caller.list({
         profileSlug: profileSlug ?? undefined,
         limit: input.limit || 50,
+        offset: input.offset ?? 0,
         ...(input.projectId ? { projectId: input.projectId } : {}),
         ...(input.includePodWide !== undefined
           ? { includePodWide: input.includePodWide }
