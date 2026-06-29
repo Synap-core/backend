@@ -17588,6 +17588,127 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 	}>>;
+	projects: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				limit?: number | undefined;
+				offset?: number | undefined;
+				status?: "active" | "archived" | "completed" | undefined;
+			} | undefined;
+			output: {
+				items: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					name: string;
+					description: string | null;
+					status: "active" | "archived" | "completed";
+					settings: unknown;
+					metadata: unknown;
+					createdAt: Date;
+					updatedAt: Date;
+				}[];
+				pagination: {
+					hasMore: boolean;
+					total?: number;
+					limit: number;
+					offset: number;
+				};
+				projects: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					name: string;
+					description: string | null;
+					status: "active" | "archived" | "completed";
+					settings: unknown;
+					metadata: unknown;
+					createdAt: Date;
+					updatedAt: Date;
+				}[];
+			};
+			meta: object;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				project: {
+					name: string;
+					userId: string;
+					workspaceId: string | null;
+					id: string;
+					updatedAt: Date;
+					createdAt: Date;
+					metadata: unknown;
+					status: "active" | "archived" | "completed";
+					description: string | null;
+					settings: unknown;
+				};
+			};
+			meta: object;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				name: string;
+				description?: string | undefined;
+				status?: "active" | "archived" | "completed" | undefined;
+				settings?: Record<string, unknown> | undefined;
+				metadata?: Record<string, unknown> | undefined;
+			};
+			output: {
+				status: string;
+				projectId: string;
+				proposalId: string;
+			} | {
+				status: string;
+				projectId: string;
+				proposalId?: undefined;
+			};
+			meta: object;
+		}>;
+		update: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				name?: string | undefined;
+				description?: string | undefined;
+				status?: "active" | "archived" | "completed" | undefined;
+				settings?: Record<string, unknown> | undefined;
+				metadata?: Record<string, unknown> | undefined;
+			};
+			output: {
+				status: string;
+				proposalId: string;
+			} | {
+				status: string;
+				proposalId?: undefined;
+			};
+			meta: object;
+		}>;
+		delete: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
+			output: {
+				status: string;
+				proposalId: string;
+			} | {
+				status: string;
+				proposalId?: undefined;
+			};
+			meta: object;
+		}>;
+	}>>;
 }>>;
 export type AppRouter = typeof coreRouter;
 

@@ -5,7 +5,7 @@
     "color": "#8B5CF6",
     "tags": ["pkm", "second-brain", "knowledge", "reading", "life-os", "notes"]
   },
-  "workspaceName": "Second Brain \u2014 Knowledge OS",
+  "workspaceName": "Second Brain — Knowledge OS",
   "description": "A sovereign personal knowledge management workspace. Capture everything, connect ideas, build your external brain.",
   "workspaceType": "personal",
   "workspaceSubtype": "knowledge-management",
@@ -15,7 +15,7 @@
       "displayName": "Note",
       "icon": "FileText",
       "color": "#6366F1",
-      "description": "Atomic knowledge units \u2014 your core thinking medium.",
+      "description": "Atomic knowledge units — your core thinking medium.",
       "scope": "WORKSPACE",
       "properties": [
         {
@@ -183,7 +183,7 @@
       "displayName": "Book",
       "icon": "BookOpen",
       "color": "#F59E0B",
-      "description": "Your reading library \u2014 track books, progress and insights.",
+      "description": "Your reading library — track books, progress and insights.",
       "scope": "WORKSPACE",
       "properties": [
         {
@@ -337,65 +337,6 @@
           "label": "Avatar URL",
           "valueType": "string",
           "inputType": "url"
-        }
-      ]
-    },
-    {
-      "slug": "project",
-      "displayName": "Project",
-      "icon": "FolderOpen",
-      "color": "#F97316",
-      "description": "Bounded efforts with a defined outcome and timeline.",
-      "scope": "WORKSPACE",
-      "properties": [
-        {
-          "slug": "title",
-          "label": "Title",
-          "valueType": "string",
-          "inputType": "text",
-          "required": true
-        },
-        {
-          "slug": "status",
-          "label": "Status",
-          "valueType": "string",
-          "inputType": "select",
-          "enumValues": [
-            "idea",
-            "planning",
-            "active",
-            "on-hold",
-            "completed",
-            "archived"
-          ]
-        },
-        {
-          "slug": "outcome",
-          "label": "Outcome",
-          "valueType": "string",
-          "inputType": "textarea"
-        },
-        {
-          "slug": "due-date",
-          "label": "Due Date",
-          "valueType": "date",
-          "inputType": "date"
-        },
-        {
-          "slug": "progress",
-          "label": "Progress",
-          "valueType": "number",
-          "inputType": "number",
-          "constraints": {
-            "min": 0,
-            "max": 100
-          }
-        },
-        {
-          "slug": "area",
-          "label": "Area",
-          "valueType": "string",
-          "inputType": "text"
         }
       ]
     },
@@ -1101,20 +1042,6 @@
       "config": {}
     },
     {
-      "name": "Active Projects",
-      "type": "kanban",
-      "scopeProfileSlug": "project",
-      "config": {
-        "groupByField": "status"
-      }
-    },
-    {
-      "name": "All Projects",
-      "type": "table",
-      "scopeProfileSlug": "project",
-      "config": {}
-    },
-    {
       "name": "All Areas",
       "type": "table",
       "scopeProfileSlug": "area",
@@ -1596,121 +1523,6 @@
       }
     },
     {
-      "name": "Projects Dashboard",
-      "type": "bento",
-      "scopeProfileSlug": "project",
-      "config": {
-        "blocks": [
-          {
-            "id": "prd-b1",
-            "kind": "widget",
-            "widgetType": "welcome-header",
-            "pos": {
-              "x": 0,
-              "y": 0,
-              "w": 12,
-              "h": 2
-            },
-            "config": {
-              "title": "Projects",
-              "subtitle": "Your active initiatives"
-            }
-          },
-          {
-            "id": "prd-b2",
-            "kind": "widget",
-            "widgetType": "entity-count",
-            "pos": {
-              "x": 0,
-              "y": 2,
-              "w": 3,
-              "h": 2
-            },
-            "config": {
-              "profileSlug": "project",
-              "label": "Active",
-              "icon": "Play",
-              "filter": {
-                "status": "active"
-              },
-              "color": "green"
-            }
-          },
-          {
-            "id": "prd-b3",
-            "kind": "widget",
-            "widgetType": "entity-count",
-            "pos": {
-              "x": 3,
-              "y": 2,
-              "w": 3,
-              "h": 2
-            },
-            "config": {
-              "profileSlug": "project",
-              "label": "Planning",
-              "icon": "Map",
-              "filter": {
-                "status": "planning"
-              },
-              "color": "blue"
-            }
-          },
-          {
-            "id": "prd-b4",
-            "kind": "widget",
-            "widgetType": "entity-count",
-            "pos": {
-              "x": 6,
-              "y": 2,
-              "w": 3,
-              "h": 2
-            },
-            "config": {
-              "profileSlug": "project",
-              "label": "On Hold",
-              "icon": "PauseCircle",
-              "filter": {
-                "status": "on-hold"
-              },
-              "color": "amber"
-            }
-          },
-          {
-            "id": "prd-b5",
-            "kind": "widget",
-            "widgetType": "entity-count",
-            "pos": {
-              "x": 9,
-              "y": 2,
-              "w": 3,
-              "h": 2
-            },
-            "config": {
-              "profileSlug": "project",
-              "label": "Completed",
-              "icon": "CheckCircle",
-              "filter": {
-                "status": "completed"
-              },
-              "color": "purple"
-            }
-          },
-          {
-            "id": "prd-b6",
-            "kind": "view",
-            "viewName": "Active Projects",
-            "pos": {
-              "x": 0,
-              "y": 4,
-              "w": 12,
-              "h": 6
-            }
-          }
-        ]
-      }
-    },
-    {
       "name": "Quotes Dashboard",
       "type": "bento",
       "scopeProfileSlug": "quote",
@@ -1823,22 +1635,6 @@
             }
           },
           {
-            "id": "ad-b3",
-            "kind": "widget",
-            "widgetType": "entity-count",
-            "pos": {
-              "x": 6,
-              "y": 2,
-              "w": 6,
-              "h": 2
-            },
-            "config": {
-              "profileSlug": "project",
-              "label": "Total Projects",
-              "icon": "FolderOpen"
-            }
-          },
-          {
             "id": "ad-b4",
             "kind": "view",
             "viewName": "All Areas",
@@ -1863,7 +1659,7 @@
         "h": 2
       },
       "config": {
-        "title": "Good morning \u2014 Your Second Brain",
+        "title": "Good morning — Your Second Brain",
         "subtitle": "Everything you know, connected.",
         "showDate": true
       }
@@ -1963,11 +1759,6 @@
             "label": "Concepts",
             "icon": "Lightbulb",
             "profileSlug": "concept"
-          },
-          {
-            "label": "Projects",
-            "icon": "FolderOpen",
-            "profileSlug": "project"
           },
           {
             "label": "People",
@@ -2308,73 +2099,6 @@
         }
       ]
     },
-    "project": {
-      "blocks": [
-        {
-          "id": "project-eb-b1",
-          "kind": "widget",
-          "widgetType": "entity-spotlight",
-          "pos": {
-            "x": 0,
-            "y": 0,
-            "w": 8,
-            "h": 3
-          },
-          "config": {
-            "seed": "pinned",
-            "layout": "detail"
-          }
-        },
-        {
-          "id": "project-eb-b2",
-          "kind": "widget",
-          "widgetType": "entity-count",
-          "pos": {
-            "x": 8,
-            "y": 0,
-            "w": 4,
-            "h": 3
-          },
-          "config": {
-            "profileSlug": "idea",
-            "label": "Ideas",
-            "icon": "Zap"
-          }
-        },
-        {
-          "id": "project-eb-b3",
-          "kind": "widget",
-          "widgetType": "entity-list",
-          "pos": {
-            "x": 0,
-            "y": 3,
-            "w": 6,
-            "h": 4
-          },
-          "config": {
-            "profileSlug": "note",
-            "title": "Project Notes",
-            "limit": 8
-          }
-        },
-        {
-          "id": "project-eb-b4",
-          "kind": "widget",
-          "widgetType": "entity-list",
-          "pos": {
-            "x": 6,
-            "y": 3,
-            "w": 6,
-            "h": 4
-          },
-          "config": {
-            "profileSlug": "idea",
-            "title": "Ideas",
-            "limit": 8
-          }
-        }
-      ]
-    },
     "area": {
       "blocks": [
         {
@@ -2390,39 +2114,6 @@
           "config": {
             "seed": "pinned",
             "layout": "detail"
-          }
-        },
-        {
-          "id": "area-eb-b2",
-          "kind": "widget",
-          "widgetType": "entity-count",
-          "pos": {
-            "x": 8,
-            "y": 0,
-            "w": 4,
-            "h": 3
-          },
-          "config": {
-            "profileSlug": "project",
-            "label": "Projects",
-            "icon": "FolderOpen",
-            "color": "green"
-          }
-        },
-        {
-          "id": "area-eb-b3",
-          "kind": "widget",
-          "widgetType": "entity-list",
-          "pos": {
-            "x": 0,
-            "y": 3,
-            "w": 12,
-            "h": 4
-          },
-          "config": {
-            "profileSlug": "project",
-            "title": "Projects",
-            "limit": 10
           }
         }
       ]
@@ -2442,39 +2133,6 @@
           "config": {
             "seed": "pinned",
             "layout": "detail"
-          }
-        },
-        {
-          "id": "goal-eb-b2",
-          "kind": "widget",
-          "widgetType": "metrics-summary",
-          "pos": {
-            "x": 8,
-            "y": 0,
-            "w": 4,
-            "h": 3
-          },
-          "config": {
-            "profileSlug": "project",
-            "property": "progress",
-            "aggregation": "average",
-            "title": "Avg Project Progress"
-          }
-        },
-        {
-          "id": "goal-eb-b3",
-          "kind": "widget",
-          "widgetType": "entity-list",
-          "pos": {
-            "x": 0,
-            "y": 3,
-            "w": 12,
-            "h": 4
-          },
-          "config": {
-            "profileSlug": "project",
-            "title": "Related Projects",
-            "limit": 8
           }
         }
       ]
@@ -2500,12 +2158,6 @@
       "label": "References"
     },
     {
-      "sourceProfileSlug": "note",
-      "targetProfileSlug": "project",
-      "type": "feeds-into",
-      "label": "Feeds into"
-    },
-    {
       "sourceProfileSlug": "highlight",
       "targetProfileSlug": "book",
       "type": "from",
@@ -2528,18 +2180,6 @@
       "targetProfileSlug": "person",
       "type": "written-by",
       "label": "Written by"
-    },
-    {
-      "sourceProfileSlug": "idea",
-      "targetProfileSlug": "project",
-      "type": "feeds-into",
-      "label": "Feeds into"
-    },
-    {
-      "sourceProfileSlug": "project",
-      "targetProfileSlug": "area",
-      "type": "belongs-to",
-      "label": "Belongs to"
     },
     {
       "sourceProfileSlug": "goal",
@@ -2626,12 +2266,6 @@
       },
       {
         "kind": "profile",
-        "profileSlug": "project",
-        "label": "Projects",
-        "icon": "FolderOpen"
-      },
-      {
-        "kind": "profile",
         "profileSlug": "area",
         "label": "Areas",
         "icon": "Compass"
@@ -2667,15 +2301,6 @@
       "properties": {
         "description": "Physical health, mental clarity, energy.",
         "status": "active"
-      }
-    },
-    {
-      "profileSlug": "project",
-      "title": "Build My Second Brain",
-      "properties": {
-        "status": "active",
-        "outcome": "Have a fully functional PKM system capturing and connecting my knowledge.",
-        "area": "Learning & Growth"
       }
     },
     {
@@ -2764,25 +2389,15 @@
       "type": "authored-by"
     },
     {
-      "sourceRef": "note:Why I'm building a Second Brain",
-      "targetRef": "project:Build My Second Brain",
-      "type": "feeds-into"
-    },
-    {
       "sourceRef": "concept:Zettelkasten",
       "targetRef": "concept:Progressive Summarization",
       "type": "related-to"
-    },
-    {
-      "sourceRef": "project:Build My Second Brain",
-      "targetRef": "area:Learning & Growth",
-      "type": "belongs-to"
     }
   ],
   "capabilities": [],
   "playbooks": [],
   "onboarding": {
-    "goal": "Capture the shape of the user's life \u2014 their areas of focus, current goals, active projects, key people, and what they're reading or learning \u2014 so the second brain starts grounded in who they actually are.",
+    "goal": "Capture the shape of the user's life — their areas of focus, current goals, active projects, key people, and what they're reading or learning — so the second brain starts grounded in who they actually are.",
     "framing": "Act as a thoughtful personal-knowledge coach. Gently tease out the domains they care about, what they're working toward, what's in motion, who matters to them, and what they're consuming. Translate that into areas, goals, projects, people, and books.",
     "collect": [
       {
@@ -2796,12 +2411,6 @@
         "what": "The goals they're currently working toward",
         "cardinality": "few",
         "keyFields": ["title", "target-date", "area", "progress"]
-      },
-      {
-        "profileSlug": "project",
-        "what": "The concrete projects in motion right now",
-        "cardinality": "several",
-        "keyFields": ["title", "status", "due-date", "area"]
       },
       {
         "profileSlug": "person",
@@ -2818,7 +2427,7 @@
     ],
     "openingQuestions": [
       "What are the main areas of your life you want to keep on top of?",
-      "What are you working toward right now \u2014 any goals or projects in motion?",
+      "What are you working toward right now — any goals or projects in motion?",
       "Who are the people that matter most, and what are you reading these days?"
     ],
     "doneWhen": "Their core life areas exist, a few current goals and active projects are captured, key people are added, and what they're reading is seeded."
