@@ -14,13 +14,7 @@ import {
   WireProposalSchema,
 } from "./_codecs/proposal.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import {
-  getCaller,
-  getUserAccessibleWorkspaceIds,
-  hasScope,
-  logger,
-  type HubHono,
-} from "./_shared.js";
+import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
 import { proposalsRouter as mainProposalsRouter } from "../../proposals.js";
 import { createHubProtocolCallerContext } from "../utils.js";
@@ -182,14 +176,17 @@ export function registerProposalsRoutes(app: HubHono): void {
       (c.req.query("status") as "pending" | "approved" | "rejected" | "all") ||
       "pending";
     try {
-      const effectiveWsId =
-        workspaceId ||
-        (await getUserAccessibleWorkspaceIds(userId))[0] ||
-        undefined;
-      const caller = await getCaller(c, { workspaceId: effectiveWsId });
+      // No workspaceId = the USER-WIDE queue (the user floor), NOT an arbitrary
+      // first workspace. listProposals always applies userVisibleWhere; a
+      // workspaceId only NARROWS. The old `|| wsIds[0]` fallback silently scoped
+      // the queue to one workspace, hiding proposals everywhere else (e.g. a
+      // session proposal filed in a non-default workspace went invisible).
+      const caller = await getCaller(c, {
+        workspaceId: workspaceId ?? undefined,
+      });
       const result = await caller.proposals.listProposals({
         userId,
-        workspaceId: effectiveWsId,
+        ...(workspaceId ? { workspaceId } : {}),
         status,
         ...(sessionId ? { sessionId } : {}),
       });
