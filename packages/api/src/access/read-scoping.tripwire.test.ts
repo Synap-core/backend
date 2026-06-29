@@ -74,6 +74,12 @@ const SCOPING_HELPERS = [
   "projectMemberWhere",
   "projectLensWhere",
   "projectLens",
+  // The canonical ScopeFilter door (utils/scope-filter.ts): a procedure that
+  // resolves its lens via resolveScope() is floor-first by construction — the
+  // floor is applied in the body, the lens only narrows. Recognized so the
+  // collapsed one-door procedures aren't false-flagged.
+  "resolveScope",
+  "ScopeFilterShape",
 ];
 
 // Per-user scoping: the row's userId pinned to the caller — `eq(t.userId,
