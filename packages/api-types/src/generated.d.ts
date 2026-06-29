@@ -4009,6 +4009,12 @@ export interface CapabilityCardConnection {
 	state: "connected" | "missing" | "expired";
 	/** connectionId (or display account) when connected. */
 	account?: string;
+	/**
+	 * True for a pod-internal credential (a `vault://<id>` secret the operator
+	 * holds) rather than a third-party OAuth (nango://) connection. Lets surfaces
+	 * distinguish "internal key" from "external account" without re-parsing refs.
+	 */
+	internal?: boolean;
 }
 /** A single declared parameter of a verb (richer than `params: string[]`). */
 export interface CapabilityCardVerbParam {
@@ -9667,6 +9673,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: CapabilityCard[];
 			meta: object;
 		}>;
+		setToolEnabled: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				skillId: string;
+				enabled: boolean;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
 		install: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				workspaceId: string;
@@ -9674,6 +9690,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				definition?: any;
 			};
 			output: CreateCapabilityResult;
+			meta: object;
+		}>;
+		uninstall: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				capabilityId: string;
+			};
+			output: {
+				success: true;
+				deleted: {
+					tools: number;
+					skills: number;
+				};
+			};
 			meta: object;
 		}>;
 		execute: import("@trpc/server").TRPCMutationProcedure<{

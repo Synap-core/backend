@@ -19,6 +19,7 @@ import {
   intelligenceServices,
   automations,
   skills,
+  capabilities as capabilitiesTable,
   eq,
   and,
   or,
@@ -39,6 +40,7 @@ import {
   loadCapabilityTemplate,
 } from "../services/capabilities/create-from-definition.js";
 import { executeCapability } from "../services/capabilities/execute-capability.js";
+import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
 
 const logger = createLogger({ module: "capabilities" });
 
@@ -234,6 +236,48 @@ export const capabilitiesRouter = router({
           workspaceId: input.workspaceId,
         }
       );
+    }),
+
+  /**
+   * Uninstall a capability container and its orphaned members (tools + skills).
+   *
+   * Auth: pod-scoped container (workspaceId=null) → pod admin; workspace-scoped
+   * container → workspace owner. Members shared with another container are kept;
+   * only orphaned members (linked to NO other container) are deleted. All steps
+   * run in a single transaction.
+   */
+  uninstall: protectedProcedure
+    .input(z.object({ capabilityId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      // Load the container to determine scope — never trust caller-supplied scope.
+      const [container] = await db
+        .select({ id: capabilitiesTable.id, workspaceId: capabilitiesTable.workspaceId })
+        .from(capabilitiesTable)
+        .where(eq(capabilitiesTable.id, input.capabilityId))
+        .limit(1);
+
+      if (!container) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Capability not found",
+        });
+      }
+
+      if (container.workspaceId !== null) {
+        const role = await getWorkspaceRole(userId, container.workspaceId);
+        if (role !== "owner") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only workspace owners can uninstall workspace capabilities.",
+          });
+        }
+      } else {
+        await requirePodAdmin(userId);
+      }
+
+      return uninstallCapability(input.capabilityId, ctx);
     }),
 
   /**
