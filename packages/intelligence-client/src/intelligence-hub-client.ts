@@ -702,6 +702,11 @@ export class IntelligenceHubClient {
         name: string;
         description?: string;
       }>;
+      availableProjects?: Array<{
+        id: string;
+        name: string;
+        description?: string;
+      }>;
       previousEntities?: Array<{
         tempId: string;
         profileSlug: string;
@@ -732,6 +737,33 @@ export class IntelligenceHubClient {
     targetWorkspaceReason?: string | null;
     /** AI's confidence (0–1) in the `targetWorkspaceId` routing. */
     targetWorkspaceConfidence?: number | null;
+    /** Suggested cross-cutting project lens (mirror of `targetWorkspaceId`). */
+    targetProjectId?: string | null;
+    /** AI's reason for routing to `targetProjectId` (provenance). */
+    targetProjectReason?: string | null;
+    /** AI's confidence (0–1) in the `targetProjectId` routing. */
+    targetProjectConfidence?: number | null;
+    /**
+     * Optional structured-form spec the IS may emit to drive a guided capture
+     * form (mirror of the `targetProject*` routing fields — additive, null-safe).
+     */
+    formSpec?: {
+      title?: string;
+      note?: string;
+      fields: Array<{
+        key: string;
+        label: string;
+        type: string;
+        constraints?: {
+          enum?: string[];
+          min?: number;
+          max?: number;
+          pattern?: string;
+        };
+        required?: boolean;
+        help?: string;
+      }>;
+    } | null;
     /** Honesty markers when an input could not be fully extracted/structured. */
     degraded?: boolean;
     degradedReason?: string;

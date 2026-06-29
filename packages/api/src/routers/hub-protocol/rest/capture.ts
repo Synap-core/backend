@@ -256,6 +256,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       );
       const result = await caller.structure({
         text: body.text,
+        file: body.file,
         url: body.url,
         html: body.html,
         context: body.context,
@@ -322,6 +323,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       const result = await caller.execute({
         entities: body.entities,
         relations: body.relations ?? [],
+        projectId: body.projectId ?? undefined,
       });
       return c.json(result);
     } catch (err) {

@@ -84,6 +84,35 @@ export function hasScope(scopes: string[], required: string): boolean {
 }
 
 /**
+ * Build a short, DETERMINISTIC prose briefing from a digest's counts —
+ * NO LLM call, pure string assembly. Shared by the workspace and project
+ * digest endpoints so the two lines read identically.
+ *
+ * Examples:
+ *   "Workspace 'CRM': 42 entities across deal (18), contact (15), company (9).
+ *    Most recent: Acme renewal."
+ *   "Project 'Q3 Launch': 12 entities across task (5), note (4), spanning
+ *    2 workspaces. Most recent: Draft copy."
+ */
+export function buildDigestSummary(
+  subject: string,
+  total: number,
+  counts: Record<string, number>,
+  keyEntities: Array<{ title: string | null }>,
+  extra?: string
+): string {
+  if (total === 0) return `${subject} is empty — no entities yet.`;
+  const breakdown = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([slug, n]) => `${slug} (${n})`)
+    .join(", ");
+  const mostRecent = keyEntities[0]?.title?.trim() || "untitled";
+  return `${subject}: ${total} entities across ${breakdown}${
+    extra ? `, ${extra}` : ""
+  }. Most recent: ${mostRecent}.`;
+}
+
+/**
  * Resolve the TRUSTED acting identity + workspace for a hub-protocol REST request.
  *
  * SECURITY — closes a cross-tenant IDOR. The auth middleware already resolves the

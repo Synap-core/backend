@@ -19,6 +19,11 @@ import {
 import {
   sql,
   eq,
+  and,
+  or,
+  isNull,
+  isNotNull,
+  desc,
   getDb,
   EventRepository,
   EntityRepository,
@@ -31,9 +36,11 @@ import {
   PropertyValidationError,
   workspaces,
   workspaceMembers,
+  projects,
   type PropertyValueType,
   type IdentitySignal,
 } from "@synap/database";
+import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
@@ -472,6 +479,36 @@ export const captureRouter = router({
         description: w.description ?? undefined,
       }));
 
+      // 2b. Fetch user's PROJECTS (cross-cutting lenses) for routing hints.
+      // Scoping mirrors the Hub `/projects` list: pod-wide projects visible to
+      // their owner; workspace-scoped projects visible to workspace members.
+      const userProjectRows = await database
+        .select({
+          id: projects.id,
+          name: projects.name,
+          description: projects.description,
+        })
+        .from(projects)
+        .where(
+          and(
+            or(
+              and(isNull(projects.workspaceId), eq(projects.userId, userId)),
+              and(
+                isNotNull(projects.workspaceId),
+                userVisibleWhere(projects.workspaceId, userId)
+              )
+            ),
+            eq(projects.status, "active")
+          )
+        )
+        .orderBy(desc(projects.createdAt))
+        .limit(10);
+      const availableProjects = userProjectRows.map((p) => ({
+        id: p.id,
+        name: p.name,
+        description: p.description ?? undefined,
+      }));
+
       // 3. Call IS /api/structure
       const { client } = await resolveIntelligenceService({
         userId,
@@ -532,6 +569,8 @@ export const captureRouter = router({
         }>,
         followUp: null as string | null,
         targetWorkspaceId: null as string | null,
+        targetProjectId: null as string | null,
+        formSpec: null,
         dedupCandidates: {} as Record<
           string,
           Array<{
@@ -556,6 +595,7 @@ export const captureRouter = router({
           hints: {
             availableProfiles,
             availableWorkspaces,
+            availableProjects,
             existingEntityNames,
             previousEntities: input.previousEntities,
           },
@@ -632,6 +672,11 @@ export const captureRouter = router({
           targetWorkspaceReason: structureResult.targetWorkspaceReason ?? null,
           targetWorkspaceConfidence:
             structureResult.targetWorkspaceConfidence ?? null,
+          targetProjectId: structureResult.targetProjectId ?? null,
+          targetProjectReason: structureResult.targetProjectReason ?? null,
+          targetProjectConfidence:
+            structureResult.targetProjectConfidence ?? null,
+          formSpec: structureResult.formSpec ?? null,
           dedupCandidates: {} as Record<
             string,
             Array<{
@@ -723,6 +768,11 @@ export const captureRouter = router({
         targetWorkspaceReason: structureResult.targetWorkspaceReason ?? null,
         targetWorkspaceConfidence:
           structureResult.targetWorkspaceConfidence ?? null,
+        targetProjectId: structureResult.targetProjectId ?? null,
+        targetProjectReason: structureResult.targetProjectReason ?? null,
+        targetProjectConfidence:
+          structureResult.targetProjectConfidence ?? null,
+        formSpec: structureResult.formSpec ?? null,
         dedupCandidates,
         // Additive: true when one or more dedup searches threw, so the caller
         // can distinguish "checked, no duplicates" from "didn't check". Omitted

@@ -515,21 +515,19 @@ export async function executeMCPToolViaHubProtocol(
               .from(workspaces)
               .where(inArray(workspaces.id, wsIds))
           : [];
-      // Surface an onboarding hint: a workspace declares an onboarding spec
-      // (settings.onboarding) the shared `onboard` skill can run. The skill
-      // itself checks sparseness before interviewing.
+      // Surface the FULL onboarding spec: a workspace declares an onboarding
+      // spec (settings.onboarding) the shared `onboard` skill can run. Return
+      // the whole interview spec (goal / framing / collect / openingQuestions /
+      // doneWhen), not just `goal`, so an agent gets the complete framing. The
+      // skill itself checks sparseness before interviewing.
       const wsList = wsRaw.map((w) => ({
         id: w.id,
         name: w.name,
         description: w.description,
         domain: w.domain,
-        onboarding: (w.settings as { onboarding?: { goal?: string } } | null)
-          ?.onboarding
-          ? {
-              goal: (w.settings as { onboarding: { goal?: string } }).onboarding
-                .goal,
-            }
-          : undefined,
+        onboarding:
+          (w.settings as { onboarding?: Record<string, unknown> } | null)
+            ?.onboarding ?? undefined,
       }));
       // Fetch profiles for first workspace as a representative sample
       const firstWsId = wsIds[0];

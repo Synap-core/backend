@@ -12,6 +12,9 @@
  */
 
 import type { AskAnswer } from "./ask.js";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "knowledge-synthesize" });
 
 export interface SynthesisSource {
   substrate: string;
@@ -102,8 +105,19 @@ export async function synthesizeAnswer(
       sources,
       routedTo,
     };
-  } catch {
+  } catch (err) {
     // Synthesis unavailable — return sources so callers can still show matches.
+    // Log the real cause: this is a pod→IS transport/auth/route failure (the IS
+    // returns 200 even on LLM errors), NOT an LLM failure — without this line the
+    // cause (ECONNREFUSED / 401 key drift / 404 stale-route) is invisible.
+    logger.error(
+      {
+        err,
+        isUrl,
+        hasInternalKey: Boolean(process.env.INTELLIGENCE_HUB_INTERNAL_KEY),
+      },
+      "knowledge synthesis call to IS failed — returning sources without answer"
+    );
     return {
       answer: null,
       sources,

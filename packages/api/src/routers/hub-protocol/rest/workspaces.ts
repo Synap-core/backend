@@ -17,6 +17,7 @@ import {
   and,
   isNull,
   inArray,
+  desc,
   EventRepository,
   WorkspaceRepository,
   type AgentMetadata,
@@ -36,10 +37,12 @@ import {
   WORKSPACE_CREATE_AGENT_TYPE_ALLOWLIST,
 } from "../../../services/workspace-creation-service.js";
 import {
+  buildDigestSummary,
   getCaller,
   getUserAccessibleWorkspaceIds,
   hasScope,
   logger,
+  verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
 
@@ -183,6 +186,30 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden — not a member", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/workspaces/{workspaceId}/digest",
+    tags: ["Workspaces"],
+    summary: "Workspace data digest",
+    description:
+      "Deterministic briefing of a workspace's existing data so an agent can " +
+      "understand it before acting: entity counts per profileSlug, the most " +
+      "recently-updated entities, and a one-line prose summary (no LLM).",
+    request: {
+      params: zOpenapi.object({ workspaceId: zOpenapi.string() }),
+    },
+    responses: {
+      200: {
+        description: "Workspace digest",
+        schema: zOpenapi.record(zOpenapi.string(), zOpenapi.unknown()),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden — not a member", schema: ErrorSchema },
+      404: { description: "Workspace not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -1153,6 +1180,107 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         "GET /workspaces/:workspaceId/home failed"
       );
       return c.json({ error: "Failed to read home layout" }, 500);
+    }
+  });
+
+  /**
+   * GET /workspaces/:workspaceId/digest
+   *
+   * Deterministic "understand existing data before acting" briefing for one
+   * workspace. Counts are grouped by profileSlug (entities.type) and scoped to
+   * the exact workspace — the SAME per-workspace count semantics as the entity
+   * count in GET /workspaces (do NOT leak cross-user/cross-workspace). The
+   * summary is pure string assembly (no LLM).
+   *
+   * `/:workspaceId/digest` is a distinct literal suffix, so it never collides
+   * with the static `/workspaces/*` routes registered above.
+   */
+  app.get("/workspaces/:workspaceId/digest", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const userId = c.get("userId") as string;
+    const parsed = z
+      .object({ workspaceId: z.string().uuid() })
+      .safeParse({ workspaceId: c.req.param("workspaceId") });
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid workspaceId", details: parsed.error.issues },
+        400
+      );
+    }
+    const { workspaceId } = parsed.data;
+
+    const hasAccess = await verifyWorkspaceReadAccess(userId, workspaceId);
+    if (!hasAccess) return c.json({ error: "Access denied" }, 403);
+
+    try {
+      const ws = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspaceId),
+        columns: { name: true },
+      });
+      if (!ws) return c.json({ error: "Workspace not found" }, 404);
+
+      const baseWhere = and(
+        eq(entities.workspaceId, workspaceId),
+        isNull(entities.deletedAt)
+      );
+
+      const [countRows, recentRows] = await Promise.all([
+        db
+          .select({
+            profileSlug: entities.type,
+            count: drizzleSql<number>`cast(count(*) as integer)`,
+          })
+          .from(entities)
+          .where(baseWhere)
+          .groupBy(entities.type),
+        db
+          .select({
+            id: entities.id,
+            title: entities.title,
+            profileSlug: entities.type,
+            updatedAt: entities.updatedAt,
+          })
+          .from(entities)
+          .where(baseWhere)
+          .orderBy(desc(entities.updatedAt))
+          .limit(10),
+      ]);
+
+      const counts: Record<string, number> = {};
+      for (const row of countRows) counts[row.profileSlug] = row.count;
+      const total = countRows.reduce((sum, r) => sum + r.count, 0);
+      const keyEntities = recentRows.map((r) => ({
+        id: r.id,
+        title: r.title,
+        profileSlug: r.profileSlug,
+        updatedAt: r.updatedAt,
+      }));
+      const summary = buildDigestSummary(
+        `Workspace '${ws.name}'`,
+        total,
+        counts,
+        keyEntities
+      );
+
+      return c.json({
+        workspaceId,
+        name: ws.name,
+        total,
+        counts,
+        keyEntities,
+        summary,
+      });
+    } catch (err) {
+      logger.error(
+        { err, userId, workspaceId },
+        "GET /workspaces/:workspaceId/digest failed"
+      );
+      return c.json({ error: "Failed to build workspace digest" }, 500);
     }
   });
 

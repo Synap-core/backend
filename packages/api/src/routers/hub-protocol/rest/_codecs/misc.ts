@@ -169,7 +169,24 @@ export const CaptureStructureRequestSchema = z
     // API-key principal via resolveActingContext (body.userId ?? authUserId).
     // An explicit value is still honored for trusted on-behalf-of infra calls.
     userId: z.string().optional(),
-    text: z.string().min(1).max(8000),
+    // Optional now: a binary input (PDF/photo/docx/audio) can arrive via `file`
+    // and be normalized to text by IS's extractor before structuring. At least
+    // one of text/file/url must be present (enforced by the refinement below).
+    text: z.string().min(1).max(8000).optional(),
+    /**
+     * Binary/text source normalized to text by IS before structuring. Shape
+     * MIRRORS the tRPC capture.structure `file` input (and the IS client's
+     * `structure` arg) — `content` is base64/utf8 per `encoding`. Field names
+     * must match exactly or the tRPC zod layer strips them on passthrough.
+     */
+    file: z
+      .object({
+        content: z.string(),
+        mimeType: z.string(),
+        filename: z.string().optional(),
+        encoding: z.enum(["base64", "utf8"]).optional(),
+      })
+      .optional(),
     url: z.string().url().optional(),
     html: z.string().max(50_000).optional(),
     context: z.string().optional(),
@@ -186,6 +203,9 @@ export const CaptureStructureRequestSchema = z
       )
       .optional(),
   })
+  .refine((b) => Boolean(b.text || b.file || b.url), {
+    message: "At least one of `text`, `file`, or `url` is required",
+  })
   .openapi("CaptureStructureRequest");
 
 /** POST /capture/execute request body. */
@@ -194,6 +214,10 @@ export const CaptureExecuteRequestSchema = z
     // Optional: derived from the API-key principal when omitted (see above).
     userId: z.string().optional(),
     workspaceId: z.string().uuid().optional(),
+    // Optional cross-cutting project lens to file the new entities into. Mirrors
+    // the tRPC `capture.execute` input; without this the AI-proposed
+    // `targetProjectId` / CLI `--project` is dropped at the REST door.
+    projectId: z.string().uuid().nullish(),
     entities: z.array(
       z.object({
         tempId: z.string(),

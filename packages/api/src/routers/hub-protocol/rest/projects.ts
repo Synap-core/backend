@@ -9,19 +9,27 @@ import { z } from "zod";
 import {
   db,
   projects,
+  entities,
+  workspaces,
   eq,
   and,
   or,
   isNull,
   isNotNull,
+  inArray,
   desc,
+  drizzleSql,
   ProjectRepository,
   EventRepository,
   sql,
 } from "@synap/database";
-import { type HubHono } from "./_shared.js";
+import { buildDigestSummary, type HubHono } from "./_shared.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { userVisibleWhere } from "../../../utils/user-visible-where.js";
+import {
+  accessScopeWhere,
+  projectLensWhere,
+} from "../../../utils/project-scope.js";
 
 const CreateProjectSchema = z.object({
   name: z.string().min(1).max(255),
@@ -69,6 +77,137 @@ export function registerProjectsRoutes(app: HubHono): void {
       .limit(limit);
 
     return c.json(rows);
+  });
+
+  // Project data digest — deterministic "understand existing data before
+  // acting" briefing aggregated across the project's linked workspaces (entities
+  // filed into the project via belongs_to_project). Registered BEFORE
+  // /projects/:id so the `/:projectId/digest` literal suffix resolves cleanly.
+  // Scoping = the canonical entity floor (accessScopeWhere) AND the project lens
+  // (projectLensWhere) — the lens only narrows, never widens (no leak).
+  app.get("/projects/:projectId/digest", async (c) => {
+    const userId = c.get("userId");
+    const parsed = z
+      .object({ projectId: z.string().uuid() })
+      .safeParse({ projectId: c.req.param("projectId") });
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid projectId", details: parsed.error.issues },
+        400
+      );
+    }
+    const { projectId } = parsed.data;
+
+    // Access gate + name resolution — same visibility predicate as GET /projects/:id.
+    const project = await db.query.projects.findFirst({
+      where: and(
+        eq(projects.id, projectId),
+        or(
+          and(isNull(projects.workspaceId), eq(projects.userId, userId)),
+          and(
+            isNotNull(projects.workspaceId),
+            userVisibleWhere(projects.workspaceId, userId)
+          )
+        )!
+      ),
+      columns: { id: true, name: true },
+    });
+    if (!project) return c.json({ error: "Project not found" }, 404);
+
+    const baseWhere = and(
+      isNull(entities.deletedAt),
+      accessScopeWhere({
+        workspaceIdColumn: entities.workspaceId,
+        entityIdColumn: entities.id,
+        ownerColumn: entities.userId,
+        userId,
+      }),
+      projectLensWhere(entities.id, projectId)
+    );
+
+    const [countRows, byWorkspaceRows, recentRows] = await Promise.all([
+      db
+        .select({
+          profileSlug: entities.type,
+          count: drizzleSql<number>`cast(count(*) as integer)`,
+        })
+        .from(entities)
+        .where(baseWhere)
+        .groupBy(entities.type),
+      db
+        .select({
+          workspaceId: entities.workspaceId,
+          count: drizzleSql<number>`cast(count(*) as integer)`,
+        })
+        .from(entities)
+        .where(baseWhere)
+        .groupBy(entities.workspaceId),
+      db
+        .select({
+          id: entities.id,
+          title: entities.title,
+          profileSlug: entities.type,
+          workspaceId: entities.workspaceId,
+          updatedAt: entities.updatedAt,
+        })
+        .from(entities)
+        .where(baseWhere)
+        .orderBy(desc(entities.updatedAt))
+        .limit(10),
+    ]);
+
+    const counts: Record<string, number> = {};
+    for (const row of countRows) counts[row.profileSlug] = row.count;
+    const total = countRows.reduce((sum, r) => sum + r.count, 0);
+
+    // Resolve workspace names for the byWorkspace breakdown (null = pod-wide).
+    const wsIds = byWorkspaceRows
+      .map((r) => r.workspaceId)
+      .filter((id): id is string => id != null);
+    const wsNameRows = wsIds.length
+      ? await db
+          .select({ id: workspaces.id, name: workspaces.name })
+          .from(workspaces)
+          .where(inArray(workspaces.id, wsIds))
+      : [];
+    const wsNameById = new Map(wsNameRows.map((w) => [w.id, w.name]));
+    const byWorkspace = byWorkspaceRows.map((r) => ({
+      workspaceId: r.workspaceId,
+      name: r.workspaceId
+        ? (wsNameById.get(r.workspaceId) ?? "Unknown")
+        : "Pod-wide",
+      total: r.count,
+    }));
+
+    const keyEntities = recentRows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      profileSlug: r.profileSlug,
+      workspaceId: r.workspaceId,
+      updatedAt: r.updatedAt,
+    }));
+
+    const summary = buildDigestSummary(
+      `Project '${project.name}'`,
+      total,
+      counts,
+      keyEntities,
+      byWorkspace.length > 0
+        ? `spanning ${byWorkspace.length} workspace${
+            byWorkspace.length === 1 ? "" : "s"
+          }`
+        : undefined
+    );
+
+    return c.json({
+      projectId,
+      name: project.name,
+      total,
+      counts,
+      byWorkspace,
+      keyEntities,
+      summary,
+    });
   });
 
   // Get a single project
