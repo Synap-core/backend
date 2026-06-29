@@ -1885,7 +1885,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "closed" | "paused";
+			data: "active" | "paused" | "closed";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -2048,57 +2048,6 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			columnType: "PgTimestamp";
 			data: Date;
 			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		contextReport: import("drizzle-orm/pg-core").PgColumn<{
-			name: "context_report";
-			tableName: "focus_sessions";
-			dataType: "json";
-			columnType: "PgJsonb";
-			data: unknown;
-			driverParam: unknown;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		planReport: import("drizzle-orm/pg-core").PgColumn<{
-			name: "plan_report";
-			tableName: "focus_sessions";
-			dataType: "json";
-			columnType: "PgJsonb";
-			data: unknown;
-			driverParam: unknown;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: undefined;
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {}>;
-		executionLog: import("drizzle-orm/pg-core").PgColumn<{
-			name: "execution_log";
-			tableName: "focus_sessions";
-			dataType: "json";
-			columnType: "PgJsonb";
-			data: unknown;
-			driverParam: unknown;
 			notNull: false;
 			hasDefault: false;
 			isPrimaryKey: false;
@@ -4548,6 +4497,63 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata?: Record<string, unknown>;
 					warnings?: string[];
 				};
+				proposals: {
+					tempId: string;
+					profileSlug: string;
+					title: string;
+					description?: string;
+					properties?: Record<string, unknown>;
+					confidence: number;
+				}[];
+				relations: {
+					sourceTempId: string;
+					targetTempId: string;
+					relationType: string;
+				}[];
+				followUp: string;
+				targetWorkspaceId: string | null;
+				targetWorkspaceReason: string | null;
+				targetWorkspaceConfidence: number | null;
+				dedupCandidates: Record<string, Array<{
+					entityId: string;
+					title: string;
+					profileSlug: string;
+					score: number;
+				}>>;
+			} | {
+				extraction?: undefined;
+				proposals: {
+					tempId: string;
+					profileSlug: string;
+					title: string;
+					description?: string;
+					properties?: Record<string, unknown>;
+					confidence: number;
+				}[];
+				relations: {
+					sourceTempId: string;
+					targetTempId: string;
+					relationType: string;
+				}[];
+				followUp: string;
+				targetWorkspaceId: string | null;
+				targetWorkspaceReason: string | null;
+				targetWorkspaceConfidence: number | null;
+				dedupCandidates: Record<string, Array<{
+					entityId: string;
+					title: string;
+					profileSlug: string;
+					score: number;
+				}>>;
+			} | {
+				extraction: {
+					kind: string;
+					extractor: string;
+					metadata?: Record<string, unknown>;
+					warnings?: string[];
+				};
+				degradedReason?: string | undefined;
+				degraded: boolean;
 				dedupSkipped?: true | undefined;
 				proposals: {
 					tempId: string;
@@ -4574,6 +4580,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[]>;
 			} | {
 				extraction?: undefined;
+				degradedReason?: string | undefined;
+				degraded: boolean;
 				dedupSkipped?: true | undefined;
 				proposals: {
 					tempId: string;
@@ -16845,9 +16853,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				progress: number | null;
 				agentIds: string[] | null;
 				closedAt: Date | null;
-				contextReport: unknown;
-				planReport: unknown;
-				executionLog: unknown;
 				verificationReport: unknown;
 				startedAt: Date;
 				createdAt: Date;
@@ -16878,9 +16883,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				progress: number | null;
 				agentIds: string[] | null;
 				closedAt: Date | null;
-				contextReport: unknown;
-				planReport: unknown;
-				executionLog: unknown;
 				verificationReport: unknown;
 			};
 			meta: object;
@@ -16908,9 +16910,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				progress: number | null;
 				agentIds: string[] | null;
 				closedAt: Date | null;
-				contextReport: unknown;
-				planReport: unknown;
-				executionLog: unknown;
 				verificationReport: unknown;
 			};
 			meta: object;
@@ -16948,9 +16947,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				progress: number | null;
 				agentIds: string[] | null;
 				closedAt: Date | null;
-				contextReport: unknown;
-				planReport: unknown;
-				executionLog: unknown;
 				verificationReport: unknown;
 			};
 			meta: object;
@@ -16989,9 +16985,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				progress: number | null;
 				agentIds: string[] | null;
 				closedAt: Date | null;
-				contextReport: unknown;
-				planReport: unknown;
-				executionLog: unknown;
 				verificationReport: unknown;
 			};
 			meta: object;
@@ -17019,9 +17012,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				progress: number | null;
 				agentIds: string[] | null;
 				closedAt: Date | null;
-				contextReport: unknown;
-				planReport: unknown;
-				executionLog: unknown;
 				verificationReport: unknown;
 			};
 			meta: object;
@@ -17298,9 +17288,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					progress: number | null;
 					agentIds: string[] | null;
 					closedAt: Date | null;
-					contextReport: unknown;
-					planReport: unknown;
-					executionLog: unknown;
 					verificationReport: unknown;
 				};
 				status: "created";
@@ -17400,9 +17387,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					progress: number | null;
 					agentIds: string[] | null;
 					closedAt: Date | null;
-					contextReport: unknown;
-					planReport: unknown;
-					executionLog: unknown;
 					verificationReport: unknown;
 				};
 				status: "running";
