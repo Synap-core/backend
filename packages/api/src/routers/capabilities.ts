@@ -153,7 +153,7 @@ export const capabilitiesRouter = router({
    * delegates to the GOVERNED `createCapabilityFromDefinition` service, scoping it
    * to `input.workspaceId` via the ctx.
    */
-  apply: protectedProcedure
+  install: protectedProcedure
     .input(
       z.object({
         templateKey: z.string().optional(),
