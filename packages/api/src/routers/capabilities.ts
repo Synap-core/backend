@@ -11,10 +11,25 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
-import { db, intelligenceServices, eq, drizzleSql } from "@synap/database";
+import {
+  db,
+  getDb,
+  intelligenceServices,
+  automations,
+  skills,
+  eq,
+  and,
+  or,
+  isNull,
+  drizzleSql,
+} from "@synap/database";
+import type { FlowDefinition } from "@synap/database";
 import { MessageAuthorType } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+import { AccessContext, scopedDb } from "../access/index.js";
+import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 import { capabilityContainersRouter } from "./capability-containers.js";
 import { buildCapabilityCatalog } from "../services/capabilities/capability-catalog.js";
 import {
@@ -201,6 +216,217 @@ export const capabilitiesRouter = router({
         workspaceId: input.workspaceId,
         userId: ctx.userId,
       });
+    }),
+
+  /**
+   * Dry-run a capability verb — preview the intended effects WITHOUT committing.
+   *
+   * Resolves the verb's backing skill exactly like `execute` (verb NAME scoped
+   * pod-wide OR this workspace OR owned by the actor), then proxies to the IS
+   * dry-run executor (`POST {IS}/api/skills/:id/dry-run`) — the SAME contract the
+   * Hub REST `/skills/:id/dry-run` door uses (external writes stubbed, reads real).
+   *
+   * Provider verbs (`kind:"provider"`) are declarative in-process executors with
+   * no isolate sandbox, so there is no dry-run path — we return a clear
+   * "not available" result rather than executing them.
+   */
+  dryRun: protectedProcedure
+    .input(
+      z.object({
+        verbId: z.string(),
+        parameters: z.record(z.string(), z.unknown()).optional(),
+        workspaceId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [skillRow] = await db
+        .select({ id: skills.id, kind: skills.kind })
+        .from(skills)
+        .where(
+          and(
+            eq(skills.name, input.verbId),
+            or(
+              isNull(skills.workspaceId),
+              eq(skills.workspaceId, input.workspaceId),
+              eq(skills.userId, ctx.userId)
+            )
+          )
+        )
+        .limit(1);
+
+      if (!skillRow) {
+        return {
+          kind: "not_found" as const,
+          message: `Verb "${input.verbId}" not found in this workspace.`,
+        };
+      }
+
+      // Declarative provider verbs run in-process — no isolate dry-run sandbox.
+      if (skillRow.kind === "provider") {
+        return {
+          kind: "dry-run-unavailable" as const,
+          skillId: skillRow.id,
+          message: "Dry-run not available for provider verbs.",
+        };
+      }
+
+      const { endpoint: isUrl, apiKey: isApiKey } =
+        await getDefaultActiveService();
+      const res = await fetch(`${isUrl}/api/skills/${skillRow.id}/dry-run`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": isApiKey,
+        },
+        body: JSON.stringify({
+          userId: ctx.userId,
+          parameters: input.parameters ?? {},
+        }),
+      });
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Skill dry-run failed (${res.status}) ${body}`.trim(),
+        });
+      }
+
+      const data = (await res.json().catch(() => null)) as {
+        result?: unknown;
+        dryRunEffects?: unknown[];
+      } | null;
+
+      return {
+        kind: "dry-run" as const,
+        skillId: skillRow.id,
+        result: data?.result ?? null,
+        dryRunEffects: data?.dryRunEffects ?? [],
+      };
+    }),
+
+  /**
+   * "Use in an automation" — scaffold a DRAFT automation from a single capability
+   * verb. Builds a minimal FlowDefinition (trigger → ONE capability node) and
+   * inserts it via the SAME path `automations.create` uses for an operator-direct
+   * write: operator identity (no agentUserId), RBAC-gated, never proposed.
+   */
+  createFromVerbCapability: protectedProcedure
+    .input(
+      z.object({
+        verbId: z.string(),
+        capabilityId: z.string().optional(),
+        capabilityName: z.string(),
+        verbLabel: z.string(),
+        verbKind: z.enum(["read", "write", "action"]).optional(),
+        workspaceId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const database = await getDb();
+
+      // Operator direct write — enforce workspace RBAC (deny if not permitted),
+      // but never propose. Mirrors the operator branch of automations.create.
+      const { verifyPermission } = await import("@synap/database");
+      const { requiredPermissionFor } = await import("@synap/governance-policy");
+      const result = await verifyPermission({
+        db: database,
+        userId: ctx.userId!,
+        workspace: { id: input.workspaceId },
+        requiredPermission: requiredPermissionFor("create"),
+      });
+      if (!result.allowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: result.reason || "Permission denied",
+        });
+      }
+
+      const flowDefinition = {
+        nodes: [
+          { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+          {
+            id: "step-1",
+            type: "capability",
+            position: { x: 0, y: 140 },
+            data: {
+              capabilityId: input.capabilityId,
+              capabilityName: input.capabilityName,
+              verbId: input.verbId,
+              verbLabel: input.verbLabel,
+              verbKind: input.verbKind,
+              inputMapping: {},
+              label: `${input.capabilityName} · ${input.verbLabel}`,
+            },
+          },
+        ],
+        edges: [{ id: "e1", source: "trigger", target: "step-1" }],
+      } as unknown as FlowDefinition;
+
+      const [row] = await database
+        .insert(automations)
+        .values({
+          workspaceId: input.workspaceId,
+          createdBy: ctx.userId!,
+          name: `New automation: ${input.verbLabel}`,
+          triggerType: "manual",
+          triggerConfig: {},
+          flowDefinition,
+          status: "draft",
+          metadata: { createdVia: "manual" as const },
+        })
+        .returning({ id: automations.id });
+
+      return { automationId: row.id };
+    }),
+
+  /**
+   * "Used in processes" — backlinks from a capability verb to the automations
+   * that reference it. Matches any automation whose flow_definition has a
+   * `type:"capability"` node with `data.verbId == verbId`, via a JSONB
+   * containment query on the nodes array. Membership-scoped via the access layer
+   * (mirrors automations.list) so a foreign workspaceId leaks nothing.
+   */
+  usedInProcesses: protectedProcedure
+    .input(
+      z.object({
+        verbId: z.string(),
+        workspaceId: z.string().uuid().optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const database = await getDb();
+      const visibility = scopedDb(AccessContext.from(ctx)).predicate(
+        automations
+      );
+
+      const containment = drizzleSql`${automations.flowDefinition} -> 'nodes' @> ${JSON.stringify(
+        [{ type: "capability", data: { verbId: input.verbId } }]
+      )}::jsonb`;
+
+      const rows = await database
+        .select({
+          automationId: automations.id,
+          name: automations.name,
+          status: automations.status,
+        })
+        .from(automations)
+        .where(
+          and(
+            visibility,
+            input.workspaceId
+              ? eq(automations.workspaceId, input.workspaceId)
+              : undefined,
+            containment
+          )
+        )
+        .orderBy(automations.name);
+
+      return rows.map((r) => ({
+        automationId: r.automationId,
+        name: r.name,
+        status: r.status,
+      }));
     }),
 
   /**
