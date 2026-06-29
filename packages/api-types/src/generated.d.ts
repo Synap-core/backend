@@ -4624,6 +4624,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}>;
 				followUp: string | null;
 				targetWorkspaceId: string | null;
+				targetProjectId: string | null;
 				dedupCandidates: Record<string, Array<{
 					entityId: string;
 					title: string;
@@ -4656,6 +4657,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceId: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
 				dedupCandidates: Record<string, Array<{
 					entityId: string;
 					title: string;
@@ -4681,6 +4685,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceId: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
 				dedupCandidates: Record<string, Array<{
 					entityId: string;
 					title: string;
@@ -4714,6 +4721,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceId: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
 				dedupCandidates: Record<string, {
 					entityId: string;
 					title: string;
@@ -4742,6 +4752,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceId: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
 				dedupCandidates: Record<string, {
 					entityId: string;
 					title: string;
@@ -9554,7 +9567,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: CapabilityCard[];
 			meta: object;
 		}>;
-		apply: import("@trpc/server").TRPCMutationProcedure<{
+		install: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				workspaceId: string;
 				templateKey?: string | undefined;
