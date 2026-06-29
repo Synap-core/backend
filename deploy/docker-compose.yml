@@ -53,6 +53,10 @@ x-backend-env: &backend-env
   HUB_JWT_SECRET: ${HUB_JWT_SECRET:-}
   INTELLIGENCE_HUB_URL: ${INTELLIGENCE_HUB_URL:-}
   INTELLIGENCE_HUB_API_KEY: ${INTELLIGENCE_HUB_API_KEY:-}
+  # X-Internal-Key for the IS /internal/* + /api/knowledge/answer routes (synthesis).
+  # MUST match the IS's INTELLIGENCE_HUB_INTERNAL_KEY — omitting it sends an empty
+  # key and synthesis fails with 401 (synthesis_unavailable, sources but no answer).
+  INTELLIGENCE_HUB_INTERNAL_KEY: ${INTELLIGENCE_HUB_INTERNAL_KEY:-}
   HERMES_TRIGGER_URL: ${HERMES_TRIGGER_URL:-}
   HERMES_TRIGGER_KEY: ${HERMES_TRIGGER_KEY:-}
   T3CODE_URL: ${T3CODE_URL:-}
