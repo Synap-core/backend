@@ -205,6 +205,41 @@ describe("read-scoping tripwire — no unguarded workspace-filtered reads", () =
   const ATTACKER_KEYED =
     /input\??\.workspaceId\s*\?\s*eq\([^)]*\.workspaceId,\s*input\??\.workspaceId/;
 
+  // THE ONE-DOOR LOCK. The list/listAll two-door split was collapsed: every
+  // user-data table now has ONE floor-first scope-aware `.list` door (no lens =
+  // the user floor; a workspace/project lens only narrows). A `.listAll` is the
+  // re-expansion of that split — the exact thing we removed. This allowlist may
+  // only SHRINK; a NEW `listAll:` procedure fails CI. To add a reader, give it a
+  // scope-aware `.list` (ScopeFilter + resolveScope), never a second door.
+  const LISTALL_ALLOWLIST = new Set<string>([
+    // events has NO workspace_id column (workspace lives in JSONB), so it can't
+    // use the unified seam; searchEvents always floors by userId and the
+    // workspaceId is membership-checked. Justified single door named listAll.
+    "subscriptions.ts::listAll",
+  ]);
+
+  it("no NEW listAll procedure (the two-door split may only collapse, never re-expand)", () => {
+    const offenders: string[] = [];
+    const listAllMark = /\blistAll\s*:\s*(workspace|protected|pod|public)/;
+    for (const file of FILES) {
+      const src = readFileSync(file, "utf8");
+      // Match an exact `listAll:` PROCEDURE (followed by a builder), not
+      // `listAllAgents:` / `listAllGrants:` (distinct, non-collapsed names).
+      if (!listAllMark.test(src)) continue;
+      for (const proc of extractProcedures(file, src)) {
+        if (proc.name !== "listAll") continue;
+        const id = `${file.split("/routers/")[1]}::${proc.name}`;
+        if (!LISTALL_ALLOWLIST.has(id)) offenders.push(id);
+      }
+    }
+    expect(
+      offenders,
+      `New \`listAll\` door(s) — the list/listAll split was collapsed to ONE ` +
+        `floor-first \`.list\` door. Give the reader a scope-aware \`.list\` ` +
+        `(ScopeFilter + resolveScope), not a second door:\n  ${offenders.join("\n  ")}`
+    ).toEqual([]);
+  });
+
   it("no mutation uses the attacker-keyed workspace-filter anti-pattern", () => {
     const violations: string[] = [];
     for (const file of FILES) {

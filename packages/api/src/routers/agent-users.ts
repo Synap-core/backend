@@ -26,7 +26,7 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import type { AgentMetadata } from "@synap/database/schema";
 
 /**
- * Floor-first agent-user fetch shared by `list` and `listAll`.
+ * Floor-first agent-user fetch backing `list`.
  *
  * Floor = (every agent that is a member of a workspace the caller can see —
  * `userVisibleWhere` is the security boundary) UNION (pod-wide agents — agent
@@ -292,17 +292,6 @@ export const agentUsersRouter = router({
       const { workspaceLens } = resolveScope(ctx, input);
       return queryAgentUsers(ctx, workspaceLens);
     }),
-
-  /**
-   * @deprecated Use `list` (the canonical scope-aware door) instead. Thin alias
-   * kept for existing call sites: same logic with NO workspace lens, so it reads
-   * the user floor — every accessible agent across all the caller's workspaces
-   * PLUS pod-wide agents. NOTE: this now ALSO includes pod-wide agents (the old
-   * listAll omitted them), per the "agents are pod-wide actors" decision.
-   */
-  listAll: protectedProcedure.query(async ({ ctx }) => {
-    return queryAgentUsers(ctx, undefined);
-  }),
 
   /**
    * Update an AI agent user

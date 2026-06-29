@@ -181,27 +181,6 @@ export const focusSessionsRouter = router({
     }),
 
   /**
-   * @deprecated Thin alias for `list` with no workspace lens (= the user floor:
-   * all the user's sessions across workspaces). Kept so existing callers keep
-   * working until the frontend wave migrates them to `list`. Use `list`.
-   */
-  listAll: protectedProcedure
-    .input(
-      z.object({
-        status: statusFilterSchema,
-        limit: z.number().int().min(1).max(50).default(20),
-      })
-    )
-    .query(async ({ ctx, input }) => {
-      return queryUserSessions(
-        ctx.userId,
-        { workspaceLens: undefined, projectLens: undefined },
-        input.status,
-        input.limit
-      );
-    }),
-
-  /**
    * Get a single focus session by ID.
    * Scoped to the authenticated user — cannot read another user's session.
    */

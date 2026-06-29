@@ -122,18 +122,6 @@ export const artifactsRouter = router({
     }),
 
   /**
-   * @deprecated Use `list` (the canonical scope-aware door) instead. Thin alias
-   * kept for existing call sites: same logic with NO workspace lens, so it reads
-   * the user floor across every workspace. Now routed through scopedDb too, so
-   * it no longer bypasses the visibility registry.
-   */
-  listAll: protectedProcedure
-    .input(artifactListInputSchema)
-    .query(async ({ ctx, input }) => {
-      return queryArtifacts(ctx, input, undefined);
-    }),
-
-  /**
    * Get a single artifact by ID.
    * Uses scopedDb.findFirst to enforce workspace visibility structurally.
    */
