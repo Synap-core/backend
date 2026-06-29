@@ -55,6 +55,10 @@ import type {
   CapabilityVaultDef,
   ToolVerbKind,
 } from "@synap/playbooks";
+import {
+  BUNDLED_TEMPLATES,
+  BUNDLED_TEMPLATE_KEYS,
+} from "./bundled-templates.generated.js";
 
 import { playbooksRouter } from "../../routers/playbooks.js";
 import { toolsRouter } from "../../routers/tools.js";
@@ -95,18 +99,24 @@ function templateDirCandidates(): string[] {
  * we only read names within the resolved dir, never a caller-supplied path.
  */
 export function listOnDiskTemplateKeys(): string[] {
+  // The BUNDLED registry is the reliable floor (compiled in — always present).
+  // Union it with any on-disk files (a template dropped on disk but not yet
+  // regenerated into the bundle), so neither path alone can hide a template.
+  const keys = new Set<string>(BUNDLED_TEMPLATE_KEYS);
   for (const dir of templateDirCandidates()) {
     try {
       if (!fs.existsSync(dir)) continue;
-      return fs
-        .readdirSync(dir)
-        .filter((f) => f.endsWith(".capability.json"))
-        .map((f) => f.replace(/\.capability\.json$/, ""));
+      for (const f of fs.readdirSync(dir)) {
+        if (f.endsWith(".capability.json")) {
+          keys.add(f.replace(/\.capability\.json$/, ""));
+        }
+      }
+      break; // first resolvable dir wins for the on-disk set
     } catch {
       // Unreadable candidate — try the next.
     }
   }
-  return [];
+  return [...keys];
 }
 
 /**
@@ -155,7 +165,16 @@ export async function loadCapabilityTemplate(
     return row.definition as CapabilityDefinition;
   }
 
-  // 2. File fallback (dev ergonomics / pre-sync bootstrap).
+  // 2. BUNDLED registry — the vendored library compiled INTO the server binary
+  //    (bundled-templates.generated.ts). This is the reliable floor: it does not
+  //    depend on the deploy image bundling the templates/ directory (a fragile
+  //    COPY that produced empty catalogs). DB overlays still win above.
+  if (BUNDLED_TEMPLATES[templateKey]) {
+    return BUNDLED_TEMPLATES[templateKey]!;
+  }
+
+  // 3. File fallback (dev ergonomics / a template dropped on disk but not yet
+  //    regenerated into the bundle).
   const fileName = `${templateKey}.capability.json`;
   for (const dir of templateDirCandidates()) {
     const filePath = path.join(dir, fileName);

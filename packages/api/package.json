@@ -32,7 +32,8 @@
   "scripts": {
     "dev": "export $(grep -v '^#' ../../.env | xargs) && tsx watch src/index.ts",
     "start": "export $(grep -v '^#' ../../.env | xargs) && tsx src/index.ts",
-    "build": "node ../../skills/build.mjs && rm -rf dist && tsc -p tsconfig.types.json && tsup && pnpm gen-types",
+    "build": "node scripts/gen-bundled-templates.mjs && node ../../skills/build.mjs && rm -rf dist && tsc -p tsconfig.types.json && tsup && pnpm gen-types",
+    "gen-bundled-templates": "node scripts/gen-bundled-templates.mjs",
     "gen-types": "node scripts/gen-types.mjs",
     "gen-types:check": "node scripts/gen-types.mjs && git diff --exit-code -- ../api-types/src/generated.d.ts",
     "gen-docs": "node scripts/gen-sdk-docs.mjs",
