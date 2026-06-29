@@ -4010,14 +4010,28 @@ export interface CapabilityCardConnection {
 	/** connectionId (or display account) when connected. */
 	account?: string;
 }
+/** A single declared parameter of a verb (richer than `params: string[]`). */
+export interface CapabilityCardVerbParam {
+	name: string;
+	type?: string;
+	required?: boolean;
+	description?: string;
+}
 export interface CapabilityCardVerb {
 	/** Backing skill NAME — the verbId the execute door resolves. */
 	verbId: string;
 	/** Backing skill UUID (installed verbs only; null for an available template). */
 	skillId: string | null;
 	label: string;
-	/** read/write by name heuristic. TODO: promote to explicit skill metadata. */
-	type: "read" | "write";
+	/** One-line description from the backing skill (`skill.description`). */
+	description?: string | null;
+	/**
+	 * read / write / action — derived (read-ish name → read; mutating-action name
+	 * → action; else write), honoring an explicit `metadata.verbType` override.
+	 * `action` is additive: a mutating verb that is an action (reply/send/…) rather
+	 * than a create/update. TODO: promote fully to explicit skill metadata.
+	 */
+	type: "read" | "write" | "action";
 	/** Backing skill `approved === true`. */
 	enabled: boolean;
 	governance: "auto" | "propose";
@@ -4025,6 +4039,12 @@ export interface CapabilityCardVerb {
 	runnable: boolean;
 	/** Parameter names the verb accepts — for `cap run <verb> --<param> …` hints. */
 	params: string[];
+	/**
+	 * Typed parameter schema (name + type + required + description) derived from the
+	 * skill's `parameters` JSON-schema — for the run form + inspector, which need
+	 * types, not just names. Empty when the skill declares no parameters.
+	 */
+	paramsSchema: CapabilityCardVerbParam[];
 }
 export interface CapabilityCard {
 	/** Container id; null for an available-only template. */
@@ -4038,6 +4058,17 @@ export interface CapabilityCard {
 	status: CapabilityCardStatus;
 	connection?: CapabilityCardConnection;
 	verbs: CapabilityCardVerb[];
+	/**
+	 * The pack's composition — the names of its member tools + skills and the
+	 * backing credential ref/kind (provider/vault). Lets the hero UI render "what's
+	 * inside" without re-deriving from verbs/connection. Derived from the same
+	 * container members (or template def) the card folds in.
+	 */
+	anatomy: {
+		tools: string[];
+		skills: string[];
+		credential?: string;
+	};
 	nextAction: {
 		kind: "add" | "connect" | "enable" | "run" | "none";
 		hint: string;
@@ -9583,6 +9614,59 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				parameters?: Record<string, unknown> | undefined;
 			};
 			output: ExecuteCapabilityResult;
+			meta: object;
+		}>;
+		dryRun: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				verbId: string;
+				workspaceId: string;
+				parameters?: Record<string, unknown> | undefined;
+			};
+			output: {
+				kind: "not_found";
+				message: string;
+				skillId?: undefined;
+				result?: undefined;
+				dryRunEffects?: undefined;
+			} | {
+				kind: "dry-run-unavailable";
+				skillId: string;
+				message: string;
+				result?: undefined;
+				dryRunEffects?: undefined;
+			} | {
+				kind: "dry-run";
+				skillId: string;
+				result: {} | null;
+				dryRunEffects: unknown[];
+				message?: undefined;
+			};
+			meta: object;
+		}>;
+		createFromVerbCapability: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				verbId: string;
+				capabilityName: string;
+				verbLabel: string;
+				workspaceId: string;
+				capabilityId?: string | undefined;
+				verbKind?: "action" | "read" | "write" | undefined;
+			};
+			output: {
+				automationId: string;
+			};
+			meta: object;
+		}>;
+		usedInProcesses: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				verbId: string;
+				workspaceId?: string | undefined;
+			};
+			output: {
+				automationId: string;
+				name: string;
+				status: "error" | "active" | "paused" | "draft";
+			}[];
 			meta: object;
 		}>;
 		checkHealth: import("@trpc/server").TRPCMutationProcedure<{

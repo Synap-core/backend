@@ -55,14 +55,29 @@ export interface CapabilityCardConnection {
   account?: string;
 }
 
+/** A single declared parameter of a verb (richer than `params: string[]`). */
+export interface CapabilityCardVerbParam {
+  name: string;
+  type?: string;
+  required?: boolean;
+  description?: string;
+}
+
 export interface CapabilityCardVerb {
   /** Backing skill NAME — the verbId the execute door resolves. */
   verbId: string;
   /** Backing skill UUID (installed verbs only; null for an available template). */
   skillId: string | null;
   label: string;
-  /** read/write by name heuristic. TODO: promote to explicit skill metadata. */
-  type: "read" | "write";
+  /** One-line description from the backing skill (`skill.description`). */
+  description?: string | null;
+  /**
+   * read / write / action — derived (read-ish name → read; mutating-action name
+   * → action; else write), honoring an explicit `metadata.verbType` override.
+   * `action` is additive: a mutating verb that is an action (reply/send/…) rather
+   * than a create/update. TODO: promote fully to explicit skill metadata.
+   */
+  type: "read" | "write" | "action";
   /** Backing skill `approved === true`. */
   enabled: boolean;
   governance: "auto" | "propose";
@@ -70,6 +85,12 @@ export interface CapabilityCardVerb {
   runnable: boolean;
   /** Parameter names the verb accepts — for `cap run <verb> --<param> …` hints. */
   params: string[];
+  /**
+   * Typed parameter schema (name + type + required + description) derived from the
+   * skill's `parameters` JSON-schema — for the run form + inspector, which need
+   * types, not just names. Empty when the skill declares no parameters.
+   */
+  paramsSchema: CapabilityCardVerbParam[];
 }
 
 /** Extract parameter NAMES from a skill `parameters` blob (JSON-schema or flat). */
@@ -86,6 +107,44 @@ function extractParamNames(schema: unknown): string[] {
   return Object.keys(obj);
 }
 
+/**
+ * Extract a TYPED parameter list from a skill `parameters` blob. Honors the
+ * JSON-schema shape (`{ properties: { name: { type, description } }, required }`)
+ * — pulling `type`/`description` per property and `required` from the schema's
+ * `required[]`. Falls back to a flat `{ name: … }` map (keys → bare names, no
+ * type info). Mirrors `extractParamNames`' two shapes additively.
+ */
+function extractParamsSchema(schema: unknown): CapabilityCardVerbParam[] {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return [];
+  const obj = schema as Record<string, unknown>;
+  const props = obj.properties;
+  if (props && typeof props === "object" && !Array.isArray(props)) {
+    const requiredList = Array.isArray(obj.required)
+      ? (obj.required as unknown[]).filter(
+          (r): r is string => typeof r === "string"
+        )
+      : [];
+    return Object.entries(props as Record<string, unknown>).map(
+      ([name, raw]) => {
+        const def =
+          raw && typeof raw === "object" && !Array.isArray(raw)
+            ? (raw as Record<string, unknown>)
+            : {};
+        return {
+          name,
+          ...(typeof def.type === "string" ? { type: def.type } : {}),
+          required: requiredList.includes(name),
+          ...(typeof def.description === "string"
+            ? { description: def.description }
+            : {}),
+        };
+      }
+    );
+  }
+  // Flat shape — bare names, no type info.
+  return Object.keys(obj).map((name) => ({ name }));
+}
+
 export interface CapabilityCard {
   /** Container id; null for an available-only template. */
   id: string | null;
@@ -98,6 +157,17 @@ export interface CapabilityCard {
   status: CapabilityCardStatus;
   connection?: CapabilityCardConnection;
   verbs: CapabilityCardVerb[];
+  /**
+   * The pack's composition — the names of its member tools + skills and the
+   * backing credential ref/kind (provider/vault). Lets the hero UI render "what's
+   * inside" without re-deriving from verbs/connection. Derived from the same
+   * container members (or template def) the card folds in.
+   */
+  anatomy: {
+    tools: string[];
+    skills: string[];
+    credential?: string;
+  };
   nextAction: {
     kind: "add" | "connect" | "enable" | "run" | "none";
     hint: string;
@@ -119,14 +189,36 @@ export interface CapabilityCatalogContext {
 // skill row) rather than a name heuristic — the heuristic is the bootstrap.
 const READ_TOKEN =
   /(^|_)(list|search|get|read|find|fetch|show|query|view|count)(_|$)/i;
-function verbType(verbId: string): "read" | "write" {
-  return READ_TOKEN.test(verbId) ? "read" : "write";
+// An `action` is a mutating verb that is a DISPATCH (reply/send/run/…) rather than
+// a create/update — a third class layered onto the read/write split. Same token
+// style as READ_TOKEN (whole `_`-delimited token anywhere).
+const ACTION_TOKEN =
+  /(^|_)(reply|invite|send|post|run|trigger|cancel|dispatch)(_|$)/i;
+
+type VerbType = "read" | "write" | "action";
+
+/**
+ * Classify a verb. An explicit `metadata.verbType` ("read"|"write"|"action") wins;
+ * otherwise read-ish names → read, action/dispatch names → action, else write.
+ * read is checked before action to keep existing read classification stable.
+ */
+function verbType(
+  verbId: string,
+  metadata?: Record<string, unknown> | null
+): VerbType {
+  const override = metadata?.verbType;
+  if (override === "read" || override === "write" || override === "action") {
+    return override;
+  }
+  if (READ_TOKEN.test(verbId)) return "read";
+  if (ACTION_TOKEN.test(verbId)) return "action";
+  return "write";
 }
 
-// Reads run inline (auto); writes ask approval each run (propose). Independent of
-// `enabled` (which is the operator's one-time approval gate). Mirrors the north
-// star: "search email (read)" inline vs "send email (write · asks approval)".
-function verbGovernance(type: "read" | "write"): "auto" | "propose" {
+// Reads run inline (auto); writes/actions ask approval each run (propose).
+// Independent of `enabled` (the operator's one-time approval gate). Mirrors the
+// north star: "search email (read)" inline vs "send email (action · asks approval)".
+function verbGovernance(type: VerbType): "auto" | "propose" {
   return type === "read" ? "auto" : "propose";
 }
 
@@ -390,8 +482,10 @@ export async function buildCapabilityCatalog(
           .select({
             id: skills.id,
             name: skills.name,
+            description: skills.description,
             approved: skills.approved,
             parameters: skills.parameters,
+            metadata: skills.metadata,
           })
           .from(skills)
           .where(inArray(skills.id, memberSkillIds))
@@ -423,32 +517,44 @@ export async function buildCapabilityCatalog(
     installedNames.add(container.name.toLowerCase());
 
     const myLinks = memberLinks.filter((l) => l.toId === container.id);
-    const myToolRefs = myLinks
+    const myTools = myLinks
       .filter((l) => l.fromType === "tool")
-      .map((l) => toolById.get(l.fromId)?.credentialRef ?? null);
+      .map((l) => toolById.get(l.fromId))
+      .filter((t): t is NonNullable<typeof t> => !!t);
+    const myToolRefs = myTools.map((t) => t.credentialRef ?? null);
 
     const connection = deriveConnection(myToolRefs, false, conn);
 
-    const verbs: CapabilityCardVerb[] = myLinks
+    const mySkills = myLinks
       .filter((l) => l.fromType === "skill")
       .map((l) => skillById.get(l.fromId))
-      .filter((s): s is NonNullable<typeof s> => !!s)
-      .map((s) => {
-        const type = verbType(s.name);
-        const enabled = s.approved === true;
-        const connectionOk =
-          !connection.required || connection.state === "connected";
-        return {
-          verbId: s.name,
-          skillId: s.id,
-          label: s.name,
-          type,
-          enabled,
-          governance: verbGovernance(type),
-          runnable: enabled && connectionOk,
-          params: extractParamNames(s.parameters),
-        };
-      });
+      .filter((s): s is NonNullable<typeof s> => !!s);
+
+    const verbs: CapabilityCardVerb[] = mySkills.map((s) => {
+      const type = verbType(s.name, s.metadata);
+      const enabled = s.approved === true;
+      const connectionOk =
+        !connection.required || connection.state === "connected";
+      return {
+        verbId: s.name,
+        skillId: s.id,
+        label: s.name,
+        description: s.description ?? null,
+        type,
+        enabled,
+        governance: verbGovernance(type),
+        runnable: enabled && connectionOk,
+        params: extractParamNames(s.parameters),
+        paramsSchema: extractParamsSchema(s.parameters),
+      };
+    });
+
+    const credentialRef = myToolRefs.find((r): r is string => !!r);
+    const anatomy: CapabilityCard["anatomy"] = {
+      tools: myTools.map((t) => t.name),
+      skills: mySkills.map((s) => s.name),
+      ...(credentialRef ? { credential: credentialRef } : {}),
+    };
 
     const status = computeInstalledStatus(connection, verbs);
 
@@ -466,6 +572,7 @@ export async function buildCapabilityCatalog(
       status,
       ...(connection.required || connection.kind ? { connection } : {}),
       verbs,
+      anatomy,
       nextAction: nextActionFor(status, container.name, connection),
     });
   }
@@ -487,13 +594,24 @@ export async function buildCapabilityCatalog(
         verbId: s.name,
         skillId: null,
         label: s.name,
+        description: s.description ?? null,
         type,
         enabled: false,
         governance: verbGovernance(type),
         runnable: false,
-        params: extractParamNames((s as { parameters?: unknown }).parameters),
+        params: extractParamNames(s.parameters),
+        paramsSchema: extractParamsSchema(s.parameters),
       };
     });
+
+    const tplCredential =
+      toolRefs.find((r): r is string => !!r) ??
+      (hasVaultRequirement ? "vault" : undefined);
+    const anatomy: CapabilityCard["anatomy"] = {
+      tools: (def.tools ?? []).map((t) => t.name),
+      skills: (def.skills ?? []).map((s) => s.name),
+      ...(tplCredential ? { credential: tplCredential } : {}),
+    };
 
     cards.push({
       id: null,
@@ -504,6 +622,7 @@ export async function buildCapabilityCatalog(
       status: "available",
       ...(connection.required || connection.kind ? { connection } : {}),
       verbs,
+      anatomy,
       nextAction: nextActionFor("available", tpl.name, connection),
     });
   }
