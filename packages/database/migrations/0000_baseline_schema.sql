@@ -2023,6 +2023,7 @@ CREATE TABLE IF NOT EXISTS "api_keys" (
   "key_name"               text    NOT NULL,
   "key_prefix"             text    NOT NULL,
   "key_hash"               text    NOT NULL,
+  "key_lookup_hash"        text,
   "key_type"               text    NOT NULL DEFAULT 'hub_inbound',
   "description"            text,
   "hub_id"                 text,
@@ -2052,6 +2053,7 @@ ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "user_id" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "key_name" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "key_prefix" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "key_hash" text;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "key_lookup_hash" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "key_type" text DEFAULT 'hub_inbound';
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "description" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "hub_id" text;
@@ -2069,6 +2071,8 @@ ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "created_by" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "revoked_at" timestamp with time zone;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "revoked_by" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "revoked_reason" text;
+CREATE INDEX IF NOT EXISTS "api_keys_key_lookup_hash_idx"
+  ON "api_keys" ("key_lookup_hash");
 
 -- ─── 38. provisioning_tokens ─────────────────────────────────────────────────
 

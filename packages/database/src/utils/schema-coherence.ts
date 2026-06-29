@@ -773,6 +773,13 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "provider_integration_id",
     addedBy: "0150_provider_integrations.sql",
   },
+
+  // O(1) sha256 lookup path for API-key verification (0157)
+  {
+    table: "api_keys",
+    column: "key_lookup_hash",
+    addedBy: "0157_api_key_lookup_hash.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

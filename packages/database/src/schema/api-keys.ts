@@ -16,6 +16,7 @@ import {
   bigint,
   unique,
   check,
+  index,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -38,6 +39,15 @@ export const apiKeys = pgTable(
     keyName: text("key_name").notNull(), // User-friendly name
     keyPrefix: text("key_prefix").notNull(), // 'synap_hub_live_', 'synap_hub_test_', 'synap_user_'
     keyHash: text("key_hash").notNull(), // Bcrypt hash (cost factor 12)
+
+    // O(1) lookup hash — sha256(fullKey), hex. API keys are 256-bit RANDOM
+    // tokens (not passwords), so a plain sha256 is the industry-standard
+    // verifier (GitHub/Stripe). Lets verification do an indexed equality lookup
+    // instead of bcrypt-comparing every prefix-matching candidate.
+    // NULLABLE: legacy bcrypt-only keys are backfilled lazily on first
+    // successful bcrypt verify (see api-keys service). See migration
+    // 0157_api_key_lookup_hash.sql.
+    keyLookupHash: text("key_lookup_hash"),
 
     // Key Type & Description
     keyType: text("key_type")
@@ -124,6 +134,10 @@ export const apiKeys = pgTable(
       sql`${table.keyType} = 'hub_inbound' OR ${table.keyPrefix} IN ('synap_hub_live_', 'synap_hub_test_', 'synap_user_')`
     ),
     keyHashUnique: unique("api_keys_key_hash_unique").on(table.keyHash),
+    // Non-unique: nullable column with many NULLs for un-migrated keys.
+    keyLookupHashIdx: index("api_keys_key_lookup_hash_idx").on(
+      table.keyLookupHash
+    ),
   })
 );
 

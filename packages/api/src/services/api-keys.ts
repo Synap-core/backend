@@ -205,8 +205,11 @@ export class ApiKeyService {
 
     const fullKey = `${prefix}${randomPart}`;
 
-    // 3. Hash with bcrypt
+    // 3. Hash with bcrypt (at-rest hash + fallback verifier) and compute the
+    // sha256 lookup hash (O(1) indexed verification path). New keys carry the
+    // lookup hash immediately, so they never hit the bcrypt fallback loop.
     const keyHash = await bcrypt.hash(fullKey, BCRYPT_COST_FACTOR);
+    const keyLookupHash = this.verificationCacheKey(fullKey);
 
     // 4. Calculate expiration and rotation dates
     const expiresAt = expiresInDays
@@ -225,6 +228,7 @@ export class ApiKeyService {
         keyName,
         keyPrefix: prefix,
         keyHash,
+        keyLookupHash,
         hubId: effectiveHubId || null,
         scope: effectiveScope,
         expiresAt,
@@ -309,6 +313,21 @@ export class ApiKeyService {
   }
 
   /**
+   * Lazily backfill the sha256 lookup hash for a key that was just verified via
+   * the bcrypt fallback (i.e. an un-migrated legacy key). Fire-and-forget — it
+   * never blocks the response and swallows errors (mirrors `recordKeyUse`). The
+   * next request for this key then takes the O(1) sha256 path.
+   */
+  private backfillLookupHash(keyId: string, apiKey: string): void {
+    db.update(apiKeys)
+      .set({ keyLookupHash: this.verificationCacheKey(apiKey) })
+      .where(eq(apiKeys.id, keyId))
+      .catch(() => {
+        // Non-fatal — backfill is best-effort; bcrypt fallback still works.
+      });
+  }
+
+  /**
    * Inspect an API key's status WITHOUT enforcing it.
    *
    * Unlike `validateApiKey`, this method distinguishes between the various
@@ -343,6 +362,29 @@ export class ApiKeyService {
     const cachedRecord = this.getCachedValidRecord(apiKey);
     if (cachedRecord) return { status: "valid", record: cachedRecord };
 
+    // O(1) path: indexed sha256 lookup. New keys (and lazily-backfilled legacy
+    // keys) match here and skip bcrypt entirely. We do NOT filter on
+    // active/expiry in the query — the row is needed to disambiguate revoked vs
+    // expired vs valid, so apply the SAME downstream checks as the bcrypt path.
+    const lookupHash = this.verificationCacheKey(apiKey);
+    const [lookupMatch] = await db
+      .select()
+      .from(apiKeys)
+      .where(eq(apiKeys.keyLookupHash, lookupHash))
+      .limit(1);
+
+    if (lookupMatch) {
+      if (!lookupMatch.isActive) {
+        return { status: "revoked", record: lookupMatch };
+      }
+      if (lookupMatch.expiresAt && lookupMatch.expiresAt <= new Date()) {
+        return { status: "expired", record: lookupMatch };
+      }
+      this.cacheValidRecord(apiKey, lookupMatch);
+      return { status: "valid", record: lookupMatch };
+    }
+
+    // Fallback (un-migrated legacy keys, lookup hash still NULL).
     // Look up ALL keys with the matching prefix (no active/expiry filter).
     // We need the row to disambiguate revoked vs expired vs unknown.
     const candidates = await db
@@ -364,6 +406,9 @@ export class ApiKeyService {
     const candidate = comparisons.find((c): c is ApiKeyRecord => c !== null);
 
     if (candidate) {
+      // Verified via bcrypt → backfill the sha256 lookup hash so the next
+      // request for this key takes the O(1) path. Fire-and-forget.
+      this.backfillLookupHash(candidate.id, apiKey);
       if (!candidate.isActive) {
         return { status: "revoked", record: candidate };
       }
@@ -401,7 +446,28 @@ export class ApiKeyService {
       return cachedRecord;
     }
 
-    // 2. Find active keys with this prefix
+    // 1c. O(1) path: indexed sha256 lookup. New keys (and lazily-backfilled
+    // legacy keys) match here and skip bcrypt entirely. Unlike the prefix query
+    // below, this does NOT pre-filter on active/expiry, so re-check both before
+    // accepting the key.
+    const lookupHash = this.verificationCacheKey(apiKey);
+    const [lookupMatch] = await db
+      .select()
+      .from(apiKeys)
+      .where(eq(apiKeys.keyLookupHash, lookupHash))
+      .limit(1);
+
+    if (lookupMatch) {
+      if (!lookupMatch.isActive) return null;
+      if (lookupMatch.expiresAt && lookupMatch.expiresAt <= new Date()) {
+        return null;
+      }
+      this.cacheValidRecord(apiKey, lookupMatch);
+      this.recordKeyUse(lookupMatch.id);
+      return lookupMatch;
+    }
+
+    // 2. Fallback (un-migrated legacy keys): find active keys with this prefix
     const candidates = await db
       .select()
       .from(apiKeys)
@@ -426,6 +492,9 @@ export class ApiKeyService {
     const candidate = comparisons.find((c): c is ApiKeyRecord => c !== null);
 
     if (candidate) {
+      // Verified via bcrypt → backfill the sha256 lookup hash so the next
+      // request for this key takes the O(1) path. Fire-and-forget.
+      this.backfillLookupHash(candidate.id, apiKey);
       // The query already filtered to active + non-expired, so this is valid.
       this.cacheValidRecord(apiKey, candidate);
       this.recordKeyUse(candidate.id);
