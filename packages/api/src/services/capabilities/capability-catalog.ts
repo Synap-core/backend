@@ -7,8 +7,8 @@
  * `CapabilityCard` per PACK:
  *   - one card per installed capability CONTAINER (`capabilities` table), with its
  *     member tools (→ connection) and member skills (→ verbs) folded in, plus
- *   - one card per AVAILABLE template (`capability_templates` + the on-disk family
- *     templates) that has NO matching installed container.
+ *   - one card per AVAILABLE template (from the Control Plane catalog — the
+ *     single source of truth) that has NO matching installed container.
  *
  * The single computed `status` per card drives every surface (CLI / browser /
  * Raycast): each card carries exactly one `nextAction`. De-dup is by pack
@@ -27,7 +27,6 @@ import {
   skills,
   links,
   secrets,
-  capabilityTemplates,
 } from "@synap/database/schema";
 import type { CapabilityDefinition } from "@synap/playbooks";
 
@@ -289,64 +288,19 @@ interface TemplateEntry {
 }
 
 /**
- * Load every available capability template definition: the live DB rows
- * (`capability_templates` — local workspace overlays) PLUS the Control Plane
- * catalog (the source of truth for the template library; the pod carries no
- * templates of its own). De-duped by key — a DB overlay wins over the CP entry.
+ * Load every available capability template definition from the Control Plane
+ * catalog — the SINGLE source of truth. The pod stores none of its own.
  */
-async function loadTemplates(workspaceId: string): Promise<TemplateEntry[]> {
-  const byKey = new Map<string, TemplateEntry>();
-
-  // DB rows: live (not soft-deleted), pod-wide OR this workspace overlay.
-  try {
-    const rows = await db
-      .select({
-        key: capabilityTemplates.key,
-        name: capabilityTemplates.name,
-        description: capabilityTemplates.description,
-        definition: capabilityTemplates.definition,
-      })
-      .from(capabilityTemplates)
-      .where(
-        and(
-          isNull(capabilityTemplates.deletedAt),
-          or(
-            isNull(capabilityTemplates.workspaceId),
-            eq(capabilityTemplates.workspaceId, workspaceId)
-          )
-        )
-      );
-    for (const r of rows) {
-      // A workspace overlay should win over the pod-wide row of the same key.
-      // The query returns both; keep the first seen — good enough for the
-      // catalog (both carry the same verbs/connection shape).
-      if (!byKey.has(r.key)) {
-        byKey.set(r.key, {
-          key: r.key,
-          name: r.name,
-          description: r.description,
-          def: r.definition as CapabilityDefinition,
-        });
-      }
-    }
-  } catch {
-    // Degrade: no DB overlays — the CP catalog below still applies.
-  }
-
-  // CONTROL PLANE catalog — the single source of truth for the template library
-  // (the pod carries no templates of its own). DB overlays above win per key.
+async function loadTemplates(): Promise<TemplateEntry[]> {
+  // CONTROL PLANE catalog — the SINGLE source of truth. The pod stores no
+  // templates of its own (no table, no files, no bundle).
   const cpItems = await fetchCPCapabilityTemplates();
-  for (const item of cpItems) {
-    if (byKey.has(item.key)) continue;
-    byKey.set(item.key, {
-      key: item.key,
-      name: item.name,
-      description: item.description ?? null,
-      def: item.definition,
-    });
-  }
-
-  return Array.from(byKey.values());
+  return cpItems.map((item) => ({
+    key: item.key,
+    name: item.name,
+    description: item.description ?? null,
+    def: item.definition,
+  }));
 }
 
 // ── The builder ───────────────────────────────────────────────────────────────
@@ -426,7 +380,7 @@ export async function buildCapabilityCatalog(
   const skillById = new Map(skillRows.map((s) => [s.id, s]));
 
   // 4. Available templates (DB + on-disk family set).
-  const templates = await loadTemplates(workspaceId);
+  const templates = await loadTemplates();
   const templateByName = new Map<string, TemplateEntry>();
   for (const t of templates) templateByName.set(t.name.toLowerCase(), t);
 

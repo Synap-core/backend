@@ -660,14 +660,8 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0146_tool_auth_binding.sql",
   },
 
-  // capability_templates — templates-as-data (0144). Absence means a pod is on a
-  // pre-0144 schema where DB-first template resolution would error and a
-  // `templateKey` apply could only fall back to (absent) on-disk JSON files.
-  {
-    table: "capability_templates",
-    column: "definition",
-    addedBy: "0144_capability_templates.sql",
-  },
+  // (capability_templates removed in 0154 — templates live on the Control Plane
+  // only; the pod stores none, so there is nothing to assert here.)
 
   // playbook_runs — the run ledger / executor spine (0127)
   {

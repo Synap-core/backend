@@ -35,7 +35,6 @@ import {
   registerCapabilitiesRoutes,
   registerCapabilitiesCatalogRoutes,
   registerCapabilitiesExecuteRoutes,
-  registerCapabilityTemplatesRoutes,
   registerLoopsRoutes,
   registerCaptureRoutes,
   registerChannelsRoutes,
@@ -455,7 +454,6 @@ registerToolsRoutes(app); // POST/GET /tools, GET /tools/:id (capability-substra
 registerCapabilitiesRoutes(app); // POST /capabilities/apply (capability-template applier)
 registerCapabilitiesCatalogRoutes(app); // GET /capabilities/catalog (pack-grouped, status-computed cards)
 registerCapabilitiesExecuteRoutes(app); // POST /capabilities/execute (agnostic capability launcher)
-registerCapabilityTemplatesRoutes(app); // POST/GET /capabilities/templates, DELETE /capabilities/templates/:key (templates-as-data)
 registerLoopsRoutes(app); // POST /loops/apply (loop / autonomy-template applier)
 registerMemoryRoutes(app); // /memory*
 registerKnowledgeRoutes(app); // /knowledge*, /graph/traverse

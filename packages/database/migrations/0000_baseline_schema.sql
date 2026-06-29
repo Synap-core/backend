@@ -3461,31 +3461,8 @@ CREATE INDEX IF NOT EXISTS "idx_project_members_user_project"
   ON "project_members" ("user_id", "project_id");
 
 -- ── Capability Templates (templates-as-data, 0144 catch-up) ───────────────────
--- DB-resident seed CapabilityDefinitions so a `templateKey` apply resolves
--- without the JSON files being bundled into the deployed image. workspace_id
--- NULL = pod-wide; SET = workspace overlay. See migration 0144.
-CREATE TABLE IF NOT EXISTS "capability_templates" (
-  "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-  "key"          text        NOT NULL,
-  "workspace_id" uuid        REFERENCES "workspaces"("id") ON DELETE CASCADE,
-  "name"         text        NOT NULL,
-  "description"  text,
-  "definition"   jsonb       NOT NULL,
-  "version"      integer     NOT NULL DEFAULT 1,
-  "source"       text,
-  "created_by"   text,
-  "deleted_at"   timestamptz,
-  "deleted_by"   text,
-  "created_at"   timestamptz NOT NULL DEFAULT now(),
-  "updated_at"   timestamptz NOT NULL DEFAULT now()
-);
-CREATE UNIQUE INDEX IF NOT EXISTS "uniq_capability_templates_key_pod_wide"
-  ON "capability_templates" ("key")
-  WHERE "workspace_id" IS NULL AND "deleted_at" IS NULL;
-CREATE INDEX IF NOT EXISTS "idx_capability_templates_key"
-  ON "capability_templates" ("key");
-CREATE INDEX IF NOT EXISTS "idx_capability_templates_workspace_id"
-  ON "capability_templates" ("workspace_id");
+-- (capability_templates table removed in 0154 — the Control Plane is the single
+-- source of truth for capability templates; the pod stores none. See 0154.)
 
 -- ── Provider Integrations (0150 catch-up) ─────────────────────────────────────
 -- Credential backend registry + secrets FK. See migration 0150 for the seeded

@@ -29,16 +29,13 @@ import {
   db,
   and,
   eq,
-  or,
   isNull,
-  drizzleSql,
   vaultGrants,
   assertGrantScoped,
 } from "@synap/database";
 import {
   secrets,
   secretAuditLog,
-  capabilityTemplates,
   tools as toolsTable,
   skills as skillsTable,
   playbooks as playbooksTable,
@@ -66,56 +63,23 @@ import { interpolateDeep } from "../_shared/interpolate.js";
 // ── templateKey → definition loader ───────────────────────────────────────────
 
 /**
- * Load a `CapabilityDefinition` by templateKey.
+ * Load a `CapabilityDefinition` by templateKey from the Control Plane catalog —
+ * the SINGLE source of truth (GET {CP}/api/marketplace/capabilities). The pod
+ * stores NO templates of its own: no table, no files, no bundle. Discovery and
+ * definitions both come from the CP, exactly like workspace packages.
  *
- * Resolution order:
- *   1. DB: a live `capability_templates` row (a WORKSPACE OVERLAY — a local
- *      customization of an installed pack). Workspace overlay wins over a
- *      pod-wide row.
- *   2. CONTROL PLANE catalog: the single source of truth for the template
- *      library (GET {CP}/api/marketplace/capabilities). The pod carries NO
- *      templates of its own — discovery + definitions come from the CP, exactly
- *      like workspace packages.
- *
- * Throws when neither resolves (unknown key, or the CP is unreachable AND no DB
- * overlay exists).
+ * `_opts` is accepted for call-site compatibility but ignored — there is no
+ * pod-local overlay anymore.
  */
 export async function loadCapabilityTemplate(
   templateKey: string,
-  opts?: { workspaceId?: string | null }
+  _opts?: { workspaceId?: string | null }
 ): Promise<CapabilityDefinition> {
-  // 1. DB overlay: workspace customization (if any) wins over a pod-wide row.
-  const workspaceId = opts?.workspaceId ?? null;
-  const scopePredicate = workspaceId
-    ? or(
-        eq(capabilityTemplates.workspaceId, workspaceId),
-        isNull(capabilityTemplates.workspaceId)
-      )
-    : isNull(capabilityTemplates.workspaceId);
-
-  const [row] = await db
-    .select({ definition: capabilityTemplates.definition })
-    .from(capabilityTemplates)
-    .where(
-      and(
-        eq(capabilityTemplates.key, templateKey),
-        isNull(capabilityTemplates.deletedAt),
-        scopePredicate
-      )
-    )
-    .orderBy(drizzleSql`${capabilityTemplates.workspaceId} ASC NULLS LAST`)
-    .limit(1);
-
-  if (row) {
-    return row.definition as CapabilityDefinition;
-  }
-
-  // 2. Control Plane catalog — the source of truth.
   const cpDef = await fetchCPCapabilityTemplate(templateKey);
   if (cpDef) return cpDef;
 
   throw new Error(
-    `Capability template "${templateKey}" not found (no workspace overlay; not in the Control Plane catalog — is the CP reachable + seeded?).`
+    `Capability template "${templateKey}" not found in the Control Plane catalog — is the CP reachable + seeded (pnpm seed:capabilities)?`
   );
 }
 

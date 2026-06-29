@@ -1,0 +1,11 @@
+-- Drop the pod-local capability-template store.
+--
+-- Capability templates now live ONLY on the Control Plane (the same place
+-- workspace packages live): GET {CP}/api/marketplace/capabilities is the single
+-- source of truth. The pod fetches definitions on demand and applies them — it
+-- stores no templates of its own (no table, no files, no bundle). This removes
+-- the second, competing resolution source that produced duplication + drift.
+--
+-- The table was effectively empty (no seed path ever populated it on a pod), so
+-- this drops nothing load-bearing. Idempotent.
+DROP TABLE IF EXISTS "capability_templates" CASCADE;
