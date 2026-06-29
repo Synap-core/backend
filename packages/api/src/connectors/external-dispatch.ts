@@ -1313,14 +1313,30 @@ export async function triggerProviderAction(
       };
     }
     if (matches.length > 1) {
-      return {
-        success: false,
-        status: 400,
-        errorCode: "bad_request",
-        error: `Tool name "${provider}" is not unique (${matches.length} matches). Use the tool's credentialRef or id.`,
-      };
+      // Scope precedence: a workspace-scoped tool OVERRIDES a pod-wide tool of
+      // the same name (standard overlay semantics — the workspace row is the
+      // deliberate, more-specific binding). Only a set that is still ambiguous
+      // AFTER applying precedence (e.g. two pod-wide rows, or two rows in the
+      // same workspace) is a genuine conflict the caller must disambiguate.
+      const wsScoped = workspaceId
+        ? matches.filter((m) => m.workspaceId === workspaceId)
+        : [];
+      const podWide = matches.filter((m) => m.workspaceId == null);
+      if (wsScoped.length === 1) {
+        tool = wsScoped[0]!;
+      } else if (wsScoped.length === 0 && podWide.length === 1) {
+        tool = podWide[0]!;
+      } else {
+        return {
+          success: false,
+          status: 400,
+          errorCode: "bad_request",
+          error: `Tool name "${provider}" is not unique (${matches.length} matches). Use the tool's credentialRef or id.`,
+        };
+      }
+    } else {
+      tool = matches[0]!;
     }
-    tool = matches[0]!;
     if (!tool.credentialRef) {
       return {
         success: false,
