@@ -37,6 +37,7 @@ import {
 } from "@synap/database";
 
 import { requireUserId } from "../utils/user-scoped.js";
+import { accessScopeWhere } from "../utils/project-scope.js";
 import { randomUUID } from "crypto";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects, getBoss } from "@synap/events";
@@ -771,7 +772,19 @@ export const documentsRouter = router({
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
-      const conditions = [eq(documents.userId, userId)];
+      // USER FLOOR (not eq(userId)): a document in a workspace the user belongs
+      // to is visible even when owned by another member. accessScopeWhere is the
+      // DATA-table resolver — it owner-gates NULL-workspace (pod-personal) rows,
+      // so a personal doc never leaks pod-wide, while shared-workspace docs are
+      // included. No lens here = the full floor; a workspace lens would narrow.
+      const conditions = [
+        accessScopeWhere({
+          workspaceIdColumn: documents.workspaceId,
+          entityIdColumn: documents.id,
+          ownerColumn: documents.userId,
+          userId,
+        }),
+      ];
       if (input.type) {
         conditions.push(eq(documents.type, input.type));
       }
