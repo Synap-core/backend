@@ -14,7 +14,8 @@ import { TRPCError } from "@trpc/server";
 import { getDb, eq, and, desc, artifacts } from "@synap/database";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { AccessContext, scopedDb } from "../access/index.js";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
+import type { Lens } from "../access/context.js";
+import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { emitHubRealtimeEvent } from "../utils/domain-event-bridge.js";
 import type { Artifact } from "@synap/database/schema";
 
@@ -36,92 +37,100 @@ const artifactOriginKindSchema = z.enum([
   "system",
 ]);
 
+// ── Shared list input + query ─────────────────────────────────────────────────
+
+/** Non-scope filters common to both list doors. */
+const artifactListFilters = {
+  state: artifactStateSchema.optional(),
+  placement: artifactPlacementSchema.optional(),
+  sessionId: z.string().uuid().optional(),
+  limit: z.number().int().min(1).max(100).default(50),
+} as const;
+
+const artifactListInputSchema = z.object(artifactListFilters);
+type ArtifactListInput = z.infer<typeof artifactListInputSchema>;
+
+/**
+ * The shared read. Starts from the USER FLOOR (the artifacts visibility rule
+ * in access/registry.ts) and lets the workspace lens NARROW within it — the
+ * floor is ALWAYS applied, a lens only narrows, an empty/absent lens never
+ * matches zero. Goes through scopedDb's registered predicate so every door
+ * gets the same structural floor.
+ */
+async function queryArtifacts(
+  ctx: {
+    userId?: string | null;
+    agentUserId?: string | null;
+    isHubProtocol?: boolean;
+  },
+  input: ArtifactListInput,
+  workspaceLens: Lens
+) {
+  const database = await getDb();
+  const visibility = scopedDb(
+    AccessContext.from(ctx).withLens(workspaceLens)
+  ).predicate(artifacts);
+
+  const rows = await database
+    .select()
+    .from(artifacts)
+    .where(
+      and(
+        visibility,
+        input.state !== undefined
+          ? eq(artifacts.state, input.state)
+          : undefined,
+        input.placement !== undefined
+          ? eq(artifacts.placement, input.placement)
+          : undefined,
+        input.sessionId !== undefined
+          ? eq(artifacts.sessionId, input.sessionId)
+          : undefined
+      )
+    )
+    .orderBy(desc(artifacts.createdAt))
+    .limit(input.limit);
+
+  return rows;
+}
+
 // ── Router ──────────────────────────────────────────────────────────────────
 
 export const artifactsRouter = router({
   /**
-   * List artifacts for the active workspace, optionally filtered by state,
-   * placement, or session.
+   * THE one door for artifacts (collapses the old list/listAll split).
    *
-   * Uses scopedDb.predicate (workspace visibility rule) + db.select() to
-   * compose arbitrary optional filters — same pattern as automations.list.
+   * Artifacts are workspace-scoped (the visibility rule's user floor = every
+   * workspace the user belongs to + pod-wide globals). The workspace lens then
+   * NARROWS within that floor:
+   *   - no `workspaceId` (and no active-ws header) → ALL my artifacts
+   *   - active-ws header / a `workspaceId` → that workspace's artifacts
+   *   - `workspaceId: null` → pod-personal/globals only
+   *   - `workspaceId: [a, b]` → those workspaces (union)
+   * No project axis (the artifacts table has no project/anchor column).
    */
-  list: workspaceProcedure
+  list: protectedProcedure
     .input(
       z.object({
-        state: artifactStateSchema.optional(),
-        placement: artifactPlacementSchema.optional(),
-        sessionId: z.string().uuid().optional(),
-        limit: z.number().int().min(1).max(100).default(50),
+        workspaceId: ScopeFilterShape.workspaceId,
+        ...artifactListFilters,
       })
     )
     .query(async ({ ctx, input }) => {
-      const database = await getDb();
-      const visibility = scopedDb(AccessContext.from(ctx)).predicate(artifacts);
-
-      const rows = await database
-        .select()
-        .from(artifacts)
-        .where(
-          and(
-            visibility,
-            input.state !== undefined
-              ? eq(artifacts.state, input.state)
-              : undefined,
-            input.placement !== undefined
-              ? eq(artifacts.placement, input.placement)
-              : undefined,
-            input.sessionId !== undefined
-              ? eq(artifacts.sessionId, input.sessionId)
-              : undefined
-          )
-        )
-        .orderBy(desc(artifacts.createdAt))
-        .limit(input.limit);
-
-      return rows;
+      const { workspaceLens } = resolveScope(ctx, input);
+      return queryArtifacts(ctx, input, workspaceLens);
     }),
 
   /**
-   * List artifacts across ALL workspaces the user belongs to.
-   *
-   * Same input/output shape as `list` so consumers can swap without
-   * restructuring the call site. Used by Eve OS and cross-workspace surfaces.
-   * Scoped by userId (the natural user-wide predicate for artifacts).
+   * @deprecated Use `list` (the canonical scope-aware door) instead. Thin alias
+   * kept for existing call sites: same logic with NO workspace lens, so it reads
+   * the user floor across every workspace. Now routed through scopedDb too, so
+   * it no longer bypasses the visibility registry.
    */
   listAll: protectedProcedure
-    .input(
-      z.object({
-        state: artifactStateSchema.optional(),
-        placement: artifactPlacementSchema.optional(),
-        sessionId: z.string().uuid().optional(),
-        limit: z.number().int().min(1).max(100).default(50),
-      })
-    )
+    .input(artifactListInputSchema)
     .query(async ({ ctx, input }) => {
-      const database = await getDb();
-
-      const rows = await database
-        .select()
-        .from(artifacts)
-        .where(
-          and(
-            userVisibleWhere(artifacts.workspaceId, ctx.userId),
-            input.state !== undefined
-              ? eq(artifacts.state, input.state)
-              : undefined,
-            input.placement !== undefined
-              ? eq(artifacts.placement, input.placement)
-              : undefined,
-            input.sessionId !== undefined
-              ? eq(artifacts.sessionId, input.sessionId)
-              : undefined
-          )
-        )
-        .orderBy(desc(artifacts.createdAt))
-        .limit(input.limit);
-
-      return rows;
+      return queryArtifacts(ctx, input, undefined);
     }),
 
   /**
