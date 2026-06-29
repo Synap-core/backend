@@ -42,7 +42,7 @@ const UpdateProjectSchema = z.object({
 
 export function registerProjectsRoutes(app: HubHono): void {
   // List projects for the authenticated user
-  app.get("/api/hub/projects", async (c) => {
+  app.get("/projects", async (c) => {
     const userId = c.get("userId");
     const status = c.req.query("status") ?? undefined;
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50") || 50, 100);
@@ -72,7 +72,7 @@ export function registerProjectsRoutes(app: HubHono): void {
   });
 
   // Get a single project
-  app.get("/api/hub/projects/:id", async (c) => {
+  app.get("/projects/:id", async (c) => {
     const userId = c.get("userId");
     const id = c.req.param("id");
 
@@ -94,7 +94,7 @@ export function registerProjectsRoutes(app: HubHono): void {
   });
 
   // Create a project
-  app.post("/api/hub/projects", async (c) => {
+  app.post("/projects", async (c) => {
     const userId = c.get("userId");
     const body = CreateProjectSchema.parse(await c.req.json());
 
@@ -133,7 +133,7 @@ export function registerProjectsRoutes(app: HubHono): void {
   });
 
   // Update a project
-  app.patch("/api/hub/projects/:id", async (c) => {
+  app.patch("/projects/:id", async (c) => {
     const userId = c.get("userId");
     const id = c.req.param("id");
     const body = UpdateProjectSchema.parse(await c.req.json());
@@ -164,7 +164,7 @@ export function registerProjectsRoutes(app: HubHono): void {
   });
 
   // Delete a project
-  app.delete("/api/hub/projects/:id", async (c) => {
+  app.delete("/projects/:id", async (c) => {
     const userId = c.get("userId");
     const id = c.req.param("id");
 
