@@ -64,6 +64,24 @@ const BoardResourceRefSchema = z.discriminatedUnion("kind", [
     html: z.string(),
   }),
   z.object({
+    // Multi-slide artboard deck (carousel/deck) authored by the generate_carousel
+    // / generate_deck agent tools. The backend passes it through to the board's
+    // socket room verbatim; the whiteboard client materializes one artboard per
+    // slide. Kept in sync with the IS place-on-whiteboard union + the synap-app
+    // placement handler.
+    kind: z.literal("artboard-deck"),
+    preset: z.string(),
+    title: z.string().optional(),
+    slides: z
+      .array(
+        z.object({
+          html: z.string(),
+          title: z.string().optional(),
+        })
+      )
+      .min(1),
+  }),
+  z.object({
     kind: z.literal("automation"),
     automationId: z.string().uuid(),
     mode: z.enum(["flow", "detail", "status", "trigger"]),

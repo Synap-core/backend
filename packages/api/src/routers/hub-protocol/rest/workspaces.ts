@@ -23,6 +23,8 @@ import {
   type AgentMetadata,
 } from "@synap/database";
 import { sql as drizzleSql } from "drizzle-orm";
+import { emitSideEffects } from "@synap/events";
+import { storage } from "@synap/storage";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -822,6 +824,160 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         },
         isValidationError ? 400 : 500
       );
+    }
+  });
+
+  /**
+   * POST /workspaces/:workspaceId/purge
+   *
+   * DESTRUCTIVE owner maintenance. Hard-purges ALL workspace-scoped content
+   * (entities/relations/proposals/documents) and then deletes the workspace row
+   * (config tables — views/profiles/property_defs/members — FK-cascade). Pod-wide
+   * rows (`workspaceId IS NULL`) are intentionally left untouched.
+   *
+   * This DELIBERATELY bypasses the soft-delete / proposal flow: it is an explicit,
+   * confirm-gated OWNER action, not an agent mutation — so it does NOT call
+   * `checkPermissionOrPropose()` and never returns `{ status: "proposed" }`. It
+   * mirrors the safety rails of `workspaces.adminDelete` (tRPC) but is gated on
+   * OWNERSHIP (owner/admin membership) rather than pod-admin.
+   *
+   * Registered as a 3-segment literal-suffix route (`/:workspaceId/purge`), so it
+   * never collides with the static `/workspaces/*` POST routes above.
+   */
+  app.post("/workspaces/:workspaceId/purge", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const userId = c.get("userId") as string;
+    const workspaceId = c.req.param("workspaceId");
+    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    const parsed = z.object({ confirm: z.string() }).safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid body", details: parsed.error.issues },
+        400
+      );
+    }
+
+    // 404 — workspace must exist.
+    const workspace = await db.query.workspaces.findFirst({
+      where: eq(workspaces.id, workspaceId),
+      columns: { id: true, name: true, settings: true },
+    });
+    if (!workspace) return c.json({ error: "Workspace not found" }, 404);
+
+    // 403 — ownership. Same predicate as the workspace write routes
+    // (eve-provider-routing / delivery-preferences): owner/admin membership.
+    const membership = await db.query.workspaceMembers.findFirst({
+      where: and(
+        eq(workspaceMembers.workspaceId, workspaceId),
+        eq(workspaceMembers.userId, userId)
+      ),
+      columns: { role: true },
+    });
+    if (!membership) return c.json({ error: "Access denied" }, 403);
+    if (membership.role !== "owner" && membership.role !== "admin") {
+      return c.json(
+        { error: "Owner/admin role required to purge a workspace." },
+        403
+      );
+    }
+
+    // 403 — refuse system workspaces (mirror adminDelete).
+    const settings = (workspace.settings ?? {}) as Record<string, unknown>;
+    if (settings.systemSlug) {
+      return c.json({ error: "System workspaces cannot be purged." }, 403);
+    }
+
+    // 400 — confirm must equal the workspace name exactly.
+    if (parsed.data.confirm !== workspace.name) {
+      return c.json(
+        {
+          error: "confirm does not match the workspace name. Purge cancelled.",
+        },
+        400
+      );
+    }
+
+    try {
+      const dbConn = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
+
+      // Hard-purge workspace-scoped rows in a tx (returns storageKeys + ids for
+      // post-commit cleanup), then delete the workspace row.
+      const purged = await workspaceRepo.purgeWorkspaceData(workspaceId);
+      await workspaceRepo.delete(workspaceId, userId);
+
+      // Post-commit, best-effort cleanup of out-of-DB state (never block delete).
+      let blobsDeleted = 0;
+      for (const key of purged.storageKeys) {
+        try {
+          await storage.delete(key);
+          blobsDeleted++;
+        } catch (err) {
+          logger.warn(
+            { err, key },
+            "Workspace purge: MinIO blob delete failed"
+          );
+        }
+      }
+      // De-index removed entities + documents from Typesense.
+      for (const id of purged.entityIds) {
+        void emitSideEffects({
+          subjectType: "entity",
+          action: "delete",
+          subjectId: id,
+          userId,
+          workspaceId,
+        });
+      }
+      for (const id of purged.documentIds) {
+        void emitSideEffects({
+          subjectType: "document",
+          action: "delete",
+          subjectId: id,
+          userId,
+          workspaceId,
+        });
+      }
+
+      logger.warn(
+        {
+          workspaceId,
+          purgedBy: userId,
+          entities: purged.entityIds.length,
+          documents: purged.documentIds.length,
+          relations: purged.relationsDeleted,
+          proposals: purged.proposalsDeleted,
+          blobs: blobsDeleted,
+        },
+        "Workspace HARD-PURGED via Hub Protocol"
+      );
+
+      return c.json({
+        purged: true,
+        workspaceId,
+        entitiesDeleted: purged.entityIds.length,
+        blobsDeleted,
+      });
+    } catch (err) {
+      logger.error(
+        { err, userId, workspaceId },
+        "POST /workspaces/:workspaceId/purge failed"
+      );
+      return c.json({ error: "Failed to purge workspace" }, 500);
     }
   });
 
