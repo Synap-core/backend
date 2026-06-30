@@ -20,7 +20,7 @@
  * (api → jobs). This mirrors the established pattern in sync-push.ts / proactive-post.ts.
  */
 
-import { db, drizzleSql } from "@synap/database";
+import { db, drizzleSql, notInArray } from "@synap/database";
 import { capabilityTemplateCache } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
@@ -99,6 +99,8 @@ export async function handleCapabilityTemplateSync(): Promise<void> {
     syncedAt: now,
   }));
 
+  const fetchedKeys = rows.map((r) => r.key);
+
   try {
     await db
       .insert(capabilityTemplateCache)
@@ -112,12 +114,28 @@ export async function handleCapabilityTemplateSync(): Promise<void> {
           syncedAt: now,
         },
       });
+
+    // PRUNE: delete cache rows whose key is no longer in the CP catalog.
+    // Guard: only runs when the fetch succeeded AND returned a non-empty list
+    // (both checks already passed above — items.length > 0 and items !== null).
+    // This prevents a CP outage or hiccup from wiping the local cache.
+    const pruned = await db
+      .delete(capabilityTemplateCache)
+      .where(notInArray(capabilityTemplateCache.key, fetchedKeys))
+      .returning({ key: capabilityTemplateCache.key });
+
     logger.info(
-      { count: rows.length },
+      { upserted: rows.length, pruned: pruned.length },
       "Synced capability_template_cache from Control Plane"
     );
+    if (pruned.length > 0) {
+      logger.info(
+        { keys: pruned.map((r) => r.key) },
+        "Pruned stale capability_template_cache entries"
+      );
+    }
   } catch (err) {
-    logger.error({ err }, "Failed to upsert capability_template_cache");
+    logger.error({ err }, "Failed to upsert/prune capability_template_cache");
     throw err; // Let pg-boss retry; the cache is left as-is.
   }
 }
