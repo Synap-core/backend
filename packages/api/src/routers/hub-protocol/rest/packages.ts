@@ -139,7 +139,10 @@ const PackageApplySchema = z.object({
 // ─── Route registration ──────────────────────────────────────────────────────
 
 export function registerPackagesRoutes(app: HubHono): void {
-  app.post("/api/hub/packages/apply", async (c) => {
+  // The hub app is mounted at /api/hub, so routes are registered RELATIVE
+  // (like every sibling: /workspaces, /capabilities). An absolute
+  // "/api/hub/packages/apply" here double-prefixes to /api/hub/api/hub/... and 404s.
+  app.post("/packages/apply", async (c) => {
     const userId = c.get("userId");
     const agentUserId = c.get("agentUserId") ?? undefined;
     const body = PackageApplySchema.parse(await c.req.json());
