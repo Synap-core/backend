@@ -444,6 +444,11 @@ export const tools = {
               type: "number",
               description: "0-100 integer progress (optional).",
             },
+            currentStage: {
+              type: "string",
+              description:
+                "Advance the session to this playbook stage by its stage `key` (optional). Only meaningful for staged playbooks. Changing it emits a stage-transition event automations can react to.",
+            },
             expectedOutputs: {
               type: "array",
               items: {

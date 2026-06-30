@@ -682,6 +682,8 @@ export async function executeMCPToolViaHubProtocol(
       if (args.status !== undefined)
         set.status = args.status as "active" | "paused";
       if (args.progress !== undefined) set.progress = args.progress as number;
+      if (args.currentStage !== undefined)
+        set.currentStage = args.currentStage as string;
 
       // addOutput / completeOutput / a full expectedOutputs replace mutate the
       // JSONB deliverables array. Do the read-modify-write inside a transaction
@@ -736,6 +738,33 @@ export async function executeMCPToolViaHubProtocol(
           .where(eq(focusSessions.id, sessionId))
           .returning();
       });
+
+      // Stage transition side-effect: when the active stage actually changes,
+      // emit `focus_session.stage_changed` so automations can react (mirrors the
+      // tRPC + Hub REST update doors). No-op for stageless / unchanged stages.
+      if (
+        args.currentStage !== undefined &&
+        args.currentStage !== existing.currentStage
+      ) {
+        const { emitSideEffects } = await import("@synap/events");
+        emitSideEffects({
+          subjectType: "focus_session",
+          action: "stage_changed",
+          subjectId: updated.id,
+          userId,
+          workspaceId: existing.workspaceId,
+          data: {
+            sessionId: updated.id,
+            subjectId: existing.subjectEntityId,
+            playbookId: existing.playbookId,
+            fromStage: existing.currentStage,
+            toStage: updated.currentStage,
+            workspaceId: existing.workspaceId,
+            userId,
+          },
+        });
+      }
+
       return ok({ status: "updated", session: updated });
     }
 

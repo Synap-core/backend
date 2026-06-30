@@ -974,6 +974,8 @@ export interface AutomationTriggerConfig {
 	feedArchetype?: string;
 	/** Minimum relevance score (0-1) — items below this score are skipped */
 	feedMinRelevanceScore?: number;
+	/** Only fire when a focus session advanced INTO this stage (PlaybookStage.key) */
+	toStage?: string;
 }
 export interface AutomationNodeBase {
 	id: string;
@@ -1998,6 +2000,26 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {}>;
+		currentStage: import("drizzle-orm/pg-core").PgColumn<{
+			name: "current_stage";
+			tableName: "focus_sessions";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
 		agentIds: import("drizzle-orm/pg-core").PgColumn<{
 			name: "agent_ids";
 			tableName: "focus_sessions";
@@ -2037,7 +2059,6 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			size: undefined;
 			baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
 				name: "agent_ids";
 				dataType: "string";
@@ -2049,6 +2070,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				];
 				driverParam: string;
 			}, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
+			size: undefined;
 		}>;
 		closedAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "closed_at";
@@ -2717,6 +2739,23 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {}>;
+		stages: import("drizzle-orm/pg-core").PgColumn<{
+			name: "stages";
+			tableName: "playbooks";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
 		schedule: import("drizzle-orm/pg-core").PgColumn<{
 			name: "schedule";
 			tableName: "playbooks";
@@ -2762,7 +2801,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "archived" | "draft" | "paused";
+			data: "draft" | "active" | "paused" | "archived";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3671,6 +3710,17 @@ declare const OperationalEventTypes: {
 		readonly description: "Fires after an entity is permanently deleted.";
 		readonly filterKeys: [
 			"profileSlug"
+		];
+	};
+	readonly FOCUS_SESSION_STAGE_CHANGED: {
+		readonly type: "focus_session.stage_changed.completed";
+		readonly label: "Playbook stage changed";
+		readonly domain: "Focus sessions";
+		readonly description: "Fires when a focus session advances to a different playbook stage.";
+		readonly filterKeys: [
+			"toStage",
+			"fromStage",
+			"playbookId"
 		];
 	};
 	readonly PROPOSAL_CREATED: {
@@ -17217,6 +17267,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expectedOutputs: unknown;
 				channelId: string | null;
 				progress: number | null;
+				currentStage: string | null;
 				agentIds: string[] | null;
 				closedAt: Date | null;
 				verificationReport: unknown;
@@ -17247,6 +17298,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				expectedOutputs: unknown;
 				progress: number | null;
+				currentStage: string | null;
 				agentIds: string[] | null;
 				closedAt: Date | null;
 				verificationReport: unknown;
@@ -17274,6 +17326,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				expectedOutputs: unknown;
 				progress: number | null;
+				currentStage: string | null;
 				agentIds: string[] | null;
 				closedAt: Date | null;
 				verificationReport: unknown;
@@ -17311,6 +17364,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				expectedOutputs: unknown;
 				progress: number | null;
+				currentStage: string | null;
 				agentIds: string[] | null;
 				closedAt: Date | null;
 				verificationReport: unknown;
@@ -17331,6 +17385,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					label: string;
 					icon?: string | undefined;
 				}[] | undefined;
+				currentStage?: string | undefined;
 			};
 			output: {
 				userId: string;
@@ -17349,6 +17404,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				expectedOutputs: unknown;
 				progress: number | null;
+				currentStage: string | null;
 				agentIds: string[] | null;
 				closedAt: Date | null;
 				verificationReport: unknown;
@@ -17376,6 +17432,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string | null;
 				expectedOutputs: unknown;
 				progress: number | null;
+				currentStage: string | null;
 				agentIds: string[] | null;
 				closedAt: Date | null;
 				verificationReport: unknown;
@@ -17502,6 +17559,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				inputStrategy: unknown;
 				channelSpec: unknown;
 				expectedOutputs: unknown;
+				stages: unknown;
 				schedule: unknown;
 				executor: PlaybookExecutorRef;
 				status: "active" | "paused" | "archived" | "draft";
@@ -17533,6 +17591,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				goalTemplate: string;
 				inputStrategy: unknown;
 				channelSpec: unknown;
+				stages: unknown;
 				schedule: unknown;
 				flowAutomationId: string | null;
 				subjectProfile: unknown;
@@ -17551,6 +17610,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				inputStrategy?: Record<string, unknown> | undefined;
 				channelSpec?: Record<string, unknown> | undefined;
 				expectedOutputs?: Record<string, unknown>[] | undefined;
+				stages?: Record<string, unknown>[] | undefined;
+				subjectProfile?: Record<string, unknown> | undefined;
 				schedule?: unknown;
 				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
 				status?: "active" | "paused" | "archived" | "draft" | undefined;
@@ -17581,6 +17642,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				inputStrategy?: Record<string, unknown> | undefined;
 				channelSpec?: Record<string, unknown> | undefined;
 				expectedOutputs?: Record<string, unknown>[] | undefined;
+				stages?: Record<string, unknown>[] | undefined;
+				subjectProfile?: Record<string, unknown> | undefined;
 				schedule?: unknown;
 				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
 				status?: "active" | "paused" | "archived" | "draft" | undefined;
@@ -17652,6 +17715,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					expectedOutputs: unknown;
 					progress: number | null;
+					currentStage: string | null;
 					agentIds: string[] | null;
 					closedAt: Date | null;
 					verificationReport: unknown;
@@ -17693,6 +17757,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					goalTemplate: string;
 					inputStrategy: unknown;
 					channelSpec: unknown;
+					stages: unknown;
 					schedule: unknown;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
@@ -17751,6 +17816,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbookId: string | null;
 					expectedOutputs: unknown;
 					progress: number | null;
+					currentStage: string | null;
 					agentIds: string[] | null;
 					closedAt: Date | null;
 					verificationReport: unknown;
