@@ -279,6 +279,8 @@ export const focusSessionsRouter = router({
         goal: z.string().min(1).max(2000).optional(),
         agentIds: z.array(z.string()).optional(),
         expectedOutputs: z.array(expectedOutputItemSchema).optional(),
+        // First-class stages: advance the active playbook stage (PlaybookStage.key).
+        currentStage: z.string().min(1).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -313,6 +315,8 @@ export const focusSessionsRouter = router({
       if (patch.agentIds !== undefined) set.agentIds = patch.agentIds;
       if (patch.expectedOutputs !== undefined)
         set.expectedOutputs = patch.expectedOutputs;
+      if (patch.currentStage !== undefined)
+        set.currentStage = patch.currentStage;
 
       // If transitioning to closed, stamp closedAt
       if (patch.status === "closed" && existing.status !== "closed") {
@@ -324,6 +328,31 @@ export const focusSessionsRouter = router({
         .set(set)
         .where(eq(focusSessions.id, input.id))
         .returning();
+
+      // Stage transition side-effect: when the active stage actually changes,
+      // emit `focus_session.stage_changed` so automations can react to the
+      // transition (and filter on toStage). No-op for stageless playbooks.
+      if (
+        patch.currentStage !== undefined &&
+        patch.currentStage !== existing.currentStage
+      ) {
+        emitSideEffects({
+          subjectType: "focus_session",
+          action: "stage_changed",
+          subjectId: updated.id,
+          userId: ctx.userId,
+          workspaceId: existing.workspaceId,
+          data: {
+            sessionId: updated.id,
+            subjectId: existing.subjectEntityId,
+            playbookId: existing.playbookId,
+            fromStage: existing.currentStage,
+            toStage: updated.currentStage,
+            workspaceId: existing.workspaceId,
+            userId: ctx.userId,
+          },
+        });
+      }
 
       return updated as FocusSession;
     }),

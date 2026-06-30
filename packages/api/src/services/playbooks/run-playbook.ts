@@ -39,7 +39,12 @@ import {
   ChannelScope,
   ChannelStatus,
 } from "@synap/database/schema";
-import type { ChannelSpec, RunResult, InputStrategy } from "@synap/playbooks";
+import type {
+  ChannelSpec,
+  RunResult,
+  InputStrategy,
+  PlaybookStage,
+} from "@synap/playbooks";
 import { instantiateSession } from "./playbook-lifecycle.js";
 import {
   resolveGrantedCapabilities,
@@ -348,6 +353,10 @@ async function executeSingleRun(
       subjectId: input.subjectId,
       subjectName,
       subjectProfile,
+      // First-class stages: the playbook's declared stages + the session's active
+      // stage key (both empty/null for a stageless, progress-only playbook).
+      stages: (playbook.stages as PlaybookStage[]) ?? [],
+      currentStage: session.currentStage,
       // Thread the run id so an external agent knows which run to capture back
       // against (POST /api/hub/runs/{runId}/capture); webhookUrl rides params.
       input: { ...params, runId: run.id },

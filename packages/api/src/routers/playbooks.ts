@@ -115,6 +115,8 @@ const createInputSchema = z.object({
   inputStrategy: jsonRecord.optional(),
   channelSpec: jsonRecord.optional(),
   expectedOutputs: z.array(jsonRecord).optional(),
+  stages: z.array(jsonRecord).optional(),
+  subjectProfile: jsonRecord.optional(),
   schedule: jsonValue.optional(),
   executor: executorRefSchema.default("is-agent"),
   status: playbookStatusSchema.default("draft"),
@@ -132,6 +134,8 @@ const updateInputSchema = z.object({
   inputStrategy: jsonRecord.optional(),
   channelSpec: jsonRecord.optional(),
   expectedOutputs: z.array(jsonRecord).optional(),
+  stages: z.array(jsonRecord).optional(),
+  subjectProfile: jsonRecord.optional(),
   schedule: jsonValue.optional(),
   executor: executorRefSchema.optional(),
   status: playbookStatusSchema.optional(),
@@ -383,6 +387,8 @@ export const playbooksRouter = router({
           inputStrategy: input.inputStrategy ?? { kind: "none" },
           channelSpec: input.channelSpec ?? {},
           expectedOutputs: input.expectedOutputs ?? [],
+          stages: input.stages ?? [],
+          subjectProfile: input.subjectProfile ?? null,
           schedule: input.schedule ?? null,
           executor: input.executor,
           status: input.status,
@@ -467,6 +473,9 @@ export const playbooksRouter = router({
       if (input.channelSpec !== undefined) set.channelSpec = input.channelSpec;
       if (input.expectedOutputs !== undefined)
         set.expectedOutputs = input.expectedOutputs;
+      if (input.stages !== undefined) set.stages = input.stages;
+      if (input.subjectProfile !== undefined)
+        set.subjectProfile = input.subjectProfile;
       if (input.schedule !== undefined) set.schedule = input.schedule;
       if (input.executor !== undefined) set.executor = input.executor;
       if (input.status !== undefined) set.status = input.status;

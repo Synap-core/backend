@@ -23,7 +23,11 @@
 
 import { getDb, eq, focusSessions, playbooks } from "@synap/database";
 import type { Playbook, FocusSession } from "@synap/database/schema";
-import type { ExpectedOutput, LinkInput } from "@synap/playbooks";
+import type {
+  ExpectedOutput,
+  LinkInput,
+  PlaybookStage,
+} from "@synap/playbooks";
 import { parseCommandTemplate } from "../../utils/command-template.js";
 import {
   createLinks,
@@ -87,6 +91,10 @@ export async function instantiateSession(
     (input.params ?? {}) as Record<string, unknown>
   );
   const expectedOutputs = (playbook.expectedOutputs as ExpectedOutput[]) ?? [];
+  // Seed the active stage from the playbook's first stage (null when stageless,
+  // so a no-stage playbook stays progress-only — currentStage never NOT NULL).
+  const stages = (playbook.stages as PlaybookStage[]) ?? [];
+  const currentStage = stages[0]?.key ?? null;
 
   const [session] = await db
     .insert(focusSessions)
@@ -98,6 +106,7 @@ export async function instantiateSession(
       projectId: input.projectId ?? null,
       subjectEntityId: input.subjectId ?? null,
       expectedOutputs,
+      currentStage,
       channelId: input.channelId ?? null,
       agentIds: input.agentIds ?? [],
       status: "active",

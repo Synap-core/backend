@@ -149,6 +149,26 @@ export interface ExpectedOutput {
   icon?: string;
 }
 
+/**
+ * A first-class stage of a Playbook — an ordered phase the run advances through.
+ * Stages are ADDITIVE: a playbook with no stages behaves exactly as before
+ * (progress-only). The active stage's `key` is stored on
+ * `focus_sessions.currentStage`; it NEVER becomes required.
+ */
+export interface PlaybookStage {
+  /** Stable id; value stored in focus_sessions.currentStage. */
+  key: string;
+  name: string;
+  description?: string;
+  /** Stage-scoped goal when this stage is active. */
+  goal?: string;
+  /** Capabilities granted while this stage is active. */
+  grants?: CapabilityRef[];
+  /** Deliverables expected from this stage. */
+  expectedOutputs?: ExpectedOutput[];
+  suggestedTasks?: string[];
+}
+
 export interface PlaybookSchedule {
   /** 5-field cron expression (e.g. "0 9 * * MON"). */
   cron: string;
@@ -224,6 +244,10 @@ export interface RunContext {
   subjectName?: string;
   /** Resolved subject profile slug (entity type), e.g. "person", "deal". */
   subjectProfile?: string;
+  /** The playbook's declared stages (empty/absent ⇒ progress-only run). */
+  stages?: PlaybookStage[];
+  /** The active stage key (mirrors focus_sessions.currentStage); null when stageless. */
+  currentStage?: string | null;
 }
 
 export interface RunResult {

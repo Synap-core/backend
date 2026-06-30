@@ -3241,6 +3241,8 @@ CREATE INDEX IF NOT EXISTS idx_focus_sessions_project_id ON "focus_sessions" ("p
 -- Process North Star subject spine (0139)
 ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS subject_entity_id uuid;
 CREATE INDEX IF NOT EXISTS idx_focus_sessions_subject_entity_id ON focus_sessions (subject_entity_id);
+-- First-class playbook stages (0159): active stage pointer (nullable).
+ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS current_stage text;
 -- One active session per channel + covering index for per-message lookup (0121)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_focus_sessions_active_channel
   ON focus_sessions (channel_id)
@@ -3391,6 +3393,8 @@ CREATE INDEX IF NOT EXISTS "idx_playbooks_status"       ON "playbooks" ("status"
 ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS flow_automation_id uuid;
 CREATE INDEX IF NOT EXISTS idx_playbooks_flow_automation_id ON playbooks (flow_automation_id);
 ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS subject_profile jsonb;
+-- First-class playbook stages (0159): PlaybookStage[] (empty = progress-only).
+ALTER TABLE playbooks ADD COLUMN IF NOT EXISTS stages jsonb NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE TABLE IF NOT EXISTS "links" (
   "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,

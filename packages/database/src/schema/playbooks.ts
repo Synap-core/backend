@@ -48,6 +48,8 @@ export const playbooks = pgTable(
     channelSpec: jsonb("channel_spec").notNull().default({}),
     /** ExpectedOutput[] — declared deliverables. */
     expectedOutputs: jsonb("expected_outputs").notNull().default([]),
+    /** PlaybookStage[] — first-class ordered stages (empty = progress-only). */
+    stages: jsonb("stages").notNull().default([]),
     /** PlaybookSchedule | null — { cron, enabled }. */
     schedule: jsonb("schedule"),
     executor: text("executor", {

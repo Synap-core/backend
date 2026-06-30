@@ -84,6 +84,11 @@ export class ExternalAgentExecutor implements Executor {
           ? `/api/hub/runs/${input.runId}/capture`
           : null,
         capabilities: ctx.capabilities,
+        // Stage context so the external agent can scope to the active stage.
+        // ADVISORY only — stage-scoped-grant ENFORCEMENT is a deliberate
+        // follow-up (stage.grants are not yet intersected into `capabilities`).
+        stages: ctx.stages ?? [],
+        currentStage: ctx.currentStage ?? null,
       });
       return {
         status: "running",

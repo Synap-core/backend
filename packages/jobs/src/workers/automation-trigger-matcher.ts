@@ -190,6 +190,14 @@ function matchTriggerSpecificFilters(
     }
   }
 
+  // ── focus_session stage trigger ──────────────────────────────────────────
+  if (eventType.startsWith("focus_session.stage_changed.")) {
+    // Filter by the stage the session advanced INTO (PlaybookStage.key).
+    if (config.toStage && eventData?.toStage !== config.toStage) {
+      return false;
+    }
+  }
+
   // ── feed trigger ─────────────────────────────────────────────────────────
   if (eventType.startsWith("feed.")) {
     // Filter by archetype (e.g. "leads", "trends") — "any" or absent = all archetypes

@@ -86,6 +86,19 @@ export const OperationalEventTypes = {
     filterKeys: ["profileSlug"],
   },
 
+  // ── Focus sessions ─────────────────────────────────────────────────────────
+  // Emitted as `focus_session.stage_changed` (action="stage_changed") — the
+  // automation-trigger matcher receives the `.completed` wire form, so triggers
+  // match the trailing-wildcard pattern `focus_session.stage_changed.*`.
+  FOCUS_SESSION_STAGE_CHANGED: {
+    type: "focus_session.stage_changed.completed",
+    label: "Playbook stage changed",
+    domain: "Focus sessions",
+    description:
+      "Fires when a focus session advances to a different playbook stage.",
+    filterKeys: ["toStage", "fromStage", "playbookId"],
+  },
+
   // ── Proposal governance ──────────────────────────────────────────────────
   PROPOSAL_CREATED: {
     type: "proposal.created.completed",

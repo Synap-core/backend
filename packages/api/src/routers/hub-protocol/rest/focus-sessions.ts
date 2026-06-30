@@ -26,6 +26,7 @@ import {
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { createLinks } from "../../../services/links/links-service.js";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
+import { emitSideEffects } from "@synap/events";
 import { createFocusSession } from "../../../services/focus-sessions/create-session.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -58,6 +59,7 @@ const FocusSessionWireSchema = z.object({
   expectedOutputs: z.unknown(),
   channelId: z.string().nullable(),
   progress: z.number().nullable(),
+  currentStage: z.string().nullable(),
   agentIds: z.array(z.string()),
   closedAt: z.string().nullable(),
   verificationReport: z.unknown().nullable(),
@@ -97,6 +99,8 @@ const UpdateBodySchema = z.object({
   agentIds: z.array(z.string()).optional(),
   expectedOutputs: z.array(ExpectedOutputItemSchema).optional(),
   verificationReport: z.unknown().optional(),
+  // First-class stages: advance the active playbook stage (PlaybookStage.key).
+  currentStage: z.string().min(1).optional(),
   agentUserId: z.string().uuid().optional(),
   reasoning: z.string().optional(),
 });
@@ -482,6 +486,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         set.expectedOutputs = patch.expectedOutputs;
       if (patch.verificationReport !== undefined)
         set.verificationReport = patch.verificationReport;
+      if (patch.currentStage !== undefined)
+        set.currentStage = patch.currentStage;
 
       if (patch.status === "closed" && existing.status !== "closed") {
         set.closedAt = new Date();
@@ -492,6 +498,31 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         .set(set)
         .where(eq(focusSessions.id, id))
         .returning();
+
+      // Stage transition side-effect: when the active stage actually changes,
+      // emit `focus_session.stage_changed` so automations can react (and filter
+      // on toStage). No-op for stageless playbooks / unchanged stages.
+      if (
+        patch.currentStage !== undefined &&
+        patch.currentStage !== existing.currentStage
+      ) {
+        emitSideEffects({
+          subjectType: "focus_session",
+          action: "stage_changed",
+          subjectId: updated.id,
+          userId,
+          workspaceId: existing.workspaceId,
+          data: {
+            sessionId: updated.id,
+            subjectId: existing.subjectEntityId,
+            playbookId: existing.playbookId,
+            fromStage: existing.currentStage,
+            toStage: updated.currentStage,
+            workspaceId: existing.workspaceId,
+            userId,
+          },
+        });
+      }
 
       emitHubRealtimeEvent({
         eventType: "focus_session.update.completed",

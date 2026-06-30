@@ -106,6 +106,10 @@ export const PlaybookDefSchema = z.object({
   inputStrategy: z.record(z.string(), z.unknown()).optional(),
   channelSpec: z.record(z.string(), z.unknown()).optional(),
   expectedOutputs: z.array(z.record(z.string(), z.unknown())).optional(),
+  // PlaybookStage[] — first-class stages carried by the template (stored loosely).
+  stages: z.array(z.record(z.string(), z.unknown())).optional(),
+  // { profileSlug, filter? } — Wave 0 subject spine: which entity type the playbook operates over.
+  subjectProfile: z.record(z.string(), z.unknown()).optional(),
   schedule: z.unknown().optional(),
   executor: z.enum(["is-agent", "external-agent", "hybrid"]).optional(),
   status: z.enum(["draft", "active", "paused", "archived"]).optional(),

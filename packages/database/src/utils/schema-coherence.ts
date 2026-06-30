@@ -414,6 +414,13 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0139_process_subject_spine.sql",
   },
 
+  // focus_sessions — first-class playbook stages (0159)
+  {
+    table: "focus_sessions",
+    column: "current_stage",
+    addedBy: "0159_playbook_stages.sql",
+  },
+
   // playbooks — Process North Star subject spine (0139)
   {
     table: "playbooks",
@@ -424,6 +431,13 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "playbooks",
     column: "subject_profile",
     addedBy: "0139_process_subject_spine.sql",
+  },
+
+  // playbooks — first-class playbook stages (0159)
+  {
+    table: "playbooks",
+    column: "stages",
+    addedBy: "0159_playbook_stages.sql",
   },
 
   // channel_context_items

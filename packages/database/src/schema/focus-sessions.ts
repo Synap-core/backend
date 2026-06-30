@@ -94,6 +94,12 @@ export const focusSessions = pgTable(
     channelId: uuid("channel_id"),
     /** 0-100 progress, updated by IS. Null until IS sets it. */
     progress: integer("progress"),
+    /**
+     * Active playbook stage key (PlaybookStage.key). Seeded from the playbook's
+     * first stage on instantiation; advanced via the update doors. Stays NULL
+     * for stageless playbooks (progress-only) — NEVER becomes NOT NULL.
+     */
+    currentStage: text("current_stage"),
     /** Agent IDs invited to this session. */
     agentIds: text("agent_ids").array().default([]),
     /** Set when the session transitions to `closed`. */

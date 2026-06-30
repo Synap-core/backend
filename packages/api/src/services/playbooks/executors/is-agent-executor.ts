@@ -37,11 +37,47 @@ export class IsAgentExecutor implements Executor {
     // Surface the bound subject so the agent knows WHAT it is working on. The id
     // lets it fetch full details via its tools; the name/profile give immediate
     // context. Omitted entirely when the run has no subject.
-    const kickoff = ctx.subjectId
+    const base = ctx.subjectId
       ? `[Subject: ${ctx.subjectName ?? "entity"}${
           ctx.subjectProfile ? ` · ${ctx.subjectProfile}` : ""
         } · id ${ctx.subjectId}]\n\n${ctx.goal}`
       : ctx.goal;
+
+    // Active-stage section — surfaces the run's current stage so the agent knows
+    // WHICH phase it is in and what's expected of it. Additive: when the run is
+    // stageless (currentStage null/absent) or no declared stage matches, this
+    // section is omitted and the kickoff is exactly `base`.
+    // NOTE: stage-scoped-grant ENFORCEMENT (intersecting stage.grants into the
+    // resolved capability set) is a deliberate follow-up — here the stage's grant
+    // ids are listed ADVISORY only.
+    const stage = ctx.currentStage
+      ? ctx.stages?.find((s) => s.key === ctx.currentStage)
+      : undefined;
+    let stageSection = "";
+    if (stage) {
+      const lines = [`## Current stage: ${stage.name}`];
+      if (stage.goal) lines.push(stage.goal);
+      if (stage.expectedOutputs?.length) {
+        lines.push(
+          `Expected outputs: ${stage.expectedOutputs
+            .map((o) => o.label)
+            .join(", ")}`
+        );
+      }
+      if (stage.suggestedTasks?.length) {
+        lines.push(`Suggested tasks: ${stage.suggestedTasks.join(", ")}`);
+      }
+      if (stage.grants?.length) {
+        lines.push(
+          `Capabilities available at this stage: ${stage.grants
+            .map((g) => g.id)
+            .join(", ")}`
+        );
+      }
+      stageSection = `\n\n${lines.join("\n")}`;
+    }
+
+    const kickoff = `${base}${stageSection}`;
 
     // Post the resolved goal as a USER message — the persisted kickoff message
     // the IS responds to. Attributed to the run's acting principal.

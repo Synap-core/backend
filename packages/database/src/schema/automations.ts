@@ -87,6 +87,10 @@ export interface AutomationTriggerConfig {
   feedArchetype?: string;
   /** Minimum relevance score (0-1) — items below this score are skipped */
   feedMinRelevanceScore?: number;
+
+  // ── focus_session stage filters ──────────────────────────────────────────
+  /** Only fire when a focus session advanced INTO this stage (PlaybookStage.key) */
+  toStage?: string;
 }
 
 export interface AutomationNodeBase {

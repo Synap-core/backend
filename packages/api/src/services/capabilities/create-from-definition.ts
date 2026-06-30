@@ -98,6 +98,10 @@ export interface CapabilityPlaybookDef {
   inputStrategy?: Record<string, unknown>;
   channelSpec?: Record<string, unknown>;
   expectedOutputs?: Record<string, unknown>[];
+  /** PlaybookStage[] — first-class stages (stored loosely, validated at the boundary). */
+  stages?: Record<string, unknown>[];
+  /** { profileSlug, filter? } — which entity type this playbook operates over (Wave 0 subject spine). */
+  subjectProfile?: Record<string, unknown>;
   schedule?: unknown;
   executor?: "is-agent" | "external-agent" | "hybrid";
   status?: "draft" | "active" | "paused" | "archived";
@@ -446,6 +450,8 @@ export async function createCapabilityFromDefinition(
         inputStrategy: p.inputStrategy,
         channelSpec: p.channelSpec,
         expectedOutputs: p.expectedOutputs,
+        stages: p.stages,
+        subjectProfile: p.subjectProfile,
         schedule: p.schedule,
         executor: p.executor ?? "is-agent",
         status: p.status ?? "draft",
