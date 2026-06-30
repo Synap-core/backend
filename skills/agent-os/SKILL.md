@@ -22,7 +22,7 @@ metadata:
     userInvocable: true
 ---
 
-# Agent OS — launch a complete company operating system
+# Company OS — launch a complete company operating system
 
 You provision a full company OS in Synap: a **project** (the cross-cutting lens
 that ties everything together) plus the **domain workspaces** the user needs,
@@ -38,12 +38,19 @@ dashboards, and (where relevant) capabilities + playbooks.
 
 | Template slug        | Workspace          | What it's for                                  |
 | -------------------- | ------------------ | ---------------------------------------------- |
+| `foundation`         | Foundation         | Strategic DNA — mission, audience, positioning |
+| `radar`              | Radar              | Competitors, market segments, trends           |
+| `brand-library`      | Brand Library      | Brand voice, assets, tokens, components, rules |
 | `crm`                | CRM                | Contacts, companies, deals, pipeline           |
 | `content-os`         | Content OS         | Posts, campaigns, content calendar, brand      |
+| `marketing-campaign` | Marketing          | Campaigns, leads, channels                     |
 | `project-management` | Project Management | OKRs, projects, sprints, tasks                 |
-| `agent-os`           | Agent OS           | AI agents, skills, providers — the agent fleet |
+| `agent-fleet`        | Agent Fleet        | AI agents, skills, providers — the agent fleet |
 | `dev-dashboard`      | Dev Dashboard      | Services, repos, environments, infrastructure  |
 | `life-os`            | Life OS            | Notes, books, goals, knowledge management      |
+
+Foundation/Radar/Brand are the **strategic base** other workspaces inherit from
+(via the `strategy`/`brand` provider roles) — suggest them first for a new company.
 
 ## The flow
 
@@ -78,24 +85,32 @@ Capture the returned `id` — that's the `projectId`.
 
 ### 5. Provision each chosen workspace
 
-For each domain slug, POST the template to the packages endpoint, **injecting
-the `projectId` from Step 4** so the workspace's seed entities link to the
-project (`belongs_to_project`). Without `projectId`, the workspaces are created
-but orphaned from the project — breaking the lens. The templates live in
-`synap-backend/templates/packages/<slug>.package.json`:
+For each domain slug, POST the template's `PackageDefinition` to the packages
+endpoint, **injecting the `projectId` from Step 4** so the workspace's seed
+entities link to the project (`belongs_to_project`). Without `projectId`, the
+workspaces are created but orphaned from the project — breaking the lens.
+
+Templates are sourced from the canonical **`@synap-core/workspace-templates`**
+package (the single source of truth shared by the CLI, the control-plane
+registry, and the browser) — **not** from repo files. The simplest path is the
+CLI, which does this whole flow end-to-end:
 
 ```bash
-# Merge projectId into the template body (jq), then POST:
-jq --arg pid "$PROJECT_ID" '. + {projectId: $pid}' \
-  synap-backend/templates/packages/crm.package.json \
-| curl -s -X POST "$SYNAP_POD_URL/api/hub/packages/apply" \
-  -H "Authorization: Bearer $SYNAP_HUB_API_KEY" -H "Content-Type: application/json" \
-  --data @-
+synap launch agent-os   # asks project + domains, applies each template, links to the project
 ```
 
-(No `jq`? Read the template, add `"projectId": "<id>"` to the JSON object, POST
-that.) Each returns `{ workspace: { workspaceId }, projectLink: {...},
-capabilities: [...], playbooks: [...] }`.
+Conversationally (or programmatically), obtain each template's PackageDefinition
+from the package (`toPackageDefinition(slug)`) or the registry (`GET
+/api/packages`), inject `projectId`, and POST:
+
+```bash
+curl -s -X POST "$SYNAP_POD_URL/api/hub/packages/apply" \
+  -H "Authorization: Bearer $SYNAP_HUB_API_KEY" -H "Content-Type: application/json" \
+  --data "{ ...<packageDefinition>, \"projectId\": \"$PROJECT_ID\" }"
+```
+
+Each returns `{ workspace: { workspaceId }, projectLink: {...}, capabilities:
+[...], playbooks: [...] }`.
 
 ### 6. Capabilities — OFFER, never silently install
 
@@ -125,7 +140,7 @@ The user can also defer: "set up CRM now, the rest later" is fine.
 
 ### 8. Summarize
 
-"Your Agent OS is ready: **CRM, Dev Dashboard, Project Management** — all under
+"Your Company OS is ready: **CRM, Dev Dashboard, Project Management** — all under
 the **<project>** project. I've onboarded CRM (pipeline + 4 accounts). Want to
 onboard the others now, or later?"
 

@@ -1,7 +1,7 @@
 /**
  * Default Relation Definitions
  *
- * The 12 domain-level relation types seeded into every new workspace.
+ * The domain-level relation types seeded into every new workspace.
  * These were previously hardcoded in RelationTypeSchema and RELATION_TYPE_METADATA.
  * Now they live as relation_defs rows in the database, making them customizable per workspace.
  *
@@ -21,7 +21,7 @@ export interface DefaultRelationDef {
 }
 
 /**
- * 12 domain-level relation types seeded into every workspace.
+ * Domain-level relation types seeded into every workspace.
  */
 export const DEFAULT_RELATION_DEFS: DefaultRelationDef[] = [
   {
@@ -102,6 +102,14 @@ export const DEFAULT_RELATION_DEFS: DefaultRelationDef[] = [
     uiHints: { category: "hierarchy" },
   },
   {
+    slug: "founder_brand_of",
+    displayName: "Founder Brand Of",
+    description:
+      "A personal-brand project is the founder brand of a company project — links a person's brand to the company it expresses",
+    isDirectional: true,
+    uiHints: { category: "hierarchy", inverseLabel: "Expression of" },
+  },
+  {
     slug: "references",
     displayName: "References",
     description: "Cites or refers to",
@@ -125,7 +133,7 @@ export const DEFAULT_RELATION_DEFS: DefaultRelationDef[] = [
   {
     slug: "advances",
     displayName: "Advances",
-    description: "Work item advances the workspace North Star goal",
+    description: "advances the company's Foundation mission/vision goal",
     isDirectional: true,
     uiHints: { category: "workflow", inverseLabel: "Advanced by" },
   },

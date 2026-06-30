@@ -1,7 +1,7 @@
 /**
  * Ensure Default Relation Definitions
  *
- * Seeds the 12 domain-level relation types into a workspace's relation_defs table.
+ * Seeds the domain-level relation types into a workspace's relation_defs table.
  * Called during workspace-init (same pattern as ensureDefaultViews, ensureDefaultCommands).
  * Checks existing defs first to avoid unnecessary upserts and report accurate counts.
  */

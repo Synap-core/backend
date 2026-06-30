@@ -355,12 +355,6 @@ async function seedProfiles() {
         constraints: {},
         uiHints: { label: "Success Criteria", inputType: "tags" },
       },
-      {
-        slug: "northStarStatus",
-        valueType: PropertyValueType.STRING,
-        constraints: { enum: ["active", "achieved", "paused", "abandoned"] },
-        uiHints: { label: "Status", inputType: "select" },
-      },
       // `knowledge` profile properties (ek_*)
       {
         slug: "ek_type",
@@ -551,15 +545,7 @@ async function seedProfiles() {
           description: "Pinned conversation moment",
         },
       },
-      {
-        slug: "north_star",
-        displayName: "North Star",
-        uiHints: {
-          icon: "compass",
-          color: "#10B981",
-          description: "The workspace's anchoring goal",
-        },
-      },
+      // north_star profile deprecated 2026-06-30 — superseded by the Foundation workspace pack (mission/vision/...). See AGENT-OS-FOUNDATION-PLAN.md §7.
       // NOTE: `engineering_knowledge` was a backward-compat ALIAS of `knowledge`
       // (same ek_* shape, same scope, same displayName). It is removed from the
       // seed — capture now writes `knowledge` and migration
@@ -778,19 +764,6 @@ async function seedProfiles() {
       { slug: "threadTitle", required: false, displayOrder: 4 },
       { slug: "content", required: false, displayOrder: 5 },
       { slug: "tags", required: false, displayOrder: 6 },
-    ]);
-
-    await linkProps("north_star", [
-      { slug: "title", required: true, displayOrder: 0 },
-      { slug: "statement", required: true, displayOrder: 1 },
-      { slug: "timeHorizon", required: false, displayOrder: 2 },
-      { slug: "successCriteria", required: false, displayOrder: 3 },
-      {
-        slug: "northStarStatus",
-        required: false,
-        displayOrder: 4,
-        defaultValue: "active",
-      },
     ]);
 
     const ekProps = [
