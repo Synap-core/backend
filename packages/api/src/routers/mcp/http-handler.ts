@@ -46,15 +46,22 @@ async function buildGrounding(userId: string): Promise<string | undefined> {
       .from(workspaceMembers)
       .where(eq(workspaceMembers.userId, userId));
     const wsIds = memberRows.map((r) => r.workspaceId);
-    // Best-effort project count — grounding is cheap (one extra query, no join).
-    const projectCount = await db
-      .select({ count: projects.id })
+    // Best-effort project names — grounding is cheap (one extra query, no join).
+    // Projects lead: a project is a company/initiative (the primary lens).
+    const projRows = await db
+      .select({ name: projects.name })
       .from(projects)
-      .where(eq(projects.userId, userId))
-      .then((rows) => rows.length);
+      .where(eq(projects.userId, userId));
+    const projNames = projRows.map((p) => p.name).filter(Boolean);
+    const projPart =
+      projNames.length === 0
+        ? ""
+        : projNames.length <= 6
+          ? `Projects (companies/initiatives): ${projNames.join(", ")}. `
+          : `${projNames.length} projects (companies/initiatives). `;
     if (wsIds.length === 0) {
-      if (projectCount === 0) return undefined;
-      return `This pod has ${projectCount} project(s) but no workspaces. Tools default to pod-wide scope.`;
+      if (projNames.length === 0) return undefined;
+      return `${projPart}No workspaces yet. Tools default to pod-wide scope.`;
     }
     const wsRows = await db
       .select({ name: workspaces.name })
@@ -62,15 +69,14 @@ async function buildGrounding(userId: string): Promise<string | undefined> {
       .where(inArray(workspaces.id, wsIds));
     const names = wsRows.map((w) => w.name).filter(Boolean);
     if (names.length === 0) {
-      if (projectCount === 0) return undefined;
-      return `This pod has ${projectCount} project(s) but no workspaces. Tools default to pod-wide scope.`;
+      if (projNames.length === 0) return undefined;
+      return `${projPart}No workspaces yet. Tools default to pod-wide scope.`;
     }
     const wsPart =
       names.length === 1
-        ? `This pod has one workspace: ${names[0]}`
-        : `This pod has ${names.length} workspaces: ${names.join(", ")}`;
-    const projPart = projectCount > 0 ? ` and ${projectCount} project(s)` : "";
-    return `${wsPart}${projPart}. Omit workspaceId for pod-wide recall, or pass one to scope.`;
+        ? `Workspaces (operational domains): ${names[0]}`
+        : `Workspaces (operational domains): ${names.join(", ")}`;
+    return `${projPart}${wsPart}. A project spans workspaces; a workspace spans projects. Omit workspaceId for pod-wide recall, or pass one to scope.`;
   } catch {
     return undefined;
   }

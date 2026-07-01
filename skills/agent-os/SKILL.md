@@ -6,11 +6,14 @@ description: >
   Project Management, etc.) under one project. Triggers: "set up my company",
   "launch agent OS", "create a workspace for my business", "I need a CRM and
   a content workspace", "build my company OS", "onboard my company", "set up
-  marketing + sales + dev workspaces". This skill orchestrates the full
-  provisioning: create a PROJECT (the cross-cutting lens), pick the right
-  domain workspaces, install each from a template, and link them to the
-  project. Ask, don't assume — infer which domains fit, then confirm with the
-  user before provisioning.
+  marketing + sales + dev workspaces". ALSO use it to add a SINGLE domain to an
+  existing project — "add a Marketing workspace to my project", "this project
+  needs a Finance domain", or when you've noticed a project is missing an
+  operational domain it clearly needs and offered to set it up. This skill
+  orchestrates provisioning: create or reuse a PROJECT (the lens that ties the
+  work together), pick the right domain workspace(s), install each from a
+  template, link them to the project, and onboard. Ask, don't assume — infer
+  which domains fit, then confirm with the user before provisioning.
 metadata:
   openclaw:
     requires:
@@ -43,11 +46,18 @@ dashboards, and (where relevant) capabilities + playbooks.
 | `brand-library`      | Brand Library      | Brand voice, assets, tokens, components, rules |
 | `crm`                | CRM                | Contacts, companies, deals, pipeline           |
 | `content-os`         | Content OS         | Posts, campaigns, content calendar, brand      |
+| `content-studio`     | Content Studio     | Video/production pipeline                       |
 | `marketing-campaign` | Marketing          | Campaigns, leads, channels                     |
 | `project-management` | Project Management | OKRs, projects, sprints, tasks                 |
-| `agent-fleet`        | Agent Fleet        | AI agents, skills, providers — the agent fleet |
+| `builder-workspace`  | Builder            | DevPlane + agents — building the product        |
 | `dev-dashboard`      | Dev Dashboard      | Services, repos, environments, infrastructure  |
-| `life-os`            | Life OS            | Notes, books, goals, knowledge management      |
+| `agent-fleet`        | Agent Fleet        | AI agents, skills, providers — the agent fleet |
+| `finance`            | Finance            | Revenue, expenses, runway, invoices            |
+| `legal`              | Legal              | Contracts, entities, compliance, IP            |
+| `hr`                 | People (HR)        | People, roles, hiring, policies                |
+| `operations`        | Operations         | Processes, vendors, assets, SOPs               |
+| `life-os`            | Second Brain       | Notes, books, goals, knowledge management      |
+| `personal`           | Personal           | Personal knowledge + life management           |
 
 Foundation/Radar/Brand are the **strategic base** other workspaces inherit from
 (via the `strategy`/`brand` provider roles) — suggest them first for a new company.
@@ -144,6 +154,23 @@ The user can also defer: "set up CRM now, the rest later" is fine.
 the **<project>** project. I've onboarded CRM (pipeline + 4 accounts). Want to
 onboard the others now, or later?"
 
+## Adding ONE domain to an existing project (the common in-conversation case)
+
+You don't only run this for whole-company setup. The frequent case: you're
+working inside a project and notice it's **missing an operational domain it
+needs** (see the "notice a missing domain" reflex in the core `synap` skill) —
+you're talking sales but there's no CRM, or content but no Content OS. Offer it
+in one line; if the user says yes, run a **trimmed version of the flow** for that
+single domain:
+
+1. **Reuse the project** — it already exists; you have its `projectId` from your
+   lens (`synap lens`) or `synap_list_projects`. Skip Steps 1–4.
+2. **Provision the one workspace** (Step 5) with that `projectId` so it links.
+3. **Onboard just it** (Step 7) — one focused interview, then summarize.
+
+Don't turn a single-domain add into a full company pitch. They asked for one
+lens; give them that one, linked and onboarded.
+
 ## Principles
 
 - **Ask, don't assume.** Infer domains, but the user confirms the final set.
@@ -155,7 +182,6 @@ onboard the others now, or later?"
 
 ## When NOT to use this skill
 
-- The user wants ONE workspace, not a company setup → use `synap-ui` / direct
-  workspace creation.
-- The user wants to extend an existing workspace's schema → use `synap-schema`.
+- The user wants to extend an existing workspace's schema (add a profile/field
+  to a workspace that already exists) → use `synap-schema`.
 - The user just wants to capture data → use the core `synap` skill.

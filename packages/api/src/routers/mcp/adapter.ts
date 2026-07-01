@@ -529,11 +529,17 @@ export async function executeMCPToolViaHubProtocol(
           (w.settings as { onboarding?: Record<string, unknown> } | null)
             ?.onboarding ?? undefined,
       }));
-      // Fetch profiles for first workspace as a representative sample
+      // Fetch profiles for first workspace as a representative sample — a LIGHT
+      // list (slug + name), not full definitions. Orient is a lens map, not a
+      // schema dump; drill into a workspace's full profiles on demand via
+      // synap_list_profiles(workspaceId).
       const firstWsId = wsIds[0];
-      const profiles = firstWsId
+      const profilesRaw = firstWsId
         ? await caller.profiles.listProfiles({ userId, workspaceId: firstWsId })
         : [];
+      const profiles = (profilesRaw as Array<{ slug?: string; name?: string }>).map(
+        (p) => ({ slug: p.slug, name: p.name }),
+      );
       // Fetch projects for the user
       const projectRows = await db
         .select({
@@ -547,15 +553,19 @@ export async function executeMCPToolViaHubProtocol(
         .where(eq(projects.userId, userId));
       return ok({
         me: { userId, scopes: apiKeyScopes },
-        workspaces: wsList,
-        workspaceCount: wsList.length,
+        // Projects lead: a project is a company/initiative — the lens you
+        // usually enter through. Workspaces are its operational domains.
         projects: projectRows,
         projectCount: projectRows.length,
+        workspaces: wsList,
+        workspaceCount: wsList.length,
         profiles,
         note:
-          wsList.length > 1
-            ? `You have ${wsList.length} workspaces and ${projectRows.length} projects. Most read tools auto-scope to all your workspaces when no workspaceId is given. Pass workspaceId to narrow to one workspace; pass projectId to narrow entity reads and recall to a project.`
-            : `Single workspace: ${wsList[0]?.name ?? "none"}. ${projectRows.length > 0 ? `${projectRows.length} project(s). ` : ""}Tools default to this workspace. Pass projectId on entity reads/recall to narrow to a project.`,
+          `Lens map: ${projectRows.length} project(s), ${wsList.length} workspace(s). A PROJECT is a company/initiative (the lens you usually enter through); a WORKSPACE is an operational domain (Foundation, CRM, Marketing, Finance…) — how the work is separated. They compose: a project spans workspaces, a workspace can span projects. ` +
+          (wsList.length > 1
+            ? `Reads auto-scope across all your workspaces when no workspaceId is given; pass workspaceId to narrow to one domain, projectId to narrow to one project. `
+            : `Tools default to your one workspace; pass projectId on reads/recall to narrow to a project. `) +
+          `If a project clearly lacks an operational domain it needs, offer (once, at the end) to set it up — see the agent-os skill.`,
       });
     }
 
