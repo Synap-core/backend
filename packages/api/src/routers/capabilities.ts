@@ -41,6 +41,12 @@ import {
 } from "../services/capabilities/create-from-definition.js";
 import { executeCapability } from "../services/capabilities/execute-capability.js";
 import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
+import {
+  addConnection,
+  listConnections,
+  removeConnection,
+  updateConnection,
+} from "../services/capabilities/capability-connections.js";
 
 const logger = createLogger({ module: "capabilities" });
 
@@ -82,6 +88,69 @@ async function pingServiceHealth(webhookUrl: string): Promise<boolean> {
 export const capabilitiesRouter = router({
   /** Capability CONTAINERS (the named bundles) — CRUD + part attach/detach. */
   containers: capabilityContainersRouter,
+
+  /**
+   * Capability CONNECTIONS (Wave 4) — CRUD over a capability's connections
+   * (vault rows carrying `capability_id`). tRPC mirror of the Hub REST
+   * `/capabilities/:capabilityId/connections` doors so the browser can drive the
+   * SAME owner-gated `capability-connections` service (acting as the authenticated
+   * operator via `ctx.userId`). NEVER returns a secret value.
+   */
+  connections: router({
+    list: protectedProcedure
+      .input(z.object({ capabilityId: z.string().uuid() }))
+      .query(async ({ ctx, input }) => {
+        const userId = requireUserId(ctx.userId);
+        return listConnections(input.capabilityId, userId);
+      }),
+
+    add: protectedProcedure
+      .input(
+        z.object({
+          capabilityId: z.string().uuid(),
+          label: z.string().min(1).max(255),
+          value: z.string().optional(),
+          contextType: z.string().nullable().optional(),
+          contextId: z.string().nullable().optional(),
+          accountHint: z.string().nullable().optional(),
+          isDefault: z.boolean().optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const userId = requireUserId(ctx.userId);
+        return addConnection({ ...input, actorUserId: userId });
+      }),
+
+    update: protectedProcedure
+      .input(
+        z.object({
+          capabilityId: z.string().uuid(),
+          connectionId: z.string().uuid(),
+          label: z.string().min(1).max(255).optional(),
+          value: z.string().optional(),
+          contextType: z.string().nullable().optional(),
+          contextId: z.string().nullable().optional(),
+          accountHint: z.string().nullable().optional(),
+          isDefault: z.boolean().optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const userId = requireUserId(ctx.userId);
+        return updateConnection({ ...input, actorUserId: userId });
+      }),
+
+    remove: protectedProcedure
+      .input(
+        z.object({
+          capabilityId: z.string().uuid(),
+          connectionId: z.string().uuid(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        const userId = requireUserId(ctx.userId);
+        return removeConnection({ ...input, actorUserId: userId });
+      }),
+  }),
 
   /**
    * List all available capabilities.
@@ -298,6 +367,12 @@ export const capabilitiesRouter = router({
         verbId: z.string(),
         parameters: z.record(z.string(), z.unknown()).optional(),
         workspaceId: z.string().uuid(),
+        connectionSelector: z
+          .object({
+            connectionId: z.string().optional(),
+            contextObjectId: z.string().optional(),
+          })
+          .optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -306,6 +381,7 @@ export const capabilitiesRouter = router({
         parameters: input.parameters,
         workspaceId: input.workspaceId,
         userId: ctx.userId,
+        connectionSelector: input.connectionSelector,
       });
     }),
 

@@ -4105,6 +4105,34 @@ export interface ExecutionStats {
 	[key: string]: unknown;
 }
 /**
+ * Capability-connection service — the SINGLE source of truth for CRUD over a
+ * capability's connections (Wave 4).
+ *
+ * A "connection" is a `secrets` row (the vault IS the connection registry, plan
+ * §3.2) that carries `capability_id`. It optionally binds to a context object
+ * (`context_type`/`context_id`), is one of possibly-many under a capability with
+ * exactly one `is_default`, and — for a Nango 1-of-N account — an `account_hint`.
+ * `secrets.name` is the human label.
+ *
+ * This module NEVER hand-rolls crypto and NEVER returns a decrypted value: it
+ * reuses the SAME `encryptServerSide` path the `POST /vault/secrets` route and the
+ * capability-template applier (`create-from-definition.ts:createVaultSecret`) use.
+ * Every function is OWNER-GATED — mirrors `tools.ts:bindCredential`
+ * (`secret.userId === actorUserId`, with a pod-admin fallback).
+ */
+/** A connection as surfaced to callers — NEVER carries the secret value. */
+export interface CapabilityConnectionView {
+	id: string;
+	/** Human label (`secrets.name`). */
+	label: string;
+	contextType: string | null;
+	contextId: string | null;
+	isDefault: boolean;
+	accountHint: string | null;
+	/** 'nango' when the credential delegates to Nango, else 'vault' (direct key). */
+	kind: "nango" | "vault";
+}
+/**
  * Capability CATALOG read-model — the pack-grouped, status-computed view that is
  * the keystone of the capability UX consolidation (see CAPABILITIES-NORTH-STAR.md).
  *
@@ -9709,6 +9737,62 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				meta: object;
 			}>;
 		}>>;
+		connections: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			meta: object;
+			errorShape: {
+				message: string;
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+				data: import("@trpc/server").TRPCDefaultErrorData;
+			};
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			list: import("@trpc/server").TRPCQueryProcedure<{
+				input: {
+					capabilityId: string;
+				};
+				output: CapabilityConnectionView[];
+				meta: object;
+			}>;
+			add: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					capabilityId: string;
+					label: string;
+					value?: string | undefined;
+					contextType?: string | null | undefined;
+					contextId?: string | null | undefined;
+					accountHint?: string | null | undefined;
+					isDefault?: boolean | undefined;
+				};
+				output: CapabilityConnectionView;
+				meta: object;
+			}>;
+			update: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					capabilityId: string;
+					connectionId: string;
+					label?: string | undefined;
+					value?: string | undefined;
+					contextType?: string | null | undefined;
+					contextId?: string | null | undefined;
+					accountHint?: string | null | undefined;
+					isDefault?: boolean | undefined;
+				};
+				output: CapabilityConnectionView;
+				meta: object;
+			}>;
+			remove: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					capabilityId: string;
+					connectionId: string;
+				};
+				output: {
+					ok: true;
+					promotedDefaultId: string | null;
+				};
+				meta: object;
+			}>;
+		}>>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: {
@@ -9779,6 +9863,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				verbId: string;
 				workspaceId: string;
 				parameters?: Record<string, unknown> | undefined;
+				connectionSelector?: {
+					connectionId?: string | undefined;
+					contextObjectId?: string | undefined;
+				} | undefined;
 			};
 			output: ExecuteCapabilityResult;
 			meta: object;
