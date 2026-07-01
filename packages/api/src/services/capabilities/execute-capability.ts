@@ -36,8 +36,9 @@ export async function executeCapability(input: {
   skillId?: string;
   /** Inputs passed to the skill sandbox (`args`). */
   parameters?: Record<string, unknown>;
-  /** Acting workspace — scopes the skill lookup + the gate + a propose. */
-  workspaceId: string;
+  /** Acting workspace — OPTIONAL lens that narrows the skill lookup + the gate.
+   * `null` = pod-wide run; a `propose` then routes to the user's pod-wide queue. */
+  workspaceId: string | null;
   /** The acting operator (bearer's user). */
   userId: string;
 }): Promise<ExecuteCapabilityResult> {
@@ -67,7 +68,7 @@ export async function executeCapability(input: {
             eq(skills.name, verbId!),
             or(
               isNull(skills.workspaceId),
-              eq(skills.workspaceId, workspaceId),
+              ...(workspaceId ? [eq(skills.workspaceId, workspaceId)] : []),
               eq(skills.userId, userId)
             )
           )
@@ -129,7 +130,7 @@ export async function executeCapability(input: {
       parameters,
       {
         userId,
-        workspaceId,
+        workspaceId: workspaceId ?? undefined,
       }
     );
     return { kind: "run", skillId: skillRow.id, result };

@@ -368,16 +368,10 @@ async function gateMessagingSend(
   if (decision.decision === "propose") {
     // Route to a reviewable proposal that, on approval, re-enters
     // `sendExternalMessage` via the `messaging.external.send` executor with
-    // `alreadyApproved`. Proposals require a workspace; with none there is no
-    // review surface → fail closed rather than silently send.
+    // `alreadyApproved`. Proposals do NOT require a workspace — a null-workspace
+    // proposal lands in the user's pod-wide review queue (workspace is an
+    // optional lens, never a routing requirement).
     const proposalWorkspaceId = input.workspaceId ?? null;
-    if (!proposalWorkspaceId) {
-      return {
-        kind: "deny",
-        reason:
-          "Messaging send requires approval but no workspace was supplied to route the proposal.",
-      };
-    }
     const proposal = await createPendingProposal({
       userId: input.userId,
       workspaceId: proposalWorkspaceId,
@@ -1451,19 +1445,9 @@ export async function triggerProviderAction(
       // The previously-ungoverned door now PRODUCES a reviewable proposal that,
       // on approval, re-enters this same impl (Door 2) with `alreadyApproved`.
       // We carry the full provider call in `data` so the executor can replay it.
-      // Proposals require a workspace (createPendingProposal inserts workspaceId);
-      // when none is supplied there is no review surface — fail closed rather
-      // than silently auto-run.
+      // A workspace is NOT required — a null-workspace proposal routes to the
+      // user's pod-wide review queue (workspace is an optional lens).
       const proposalWorkspaceId = input.workspaceId ?? null;
-      if (!proposalWorkspaceId) {
-        return {
-          success: false,
-          status: 403,
-          errorCode: "bad_request",
-          error:
-            "Capability execution requires approval but no workspace was supplied to route the proposal. Provide a workspaceId or pre-approve the capability.",
-        };
-      }
       const proposal = await createPendingProposal({
         userId: input.userId,
         workspaceId: proposalWorkspaceId,

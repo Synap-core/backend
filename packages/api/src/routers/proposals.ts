@@ -168,21 +168,27 @@ function emitProposalReviewed(
   status: "approved" | "rejected",
   userId?: string
 ): void {
-  if (!workspaceId) return;
+  // A null-workspace (pod-wide) proposal still needs its reviewed event so the
+  // bell clears — route it to the user's room instead of a workspace room.
+  // Workspace is an optional lens, never a delivery requirement.
+  if (!workspaceId && !userId) return;
   emitChatEvent({
     event: "proposal:reviewed",
-    data: { proposalId, status, workspaceId },
-    workspaceId,
+    data: { proposalId, status, ...(workspaceId ? { workspaceId } : {}) },
+    ...(workspaceId ? { workspaceId } : { userId: userId! }),
   });
-  // Automation side-effects: proposal.approved.completed / proposal.rejected.completed
-  emitSideEffects({
-    subjectType: "proposal",
-    action: status,
-    subjectId: proposalId,
-    userId: userId ?? "",
-    workspaceId,
-    data: { proposalStatus: status },
-  });
+  // Automation side-effects (proposal.approved/rejected.completed) are
+  // workspace-scoped triggers; only emit them when a workspace is present.
+  if (workspaceId) {
+    emitSideEffects({
+      subjectType: "proposal",
+      action: status,
+      subjectId: proposalId,
+      userId: userId ?? "",
+      workspaceId,
+      data: { proposalStatus: status },
+    });
+  }
   // Mark the corresponding notification as actioned (fire-and-forget)
   markProposalNotificationActioned(proposalId);
   // Notify the originating channel so waiting agents can continue (fire-and-forget)

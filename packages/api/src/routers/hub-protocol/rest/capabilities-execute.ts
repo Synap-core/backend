@@ -45,8 +45,9 @@ const ExecuteCapabilityRequestSchema = z
     skillId: z.string().min(1).optional(),
     /** Inputs passed to the skill (the sandbox `args`). */
     parameters: z.record(z.string(), z.unknown()).optional(),
-    /** Acting workspace — scopes the skill lookup + the gate, and routes a `propose` proposal. */
-    workspaceId: z.string().uuid(),
+    /** Acting workspace — OPTIONAL lens that narrows the skill lookup + the gate.
+     * Omit for a pod-wide run; a `propose` then routes to the user's pod-wide queue. */
+    workspaceId: z.string().uuid().optional(),
   })
   .refine((b) => !!b.verbId || !!b.skillId, {
     message: "Either verbId or skillId is required",
@@ -129,7 +130,7 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
         verbId,
         skillId,
         parameters,
-        workspaceId,
+        workspaceId: acting.workspaceId,
         userId,
       });
 
