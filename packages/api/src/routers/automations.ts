@@ -697,10 +697,16 @@ export const automationsRouter = router({
         workspaceId: existing.workspaceId,
         ownerId: existing.createdBy,
       });
-      if (existing.status !== "active" && existing.triggerType !== "manual") {
+      // An explicit manual trigger bypasses the normal trigger config, so a
+      // DRAFT is test-runnable on demand (e.g. run a draft cron once before
+      // activating it). Only paused/error block a non-manual-type automation —
+      // those states signal "do not run".
+      const runnableStatus =
+        existing.status === "active" || existing.status === "draft";
+      if (!runnableStatus && existing.triggerType !== "manual") {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `Cannot trigger automation with status="${existing.status}". Must be active or manual trigger type.`,
+          message: `Cannot trigger automation with status="${existing.status}". Activate it, or use a manual trigger type.`,
         });
       }
 

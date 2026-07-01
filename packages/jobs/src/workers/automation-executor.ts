@@ -1173,7 +1173,7 @@ async function executePlaybookRun(
   // playbookId is editor-authored config, but defend in depth (no FK).
   if (playbook.workspaceId && playbook.workspaceId !== workspaceId) {
     throw new Error(
-      `playbook_run: playbook ${data.playbookId} not visible in workspace ${workspaceId}`
+      `playbook_run: playbook ${playbook.id} not visible in workspace ${workspaceId}`
     );
   }
 
@@ -1250,6 +1250,10 @@ async function executePlaybookRun(
       goal,
       playbookId: playbook.id,
       status: "active",
+      // Seed the first stage so the session starts stage-aware (the initial IS
+      // dispatch gets the stage hint/grant), matching the tRPC/Hub creation path.
+      currentStage:
+        (playbook.stages as { key?: string }[] | null)?.[0]?.key ?? null,
       expectedOutputs: (playbook.expectedOutputs ?? []) as any[],
       agentIds: [],
       subjectEntityId: resolvedSubjectId,
@@ -1687,16 +1691,29 @@ async function executeAutomationFlow(params: {
               break;
             }
 
-            // The loop OWNS its entire downstream subgraph — every node
-            // reachable from it runs once per item, in topological order. This
-            // lets a loop body be a multi-node chain (e.g. messages_query →
-            // command → session_update → entity_create), not just direct
-            // children. Post-loop merge nodes are not supported (author a
-            // separate flow); this matches the prior behavior, which already
-            // marked all descendants skipped in the main pass.
+            // The loop owns the CONTIGUOUS chain of SUPPORTED body nodes reachable
+            // from it — traversal STOPS at any unsupported node type (condition,
+            // switch, skill, delay, a nested loop, …). Those are BOUNDARIES: not
+            // owned by the loop, so they are neither dispatched per-item nor marked
+            // skipped — they run ONCE in the main topological pass (as before this
+            // rewrite). This keeps a linear per-item body (messages_query → command
+            // → session_update → entity_create) working while never silently
+            // dropping downstream branch/merge/post-loop logic.
+            const nodeById = new Map(flow.nodes.map((n) => [n.id, n]));
             const bodyNodeIds = new Set<string>();
-            for (const edge of getOutEdges(flow.edges, node.id)) {
-              collectDescendants(edge.target, flow.edges, bodyNodeIds);
+            {
+              const stack = getOutEdges(flow.edges, node.id).map(
+                (e) => e.target
+              );
+              while (stack.length) {
+                const id = stack.pop() as string;
+                if (bodyNodeIds.has(id)) continue;
+                const bn = nodeById.get(id);
+                if (!bn || !LOOP_BODY_NODE_TYPES.has(bn.type)) continue; // boundary
+                bodyNodeIds.add(id);
+                for (const e of getOutEdges(flow.edges, id))
+                  stack.push(e.target);
+              }
             }
             // Already topologically sorted — filter preserves the order so a
             // child's inputs (earlier nodes in the chain) run before it.
@@ -2515,23 +2532,19 @@ function markDescendantsSkipped(
   }
 }
 
-/**
- * Collect every node reachable downstream of `nodeId` (its descendants) into
- * `acc`. Mirrors {@link markDescendantsSkipped}'s traversal but only gathers
- * ids — used to materialize a loop's per-item subgraph (the loop OWNS its
- * entire downstream chain).
- */
-function collectDescendants(
-  nodeId: string,
-  edges: AutomationEdge[],
-  acc: Set<string>
-): void {
-  if (acc.has(nodeId)) return;
-  acc.add(nodeId);
-  for (const edge of edges.filter((e) => e.source === nodeId)) {
-    collectDescendants(edge.target, edges, acc);
-  }
-}
+// Node types a loop may dispatch per-item (mirrors the `switch (childNode.type)`
+// in the loop body). Traversal of a loop's body STOPS at any type not in this
+// set, so branch/control nodes (condition, switch, skill, delay, nested loop)
+// are boundaries that run once in the main pass rather than being swallowed.
+const LOOP_BODY_NODE_TYPES = new Set<string>([
+  "command",
+  "output",
+  "playbook_run",
+  "messages_query",
+  "query",
+  "fetch",
+  "transform",
+]);
 
 /**
  * Parse a duration string to milliseconds.

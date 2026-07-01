@@ -54,6 +54,7 @@ import {
   resolveActingContext,
   resolveActorId,
   verifyWorkspaceReadAccess,
+  verifyWorkspaceAccess,
   type HubHono,
 } from "./_shared.js";
 
@@ -1255,13 +1256,22 @@ export function registerEntitiesRoutes(app: HubHono): void {
         columns: { id: true, workspaceId: true },
       });
       if (!target) return c.body(null, 404);
-      const effectiveWorkspaceId =
-        target.workspaceId ?? body.workspaceId ?? null;
+      // Attaching a file is a WRITE — it creates a file entity + relation in the
+      // target's scope. The file ALWAYS lands in the target's own scope (never a
+      // caller-supplied workspaceId — that would let a caller inject into a
+      // foreign workspace via a pod-personal target). A workspace-scoped target
+      // requires MEMBERSHIP (verifyWorkspaceAccess), not mere pod-read-visibility
+      // — reads must not authorize writes. A pod-personal target (null ws) is
+      // already gated above to the caller's own entities.
+      const effectiveWorkspaceId = target.workspaceId ?? null;
       if (
         effectiveWorkspaceId &&
-        !(await verifyWorkspaceReadAccess(userId, effectiveWorkspaceId))
+        !(await verifyWorkspaceAccess(userId, effectiveWorkspaceId))
       ) {
-        return c.json({ error: "Access denied to entity's workspace" }, 403);
+        return c.json(
+          { error: "Access denied: not a member of the entity's workspace" },
+          403
+        );
       }
 
       // 1. Store the blob as a `file` entity (document + v1 snapshot) in the
@@ -1276,14 +1286,19 @@ export function registerEntitiesRoutes(app: HubHono): void {
       const fileEntityId = uploaded.entity.id;
 
       // 2. LINK target --references--> file via the canonical relations.create
-      //    procedure. Governance is inherited: an agent key either applies the
-      //    edge or returns a reviewable proposal (proposal attribution rides on
-      //    the caller context's identity, exactly like buildCreateResolution).
+      //    procedure. Governance is inherited: with an agent identity threaded,
+      //    the edge either auto-applies (per the caller's exec mode) or returns a
+      //    reviewable proposal, and agent-presence attribution is stamped — same
+      //    membrane as createEntity.
       const scopes = c.get("scopes") as string[];
+      const relAgentUserId = c.get("agentUserId") as string | undefined;
       const relCtx = await createHubProtocolCallerContext(
         userId,
         scopes,
-        effectiveWorkspaceId ?? undefined
+        effectiveWorkspaceId ?? undefined,
+        undefined,
+        undefined,
+        relAgentUserId
       );
       const relCaller = relationsRouter.createCaller(
         relCtx as Parameters<typeof relationsRouter.createCaller>[0]

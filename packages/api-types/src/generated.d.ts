@@ -979,7 +979,7 @@ export interface AutomationTriggerConfig {
 }
 export interface AutomationNodeBase {
 	id: string;
-	type: "trigger" | "command" | "condition" | "delay" | "output" | "loop" | "transform" | "fetch" | "query" | "switch" | "skill" | "capability" | "sub_automation" | "playbook_run";
+	type: "trigger" | "command" | "condition" | "delay" | "output" | "loop" | "transform" | "fetch" | "query" | "messages_query" | "switch" | "skill" | "capability" | "sub_automation" | "playbook_run";
 	position: {
 		x: number;
 		y: number;
@@ -1026,7 +1026,7 @@ export interface OutputNodeDef extends AutomationNodeBase {
 	type: "output";
 	data: {
 		label: string;
-		outputType: "notification" | "entity_create" | "entity_update" | "webhook" | "channel_message";
+		outputType: "notification" | "entity_create" | "entity_update" | "webhook" | "channel_message" | "session_update";
 		config: Record<string, unknown>;
 	};
 }
@@ -1069,6 +1069,27 @@ export interface QueryNodeDef extends AutomationNodeBase {
 		profileSlug: string;
 		filter: string;
 		limit: number;
+		/** Optional per-node error handling */
+		errorHandling?: NodeErrorHandling;
+	};
+}
+/**
+ * Source node that reads stored chat messages for a client. Either reads a
+ * channel directly (`channelId`) or resolves the client-comms channel bound to
+ * a subject entity (`channels.contextObjectId`). Output:
+ * `{ messages: [{ role, content, authorName, createdAt }], channelId, count }`
+ * so a downstream loop can iterate `steps.<id>.output.messages`.
+ */
+export interface MessagesQueryNodeDef extends AutomationNodeBase {
+	type: "messages_query";
+	data: {
+		label: string;
+		/** Read messages for the client-comms channel bound to this entity. */
+		subjectEntityId?: string;
+		/** Read this channel directly (wins over subjectEntityId). */
+		channelId?: string;
+		/** Most-recent N messages (default 40). */
+		limit?: number;
 		/** Optional per-node error handling */
 		errorHandling?: NodeErrorHandling;
 	};
@@ -1148,14 +1169,16 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 	type: "playbook_run";
 	data: {
 		label: string;
-		playbookId: string;
+		/** Resolve the playbook by id, OR by `playbookName` (template-friendly:
+		 *  a capability references its seeded playbook by stable name). One required. */
+		playbookId?: string;
 		playbookName?: string;
 		/** Maps automation step outputs to playbook params */
 		paramsMapping?: Record<string, string>;
 		errorHandling?: NodeErrorHandling;
 	};
 }
-export type AutomationNode = TriggerNodeDef | CommandNodeDef | ConditionNodeDef | DelayNodeDef | OutputNodeDef | LoopNodeDef | TransformNodeDef | FetchNodeDef | QueryNodeDef | SwitchNodeDef | SkillNodeDef | CapabilityNodeDef | SubAutomationNodeDef | PlaybookRunNodeDef;
+export type AutomationNode = TriggerNodeDef | CommandNodeDef | ConditionNodeDef | DelayNodeDef | OutputNodeDef | LoopNodeDef | TransformNodeDef | FetchNodeDef | QueryNodeDef | MessagesQueryNodeDef | SwitchNodeDef | SkillNodeDef | CapabilityNodeDef | SubAutomationNodeDef | PlaybookRunNodeDef;
 export interface AutomationEdge {
 	id: string;
 	source: string;
@@ -2098,6 +2121,23 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			driverParam: unknown;
 			notNull: false;
 			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		metadata: import("drizzle-orm/pg-core").PgColumn<{
+			name: "metadata";
+			tableName: "focus_sessions";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
 			isPrimaryKey: false;
 			isAutoincrement: false;
 			hasRuntimeDefault: false;
@@ -4274,6 +4314,12 @@ export interface CreateCapabilityResult {
 			playbookId: string | null;
 			proposalId: string | null;
 		}[];
+		automations: {
+			name: string;
+			status: "created" | "reused" | "proposed";
+			automationId: string | null;
+			proposalId: string | null;
+		}[];
 	};
 	proposals: string[];
 }
@@ -4692,6 +4738,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description?: string | undefined;
 					properties?: Record<string, unknown> | undefined;
 				}[] | undefined;
+				instructions?: string | undefined;
 			};
 			output: {
 				proposals: {
@@ -17271,6 +17318,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentIds: string[] | null;
 				closedAt: Date | null;
 				verificationReport: unknown;
+				metadata: unknown;
 				startedAt: Date;
 				createdAt: Date;
 				updatedAt: Date;
@@ -17288,6 +17336,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				updatedAt: Date;
 				createdAt: Date;
+				metadata: unknown;
 				correlationId: string | null;
 				channelId: string | null;
 				startedAt: Date;
@@ -17316,6 +17365,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				updatedAt: Date;
 				createdAt: Date;
+				metadata: unknown;
 				correlationId: string | null;
 				channelId: string | null;
 				startedAt: Date;
@@ -17354,6 +17404,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				updatedAt: Date;
 				createdAt: Date;
+				metadata: unknown;
 				correlationId: string | null;
 				channelId: string | null;
 				startedAt: Date;
@@ -17394,6 +17445,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				updatedAt: Date;
 				createdAt: Date;
+				metadata: unknown;
 				correlationId: string | null;
 				channelId: string | null;
 				startedAt: Date;
@@ -17422,6 +17474,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				updatedAt: Date;
 				createdAt: Date;
+				metadata: unknown;
 				correlationId: string | null;
 				channelId: string | null;
 				startedAt: Date;
@@ -17705,6 +17758,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					updatedAt: Date;
 					createdAt: Date;
+					metadata: unknown;
 					correlationId: string | null;
 					channelId: string | null;
 					startedAt: Date;
@@ -17806,6 +17860,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					updatedAt: Date;
 					createdAt: Date;
+					metadata: unknown;
 					correlationId: string | null;
 					channelId: string | null;
 					startedAt: Date;

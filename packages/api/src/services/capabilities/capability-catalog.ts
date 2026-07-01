@@ -151,6 +151,16 @@ function extractParamsSchema(schema: unknown): CapabilityCardVerbParam[] {
   return Object.keys(obj).map((name) => ({ name }));
 }
 
+/** A template's INSTALL parameter — what the caller supplies to `apply` it. */
+export interface CapabilityCardInstallParam {
+  name: string;
+  label?: string;
+  type?: string;
+  required?: boolean;
+  description?: string;
+  secret?: boolean;
+}
+
 export interface CapabilityCard {
   /** Container id; null for an available-only template. */
   id: string | null;
@@ -174,10 +184,44 @@ export interface CapabilityCard {
     skills: string[];
     credential?: string;
   };
+  /**
+   * The template's INSTALL params — what the caller must supply to apply it (e.g.
+   * a vault credential, a baseUrl). Surfaced so the CLI can prompt for them and
+   * apply WITH params (which wires the credential into the tool), instead of a
+   * disconnected post-hoc vault write. Empty when the template declares none.
+   */
+  installParams: CapabilityCardInstallParam[];
   nextAction: {
     kind: "add" | "connect" | "enable" | "run" | "none";
     hint: string;
   };
+}
+
+/** Map a template definition's declared params → the card's install-param specs. */
+function extractInstallParams(
+  def: CapabilityDefinition
+): CapabilityCardInstallParam[] {
+  const params = (def as { params?: Array<Record<string, unknown>> }).params;
+  if (!Array.isArray(params)) return [];
+  return params.map((p) => {
+    const type = typeof p.type === "string" ? p.type : undefined;
+    return {
+      name: String(p.name),
+      ...(typeof p.label === "string" ? { label: p.label } : {}),
+      ...(type ? { type } : {}),
+      ...(typeof p.required === "boolean" ? { required: p.required } : {}),
+      ...(typeof p.description === "string"
+        ? { description: p.description }
+        : {}),
+      // Prompt these masked: an explicit secret/password type, or the
+      // conventional credential param names used by vault-generic templates.
+      ...(type === "password" ||
+      type === "secret" ||
+      /key|token|secret|password/i.test(String(p.name))
+        ? { secret: true }
+        : {}),
+    };
+  });
 }
 
 export interface CapabilityCatalogContext {
@@ -385,7 +429,16 @@ async function loadConnState(
         .select({ id: secrets.id })
         .from(secrets)
         .where(
-          and(inArray(secrets.id, vaultSecretIds), isNull(secrets.deletedAt))
+          and(
+            inArray(secrets.id, vaultSecretIds),
+            // Scope to the caller's own secrets — matching by id ALONE let a
+            // secret the caller can't actually resolve read as "connected"
+            // (the false-positive that hid the workspace-scope bug and made the
+            // CLI skip the key prompt). A connection is only real if the caller
+            // owns the backing secret.
+            eq(secrets.userId, userId),
+            isNull(secrets.deletedAt)
+          )
         );
       for (const r of rows) vaultExists.add(r.id);
     } catch {
@@ -581,6 +634,9 @@ export async function buildCapabilityCatalog(
       ...(connection.required || connection.kind ? { connection } : {}),
       verbs,
       anatomy,
+      installParams: matchedTemplate
+        ? extractInstallParams(matchedTemplate.def)
+        : [],
       nextAction: nextActionFor(status, container.name, connection),
     });
   }
@@ -631,6 +687,7 @@ export async function buildCapabilityCatalog(
       ...(connection.required || connection.kind ? { connection } : {}),
       verbs,
       anatomy,
+      installParams: extractInstallParams(def),
       nextAction: nextActionFor("available", tpl.name, connection),
     });
   }

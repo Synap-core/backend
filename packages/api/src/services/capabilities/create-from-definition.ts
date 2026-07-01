@@ -206,7 +206,34 @@ export async function createCapabilityFromDefinition(
       effectiveParams[p.name] = p.default;
     }
   }
+
+  // Reject a missing REQUIRED param up front. Otherwise `{{param}}` interpolates
+  // to "" and we would store a BLANK credential — which then reads as a falsely
+  // "connected" connection (the bug that let `cap add` install a keyless cap).
+  for (const p of rawDef.params ?? []) {
+    const required = (p as { required?: boolean }).required;
+    if (required && effectiveParams[p.name] === undefined) {
+      throw new Error(
+        `Capability "${rawDef.key}" requires parameter "${p.name}" — pass it in \`params\`.`
+      );
+    }
+  }
+
   const def = interpolateDeep(rawDef, effectiveParams);
+
+  // A pod-scoped capability (all its skills are pod-scoped) exposes a POD-WIDE
+  // connection: its vault secret, credentialed tool, skills and container must be
+  // created with `workspace_id = null`, because every consumer reads pod-wide —
+  // the Hub vault list, and the IS→dispatcher tool lookup (which never forwards a
+  // workspaceId). Stamping the caller's ACTIVE workspace here is exactly what made
+  // a pod capability install as a hidden, unrunnable workspace-scoped one. A
+  // genuinely workspace-scoped capability (non-pod skills) keeps the workspace.
+  // (Playbooks + automations stay on `workspaceId` — they are workspace-scoped by
+  // construction.)
+  const skillScopes = (def.skills ?? []).map((s) => s.scope ?? "pod");
+  const isPodScoped =
+    skillScopes.length > 0 && skillScopes.every((sc) => sc === "pod");
+  const connWorkspaceId = isPodScoped ? undefined : workspaceId;
 
   const proposals: string[] = [];
 
@@ -216,7 +243,11 @@ export async function createCapabilityFromDefinition(
   const vaultByRef = new Map<string, string>();
   const createdVault: CreateCapabilityResult["created"]["vault"] = [];
   for (const v of def.vault ?? []) {
-    const vaultRef = await createVaultSecret(v, userId, workspaceId ?? null);
+    const vaultRef = await createVaultSecret(
+      v,
+      userId,
+      connWorkspaceId ?? null
+    );
     vaultByRef.set(v.ref, vaultRef.vaultRef);
     createdVault.push({ ref: v.ref, ...vaultRef });
   }
@@ -252,8 +283,8 @@ export async function createCapabilityFromDefinition(
           credentialRef
             ? eq(toolsTable.credentialRef, credentialRef)
             : eq(toolsTable.name, t.name),
-          workspaceId
-            ? eq(toolsTable.workspaceId, workspaceId)
+          connWorkspaceId
+            ? eq(toolsTable.workspaceId, connWorkspaceId)
             : isNull(toolsTable.workspaceId)
         )
       )
@@ -297,7 +328,7 @@ export async function createCapabilityFromDefinition(
       executor: t.executor ?? "is-agent",
       config: t.config,
       metadata: t.metadata,
-      workspaceId,
+      workspaceId: connWorkspaceId,
     });
 
     const toolId = result.tool?.id ?? null;
@@ -308,7 +339,12 @@ export async function createCapabilityFromDefinition(
     // grant → agent run is governed). Conservative `execMode: "propose"` for a
     // side-effecting tool — an agent run routes to review unless re-granted auto.
     if (result.status === "created" && toolId) {
-      await issueCapabilityGrant("tool", toolId, userId, workspaceId ?? null);
+      await issueCapabilityGrant(
+        "tool",
+        toolId,
+        userId,
+        connWorkspaceId ?? null
+      );
       // Derive + persist the verb catalog from the skills that require this tool.
       // `govDefault` aligns to the exec-mode `issueCapabilityGrant` just seeded
       // ("propose") so the verb never bypasses the approved+grant model.
@@ -346,8 +382,8 @@ export async function createCapabilityFromDefinition(
       .where(
         and(
           eq(skillsTable.name, s.name),
-          workspaceId
-            ? eq(skillsTable.workspaceId, workspaceId)
+          connWorkspaceId
+            ? eq(skillsTable.workspaceId, connWorkspaceId)
             : isNull(skillsTable.workspaceId)
         )
       )
@@ -394,7 +430,7 @@ export async function createCapabilityFromDefinition(
       category: s.category,
       executionMode: s.executionMode ?? "sync",
       timeoutSeconds: s.timeoutSeconds ?? 30,
-      workspaceId,
+      workspaceId: connWorkspaceId,
     });
 
     const proposalId =
@@ -419,7 +455,7 @@ export async function createCapabilityFromDefinition(
         "skill",
         result.id,
         userId,
-        workspaceId ?? null
+        connWorkspaceId ?? null
       );
     }
 
@@ -559,8 +595,8 @@ export async function createCapabilityFromDefinition(
     .where(
       and(
         eq(capabilitiesTable.name, def.name),
-        workspaceId
-          ? eq(capabilitiesTable.workspaceId, workspaceId)
+        connWorkspaceId
+          ? eq(capabilitiesTable.workspaceId, connWorkspaceId)
           : isNull(capabilitiesTable.workspaceId)
       )
     )
@@ -571,7 +607,7 @@ export async function createCapabilityFromDefinition(
         await containersCaller.create({
           name: def.name,
           description: def.description,
-          workspaceId,
+          workspaceId: connWorkspaceId,
         })
       ).capability?.id ?? null);
   if (containerId) {

@@ -124,7 +124,14 @@ export async function uploadBufferAsFileEntity(params: {
   const extraProperties = params.properties ?? {};
 
   const storageId = randomUUID();
-  const storagePath = `files/${workspaceId ?? "pod"}/${storageId}/${filename}`;
+  // Sanitize the caller-supplied filename for the storage KEY (defense-in-depth
+  // for a local-fs storage backend; object stores treat keys literally). The
+  // random storageId already namespaces each blob; this just strips separators
+  // and parent refs. The original `filename` is still used for the display title.
+  const safeName = (filename || "file")
+    .replace(/[\\/]/g, "_")
+    .replace(/\.\./g, "_");
+  const storagePath = `files/${workspaceId ?? "pod"}/${storageId}/${safeName}`;
 
   // Upload current file content to storage (MinIO / R2).
   logger.info(
