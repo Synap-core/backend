@@ -128,6 +128,19 @@ export const secrets = pgTable(
     // Sharing
     isShared: boolean("is_shared").notNull().default(false),
 
+    // ── Capability-connection registry (0161) ──
+    // This secret IS a capability connection when `capabilityId` is set; NULL =
+    // a plain personal-vault entry. `contextType`/`contextId` optionally bind the
+    // connection to a context object (entity/participant/project/workspace) so a
+    // per-entity / per-user run resolves the right credential. `isDefault` marks
+    // the connection picked when no selector is supplied. `accountHint` selects
+    // 1-of-N Nango connections under one provider.
+    capabilityId: uuid("capability_id"),
+    accountHint: text("account_hint"),
+    contextType: text("context_type"),
+    contextId: text("context_id"),
+    isDefault: boolean("is_default").notNull().default(false),
+
     // Soft delete
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     deletedBy: text("deleted_by"),
@@ -160,6 +173,12 @@ export const secrets = pgTable(
     ),
     providerIntegrationIdx: index("idx_secrets_provider_integration").on(
       table.providerIntegrationId
+    ),
+    // Capability-connection registry (0161)
+    capabilityIdx: index("idx_secrets_capability").on(table.capabilityId),
+    contextIdx: index("idx_secrets_context").on(
+      table.contextType,
+      table.contextId
     ),
   })
 );

@@ -2117,6 +2117,11 @@ CREATE TABLE IF NOT EXISTS "secrets" (
   "is_compromised"         boolean DEFAULT false,
   "compromised_at"         timestamp with time zone,
   "is_shared"              boolean NOT NULL DEFAULT false,
+  "capability_id"          uuid,
+  "account_hint"           text,
+  "context_type"           text,
+  "context_id"             text,
+  "is_default"             boolean NOT NULL DEFAULT false,
   "deleted_at"             timestamp with time zone,
   "deleted_by"             text,
   "created_at"             timestamp with time zone NOT NULL DEFAULT now(),
@@ -2163,6 +2168,15 @@ CREATE INDEX IF NOT EXISTS "idx_secrets_encryption_mode" ON "secrets" ("encrypti
 CREATE INDEX IF NOT EXISTS "idx_secrets_user_service"    ON "secrets" ("user_id", "service_id");
 ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "provider_integration_id" uuid;
 CREATE INDEX IF NOT EXISTS "idx_secrets_provider_integration" ON "secrets" ("provider_integration_id");
+-- Capability-connection registry (0161)
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "capability_id" uuid;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "account_hint"  text;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "context_type"  text;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "context_id"    text;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "is_default"    boolean NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_secrets_capability_default" ON "secrets" ("capability_id") WHERE "is_default" AND "capability_id" IS NOT NULL;
+CREATE INDEX IF NOT EXISTS "idx_secrets_capability" ON "secrets" ("capability_id") WHERE "capability_id" IS NOT NULL;
+CREATE INDEX IF NOT EXISTS "idx_secrets_context" ON "secrets" ("context_type", "context_id");
 
 -- ── capability grants (formerly vault_grants — generalized in 0142) ──────────
 -- Records an AI/agent access grant to a grantable capability (secret/tool/skill/

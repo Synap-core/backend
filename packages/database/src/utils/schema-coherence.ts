@@ -801,6 +801,13 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "key_lookup_hash",
     addedBy: "0157_api_key_lookup_hash.sql",
   },
+  // Vault-as-connection-registry: the marker column proving 0161 ran (it adds
+  // capability_id/account_hint/context_type/context_id/is_default together).
+  {
+    table: "secrets",
+    column: "capability_id",
+    addedBy: "0161_secrets_capability_connections.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {
