@@ -63,6 +63,7 @@ const FocusSessionWireSchema = z.object({
   agentIds: z.array(z.string()),
   closedAt: z.string().nullable(),
   verificationReport: z.unknown().nullable(),
+  metadata: z.unknown(),
   startedAt: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -101,6 +102,8 @@ const UpdateBodySchema = z.object({
   verificationReport: z.unknown().optional(),
   // First-class stages: advance the active playbook stage (PlaybookStage.key).
   currentStage: z.string().min(1).optional(),
+  // Free-form metadata bag — SHALLOW-MERGED into the existing row metadata.
+  metadata: z.record(z.string(), z.unknown()).optional(),
   agentUserId: z.string().uuid().optional(),
   reasoning: z.string().optional(),
 });
@@ -488,6 +491,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         set.verificationReport = patch.verificationReport;
       if (patch.currentStage !== undefined)
         set.currentStage = patch.currentStage;
+      // Shallow-merge the metadata bag into the existing row metadata (additive).
+      if (patch.metadata !== undefined) {
+        const existingMeta =
+          (existing.metadata as Record<string, unknown> | null) ?? {};
+        set.metadata = { ...existingMeta, ...patch.metadata };
+      }
 
       if (patch.status === "closed" && existing.status !== "closed") {
         set.closedAt = new Date();

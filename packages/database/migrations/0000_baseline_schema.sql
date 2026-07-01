@@ -3243,6 +3243,8 @@ ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS subject_entity_id uuid;
 CREATE INDEX IF NOT EXISTS idx_focus_sessions_subject_entity_id ON focus_sessions (subject_entity_id);
 -- First-class playbook stages (0159): active stage pointer (nullable).
 ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS current_stage text;
+-- Free-form session metadata bag (0160): shallow-merged by PATCH + session_update.
+ALTER TABLE focus_sessions ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}'::jsonb;
 -- One active session per channel + covering index for per-message lookup (0121)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_focus_sessions_active_channel
   ON focus_sessions (channel_id)

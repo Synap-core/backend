@@ -30,7 +30,7 @@ import { authMiddleware } from "@synap/auth";
 const logger = createLogger({ module: "file-upload" });
 
 /** Max file size: 10 MB */
-const MAX_FILE_SIZE = 10 * 1024 * 1024;
+export const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 /** Allowed MIME type prefixes and exact types */
 const ALLOWED_MIME_TYPES = new Set([
@@ -73,6 +73,182 @@ function brandAssetKindForMimeType(mimeType: string): string {
   if (mimeType.startsWith("audio/")) return "audio";
   if (mimeType === "application/pdf") return "document";
   return "other";
+}
+
+/**
+ * Result of {@link uploadBufferAsFileEntity}. Loosely typed on purpose so this
+ * exported signature stays self-contained (no drizzle-inferred types leak into
+ * the package `.d.ts`, which would break the `--declaration` portability check).
+ */
+export interface UploadedFileEntity {
+  entity: { id: string; [k: string]: unknown };
+  document: { id: string; storageKey: string | null; [k: string]: unknown };
+  /** The document's canonical storage url (`metadata.url`). */
+  url: string;
+  /** The storage object key/path (`metadata.path`) — usable with `storage.getSignedUrl`. */
+  storageKey: string;
+}
+
+/**
+ * Core upload → document → file-entity pipeline, shared by the Kratos-authed
+ * `POST /upload` multipart route AND the Hub-Protocol (API-key) attachment route.
+ *
+ * Given a decoded `Buffer` + mime/filename, this:
+ *   1. uploads the blob to object storage,
+ *   2. creates the canonical `documents` row + immutable `documentVersions` v1
+ *      snapshot,
+ *   3. creates the `file` (or caller-specified profile) entity via
+ *      `EntityRepository` — including the `brand-asset` property mapping the
+ *      route used before — and cleans up storage/document on entity failure.
+ *
+ * This is a straight extraction of the original `/upload` handler body; the
+ * route now calls it so both auth surfaces share ONE storage/entity path.
+ */
+export async function uploadBufferAsFileEntity(params: {
+  userId: string;
+  /** Workspace the document + entity land in. `null` = pod-personal. */
+  workspaceId: string | null;
+  buffer: Buffer;
+  mimeType: string;
+  filename: string;
+  /** Defaults to "file" — same as the plain-file upload route. */
+  profileSlug?: string;
+  /** Property key that receives the storage path. Defaults to "storageKey". */
+  storageKeyProperty?: string;
+  /** Extra entity properties merged in (e.g. from the multipart `properties`). */
+  properties?: Record<string, unknown>;
+}): Promise<UploadedFileEntity> {
+  const { userId, workspaceId, buffer, mimeType, filename } = params;
+  const profileSlug = params.profileSlug || "file";
+  const storageKeyProperty = params.storageKeyProperty || "storageKey";
+  const extraProperties = params.properties ?? {};
+
+  const storageId = randomUUID();
+  const storagePath = `files/${workspaceId ?? "pod"}/${storageId}/${filename}`;
+
+  // Upload current file content to storage (MinIO / R2).
+  logger.info(
+    { storageId, fileName: filename, size: buffer.length, mimeType },
+    "Uploading file to storage"
+  );
+  const metadata = await storage.upload(storagePath, buffer, {
+    contentType: mimeType,
+  });
+
+  // Canonical path: each uploaded blob gets a document row plus an immutable
+  // v1 snapshot. Entities link to the document; raw storage is never the only
+  // source of truth.
+  const documentId = randomUUID();
+  const versionId = randomUUID();
+  const documentType = documentTypeForMimeType(mimeType);
+  const snapshot = await uploadDocumentVersionSnapshot({
+    userId,
+    documentId,
+    versionId,
+    documentType,
+    mimeType,
+    content: buffer,
+  });
+  const [document] = await db.transaction(async (tx) => {
+    const [doc] = await tx
+      .insert(documents)
+      .values({
+        id: documentId,
+        userId,
+        workspaceId,
+        title: filename,
+        type: documentType,
+        storageUrl: metadata.url,
+        storageKey: metadata.path,
+        size: metadata.size,
+        mimeType,
+        currentVersion: 1,
+        lastSavedVersion: 1,
+        metadata: {
+          originalFileName: filename,
+          uploadKind: "file-upload",
+        },
+      })
+      .returning();
+
+    await tx.insert(documentVersions).values({
+      id: versionId,
+      documentId,
+      version: 1,
+      ...storedVersionValues(snapshot),
+      author: "user",
+      authorId: userId,
+      message: "Initial upload",
+    });
+
+    return [doc];
+  });
+
+  // Create entity via EntityRepository — handles profile resolution, property
+  // indexing, event emission. Merge caller-provided properties. Legacy callers
+  // can still choose the storage-key property, but brand uploads link through
+  // asset-document-id so asset-url remains an actual external URL field.
+  const entityRepo = new EntityRepository(db, eventRepository);
+  const effectiveStorageKeyProperty =
+    profileSlug === "brand-asset" && storageKeyProperty === "asset-url"
+      ? "storageKey"
+      : storageKeyProperty;
+  const documentProperties =
+    profileSlug === "brand-asset"
+      ? {
+          "asset-document-id": document.id,
+          "asset-kind":
+            (extraProperties["asset-kind"] as string | undefined) ??
+            brandAssetKindForMimeType(mimeType),
+        }
+      : {};
+  let createdEntity;
+  try {
+    createdEntity = await entityRepo.create(
+      {
+        profileSlug,
+        title: filename,
+        workspaceId,
+        userId,
+        documentId: document.id,
+        properties: {
+          ...extraProperties,
+          ...documentProperties,
+          fileName: filename,
+          mimeType,
+          fileSize: buffer.length,
+          documentId: document.id,
+          [effectiveStorageKeyProperty]: metadata.path,
+        },
+      },
+      userId
+    );
+  } catch (createError) {
+    try {
+      await db.delete(documents).where(eq(documents.id, document.id));
+      await Promise.allSettled([
+        storage.delete(metadata.path),
+        storage.delete(snapshot.storageKey),
+      ]);
+    } catch (cleanupError) {
+      logger.warn(
+        { err: cleanupError, documentId: document.id },
+        "Failed to clean up uploaded document after entity creation failure"
+      );
+    }
+    throw createError;
+  }
+
+  return {
+    entity: createdEntity as { id: string; [k: string]: unknown },
+    document: document as {
+      id: string;
+      storageKey: string | null;
+      [k: string]: unknown;
+    },
+    url: metadata.url,
+    storageKey: metadata.path,
+  };
 }
 
 export const fileUploadApp = new Hono<{
@@ -143,126 +319,28 @@ fileUploadApp.post("/upload", async (c) => {
     }
 
     const originalFileName = file.name || "unnamed";
-    const storageId = randomUUID();
-    const storagePath = `files/${workspaceId}/${storageId}/${originalFileName}`;
 
     // Read file into Buffer
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // Upload current file content to storage (MinIO / R2).
-    logger.info(
-      { storageId, fileName: originalFileName, size: file.size, mimeType },
-      "Uploading file to storage"
-    );
-
-    const metadata = await storage.upload(storagePath, buffer, {
-      contentType: mimeType,
-    });
-
-    // Canonical path: each uploaded blob gets a document row plus an immutable
-    // v1 snapshot. Entities link to the document; raw storage is never the only
-    // source of truth.
-    const documentId = randomUUID();
-    const versionId = randomUUID();
-    const documentType = documentTypeForMimeType(mimeType);
-    const snapshot = await uploadDocumentVersionSnapshot({
+    // Canonical storage + document + file-entity pipeline (shared with the
+    // Hub-Protocol attachment route). Behavior is unchanged from the previous
+    // inline implementation.
+    const {
+      entity: createdEntity,
+      document,
+      storageKey,
+    } = await uploadBufferAsFileEntity({
       userId,
-      documentId,
-      versionId,
-      documentType,
+      workspaceId,
+      buffer,
       mimeType,
-      content: buffer,
+      filename: originalFileName,
+      profileSlug,
+      storageKeyProperty,
+      properties: extraProperties,
     });
-    const [document] = await db.transaction(async (tx) => {
-      const [doc] = await tx
-        .insert(documents)
-        .values({
-          id: documentId,
-          userId,
-          workspaceId,
-          title: originalFileName,
-          type: documentType,
-          storageUrl: metadata.url,
-          storageKey: metadata.path,
-          size: metadata.size,
-          mimeType,
-          currentVersion: 1,
-          lastSavedVersion: 1,
-          metadata: {
-            originalFileName,
-            uploadKind: "file-upload",
-          },
-        })
-        .returning();
-
-      await tx.insert(documentVersions).values({
-        id: versionId,
-        documentId,
-        version: 1,
-        ...storedVersionValues(snapshot),
-        author: "user",
-        authorId: userId,
-        message: "Initial upload",
-      });
-
-      return [doc];
-    });
-
-    // Create entity via EntityRepository — handles profile resolution, property indexing, event emission.
-    // Merge caller-provided properties. Legacy callers can still choose the
-    // storage-key property, but brand uploads link through asset-document-id so
-    // asset-url remains an actual external URL field.
-    const entityRepo = new EntityRepository(db, eventRepository);
-    const effectiveStorageKeyProperty =
-      profileSlug === "brand-asset" && storageKeyProperty === "asset-url"
-        ? "storageKey"
-        : storageKeyProperty;
-    const documentProperties =
-      profileSlug === "brand-asset"
-        ? {
-            "asset-document-id": document.id,
-            "asset-kind":
-              (extraProperties["asset-kind"] as string | undefined) ??
-              brandAssetKindForMimeType(mimeType),
-          }
-        : {};
-    let createdEntity;
-    try {
-      createdEntity = await entityRepo.create(
-        {
-          profileSlug,
-          title: originalFileName,
-          workspaceId,
-          userId,
-          documentId: document.id,
-          properties: {
-            ...extraProperties,
-            ...documentProperties,
-            fileName: originalFileName,
-            mimeType,
-            fileSize: file.size,
-            documentId: document.id,
-            [effectiveStorageKeyProperty]: metadata.path,
-          },
-        },
-        userId
-      );
-    } catch (createError) {
-      try {
-        await db.delete(documents).where(eq(documents.id, document.id));
-        await Promise.allSettled([
-          storage.delete(metadata.path),
-          storage.delete(snapshot.storageKey),
-        ]);
-      } catch (cleanupError) {
-        logger.warn(
-          { err: cleanupError, documentId: document.id },
-          "Failed to clean up uploaded document after entity creation failure"
-        );
-      }
-      throw createError;
-    }
     // Use the canonical entity ID returned by the repository
     const createdEntityId = createdEntity.id;
 
@@ -298,7 +376,7 @@ fileUploadApp.post("/upload", async (c) => {
     let previewUrl: string | undefined;
     if (mimeType.startsWith("image/")) {
       try {
-        previewUrl = await storage.getSignedUrl(metadata.path, 3600);
+        previewUrl = await storage.getSignedUrl(storageKey, 3600);
       } catch {
         // Non-fatal
       }
@@ -309,7 +387,7 @@ fileUploadApp.post("/upload", async (c) => {
       fileName: originalFileName,
       mimeType,
       size: file.size,
-      storageKey: metadata.path,
+      storageKey,
       documentId: document.id,
       previewUrl: previewUrl ?? null,
     });

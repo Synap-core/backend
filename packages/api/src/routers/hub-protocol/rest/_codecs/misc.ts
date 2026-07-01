@@ -190,6 +190,9 @@ export const CaptureStructureRequestSchema = z
     url: z.string().url().optional(),
     html: z.string().max(50_000).optional(),
     context: z.string().optional(),
+    // Optional extraction bias (e.g. lead-capture channel intake hint). Passed
+    // through to the tRPC capture.structure procedure → IS structuring call.
+    instructions: z.string().max(2000).optional(),
     workspaceId: z.string().uuid().optional(),
     previousEntities: z
       .array(

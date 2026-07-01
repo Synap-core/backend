@@ -427,6 +427,11 @@ export const captureRouter = router({
             })
           )
           .optional(),
+        // Optional extraction bias from the caller (e.g. the Discord bridge's
+        // lead-capture channel: "this is a new-lead intake; prefer creating a
+        // contact/company/lead; link to existing entities, don't duplicate").
+        // Threaded verbatim into the IS structuring call. Absent → unchanged.
+        instructions: z.string().max(2000).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -592,6 +597,7 @@ export const captureRouter = router({
           url: input.url,
           html: input.html,
           context: input.context,
+          instructions: input.instructions,
           hints: {
             availableProfiles,
             availableWorkspaces,

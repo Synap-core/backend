@@ -421,6 +421,13 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0159_playbook_stages.sql",
   },
 
+  // focus_sessions — free-form metadata bag (0160)
+  {
+    table: "focus_sessions",
+    column: "metadata",
+    addedBy: "0160_focus_session_metadata.sql",
+  },
+
   // playbooks — Process North Star subject spine (0139)
   {
     table: "playbooks",

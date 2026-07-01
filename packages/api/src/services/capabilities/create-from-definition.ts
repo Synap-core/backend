@@ -39,6 +39,7 @@ import {
   tools as toolsTable,
   skills as skillsTable,
   playbooks as playbooksTable,
+  automations as automationsTable,
   capabilities as capabilitiesTable,
 } from "@synap/database/schema";
 import type { ToolVerbCatalogEntry } from "@synap/database/schema";
@@ -51,6 +52,7 @@ import type {
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
 
 import { playbooksRouter } from "../../routers/playbooks.js";
+import { automationsRouter } from "../../routers/automations.js";
 import { toolsRouter } from "../../routers/tools.js";
 import { skillsRouter } from "../../routers/skills.js";
 import { capabilityContainersRouter } from "../../routers/capability-containers.js";
@@ -107,9 +109,27 @@ export interface CapabilityPlaybookDef {
   status?: "draft" | "active" | "paused" | "archived";
 }
 
-/** Definition the applier accepts — the shared contract plus optional playbooks. */
+// Mirrors the `automations.create` tRPC input (routers/automations.ts:164). An
+// automation seeded alongside the capability — a WHEN→THEN flow (e.g. a cron
+// source-ingest). Stored loosely (the JSON rides the @synap/playbooks
+// CapabilityDefinition contract) so the applier can accept it.
+export interface CapabilityAutomationDef {
+  name: string;
+  description?: string;
+  triggerType: "event" | "cron" | "webhook" | "manual";
+  triggerConfig?: Record<string, unknown>;
+  flowDefinition: {
+    nodes: Record<string, unknown>[];
+    edges: Record<string, unknown>[];
+  };
+  status?: "draft" | "active" | "paused" | "error";
+  metadata?: Record<string, unknown>;
+}
+
+/** Definition the applier accepts — the shared contract plus optional playbooks + automations. */
 export type CapabilityDefinitionWithPlaybooks = CapabilityDefinition & {
   playbooks?: CapabilityPlaybookDef[];
+  automations?: CapabilityAutomationDef[];
 };
 
 // ── Result shape ──────────────────────────────────────────────────────────────
@@ -140,6 +160,12 @@ export interface CreateCapabilityResult {
       name: string;
       status: "created" | "reused" | "proposed";
       playbookId: string | null;
+      proposalId: string | null;
+    }[];
+    automations: {
+      name: string;
+      status: "created" | "reused" | "proposed";
+      automationId: string | null;
       proposalId: string | null;
     }[];
   };
@@ -467,6 +493,58 @@ export async function createCapabilityFromDefinition(
     }
   }
 
+  // 4b. AUTOMATIONS — WHEN→THEN flows seeded alongside the capability (e.g. a
+  //     cron source-ingest). Idempotent on name within scope (matches the
+  //     bridge's applyAutomationTemplates idempotency). Routed through the
+  //     governed automations.create caller — ZERO duplicated insert logic.
+  const createdAutomations: CreateCapabilityResult["created"]["automations"] =
+    [];
+  if ((def.automations?.length ?? 0) > 0) {
+    const automationsCaller = automationsRouter.createCaller(ctx as never);
+    for (const a of def.automations ?? []) {
+      // Idempotent reuse keyed on the stable natural key: name within scope
+      // (workspace-scoped when a workspaceId is present, else pod-wide/NULL).
+      const [existing] = await db
+        .select({ id: automationsTable.id })
+        .from(automationsTable)
+        .where(
+          and(
+            eq(automationsTable.name, a.name),
+            workspaceId
+              ? eq(automationsTable.workspaceId, workspaceId)
+              : isNull(automationsTable.workspaceId)
+          )
+        )
+        .limit(1);
+      if (existing) {
+        createdAutomations.push({
+          name: a.name,
+          status: "reused",
+          automationId: existing.id,
+          proposalId: null,
+        });
+        continue;
+      }
+
+      const created = await automationsCaller.create({
+        workspaceId: workspaceId ?? null,
+        name: a.name,
+        description: a.description,
+        triggerType: a.triggerType,
+        triggerConfig: a.triggerConfig ?? {},
+        flowDefinition: a.flowDefinition,
+        status: a.status ?? "draft",
+        metadata: a.metadata,
+      });
+      createdAutomations.push({
+        name: a.name,
+        status: "created",
+        automationId: created?.id ?? null,
+        proposalId: null,
+      });
+    }
+  }
+
   // 5. Capability CONTAINER — group the seeded tools + skills under ONE named
   //    capability (the container model). Idempotent on name within scope; parts
   //    attach as `tool|skill --member_of--> capability` via the GOVERNED container
@@ -529,6 +607,7 @@ export async function createCapabilityFromDefinition(
       tools: createdTools,
       skills: createdSkills,
       playbooks: createdPlaybooks,
+      automations: createdAutomations,
     },
     proposals,
   };

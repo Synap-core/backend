@@ -57,6 +57,7 @@ export type AutomationNodeType =
   | "trigger"
   | "command"
   | "query"
+  | "messages_query"
   | "condition"
   | "delay"
   | "output"
@@ -73,7 +74,8 @@ export type AutomationOutputType =
   | "entity_create"
   | "entity_update"
   | "webhook"
-  | "channel_message";
+  | "channel_message"
+  | "session_update";
 
 // ── API input types ─────────────────────────────────────────────────────────
 

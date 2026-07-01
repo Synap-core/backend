@@ -688,6 +688,12 @@ export class IntelligenceHubClient {
     url?: string;
     html?: string;
     context?: string;
+    /**
+     * Optional free-text bias for the structuring pass (e.g. "new-lead intake:
+     * prefer contact/company/lead; link to existing entities, don't duplicate").
+     * Rides in the POST body to /api/structure; the IS prompt may use it.
+     */
+    instructions?: string;
     hints?: {
       preferredProfiles?: string[];
       existingEntityNames?: string[];

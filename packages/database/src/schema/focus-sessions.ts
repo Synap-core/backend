@@ -106,6 +106,13 @@ export const focusSessions = pgTable(
     closedAt: timestamp("closed_at", { withTimezone: true }),
     /** Verification report: Test results and verification outcomes (single closing report). */
     verificationReport: jsonb("verification_report"),
+    /**
+     * Free-form session metadata bag (additive — 0160). Shallow-merged by the
+     * Hub PATCH door and the automation `session_update` output subtype. Used
+     * e.g. for `grantStatus` (a sub-object an automation maintains while driving
+     * a playbook session). Defaults to `{}` so a fresh row is never NULL.
+     */
+    metadata: jsonb("metadata").notNull().default({}),
     startedAt: timestamp("started_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

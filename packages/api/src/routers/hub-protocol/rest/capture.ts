@@ -260,6 +260,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         url: body.url,
         html: body.html,
         context: body.context,
+        instructions: body.instructions,
         previousEntities: body.previousEntities,
       });
       return c.json(result);

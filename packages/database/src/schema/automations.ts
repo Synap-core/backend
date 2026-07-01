@@ -105,6 +105,7 @@ export interface AutomationNodeBase {
     | "transform"
     | "fetch"
     | "query"
+    | "messages_query"
     | "switch"
     | "skill"
     | "capability"
@@ -163,7 +164,8 @@ export interface OutputNodeDef extends AutomationNodeBase {
       | "entity_create"
       | "entity_update"
       | "webhook"
-      | "channel_message";
+      | "channel_message"
+      | "session_update";
     config: Record<string, unknown>;
   };
 }
@@ -210,6 +212,28 @@ export interface QueryNodeDef extends AutomationNodeBase {
     profileSlug: string;
     filter: string;
     limit: number;
+    /** Optional per-node error handling */
+    errorHandling?: NodeErrorHandling;
+  };
+}
+
+/**
+ * Source node that reads stored chat messages for a client. Either reads a
+ * channel directly (`channelId`) or resolves the client-comms channel bound to
+ * a subject entity (`channels.contextObjectId`). Output:
+ * `{ messages: [{ role, content, authorName, createdAt }], channelId, count }`
+ * so a downstream loop can iterate `steps.<id>.output.messages`.
+ */
+export interface MessagesQueryNodeDef extends AutomationNodeBase {
+  type: "messages_query";
+  data: {
+    label: string;
+    /** Read messages for the client-comms channel bound to this entity. */
+    subjectEntityId?: string;
+    /** Read this channel directly (wins over subjectEntityId). */
+    channelId?: string;
+    /** Most-recent N messages (default 40). */
+    limit?: number;
     /** Optional per-node error handling */
     errorHandling?: NodeErrorHandling;
   };
@@ -292,7 +316,9 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
   type: "playbook_run";
   data: {
     label: string;
-    playbookId: string;
+    /** Resolve the playbook by id, OR by `playbookName` (template-friendly:
+     *  a capability references its seeded playbook by stable name). One required. */
+    playbookId?: string;
     playbookName?: string;
     /** Maps automation step outputs to playbook params */
     paramsMapping?: Record<string, string>;
@@ -310,6 +336,7 @@ export type AutomationNode =
   | TransformNodeDef
   | FetchNodeDef
   | QueryNodeDef
+  | MessagesQueryNodeDef
   | SwitchNodeDef
   | SkillNodeDef
   | CapabilityNodeDef

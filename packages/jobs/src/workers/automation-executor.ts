@@ -32,6 +32,7 @@ import {
   and,
   or,
   isNull,
+  desc,
   automations,
   automationRuns,
   automationStepRuns,
@@ -670,6 +671,135 @@ async function executeOutputStep(
       return { status: "sent", messageId: msg.id, channelId };
     }
 
+    case "session_update": {
+      // Drive a focus session from inside a flow: advance its stage, maintain a
+      // grantStatus bag in metadata, or append an expected output. Resolve the
+      // session by explicit id, else the active focus_session bound to the
+      // subject entity. Governed by the SAME agent policy as entity_update.
+      const sessionId = config.sessionId as string | undefined;
+      const subjectEntityId = config.subjectEntityId as string | undefined;
+      const currentStage = config.currentStage as string | undefined;
+      const grantStatus = config.grantStatus as unknown;
+      const addOutput = config.addOutput as
+        | { kind: string; label: string; icon?: string }
+        | undefined;
+
+      let session: typeof focusSessions.$inferSelect | undefined;
+      if (sessionId) {
+        session = await db.query.focusSessions.findFirst({
+          where: eq(focusSessions.id, sessionId),
+        });
+      } else if (subjectEntityId) {
+        session = await db.query.focusSessions.findFirst({
+          where: and(
+            eq(focusSessions.subjectEntityId, subjectEntityId),
+            eq(focusSessions.status, "active")
+          ),
+          orderBy: [desc(focusSessions.startedAt)],
+        });
+      }
+
+      if (!session) {
+        return { status: "skipped", reason: "no matching session" };
+      }
+
+      // Cross-workspace guard: only mutate a session in the automation's
+      // workspace (or a pod-wide NULL-workspace session). Mirrors the
+      // playbook_run subject IDOR guard — the column has no FK.
+      if (session.workspaceId && session.workspaceId !== workspaceId) {
+        throw new Error(
+          `session_update: session ${session.id} not visible in workspace ${workspaceId}`
+        );
+      }
+
+      // Governed — same gate as entity_create / entity_update above.
+      const gate = await checkAutomationWriteOrPropose({
+        ownerId,
+        workspaceId,
+        subjectType: "focus_session",
+        action: "update",
+        data: { id: session.id, currentStage, grantStatus, addOutput },
+        reasoning: "Automation proposed updating a focus session.",
+        automationRunId: automationContext.automationRunId,
+        correlationId: automationContext.rootRunId,
+      });
+      if ("denied" in gate) {
+        throw new Error(`session_update denied by governance: ${gate.reason}`);
+      }
+      if ("proposed" in gate) {
+        // SAFETY: a proposal was created — do NOT direct-write.
+        return { status: "proposed", proposalId: gate.proposalId };
+      }
+
+      const set: Partial<typeof focusSessions.$inferInsert> = {
+        updatedAt: new Date(),
+      };
+
+      const stageChanged =
+        currentStage !== undefined && currentStage !== session.currentStage;
+      if (stageChanged) set.currentStage = currentStage;
+
+      // grantStatus → shallow-merge into session.metadata under `grantStatus`.
+      if (grantStatus !== undefined) {
+        const existingMeta =
+          (session.metadata as Record<string, unknown> | null) ?? {};
+        set.metadata = { ...existingMeta, grantStatus };
+      }
+
+      // addOutput → append to expectedOutputs (status 'pending'); read-modify-write.
+      if (addOutput) {
+        const existingOutputs = Array.isArray(session.expectedOutputs)
+          ? (session.expectedOutputs as Array<Record<string, unknown>>)
+          : [];
+        set.expectedOutputs = [
+          ...existingOutputs,
+          {
+            kind: addOutput.kind,
+            label: addOutput.label,
+            ...(addOutput.icon ? { icon: addOutput.icon } : {}),
+            status: "pending",
+          },
+        ];
+      }
+
+      await db
+        .update(focusSessions)
+        .set(set)
+        .where(eq(focusSessions.id, session.id));
+
+      // Stage transition side-effect — mirror rest/focus-sessions.ts:503-524 so
+      // automations can react (and filter on toStage). Only when stage changed.
+      if (stageChanged) {
+        emitSideEffects({
+          subjectType: "focus_session",
+          action: "stage_changed",
+          subjectId: session.id,
+          userId: ownerId,
+          workspaceId: session.workspaceId,
+          data: {
+            sessionId: session.id,
+            subjectId: session.subjectEntityId,
+            playbookId: session.playbookId,
+            fromStage: session.currentStage,
+            toStage: currentStage,
+            workspaceId: session.workspaceId,
+            userId: ownerId,
+          },
+        }).catch((err) => {
+          logger.warn(
+            { err, sessionId: session.id },
+            "session_update: stage_changed emit failed (non-fatal)"
+          );
+        });
+      }
+
+      return {
+        status: "updated",
+        sessionId: session.id,
+        ...(stageChanged ? { stageChanged: true, toStage: currentStage } : {}),
+      };
+    }
+
     default:
       logger.warn({ outputType: data.outputType }, "Unknown output type");
       return { status: "unknown_output_type", outputType: data.outputType };
@@ -901,6 +1031,97 @@ async function executeQueryStep(
 }
 
 /**
+ * Execute a messages_query SOURCE step: read a client's stored chat messages.
+ *
+ * Resolution: an explicit `channelId` wins; otherwise the client-comms channel
+ * bound to `subjectEntityId` (channels.contextObjectType='entity' +
+ * contextObjectId=entity) is resolved. Either way the channel must be visible
+ * in the automation's workspace (its workspace OR a pod-wide NULL one) — we
+ * never read a channel from another workspace.
+ *
+ * Returns the most-recent `limit` messages in CHRONOLOGICAL order (oldest →
+ * newest) so a downstream loop iterates the conversation in sequence:
+ * `{ messages: [{ role, content, authorName, createdAt }], channelId, count }`.
+ */
+async function executeMessagesQueryStep(
+  data: { subjectEntityId?: string; channelId?: string; limit?: number },
+  context: StepContext,
+  workspaceId: string
+): Promise<Record<string, unknown>> {
+  const limit = Math.min(Math.max(Number(data.limit ?? 40), 1), 200);
+
+  // The id fields may reference trigger payload / prior step outputs.
+  const subjectEntityId = data.subjectEntityId
+    ? resolveTemplate(data.subjectEntityId, context) || undefined
+    : undefined;
+  let channelId = data.channelId
+    ? resolveTemplate(data.channelId, context) || undefined
+    : undefined;
+
+  if (channelId) {
+    const ch = await db.query.channels.findFirst({
+      where: and(
+        eq(channels.id, channelId),
+        or(eq(channels.workspaceId, workspaceId), isNull(channels.workspaceId))
+      ),
+      columns: { id: true },
+    });
+    if (!ch) {
+      throw new Error(
+        `messages_query: channel ${channelId} not visible in workspace ${workspaceId}`
+      );
+    }
+  } else if (subjectEntityId) {
+    // Resolve the client's CLIENT-COMMS channel (where the client's messages are
+    // ingested) — channelType EXTERNAL. An entity often has BOTH a team THREAD
+    // and an EXTERNAL client-comms channel bound to the same contextObjectId; we
+    // must read the EXTERNAL one, never the team thread (which carries team
+    // chatter, not the client's messages).
+    const ch = await db.query.channels.findFirst({
+      where: and(
+        eq(channels.contextObjectType, "entity"),
+        eq(channels.contextObjectId, subjectEntityId),
+        eq(channels.channelType, ChannelType.EXTERNAL),
+        or(eq(channels.workspaceId, workspaceId), isNull(channels.workspaceId))
+      ),
+      columns: { id: true },
+      orderBy: [desc(channels.updatedAt)],
+    });
+    channelId = ch?.id;
+  }
+
+  if (!channelId) {
+    // No channel given and none bound to the entity — empty set (additive).
+    return { messages: [], channelId: null, count: 0 };
+  }
+
+  const rows = await db
+    .select({
+      role: messages.role,
+      content: messages.content,
+      metadata: messages.metadata,
+      timestamp: messages.timestamp,
+    })
+    .from(messages)
+    .where(and(eq(messages.channelId, channelId), isNull(messages.deletedAt)))
+    .orderBy(desc(messages.timestamp))
+    .limit(limit);
+
+  // Re-order oldest → newest for downstream iteration.
+  const ordered = rows.reverse().map((m) => ({
+    role: m.role,
+    content: m.content,
+    authorName:
+      (m.metadata as { sender?: { name?: string } } | null)?.sender?.name ??
+      null,
+    createdAt:
+      m.timestamp instanceof Date ? m.timestamp.toISOString() : m.timestamp,
+  }));
+
+  return { messages: ordered, channelId, count: ordered.length };
+}
+
+/**
  * Execute a playbook_run step: instantiate a playbook, create a channel + session,
  * dispatch the goal to the Intelligence Hub, and return the run/session IDs.
  *
@@ -909,19 +1130,43 @@ async function executeQueryStep(
  */
 async function executePlaybookRun(
   data: {
-    playbookId: string;
+    playbookId?: string;
+    playbookName?: string;
     paramsMapping?: Record<string, string>;
   },
   context: StepContext,
   workspaceId: string,
   ownerId: string
 ): Promise<Record<string, unknown>> {
-  // 1. Load the playbook definition
-  const playbook = await db.query.playbooks.findFirst({
-    where: eq(playbooks.id, data.playbookId),
-  });
+  // 1. Resolve the playbook — by id, else by NAME within this workspace (then a
+  // pod-wide NULL-workspace playbook). By-name is the template-friendly form: a
+  // capability seeds a playbook + an automation together, and the automation
+  // references the playbook by its stable name rather than a runtime id it can't
+  // know at author time (mirrors entity resolution by profileSlug).
+  let playbook = data.playbookId
+    ? await db.query.playbooks.findFirst({
+        where: eq(playbooks.id, data.playbookId),
+      })
+    : undefined;
+  if (!playbook && data.playbookName) {
+    playbook =
+      (await db.query.playbooks.findFirst({
+        where: and(
+          eq(playbooks.name, data.playbookName),
+          eq(playbooks.workspaceId, workspaceId)
+        ),
+      })) ??
+      (await db.query.playbooks.findFirst({
+        where: and(
+          eq(playbooks.name, data.playbookName),
+          isNull(playbooks.workspaceId)
+        ),
+      }));
+  }
   if (!playbook) {
-    throw new Error(`Playbook ${data.playbookId} not found`);
+    throw new Error(
+      `Playbook not found (${data.playbookId ?? data.playbookName ?? "no id/name given"})`
+    );
   }
   // Cross-workspace guard: a flow may only run a playbook from its own workspace
   // or a pod-wide (NULL) one. Mirrors the subject IDOR guard below — the flow's
@@ -973,6 +1218,29 @@ async function executePlaybookRun(
     }
   }
 
+  // 3b. Idempotency by subject — if an active session for this playbook +
+  // subject already exists, REUSE it rather than starting a duplicate. This
+  // makes a playbook_run node safe on a schedule (e.g. a daily client-sync that
+  // ensures every client has a session): start-if-missing, no-op-if-present.
+  if (resolvedSubjectId) {
+    const existing = await db.query.focusSessions.findFirst({
+      where: and(
+        eq(focusSessions.playbookId, playbook.id),
+        eq(focusSessions.subjectEntityId, resolvedSubjectId),
+        eq(focusSessions.status, "active")
+      ),
+      orderBy: [desc(focusSessions.startedAt)],
+    });
+    if (existing) {
+      return {
+        sessionId: existing.id,
+        channelId: existing.channelId ?? null,
+        status: "reused",
+        reused: true,
+      };
+    }
+  }
+
   // 4. Create a focus session for this playbook run
   const [session] = await db
     .insert(focusSessions)
@@ -999,10 +1267,10 @@ async function executePlaybookRun(
       status: ChannelStatus.ACTIVE,
       title: playbook.name,
       contextObjectType: "playbook",
-      contextObjectId: data.playbookId,
+      contextObjectId: playbook.id,
       metadata: {
         origin: "automation-playbook-run",
-        playbookId: data.playbookId,
+        playbookId: playbook.id,
       },
     })
     .returning();
@@ -1072,7 +1340,7 @@ async function executePlaybookRun(
     );
   } catch (err) {
     logger.warn(
-      { err, playbookId: data.playbookId },
+      { err, playbookId: playbook.id },
       "Failed to trigger IS for playbook run — run created but agent not dispatched"
     );
   }
@@ -1419,52 +1687,105 @@ async function executeAutomationFlow(params: {
               break;
             }
 
-            // Find child nodes (nodes connected from this loop node)
-            const childEdges = getOutEdges(flow.edges, node.id);
-            const childNodeIds = new Set(childEdges.map((e) => e.target));
+            // The loop OWNS its entire downstream subgraph — every node
+            // reachable from it runs once per item, in topological order. This
+            // lets a loop body be a multi-node chain (e.g. messages_query →
+            // command → session_update → entity_create), not just direct
+            // children. Post-loop merge nodes are not supported (author a
+            // separate flow); this matches the prior behavior, which already
+            // marked all descendants skipped in the main pass.
+            const bodyNodeIds = new Set<string>();
+            for (const edge of getOutEdges(flow.edges, node.id)) {
+              collectDescendants(edge.target, flow.edges, bodyNodeIds);
+            }
+            // Already topologically sorted — filter preserves the order so a
+            // child's inputs (earlier nodes in the chain) run before it.
+            const bodyNodes = sortedNodes.filter((n) => bodyNodeIds.has(n.id));
 
-            // Execute child nodes for each item
+            // Execute the body subgraph for each item
             const iterationResults: unknown[] = [];
             for (let i = 0; i < items.length; i++) {
               // Set loop context
               context.loop = { item: items[i], index: i };
 
-              // Execute each child node in this iteration
-              for (const childNode of sortedNodes.filter((n) =>
-                childNodeIds.has(n.id)
-              )) {
+              for (const childNode of bodyNodes) {
                 try {
                   let childOutput: Record<string, unknown> = {};
 
-                  if (childNode.type === "command") {
-                    const commandData =
-                      childNode.data as CommandNodeDef["data"];
-                    childOutput = await executeCommandStep(
-                      commandData,
-                      context,
-                      workspaceId,
-                      ownerId
-                    );
-                  } else if (childNode.type === "output") {
-                    const outputData = childNode.data as OutputNodeDef["data"];
-                    childOutput = await executeOutputStep(
-                      outputData,
-                      context,
-                      workspaceId,
-                      automationContext,
-                      ownerId
-                    );
-                  } else if (childNode.type === "playbook_run") {
-                    const playbookRunData = childNode.data as {
-                      playbookId: string;
-                      paramsMapping?: Record<string, string>;
-                    };
-                    childOutput = await executePlaybookRun(
-                      playbookRunData,
-                      context,
-                      workspaceId,
-                      ownerId
-                    );
+                  switch (childNode.type) {
+                    case "command":
+                      childOutput = await executeCommandStep(
+                        childNode.data as CommandNodeDef["data"],
+                        context,
+                        workspaceId,
+                        ownerId
+                      );
+                      break;
+                    case "output":
+                      childOutput = await executeOutputStep(
+                        childNode.data as OutputNodeDef["data"],
+                        context,
+                        workspaceId,
+                        automationContext,
+                        ownerId
+                      );
+                      break;
+                    case "playbook_run":
+                      childOutput = await executePlaybookRun(
+                        childNode.data as {
+                          playbookId?: string;
+                          playbookName?: string;
+                          paramsMapping?: Record<string, string>;
+                        },
+                        context,
+                        workspaceId,
+                        ownerId
+                      );
+                      break;
+                    case "messages_query":
+                      childOutput = await executeMessagesQueryStep(
+                        childNode.data as {
+                          subjectEntityId?: string;
+                          channelId?: string;
+                          limit?: number;
+                        },
+                        context,
+                        workspaceId
+                      );
+                      break;
+                    case "query":
+                      childOutput = await executeQueryStep(
+                        childNode.data as {
+                          profileSlug: string;
+                          filter: string;
+                          limit: number;
+                        },
+                        context,
+                        workspaceId
+                      );
+                      break;
+                    case "fetch":
+                      childOutput = await executeFetchStep(
+                        childNode.data as {
+                          method: string;
+                          url: string;
+                          headers: Record<string, string>;
+                          body: string;
+                        },
+                        context,
+                        ownerId
+                      );
+                      break;
+                    case "transform":
+                      childOutput = executeTransformStep(
+                        childNode.data as { expression: string },
+                        context
+                      );
+                      break;
+                    default:
+                      throw new Error(
+                        `Loop child node type "${childNode.type}" is not supported inside a loop`
+                      );
                   }
 
                   iterationResults.push({
@@ -1473,10 +1794,13 @@ async function executeAutomationFlow(params: {
                     output: childOutput,
                   });
 
-                  // Update step context so later children can reference this output
+                  // Store under BOTH the per-iteration key AND the plain id, so
+                  // a later node in the SAME iteration can reference it as
+                  // {{steps.<id>.output...}} (the natural authoring form).
                   context.steps[`${childNode.id}_iter${i}`] = {
                     output: childOutput,
                   };
+                  context.steps[childNode.id] = { output: childOutput };
                 } catch (err) {
                   logger.error(
                     { err, nodeId: childNode.id, iteration: i },
@@ -1487,6 +1811,9 @@ async function executeAutomationFlow(params: {
                     nodeId: childNode.id,
                     error: err instanceof Error ? err.message : "unknown",
                   });
+                  // The body is a dependent chain — abort the rest of THIS
+                  // item's steps and move to the next item.
+                  break;
                 }
               }
             }
@@ -1494,8 +1821,8 @@ async function executeAutomationFlow(params: {
             // Clear loop context
             delete context.loop;
 
-            // Mark child nodes as completed so the main loop skips them
-            for (const childId of childNodeIds) {
+            // Mark body nodes as completed so the main loop skips them
+            for (const childId of bodyNodeIds) {
               skippedNodes.add(childId);
             }
 
@@ -1531,6 +1858,16 @@ async function executeAutomationFlow(params: {
               limit: number;
             };
             output = await executeQueryStep(data, context, workspaceId);
+            break;
+          }
+
+          case "messages_query": {
+            const data = node.data as {
+              subjectEntityId?: string;
+              channelId?: string;
+              limit?: number;
+            };
+            output = await executeMessagesQueryStep(data, context, workspaceId);
             break;
           }
 
@@ -1913,17 +2250,20 @@ async function executeAutomationFlow(params: {
 
           case "playbook_run": {
             const data = node.data as {
-              playbookId: string;
+              playbookId?: string;
+              playbookName?: string;
               paramsMapping?: Record<string, string>;
             };
 
-            const playbookId = data.playbookId;
-            if (!playbookId)
-              throw new Error("playbook_run node has no playbookId");
+            if (!data.playbookId && !data.playbookName)
+              throw new Error(
+                "playbook_run node has no playbookId or playbookName"
+              );
 
             output = await executePlaybookRun(
               {
-                playbookId,
+                playbookId: data.playbookId,
+                playbookName: data.playbookName,
                 paramsMapping: data.paramsMapping,
               },
               context,
@@ -2172,6 +2512,24 @@ function markDescendantsSkipped(
   const outEdges = edges.filter((e) => e.source === nodeId);
   for (const edge of outEdges) {
     markDescendantsSkipped(edge.target, edges, skippedNodes);
+  }
+}
+
+/**
+ * Collect every node reachable downstream of `nodeId` (its descendants) into
+ * `acc`. Mirrors {@link markDescendantsSkipped}'s traversal but only gathers
+ * ids — used to materialize a loop's per-item subgraph (the loop OWNS its
+ * entire downstream chain).
+ */
+function collectDescendants(
+  nodeId: string,
+  edges: AutomationEdge[],
+  acc: Set<string>
+): void {
+  if (acc.has(nodeId)) return;
+  acc.add(nodeId);
+  for (const edge of edges.filter((e) => e.source === nodeId)) {
+    collectDescendants(edge.target, edges, acc);
   }
 }
 

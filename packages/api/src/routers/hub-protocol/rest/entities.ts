@@ -24,8 +24,10 @@ import {
   isNotNull,
 } from "@synap/database";
 import { inArray } from "drizzle-orm";
+import { storage } from "@synap/storage";
 import { userVisibleWhere } from "../../../utils/user-visible-where.js";
 
+import { uploadBufferAsFileEntity, MAX_FILE_SIZE } from "../../file-upload.js";
 import { relationsRouter } from "../../relations.js";
 import { resolveEntityByName } from "../../../services/entity-resolution.js";
 import { createHubProtocolCallerContext } from "../utils.js";
@@ -1115,6 +1117,218 @@ export function registerEntitiesRoutes(app: HubHono): void {
       );
     } catch (err) {
       logger.error({ err }, "createEntity failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /entities/:entityId/attachments ────────────────────────────────
+  // Upload an image (base64) and attach it to an existing entity — the SERVICE
+  // (Hub-key) counterpart of the Kratos-authed multipart `POST /upload`. The
+  // Discord bridge uses this to attach e.g. a selfie to a freshly-captured lead.
+  //
+  // Reuses `uploadBufferAsFileEntity` (the exact storage → document → file-entity
+  // pipeline the /upload route runs), then LINKS the new file entity to the
+  // target via the canonical entity↔entity `relations.create` procedure (which
+  // inherits governance: an agent key either applies the edge or returns a
+  // reviewable proposal). Relation TYPE is "references" — the established default
+  // for generic entity associations (mirrors cell-instances' `relationType ??
+  // "references"` and the seeded `references` relation def). "attachment" is NOT
+  // used because it is not a seeded/built-in relation type and would be rejected
+  // by relations.create's type validation.
+  const attachEntityRoute = createRoute({
+    method: "post",
+    path: "/entities/{entityId}/attachments",
+    tags: ["Entities"],
+    summary: "Attach an uploaded image to an entity",
+    description:
+      "Service (Hub API-key) route: base64-decode an image, store it as a file " +
+      "entity (document + snapshot), and link it to :entityId via a `references` " +
+      "relation. Max 10MB, image/* only. Requires scope hub-protocol.write.",
+    request: {
+      params: z.object({ entityId: z.string() }),
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              userId: z.string().optional(),
+              workspaceId: z.string().optional(),
+              filename: z.string().min(1),
+              mimeType: z.string().min(1),
+              contentBase64: z.string().min(1),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Created file entity + link result",
+        content: { "application/json": { schema: z.object({}).passthrough() } },
+      },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      404: { description: "Target entity not found" },
+      413: {
+        description: "File too large",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      415: {
+        description: "Unsupported media type",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(attachEntityRoute, async (c): Promise<any> => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const { entityId } = c.req.valid("param");
+    const body = c.req.valid("json");
+
+    // image/* only + 10MB cap (same limits as the multipart /upload route).
+    if (!body.mimeType.startsWith("image/")) {
+      return c.json(
+        { error: `Only image/* uploads are allowed (got ${body.mimeType})` },
+        415
+      );
+    }
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(body.contentBase64, "base64");
+    } catch {
+      return c.json({ error: "contentBase64 is not valid base64" }, 400);
+    }
+    if (buffer.length === 0) {
+      return c.json({ error: "Decoded file is empty" }, 400);
+    }
+    if (buffer.length > MAX_FILE_SIZE) {
+      return c.json(
+        {
+          error: `File too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB`,
+        },
+        413
+      );
+    }
+
+    // Bind acting identity to the authenticated principal (service key may pass
+    // body.userId for on-behalf-of; a session caller may not). Mirrors the PATCH
+    // route below.
+    const authUserId = c.get("userId") as string | undefined;
+    if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
+    const isServiceKey = !!c.get("apiKeyId");
+    if (!isServiceKey && body.userId && body.userId !== authUserId) {
+      return c.json(
+        { error: "userId does not match the authenticated session" },
+        403
+      );
+    }
+    const userId = isServiceKey ? (body.userId ?? authUserId) : authUserId;
+
+    try {
+      // Resolve + verify the TARGET entity is visible to the acting user, and
+      // derive the workspace the attachment lands in from the target itself
+      // (mirror of the PATCH guard). This ensures a caller can only attach to an
+      // entity it can actually see, and keeps the file entity in the same lens.
+      const target = await db.query.entities.findFirst({
+        where: and(
+          eq(entities.id, entityId),
+          isNull(entities.deletedAt),
+          or(
+            and(isNull(entities.workspaceId), eq(entities.userId, userId)),
+            isNotNull(entities.workspaceId)
+          )
+        ),
+        columns: { id: true, workspaceId: true },
+      });
+      if (!target) return c.body(null, 404);
+      const effectiveWorkspaceId =
+        target.workspaceId ?? body.workspaceId ?? null;
+      if (
+        effectiveWorkspaceId &&
+        !(await verifyWorkspaceReadAccess(userId, effectiveWorkspaceId))
+      ) {
+        return c.json({ error: "Access denied to entity's workspace" }, 403);
+      }
+
+      // 1. Store the blob as a `file` entity (document + v1 snapshot) in the
+      //    same workspace as the target.
+      const uploaded = await uploadBufferAsFileEntity({
+        userId,
+        workspaceId: effectiveWorkspaceId,
+        buffer,
+        mimeType: body.mimeType,
+        filename: body.filename,
+      });
+      const fileEntityId = uploaded.entity.id;
+
+      // 2. LINK target --references--> file via the canonical relations.create
+      //    procedure. Governance is inherited: an agent key either applies the
+      //    edge or returns a reviewable proposal (proposal attribution rides on
+      //    the caller context's identity, exactly like buildCreateResolution).
+      const scopes = c.get("scopes") as string[];
+      const relCtx = await createHubProtocolCallerContext(
+        userId,
+        scopes,
+        effectiveWorkspaceId ?? undefined
+      );
+      const relCaller = relationsRouter.createCaller(
+        relCtx as Parameters<typeof relationsRouter.createCaller>[0]
+      );
+      let link: unknown = null;
+      try {
+        link = await relCaller.create({
+          sourceEntityId: entityId,
+          targetEntityId: fileEntityId,
+          type: "references",
+          ...(effectiveWorkspaceId
+            ? { workspaceId: effectiveWorkspaceId }
+            : {}),
+        });
+      } catch (relErr) {
+        // The file entity IS created; surface the link failure without losing it.
+        logger.warn(
+          { relErr, entityId, fileEntityId },
+          "attachment: relation create failed"
+        );
+        link = {
+          error:
+            relErr instanceof Error ? relErr.message : "relation create failed",
+        };
+      }
+
+      // Presigned url for the image if storage can mint one; else the stored url.
+      let url = uploaded.url;
+      try {
+        url = await storage.getSignedUrl(uploaded.storageKey, 3600);
+      } catch {
+        // Non-fatal — fall back to the canonical storage url.
+      }
+
+      return c.json(
+        {
+          fileEntityId,
+          documentId: uploaded.document.id,
+          url,
+          link,
+        },
+        200
+      );
+    } catch (err) {
+      logger.error({ err, entityId }, "POST /entities/:id/attachments failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

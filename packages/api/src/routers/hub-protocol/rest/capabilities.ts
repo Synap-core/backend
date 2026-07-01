@@ -125,6 +125,24 @@ export const CapabilityDefinitionSchema = z.object({
   skills: z.array(SkillDefSchema),
   // Optional: session-template playbooks seeded alongside {vault · tools · skills}.
   playbooks: z.array(PlaybookDefSchema).optional(),
+  // Optional: WHEN→THEN automations seeded alongside the capability (e.g. a
+  // cron source-ingest). Loosely shaped; validated by automations.create.
+  automations: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        description: z.string().optional(),
+        triggerType: z.enum(["event", "cron", "webhook", "manual"]),
+        triggerConfig: z.record(z.string(), z.unknown()).optional(),
+        flowDefinition: z.object({
+          nodes: z.array(z.record(z.string(), z.unknown())),
+          edges: z.array(z.record(z.string(), z.unknown())),
+        }),
+        status: z.enum(["draft", "active", "paused", "error"]).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+      })
+    )
+    .optional(),
 });
 
 const ApplyCapabilityRequestSchema = z
