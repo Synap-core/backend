@@ -39,6 +39,7 @@ import {
   registerLoopsRoutes,
   registerCaptureRoutes,
   registerChannelsRoutes,
+  registerChannelEgressRoutes,
   registerCommandsRoutes,
   registerDocumentsRoutes,
   registerEntitiesRoutes,
@@ -479,6 +480,7 @@ registerMcpServersRoutes(app); // /mcp-servers
 registerAutomationsRoutes(app); // /automations*
 registerVaultRoutes(app); // /vault/request
 registerChannelsRoutes(app); // /channels/*
+registerChannelEgressRoutes(app); // /channel-egress/pending, /channel-egress/:id/ack
 registerTerminalRoutes(app); // /terminal/logs
 registerProactiveRoutes(app); // /proactive/post
 registerNotificationsRoutes(app); // /notifications

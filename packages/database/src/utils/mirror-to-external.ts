@@ -1,37 +1,35 @@
 /**
- * mirror-to-external — the FORWARD half of the generic Synap↔Discord channel
- * mirror. When a message is inserted into an EXTERNAL channel bound to a Discord
- * channel (channelType='external', externalSource='discord', externalId=<snowflake>),
- * this posts the same content out to Discord via the bot REST API.
+ * mirror-to-external — the FORWARD half of the generic Synap↔external channel
+ * mirror. When a message is inserted into an EXTERNAL channel bound to an
+ * external chat channel (channelType='external', externalSource=<provider>,
+ * externalId=<channel id>), this ENQUEUES a provider-AGNOSTIC `post_message`
+ * egress intent onto the `channel_egress` outbox. It no longer posts to Discord
+ * (or any platform) directly — the external bridge consumes the outbox and does
+ * the delivery.
  *
  * Lives in `@synap/database` (not `@synap/api`) so every producer can call it:
  * api-side (chat relay) AND jobs-side (automation-executor, feed/mail/event
  * workers) — the dep graph is api→jobs→database.
  *
- * PURE delivery — no message-row insert (the row already exists; that's what
+ * PURE enqueue — no message-row insert (the row already exists; that's what
  * triggered the mirror) and no capability re-gate (the message already passed its
- * producer's governance). The reverse half (Discord→Synap) already exists via
- * `/discord/ingest` → `recordInboundMessage`.
+ * producer's governance) and no network I/O. The reverse half (external→Synap)
+ * already exists via `/discord/ingest` → `recordInboundMessage`.
  *
- * Guards:
- *   1. ECHO — `authorType='external'` means the message came FROM the platform
- *      (inbound); never push it back out.
- *   2. FIREWALL — bot/AI output (ai_agent|bot) must NEVER reach a `client-comms`
- *      channel (those mirror to the client's own Telegram). A HUMAN operator
- *      message to client-comms IS the intended operator→client reply, allowed.
+ * Guard here:
+ *   ECHO — `authorType='external'` means the message came FROM the platform
+ *   (inbound); never push it back out.
+ *
+ * The FIREWALL (bot/AI output must never reach a client-comms channel) now lives
+ * in the bridge, which reads `payload.authorType` + `payload.branchPurpose` FACTS
+ * off the enqueued intent and drops what it must. This layer only emits facts.
  */
 
 import { getDb } from "../client-pg.js";
 import { channels, ChannelType } from "../schema/channels.js";
 import { MessageAuthorType } from "../schema/messages.js";
 import { eq } from "drizzle-orm";
-import { createLogger } from "@synap-core/core";
-import {
-  resolveDiscordBotToken,
-  postDiscordChannelMessage,
-} from "./discord-rest.js";
-
-const logger = createLogger({ module: "mirror-to-external" });
+import { enqueueChannelEgress } from "./channel-egress.js";
 
 /** The channel fields the mirror needs. Pass the row to skip a lookup. */
 export interface MirrorChannelRef {
@@ -50,10 +48,9 @@ export interface MirrorMessageParams {
   channelId?: string;
   /** The message content to mirror. */
   content: string;
-  /** authorType of the inserted message — drives the echo + firewall guards. */
+  /** authorType of the inserted message — drives the echo guard + rides the
+   * intent as a FACT the bridge firewall reads. */
   authorType: string;
-  /** Optional pod-owner override for bot-token resolution. */
-  ownerId?: string;
 }
 
 export interface MirrorResult {
@@ -62,9 +59,10 @@ export interface MirrorResult {
 }
 
 /**
- * Mirror a just-inserted channel message out to its bound external platform.
- * Never throws — a mirror failure must never break the producer that inserted
- * the message. Returns a structured result for logging/tests.
+ * Mirror a just-inserted channel message out to its bound external platform by
+ * ENQUEUEING an agnostic egress intent. Never throws — a mirror failure must
+ * never break the producer that inserted the message. Returns a structured
+ * result for logging/tests.
  */
 export async function mirrorMessageToBoundExternal(
   params: MirrorMessageParams
@@ -72,7 +70,7 @@ export async function mirrorMessageToBoundExternal(
   const { content, authorType } = params;
   if (!content) return { mirrored: false, reason: "empty_content" };
 
-  // (1) ECHO guard — inbound-origin messages are never re-mirrored.
+  // ECHO guard — inbound-origin messages are never re-mirrored.
   if (authorType === MessageAuthorType.EXTERNAL) {
     return { mirrored: false, reason: "inbound_origin" };
   }
@@ -104,53 +102,18 @@ export async function mirrorMessageToBoundExternal(
     return { mirrored: false, reason: "no_external_id" };
   }
 
-  // (2) FIREWALL — fail-closed ALLOWLIST. Bot/AI output mirrors ONLY to channels
-  // EXPLICITLY marked internal ('team'). A null/unknown branchPurpose is treated
-  // as potentially client-comms: the rest of the system defaults null→client-comms
-  // (bridge refreshClientCommsCache / resolveTeamExternalId), so a denylist on the
-  // exact string "client-comms" would leak bot/AI output to a null-purpose client
-  // channel. Human operator messages are NOT gated (operator→client is intended).
-  const isBotOrAI =
-    authorType === MessageAuthorType.AI_AGENT ||
-    authorType === MessageAuthorType.BOT;
-  if (isBotOrAI && channel.branchPurpose !== "team") {
-    logger.warn(
-      {
-        externalSource: channel.externalSource,
-        externalId,
-        authorType,
-        branchPurpose: channel.branchPurpose,
-      },
-      "mirror blocked: bot/AI output may only reach an internal ('team') channel"
-    );
-    return { mirrored: false, reason: "blocked_non_internal" };
-  }
-
-  // Only Discord is a server-resolvable mirror target today. Other externalSource
-  // values (telegram/whatsapp/gmail via Unipile) send through the api messaging
-  // path, not this fire-and-forget mirror.
-  if (channel.externalSource !== "discord") {
-    return {
-      mirrored: false,
-      reason: `unsupported_provider:${channel.externalSource}`,
-    };
-  }
-
-  // ownerId override is optional; otherwise the resolver uses the pod owner.
-  const token = await resolveDiscordBotToken(params.ownerId);
-  if (!token) return { mirrored: false, reason: "no_bot_token" };
-
-  try {
-    await postDiscordChannelMessage(token, externalId, content);
-    return { mirrored: true };
-  } catch (err) {
-    logger.warn(
-      { err, externalSource: channel.externalSource, externalId },
-      "mirror send failed"
-    );
-    return {
-      mirrored: false,
-      reason: err instanceof Error ? err.message : "send_failed",
-    };
-  }
+  // Enqueue an agnostic `post_message` intent. The bridge delivers it and owns
+  // the firewall — it reads `authorType` + `branchPurpose` FACTS to decide.
+  await enqueueChannelEgress({
+    externalSource: channel.externalSource,
+    externalId,
+    kind: "post_message",
+    payload: {
+      content,
+      authorType,
+      branchPurpose: channel.branchPurpose ?? null,
+    },
+    workspaceId: channel.workspaceId ?? null,
+  });
+  return { mirrored: true };
 }

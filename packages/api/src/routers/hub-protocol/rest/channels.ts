@@ -11,11 +11,11 @@ import {
   and,
   desc,
   isNull,
+  enqueueChannelEgress,
 } from "@synap/database";
 // Note: channelsTable.externalId is the canonical dedup field — same as externalChannelId at insert time.
 
 import { resolveOrCreateExternalChannel } from "../../../services/connectors/inbound-recorder.js";
-import { DiscordConnector } from "../../../connectors/DiscordConnector.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -39,24 +39,24 @@ import {
  *
  * Runs in order:
  *   1. hub-protocol.write scope check → 403
- *   2. DiscordConnector.isConfigured() fast-fail → 503
- *   3. Channel lookup by (externalSource=discord, externalId) → 404
- *   4. channel.workspaceId present → 403
- *   5. resolveActingContext on the loaded workspace → 400/403
+ *   2. Channel lookup by (externalSource=discord, externalId) → 404
+ *   3. channel.workspaceId present → 403
+ *   4. resolveActingContext on the loaded workspace → 400/403
  *
- * Returns `{ ok: true, connector }` when all gates pass, or
- * `{ ok: false, status, body }` to return directly to the caller.
+ * Returns `{ ok: true, workspaceId }` when all gates pass, or
+ * `{ ok: false, status, body }` to return directly to the caller. The routes
+ * then ENQUEUE an agnostic egress intent (the bridge delivers it); no Discord
+ * call happens here, so there is no bot-token/connector-config gate anymore.
  *
  * The caller is responsible for the provider gate (discord-only guard)
- * BEFORE invoking this helper, and for the connector action + 429-forwarding
- * catch AFTER it.
+ * BEFORE invoking this helper.
  */
 async function resolveDiscordChannelForWrite(
   c: { get: (k: string) => unknown },
   externalChannelId: string,
   action: string
 ): Promise<
-  | { ok: true; connector: DiscordConnector }
+  | { ok: true; workspaceId: string }
   | { ok: false; status: number; body: { error: string } }
 > {
   if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -64,15 +64,6 @@ async function resolveDiscordChannelForWrite(
       ok: false,
       status: 403,
       body: { error: "Insufficient scope: hub-protocol.write required" },
-    };
-  }
-
-  const connector = new DiscordConnector();
-  if (!connector.isConfigured()) {
-    return {
-      ok: false,
-      status: 503,
-      body: { error: "Discord bot token not configured on this pod" },
     };
   }
 
@@ -109,7 +100,7 @@ async function resolveDiscordChannelForWrite(
     return { ok: false, status: acting.status, body: { error: acting.error } };
   }
 
-  return { ok: true, connector };
+  return { ok: true, workspaceId: channel.workspaceId };
 }
 
 export function registerChannelsRoutes(app: HubHono): void {
@@ -472,12 +463,12 @@ export function registerChannelsRoutes(app: HubHono): void {
     tags: ["Channels"],
     summary: "Pin a message in a Discord channel",
     description:
-      "Resolves the EXTERNAL channel by (externalSource='discord', externalId=:externalChannelId) and calls Discord PUT /channels/{id}/pins/{messageId} to pin it.",
+      "Resolves the EXTERNAL channel by (externalSource='discord', externalId=:externalChannelId) and ENQUEUES an agnostic `pin_message` egress intent; the bridge performs the Discord pin.",
     request: {},
     responses: {
       200: {
-        description: "Pinned",
-        schema: z.object({ ok: z.literal(true), pinned: z.literal(true) }),
+        description: "Queued",
+        schema: z.object({ ok: z.literal(true), queued: z.literal(true) }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
@@ -507,22 +498,19 @@ export function registerChannelsRoutes(app: HubHono): void {
     if (!gate.ok) return c.json(gate.body, gate.status as never);
 
     try {
-      await gate.connector.pinMessage(externalChannelId, messageId);
-      return c.json({ ok: true as const, pinned: true as const }, 200);
+      await enqueueChannelEgress({
+        externalSource: "discord",
+        externalId: externalChannelId,
+        kind: "pin_message",
+        payload: { messageId },
+        workspaceId: gate.workspaceId,
+      });
+      return c.json({ ok: true as const, queued: true as const }, 200);
     } catch (err) {
-      // Surface Discord's rate-limit as a 429 so callers (IS tool, automations)
-      // can back off instead of treating it as a generic failure.
       const msg = err instanceof Error ? err.message : "Unknown error";
-      if (msg.includes("rate limited (429)")) {
-        logger.warn(
-          { externalChannelId, messageId },
-          "pin rate-limited by Discord"
-        );
-        return c.json({ error: msg }, 429);
-      }
       logger.error(
         { err, externalChannelId, messageId },
-        "POST /channels/:externalChannelId/pins/:messageId failed"
+        "POST /channels/:externalChannelId/pins/:messageId enqueue failed"
       );
       return c.json({ error: msg }, 500);
     }
@@ -536,7 +524,7 @@ export function registerChannelsRoutes(app: HubHono): void {
     tags: ["Channels"],
     summary: "Rename a Discord channel",
     description:
-      "Resolves the EXTERNAL channel by (externalSource=provider||'discord', externalId=:externalChannelId) and calls Discord PATCH /channels/{id} to rename it. Rate-limit: ~2 renames per 10 min per channel.",
+      "Resolves the EXTERNAL channel by (externalSource=provider||'discord', externalId=:externalChannelId) and ENQUEUES an agnostic `rename_channel` egress intent; the bridge performs the Discord rename (rate-limited ~2 renames per 10 min per channel).",
     request: {
       body: z.object({
         name: z.string().min(1).max(100),
@@ -545,8 +533,8 @@ export function registerChannelsRoutes(app: HubHono): void {
     },
     responses: {
       200: {
-        description: "Renamed",
-        schema: z.object({ ok: z.literal(true), name: z.string() }),
+        description: "Queued",
+        schema: z.object({ ok: z.literal(true), queued: z.literal(true) }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
@@ -592,19 +580,19 @@ export function registerChannelsRoutes(app: HubHono): void {
     if (!gate.ok) return c.json(gate.body, gate.status as never);
 
     try {
-      await gate.connector.renameChannel(externalChannelId, body.name);
-      return c.json({ ok: true as const, name: body.name }, 200);
+      await enqueueChannelEgress({
+        externalSource: "discord",
+        externalId: externalChannelId,
+        kind: "rename_channel",
+        payload: { name: body.name },
+        workspaceId: gate.workspaceId,
+      });
+      return c.json({ ok: true as const, queued: true as const }, 200);
     } catch (err) {
-      // Surface Discord's rate-limit as a 429 so callers (IS tool, automations)
-      // can back off instead of treating it as a generic failure.
       const msg = err instanceof Error ? err.message : "Unknown error";
-      if (msg.includes("rate limited (429)")) {
-        logger.warn({ externalChannelId }, "rename rate-limited by Discord");
-        return c.json({ error: msg }, 429);
-      }
       logger.error(
         { err, externalChannelId },
-        "POST /channels/:externalChannelId/rename failed"
+        "POST /channels/:externalChannelId/rename enqueue failed"
       );
       return c.json({ error: msg }, 500);
     }

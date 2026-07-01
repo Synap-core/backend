@@ -808,6 +808,20 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "capability_id",
     addedBy: "0161_secrets_capability_connections.sql",
   },
+
+  // channel_egress — channel-agnostic outbound action outbox (0162). Absence
+  // means a pod is on a pre-0162 schema where the egress write-helper / read-ack
+  // Hub routes would hit a missing table.
+  {
+    table: "channel_egress",
+    column: "external_source",
+    addedBy: "0162_channel_egress.sql",
+  },
+  {
+    table: "channel_egress",
+    column: "status",
+    addedBy: "0162_channel_egress.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

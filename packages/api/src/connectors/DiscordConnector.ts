@@ -1,25 +1,28 @@
 /**
- * DiscordConnector — a MessagingConnector that posts agent replies back to a
- * Discord channel via the Discord REST API.
+ * DiscordConnector — a MessagingConnector for OUTBOUND Discord sends.
  *
- * V0 scope (BYOA Discord bridge): OUTBOUND ONLY. Sending a message needs no
- * gateway/websocket connection — a single authenticated REST call to
- * `POST /channels/{channelId}/messages` is sufficient. Inbound is handled by a
- * separate Discord-side bot process that calls
- * `POST /api/hub/discord/agent-turn`; this connector never reads from Discord.
+ * The backend is Discord-AGNOSTIC: it never calls discord.com. This connector's
+ * `sendMessage` writes an abstract `post_message` intent to the `channel_egress`
+ * outbox; the Discord bridge (the SOLE Discord egress) polls the outbox and
+ * delivers it via its own discord.js client. See decision `8304d8c8`.
  *
- * Auth: bot token from `DISCORD_BOT_TOKEN`, sent as `Authorization: Bot <token>`
- * (the literal "Bot " prefix is required by Discord).
+ * FIREWALL: the bridge owns the firewall (bot/AI output never to client-comms).
+ * Sends that reach THIS connector are already governance-authorized upstream
+ * (`gateMessagingSend` in external-dispatch: an un-approved AGENT send is
+ * proposed/denied and never gets here; owner + approved-proposal sends are
+ * human-authorized). So the egress carries `authorType: "human"` — a deliberate,
+ * authorized operator→client send that the bridge firewall must let through. The
+ * "block un-approved AI" guarantee lives upstream in the gate, not here.
  *
- * Provider id: "discord". On EXTERNAL channels `externalSource` is "discord" and
- * `externalChannelId` / `threadId` is the Discord channel snowflake id — which is
- * exactly what `sendMessage(threadId, ...)` receives as its `threadId`.
- *
- * The other MessagingConnector interface methods are minimal stubs: Discord
- * accounts/conversations/messages are not synced into the inbox in V0, and
- * webhooks are not registered here (the bot process owns inbound).
+ * Provider id: "discord". `sendMessage`'s `threadId` is the Discord channel
+ * snowflake (the bound EXTERNAL channel's externalId), which is exactly the
+ * egress `externalId`. The other MessagingConnector methods are V0 stubs (Discord
+ * accounts/conversations/messages are not synced into the inbox; the bot process
+ * owns inbound). Channel rename/pin no longer go through this connector — those
+ * hub routes enqueue `rename_channel` / `pin_message` intents directly.
  */
 
+import { enqueueChannelEgress } from "@synap/database";
 import type {
   MessagingConnector,
   MessagingAccount,
@@ -28,120 +31,39 @@ import type {
   WebhookEvent,
 } from "./MessagingConnector.js";
 
-const DISCORD_API_BASE = "https://discord.com/api/v10";
-
 export class DiscordConnector implements MessagingConnector {
-  constructor(private readonly overrides?: { botToken?: string }) {}
-
-  private get botToken(): string {
-    return this.overrides?.botToken || process.env.DISCORD_BOT_TOKEN || "";
-  }
-
+  // The bridge holds the bot token; the backend only enqueues, so this connector
+  // is always "configured" (no token to check).
   isConfigured(): boolean {
-    return !!this.botToken;
+    return true;
   }
 
   /**
-   * Discord is server-managed (single shared bot token), so it needs no per-user
-   * messaging account. The send target is the bound EXTERNAL channel; `sendMessage`
-   * ignores its accountId argument.
+   * Discord is server-managed (single shared bot token on the bridge), so it
+   * needs no per-user messaging account. The send target is the bound EXTERNAL
+   * channel; `sendMessage` ignores its accountId argument.
    */
   requiresAccount(): boolean {
     return false;
   }
 
-  private headers(): Record<string, string> {
-    return {
-      Authorization: `Bot ${this.botToken}`,
-      "Content-Type": "application/json",
-      // Discord requires a User-Agent for bot requests.
-      "User-Agent": "Synap-Discord-Bridge (https://synap, v0)",
-    };
-  }
-
   /**
-   * Post a message into a Discord channel. `threadId` is the Discord channel id
-   * (snowflake). Sending requires no gateway connection — a single REST call.
+   * Enqueue an outbound message to a Discord channel. `threadId` is the Discord
+   * channel id (snowflake). Never calls Discord — writes a `post_message` intent
+   * the bridge delivers. `authorType: "human"` because the send is already
+   * authorized upstream (see the file header / firewall note).
    */
   async sendMessage(
     _externalAccountId: string,
     threadId: string,
     body: string
   ): Promise<void> {
-    const res = await fetch(
-      `${DISCORD_API_BASE}/channels/${threadId}/messages`,
-      {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify({ content: body }),
-      }
-    );
-    if (res.status === 429) {
-      // Rate limited. Surface Retry-After cleanly; no auto-retry loop here.
-      const retryAfter = res.headers.get("Retry-After") ?? "unknown";
-      throw new Error(
-        `Discord sendMessage rate limited (429) — retry after ${retryAfter}s`
-      );
-    }
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => "");
-      throw new Error(
-        `Discord sendMessage failed: ${res.status}${errBody ? ` — ${errBody.slice(0, 200)}` : ""}`
-      );
-    }
-  }
-
-  /**
-   * Rename a Discord channel via PATCH /channels/{channelId}.
-   * Discord allows ~2 renames per 10 minutes per channel — callers should
-   * debounce and handle the 429 (rate-limit) error thrown here.
-   */
-  async renameChannel(channelId: string, name: string): Promise<void> {
-    const res = await fetch(`${DISCORD_API_BASE}/channels/${channelId}`, {
-      method: "PATCH",
-      headers: this.headers(),
-      body: JSON.stringify({ name }),
+    await enqueueChannelEgress({
+      externalSource: "discord",
+      externalId: threadId,
+      kind: "post_message",
+      payload: { content: body, authorType: "human" },
     });
-    if (res.status === 429) {
-      const retryAfter = res.headers.get("Retry-After") ?? "unknown";
-      throw new Error(
-        `Discord renameChannel rate limited (429) — retry after ${retryAfter}s`
-      );
-    }
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => "");
-      throw new Error(
-        `Discord renameChannel failed: ${res.status}${errBody ? ` — ${errBody.slice(0, 200)}` : ""}`
-      );
-    }
-  }
-
-  /**
-   * Pin a message in a Discord channel via PUT /channels/{channelId}/pins/{messageId}.
-   * Discord allows ~5 pins per 10 seconds per channel; callers should handle the
-   * 429 (rate-limit) error thrown here.
-   */
-  async pinMessage(channelId: string, messageId: string): Promise<void> {
-    const res = await fetch(
-      `${DISCORD_API_BASE}/channels/${channelId}/pins/${messageId}`,
-      {
-        method: "PUT",
-        headers: this.headers(),
-      }
-    );
-    if (res.status === 429) {
-      const retryAfter = res.headers.get("Retry-After") ?? "unknown";
-      throw new Error(
-        `Discord pinMessage rate limited (429) — retry after ${retryAfter}s`
-      );
-    }
-    if (res.status !== 204 && !res.ok) {
-      const errBody = await res.text().catch(() => "");
-      throw new Error(
-        `Discord pinMessage failed: ${res.status}${errBody ? ` — ${errBody.slice(0, 200)}` : ""}`
-      );
-    }
-    // 204 No Content = success
   }
 
   // ── Inbound / sync surface: not used in V0 (bot process owns inbound) ───────

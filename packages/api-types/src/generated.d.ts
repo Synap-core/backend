@@ -13061,10 +13061,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "error" | "active" | "inactive";
 					description: string | null;
 					scope: SkillScope;
+					kind: SkillKind;
 					slug: string | null;
 					tags: string[] | null;
 					category: string | null;
-					kind: SkillKind;
 					agentTypes: string[] | null;
 					body: string | null;
 					bodyDocumentId: string | null;
@@ -13136,8 +13136,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "error" | "active" | "inactive";
 				description: string | null;
 				createdBy: string;
-				config: unknown;
 				kind: ToolKind;
+				config: unknown;
 				approved: boolean;
 				inputSchema: unknown;
 				credentialRef: string | null;
@@ -15927,13 +15927,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					createdAt: Date;
 					status: string;
+					lastError: string | null;
 					syncPeerId: string;
 					lastCursor: Date | null;
 					lastPushCursor: Date | null;
 					lastPullCursor: Date | null;
 					lastSyncAt: Date | null;
 					errorCount: number;
-					lastError: string | null;
 					eventsProcessed: number;
 					supplementaryCursors: Record<string, string>;
 				} | null;

@@ -22,6 +22,7 @@ export * from "./channels.js";
 export * from "./message-reactions.js";
 export * from "./channel-context-items.js";
 export * from "./channel-connections.js";
+export * from "./channel-egress.js";
 export * from "./agents.js";
 export * from "./projects.js";
 export * from "./roles.js";

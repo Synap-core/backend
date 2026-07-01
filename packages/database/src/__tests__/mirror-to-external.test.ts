@@ -1,26 +1,28 @@
 /**
- * Unit tests for the generic Synap→Discord channel mirror guards.
+ * Unit tests for the generic Synap→external channel mirror.
  *
- * These are the SECURITY-CRITICAL invariants of the mirror:
- *   - ECHO: inbound-origin (authorType='external') messages are never re-mirrored.
- *   - FIREWALL: bot/AI output must never reach a client-comms channel; a human
- *     operator message to client-comms IS allowed (operator→client reply).
- *   - Only EXTERNAL discord-bound channels with an external id mirror.
+ * After the Wave C cutover the mirror is provider-AGNOSTIC: it ENQUEUES a
+ * `post_message` egress intent instead of posting to Discord, and it no longer
+ * owns the firewall (bot/AI vs client-comms) — that moved to the bridge, which
+ * reads the `authorType` + `branchPurpose` FACTS off the intent. So the mirror's
+ * remaining invariants are:
+ *   - ECHO: inbound-origin (authorType='external') messages are never enqueued.
+ *   - Only EXTERNAL channels with an external id enqueue.
+ *   - Bot/AI output STILL enqueues here (the bridge decides whether to drop it) —
+ *     the enqueued payload carries the facts the bridge firewall needs.
  *
- * `discord-rest` is mocked so no network/DB is touched; channels are passed
+ * `channel-egress` is mocked so no network/DB is touched; channels are passed
  * inline so `getDb` is never called.
  */
 
 import { describe, test, expect, beforeEach, vi } from "vitest";
 
-const { tokenMock, postMock } = vi.hoisted(() => ({
-  tokenMock: vi.fn(),
-  postMock: vi.fn(),
+const { enqueueMock } = vi.hoisted(() => ({
+  enqueueMock: vi.fn(),
 }));
 
-vi.mock("../utils/discord-rest.js", () => ({
-  resolveDiscordBotToken: tokenMock,
-  postDiscordChannelMessage: postMock,
+vi.mock("../utils/channel-egress.js", () => ({
+  enqueueChannelEgress: enqueueMock,
 }));
 
 import { mirrorMessageToBoundExternal } from "../utils/mirror-to-external.js";
@@ -32,19 +34,18 @@ const discordTeam = {
   externalId: "chan-123",
   externalChannelId: "chan-123",
   branchPurpose: "team",
+  workspaceId: "ws-1",
 };
 const discordComms = { ...discordTeam, branchPurpose: "client-comms" };
 const discordNullPurpose = { ...discordTeam, branchPurpose: null };
 
 beforeEach(() => {
-  tokenMock.mockReset();
-  postMock.mockReset();
-  tokenMock.mockResolvedValue("bot-token");
-  postMock.mockResolvedValue(undefined);
+  enqueueMock.mockReset();
+  enqueueMock.mockResolvedValue({ id: "egress-1" });
 });
 
-describe("mirrorMessageToBoundExternal — guards", () => {
-  test("ECHO: inbound-origin (external) message is not re-mirrored", async () => {
+describe("mirrorMessageToBoundExternal — agnostic enqueue", () => {
+  test("ECHO: inbound-origin (external) message is NOT enqueued", async () => {
     const r = await mirrorMessageToBoundExternal({
       channel: discordTeam,
       content: "hi",
@@ -52,81 +53,106 @@ describe("mirrorMessageToBoundExternal — guards", () => {
     });
     expect(r.mirrored).toBe(false);
     expect(r.reason).toBe("inbound_origin");
-    expect(postMock).not.toHaveBeenCalled();
+    expect(enqueueMock).not.toHaveBeenCalled();
   });
 
-  test("FIREWALL: bot output to a client-comms channel is blocked", async () => {
+  test("empty content is NOT enqueued", async () => {
     const r = await mirrorMessageToBoundExternal({
-      channel: discordComms,
-      content: "automated",
+      channel: discordTeam,
+      content: "",
       authorType: MessageAuthorType.BOT,
     });
     expect(r.mirrored).toBe(false);
-    expect(r.reason).toBe("blocked_non_internal");
-    expect(postMock).not.toHaveBeenCalled();
+    expect(r.reason).toBe("empty_content");
+    expect(enqueueMock).not.toHaveBeenCalled();
   });
 
-  test("FIREWALL: ai_agent output to a client-comms channel is blocked", async () => {
-    const r = await mirrorMessageToBoundExternal({
-      channel: discordComms,
-      content: "ai reply",
-      authorType: MessageAuthorType.AI_AGENT,
-    });
-    expect(r.mirrored).toBe(false);
-    expect(r.reason).toBe("blocked_non_internal");
-    expect(postMock).not.toHaveBeenCalled();
-  });
-
-  test("FIREWALL (fail-closed): bot output to a NULL-purpose channel is blocked — null defaults to client-comms elsewhere", async () => {
-    const r = await mirrorMessageToBoundExternal({
-      channel: discordNullPurpose,
-      content: "automated",
-      authorType: MessageAuthorType.BOT,
-    });
-    expect(r.mirrored).toBe(false);
-    expect(r.reason).toBe("blocked_non_internal");
-    expect(postMock).not.toHaveBeenCalled();
-  });
-
-  test("FIREWALL: human operator message to client-comms IS allowed (operator→client)", async () => {
-    const r = await mirrorMessageToBoundExternal({
-      channel: discordComms,
-      content: "reply to client",
-      authorType: MessageAuthorType.HUMAN,
-    });
-    expect(r.mirrored).toBe(true);
-    expect(postMock).toHaveBeenCalledWith(
-      "bot-token",
-      "chan-123",
-      "reply to client"
-    );
-  });
-
-  test("FIREWALL: human operator message to a NULL-purpose channel IS allowed", async () => {
-    const r = await mirrorMessageToBoundExternal({
-      channel: discordNullPurpose,
-      content: "reply",
-      authorType: MessageAuthorType.HUMAN,
-    });
-    expect(r.mirrored).toBe(true);
-    expect(postMock).toHaveBeenCalled();
-  });
-
-  test("bot output to a team channel is mirrored", async () => {
+  test("bot output enqueues a post_message intent with the firewall FACTS", async () => {
     const r = await mirrorMessageToBoundExternal({
       channel: discordTeam,
       content: "digest item",
       authorType: MessageAuthorType.BOT,
     });
     expect(r.mirrored).toBe(true);
-    expect(postMock).toHaveBeenCalledWith(
-      "bot-token",
-      "chan-123",
-      "digest item"
+    expect(enqueueMock).toHaveBeenCalledWith({
+      externalSource: "discord",
+      externalId: "chan-123",
+      kind: "post_message",
+      payload: {
+        content: "digest item",
+        authorType: MessageAuthorType.BOT,
+        branchPurpose: "team",
+      },
+      workspaceId: "ws-1",
+    });
+  });
+
+  test("bot output to a client-comms channel STILL enqueues here (bridge drops it) — carrying branchPurpose", async () => {
+    const r = await mirrorMessageToBoundExternal({
+      channel: discordComms,
+      content: "automated",
+      authorType: MessageAuthorType.BOT,
+    });
+    expect(r.mirrored).toBe(true);
+    expect(enqueueMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "post_message",
+        payload: expect.objectContaining({
+          authorType: MessageAuthorType.BOT,
+          branchPurpose: "client-comms",
+        }),
+      })
     );
   });
 
-  test("non-external channel does not mirror", async () => {
+  test("ai_agent output enqueues with its authorType FACT", async () => {
+    const r = await mirrorMessageToBoundExternal({
+      channel: discordComms,
+      content: "ai reply",
+      authorType: MessageAuthorType.AI_AGENT,
+    });
+    expect(r.mirrored).toBe(true);
+    expect(enqueueMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          authorType: MessageAuthorType.AI_AGENT,
+          branchPurpose: "client-comms",
+        }),
+      })
+    );
+  });
+
+  test("null branchPurpose rides the intent as null (bridge decides)", async () => {
+    const r = await mirrorMessageToBoundExternal({
+      channel: discordNullPurpose,
+      content: "automated",
+      authorType: MessageAuthorType.BOT,
+    });
+    expect(r.mirrored).toBe(true);
+    expect(enqueueMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ branchPurpose: null }),
+      })
+    );
+  });
+
+  test("human operator message enqueues with its authorType FACT", async () => {
+    const r = await mirrorMessageToBoundExternal({
+      channel: discordComms,
+      content: "reply to client",
+      authorType: MessageAuthorType.HUMAN,
+    });
+    expect(r.mirrored).toBe(true);
+    expect(enqueueMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          authorType: MessageAuthorType.HUMAN,
+        }),
+      })
+    );
+  });
+
+  test("non-external channel does not enqueue", async () => {
     const r = await mirrorMessageToBoundExternal({
       channel: { ...discordTeam, channelType: "feed" },
       content: "x",
@@ -134,10 +160,10 @@ describe("mirrorMessageToBoundExternal — guards", () => {
     });
     expect(r.mirrored).toBe(false);
     expect(r.reason).toBe("not_external");
-    expect(postMock).not.toHaveBeenCalled();
+    expect(enqueueMock).not.toHaveBeenCalled();
   });
 
-  test("external channel without an external id does not mirror", async () => {
+  test("external channel without an external id does not enqueue", async () => {
     const r = await mirrorMessageToBoundExternal({
       channel: { ...discordTeam, externalId: null, externalChannelId: null },
       content: "x",
@@ -145,39 +171,18 @@ describe("mirrorMessageToBoundExternal — guards", () => {
     });
     expect(r.mirrored).toBe(false);
     expect(r.reason).toBe("no_external_id");
-    expect(postMock).not.toHaveBeenCalled();
+    expect(enqueueMock).not.toHaveBeenCalled();
   });
 
-  test("non-discord provider is not mirrored (goes through the messaging path)", async () => {
+  test("a non-discord provider is agnostic — it enqueues with its own externalSource", async () => {
     const r = await mirrorMessageToBoundExternal({
       channel: { ...discordTeam, externalSource: "telegram" },
       content: "x",
       authorType: MessageAuthorType.BOT,
     });
-    expect(r.mirrored).toBe(false);
-    expect(r.reason).toBe("unsupported_provider:telegram");
-    expect(postMock).not.toHaveBeenCalled();
-  });
-
-  test("missing bot token is a clean skip, not a throw", async () => {
-    tokenMock.mockResolvedValue(null);
-    const r = await mirrorMessageToBoundExternal({
-      channel: discordTeam,
-      content: "x",
-      authorType: MessageAuthorType.BOT,
-    });
-    expect(r.mirrored).toBe(false);
-    expect(r.reason).toBe("no_bot_token");
-  });
-
-  test("a send failure is swallowed into a structured result (never throws)", async () => {
-    postMock.mockRejectedValue(new Error("429 rate limited"));
-    const r = await mirrorMessageToBoundExternal({
-      channel: discordTeam,
-      content: "x",
-      authorType: MessageAuthorType.BOT,
-    });
-    expect(r.mirrored).toBe(false);
-    expect(r.reason).toContain("429");
+    expect(r.mirrored).toBe(true);
+    expect(enqueueMock).toHaveBeenCalledWith(
+      expect.objectContaining({ externalSource: "telegram" })
+    );
   });
 });

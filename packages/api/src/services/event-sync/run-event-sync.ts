@@ -29,9 +29,7 @@ import {
   eq,
   and,
   drizzleSql,
-  resolveDiscordBotToken,
-  resolveDiscordGuildId,
-  createDiscordScheduledEvent,
+  enqueueChannelEgress,
   ensureExternalChannel,
   insertChannelMessage,
 } from "@synap/database";
@@ -351,22 +349,6 @@ export async function runEventSync(): Promise<RunEventSyncResult> {
   const windowDays = eventSync.windowDays ?? DEFAULT_WINDOW_DAYS;
   const existingSynced = eventSync.synced ?? {};
 
-  // Resolve the bot token + guild before doing work.
-  const token = await resolveDiscordBotToken(owner);
-  if (!token) {
-    return { skipped: true, reason: "no_discord_token" };
-  }
-  let guildId: string | null = null;
-  try {
-    guildId = await resolveDiscordGuildId(token);
-  } catch (err) {
-    logger.warn({ err }, "resolveDiscordGuildId failed");
-    return { skipped: true, reason: "guild_resolve_failed" };
-  }
-  if (!guildId) {
-    return { skipped: true, reason: "no_discord_guild" };
-  }
-
   // Collect + normalize upcoming events across all enabled sources.
   const events: UpcomingEvent[] = [];
   events.push(...(await fetchEntityEvents(windowDays, sources)));
@@ -404,18 +386,23 @@ export async function runEventSync(): Promise<RunEventSyncResult> {
     const { location, description } = buildEventLocation(evt);
 
     try {
-      const dEvent = await createDiscordScheduledEvent(token, guildId, {
-        name: evt.title,
-        scheduledStartTime: startIso,
-        scheduledEndTime: endIso,
-        location,
-        description,
+      // Enqueue an agnostic `scheduled_event` intent — the bridge resolves its
+      // own guild and creates the native event. The dedup map now carries the
+      // egress row id so a re-run doesn't re-enqueue the same event.
+      const enq = await enqueueChannelEgress({
+        externalSource: "discord",
+        externalId: "",
+        kind: "scheduled_event",
+        payload: {
+          name: evt.title,
+          description,
+          startTime: startIso,
+          endTime: endIso,
+          location,
+        },
+        workspaceId,
       });
-      if (!dEvent) {
-        logger.warn({ key }, "createDiscordScheduledEvent returned no id");
-        continue;
-      }
-      nextSynced[key] = dEvent.id;
+      nextSynced[key] = enq.id;
       created += 1;
 
       // Optional announce card into the bound Synap channel (auto-mirrors).
@@ -434,7 +421,7 @@ export async function runEventSync(): Promise<RunEventSyncResult> {
           userId: owner,
           metadata: {
             eventSync: true,
-            discordEventId: dEvent.id,
+            egressId: enq.id,
             sourceType: evt.sourceType,
           },
         }).catch((err) =>
@@ -444,7 +431,7 @@ export async function runEventSync(): Promise<RunEventSyncResult> {
     } catch (err) {
       logger.warn(
         { err, key },
-        "createDiscordScheduledEvent failed — skipping"
+        "scheduled_event egress enqueue failed — skipping"
       );
       continue;
     }

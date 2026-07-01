@@ -70,13 +70,6 @@ export type { GrantDenialCode, GrantRedeemer } from "./utils/vault-resolver.js";
 
 // Discord REST + the generic Synap→Discord channel mirror (forward half).
 // Placed in @synap/database so both @synap/api and @synap/jobs producers reach it.
-export {
-  resolveDiscordBotToken,
-  postDiscordChannelMessage,
-  resolveDiscordGuildId,
-  createDiscordScheduledEvent,
-  type CreateDiscordScheduledEventParams,
-} from "./utils/discord-rest.js";
 export { mirrorMessageToBoundExternal } from "./utils/mirror-to-external.js";
 export type {
   MirrorChannelRef,
@@ -90,6 +83,11 @@ export type {
 } from "./utils/insert-channel-message.js";
 export { ensureExternalChannel } from "./utils/ensure-external-channel.js";
 export type { EnsureExternalChannelArgs } from "./utils/ensure-external-channel.js";
+export { enqueueChannelEgress } from "./utils/channel-egress.js";
+export type {
+  ChannelEgressKind,
+  EnqueueChannelEgressInput,
+} from "./utils/channel-egress.js";
 
 // Schema coherence tripwire — pod-startup guard against schema drift
 export {

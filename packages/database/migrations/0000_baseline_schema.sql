@@ -3533,3 +3533,23 @@ CREATE TABLE IF NOT EXISTS "capability_template_cache" (
   "definition"  jsonb       NOT NULL,
   "synced_at"   timestamptz NOT NULL DEFAULT now()
 );
+
+-- channel_egress — channel-AGNOSTIC outbound action outbox (0162). An external
+-- adapter (e.g. the Discord bridge) pulls pending rows and executes them so the
+-- backend can stop calling external systems directly. No provider specifics in
+-- column names — external_source + external_id name the target generically.
+CREATE TABLE IF NOT EXISTS "channel_egress" (
+  "id"               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "external_source"  text        NOT NULL,
+  "external_id"      text        NOT NULL,
+  "kind"             text        NOT NULL,
+  "payload"          jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  "status"           text        NOT NULL DEFAULT 'pending',
+  "attempts"         integer     NOT NULL DEFAULT 0,
+  "last_error"       text,
+  "workspace_id"     uuid,
+  "created_at"       timestamptz NOT NULL DEFAULT now(),
+  "delivered_at"     timestamptz
+);
+CREATE INDEX IF NOT EXISTS "channel_egress_status_created_idx"
+  ON "channel_egress" ("status", "created_at");

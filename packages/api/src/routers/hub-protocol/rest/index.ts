@@ -47,6 +47,7 @@ export { registerMcpServersRoutes } from "./mcp-servers.js";
 export { registerAutomationsRoutes } from "./automations.js";
 export { registerVaultRoutes } from "./vault.js";
 export { registerChannelsRoutes } from "./channels.js";
+export { registerChannelEgressRoutes } from "./channel-egress.js";
 export { registerTerminalRoutes } from "./terminal.js";
 export { registerProactiveRoutes } from "./proactive.js";
 export { registerNotificationsRoutes } from "./notifications.js";
