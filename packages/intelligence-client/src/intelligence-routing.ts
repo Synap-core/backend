@@ -36,7 +36,8 @@ interface WorkspaceSettings {
 }
 
 export interface ServiceResolutionContext {
-  userId: string;
+  /** Optional — omit for pod-level/background resolution (no user context). */
+  userId?: string;
   workspaceId?: string;
   /**
    * Capability hint for service selection.
@@ -72,7 +73,7 @@ export interface ResolvedService {
  * @alias resolveAgent
  */
 export async function resolveIntelligenceService(
-  ctx: ServiceResolutionContext
+  ctx: ServiceResolutionContext = {}
 ): Promise<ResolvedService> {
   const capability = ctx.capability || "default";
 
@@ -157,9 +158,11 @@ export async function resolveIntelligenceService(
 
   // 2. Check user preferences
   logger.debug({ userId: ctx.userId }, "Step 2: Checking user preferences");
-  const userPrefs = await db.query.userPreferences.findFirst({
-    where: eq(userPreferences.userId, ctx.userId),
-  });
+  const userPrefs = ctx.userId
+    ? await db.query.userPreferences.findFirst({
+        where: eq(userPreferences.userId, ctx.userId),
+      })
+    : undefined;
 
   const userServicePrefs =
     (userPrefs?.intelligenceServicePreferences as
@@ -189,7 +192,26 @@ export async function resolveIntelligenceService(
     logger.debug({ userId: ctx.userId }, "Step 2: No user IS preference set");
   }
 
-  // 3. Failover: if no service matched so far, check if ANY active+enabled service
+  // 3. Pod default: the explicitly SELECTED default IS (the `is_default` flag) —
+  //    the "switch" target, the pod's chosen agent service when no workspace/user
+  //    preference applies (background jobs, pod-level calls).
+  logger.debug("Step 3: Checking the pod's selected default IS (is_default)");
+  const selectedDefault = await db.query.intelligenceServices.findFirst({
+    where: and(
+      eq(intelligenceServices.isDefault, true),
+      drizzleSql`${intelligenceServices.status} IN ('active', 'credential_error')`,
+      eq(intelligenceServices.enabled, true)
+    ),
+  });
+  if (selectedDefault) {
+    logger.info(
+      { serviceId: selectedDefault.serviceId, source: "is_default" },
+      "IS resolved via the pod's selected default (is_default)"
+    );
+    return { ...createClient(selectedDefault), agentUserId };
+  }
+
+  // 4. Failover: if no service matched so far, check if ANY active+enabled service
   //    exists in the DB (e.g. synced from the primary pod via supplementary sync).
   //    This covers replica pods that received IS metadata via sync but whose preferred
   //    service lookup in steps 1-2 didn't match (no workspace/user preference set).
@@ -250,10 +272,10 @@ export async function resolveIntelligenceService(
  * Returns undefined if no agent user exists (graceful degradation).
  */
 async function lookupAgentUser(
-  userId: string,
+  userId: string | undefined,
   workspaceId?: string
 ): Promise<string | undefined> {
-  if (!workspaceId) return undefined;
+  if (!userId || !workspaceId) return undefined;
   try {
     const [row] = await db
       .select({ id: users.id })
@@ -415,25 +437,32 @@ export async function getDefaultActiveService(): Promise<{
   endpoint: string;
   apiKey: string;
 }> {
-  try {
-    const svc = await db.query.intelligenceServices.findFirst({
-      where: and(
-        eq(intelligenceServices.status, "active"),
-        eq(intelligenceServices.enabled, true)
-      ),
-      columns: { webhookUrl: true, apiKey: true },
-    });
-    if (svc?.webhookUrl) {
-      return {
-        endpoint: svc.webhookUrl,
-        apiKey: svc.apiKey ? resolveServiceKey(svc.apiKey as string) : "",
-      };
-    }
-  } catch {
-    // Fall through
-  }
-  const ep = createDefaultClient();
-  return { endpoint: ep.endpoint, apiKey: ep.serviceApiKey };
+  // Thin facade over the ONE canonical resolver. Callers just ask for "the IS";
+  // resolveIntelligenceService() decides (capability → workspace → user →
+  // is_default → any active → env). No separate resolution logic lives here.
+  const svc = await resolveIntelligenceService();
+  return { endpoint: svc.endpoint, apiKey: svc.serviceApiKey };
+}
+
+/**
+ * Switch the pod's default intelligence service — the "use any IS you want"
+ * selector. Clears the previous default and marks `serviceId` as the sole default
+ * (the partial-unique index enforces one). This is what the canonical resolver
+ * picks when no workspace/user preference applies.
+ */
+export async function setDefaultIntelligenceService(
+  serviceId: string
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx
+      .update(intelligenceServices)
+      .set({ isDefault: false, updatedAt: new Date() })
+      .where(eq(intelligenceServices.isDefault, true));
+    await tx
+      .update(intelligenceServices)
+      .set({ isDefault: true, updatedAt: new Date() })
+      .where(eq(intelligenceServices.serviceId, serviceId));
+  });
 }
 
 /**

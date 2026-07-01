@@ -221,6 +221,21 @@ export async function createCapabilityFromDefinition(
 
   const def = interpolateDeep(rawDef, effectiveParams);
 
+  // A skill's `providerSpec` holds RUNTIME `{{param}}` placeholders (maxResults,
+  // id, calendarId, …) that `executeProviderVerb` resolves at CALL time from the
+  // verb's own arguments — NOT capability-template params. interpolateDeep above
+  // would wipe those unknown tokens to "" (e.g. `query.maxResults` → ""), silently
+  // breaking every declarative verb. Restore the RAW providerSpec (by index; the
+  // interpolation preserves skill order) so runtime placeholders survive apply.
+  if (Array.isArray(def.skills) && Array.isArray(rawDef.skills)) {
+    def.skills.forEach((s, i) => {
+      const raw = rawDef.skills[i]?.providerSpec;
+      if (raw !== undefined) {
+        (s as { providerSpec?: unknown }).providerSpec = raw;
+      }
+    });
+  }
+
   // A pod-scoped capability (all its skills are pod-scoped) exposes a POD-WIDE
   // connection: its vault secret, credentialed tool, skills and container must be
   // created with `workspace_id = null`, because every consumer reads pod-wide —

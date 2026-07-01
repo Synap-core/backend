@@ -27,6 +27,7 @@ import {
   isNull,
   inArray,
   capabilities,
+  skills,
   workspaces,
   workspaceMembers,
 } from "@synap/database";
@@ -147,6 +148,20 @@ export async function ensureSynapCoreCapability(): Promise<void> {
       {},
       ctx
     );
+
+    // First-party system verbs are trusted by construction (pod-owner seeded) —
+    // born approved so the built-in capability is usable without a manual approve
+    // step. (Non-instruction skills otherwise default to approved=false.)
+    const seededSkillIds = result.created.skills
+      .map((s) => s.skillId)
+      .filter((id): id is string => Boolean(id));
+    if (seededSkillIds.length > 0) {
+      await db
+        .update(skills)
+        .set({ approved: true })
+        .where(inArray(skills.id, seededSkillIds));
+    }
+
     logger.info(
       {
         container: result.created.container?.id,

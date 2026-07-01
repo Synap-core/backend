@@ -21,6 +21,7 @@ import { db, tools, eq, drizzleSql } from "@synap/database";
 import { ensureExternalChannel, insertChannelMessage } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { executeCapability } from "../capabilities/execute-capability.js";
+import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 
 const logger = createLogger({ module: "mail-feed" });
 
@@ -165,18 +166,16 @@ async function triageEmails(
   emails: EmailHit[],
   mutedCategories: string[]
 ): Promise<TriagedEmail[]> {
-  // IS is a separate service — its URL comes from env (no localhost default; the
-  // pod's IS lives on another host). Fail loudly if unconfigured rather than
-  // hitting a wrong local port and silently posting nothing.
-  const isUrl = process.env.INTELLIGENCE_HUB_URL;
-  if (!isUrl) {
-    throw new Error("INTELLIGENCE_HUB_URL not configured — cannot triage mail");
-  }
+  // Resolve the IS endpoint + the pod's PER-CONNECTION key from the DB (the
+  // registered intelligence service), NEVER from env. mail_triage is a normal
+  // backend→IS AI op, so it authenticates with the same X-API-Key the IS verifies
+  // for every /api call (multiTenantAuth) — the internal key is CP↔IS only.
+  const { endpoint: isUrl, apiKey } = await getDefaultActiveService();
   const res = await fetch(`${isUrl}/v1/tools/mail_triage`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Internal-Key": process.env.INTELLIGENCE_HUB_INTERNAL_KEY ?? "",
+      "X-API-Key": apiKey,
     },
     body: JSON.stringify({
       emails: emails.map((e) => ({

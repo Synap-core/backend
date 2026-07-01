@@ -15,7 +15,7 @@
  * first via `POST /skills/:id/approve`.
  */
 
-import { db, skills, eq, and, or, isNull } from "@synap/database";
+import { db, skills, eq, and, or, isNull, desc } from "@synap/database";
 
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
 import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
@@ -78,6 +78,11 @@ export async function executeCapability(input: {
             )
           )
     )
+    // Deterministic resolution when a verb NAME has duplicates (e.g. a stale
+    // re-installed capability): prefer an approved skill, then the most recently
+    // updated — so a fresh re-apply wins over a stale shadow instead of a random
+    // `.limit(1)`. (The real fix for duplicates is de-dup; this hardens the door.)
+    .orderBy(desc(skills.approved), desc(skills.updatedAt))
     .limit(1);
 
   if (!skillRow) {

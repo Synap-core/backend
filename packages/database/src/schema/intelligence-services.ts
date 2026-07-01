@@ -35,6 +35,14 @@ export const intelligenceServices = pgTable("intelligence_services", {
   enabled: boolean("enabled").notNull().default(true),
 
   /**
+   * The pod's SELECTED default intelligence service. The canonical resolver picks
+   * this when no workspace/user preference applies (background jobs, pod-level
+   * calls). Partial-unique: at most one row may be true (migration 0165).
+   * Switching the pod's IS = flip this flag via setDefaultIntelligenceService().
+   */
+  isDefault: boolean("is_default").notNull().default(false),
+
+  /**
    * Whether this service's MCP endpoint is approved to inject tools into LLM requests.
    * Default false — must be explicitly approved by workspace owner/admin or auto-approved
    * via the trusted Hub Protocol provisioning path (control plane sets this to true).

@@ -145,6 +145,21 @@ export interface OnboardingCollectTarget {
   keyFields?: string[];
 }
 
+/**
+ * Authored domain expertise the onboarding agent LEADS with — so it resolves
+ * the founder's gaps (brings best practices they lack, surfaces what they miss)
+ * instead of only extracting what they already know. Mirrors
+ * `TemplateOnboardingExpertise` in @synap-core/workspace-templates.
+ */
+export interface OnboardingExpertise {
+  /** Concrete starting points the agent proposes instead of asking blank. */
+  starters?: string[];
+  /** Blind spots founders in this domain miss — surfaced proactively. */
+  blindSpots?: string[];
+  /** What a great result looks like here — the bar the agent pushes toward. */
+  bar?: string;
+}
+
 export interface OnboardingSpec {
   /** The outcome this onboarding achieves, in one sentence. */
   goal: string;
@@ -154,6 +169,12 @@ export interface OnboardingSpec {
    * brand strategist; tease out voice, audience, and cadence").
    */
   framing: string;
+  /**
+   * Authored domain expertise the agent leads with (optional). Turns the
+   * interview from "extract" into "resolve the founder's gaps". Consumed by the
+   * `onboard` skill's "Lead with your expertise" step.
+   */
+  expertise?: OnboardingExpertise;
   /** What structured data to collect (entities to create + their key fields). */
   collect: OnboardingCollectTarget[];
   /** A few opening questions — the agent adapts from here, never rigid. */

@@ -13,6 +13,7 @@
 
 import type { AskAnswer } from "./ask.js";
 import { createLogger } from "@synap-core/core";
+import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 
 const logger = createLogger({ module: "knowledge-synthesize" });
 
@@ -82,14 +83,17 @@ export async function synthesizeAnswer(
 
   const context = contextParts.join("\n");
 
-  // Call the IS "answer" door — one focused LLM call.
-  const isUrl = process.env.INTELLIGENCE_HUB_URL || "http://localhost:3002";
+  // Call the IS "answer" door — one focused LLM call. Resolve the IS endpoint +
+  // the pod's PER-CONNECTION key from the DB (registered IS), NEVER from env.
+  let isUrl = "";
   try {
+    const { endpoint, apiKey } = await getDefaultActiveService();
+    isUrl = endpoint;
     const res = await fetch(`${isUrl}/api/knowledge/answer`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Internal-Key": process.env.INTELLIGENCE_HUB_INTERNAL_KEY ?? "",
+        "X-API-Key": apiKey,
       },
       body: JSON.stringify({
         question,
@@ -111,11 +115,7 @@ export async function synthesizeAnswer(
     // returns 200 even on LLM errors), NOT an LLM failure — without this line the
     // cause (ECONNREFUSED / 401 key drift / 404 stale-route) is invisible.
     logger.error(
-      {
-        err,
-        isUrl,
-        hasInternalKey: Boolean(process.env.INTELLIGENCE_HUB_INTERNAL_KEY),
-      },
+      { err, isUrl },
       "knowledge synthesis call to IS failed — returning sources without answer"
     );
     return {
