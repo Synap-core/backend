@@ -633,6 +633,37 @@ export async function createCapabilityFromDefinition(
         });
       }
     }
+
+    // W3: the vault IS the connection registry. Stamp the secrets this applier
+    // created as THIS capability's connections (`capability_id`), promoting one to
+    // the capability's DEFAULT connection. Respect the partial-unique index
+    // `idx_secrets_capability_default` (one default per capability): if a default
+    // already exists (a prior apply), keep it; otherwise the first created secret
+    // becomes default. Idempotent — re-apply preserves the existing default.
+    if (createdVault.length > 0) {
+      const [existingDefault] = await db
+        .select({ id: secrets.id })
+        .from(secrets)
+        .where(
+          and(
+            eq(secrets.capabilityId, containerId),
+            eq(secrets.isDefault, true),
+            isNull(secrets.deletedAt)
+          )
+        )
+        .limit(1);
+      const defaultSecretId = existingDefault?.id ?? createdVault[0]!.secretId;
+      for (const v of createdVault) {
+        await db
+          .update(secrets)
+          .set({
+            capabilityId: containerId,
+            isDefault: v.secretId === defaultSecretId,
+            updatedAt: new Date(),
+          })
+          .where(eq(secrets.id, v.secretId));
+      }
+    }
   }
 
   return {

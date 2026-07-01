@@ -315,7 +315,7 @@ export function registerToolsRoutes(app: HubHono): void {
     tags: ["Tools"],
     summary: "List bound credentials for a tool",
     description:
-      "Lists the `provides_credential` edges scoped to this tool. " +
+      "Lists the connections (vault secrets) scoped to this tool's capability. " +
       "Owner-gated. Requires hub-protocol.read scope.",
     request: { params: z.object({ id: z.string().uuid() }) },
     responses: {
@@ -336,9 +336,9 @@ export function registerToolsRoutes(app: HubHono): void {
     tags: ["Tools"],
     summary: "Bind a credential to a principal/entity for a tool",
     description:
-      "Creates a `provides_credential` edge from a principal (participant or " +
-      "entity) to a vault secret, scoped to this tool. Owner-gated. The secret " +
-      "must exist and belong to the acting user. Requires hub-protocol.write scope.",
+      "Binds a vault secret to a principal (participant or entity) for this " +
+      "tool's capability, stamping the secret's connection context. Owner-gated. " +
+      "The secret must exist and belong to the acting user. Requires hub-protocol.write scope.",
     request: {
       params: z.object({ id: z.string().uuid() }),
       body: z.object({
@@ -366,8 +366,8 @@ export function registerToolsRoutes(app: HubHono): void {
     tags: ["Tools"],
     summary: "Unbind a credential from a tool",
     description:
-      "Removes a `provides_credential` edge. Owner-gated by the linked tool. " +
-      "Handles orphan edges gracefully. Requires hub-protocol.write scope.",
+      "Clears a secret's connection context (the `linkId` path param is the " +
+      "secret id). Gated on secret ownership. Requires hub-protocol.write scope.",
     request: {
       params: z.object({
         id: z.string().uuid(),

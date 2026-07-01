@@ -57,11 +57,12 @@ async function getNangoConnector(): Promise<NangoConnector | undefined> {
  *   per_agent  → the acting agent-user's bound credential.
  *   per_entity → the run's subject entity's bound credential (e.g. per client).
  *
- * Dynamic bindings resolve a `provides_credential` link from the principal
- * (participant = user/agent id) or entity (subjectId) to a vault `secret`, scoped
- * to THIS tool via `metadata.toolId`. Returns `vault://<secretId>`. Throws when
- * the binding has no bound credential or the required principal is absent — the
- * caller turns the throw into a 400 (never silently falls back to a shared cred).
+ * Dynamic bindings resolve the tool's owning capability (`member_of` edge) then
+ * read the `secrets` connection registry directly: a row for that capability whose
+ * `context_type`/`context_id` match the principal (participant = user/agent id) or
+ * entity (subjectId). Returns `vault://<secretId>`. Throws when the binding has no
+ * bound credential or the required principal is absent — the caller turns the throw
+ * into a 400 (never silently falls back to a shared cred).
  */
 async function resolveBoundCredentialRef(
   tool: Pick<ToolRow, "id" | "name" | "authBinding" | "credentialRef">,
@@ -124,31 +125,53 @@ async function resolveBoundCredentialRef(
       );
   }
 
-  const edges = await db
-    .select()
+  // The credential now lives on `secrets` (the connection registry), keyed by the
+  // owning CAPABILITY + the resolved context — NOT a `provides_credential` link
+  // (retired in migration 0161). First resolve THIS tool's owning capability via
+  // its `member_of` edge (to_id is the capability uuid, stored as text).
+  const [memberEdge] = await db
+    .select({ capabilityId: links.toId })
     .from(links)
     .where(
       and(
-        eq(links.fromType, principalType),
-        eq(links.fromId, principalId),
-        eq(links.toType, "secret"),
-        eq(links.linkType, "provides_credential")
+        eq(links.fromType, "tool"),
+        eq(links.fromId, tool.id),
+        eq(links.linkType, "member_of"),
+        eq(links.toType, "capability")
       )
-    );
-  // Require a credential scoped to THIS tool (metadata.toolId). NEVER fall back to
-  // an unrelated edge — a single bound secret for a different tool must not be
-  // mis-routed here (cross-tool credential leak).
-  const edge = edges.find(
-    (e) => (e.metadata as { toolId?: string } | null)?.toolId === tool.id
-  );
-  if (!edge) {
+    )
+    .limit(1);
+  if (!memberEdge) {
     throw new Error(
       `No credential is bound to this ${
         binding === "per_entity" ? "entity" : "principal"
       } for "${tool.name}". Bind one in the capability's Authentication step.`
     );
   }
-  return `vault://${edge.toId}`;
+
+  // Map the binding's principal to the secret's context and look up the connection
+  // scoped to THIS capability. NEVER fall back to an unrelated secret — a
+  // connection for a different capability/context must not be mis-routed here.
+  const [row] = await db
+    .select({ id: secrets.id })
+    .from(secrets)
+    .where(
+      and(
+        eq(secrets.capabilityId, memberEdge.capabilityId),
+        eq(secrets.contextType, principalType),
+        eq(secrets.contextId, principalId),
+        isNull(secrets.deletedAt)
+      )
+    )
+    .limit(1);
+  if (!row) {
+    throw new Error(
+      `No credential is bound to this ${
+        binding === "per_entity" ? "entity" : "principal"
+      } for "${tool.name}". Bind one in the capability's Authentication step.`
+    );
+  }
+  return `vault://${row.id}`;
 }
 
 // ── External messaging send ──────────────────────────────────────────────────

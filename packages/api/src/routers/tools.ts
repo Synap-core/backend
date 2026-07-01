@@ -9,7 +9,16 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, or, isNull, inArray, desc } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  or,
+  isNull,
+  isNotNull,
+  inArray,
+  desc,
+} from "@synap/database";
 import { tools, skills, links, secrets } from "@synap/database/schema";
 import type { Tool } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
@@ -30,6 +39,28 @@ const TOOL_KINDS = [
   "script",
 ] as const;
 const EXECUTORS = ["is-agent", "external-agent", "hybrid"] as const;
+
+/**
+ * Resolve a tool's owning capability id via its `member_of` edge
+ * (`tool --member_of--> capability`; `to_id` is the capability uuid, stored as
+ * text). Returns null when the tool is not part of any capability. Since W3 the
+ * capability id is the home key for a tool's dynamic connections on `secrets`.
+ */
+async function resolveToolCapabilityId(toolId: string): Promise<string | null> {
+  const [edge] = await db
+    .select({ capabilityId: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "tool"),
+        eq(links.fromId, toolId),
+        eq(links.linkType, "member_of"),
+        eq(links.toType, "capability")
+      )
+    )
+    .limit(1);
+  return edge?.capabilityId ?? null;
+}
 
 export const toolsRouter = router({
   /** Tools visible to the caller: pod-wide (null ws) + the given workspace. */
@@ -328,11 +359,14 @@ export const toolsRouter = router({
     }),
 
   /**
-   * List the credentials bound to a tool for a dynamic auth binding — the
-   * `provides_credential` edges scoped to this tool. Powers the Authentication
-   * step's "who has a credential" list. OWNER-GATED: the binding graph maps
-   * principalId→secretId and must not leak to non-owners, so the caller must own
-   * the tool (workspace owner / pod-admin) — same gate as bind/unbind.
+   * List the credentials bound to a tool for a dynamic auth binding. Since W3 the
+   * binding lives on the `secrets` connection registry (not a `provides_credential`
+   * link): a connection is a `secrets` row for the tool's owning capability whose
+   * `context_type`/`context_id` are set. Powers the Authentication step's "who has
+   * a credential" list. OWNER-GATED: the binding maps context→secret and must not
+   * leak to non-owners, so the caller must own the tool (ws owner / pod-admin) —
+   * same gate as bind/unbind. `linkId` is the secret id (the stable handle used by
+   * unbindCredential), preserving the wire contract.
    */
   listBoundCredentials: protectedProcedure
     .input(z.object({ toolId: z.string().uuid() }))
@@ -354,27 +388,38 @@ export const toolsRouter = router({
       } else {
         await requirePodAdmin(userId);
       }
-      const edges = await db
-        .select()
-        .from(links)
-        .where(eq(links.linkType, "provides_credential"));
-      return edges
-        .filter(
-          (e) =>
-            (e.metadata as { toolId?: string } | null)?.toolId === input.toolId
-        )
-        .map((e) => ({
-          linkId: e.id,
-          principalType: e.fromType,
-          principalId: e.fromId,
-          secretId: e.toId,
-        }));
+      // Resolve the tool's owning capability (member_of edge → capability uuid).
+      const capabilityId = await resolveToolCapabilityId(input.toolId);
+      if (!capabilityId) return [];
+      const rows = await db
+        .select({
+          id: secrets.id,
+          contextType: secrets.contextType,
+          contextId: secrets.contextId,
+        })
+        .from(secrets)
+        .where(
+          and(
+            eq(secrets.capabilityId, capabilityId),
+            isNotNull(secrets.contextType),
+            isNotNull(secrets.contextId),
+            isNull(secrets.deletedAt)
+          )
+        );
+      return rows.map((r) => ({
+        linkId: r.id,
+        principalType: r.contextType as string,
+        principalId: r.contextId as string,
+        secretId: r.id,
+      }));
     }),
 
   /**
    * Bind a credential (vault secret) to a principal/entity for a tool's dynamic
-   * auth binding: `principal|entity --provides_credential--> secret`
-   * (metadata.toolId scopes it). Owner-gated. Idempotent on the unique edge.
+   * auth binding. Since W3 the vault IS the connection registry: this stamps the
+   * secret with the tool's owning capability + the context, so `resolveBound-
+   * CredentialRef` reads it back at execution. Owner-gated. Input shape unchanged;
+   * `linkId` in the response is the secret id (the stable handle). Idempotent.
    */
   bindCredential: protectedProcedure
     .input(
@@ -416,58 +461,53 @@ export const toolsRouter = router({
           code: "FORBIDDEN",
           message: "Secret not found in your vault.",
         });
-      const [edge] = await db
-        .insert(links)
-        .values({
-          workspaceId: tool.workspaceId,
-          fromType: input.principalType,
-          fromId: input.principalId,
-          toType: "secret",
-          toId: input.secretId,
-          linkType: "provides_credential",
-          metadata: { toolId: input.toolId },
-          createdBy: userId,
+      // Resolve the tool's owning capability — the connection's home key. A tool
+      // that is not part of a capability has nowhere to hang a dynamic connection.
+      const capabilityId = await resolveToolCapabilityId(input.toolId);
+      if (!capabilityId)
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Tool is not part of a capability; cannot bind a dynamic connection.",
+        });
+      await db
+        .update(secrets)
+        .set({
+          capabilityId,
+          contextType: input.principalType,
+          contextId: input.principalId,
+          updatedAt: new Date(),
         })
-        .onConflictDoNothing()
-        .returning();
-      return { linkId: edge?.id ?? null };
+        .where(eq(secrets.id, input.secretId));
+      return { linkId: input.secretId };
     }),
 
-  /** Remove a bound credential edge (owner-gated by the linked tool). */
+  /**
+   * Clear a secret's dynamic-connection context (the W3 replacement for deleting a
+   * `provides_credential` edge). Input `linkId` is the secret id (the handle
+   * returned by list/bind). Gated on secret OWNERSHIP — you can only unbind a
+   * secret in your own vault (pod-admin fallback). `capability_id` is preserved:
+   * the secret stays the capability's connection, just no longer context-scoped.
+   */
   unbindCredential: protectedProcedure
     .input(z.object({ linkId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const [edge] = await db
-        .select()
-        .from(links)
-        .where(eq(links.id, input.linkId))
+      const [secret] = await db
+        .select({ id: secrets.id, userId: secrets.userId })
+        .from(secrets)
+        .where(eq(secrets.id, input.linkId))
         .limit(1);
-      if (!edge || edge.linkType !== "provides_credential")
+      if (!secret)
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Credential binding not found",
         });
-      const toolId = (edge.metadata as { toolId?: string } | null)?.toolId;
-      const tool = toolId
-        ? await db.query.tools.findFirst({ where: eq(tools.id, toolId) })
-        : undefined;
-      if (tool?.workspaceId) {
-        const role = await getWorkspaceRole(userId, tool.workspaceId);
-        if (role !== "owner")
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Only workspace owners can unbind tool credentials.",
-          });
-      } else if (tool) {
-        // Pod-wide tool — pod-level privileged action.
-        await requirePodAdmin(userId);
-      } else {
-        // Orphan edge (tool deleted / metadata missing): gate on the binding's
-        // creator, falling back to pod-admin — never a silent confused-deputy.
-        if (edge.createdBy !== userId) await requirePodAdmin(userId);
-      }
-      await db.delete(links).where(eq(links.id, input.linkId));
+      if (secret.userId !== userId) await requirePodAdmin(userId);
+      await db
+        .update(secrets)
+        .set({ contextType: null, contextId: null, updatedAt: new Date() })
+        .where(eq(secrets.id, input.linkId));
       return { ok: true };
     }),
 
