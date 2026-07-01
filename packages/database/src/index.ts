@@ -73,6 +73,9 @@ export type { GrantDenialCode, GrantRedeemer } from "./utils/vault-resolver.js";
 export {
   resolveDiscordBotToken,
   postDiscordChannelMessage,
+  resolveDiscordGuildId,
+  createDiscordScheduledEvent,
+  type CreateDiscordScheduledEventParams,
 } from "./utils/discord-rest.js";
 export { mirrorMessageToBoundExternal } from "./utils/mirror-to-external.js";
 export type {
@@ -85,6 +88,8 @@ export type {
   InsertChannelMessageParams,
   InsertChannelMessageResult,
 } from "./utils/insert-channel-message.js";
+export { ensureExternalChannel } from "./utils/ensure-external-channel.js";
+export type { EnsureExternalChannelArgs } from "./utils/ensure-external-channel.js";
 
 // Schema coherence tripwire — pod-startup guard against schema drift
 export {

@@ -82,6 +82,19 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("crm-daily-digest", "55 8 * * *", {});
   logger.info("Registered cron: crm-daily-digest (daily at 08:55 UTC)");
 
+  // Mail feed (every 2 hours — triggers the api-side loopback endpoint that
+  // fetches + triages Gmail and posts relevant emails to the Discord-bound
+  // channel). No-ops unless the pod's Discord tool has mailFeed.enabled.
+  await boss.schedule("mail-feed-cron", "0 */2 * * *", {});
+  logger.info("Registered cron: mail-feed-cron (every 2h)");
+
+  // Event sync (every 6 hours — triggers the api-side loopback endpoint that
+  // mirrors upcoming Synap events + Stellar deadlines + Google Calendar into
+  // native Discord scheduled events). No-ops unless the pod's Discord tool has
+  // eventSync.enabled.
+  await boss.schedule("event-sync-cron", "0 */6 * * *", {});
+  logger.info("Registered cron: event-sync-cron (every 6h)");
+
   // Hermes trigger (every 60s — dispatches idle devplane features to Hermes AI)
   // Only schedule when Hermes is configured.
   if (process.env.HERMES_TRIGGER_URL) {

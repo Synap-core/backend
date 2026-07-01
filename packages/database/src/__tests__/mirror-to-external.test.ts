@@ -34,6 +34,7 @@ const discordTeam = {
   branchPurpose: "team",
 };
 const discordComms = { ...discordTeam, branchPurpose: "client-comms" };
+const discordNullPurpose = { ...discordTeam, branchPurpose: null };
 
 beforeEach(() => {
   tokenMock.mockReset();
@@ -61,7 +62,7 @@ describe("mirrorMessageToBoundExternal — guards", () => {
       authorType: MessageAuthorType.BOT,
     });
     expect(r.mirrored).toBe(false);
-    expect(r.reason).toBe("blocked_client_comms");
+    expect(r.reason).toBe("blocked_non_internal");
     expect(postMock).not.toHaveBeenCalled();
   });
 
@@ -72,7 +73,18 @@ describe("mirrorMessageToBoundExternal — guards", () => {
       authorType: MessageAuthorType.AI_AGENT,
     });
     expect(r.mirrored).toBe(false);
-    expect(r.reason).toBe("blocked_client_comms");
+    expect(r.reason).toBe("blocked_non_internal");
+    expect(postMock).not.toHaveBeenCalled();
+  });
+
+  test("FIREWALL (fail-closed): bot output to a NULL-purpose channel is blocked — null defaults to client-comms elsewhere", async () => {
+    const r = await mirrorMessageToBoundExternal({
+      channel: discordNullPurpose,
+      content: "automated",
+      authorType: MessageAuthorType.BOT,
+    });
+    expect(r.mirrored).toBe(false);
+    expect(r.reason).toBe("blocked_non_internal");
     expect(postMock).not.toHaveBeenCalled();
   });
 
@@ -88,6 +100,16 @@ describe("mirrorMessageToBoundExternal — guards", () => {
       "chan-123",
       "reply to client"
     );
+  });
+
+  test("FIREWALL: human operator message to a NULL-purpose channel IS allowed", async () => {
+    const r = await mirrorMessageToBoundExternal({
+      channel: discordNullPurpose,
+      content: "reply",
+      authorType: MessageAuthorType.HUMAN,
+    });
+    expect(r.mirrored).toBe(true);
+    expect(postMock).toHaveBeenCalled();
   });
 
   test("bot output to a team channel is mirrored", async () => {

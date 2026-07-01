@@ -22,6 +22,7 @@
  */
 
 import type { ImportItem } from "./import-items.js";
+import type { StructuredFollowUp } from "@synap/intelligence-client";
 
 /** Minimal structural shape of the IS bulk-structuring client we depend on. */
 export interface BulkStructureClient {
@@ -70,7 +71,7 @@ type BulkStructureEvent =
           targetTempId: string;
           relationType: string;
         }>;
-        followUp: string | null;
+        followUp: string | StructuredFollowUp | null;
       };
     }
   | { type: "item-error"; clientId: string; error: string }

@@ -175,6 +175,52 @@ export interface PodStatus {
 
 // ─── Capture pipeline types ───────────────────────────────────────────────────
 
+/**
+ * A single tappable chip in a structured follow-up. Mirrors the IS `structure`
+ * output and the frontend capture-pipeline contract EXACTLY (do NOT narrow).
+ */
+export interface FollowUpChip {
+  label: string;
+  value: string;
+  action:
+    | "link_entity"
+    | "set_property"
+    | "add_relation"
+    | "confirm"
+    | "dismiss";
+  icon?: string;
+  entityId?: string;
+  propertyKey?: string;
+}
+
+/** Structured follow-up the IS may emit instead of a plain string question. */
+export interface StructuredFollowUp {
+  question: string;
+  suggestions: FollowUpChip[];
+}
+
+/** One field of an AI-authored dynamic form. `type` is a free string (field kind). */
+export interface DynamicFormField {
+  key: string;
+  label: string;
+  type: string;
+  constraints?: {
+    enum?: string[];
+    min?: number;
+    max?: number;
+    pattern?: string;
+  };
+  required?: boolean;
+  help?: string;
+}
+
+/** AI-authored guided-capture form spec (additive, null-safe). */
+export interface DynamicFormSpec {
+  title?: string;
+  note?: string;
+  fields: DynamicFormField[];
+}
+
 export interface CaptureProposal {
   tempId: string;
   profileSlug: string;
@@ -202,10 +248,18 @@ export interface CaptureRelation {
 export interface CaptureStructureResponse {
   proposals: CaptureProposal[];
   relations: CaptureRelation[];
-  followUp: string | null;
+  followUp: string | StructuredFollowUp | null;
+  formSpec?: DynamicFormSpec | null;
+  targetWorkspaceId?: string | null;
+  targetProjectId?: string | null;
   dedupCandidates?: Record<
     string,
-    Array<{ entityId: string; title: string; score: number }>
+    Array<{
+      entityId: string;
+      title: string;
+      profileSlug: string;
+      score: number;
+    }>
   >;
 }
 

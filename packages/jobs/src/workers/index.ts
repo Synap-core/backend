@@ -79,6 +79,11 @@ import {
   handleCrmDailyDigest,
   CRM_DAILY_DIGEST_QUEUE,
 } from "./crm-daily-digest.js";
+import { handleMailFeedCron, MAIL_FEED_CRON_QUEUE } from "./mail-feed-cron.js";
+import {
+  handleEventSyncCron,
+  EVENT_SYNC_CRON_QUEUE,
+} from "./event-sync-cron.js";
 import { handleEntityExtract } from "./entity-extract-worker.js";
 import {
   handleHermesTrigger,
@@ -144,6 +149,8 @@ const ALL_QUEUES = [
   "hydration-summary-post",
   HERMES_TRIGGER_QUEUE,
   CRM_DAILY_DIGEST_QUEUE,
+  MAIL_FEED_CRON_QUEUE,
+  EVENT_SYNC_CRON_QUEUE,
   PROACTIVE_SCAN_QUEUE,
   PROPOSAL_REVIEWED_NOTIFY_QUEUE,
   MEMORY_DECAY_QUEUE,
@@ -386,6 +393,21 @@ export async function registerAllWorkers(): Promise<void> {
     handleCrmDailyDigest(job)
   );
   logger.info("Registered worker: crm-daily-digest");
+
+  // Mail feed (cron: every 2h) — triggers the api-side loopback endpoint that
+  // fetches + triages Gmail and posts relevant emails to the Discord-bound channel.
+  await boss.work(MAIL_FEED_CRON_QUEUE, async ([job]: any[]) =>
+    handleMailFeedCron(job)
+  );
+  logger.info("Registered worker: mail-feed-cron");
+
+  // Event sync (cron: every 6h) — triggers the api-side loopback endpoint that
+  // mirrors upcoming events + Stellar deadlines + Google Calendar into native
+  // Discord scheduled events.
+  await boss.work(EVENT_SYNC_CRON_QUEUE, async ([job]: any[]) =>
+    handleEventSyncCron(job)
+  );
+  logger.info("Registered worker: event-sync-cron");
 
   // Proactive scan — cluster assembly → intelligence-service brain. Reachable as
   // an action a loop/automation can invoke (no parallel per-event auto-trigger).

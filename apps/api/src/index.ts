@@ -1576,6 +1576,61 @@ app.post("/internal/signal/route", async (c) => {
   }
 });
 
+// ── Internal mail-feed run endpoint ───────────────────────────────────────────
+//
+// POST /internal/mail-feed/run — loopback-only, gated by X-Bridge-Secret.
+// Used by the jobs `mail-feed-cron` worker to run the capability-heavy mail feed
+// (gmail_search + IS triage + post) which lives in @synap/api, avoiding a
+// circular dep. NOT public — never exposed through Caddy.
+app.post("/internal/mail-feed/run", async (c) => {
+  // FAIL-CLOSED: require BRIDGE_SECRET. Without it the endpoint refuses (503),
+  // so a misconfigured deploy (or the Caddy :80 catch-all reaching /internal/*)
+  // cannot drive gmail reads / LLM calls unauthenticated.
+  const secret = process.env.BRIDGE_SECRET;
+  if (!secret) return c.json({ error: "not_configured" }, 503);
+  if (!safeTokenEqual(c.req.header("x-bridge-secret") ?? "", secret)) {
+    return c.json({ error: "Forbidden" }, 403);
+  }
+
+  try {
+    const apiModule = (await import("@synap/api")) as unknown as {
+      runMailFeed: () => Promise<Record<string, unknown>>;
+    };
+    const result = await apiModule.runMailFeed();
+    return c.json(result);
+  } catch (err) {
+    apiLogger.error({ err }, "/internal/mail-feed/run failed");
+    return c.json({ error: "internal_error" }, 500);
+  }
+});
+
+// ── Internal event-sync run endpoint ──────────────────────────────────────────
+//
+// POST /internal/event-sync/run — loopback-only, gated by X-Bridge-Secret.
+// Used by the jobs `event-sync-cron` worker to run the capability-heavy event
+// sync (event entities + Stellar deadlines + Google Calendar → native Discord
+// scheduled events) which lives in @synap/api, avoiding a circular dep. NOT
+// public — never exposed through Caddy.
+app.post("/internal/event-sync/run", async (c) => {
+  // FAIL-CLOSED: require BRIDGE_SECRET (see /internal/mail-feed/run).
+  const secret = process.env.BRIDGE_SECRET;
+  if (!secret) return c.json({ error: "not_configured" }, 503);
+  if (!safeTokenEqual(c.req.header("x-bridge-secret") ?? "", secret)) {
+    return c.json({ error: "Forbidden" }, 403);
+  }
+
+  try {
+    const apiModule = (await import("@synap/api")) as unknown as {
+      runEventSync: () => Promise<Record<string, unknown>>;
+    };
+    const result = await apiModule.runEventSync();
+    return c.json(result);
+  } catch (err) {
+    apiLogger.error({ err }, "/internal/event-sync/run failed");
+    return c.json({ error: "internal_error" }, 500);
+  }
+});
+
 // 404 handler
 app.notFound((c) => {
   return c.json({ error: "Not found" }, 404);

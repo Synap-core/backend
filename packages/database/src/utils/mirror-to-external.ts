@@ -104,16 +104,26 @@ export async function mirrorMessageToBoundExternal(
     return { mirrored: false, reason: "no_external_id" };
   }
 
-  // (2) FIREWALL — bot/AI output must never reach a client-comms channel.
+  // (2) FIREWALL — fail-closed ALLOWLIST. Bot/AI output mirrors ONLY to channels
+  // EXPLICITLY marked internal ('team'). A null/unknown branchPurpose is treated
+  // as potentially client-comms: the rest of the system defaults null→client-comms
+  // (bridge refreshClientCommsCache / resolveTeamExternalId), so a denylist on the
+  // exact string "client-comms" would leak bot/AI output to a null-purpose client
+  // channel. Human operator messages are NOT gated (operator→client is intended).
   const isBotOrAI =
     authorType === MessageAuthorType.AI_AGENT ||
     authorType === MessageAuthorType.BOT;
-  if (channel.branchPurpose === "client-comms" && isBotOrAI) {
+  if (isBotOrAI && channel.branchPurpose !== "team") {
     logger.warn(
-      { externalSource: channel.externalSource, externalId, authorType },
-      "mirror blocked: bot/AI output must not reach a client-comms channel"
+      {
+        externalSource: channel.externalSource,
+        externalId,
+        authorType,
+        branchPurpose: channel.branchPurpose,
+      },
+      "mirror blocked: bot/AI output may only reach an internal ('team') channel"
     );
-    return { mirrored: false, reason: "blocked_client_comms" };
+    return { mirrored: false, reason: "blocked_non_internal" };
   }
 
   // Only Discord is a server-resolvable mirror target today. Other externalSource

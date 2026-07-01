@@ -79,6 +79,13 @@
         reverse_proxy realtime:4001
     }
 
+    # /internal/* are loopback-only backend endpoints (mail-feed/event-sync run,
+    # signal route). They must NEVER be reachable from outside — this :80 listener
+    # is the Cloudflare-tunnel ingress, so block them before the catch-all proxy.
+    handle /internal/* {
+        respond 404
+    }
+
     # Everything else goes to backend
     reverse_proxy backend:4000
 }

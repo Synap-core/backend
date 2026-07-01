@@ -3662,6 +3662,42 @@ export interface ImportModelingSuggestion {
 		reason?: string;
 	}>;
 }
+/**
+ * Structured follow-up the IS `structure` endpoint may emit instead of a plain
+ * string question. Mirrors `@synap/hub-rest-client` and the frontend
+ * capture-pipeline contract EXACTLY — defined locally to keep this internal
+ * service client free of a dependency on the published Hub REST SDK.
+ */
+export interface FollowUpChip {
+	label: string;
+	value: string;
+	action: "link_entity" | "set_property" | "add_relation" | "confirm" | "dismiss";
+	icon?: string;
+	entityId?: string;
+	propertyKey?: string;
+}
+export interface StructuredFollowUp {
+	question: string;
+	suggestions: FollowUpChip[];
+}
+export interface DynamicFormField {
+	key: string;
+	label: string;
+	type: string;
+	constraints?: {
+		enum?: string[];
+		min?: number;
+		max?: number;
+		pattern?: string;
+	};
+	required?: boolean;
+	help?: string;
+}
+export interface DynamicFormSpec {
+	title?: string;
+	note?: string;
+	fields: DynamicFormField[];
+}
 export interface ColumnMappingProposal {
 	header: string;
 	slug: string;
@@ -4339,22 +4375,6 @@ export interface CreateCapabilityResult {
 	};
 	proposals: string[];
 }
-/**
- * Capability execution — ONE shared core for "launch a registered capability".
- *
- * Resolves a capability VERB (verbId = backing skill name) or a skillId to its
- * skill, runs `gateCapabilityExecution`, and on `run` delegates to the IS sandbox
- * via `executeSkillViaIS`. Returns a discriminated result the callers map to their
- * own shape:
- *   - Hub REST `POST /capabilities/execute` → HTTP 200/202/403/404
- *   - MCP tool `run_capability` → a text result
- *
- * Identity: OPERATOR/owner run (no agentUserId) — the bearer who applied the
- * capability owns the skill → owner-bypass runs it; a non-owner/unapproved skill
- * routes to `propose`. (Agent-initiated runs flow through the IS agent loop, not
- * this door.) A DRAFT skill is denied for everyone (approval gate) — enable it
- * first via `POST /skills/:id/approve`.
- */
 export type ExecuteCapabilityResult = {
 	kind: "run";
 	skillId: string;
@@ -4772,7 +4792,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetTempId: string;
 					relationType: string;
 				}>;
-				followUp: string | null;
+				followUp: string | StructuredFollowUp | null;
 				targetWorkspaceId: string | null;
 				targetProjectId: string | null;
 				formSpec: null;
@@ -4804,30 +4824,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetTempId: string;
 					relationType: string;
 				}[];
-				followUp: string;
+				followUp: string | StructuredFollowUp;
 				targetWorkspaceId: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
-				formSpec: {
-					title?: string;
-					note?: string;
-					fields: Array<{
-						key: string;
-						label: string;
-						type: string;
-						constraints?: {
-							enum?: string[];
-							min?: number;
-							max?: number;
-							pattern?: string;
-						};
-						required?: boolean;
-						help?: string;
-					}>;
-				} | null;
+				formSpec: DynamicFormSpec | null;
 				dedupCandidates: Record<string, Array<{
 					entityId: string;
 					title: string;
@@ -4849,30 +4853,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetTempId: string;
 					relationType: string;
 				}[];
-				followUp: string;
+				followUp: string | StructuredFollowUp;
 				targetWorkspaceId: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
-				formSpec: {
-					title?: string;
-					note?: string;
-					fields: Array<{
-						key: string;
-						label: string;
-						type: string;
-						constraints?: {
-							enum?: string[];
-							min?: number;
-							max?: number;
-							pattern?: string;
-						};
-						required?: boolean;
-						help?: string;
-					}>;
-				} | null;
+				formSpec: DynamicFormSpec | null;
 				dedupCandidates: Record<string, Array<{
 					entityId: string;
 					title: string;
@@ -4902,30 +4890,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetTempId: string;
 					relationType: string;
 				}[];
-				followUp: string | null;
+				followUp: string | StructuredFollowUp | null;
 				targetWorkspaceId: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
-				formSpec: {
-					title?: string;
-					note?: string;
-					fields: Array<{
-						key: string;
-						label: string;
-						type: string;
-						constraints?: {
-							enum?: string[];
-							min?: number;
-							max?: number;
-							pattern?: string;
-						};
-						required?: boolean;
-						help?: string;
-					}>;
-				} | null;
+				formSpec: DynamicFormSpec | null;
 				dedupCandidates: Record<string, {
 					entityId: string;
 					title: string;
@@ -4950,30 +4922,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetTempId: string;
 					relationType: string;
 				}[];
-				followUp: string | null;
+				followUp: string | StructuredFollowUp | null;
 				targetWorkspaceId: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
-				formSpec: {
-					title?: string;
-					note?: string;
-					fields: Array<{
-						key: string;
-						label: string;
-						type: string;
-						constraints?: {
-							enum?: string[];
-							min?: number;
-							max?: number;
-							pattern?: string;
-						};
-						required?: boolean;
-						help?: string;
-					}>;
-				} | null;
+				formSpec: DynamicFormSpec | null;
 				dedupCandidates: Record<string, {
 					entityId: string;
 					title: string;
@@ -13218,7 +13174,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				linkId: string;
-				principalType: LinkEndpointType;
+				principalType: string;
 				principalId: string;
 				secretId: string;
 			}[];

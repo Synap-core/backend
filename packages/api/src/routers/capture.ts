@@ -16,6 +16,7 @@ import {
   resolveIntelligenceService,
   IntelligenceAuthError,
 } from "../utils/intelligence-routing.js";
+import type { StructuredFollowUp } from "@synap/intelligence-client";
 import {
   sql,
   eq,
@@ -572,7 +573,7 @@ export const captureRouter = router({
           targetTempId: string;
           relationType: string;
         }>,
-        followUp: null as string | null,
+        followUp: null as string | StructuredFollowUp | null,
         targetWorkspaceId: null as string | null,
         targetProjectId: null as string | null,
         formSpec: null,
@@ -769,7 +770,7 @@ export const captureRouter = router({
       return {
         proposals: structureResult.entities,
         relations: structureResult.relations,
-        followUp: null as string | null,
+        followUp: null as string | StructuredFollowUp | null,
         targetWorkspaceId: structureResult.targetWorkspaceId ?? null,
         targetWorkspaceReason: structureResult.targetWorkspaceReason ?? null,
         targetWorkspaceConfidence:

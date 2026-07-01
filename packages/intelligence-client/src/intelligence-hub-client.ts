@@ -19,6 +19,51 @@ import type {
   CreatedProposal,
 } from "@synap-core/types";
 
+/**
+ * Structured follow-up the IS `structure` endpoint may emit instead of a plain
+ * string question. Mirrors `@synap/hub-rest-client` and the frontend
+ * capture-pipeline contract EXACTLY — defined locally to keep this internal
+ * service client free of a dependency on the published Hub REST SDK.
+ */
+export interface FollowUpChip {
+  label: string;
+  value: string;
+  action:
+    | "link_entity"
+    | "set_property"
+    | "add_relation"
+    | "confirm"
+    | "dismiss";
+  icon?: string;
+  entityId?: string;
+  propertyKey?: string;
+}
+
+export interface StructuredFollowUp {
+  question: string;
+  suggestions: FollowUpChip[];
+}
+
+export interface DynamicFormField {
+  key: string;
+  label: string;
+  type: string;
+  constraints?: {
+    enum?: string[];
+    min?: number;
+    max?: number;
+    pattern?: string;
+  };
+  required?: boolean;
+  help?: string;
+}
+
+export interface DynamicFormSpec {
+  title?: string;
+  note?: string;
+  fields: DynamicFormField[];
+}
+
 export interface McpServerConfig {
   id: string;
   name: string;
@@ -737,7 +782,7 @@ export class IntelligenceHubClient {
       targetTempId: string;
       relationType: string;
     }>;
-    followUp: string | null;
+    followUp: string | StructuredFollowUp | null;
     targetWorkspaceId?: string | null;
     /** AI's reason for routing to `targetWorkspaceId` (provenance). */
     targetWorkspaceReason?: string | null;
@@ -753,23 +798,7 @@ export class IntelligenceHubClient {
      * Optional structured-form spec the IS may emit to drive a guided capture
      * form (mirror of the `targetProject*` routing fields — additive, null-safe).
      */
-    formSpec?: {
-      title?: string;
-      note?: string;
-      fields: Array<{
-        key: string;
-        label: string;
-        type: string;
-        constraints?: {
-          enum?: string[];
-          min?: number;
-          max?: number;
-          pattern?: string;
-        };
-        required?: boolean;
-        help?: string;
-      }>;
-    } | null;
+    formSpec?: DynamicFormSpec | null;
     /** Honesty markers when an input could not be fully extracted/structured. */
     degraded?: boolean;
     degradedReason?: string;
@@ -953,7 +982,8 @@ export class IntelligenceHubClient {
             targetTempId: string;
             relationType: string;
           }>;
-          followUp: string | null;
+          followUp: string | StructuredFollowUp | null;
+          formSpec?: DynamicFormSpec | null;
         };
       }
     | { type: "item-error"; clientId: string; error: string }

@@ -35,6 +35,24 @@ export const workerRegistry: WorkerMetadata[] = [
     category: "ai",
   },
   {
+    id: "mail-feed-cron",
+    name: "Mail Feed",
+    description:
+      "Every 2h, triggers the api-side loopback endpoint that runs gmail_search, AI-triages each email (relevance + category + summary), filters by allow/deny + muted categories, and posts one message per relevant email into the Discord-bound Synap channel (auto-mirrored to Discord). No-ops unless the Discord tool has mailFeed.enabled.",
+    triggers: ["cron:0 */2 * * *"],
+    outputs: ["message.create.completed"],
+    category: "ai",
+  },
+  {
+    id: "event-sync-cron",
+    name: "Event Sync",
+    description:
+      "Every 6h, triggers the api-side loopback endpoint that mirrors upcoming Synap events, Stellar grant deadlines, and Google Calendar events into native Discord scheduled events (idempotent via a dedup map in the Discord tool metadata). No-ops unless the Discord tool has eventSync.enabled.",
+    triggers: ["cron:0 */6 * * *"],
+    outputs: ["discord.scheduled_event.created"],
+    category: "ai",
+  },
+  {
     id: "proactive-intelligence",
     name: "Proactive Intelligence (scan)",
     description:

@@ -21,6 +21,15 @@ const logger = createLogger({ module: "discord-rest" });
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 
+/** Reject anything that isn't a plausible Discord snowflake before it reaches a
+ * request URL — a malformed value must not redirect the bot's authenticated REST
+ * call (defense-in-depth; ids here are operator-configured, not attacker-set). */
+function assertSnowflake(value: string, label: string): void {
+  if (!/^\d{5,25}$/.test(value)) {
+    throw new Error(`Invalid Discord ${label}: ${JSON.stringify(value)}`);
+  }
+}
+
 /**
  * Resolve the Discord bot token. Env-first, then the pod owner's vault secret
  * (serviceId='discord'). `ownerId` defaults to the first workspace's owner — the
@@ -72,6 +81,7 @@ export async function postDiscordChannelMessage(
   channelId: string,
   content: string
 ): Promise<void> {
+  assertSnowflake(channelId, "channelId");
   const res = await fetch(
     `${DISCORD_API_BASE}/channels/${channelId}/messages`,
     {
@@ -81,7 +91,9 @@ export async function postDiscordChannelMessage(
         "Content-Type": "application/json",
         "User-Agent": "Synap-Discord-Mirror (https://synap, v0)",
       },
-      body: JSON.stringify({ content }),
+      // allowed_mentions parse:[] — mirrored/feed content is data (email subjects,
+      // event titles from external parties); it must NEVER @everyone/@here/role-ping.
+      body: JSON.stringify({ content, allowed_mentions: { parse: [] } }),
     }
   );
   if (res.status === 429) {
@@ -96,4 +108,102 @@ export async function postDiscordChannelMessage(
       `Discord postChannelMessage failed: ${res.status}${errBody ? ` — ${errBody.slice(0, 200)}` : ""}`
     );
   }
+}
+
+/**
+ * Resolve the guild the bot belongs to. The agency runs ONE guild, so we return
+ * the FIRST guild the bot is a member of (or null when the bot is in none). Used
+ * by the event-sync worker to know where to create native scheduled events.
+ */
+export async function resolveDiscordGuildId(
+  token: string
+): Promise<string | null> {
+  const res = await fetch(`${DISCORD_API_BASE}/users/@me/guilds`, {
+    headers: {
+      Authorization: `Bot ${token}`,
+      "User-Agent": "Synap-Discord-Mirror (https://synap, v0)",
+    },
+  });
+  if (res.status === 429) {
+    const retryAfter = res.headers.get("Retry-After") ?? "unknown";
+    throw new Error(
+      `Discord resolveGuildId rate limited (429) — retry after ${retryAfter}s`
+    );
+  }
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "");
+    throw new Error(
+      `Discord resolveGuildId failed: ${res.status}${errBody ? ` — ${errBody.slice(0, 200)}` : ""}`
+    );
+  }
+  const guilds = (await res.json().catch(() => [])) as Array<{ id?: string }>;
+  return Array.isArray(guilds) && guilds[0]?.id ? guilds[0].id : null;
+}
+
+export interface CreateDiscordScheduledEventParams {
+  /** Event name (Discord caps at 100 chars — caller truncates). */
+  name: string;
+  /** ISO8601 start time. */
+  scheduledStartTime: string;
+  /** ISO8601 end time — REQUIRED for EXTERNAL events. */
+  scheduledEndTime: string;
+  /** Where it happens: a meet URL or a physical address. Capped at 100 chars. */
+  location: string;
+  /** Longer detail (full address, description) — Discord caps at 1000 chars. */
+  description?: string;
+}
+
+/**
+ * Create a native Discord GUILD scheduled event of type EXTERNAL (an event whose
+ * location is a free-text string — an address or a Meet link — rather than a
+ * voice channel). Returns the created event `{ id }`. Throws on 429/non-2xx like
+ * `postDiscordChannelMessage` so the caller can log; the worker wraps in
+ * try/catch. `location` is capped at 100 chars by Discord — we truncate here.
+ */
+export async function createDiscordScheduledEvent(
+  token: string,
+  guildId: string,
+  params: CreateDiscordScheduledEventParams
+): Promise<{ id: string } | null> {
+  assertSnowflake(guildId, "guildId");
+  const body = {
+    name: params.name.slice(0, 100),
+    scheduled_start_time: params.scheduledStartTime,
+    scheduled_end_time: params.scheduledEndTime,
+    privacy_level: 2, // GUILD_ONLY
+    entity_type: 3, // EXTERNAL
+    entity_metadata: { location: params.location.slice(0, 100) },
+    ...(params.description
+      ? { description: params.description.slice(0, 1000) }
+      : {}),
+  };
+
+  const res = await fetch(
+    `${DISCORD_API_BASE}/guilds/${guildId}/scheduled-events`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bot ${token}`,
+        "Content-Type": "application/json",
+        "User-Agent": "Synap-Discord-Mirror (https://synap, v0)",
+      },
+      body: JSON.stringify(body),
+    }
+  );
+  if (res.status === 429) {
+    const retryAfter = res.headers.get("Retry-After") ?? "unknown";
+    throw new Error(
+      `Discord createScheduledEvent rate limited (429) — retry after ${retryAfter}s`
+    );
+  }
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "");
+    throw new Error(
+      `Discord createScheduledEvent failed: ${res.status}${errBody ? ` — ${errBody.slice(0, 200)}` : ""}`
+    );
+  }
+  const created = (await res.json().catch(() => null)) as {
+    id?: string;
+  } | null;
+  return created?.id ? { id: created.id } : null;
 }

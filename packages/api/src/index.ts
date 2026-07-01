@@ -626,3 +626,12 @@ export {
   type SurfaceKind,
   type SurfaceResult,
 } from "./utils/delivery-router.js";
+
+export {
+  runMailFeed,
+  type RunMailFeedResult,
+} from "./services/mail-feed/run-mail-feed.js";
+export {
+  runEventSync,
+  type RunEventSyncResult,
+} from "./services/event-sync/run-event-sync.js";

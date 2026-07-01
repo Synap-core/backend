@@ -19,6 +19,10 @@ export type {
   CreatedProposal,
   ImportAnalysisPlan,
   ColumnMappingProposal,
+  FollowUpChip,
+  StructuredFollowUp,
+  DynamicFormField,
+  DynamicFormSpec,
 } from "./intelligence-hub-client.js";
 
 export {
