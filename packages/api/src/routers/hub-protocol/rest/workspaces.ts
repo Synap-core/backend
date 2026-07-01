@@ -38,6 +38,7 @@ import {
   isAgentTypeAllowedToCreateWorkspaces,
   WORKSPACE_CREATE_AGENT_TYPE_ALLOWLIST,
 } from "../../../services/workspace-creation-service.js";
+import { enrollAgentInWorkspace } from "../../../services/enroll-agent-in-workspace.js";
 import {
   buildDigestSummary,
   getCaller,
@@ -533,10 +534,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
           continue;
         }
 
-        await db
-          .insert(workspaceMembers)
-          .values({ workspaceId: wsId, userId: agentUserId, role })
-          .onConflictDoNothing();
+        await enrollAgentInWorkspace({ workspaceId: wsId, agentUserId, role });
         enrolled.push(wsId);
       }
 

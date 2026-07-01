@@ -46,6 +46,7 @@ export { externalChatApp } from "./routers/external/chat.js";
 export { chatStreamApp } from "./routers/chat-stream.js";
 export { openaiCompatApp } from "./routers/external/openai-compat.js";
 export { apiKeysRouter } from "./routers/api-keys.js";
+export { ensureSynapCoreCapability } from "./services/capabilities/ensure-synap-core.js";
 export { healthRouter } from "./routers/health.js";
 export { projectsRouter } from "./routers/projects.js";
 export { sourceConfigsRouter } from "./routers/source-configs.js";

@@ -21,7 +21,7 @@ import {
 } from "@synap/database";
 import { randomUUID, randomBytes } from "crypto";
 import { sql as drizzleSql } from "drizzle-orm";
-import { setDynamicCorsOrigins } from "@synap/api";
+import { setDynamicCorsOrigins, ensureSynapCoreCapability } from "@synap/api";
 
 const logger = createLogger({ module: "startup-hooks" });
 
@@ -472,6 +472,11 @@ export async function runStartupHooks(): Promise<void> {
   // Pod-admin invariant — non-fatal, surfaces a loud warning if broken so
   // operators see exactly which recovery command to run.
   await verifyPodAdminInvariant();
+
+  // Seed the synap-core built-in capability (Tier-0 verbs). Idempotent +
+  // non-fatal; runs after the pod-owner invariant so an owner exists to attribute
+  // the pod-wide skills to (pre-bootstrap pods are skipped and retried next boot).
+  await ensureSynapCoreCapability();
 
   logger.info("✅ Startup hooks complete");
 }

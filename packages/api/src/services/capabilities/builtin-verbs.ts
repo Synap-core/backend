@@ -19,6 +19,17 @@
  * way a builtin verb becomes runnable, so the surface is explicit + auditable.
  */
 
+import { z } from "zod";
+import { TRPCError } from "@trpc/server";
+import {
+  db,
+  eq,
+  channels,
+  getWorkspaceMembership,
+  insertChannelMessage,
+} from "@synap/database";
+import type { Context } from "../../context.js";
+
 export interface BuiltinVerbContext {
   /** The acting operator (bearer's user id). */
   userId: string;
@@ -31,9 +42,137 @@ export type BuiltinVerbHandler = (
   ctx: BuiltinVerbContext
 ) => Promise<unknown>;
 
+// ── Pilot handlers (W5) ───────────────────────────────────────────────────────
+//
+// Each handler runs POST-gate (executeCapability already gated the builtin skill)
+// and delegates to the EXISTING in-process governed path — it never raw-inserts
+// or reimplements the operation:
+//   channel.create → the governed `channelsRouter.createChannel` caller (a
+//                    workspaceProcedure that re-checks membership + role).
+//   feed.post      → `insertChannelMessage` (@synap/database), the ONE shared
+//                    channel-message writer that also mirrors to a bound Discord
+//                    channel (the same primitive the mail-feed + event-sync feed
+//                    producers use). It preserves the hash-chain insert + mirror.
+//
+// `channelsRouter` is imported dynamically inside the handler: this module is
+// imported at top-level by execute-capability.ts, and the channels router pulls
+// in a large dependency graph — a lazy import keeps the module-load order free of
+// any accidental cycle (mirrors how the hub proactive route lazy-imports helpers).
+
+/** channel.create — create a channel through the governed createChannel caller. */
+const channelCreateParams = z.object({
+  /** Optional channel title (main AI channel). */
+  title: z.string().max(500).optional(),
+  /** Assign an agent by slug (resolved to a UUID server-side by createChannel). */
+  agentSlug: z.string().max(100).optional(),
+  /** When set, create a branch under this parent instead of a main channel. */
+  parentChannelId: z.string().uuid().optional(),
+  branchPurpose: z.string().max(500).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+const channelCreateHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = channelCreateParams.parse(params);
+
+  // Channels are workspace-scoped (createChannel is a workspaceProcedure): a
+  // builtin channel.create needs an acting workspace lens, not a pod-wide run.
+  if (!ctx.workspaceId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "channel.create requires a workspace context (workspaceId).",
+    });
+  }
+
+  // Rebuild the operator's governed caller context exactly like the proposal
+  // approve-executors do (getWorkspaceMembership → role), so the workspaceProcedure
+  // membership guard passes and the write is attributed to the operator.
+  const membership = await getWorkspaceMembership(
+    db,
+    ctx.workspaceId,
+    ctx.userId
+  );
+  if (!membership) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "No access to the acting workspace.",
+    });
+  }
+
+  const { channelsRouter } = await import("../../routers/channels.js");
+  const caller = channelsRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    workspaceRole: membership.role,
+  } as unknown as Context);
+
+  const result = await caller.createChannel({
+    title: input.title,
+    agentSlug: input.agentSlug,
+    parentChannelId: input.parentChannelId,
+    branchPurpose: input.branchPurpose,
+    metadata: input.metadata,
+  });
+
+  return { channelId: result.channelId };
+};
+
+/** feed.post — post a message into a channel via the mirror-preserving writer. */
+const feedPostParams = z.object({
+  channelId: z.string().uuid(),
+  content: z.string().min(1).max(10000),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+const feedPostHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = feedPostParams.parse(params);
+
+  // Lightweight existence guard — a clean 404 instead of a downstream FK error,
+  // and (when the channel is workspace-scoped) confine posting to the operator's
+  // acting workspace. The capability gate already governs THAT this operator may
+  // run feed.post; this only bounds WHICH channel the run may target.
+  const [channel] = await db
+    .select({ id: channels.id, workspaceId: channels.workspaceId })
+    .from(channels)
+    .where(eq(channels.id, input.channelId))
+    .limit(1);
+  if (!channel) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found." });
+  }
+  if (
+    channel.workspaceId &&
+    ctx.workspaceId &&
+    channel.workspaceId !== ctx.workspaceId
+  ) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Channel is not in the acting workspace.",
+    });
+  }
+
+  // insertChannelMessage is THE shared channel writer: hash-chain insert + Discord
+  // mirror if the channel is bound. Do NOT reimplement posting — reuse it, exactly
+  // as the mail-feed / event-sync feed producers do.
+  const result = await insertChannelMessage({
+    channelId: input.channelId,
+    content: input.content,
+    userId: ctx.userId,
+    metadata: input.metadata,
+  });
+
+  return {
+    messageId: result.messageId,
+    mirrored: result.mirrored,
+  };
+};
+
 /**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5.
  * Keep names namespaced (`channel.create`, `feed.post`) to mirror the
  * `connector.action` convention used for external verbs.
  */
-export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {};
+export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
+  "channel.create": channelCreateHandler,
+  "feed.post": feedPostHandler,
+};

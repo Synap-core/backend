@@ -44,7 +44,18 @@ export const skillsRouter = router({
         limit: 100, // Get all active skills
       });
 
-      return result.skills;
+      // Agent-tool-loader exclusion (W5): this Hub endpoint is IS-only (its sole
+      // backend consumer is GET /agent-skills/executable, which feeds the IS
+      // agent-tool loader). The IS wraps each returned skill as an executable
+      // isolate tool — but `builtin` (Tier-0, in-process handler) and `declarative`
+      // (Tier-1, provider-verb) skills carry NO isolate code, so loading them would
+      // fail. Exclude them HERE (the narrowest IS-only chokepoint) rather than on
+      // the shared `skills.list`, which the browser UI reads directly and must
+      // keep showing every kind.
+      return result.skills.filter(
+        (s: { kind: string | null }) =>
+          s.kind === "code" || s.kind === "instruction"
+      );
     }),
 
   /**

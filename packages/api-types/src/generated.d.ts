@@ -847,20 +847,24 @@ export interface WorkspaceSettings {
  * Skills Schema
  *
  * The canonical skills table — merged from the (now-dropped) agent_skills table.
- * Two kinds, differentiated by `kind`:
+ * Four kinds, differentiated by `kind`:
  *
  *   instruction — text injected into the agent system prompt (always-on
  *                 knowledge/methodology). Uses the `body` column (Markdown).
  *   code        — JS/TS function executed in the Intelligence Hub sandbox
  *                 (callable tool). Uses the `code` column.
+ *   declarative — provider-verb spec the pod runs IN-PROCESS (Tier-1). Uses the
+ *                 `provider_spec` column; carries no code.
+ *   builtin     — first-party op run IN-PROCESS via a governed handler (Tier-0),
+ *                 keyed by the skill `name`; carries no code/spec.
  *
  * Columns absorbed from agent_skills: slug, body, topics, source, author,
  * version, tags. Doc-style skills set kind='instruction' with body populated;
  * executable skills set kind='code' with code populated.
  */
-export type SkillKind = "instruction" | "code" | "provider";
+export type SkillKind = "instruction" | "code" | "declarative" | "builtin";
 /**
- * Declarative spec for a `kind:'provider'` capability verb — a deterministic
+ * Declarative spec for a `kind:'declarative'` capability verb — a deterministic
  * provider HTTP call the POD executes IN-PROCESS via `triggerProviderAction`
  * (no Intelligence Service, no sandbox isolate). The Tier-1 counterpart to a
  * `kind:'code'` skill (which runs untrusted JS in the IS isolate).
@@ -12882,7 +12886,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | undefined;
-				kind?: "code" | "instruction" | undefined;
+				kind?: "code" | "instruction" | "declarative" | "builtin" | undefined;
 				scope?: "user" | "pod" | "workspace" | undefined;
 				status?: "error" | "active" | "inactive" | "all" | undefined;
 				approved?: boolean | undefined;
@@ -12907,7 +12911,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				name: string;
 				workspaceId?: string | undefined;
-				kind?: "code" | "provider" | "instruction" | undefined;
+				kind?: "code" | "instruction" | "declarative" | "builtin" | undefined;
 				scope?: "user" | "pod" | "workspace" | undefined;
 				agentTypes?: string[] | undefined;
 				description?: string | undefined;
@@ -12933,7 +12937,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		update: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
-				kind?: "code" | "instruction" | undefined;
+				kind?: "code" | "instruction" | "declarative" | "builtin" | undefined;
 				scope?: "user" | "pod" | "workspace" | undefined;
 				agentTypes?: string[] | null | undefined;
 				name?: string | undefined;
