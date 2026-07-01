@@ -533,12 +533,14 @@ export async function executeMCPToolViaHubProtocol(
       // list (slug + name), not full definitions. Orient is a lens map, not a
       // schema dump; drill into a workspace's full profiles on demand via
       // synap_list_profiles(workspaceId).
+      // listProfiles returns { profiles: [...] } — NOT a bare array (matches the
+      // synap_ask handler's destructure). Take .profiles, then trim to slug+name.
       const firstWsId = wsIds[0];
-      const profilesRaw = firstWsId
+      const profilesRes = firstWsId
         ? await caller.profiles.listProfiles({ userId, workspaceId: firstWsId })
-        : [];
+        : { profiles: [] };
       const profiles = (
-        profilesRaw as Array<{ slug?: string; name?: string }>
+        (profilesRes.profiles ?? []) as Array<{ slug?: string; name?: string }>
       ).map((p) => ({ slug: p.slug, name: p.name }));
       // Fetch projects for the user. Annotate each with its home workspace
       // name (in-memory join, no extra query) so composition is visible.
