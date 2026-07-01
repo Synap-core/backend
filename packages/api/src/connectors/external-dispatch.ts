@@ -791,11 +791,18 @@ async function vaultDelegatedHandler(ctx: {
   input: TriggerProviderActionInput;
   tool: ToolRow;
   vaultId: string;
-  secretRow: { userId: string; providerIntegrationId: string };
+  secretRow: {
+    userId: string;
+    providerIntegrationId: string;
+    accountHint?: string | null;
+  };
   providerIntegrationId: string;
 }): Promise<TriggerProviderActionResult> {
   const { input } = ctx;
-  const { userId, method, path, body, accountHint, baseUrlOverride } = input;
+  const { userId, method, path, body, baseUrlOverride } = input;
+  // The connection row's OWN account_hint (which Nango connection it represents)
+  // is authoritative for the 1-of-N pick; fall back to a caller-supplied hint.
+  const accountHint = ctx.secretRow.accountHint ?? input.accountHint;
 
   // Resolve the provider integration + its parent provider.
   const integration = await db.query.providerIntegrations.findFirst({
@@ -923,7 +930,7 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   // vault-direct (API key injection) and provider-delegated (Nango proxy, etc.).
   const secretRow = await db.query.secrets.findFirst({
     where: eq(secrets.id, vaultId),
-    columns: { userId: true, providerIntegrationId: true },
+    columns: { userId: true, providerIntegrationId: true, accountHint: true },
   });
   if (!secretRow) {
     return {
@@ -935,7 +942,9 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   }
 
   // If this secret is linked to a provider integration, delegate to the
-  // provider's credential handler instead of vault-direct injection.
+  // provider's credential handler instead of vault-direct injection. The row's
+  // own `account_hint` (which Nango connection this connection row represents)
+  // is carried through so a 1-of-N account pick pins the RIGHT connection.
   if (secretRow.providerIntegrationId) {
     return vaultDelegatedHandler({
       input,
@@ -944,6 +953,7 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
       secretRow: {
         ...secretRow,
         providerIntegrationId: secretRow.providerIntegrationId!,
+        accountHint: secretRow.accountHint ?? null,
       },
       providerIntegrationId: secretRow.providerIntegrationId!,
     });

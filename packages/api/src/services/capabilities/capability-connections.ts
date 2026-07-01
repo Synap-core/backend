@@ -19,6 +19,7 @@ import { encryptServerSide, db, and, eq, isNull, asc } from "@synap/database";
 import { secrets, secretAuditLog } from "@synap/database/schema";
 
 import { requirePodAdmin } from "../../utils/workspace-role.js";
+import { syncNangoConnectionsToRegistry } from "./capability-nango-sync.js";
 
 // ── Public shapes ─────────────────────────────────────────────────────────────
 
@@ -122,6 +123,11 @@ export async function listConnections(
   capabilityId: string,
   actorUserId: string
 ): Promise<CapabilityConnectionView[]> {
+  // Reconcile live Nango OAuth connections into the registry first (backfill +
+  // refresh) so a Nango-backed capability's accounts appear here and become
+  // pickable. Best-effort: a Nango outage must never break the list.
+  await syncNangoConnectionsToRegistry(capabilityId, actorUserId).catch(() => {});
+
   const rows = await db
     .select()
     .from(secrets)
