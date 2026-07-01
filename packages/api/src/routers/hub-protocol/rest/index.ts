@@ -23,6 +23,7 @@ export { registerToolsRoutes } from "./tools.js";
 export { registerCapabilitiesRoutes } from "./capabilities.js";
 export { registerCapabilitiesCatalogRoutes } from "./capabilities-catalog.js";
 export { registerCapabilitiesExecuteRoutes } from "./capabilities-execute.js";
+export { registerCapabilityConnectionsRoutes } from "./capability-connections.js";
 export { registerLoopsRoutes } from "./loops.js";
 export { registerMemoryRoutes } from "./memory.js";
 export { registerKnowledgeRoutes } from "./knowledge.js";

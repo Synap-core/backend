@@ -70,8 +70,84 @@ async function resolveBoundCredentialRef(
     userId: string;
     agentUserId?: string | null;
     subjectId?: string | null;
+    /**
+     * Runtime 1-of-N connection pick (Wave 4). When present it is AUTHORITATIVE —
+     * handled before the static/dynamic authBinding logic. A selector that
+     * matches nothing THROWS (never silently falls back to a shared/default cred).
+     */
+    connectionSelector?: ConnectionSelector | null;
   }
 ): Promise<string> {
+  // ── Runtime connection selector (Wave 4) ────────────────────────────────────
+  // An explicit connection chosen at the execute door outranks the tool's own
+  // authBinding. `connectionId` picks a specific connection (verified to be THIS
+  // capability's, owned by the actor, live); `contextObjectId` picks the
+  // capability's connection bound to that context object. Nothing matches → throw.
+  const selector = ctx.connectionSelector;
+  if (selector && (selector.connectionId || selector.contextObjectId)) {
+    // Resolve THIS tool's owning capability (member_of edge → capability uuid).
+    const [capEdge] = await db
+      .select({ capabilityId: links.toId })
+      .from(links)
+      .where(
+        and(
+          eq(links.fromType, "tool"),
+          eq(links.fromId, tool.id),
+          eq(links.linkType, "member_of"),
+          eq(links.toType, "capability")
+        )
+      )
+      .limit(1);
+    if (!capEdge) {
+      throw new Error(
+        `Tool "${tool.name}" is not part of a capability; a connection selector cannot be resolved.`
+      );
+    }
+
+    if (selector.connectionId) {
+      // The selected secret must be THIS capability's connection, owned by the
+      // actor, and not deleted — else a caller could point the dispatcher at an
+      // unrelated / another user's secret and have it decrypted under this tool.
+      const [row] = await db
+        .select({ id: secrets.id })
+        .from(secrets)
+        .where(
+          and(
+            eq(secrets.id, selector.connectionId),
+            eq(secrets.capabilityId, capEdge.capabilityId),
+            eq(secrets.userId, ctx.userId),
+            isNull(secrets.deletedAt)
+          )
+        )
+        .limit(1);
+      if (!row) {
+        throw new Error(
+          `Connection "${selector.connectionId}" is not a valid connection for "${tool.name}".`
+        );
+      }
+      return `vault://${row.id}`;
+    }
+
+    // contextObjectId → the capability's connection bound to that context object.
+    const [row] = await db
+      .select({ id: secrets.id })
+      .from(secrets)
+      .where(
+        and(
+          eq(secrets.capabilityId, capEdge.capabilityId),
+          eq(secrets.contextId, selector.contextObjectId!),
+          isNull(secrets.deletedAt)
+        )
+      )
+      .limit(1);
+    if (!row) {
+      throw new Error(
+        `No connection bound to context object "${selector.contextObjectId}" for "${tool.name}".`
+      );
+    }
+    return `vault://${row.id}`;
+  }
+
   const binding = tool.authBinding ?? "static";
   if (binding === "static") {
     if (!tool.credentialRef)
@@ -455,6 +531,17 @@ async function gateMessagingSend(
 // resolves the user's connection via Nango, and forwards through the generic
 // `connector.proxyRequest(...)` — no per-provider branches in either caller.
 
+/**
+ * Runtime 1-of-N connection selection (Wave 4). Picks which of a capability's
+ * connections a call uses: `connectionId` = a specific connection (secrets row);
+ * `contextObjectId` = the connection bound to that context object (`context_id`).
+ * Optional everywhere — absent → existing (default/authBinding) behavior.
+ */
+export interface ConnectionSelector {
+  connectionId?: string;
+  contextObjectId?: string;
+}
+
 export interface TriggerProviderActionInput {
   /** The user whose connection to resolve (Nango end_user_id). */
   userId: string;
@@ -515,6 +602,13 @@ export interface TriggerProviderActionInput {
    * subject-bound run.
    */
   subjectId?: string | null;
+  /**
+   * Runtime 1-of-N connection selector (Wave 4). When present, the effective
+   * credential is resolved from the chosen connection instead of the tool's
+   * static/authBinding credential. A selector that matches nothing THROWS
+   * (surfaced as a 400) — never a silent fallback. Absent → behavior unchanged.
+   */
+  connectionSelector?: ConnectionSelector | null;
   /**
    * BYPASS CONTRACT (Wave 3a/3b): set ONLY by the `capability/run` proposal
    * executor (and the auto `run` decision re-entry). When `true`, the
@@ -1381,12 +1475,19 @@ export async function triggerProviderAction(
   // A non-static tool resolves its credential per the acting user/agent or the
   // run's subject entity (a `provides_credential` link). `static` tools keep the
   // ref resolved above, byte-identical. A binding with no bound credential 400s.
-  if ((tool.authBinding ?? "static") !== "static") {
+  // A runtime connection selector ALSO routes through the resolver (even for a
+  // `static` tool) so an explicit 1-of-N pick can override the static credential.
+  const hasConnectionSelector =
+    !!input.connectionSelector &&
+    (!!input.connectionSelector.connectionId ||
+      !!input.connectionSelector.contextObjectId);
+  if ((tool.authBinding ?? "static") !== "static" || hasConnectionSelector) {
     try {
       credentialRef = await resolveBoundCredentialRef(tool, {
         userId: input.userId,
         agentUserId: input.agentUserId ?? null,
         subjectId: input.subjectId ?? null,
+        connectionSelector: input.connectionSelector ?? null,
       });
     } catch (e) {
       return {

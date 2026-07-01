@@ -20,6 +20,7 @@ import { db, skills, eq, and, or, isNull } from "@synap/database";
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
 import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
+import type { ConnectionSelector } from "../../connectors/external-dispatch.js";
 import { createPendingProposal } from "../../utils/permission-check.js";
 
 export type ExecuteCapabilityResult =
@@ -41,6 +42,8 @@ export async function executeCapability(input: {
   workspaceId: string | null;
   /** The acting operator (bearer's user). */
   userId: string;
+  /** Runtime 1-of-N connection selector (Wave 4) — passed to a provider verb. */
+  connectionSelector?: ConnectionSelector | null;
 }): Promise<ExecuteCapabilityResult> {
   const { verbId, skillId, parameters, workspaceId, userId } = input;
   if (!verbId && !skillId) {
@@ -131,6 +134,7 @@ export async function executeCapability(input: {
       {
         userId,
         workspaceId: workspaceId ?? undefined,
+        connectionSelector: input.connectionSelector ?? null,
       }
     );
     return { kind: "run", skillId: skillRow.id, result };

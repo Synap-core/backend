@@ -19,7 +19,10 @@
  */
 
 import type { ProviderVerbSpec } from "@synap/database/schema";
-import { triggerProviderAction } from "../../connectors/external-dispatch.js";
+import {
+  triggerProviderAction,
+  type ConnectionSelector,
+} from "../../connectors/external-dispatch.js";
 import { interpolateString, interpolateDeep } from "../_shared/interpolate.js";
 
 type DetailSpec = Omit<ProviderVerbSpec, "tool" | "expand">;
@@ -29,6 +32,8 @@ interface CallCtx {
   workspaceId?: string;
   /** The provider tool name (detail specs inherit the parent's tool). */
   tool: string;
+  /** Runtime 1-of-N connection selection (Wave 4), threaded to the dispatcher. */
+  connectionSelector?: ConnectionSelector | null;
 }
 
 // ── dot-path getter ───────────────────────────────────────────────────────────
@@ -236,6 +241,7 @@ async function executeSingleCall(
     baseUrlOverride: spec.baseUrlOverride,
     headers: spec.headers,
     workspaceId: ctx.workspaceId,
+    connectionSelector: ctx.connectionSelector,
     // Skill-level gate already ran in executeCapability → skip the tool gate so
     // this Tier-1 dispatch does not double-propose (same contract as Door-2).
     alreadyApproved: true,
@@ -300,12 +306,17 @@ async function runExpand(
 export async function executeProviderVerb(
   spec: ProviderVerbSpec,
   parameters: Record<string, unknown> | undefined,
-  opts: { userId: string; workspaceId?: string }
+  opts: {
+    userId: string;
+    workspaceId?: string;
+    connectionSelector?: ConnectionSelector | null;
+  }
 ): Promise<unknown> {
   const ctx: CallCtx = {
     userId: opts.userId,
     workspaceId: opts.workspaceId,
     tool: spec.tool,
+    connectionSelector: opts.connectionSelector ?? null,
   };
 
   const outcome = await executeSingleCall(spec, parameters ?? {}, ctx);

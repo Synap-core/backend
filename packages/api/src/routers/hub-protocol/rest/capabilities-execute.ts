@@ -48,6 +48,15 @@ const ExecuteCapabilityRequestSchema = z
     /** Acting workspace — OPTIONAL lens that narrows the skill lookup + the gate.
      * Omit for a pod-wide run; a `propose` then routes to the user's pod-wide queue. */
     workspaceId: z.string().uuid().optional(),
+    /** Runtime 1-of-N connection selector (Wave 4) — pick which of the capability's
+     * connections this run uses. `connectionId` = a specific connection; `contextObjectId`
+     * = the connection bound to that context object. A selector matching nothing fails the run. */
+    connectionSelector: z
+      .object({
+        connectionId: z.string().optional(),
+        contextObjectId: z.string().optional(),
+      })
+      .optional(),
   })
   .refine((b) => !!b.verbId || !!b.skillId, {
     message: "Either verbId or skillId is required",
@@ -118,7 +127,8 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
       );
     }
 
-    const { verbId, skillId, parameters, workspaceId } = body;
+    const { verbId, skillId, parameters, workspaceId, connectionSelector } =
+      body;
 
     const acting = await resolveActingContext(c, { workspaceId });
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
@@ -132,6 +142,7 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
         parameters,
         workspaceId: acting.workspaceId,
         userId,
+        connectionSelector,
       });
 
       switch (outcome.kind) {
