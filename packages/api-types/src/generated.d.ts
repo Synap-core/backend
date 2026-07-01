@@ -4142,6 +4142,15 @@ export interface CapabilityCardVerb {
 	 */
 	paramsSchema: CapabilityCardVerbParam[];
 }
+/** A template's INSTALL parameter — what the caller supplies to `apply` it. */
+export interface CapabilityCardInstallParam {
+	name: string;
+	label?: string;
+	type?: string;
+	required?: boolean;
+	description?: string;
+	secret?: boolean;
+}
 export interface CapabilityCard {
 	/** Container id; null for an available-only template. */
 	id: string | null;
@@ -4165,6 +4174,13 @@ export interface CapabilityCard {
 		skills: string[];
 		credential?: string;
 	};
+	/**
+	 * The template's INSTALL params — what the caller must supply to apply it (e.g.
+	 * a vault credential, a baseUrl). Surfaced so the CLI can prompt for them and
+	 * apply WITH params (which wires the credential into the tool), instead of a
+	 * disconnected post-hoc vault write. Empty when the template declares none.
+	 */
+	installParams: CapabilityCardInstallParam[];
 	nextAction: {
 		kind: "add" | "connect" | "enable" | "run" | "none";
 		hint: string;
