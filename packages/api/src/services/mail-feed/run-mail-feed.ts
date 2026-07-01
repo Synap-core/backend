@@ -40,6 +40,8 @@ export interface MailFeedConfig {
   mutedCategories?: string[];
   /** High-water mark — emails at/older than this (ms) are skipped. */
   lastProcessedMs?: number;
+  /** Optional: pin the feed to a specific Google connection (1-of-N). Absent → the install-default connection. */
+  connectionId?: string;
 }
 
 interface DiscordToolMetadata {
@@ -253,6 +255,9 @@ export async function runMailFeed(): Promise<RunMailFeedResult> {
     },
     userId: owner,
     workspaceId,
+    connectionSelector: mailFeed.connectionId
+      ? { connectionId: mailFeed.connectionId }
+      : undefined,
   });
 
   if (cap.kind !== "run") {

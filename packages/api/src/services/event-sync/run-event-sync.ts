@@ -56,6 +56,8 @@ export interface EventSyncConfig {
   announceChannelId?: string;
   /** Dedup map: sourceKey → created Discord scheduled-event id. */
   synced?: Record<string, string>;
+  /** Optional: pin the event sync to a specific Google connection (1-of-N). Absent → the install-default connection. */
+  connectionId?: string;
 }
 
 interface DiscordToolMetadata {
@@ -286,7 +288,8 @@ async function fetchEntityEvents(
 /** Source C — Google Calendar via the `calendar_list` capability. */
 async function fetchCalendarEvents(
   owner: string,
-  workspaceId: string | null
+  workspaceId: string | null,
+  connectionId: string | null | undefined
 ): Promise<UpcomingEvent[]> {
   // maxResults at the verb's clamp ceiling (50) to reduce the chance an in-window
   // event is missed — the synced dedup map is rebuilt from each fetch, so an
@@ -296,6 +299,7 @@ async function fetchCalendarEvents(
     parameters: { timeMin: "@now", maxResults: 50 },
     userId: owner,
     workspaceId,
+    connectionSelector: connectionId ? { connectionId } : undefined,
   });
 
   if (cap.kind !== "run") {
@@ -367,7 +371,9 @@ export async function runEventSync(): Promise<RunEventSyncResult> {
   const events: UpcomingEvent[] = [];
   events.push(...(await fetchEntityEvents(windowDays, sources)));
   if (sources.includes("calendar")) {
-    events.push(...(await fetchCalendarEvents(owner, workspaceId)));
+    events.push(
+      ...(await fetchCalendarEvents(owner, workspaceId, eventSync.connectionId))
+    );
   }
 
   const now = Date.now();

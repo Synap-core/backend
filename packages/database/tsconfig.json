@@ -3,6 +3,15 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
+    // TEMPORARY (2026-07): `discord-rest.ts` is the first file in the data layer
+    // to use global `fetch`/`Response`. Under pnpm's symlinked layout + this
+    // package's `preserveSymlinks`, the Docker builder can't resolve those types
+    // from @types/node (works locally only because pnpm also hoists @types/node
+    // to the repo root). DOM lib supplies `Response`/`fetch` from TypeScript's
+    // built-in lib, needing zero node_modules resolution. REMOVE this when Discord
+    // egress moves out of the backend to the bridge (see capture-flow-centralized
+    // follow-up: "bridge = sole Discord egress") — the data layer must not do I/O.
+    "lib": ["ES2022", "DOM"],
     "skipLibCheck": true,
     "declaration": true,
     "preserveSymlinks": true,
