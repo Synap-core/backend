@@ -324,7 +324,7 @@ export const tools = {
       {
         name: "synap_orient",
         description:
-          "Returns a lightweight LENS MAP — your identity, projects (companies/initiatives), workspaces (operational domains: Foundation, CRM, Marketing, Finance…), and a profile sample. Call first in every session. Projects and workspaces compose: a project spans workspaces; a workspace can span projects. Drill into a workspace's full profiles via synap_list_profiles.",
+          "Returns a lightweight LENS MAP — your identity, projects (companies/initiatives), workspaces (operational domains), and a profile sample. Call first in every session. Drill into a workspace's full profiles via synap_list_profiles.",
         inputSchema: {
           type: "object",
           properties: {},

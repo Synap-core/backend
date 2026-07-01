@@ -537,35 +537,47 @@ export async function executeMCPToolViaHubProtocol(
       const profilesRaw = firstWsId
         ? await caller.profiles.listProfiles({ userId, workspaceId: firstWsId })
         : [];
-      const profiles = (profilesRaw as Array<{ slug?: string; name?: string }>).map(
-        (p) => ({ slug: p.slug, name: p.name }),
-      );
-      // Fetch projects for the user
-      const projectRows = await db
-        .select({
-          id: projects.id,
-          name: projects.name,
-          description: projects.description,
-          workspaceId: projects.workspaceId,
-          status: projects.status,
-        })
-        .from(projects)
-        .where(eq(projects.userId, userId));
+      const profiles = (
+        profilesRaw as Array<{ slug?: string; name?: string }>
+      ).map((p) => ({ slug: p.slug, name: p.name }));
+      // Fetch projects for the user. Annotate each with its home workspace
+      // name (in-memory join, no extra query) so composition is visible.
+      const wsNameById = new Map(wsRaw.map((w) => [w.id, w.name]));
+      const projectRows = (
+        await db
+          .select({
+            id: projects.id,
+            name: projects.name,
+            description: projects.description,
+            workspaceId: projects.workspaceId,
+            status: projects.status,
+          })
+          .from(projects)
+          .where(eq(projects.userId, userId))
+      ).map((p) => ({
+        ...p,
+        homeWorkspace: p.workspaceId
+          ? (wsNameById.get(p.workspaceId) ?? null)
+          : null,
+      }));
+      // Note = dynamic + action only. The lens model itself is taught once, in
+      // the synap_behavior prompt — don't re-teach it on every call.
       return ok({
         me: { userId, scopes: apiKeyScopes },
-        // Projects lead: a project is a company/initiative — the lens you
-        // usually enter through. Workspaces are its operational domains.
         projects: projectRows,
         projectCount: projectRows.length,
         workspaces: wsList,
         workspaceCount: wsList.length,
         profiles,
         note:
-          `Lens map: ${projectRows.length} project(s), ${wsList.length} workspace(s). A PROJECT is a company/initiative (the lens you usually enter through); a WORKSPACE is an operational domain (Foundation, CRM, Marketing, Finance…) — how the work is separated. They compose: a project spans workspaces, a workspace can span projects. ` +
+          `Lens map: ${projectRows.length} project(s), ${wsList.length} workspace(s). ` +
           (wsList.length > 1
-            ? `Reads auto-scope across all your workspaces when no workspaceId is given; pass workspaceId to narrow to one domain, projectId to narrow to one project. `
+            ? `Reads auto-scope across all your workspaces; pass workspaceId to narrow to one domain, projectId to one project. `
             : `Tools default to your one workspace; pass projectId on reads/recall to narrow to a project. `) +
-          `If a project clearly lacks an operational domain it needs, offer (once, at the end) to set it up — see the agent-os skill.`,
+          (projectRows.length > 0
+            ? `A project's data can span workspaces — see synap_get_entities(projectId) or the project digest. `
+            : ``) +
+          `If a project clearly lacks an operational domain it needs (and the user hasn't declined it), offer once — see the agent-os skill.`,
       });
     }
 

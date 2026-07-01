@@ -46,16 +46,16 @@ dashboards, and (where relevant) capabilities + playbooks.
 | `brand-library`      | Brand Library      | Brand voice, assets, tokens, components, rules |
 | `crm`                | CRM                | Contacts, companies, deals, pipeline           |
 | `content-os`         | Content OS         | Posts, campaigns, content calendar, brand      |
-| `content-studio`     | Content Studio     | Video/production pipeline                       |
+| `content-studio`     | Content Studio     | Video/production pipeline                      |
 | `marketing-campaign` | Marketing          | Campaigns, leads, channels                     |
 | `project-management` | Project Management | OKRs, projects, sprints, tasks                 |
-| `builder-workspace`  | Builder            | DevPlane + agents — building the product        |
+| `builder-workspace`  | Builder            | DevPlane + agents — building the product       |
 | `dev-dashboard`      | Dev Dashboard      | Services, repos, environments, infrastructure  |
 | `agent-fleet`        | Agent Fleet        | AI agents, skills, providers — the agent fleet |
 | `finance`            | Finance            | Revenue, expenses, runway, invoices            |
 | `legal`              | Legal              | Contracts, entities, compliance, IP            |
 | `hr`                 | People (HR)        | People, roles, hiring, policies                |
-| `operations`        | Operations         | Processes, vendors, assets, SOPs               |
+| `operations`         | Operations         | Processes, vendors, assets, SOPs               |
 | `life-os`            | Second Brain       | Notes, books, goals, knowledge management      |
 | `personal`           | Personal           | Personal knowledge + life management           |
 
@@ -165,8 +165,14 @@ single domain:
 
 1. **Reuse the project** — it already exists; you have its `projectId` from your
    lens (`synap lens`) or `synap_list_projects`. Skip Steps 1–4.
-2. **Provision the one workspace** (Step 5) with that `projectId` so it links.
-3. **Onboard just it** (Step 7) — one focused interview, then summarize.
+2. **Check the spine first.** If the domain you're adding consumes the strategic
+   base — CRM, Marketing, Content, most business domains inherit `strategy`
+   (Foundation) and `brand` (Brand Library) via `sourceRoles` — and the project
+   has **no Foundation/Brand yet**, say so and offer the spine first: "Marketing
+   works best once your Foundation (mission, audience) exists — set that up first,
+   or go straight to Marketing?" Let the user choose; don't silently skip it.
+3. **Provision the one workspace** (Step 5) with that `projectId` so it links.
+4. **Onboard just it** (Step 7) — one focused interview, then summarize.
 
 Don't turn a single-domain add into a full company pitch. They asked for one
 lens; give them that one, linked and onboarded.

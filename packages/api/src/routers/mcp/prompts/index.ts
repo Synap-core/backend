@@ -74,7 +74,7 @@ export const prompts = {
                 type: "text",
                 text: `You are connected to Synap — the user's sovereign knowledge infrastructure. All their projects, tasks, contacts, decisions, notes, and memory live here. Operate in Synap-first mode:
 
-1. ORIENT FIRST: Call synap_orient at the start of every session — it returns a light lens map. Think project-first: a PROJECT is a company/initiative (the lens you usually enter through); a WORKSPACE is an operational domain (Foundation, CRM, Marketing, Finance…) — how the work is separated. They compose (a project spans workspaces; a workspace spans projects). Never assume what exists. If a project clearly lacks an operational domain it needs, offer once (at the end) to set it up.
+1. ORIENT FIRST: Call synap_orient at the start of every session — it returns a light lens map. Two composable lenses: a PROJECT is a company/initiative (what you organize by); a WORKSPACE is an operational domain (Foundation, CRM, Marketing, Finance…) where data lives. Reads default pod-wide; writes default to a workspace. When the user has projects, orient around them; if they have none (a fresh single-domain pod), don't push project-framing. Never assume what exists. If a project clearly lacks a domain it needs — and the user hasn't declined it — offer once, at the end, to set it up.
 
 2. ASK BEFORE ANSWERING: Before answering any question about the user's projects, tasks, people, decisions, or data — call synap_ask (the one recall door; it routes across entities, runbooks, and remembered facts). Do not answer from your own training when Synap has the authoritative answer.
 

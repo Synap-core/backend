@@ -387,10 +387,15 @@ export async function checkPermissionOrPropose(
     channelCapabilities,
   } = opts;
 
-  // 1. Personal resources (no workspace) - implicit ownership
-  if (!workspaceId) {
-    return { granted: true };
-  }
+  // 1. Pod/owner scope (no workspace lens).
+  //
+  // A write with NO workspace is pod-scoped: the authenticated bearer owns the
+  // pod (matches resolveActingContext role:"owner"). We do NOT auto-grant blindly
+  // anymore — the governance ladder below STILL runs so that agent actions are
+  // governed pod-wide (DEFAULT_AUTO_APPROVE whitelist + agent-metadata policy),
+  // instead of silently bypassing review just because no workspace was supplied.
+  // Only the workspace-membership RBAC step is skipped when there is no workspace
+  // (there is no membership to verify at pod scope).
 
   // 1a. Filesystem path blocklist — enforced before any role check.
   // These paths are hard-blocked regardless of user approval or workspace settings.
@@ -420,55 +425,60 @@ export async function checkPermissionOrPropose(
   try {
     const { verifyPermission, eq } = await import("@synap/database");
 
-    const result = await verifyPermission({
-      db,
-      userId: effectiveUserId,
-      workspace: { id: workspaceId },
-      requiredPermission,
-    });
+    // 4. Workspace-membership RBAC — ONLY when a workspace lens is present.
+    // At pod scope (no workspace) the authenticated bearer is the owner, so there
+    // is no membership to verify; agent governance still runs below.
+    if (workspaceId) {
+      const result = await verifyPermission({
+        db,
+        userId: effectiveUserId,
+        workspace: { id: workspaceId },
+        requiredPermission,
+      });
 
-    if (!result.allowed) {
-      // PRODUCT DECISION ("agent asks to join"): an agent actor that is not yet
-      // a member of the workspace does not hard-deny — instead it files a
-      // `workspace.join` proposal the human can approve. Approval materializes a
-      // workspace_members row (see materializer `workspace` case) and the agent
-      // retries the original write. Any OTHER denial (insufficient role for a
-      // member, etc.) still hard-denies. Gated on the membership-miss reason so a
-      // member-but-under-privileged agent is NOT silently escalated to a join.
-      const isMembershipMiss =
-        result.reason === "User is not a member of this workspace";
-      if (isMembershipMiss && agentUserId) {
-        const join = await maybeCreateWorkspaceJoinProposal({
-          agentUserId,
-          requesterUserId: userId,
-          workspaceId,
-          correlationId,
-          threadId,
-          commandRunId,
-          sourceMessageId,
-          sessionId,
-          // Thread the original subject + data so the proposal card shows
-          // WHAT the agent wanted to do (e.g. create a session with goal X).
-          // Without this, every join proposal looks identical — the reviewer
-          // can't tell if the agent wants to create a session, write an entity,
-          // or execute a capability.
-          requestedSubjectType: subjectType,
-          requestedAction: action,
-          requestedData: data,
-        });
-        if (join) return join;
-        // Not an agent user row (defence-in-depth) → fall through to deny.
+      if (!result.allowed) {
+        // PRODUCT DECISION ("agent asks to join"): an agent actor that is not yet
+        // a member of the workspace does not hard-deny — instead it files a
+        // `workspace.join` proposal the human can approve. Approval materializes a
+        // workspace_members row (see materializer `workspace` case) and the agent
+        // retries the original write. Any OTHER denial (insufficient role for a
+        // member, etc.) still hard-denies. Gated on the membership-miss reason so a
+        // member-but-under-privileged agent is NOT silently escalated to a join.
+        const isMembershipMiss =
+          result.reason === "User is not a member of this workspace";
+        if (isMembershipMiss && agentUserId) {
+          const join = await maybeCreateWorkspaceJoinProposal({
+            agentUserId,
+            requesterUserId: userId,
+            workspaceId,
+            correlationId,
+            threadId,
+            commandRunId,
+            sourceMessageId,
+            sessionId,
+            // Thread the original subject + data so the proposal card shows
+            // WHAT the agent wanted to do (e.g. create a session with goal X).
+            // Without this, every join proposal looks identical — the reviewer
+            // can't tell if the agent wants to create a session, write an entity,
+            // or execute a capability.
+            requestedSubjectType: subjectType,
+            requestedAction: action,
+            requestedData: data,
+          });
+          if (join) return join;
+          // Not an agent user row (defence-in-depth) → fall through to deny.
+        }
+        logger.warn(
+          {
+            userId: effectiveUserId,
+            workspaceId,
+            requiredPermission,
+            reason: result.reason,
+          },
+          "Permission denied"
+        );
+        return { denied: true, reason: result.reason || "Permission denied" };
       }
-      logger.warn(
-        {
-          userId: effectiveUserId,
-          workspaceId,
-          requiredPermission,
-          reason: result.reason,
-        },
-        "Permission denied"
-      );
-      return { denied: true, reason: result.reason || "Permission denied" };
     }
 
     // 4b. Untrusted issuer → always propose (after RBAC, before any other policy).
@@ -514,17 +524,21 @@ export async function checkPermissionOrPropose(
         .limit(1);
 
       if (agentUser?.userType === "agent") {
-        // Agent user: permission already verified via role above.
-        // DEFAULT: all agent actions require a proposal.
-        // EXCEPTION: actions listed in autoApproveFor whitelist bypass proposal.
-        const [ws] = await db
-          .select({
-            settings: workspaces.settings,
-            workspaceType: workspaces.workspaceType,
-          })
-          .from(workspaces)
-          .where(eq(workspaces.id, workspaceId))
-          .limit(1);
+        // Agent user: permission already verified via role above (or pod-owner
+        // scope). DEFAULT: all agent actions require a proposal. EXCEPTION:
+        // actions in the autoApproveFor whitelist bypass proposal. Workspace
+        // settings are the governance OVERRIDE source; at pod scope (no
+        // workspace) we fall back to agent-metadata + DEFAULT_AUTO_APPROVE.
+        const [ws] = workspaceId
+          ? await db
+              .select({
+                settings: workspaces.settings,
+                workspaceType: workspaces.workspaceType,
+              })
+              .from(workspaces)
+              .where(eq(workspaces.id, workspaceId))
+              .limit(1)
+          : [undefined];
 
         const settings = ws?.settings as WorkspaceSettings | undefined;
         const isAgentOwnedWorkspace =
@@ -651,11 +665,13 @@ export async function checkPermissionOrPropose(
     // Legacy AI source path (no agent user row, but caller signals AI-sourced action).
     // Use the legacy aiAutoApprove workspace toggle.
     if (source === "ai" || source === "intelligence") {
-      const [ws] = await db
-        .select({ settings: workspaces.settings })
-        .from(workspaces)
-        .where(eq(workspaces.id, workspaceId))
-        .limit(1);
+      const [ws] = workspaceId
+        ? await db
+            .select({ settings: workspaces.settings })
+            .from(workspaces)
+            .where(eq(workspaces.id, workspaceId))
+            .limit(1)
+        : [undefined];
 
       const settings = ws?.settings as WorkspaceSettings | undefined;
       const aiAutoApprove =
@@ -900,7 +916,7 @@ export async function createPendingProposal(
 async function createProposal(opts: {
   userId: string;
   agentUserId?: string;
-  workspaceId: string;
+  workspaceId: string | null | undefined;
   subjectType: string;
   action: string;
   source?: string;
@@ -1004,7 +1020,7 @@ async function createProposal(opts: {
       requestId: randomUUID(),
       source: (source || "intelligence") as RequestShapedProposalData["source"],
       sourceId: userId,
-      workspaceId,
+      workspaceId: workspaceId ?? null,
       targetType: singularType as RequestShapedProposalData["targetType"],
       targetId,
       ...(targetName ? { targetName } : {}),
@@ -1020,7 +1036,7 @@ async function createProposal(opts: {
 
     const pendingInput: CreatePendingProposalInput = {
       userId,
-      workspaceId,
+      workspaceId: workspaceId ?? null,
       targetType: singularType,
       targetId,
       proposalType: action,

@@ -37,7 +37,7 @@ just a lens; a project is a cross-cutting lens; they compose. You onboard when
 ## 1. Detect emptiness THROUGH THE ACTIVE LENS
 
 ```
-synap orient    # shows active workspace + active project + their onboarding hints
+synap orient --details    # projects + workspaces, with each workspace's onboarding hint (empty ones)
 ```
 
 Figure out the active lens (workspace, project, or both — `synap lens`), then

@@ -75,8 +75,14 @@ async function buildGrounding(userId: string): Promise<string | undefined> {
     const wsPart =
       names.length === 1
         ? `Workspaces (operational domains): ${names[0]}`
-        : `Workspaces (operational domains): ${names.join(", ")}`;
-    return `${projPart}${wsPart}. A project spans workspaces; a workspace spans projects. Omit workspaceId for pod-wide recall, or pass one to scope.`;
+        : names.length <= 8
+          ? `Workspaces (operational domains): ${names.join(", ")}`
+          : `${names.length} workspaces (operational domains)`;
+    const compose =
+      projNames.length > 0
+        ? " Projects organize; workspaces hold the data."
+        : "";
+    return `${projPart}${wsPart}.${compose} Omit workspaceId for pod-wide recall, or pass one to scope.`;
   } catch {
     return undefined;
   }
