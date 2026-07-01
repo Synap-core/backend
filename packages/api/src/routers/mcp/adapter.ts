@@ -540,8 +540,12 @@ export async function executeMCPToolViaHubProtocol(
         ? await caller.profiles.listProfiles({ userId, workspaceId: firstWsId })
         : { profiles: [] };
       const profiles = (
-        (profilesRes.profiles ?? []) as Array<{ slug?: string; name?: string }>
-      ).map((p) => ({ slug: p.slug, name: p.name }));
+        (profilesRes.profiles ?? []) as Array<{
+          slug?: string;
+          name?: string;
+          displayName?: string;
+        }>
+      ).map((p) => ({ slug: p.slug, name: p.displayName ?? p.name ?? p.slug }));
       // Fetch projects for the user. Annotate each with its home workspace
       // name (in-memory join, no extra query) so composition is visible.
       const wsNameById = new Map(wsRaw.map((w) => [w.id, w.name]));
