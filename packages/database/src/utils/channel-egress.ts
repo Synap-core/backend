@@ -7,8 +7,6 @@
  *   - NO network I/O.
  *   - Imports NOTHING provider-specific.
  * Keeping the data layer clean is the whole point of the egress migration.
- *
- * Nothing calls this yet — Wave A infra only.
  */
 
 import { getDb } from "../client-pg.js";

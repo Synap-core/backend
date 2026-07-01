@@ -393,7 +393,7 @@ export const capabilitiesRouter = router({
    * dry-run executor (`POST {IS}/api/skills/:id/dry-run`) — the SAME contract the
    * Hub REST `/skills/:id/dry-run` door uses (external writes stubbed, reads real).
    *
-   * Provider verbs (`kind:"provider"`) are declarative in-process executors with
+   * Declarative verbs (`kind:"declarative"`) are in-process executors with
    * no isolate sandbox, so there is no dry-run path — we return a clear
    * "not available" result rather than executing them.
    */
@@ -428,12 +428,12 @@ export const capabilitiesRouter = router({
         };
       }
 
-      // Declarative provider verbs run in-process — no isolate dry-run sandbox.
-      if (skillRow.kind === "provider") {
+      // Declarative verbs run in-process — no isolate dry-run sandbox.
+      if (skillRow.kind === "declarative") {
         return {
           kind: "dry-run-unavailable" as const,
           skillId: skillRow.id,
-          message: "Dry-run not available for provider verbs.",
+          message: "Dry-run not available for declarative verbs.",
         };
       }
 

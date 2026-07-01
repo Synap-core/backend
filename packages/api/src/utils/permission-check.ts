@@ -447,6 +447,39 @@ export async function checkPermissionOrPropose(
         const isMembershipMiss =
           result.reason === "User is not a member of this workspace";
         if (isMembershipMiss && agentUserId) {
+          // A non-member agent's CONTENT write (entity/relation/document) must
+          // NOT be routed into a contentless `workspace.join` proposal. The join
+          // path dedupes many distinct writes into ONE join proposal and DROPS
+          // the payload — the join grants membership but never replays the
+          // writes, so the content is lost. Instead, record a normal
+          // content-carrying governance proposal: it preserves the full payload
+          // and materializes on owner approval (materialization runs with the
+          // APPROVER's authority — a member — so the agent's non-membership is
+          // irrelevant at materialize time). Non-content subject types (e.g.
+          // focus_session) keep the join flow, where joining is the actual goal.
+          const isContentWrite =
+            subjectType === "entity" ||
+            subjectType === "relation" ||
+            subjectType === "document";
+          if (isContentWrite) {
+            return createProposal({
+              userId,
+              agentUserId,
+              workspaceId,
+              subjectType,
+              action,
+              source,
+              data,
+              correlationId,
+              requestedEventId,
+              reasoning: opts.reasoning,
+              threadId,
+              commandRunId,
+              sourceMessageId,
+              sessionId,
+              projectId,
+            });
+          }
           const join = await maybeCreateWorkspaceJoinProposal({
             agentUserId,
             requesterUserId: userId,

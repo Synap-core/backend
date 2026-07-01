@@ -20,6 +20,7 @@ import { db, skills, eq, and, or, isNull } from "@synap/database";
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
 import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
+import { BUILTIN_VERBS } from "./builtin-verbs.js";
 import type { ConnectionSelector } from "../../connectors/external-dispatch.js";
 import { createPendingProposal } from "../../utils/permission-check.js";
 
@@ -58,6 +59,7 @@ export async function executeCapability(input: {
   const [skillRow] = await db
     .select({
       id: skills.id,
+      name: skills.name,
       approved: skills.approved,
       userId: skills.userId,
       kind: skills.kind,
@@ -115,36 +117,91 @@ export async function executeCapability(input: {
         verbId: verbId ?? null,
         parameters: parameters ?? {},
         workspaceId,
+        // Carry the 1-of-N connection selector so an APPROVED run resolves the
+        // same connection the original call intended (see runResolvedSkill).
+        connectionSelector: input.connectionSelector ?? null,
       },
       notificationDescription: `Run capability ${verbId ?? skillRow.id}`,
     });
     return { kind: "proposed", proposalId: proposal.id };
   }
 
-  // decision === "run" → execute the backing skill.
-  //
-  // TIER 1 (provider verb): a `kind:'provider'` skill is a DECLARATIVE spec the
-  // pod runs IN-PROCESS via triggerProviderAction — no IS, no isolate. The
-  // skill-level gate above already ran; the engine passes `alreadyApproved:true`
-  // so the tool gate does not double-propose.
-  if (skillRow.kind === "provider" && skillRow.providerSpec) {
-    const result = await executeProviderVerb(
-      skillRow.providerSpec,
-      parameters,
-      {
-        userId,
-        workspaceId: workspaceId ?? undefined,
-        connectionSelector: input.connectionSelector ?? null,
-      }
-    );
-    return { kind: "run", skillId: skillRow.id, result };
+  // decision === "run" → execute through the SINGLE post-gate runner (shared with
+  // the capability.run proposal replay), so the door and an approved proposal can
+  // never diverge on kind-routing.
+  return runResolvedSkill(skillRow, parameters, {
+    userId,
+    workspaceId,
+    connectionSelector: input.connectionSelector ?? null,
+  });
+}
+
+/** The gate-approved skill row shape `runResolvedSkill` operates on. */
+export interface ResolvedSkillRow {
+  id: string;
+  name: string;
+  kind: string | null;
+  providerSpec: Parameters<typeof executeProviderVerb>[0] | null;
+}
+
+/**
+ * The SINGLE post-gate execution branch: given a gate-approved skill row, run it
+ * by kind. Called by BOTH executeCapability (the door) AND the `capability.run`
+ * proposal replay (proposals/approve-executors), so an approved proposal can
+ * never diverge from the door's routing — the kind-branch has exactly one home.
+ *   TIER 0 builtin      → governed in-process handler (BUILTIN_VERBS)
+ *   TIER 1 declarative  → executeProviderVerb (connection-aware, in-process)
+ *   TIER 2 code/instr.  → the IS isolate
+ */
+export async function runResolvedSkill(
+  skill: ResolvedSkillRow,
+  parameters: Record<string, unknown> | undefined,
+  ctx: {
+    userId: string;
+    workspaceId: string | null;
+    connectionSelector?: ConnectionSelector | null;
+  }
+): Promise<
+  | { kind: "run"; skillId: string; result: unknown }
+  | { kind: "not_found"; message: string }
+> {
+  if (skill.kind === "builtin") {
+    const handler = BUILTIN_VERBS[skill.name];
+    if (!handler) {
+      return {
+        kind: "not_found",
+        message: `No builtin handler registered for verb "${skill.name}".`,
+      };
+    }
+    const result = await handler(parameters ?? {}, {
+      userId: ctx.userId,
+      workspaceId: ctx.workspaceId,
+    });
+    return { kind: "run", skillId: skill.id, result };
+  }
+
+  if (skill.kind === "declarative") {
+    // A declarative verb with no providerSpec is malformed — fail explicitly
+    // rather than falling through to the IS isolate (which has no code to run).
+    if (!skill.providerSpec) {
+      return {
+        kind: "not_found",
+        message: `Declarative verb "${skill.name}" is missing its providerSpec.`,
+      };
+    }
+    const result = await executeProviderVerb(skill.providerSpec, parameters, {
+      userId: ctx.userId,
+      workspaceId: ctx.workspaceId ?? undefined,
+      connectionSelector: ctx.connectionSelector ?? null,
+    });
+    return { kind: "run", skillId: skill.id, result };
   }
 
   // TIER 2 (code/instruction): execute the backing skill in the IS sandbox.
   const result = await executeSkillViaIS({
-    skillId: skillRow.id,
-    userId,
+    skillId: skill.id,
+    userId: ctx.userId,
     parameters,
   });
-  return { kind: "run", skillId: skillRow.id, result };
+  return { kind: "run", skillId: skill.id, result };
 }

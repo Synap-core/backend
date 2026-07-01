@@ -9,7 +9,7 @@
  *
  * Deliberately provider-agnostic: no Discord specifics in column names.
  * `externalSource` names the system ('discord', …) and `externalId` names the
- * target within it (a channel id). Nothing enqueues yet — Wave A infra only.
+ * target within it (a channel id).
  */
 
 import {

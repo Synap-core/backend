@@ -189,6 +189,77 @@ export function registerPackagesRoutes(app: HubHono): void {
       );
     }
 
+    // ── Step 1b: Enroll the acting agent as a member of the workspace it just
+    // provisioned ─────────────────────────────────────────────────────────
+    // The hub key resolves to userId = the human owner (linkedUserId) and
+    // agentUserId = the agent user (key owner). createWorkspaceFromDefinition
+    // adds ONLY the human as owner/admin — the agent gets no member row. Without
+    // this, the agent's immediate onboarding writes (POST /api/hub/entities)
+    // fail the workspace-membership RBAC in checkPermissionOrPropose, which
+    // routes every write into a single deduped, contentless `workspace.join`
+    // proposal and DROPS the entity content. Enrolling the agent here (idempotent)
+    // lets those writes flow through as normal per-entity governance proposals.
+    //
+    // Role mirrors the canonical agent-membership logic (channels.ts): "owner"
+    // in agent-governed workspaces, "editor" elsewhere.
+    //
+    // SECURITY: only enrolls into the brand-new workspace this agent just
+    // provisioned for its own linked operator (userId owns it) — never a
+    // pre-existing workspace, so it can never broaden access. agentUserId is the
+    // authenticated key owner (set by the hub auth middleware), and we re-verify
+    // it is a real agent user before inserting.
+    if (agentUserId && workspaceId) {
+      try {
+        const { db, users, workspaces, workspaceMembers, eq, and } =
+          await import("@synap/database");
+        const [agentRow] = await db
+          .select({ userType: users.userType })
+          .from(users)
+          .where(eq(users.id, agentUserId))
+          .limit(1);
+        if (agentRow?.userType === "agent") {
+          // Idempotency via an explicit existence check — workspace_members has
+          // NO unique constraint on (workspace_id, user_id), so onConflictDoNothing
+          // would not dedup and a re-apply would insert a duplicate member row.
+          // This mirrors the canonical agent-membership guard in channels.ts.
+          const [existing] = await db
+            .select({ id: workspaceMembers.id })
+            .from(workspaceMembers)
+            .where(
+              and(
+                eq(workspaceMembers.workspaceId, workspaceId),
+                eq(workspaceMembers.userId, agentUserId)
+              )
+            )
+            .limit(1);
+          if (existing) {
+            result.agentMembership = { status: "already-member" };
+          } else {
+            const [ws] = await db
+              .select({ settings: workspaces.settings })
+              .from(workspaces)
+              .where(eq(workspaces.id, workspaceId))
+              .limit(1);
+            const governanceMode = (
+              ws?.settings as { governanceMode?: string } | undefined
+            )?.governanceMode;
+            const role = governanceMode === "agent-owned" ? "owner" : "editor";
+            await db
+              .insert(workspaceMembers)
+              .values({ workspaceId, userId: agentUserId, role });
+            result.agentMembership = { status: "enrolled", role };
+          }
+        }
+      } catch (e) {
+        // Non-fatal: onboarding writes will fall back to join proposals, but the
+        // workspace itself was created successfully.
+        result.agentMembership = {
+          status: "error",
+          message: (e as Error).message,
+        };
+      }
+    }
+
     const ctx = await createHubProtocolCallerContext(
       userId,
       c.get("scopes") ?? [],

@@ -395,7 +395,7 @@ export interface CapabilityToolDef {
 }
 
 /**
- * Declarative spec for a `kind:'provider'` capability verb — a deterministic
+ * Declarative spec for a `kind:'declarative'` capability verb — a deterministic
  * provider HTTP call the POD executes IN-PROCESS via `triggerProviderAction`
  * (Tier-1: no Intelligence Service, no sandbox isolate). The canonical copy of
  * this contract; `@synap/database`'s `ProviderVerbSpec` mirrors it (re-declared
@@ -455,18 +455,20 @@ export interface CapabilitySkillDef {
   name: string;
   /**
    * instruction — prompt text · code — JS run in the IS isolate (Tier-2) ·
-   * provider — declarative verb run in-process on the pod (Tier-1).
+   * declarative — provider-verb spec run in-process on the pod (Tier-1) ·
+   * builtin — first-party op run in-process via a governed handler (Tier-0).
    */
-  kind?: "instruction" | "code" | "provider";
+  kind?: "instruction" | "code" | "declarative" | "builtin";
   scope?: "pod" | "user" | "workspace";
   agentTypes?: string[];
   description?: string;
   /**
    * Executable source (kind="code") or instruction text (kind="instruction").
-   * Optional — a `kind:'provider'` skill carries `providerSpec` instead.
+   * Optional — a `kind:'declarative'` skill carries `providerSpec` instead, and
+   * a `kind:'builtin'` skill carries neither (its name resolves to a handler).
    */
   code?: string;
-  /** Declarative provider-verb spec (kind="provider"). */
+  /** Declarative provider-verb spec (kind="declarative"). */
   providerSpec?: ProviderVerbSpec;
   parameters?: Record<string, unknown>;
   category?: string;

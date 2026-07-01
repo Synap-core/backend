@@ -45,8 +45,9 @@ import {
 
 const CreateSkillRequestSchema = z.object({
   name: z.string().min(1).max(255),
-  /** instruction = prompt-injected know-how; code = sandbox-executed. */
-  kind: z.enum(["instruction", "code"]).optional(),
+  /** instruction = prompt-injected know-how; code = sandbox-executed;
+   *  declarative = in-process provider-verb; builtin = in-process handler. */
+  kind: z.enum(["instruction", "code", "declarative", "builtin"]).optional(),
   scope: z.enum(["pod", "user", "workspace"]).optional(),
   agentTypes: z.array(z.string()).optional(),
   description: z.string().optional(),
@@ -142,7 +143,9 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
     request: {
       query: z.object({
         workspaceId: z.string().uuid().optional(),
-        kind: z.enum(["instruction", "code"]).optional(),
+        kind: z
+          .enum(["instruction", "code", "declarative", "builtin"])
+          .optional(),
         scope: z.enum(["pod", "user", "workspace"]).optional(),
         status: z.enum(["active", "inactive", "error", "all"]).optional(),
         limit: z.string().optional(),

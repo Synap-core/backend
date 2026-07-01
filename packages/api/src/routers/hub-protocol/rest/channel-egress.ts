@@ -13,9 +13,25 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { db, channelEgress, eq, and, asc, drizzleSql } from "@synap/database";
+import {
+  db,
+  channelEgress,
+  eq,
+  and,
+  or,
+  lt,
+  asc,
+  drizzleSql,
+} from "@synap/database";
 
 import { hasScope, logger, type HubHono } from "./_shared.js";
+
+// A `failed` row is RETRIABLE until it has been attempted this many times, then it
+// is dead-lettered (stays `failed`, no longer served). Without this, a single
+// transient bridge failure (Discord 5xx / rate-limit / restart mid-sweep) would
+// permanently drop the outbound action. Firewall-dropped rows are acked
+// `delivered`, so they never retry.
+const MAX_EGRESS_ATTEMPTS = 5;
 
 const PendingQuerySchema = z.object({
   externalSource: z.string().min(1),
@@ -62,8 +78,15 @@ export function registerChannelEgressRoutes(app: HubHono): void {
         .from(channelEgress)
         .where(
           and(
-            eq(channelEgress.status, "pending"),
-            eq(channelEgress.externalSource, externalSource)
+            eq(channelEgress.externalSource, externalSource),
+            // `pending`, plus `failed` rows still under the retry ceiling.
+            or(
+              eq(channelEgress.status, "pending"),
+              and(
+                eq(channelEgress.status, "failed"),
+                lt(channelEgress.attempts, MAX_EGRESS_ATTEMPTS)
+              )
+            )
           )
         )
         .orderBy(asc(channelEgress.createdAt))

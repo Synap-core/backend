@@ -108,6 +108,9 @@ ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "user_id" text;
 ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "role" text;
 ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "joined_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "workspace_members" ADD COLUMN IF NOT EXISTS "invited_by" text;
+-- One membership row per (workspace_id, user_id) — see migration 0164.
+CREATE UNIQUE INDEX IF NOT EXISTS "workspace_members_workspace_user_unique"
+  ON "workspace_members" ("workspace_id", "user_id");
 
 CREATE TABLE IF NOT EXISTS "invites" (
   "id"            uuid  PRIMARY KEY DEFAULT gen_random_uuid(),

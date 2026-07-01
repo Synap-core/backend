@@ -7,7 +7,14 @@
  * - Enterprise (advanced features)
  */
 
-import { pgTable, uuid, text, timestamp, jsonb } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  uuid,
+  text,
+  timestamp,
+  jsonb,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { users } from "./users.js";
 
@@ -811,24 +818,35 @@ export const workspaces = pgTable("workspaces", {
   archivedAt: timestamp("archived_at", { mode: "date", withTimezone: true }),
 });
 
-export const workspaceMembers = pgTable("workspace_members", {
-  id: uuid("id").defaultRandom().primaryKey(),
+export const workspaceMembers = pgTable(
+  "workspace_members",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
 
-  // References
-  workspaceId: uuid("workspace_id")
-    .references(() => workspaces.id, { onDelete: "cascade" })
-    .notNull(),
-  userId: text("user_id").notNull(),
+    // References
+    workspaceId: uuid("workspace_id")
+      .references(() => workspaces.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: text("user_id").notNull(),
 
-  // Role-based access
-  role: text("role").notNull(), // 'owner' | 'admin' | 'editor' | 'viewer'
+    // Role-based access
+    role: text("role").notNull(), // 'owner' | 'admin' | 'editor' | 'viewer'
 
-  // Metadata
-  joinedAt: timestamp("joined_at", { mode: "date", withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  invitedBy: text("invited_by"), // userId of inviter
-});
+    // Metadata
+    joinedAt: timestamp("joined_at", { mode: "date", withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    invitedBy: text("invited_by"), // userId of inviter
+  },
+  (table) => ({
+    // One membership row per (workspace, user). Without this, code using
+    // onConflictDoNothing() (e.g. enroll-agent) does NOT actually dedup and can
+    // insert duplicate member rows. See migration 0164.
+    workspaceUserUnique: uniqueIndex(
+      "workspace_members_workspace_user_unique"
+    ).on(table.workspaceId, table.userId),
+  })
+);
 
 export const invites = pgTable("invites", {
   id: uuid("id").defaultRandom().primaryKey(),

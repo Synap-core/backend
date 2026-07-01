@@ -197,7 +197,8 @@ export async function resolveNangoConnector(): Promise<NangoConnector | null> {
  *
  * The `provider` selects the registered messaging TYPE descriptor:
  *   - "stalwart" → self-hosted Stalwart/JMAP (vault `stalwart-connector`)
- *   - "discord"  → server-managed Discord bot (DISCORD_BOT_TOKEN)
+ *   - "discord"  → agnostic egress: enqueues to the channel_egress outbox; the
+ *                  Discord bridge holds the token and delivers (no token here)
  *   - anything else / undefined → Unipile, reading credentials from:
  *       1. Vault (server-encrypted secret with serviceId='messaging-connector')
  *       2. workspace.settings.messaging (set via Settings UI)

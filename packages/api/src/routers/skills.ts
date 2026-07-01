@@ -41,7 +41,9 @@ export const skillsRouter = router({
       z
         .object({
           workspaceId: z.string().uuid().optional(),
-          kind: z.enum(["instruction", "code"]).optional(),
+          kind: z
+            .enum(["instruction", "code", "declarative", "builtin"])
+            .optional(),
           scope: z.enum(["pod", "user", "workspace"]).optional(),
           status: z.enum(["active", "inactive", "error", "all"]).optional(),
           /** When true, return only approved skills (the agent-tool loader uses this). */
@@ -147,8 +149,10 @@ export const skillsRouter = router({
         workspaceId: z.string().uuid().optional(),
         // A skill is Documentation (always) + optional Code. `kind` is derived
         // from whether code is present; still accepted for back-compat.
-        // `provider` = a declarative Tier-1 verb (carries `providerSpec`).
-        kind: z.enum(["instruction", "code", "provider"]).optional(),
+        // `declarative` = a Tier-1 in-process verb (carries `providerSpec`).
+        kind: z
+          .enum(["instruction", "code", "declarative", "builtin"])
+          .optional(),
         scope: z.enum(["pod", "user", "workspace"]).default("pod"),
         agentTypes: z.array(z.string()).optional(),
         name: z.string().min(1).max(255),
@@ -157,7 +161,7 @@ export const skillsRouter = router({
         body: z.string().optional(),
         /** Optional executable — present ⇒ the skill is runnable (sandboxed). */
         code: z.string().optional(),
-        /** Declarative provider-verb spec (kind="provider"). */
+        /** Declarative provider-verb spec (kind="declarative"). */
         providerSpec: z.record(z.string(), z.unknown()).optional(),
         parameters: z.record(z.string(), z.unknown()).optional(),
         category: z.string().optional(),
@@ -173,12 +177,25 @@ export const skillsRouter = router({
       // input.kind still honored). A skill must carry documentation or code.
       const hasCode = !!input.code?.trim();
       const kind = input.kind ?? (hasCode ? "code" : "instruction");
-      // A `provider` skill carries a declarative `providerSpec` instead of
-      // body/code, so it is exempt from the documentation-or-code requirement.
-      if (kind !== "provider" && !input.body?.trim() && !hasCode) {
+      // `declarative` (providerSpec) and `builtin` (in-process handler) carry no
+      // body/code, so they are exempt from the documentation-or-code requirement.
+      if (
+        kind !== "declarative" &&
+        kind !== "builtin" &&
+        !input.body?.trim() &&
+        !hasCode
+      ) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "A skill needs documentation or code.",
+        });
+      }
+      // A declarative verb IS its providerSpec — require it so the skill cannot be
+      // created malformed (a declarative skill with no spec misroutes at run time).
+      if (kind === "declarative" && !input.providerSpec) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "A declarative skill requires a providerSpec.",
         });
       }
 
@@ -266,7 +283,9 @@ export const skillsRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
-        kind: z.enum(["instruction", "code"]).optional(),
+        kind: z
+          .enum(["instruction", "code", "declarative", "builtin"])
+          .optional(),
         scope: z.enum(["pod", "user", "workspace"]).optional(),
         agentTypes: z.array(z.string()).nullable().optional(),
         name: z.string().min(1).max(255).optional(),

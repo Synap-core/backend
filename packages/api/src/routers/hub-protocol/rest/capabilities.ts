@@ -79,15 +79,24 @@ export const ToolDefSchema = z.object({
   credentialRef: z.string().optional(),
   executor: z.enum(["is-agent", "external-agent", "hybrid"]).optional(),
   config: z.record(z.string(), z.unknown()).optional(),
+  // Descriptive behavioral config stored in tool.metadata (the applier passes
+  // t.metadata — omitting it here silently dropped inline-apply tool metadata).
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const SkillDefSchema = z.object({
   name: z.string().min(1),
-  kind: z.enum(["instruction", "code"]).optional(),
+  // Mirrors @synap/playbooks CapabilitySkillDef: instruction (prompt) · code (JS
+  // in the IS isolate) · declarative (in-process provider-verb spec).
+  kind: z.enum(["instruction", "code", "declarative", "builtin"]).optional(),
   scope: z.enum(["pod", "user", "workspace"]).optional(),
   agentTypes: z.array(z.string()).optional(),
   description: z.string().optional(),
-  code: z.string().min(1),
+  // Optional: a `declarative` skill carries `providerSpec` instead of code, and
+  // an `instruction` skill may carry only documentation.
+  code: z.string().min(1).optional(),
+  /** Declarative provider-verb spec (kind="declarative"). */
+  providerSpec: z.record(z.string(), z.unknown()).optional(),
   parameters: z.record(z.string(), z.unknown()).optional(),
   category: z.string().optional(),
   executionMode: z.enum(["sync", "async"]).optional(),
@@ -406,7 +415,12 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       );
 
       const result = await createCapabilityFromDefinition(
-        definition,
+        // Inline defs are structurally validated by CapabilityDefinitionSchema;
+        // `providerSpec` is passed through as opaque JSON (the applier re-casts it
+        // to Record), so a boundary cast to the applier's input type is safe.
+        definition as unknown as Parameters<
+          typeof createCapabilityFromDefinition
+        >[0],
         body.params ?? {},
         ctx
       );

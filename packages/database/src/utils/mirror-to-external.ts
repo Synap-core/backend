@@ -102,6 +102,19 @@ export async function mirrorMessageToBoundExternal(
     return { mirrored: false, reason: "no_external_id" };
   }
 
+  // Only Discord has a bridge that CONSUMES the egress outbox today. Other
+  // externalSource values (telegram/whatsapp/gmail via Unipile) deliver through
+  // the api messaging path, not this fire-and-forget mirror — enqueuing them here
+  // would pile up unconsumed rows and falsely report `mirrored: true`. Restore the
+  // provider guard until each source has its own egress consumer. (The outbox row
+  // shape stays agnostic; only the mirror's set of sources is gated.)
+  if (channel.externalSource !== "discord") {
+    return {
+      mirrored: false,
+      reason: `no_egress_consumer:${channel.externalSource}`,
+    };
+  }
+
   // Enqueue an agnostic `post_message` intent. The bridge delivers it and owns
   // the firewall — it reads `authorType` + `branchPurpose` FACTS to decide.
   await enqueueChannelEgress({

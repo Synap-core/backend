@@ -16,6 +16,7 @@ import { TRPCError } from "@trpc/server";
 import {
   db,
   proposals,
+  skills,
   documents,
   documentVersions,
   eq,
@@ -37,9 +38,10 @@ import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import {
   sendExternalMessage,
   triggerProviderAction,
+  type ConnectionSelector,
 } from "../../connectors/external-dispatch.js";
 import { getMessagingConnector } from "../../connectors/index.js";
-import { executeSkillViaIS } from "../../services/skills/execute-skill-via-is.js";
+import { runResolvedSkill } from "../../services/capabilities/execute-capability.js";
 import type { Context } from "../../context.js";
 import {
   registerProposalExecutor,
@@ -664,7 +666,8 @@ export function registerApproveExecutors(): void {
   // ── capability.run (proposalType-only) — AGNOSTIC CAPABILITY LAST-MILE ───────
   // Re-entry for a `propose` verdict from POST /capabilities/execute (and any
   // other capability launcher): approve → run the backing skill through the SAME
-  // executeSkillViaIS the door uses (ONE wire contract, two doors). The gate
+  // post-gate runResolvedSkill the door uses (ONE kind-branch, two doors) so an
+  // approved declarative/builtin verb routes to its correct tier. The gate
   // already ran when the proposal was created, so this does NOT re-gate.
   // Idempotent: skip if already APPROVED.
   registerProposalExecutor({
@@ -689,11 +692,38 @@ export function registerApproveExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      const runResult = await executeSkillViaIS({
-        skillId,
+      // Route through the SAME post-gate runner the door uses, so an approved
+      // `declarative`/`builtin` verb is executed by its correct tier instead of
+      // being blindly shipped to the IS isolate. Load the row the runner needs.
+      const [skillRow] = await db
+        .select({
+          id: skills.id,
+          name: skills.name,
+          kind: skills.kind,
+          providerSpec: skills.providerSpec,
+        })
+        .from(skills)
+        .where(eq(skills.id, skillId))
+        .limit(1);
+      if (!skillRow) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `capability.run skill "${skillId}" not found`,
+        });
+      }
+      const runOutcome = await runResolvedSkill(skillRow, parameters, {
         userId,
-        parameters,
+        workspaceId: proposal.workspaceId ?? null,
+        connectionSelector:
+          (data.connectionSelector as ConnectionSelector | null) ?? null,
       });
+      if (runOutcome.kind === "not_found") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: runOutcome.message,
+        });
+      }
+      const runResult = runOutcome.result;
 
       const materializedPayload = {
         ...payload,

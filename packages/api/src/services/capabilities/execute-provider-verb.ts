@@ -1,7 +1,7 @@
 /**
  * Provider-verb engine — Tier-1, in-process capability execution.
  *
- * Executes a DECLARATIVE `ProviderVerbSpec` (a `kind:'provider'` skill) directly
+ * Executes a DECLARATIVE `ProviderVerbSpec` (a `kind:'declarative'` skill) directly
  * on the pod via the existing `triggerProviderAction` dispatcher — NO Intelligence
  * Service, NO sandbox isolate. Reserved for deterministic, READ-ONLY provider
  * verbs; AI + untrusted code stay on the `kind:'code'` → `executeSkillViaIS` path.

@@ -2,12 +2,16 @@
  * Skills Schema
  *
  * The canonical skills table — merged from the (now-dropped) agent_skills table.
- * Two kinds, differentiated by `kind`:
+ * Four kinds, differentiated by `kind`:
  *
  *   instruction — text injected into the agent system prompt (always-on
  *                 knowledge/methodology). Uses the `body` column (Markdown).
  *   code        — JS/TS function executed in the Intelligence Hub sandbox
  *                 (callable tool). Uses the `code` column.
+ *   declarative — provider-verb spec the pod runs IN-PROCESS (Tier-1). Uses the
+ *                 `provider_spec` column; carries no code.
+ *   builtin     — first-party op run IN-PROCESS via a governed handler (Tier-0),
+ *                 keyed by the skill `name`; carries no code/spec.
  *
  * Columns absorbed from agent_skills: slug, body, topics, source, author,
  * version, tags. Doc-style skills set kind='instruction' with body populated;
@@ -29,10 +33,10 @@ import { workspaces } from "./workspaces.js";
 import { documents } from "./documents.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
-export type SkillKind = "instruction" | "code" | "provider";
+export type SkillKind = "instruction" | "code" | "declarative" | "builtin";
 
 /**
- * Declarative spec for a `kind:'provider'` capability verb — a deterministic
+ * Declarative spec for a `kind:'declarative'` capability verb — a deterministic
  * provider HTTP call the POD executes IN-PROCESS via `triggerProviderAction`
  * (no Intelligence Service, no sandbox isolate). The Tier-1 counterpart to a
  * `kind:'code'` skill (which runs untrusted JS in the IS isolate).
@@ -117,9 +121,13 @@ export const skills = pgTable(
 
     /**
      * instruction — text appended to the agent system prompt
-     * code        — JS/TS function executed in the sandbox
+     * code        — JS/TS function executed in the IS sandbox (Tier-2)
+     * declarative — in-process provider-verb spec (providerSpec) (Tier-1)
+     * builtin     — first-party op run in-process via a governed handler (Tier-0)
      */
-    kind: text("kind", { enum: ["instruction", "code", "provider"] })
+    kind: text("kind", {
+      enum: ["instruction", "code", "declarative", "builtin"],
+    })
       .notNull()
       .default("code")
       .$type<SkillKind>(),
@@ -176,9 +184,9 @@ export const skills = pgTable(
     code: text("code"),
 
     /**
-     * For kind='provider': the DECLARATIVE provider-verb spec the pod executes
-     * IN-PROCESS via `triggerProviderAction` (Tier-1, no IS isolate). Nullable —
-     * only `provider` skills populate it.
+     * For kind='declarative': the provider-verb spec the pod executes IN-PROCESS
+     * via `triggerProviderAction` (Tier-1, no IS isolate). Nullable — only
+     * `declarative` skills populate it.
      */
     providerSpec: jsonb("provider_spec").$type<ProviderVerbSpec | null>(),
 
