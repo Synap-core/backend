@@ -82,10 +82,18 @@ sales lead…). Then:
 - Start with the `openingQuestions`, but **adapt every next question to what
   you just learned.** This is a conversation, not a checklist.
 - Ask ONE focused thing at a time. Short, specific, in the user's language.
-- When the user is vague, **propose** a concrete option and let them react
-  ("Sounds like your voice is warm-but-direct — want me to go with that?").
-- Infer aggressively, confirm lightly. Don't make the user do the structuring —
-  that's your job. Turn their prose into entities.
+- **Let the `framing` set your posture.** When it says interrogate / pressure-test
+  (e.g. Foundation's skeptical cofounder), that OVERRIDES the propose-then-refine
+  reflex below: draw the real answer out of them, refuse fuzzy answers, propose a
+  concrete option only as a last resort when they're genuinely stuck.
+- **Strategic DNA vs operational detail — capture them differently.** For
+  strategy (mission, positioning, voice, differentiators), thin inference becomes
+  generic strategy — *extract* the real thing, don't hand them a plausible one.
+  Propose-then-refine is fine for operational fields (a deal stage, a task
+  priority): when the user is vague there, **propose** a concrete option and let
+  them react ("Sounds like your voice is warm-but-direct — want me to go with
+  that?"), infer aggressively, confirm lightly. Don't make them do the
+  structuring — that's your job. Turn their prose into entities.
 - Re-evaluate as you go: if an answer opens a more important thread, follow it.
 
 ## 3. Capture as you learn — structured, linked
