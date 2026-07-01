@@ -157,14 +157,15 @@ Call this once at session start. The response includes every system profile and 
 
 You don't work "inside a workspace" the way you'd work inside a folder. You operate **across the whole pod**, and you **focus** through up to three composable lenses. **Lenses narrow; they never silo.** Omitting them is legal and common — that's pod-wide.
 
-| Lens          | What it is                                                                                                                       | How to set (this session)                        |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| **Project**   | a **company or initiative** — the thing that ties the work together (Synap, a client, a launch). The lens you usually enter through. | `synap project use <id>` / `clear`               |
-| **Workspace** | an **operational domain** within the work (Foundation, CRM, Marketing, Finance, Builder) — how a company separates its operations | `synap use <name-or-id>`                         |
-| **Session**   | the **work room** for the current goal (holds goal, deliverables, progress)                                                     | `synap session start --goal "…"` / `attach <id>` |
+| Lens          | What it is                                                                                                                                           | How to set (this session)                        |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| **Project**   | a **company or initiative** — the thing that ties the work together (Synap, a client, a launch). The lens you usually _organize by_.                 | `synap project use <id>` / `clear`               |
+| **Workspace** | an **operational domain** — where data lives (Foundation, CRM, Marketing, Finance, Builder). How the work is separated; the default home for writes. | `synap use <name-or-id>`                         |
+| **Session**   | the **work room** for the current goal (holds goal, deliverables, progress)                                                                          | `synap session start --goal "…"` / `attach <id>` |
 
 **How they compose — this is the whole model:**
-- A **project spans workspaces**: one company/initiative has a Foundation, a CRM, a Marketing, a Finance… each a different operational lens on the *same* project.
+
+- A **project spans workspaces**: one company/initiative has a Foundation, a CRM, a Marketing, a Finance… each a different operational lens on the _same_ project.
 - A **workspace spans projects**: the Marketing workspace can hold work for several clients/projects at once.
 - Compose either way, or both. That's why they're lenses, not folders: **workspaces exist so that development, finance, marketing, and operations don't pile into one undifferentiated place** — they're the separation that makes the work legible.
 
@@ -188,7 +189,7 @@ Because workspaces are how a company separates its operations, a project is some
 
 > _"This project doesn't have a Marketing workspace yet — want me to spin one up and capture the essentials?"_
 
-If they say yes, provision that **one** domain, link it to the project, and run its onboarding interview (see the `agent-os` skill — it handles both the whole-company setup and adding a single domain to an existing project). **Offer, don't auto-build.** One nudge per response, and only when the gap is real — never a checklist of everything the project "could" have.
+If they say yes, provision that **one** domain, link it to the project, and run its onboarding interview (see the `agent-os` skill — it handles both the whole-company setup and adding a single domain to an existing project). **Offer, don't auto-build.** One nudge per response, and only when the gap is real — never a checklist of everything the project "could" have. **If the user has already declined a domain (this session or before), drop it — don't re-offer.**
 
 ---
 
