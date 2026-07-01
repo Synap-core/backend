@@ -425,7 +425,7 @@ export async function checkPermissionOrPropose(
   try {
     const { verifyPermission, eq } = await import("@synap/database");
 
-    // 4. Workspace-membership RBAC — ONLY when a workspace lens is present.
+    // Workspace-membership RBAC — ONLY when a workspace lens is present.
     // At pod scope (no workspace) the authenticated bearer is the owner, so there
     // is no membership to verify; agent governance still runs below.
     if (workspaceId) {
@@ -626,7 +626,7 @@ export async function checkPermissionOrPropose(
         const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
         db.insert(proposals)
           .values({
-            workspaceId,
+            workspaceId: workspaceId ?? null,
             targetType: subjectType,
             targetId: String(data?.id ?? randomUUID()),
             proposalType: `${subjectType}.${action}`,
