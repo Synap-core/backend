@@ -21,14 +21,12 @@ import {
   db,
   and,
   eq,
-  or,
   isNull,
   inArray,
   like,
-  drizzleSql,
   encryptServerSide,
 } from "@synap/database";
-import { links, tools, providerIntegrations, secrets } from "@synap/database/schema";
+import { links, tools, secrets } from "@synap/database/schema";
 
 import { resolveNangoConnector } from "../../connectors/index.js";
 
@@ -104,15 +102,6 @@ export async function syncNangoConnectionsToRegistry(
   const liveConnections = await connector.listConnections(actorUserId);
 
   for (const providerConfigKey of providerKeys) {
-    const integration = await db.query.providerIntegrations.findFirst({
-      where: or(
-        eq(providerIntegrations.slug, providerConfigKey),
-        drizzleSql`${providerIntegrations.backendConfig}->>'providerConfigKey' = ${providerConfigKey}`
-      ),
-      columns: { id: true },
-    });
-    if (!integration) continue; // no integration row → can't route; skip.
-
     const matches = liveConnections.filter(
       (c) => c.provider === providerConfigKey
     );
@@ -125,6 +114,11 @@ export async function syncNangoConnectionsToRegistry(
       needsDefault = false;
       known.add(conn.connectionId);
 
+      // A pure POINTER row: no stored credential (empty blob — the credential
+      // stays in Nango) and NO provider_integration_id. `account_hint` = the Nango
+      // connectionId; at run time the selector keeps the tool's own nango:// ref
+      // and pins THIS account via the hint (see external-dispatch). This works
+      // against the live nango:// tools without needing a provider_integrations row.
       const blob = encryptServerSide("");
       await db.insert(secrets).values({
         userId: actorUserId,
@@ -132,7 +126,6 @@ export async function syncNangoConnectionsToRegistry(
         name: `${providerConfigKey} · ${conn.connectionId.slice(-6)}`,
         type: "api_key",
         capabilityId,
-        providerIntegrationId: integration.id,
         accountHint: conn.connectionId,
         isDefault: makeDefault,
         encryptedData: blob.encryptedData,

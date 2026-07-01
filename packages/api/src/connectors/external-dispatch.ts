@@ -77,7 +77,7 @@ async function resolveBoundCredentialRef(
      */
     connectionSelector?: ConnectionSelector | null;
   }
-): Promise<string> {
+): Promise<{ ref: string; accountHint?: string | null }> {
   // ── Runtime connection selector (Wave 4) ────────────────────────────────────
   // An explicit connection chosen at the execute door outranks the tool's own
   // authBinding. `connectionId` picks a specific connection (verified to be THIS
@@ -109,7 +109,7 @@ async function resolveBoundCredentialRef(
       // actor, and not deleted — else a caller could point the dispatcher at an
       // unrelated / another user's secret and have it decrypted under this tool.
       const [row] = await db
-        .select({ id: secrets.id })
+        .select({ id: secrets.id, accountHint: secrets.accountHint })
         .from(secrets)
         .where(
           and(
@@ -125,14 +125,21 @@ async function resolveBoundCredentialRef(
           `Connection "${selector.connectionId}" is not a valid connection for "${tool.name}".`
         );
       }
-      return `vault://${row.id}`;
+      // A nango:// tool's connection is a Nango ACCOUNT: keep the tool's own
+      // nango ref and pin the chosen account via its hint — routing stays on the
+      // live nango:// path (no provider_integrations row required). A vault:// (or
+      // other) tool's connection resolves to the picked secret directly.
+      if (tool.credentialRef?.startsWith("nango://")) {
+        return { ref: tool.credentialRef, accountHint: row.accountHint };
+      }
+      return { ref: `vault://${row.id}` };
     }
 
     // contextObjectId → the capability's connection bound to that context object.
     // Scope to the actor's own secrets (defense-in-depth: never resolve another
     // user's connection even for a pod-wide capability).
     const [row] = await db
-      .select({ id: secrets.id })
+      .select({ id: secrets.id, accountHint: secrets.accountHint })
       .from(secrets)
       .where(
         and(
@@ -148,14 +155,17 @@ async function resolveBoundCredentialRef(
         `No connection bound to context object "${selector.contextObjectId}" for "${tool.name}".`
       );
     }
-    return `vault://${row.id}`;
+    if (tool.credentialRef?.startsWith("nango://")) {
+      return { ref: tool.credentialRef, accountHint: row.accountHint };
+    }
+    return { ref: `vault://${row.id}` };
   }
 
   const binding = tool.authBinding ?? "static";
   if (binding === "static") {
     if (!tool.credentialRef)
       throw new Error(`Tool "${tool.name}" has no credential.`);
-    return tool.credentialRef;
+    return { ref: tool.credentialRef };
   }
 
   let principalType: "participant" | "entity";
@@ -252,7 +262,7 @@ async function resolveBoundCredentialRef(
       } for "${tool.name}". Bind one in the capability's Authentication step.`
     );
   }
-  return `vault://${row.id}`;
+  return { ref: `vault://${row.id}` };
 }
 
 // ── External messaging send ──────────────────────────────────────────────────
@@ -1496,14 +1506,19 @@ export async function triggerProviderAction(
     !!input.connectionSelector &&
     (!!input.connectionSelector.connectionId ||
       !!input.connectionSelector.contextObjectId);
+  // A selector that pins a Nango account resolves to the tool's own nango:// ref
+  // PLUS an account hint (the chosen 1-of-N connection); thread it to the handler.
+  let accountHintOverride: string | null = null;
   if ((tool.authBinding ?? "static") !== "static" || hasConnectionSelector) {
     try {
-      credentialRef = await resolveBoundCredentialRef(tool, {
+      const resolved = await resolveBoundCredentialRef(tool, {
         userId: input.userId,
         agentUserId: input.agentUserId ?? null,
         subjectId: input.subjectId ?? null,
         connectionSelector: input.connectionSelector ?? null,
       });
+      credentialRef = resolved.ref;
+      accountHintOverride = resolved.accountHint ?? null;
     } catch (e) {
       return {
         success: false,
@@ -1680,6 +1695,14 @@ export async function triggerProviderAction(
   // already passed a credentialRef, `credentialRef === provider`, so this is a
   // no-op for the existing path.
   const dispatchInput: TriggerProviderActionInput =
-    credentialRef === provider ? input : { ...input, provider: credentialRef };
+    credentialRef === provider && accountHintOverride == null
+      ? input
+      : {
+          ...input,
+          provider: credentialRef,
+          ...(accountHintOverride != null
+            ? { accountHint: accountHintOverride }
+            : {}),
+        };
   return handler({ input: dispatchInput, tool });
 }
