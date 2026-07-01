@@ -212,7 +212,9 @@ export const skillsRouter = router({
         .values({
           id: skillId,
           userId,
-          workspaceId: input.workspaceId,
+          // Pod-wide by default: only stamp a workspace when the caller explicitly
+          // narrows to one. No workspace context → pod-wide (NULL).
+          workspaceId: input.workspaceId ?? null,
           kind,
           scope: input.scope,
           agentTypes: input.agentTypes ?? null,

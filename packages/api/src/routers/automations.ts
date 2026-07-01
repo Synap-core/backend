@@ -18,6 +18,7 @@ import {
   getDb,
   eq,
   and,
+  or,
   isNull,
   desc,
   automations,
@@ -112,9 +113,14 @@ export const automationsRouter = router({
         .where(
           and(
             visibility,
+            // Pod-wide floor (`visibility`); a specific workspace only NARROWS,
+            // and still includes pod-wide (NULL) rows. No workspace → no narrow.
             input?.workspaceId
-              ? eq(automations.workspaceId, input.workspaceId)
-              : isNull(automations.workspaceId),
+              ? or(
+                  isNull(automations.workspaceId),
+                  eq(automations.workspaceId, input.workspaceId)
+                )
+              : undefined,
             input?.status ? eq(automations.status, input.status) : undefined,
             input?.triggerType
               ? eq(automations.triggerType, input.triggerType)
@@ -145,8 +151,11 @@ export const automationsRouter = router({
         where: and(
           eq(automations.id, input.id),
           input.workspaceId
-            ? eq(automations.workspaceId, input.workspaceId)
-            : isNull(automations.workspaceId)
+            ? or(
+                isNull(automations.workspaceId),
+                eq(automations.workspaceId, input.workspaceId)
+              )
+            : undefined
         ),
       });
 
@@ -510,8 +519,11 @@ export const automationsRouter = router({
         where: and(
           eq(automations.id, input.automationId),
           input.workspaceId
-            ? eq(automations.workspaceId, input.workspaceId)
-            : isNull(automations.workspaceId)
+            ? or(
+                isNull(automations.workspaceId),
+                eq(automations.workspaceId, input.workspaceId)
+              )
+            : undefined
         ),
         columns: { id: true },
       });
@@ -550,8 +562,11 @@ export const automationsRouter = router({
         where: and(
           eq(automationRuns.id, input.runId),
           input.workspaceId
-            ? eq(automationRuns.workspaceId, input.workspaceId)
-            : isNull(automationRuns.workspaceId)
+            ? or(
+                isNull(automationRuns.workspaceId),
+                eq(automationRuns.workspaceId, input.workspaceId)
+              )
+            : undefined
         ),
       });
       if (!run) {

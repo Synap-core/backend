@@ -253,7 +253,10 @@ export const capabilitiesRouter = router({
 
       // Load the container to determine scope — never trust caller-supplied scope.
       const [container] = await db
-        .select({ id: capabilitiesTable.id, workspaceId: capabilitiesTable.workspaceId })
+        .select({
+          id: capabilitiesTable.id,
+          workspaceId: capabilitiesTable.workspaceId,
+        })
         .from(capabilitiesTable)
         .where(eq(capabilitiesTable.id, input.capabilityId))
         .limit(1);
@@ -270,7 +273,8 @@ export const capabilitiesRouter = router({
         if (role !== "owner") {
           throw new TRPCError({
             code: "FORBIDDEN",
-            message: "Only workspace owners can uninstall workspace capabilities.",
+            message:
+              "Only workspace owners can uninstall workspace capabilities.",
           });
         }
       } else {
@@ -507,8 +511,13 @@ export const capabilitiesRouter = router({
         .where(
           and(
             visibility,
+            // A specific workspace only NARROWS and still includes pod-wide
+            // (NULL) automations; no workspace → no narrow (the user floor).
             input.workspaceId
-              ? eq(automations.workspaceId, input.workspaceId)
+              ? or(
+                  isNull(automations.workspaceId),
+                  eq(automations.workspaceId, input.workspaceId)
+                )
               : undefined,
             containment
           )

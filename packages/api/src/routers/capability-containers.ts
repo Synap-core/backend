@@ -44,9 +44,11 @@ export const capabilityContainersRouter = router({
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const ws = input?.workspaceId;
+      // A specific workspace only NARROWS (still includes pod-wide NULL rows);
+      // no workspace → no narrow, so the user-visible floor below is pod-wide.
       const lens = ws
         ? or(isNull(capabilities.workspaceId), eq(capabilities.workspaceId, ws))
-        : isNull(capabilities.workspaceId);
+        : undefined;
       const rows = await db
         .select()
         .from(capabilities)
