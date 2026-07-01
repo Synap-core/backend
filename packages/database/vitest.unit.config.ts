@@ -10,6 +10,7 @@ export default defineConfig({
     include: [
       "src/repositories/**/__tests__/*.test.ts",
       "src/__tests__/channel-type-canon.test.ts",
+      "src/__tests__/mirror-to-external.test.ts",
     ],
     env: {
       NODE_ENV: "test",

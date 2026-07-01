@@ -1,0 +1,90 @@
+/**
+ * insertChannelMessage — the single channel-message writer that ALSO mirrors.
+ *
+ * Insert a message row into a channel and, if that channel is bound to Discord,
+ * mirror the content out via `mirrorMessageToBoundExternal`. New producers
+ * (mail-feed worker, event-sync worker, and any future feed) use this instead of
+ * a bare `db.insert(messages)` so Discord delivery is automatic and consistent.
+ *
+ * It does NOT emit the app realtime event (`emitChatEvent` lives in `@synap/api`);
+ * api-side callers that need live UI updates broadcast separately. The mirror is
+ * the value this helper adds over a raw insert.
+ */
+
+import { createHash } from "crypto";
+import { getDb } from "../client-pg.js";
+import { messages, MessageRole, MessageAuthorType } from "../schema/index.js";
+import {
+  mirrorMessageToBoundExternal,
+  type MirrorChannelRef,
+} from "./mirror-to-external.js";
+
+export interface InsertChannelMessageParams {
+  channelId: string;
+  content: string;
+  /** Message author identity — defaults to a system/bot user. */
+  userId?: string;
+  role?: MessageRole;
+  authorType?: MessageAuthorType;
+  metadata?: Record<string, unknown>;
+  /** Pass the channel row to let the mirror skip a lookup. */
+  channel?: MirrorChannelRef;
+}
+
+export interface InsertChannelMessageResult {
+  messageId: string | undefined;
+  mirrored: boolean;
+  mirrorReason?: string;
+}
+
+/**
+ * Insert a channel message + mirror to Discord if bound. Never throws on the
+ * mirror path (a delivery failure must not fail the insert).
+ */
+export async function insertChannelMessage(
+  params: InsertChannelMessageParams
+): Promise<InsertChannelMessageResult> {
+  const {
+    channelId,
+    content,
+    userId = "system",
+    role = MessageRole.ASSISTANT,
+    authorType = MessageAuthorType.BOT,
+    metadata,
+    channel,
+  } = params;
+
+  const database = await getDb();
+  const hash = createHash("sha256")
+    .update(`${channelId}:${Date.now()}:${content}`)
+    .digest("hex");
+
+  const [msg] = await database
+    .insert(messages)
+    .values({
+      channelId,
+      userId,
+      role,
+      authorType,
+      content,
+      hash,
+      ...(metadata
+        ? { metadata: metadata as (typeof messages.$inferInsert)["metadata"] }
+        : {}),
+    })
+    .onConflictDoNothing()
+    .returning({ id: messages.id });
+
+  const mirror = await mirrorMessageToBoundExternal({
+    channel,
+    channelId,
+    content,
+    authorType,
+  });
+
+  return {
+    messageId: msg?.id,
+    mirrored: mirror.mirrored,
+    mirrorReason: mirror.reason,
+  };
+}

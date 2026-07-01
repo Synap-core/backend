@@ -46,6 +46,7 @@ import {
   drizzleSql,
   EntityRepository,
   eventRepository,
+  mirrorMessageToBoundExternal,
 } from "@synap/database";
 import {
   ChannelType,
@@ -53,6 +54,7 @@ import {
   FeedScope,
   ChannelStatus,
   MessageRole,
+  MessageAuthorType,
   skills,
 } from "@synap/database/schema";
 import type {
@@ -667,6 +669,22 @@ async function executeOutputStep(
           } as (typeof messages.$inferInsert)["metadata"],
         })
         .returning({ id: messages.id });
+
+      // MIRROR: if this channel is bound to Discord, post the message out. An
+      // automation output is BOT-authored, so the mirror's firewall blocks it
+      // from any client-comms channel (team/feed only). No-ops for non-external
+      // channels (personal/feed). Never throws.
+      const mirror = await mirrorMessageToBoundExternal({
+        channelId,
+        content,
+        authorType: MessageAuthorType.BOT,
+      });
+      if (mirror.mirrored) {
+        logger.info(
+          { channelId },
+          "automation channel_message mirrored to Discord"
+        );
+      }
 
       return { status: "sent", messageId: msg.id, channelId };
     }

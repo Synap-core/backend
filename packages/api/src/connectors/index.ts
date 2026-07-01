@@ -12,7 +12,12 @@ import {
   type BaseConnector,
   type ConnectorKind,
 } from "./ConnectorRegistry.js";
-import { db, getServiceSecret, getDb } from "@synap/database";
+import {
+  db,
+  getServiceSecret,
+  getDb,
+  resolveDiscordBotToken,
+} from "@synap/database";
 
 // ── ONE registry: all three families mirror into the unified
 //    `connectorRegistry`. ─────────────────────────────────────────────────────
@@ -119,11 +124,13 @@ registerMessagingType("stalwart", async ({ ownerId }) => {
   });
 });
 
-registerMessagingType("discord", async () => {
-  // Discord is outbound-only and server-managed: the bot token lives in
-  // DISCORD_BOT_TOKEN. Return null when unconfigured so callers no-op.
-  const discord = new DiscordConnector();
-  return discord.isConfigured() ? discord : null;
+registerMessagingType("discord", async ({ ownerId }) => {
+  // Discord is outbound-only and server-managed (single shared bot token).
+  // `resolveDiscordBotToken` is env-first (DISCORD_BOT_TOKEN) then the pod
+  // owner's vault secret (serviceId='discord') — the latter is what lets the
+  // BACKEND post to Discord (the channel mirror) without the token in env.
+  const token = await resolveDiscordBotToken(ownerId);
+  return token ? new DiscordConnector({ botToken: token }) : null;
 });
 
 registerMessagingType("unipile", async ({ ownerId, settings }) => {
