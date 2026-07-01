@@ -129,6 +129,8 @@ async function resolveBoundCredentialRef(
     }
 
     // contextObjectId → the capability's connection bound to that context object.
+    // Scope to the actor's own secrets (defense-in-depth: never resolve another
+    // user's connection even for a pod-wide capability).
     const [row] = await db
       .select({ id: secrets.id })
       .from(secrets)
@@ -136,6 +138,7 @@ async function resolveBoundCredentialRef(
         and(
           eq(secrets.capabilityId, capEdge.capabilityId),
           eq(secrets.contextId, selector.contextObjectId!),
+          eq(secrets.userId, ctx.userId),
           isNull(secrets.deletedAt)
         )
       )
@@ -226,8 +229,9 @@ async function resolveBoundCredentialRef(
   }
 
   // Map the binding's principal to the secret's context and look up the connection
-  // scoped to THIS capability. NEVER fall back to an unrelated secret — a
-  // connection for a different capability/context must not be mis-routed here.
+  // scoped to THIS capability AND the actor's own secrets. NEVER fall back to an
+  // unrelated secret — a connection for a different capability/context/owner must
+  // not be mis-routed here.
   const [row] = await db
     .select({ id: secrets.id })
     .from(secrets)
@@ -236,6 +240,7 @@ async function resolveBoundCredentialRef(
         eq(secrets.capabilityId, memberEdge.capabilityId),
         eq(secrets.contextType, principalType),
         eq(secrets.contextId, principalId),
+        eq(secrets.userId, ctx.userId),
         isNull(secrets.deletedAt)
       )
     )
@@ -1587,6 +1592,10 @@ export async function triggerProviderAction(
           body: input.body ?? null,
           accountHint: input.accountHint ?? null,
           baseUrlOverride: input.baseUrlOverride ?? null,
+          // Persist the run-time connection pick so the approve replay resolves
+          // the SAME credential the caller selected (else it silently falls back
+          // to the capability's default connection).
+          connectionSelector: input.connectionSelector ?? null,
           workspaceId: proposalWorkspaceId,
           agentUserId: input.agentUserId ?? null,
           sessionId: input.sessionId ?? null,

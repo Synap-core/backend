@@ -888,6 +888,14 @@ export function registerApproveExecutors(): void {
             baseUrlOverride:
               (data.baseUrlOverride as string | undefined) ?? undefined,
             workspaceId: (data.workspaceId as string | undefined) ?? undefined,
+            // Replay the caller's run-time connection pick so the approved run
+            // uses the SAME credential that was selected at propose time (not the
+            // capability's default). Persisted into proposal.data at propose time.
+            connectionSelector:
+              (data.connectionSelector as
+                | { connectionId?: string; contextObjectId?: string }
+                | null
+                | undefined) ?? undefined,
             // BYPASS the capability-execution gate: a human already approved THIS
             // proposal, so this is the governed Door-2 re-entry — dispatch directly,
             // exactly once, without re-proposing (Wave 3a `alreadyApproved` contract).
