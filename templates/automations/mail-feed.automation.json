@@ -1,0 +1,86 @@
+{
+  "name": "Mail feed → Discord (AI-triaged)",
+  "triggerType": "cron",
+  "status": "draft",
+  "triggerConfig": { "expression": "0 */2 * * *" },
+  "flowDefinition": {
+    "nodes": [
+      {
+        "id": "trigger",
+        "type": "trigger",
+        "position": { "x": 0, "y": 0 },
+        "data": {
+          "triggerType": "cron",
+          "label": "Every 2 hours",
+          "config": { "expression": "0 */2 * * *" }
+        }
+      },
+      {
+        "id": "fetch-mail",
+        "type": "capability",
+        "position": { "x": 0, "y": 120 },
+        "data": {
+          "label": "Search Gmail (source verb)",
+          "verbId": "gmail_search",
+          "inputMapping": { "query": "newer_than:2d", "maxResults": "25" },
+          "connectionSelector": { "connectionId": "" }
+        }
+      },
+      {
+        "id": "triage",
+        "type": "capability",
+        "position": { "x": 0, "y": 240 },
+        "data": {
+          "label": "AI triage (batch classifier verb)",
+          "verbId": "ai.triage",
+          "inputMapping": { "emails": "{{steps.fetch-mail.output.results}}" }
+        }
+      },
+      {
+        "id": "relevant-loop",
+        "type": "loop",
+        "position": { "x": 0, "y": 360 },
+        "data": {
+          "label": "For each relevant email",
+          "iteratorExpression": "steps.triage.output.results",
+          "itemVariable": "email"
+        }
+      },
+      {
+        "id": "post-to-feed",
+        "type": "output",
+        "position": { "x": 0, "y": 480 },
+        "data": {
+          "label": "Post to the Discord-bound feed channel",
+          "outputType": "channel_message",
+          "config": {
+            "channelId": "<discord-bound team feed channel id>",
+            "content": "**{{loop.item.subject}}** — _{{loop.item.category}}_\n{{loop.item.summary}}",
+            "channelType": "proactive",
+            "metadata": {
+              "proactiveType": "mail-feed",
+              "gmailId": "{{loop.item.id}}"
+            }
+          }
+        }
+      }
+    ],
+    "edges": [
+      { "id": "e1", "source": "trigger", "target": "fetch-mail" },
+      { "id": "e2", "source": "fetch-mail", "target": "triage" },
+      { "id": "e3", "source": "triage", "target": "relevant-loop" },
+      { "id": "e4", "source": "relevant-loop", "target": "post-to-feed" }
+    ]
+  },
+  "metadata": {
+    "source": "feed-template",
+    "purpose": "CANONICAL example of the North Star: a FEED is an AUTOMATION that composes capability verbs. Cron → gmail_search (source verb) → AI triage (classifier verb) → loop → post relevant items to a Discord-bound feed channel. Replaces the bespoke run-mail-feed.ts worker with pure config.",
+    "prerequisites": [
+      "Wave 1 (SHIPPED): the `capability` node dispatches gmail_search (declarative) + any verb through executeCapability.",
+      "verb `ai.triage`: a batch email classifier verb must be seeded (today this is the mail_triage IS route; roadmap folds it into a verb). Until then, swap the triage node for a `command` node (IS task) or point verbId at the seeded classifier.",
+      "a connected Google account (nango-google) + set connectionSelector.connectionId to pin the mailbox.",
+      "a Discord-bound `branchPurpose:'team'` feed channel — put its id in the post node (or use channelType:'proactive' for the user's feed).",
+      "PER-ITEM filtering/AI inside the loop needs automation Wave 2 (loop body currently allows `output` only — this template does BATCH triage OUTSIDE the loop and posts via an `output.channel_message` node INSIDE the loop, which IS loop-allowed today)."
+    ]
+  }
+}
