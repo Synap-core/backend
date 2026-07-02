@@ -8,7 +8,15 @@
  * visibility, not `createdBy`, so it is NOT interchangeable here).
  */
 
-import { db, proposals, ProposalStatus, eq, and, desc } from "@synap/database";
+import {
+  db,
+  proposals,
+  ProposalStatus,
+  eq,
+  and,
+  desc,
+  drizzleSql,
+} from "@synap/database";
 
 /**
  * List proposals CREATED BY a user (optionally narrowed to a workspace/status),
@@ -47,7 +55,7 @@ export async function countPendingProposals(
   workspaceId: string
 ): Promise<number> {
   const rows = await db
-    .select({ count: proposals.id })
+    .select({ count: drizzleSql<number>`cast(count(*) as integer)` })
     .from(proposals)
     .where(
       and(
@@ -55,7 +63,7 @@ export async function countPendingProposals(
         eq(proposals.status, ProposalStatus.PENDING)
       )
     );
-  return rows.length;
+  return rows[0]?.count ?? 0;
 }
 
 /**

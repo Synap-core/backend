@@ -6,7 +6,6 @@
  *   - writesRequireProposal: assistant-template write gate
  *   - ADMIN_ACTIONS: always-propose regardless of whitelist / writesRequireProposal flag
  *   - buildProposalSummary: label composition helper
- *   - STUDIO_APP_URL: env override
  *
  * Heavy I/O paths (DB inserts, broadcastNotification, emitSideEffects) are
  * mocked so these remain fast, deterministic unit tests.
@@ -180,8 +179,8 @@ describe("buildProposalResponseFields", () => {
       action: "delete",
       data: { title: "Q2 Plan" },
     });
-    expect(result.reviewPath).toBe("/proposals/prop-001");
-    expect(result.reviewUrl).toContain("/proposals/prop-001");
+    expect(result.reviewPath).toBe("/open/prop-001");
+    expect(result.reviewUrl).toContain("/open/prop-001");
     expect(result.summary).toBe('Delete entity "Q2 Plan"');
   });
 

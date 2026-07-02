@@ -57,10 +57,11 @@ x-backend-env: &backend-env
   # MUST match the IS's INTELLIGENCE_HUB_INTERNAL_KEY — omitting it sends an empty
   # key and synthesis fails with 401 (synthesis_unavailable, sources but no answer).
   INTELLIGENCE_HUB_INTERNAL_KEY: ${INTELLIGENCE_HUB_INTERNAL_KEY:-}
-  # Shared secret gating the loopback /internal/* endpoints (mail-feed/event-sync
-  # run, signal route). The in-process pg-boss cron workers send it as
-  # X-Bridge-Secret; the endpoints FAIL CLOSED (503) without it. REQUIRED to enable
-  # the mail-feed + event-sync features; leave empty to keep them off.
+  # Shared secret for the realtime server's cross-process /bridge/emit endpoint
+  # (packages/realtime) — the ONE genuine backend↔realtime hop. Validation is
+  # fail-OPEN: if empty, /bridge/emit accepts unauthenticated (localhost only).
+  # (The mail-feed / event-sync / automation crons run IN-PROCESS via IoC slots —
+  # they do NOT use this secret; the old /internal/* loopback was removed.)
   # Generate once: openssl rand -hex 32
   BRIDGE_SECRET: ${BRIDGE_SECRET:-}
   HERMES_TRIGGER_URL: ${HERMES_TRIGGER_URL:-}

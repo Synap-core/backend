@@ -1,8 +1,8 @@
 /**
  * Event Sync — mirror upcoming Synap events into NATIVE Discord scheduled events.
  *
- * Runs on a schedule (via the jobs `event-sync-cron` worker POSTing the loopback
- * endpoint `/internal/event-sync/run`). For the pod's Discord tool with a
+ * Runs on a schedule: the jobs `event-sync-cron` worker invokes this in-process
+ * via the `registerEventSyncRunner` IoC slot. For the pod's Discord tool with a
  * `metadata.discord.eventSync` config it collects upcoming events from three
  * sources and creates one native Discord "external" scheduled event per new item:
  *   A. `event` entities             — Synap-native events (properties.startDate…)

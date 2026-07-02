@@ -76,11 +76,15 @@ async function createHubProtocolCaller(
 /**
  * Extract the primary object id from a tool result, in field-priority order:
  *   proposalId → id → entityId → documentId → viewId → channelId →
- *   sessionId → messageId → knowledgeKey.id → nested data.id
+ *   sessionId → knowledgeKey.id → nested data.id
  * First string hit wins; returns undefined when none is present.
+ *
+ * `messageId` is intentionally excluded — messages aren't openable, and
+ * post_message already resolves via `channelId` (which precedes it here).
  */
 function primaryObjectId(data: unknown): string | undefined {
-  if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
+  if (!data || typeof data !== "object" || Array.isArray(data))
+    return undefined;
   const d = data as Record<string, unknown>;
   const keys = [
     "proposalId",
@@ -90,7 +94,6 @@ function primaryObjectId(data: unknown): string | undefined {
     "viewId",
     "channelId",
     "sessionId",
-    "messageId",
   ] as const;
   for (const key of keys) {
     const v = d[key];
@@ -99,22 +102,31 @@ function primaryObjectId(data: unknown): string | undefined {
   const kk = d.knowledgeKey as Record<string, unknown> | undefined;
   if (kk && typeof kk.id === "string" && kk.id) return kk.id;
   const nested = d.data as Record<string, unknown> | undefined;
-  if (nested && typeof nested === "object" && typeof nested.id === "string" && nested.id) {
+  if (
+    nested &&
+    typeof nested === "object" &&
+    typeof nested.id === "string" &&
+    nested.id
+  ) {
     return nested.id;
   }
   return undefined;
 }
 
 function ok(data: unknown): CallToolResult {
-  // Centrally inject the canonical clickable `link` (`${PUBLIC_URL}/open/<id>`)
-  // for EVERY MCP tool response — every handler flows through this one shaper,
-  // so no per-handler edits are needed.
+  // Best-effort: inject the canonical clickable `link` (`${PUBLIC_URL}/open/<id>`)
+  // ONLY when the result carries an id that resolves to an openable object
+  // (proposal / entity / view / document / channel — see primaryObjectId). Every
+  // handler flows through this one shaper, so no per-handler edits are needed;
+  // arrays, id-less objects, and non-openable ids simply get no link.
   const id = primaryObjectId(data);
   const payload =
     id && data && typeof data === "object" && !Array.isArray(data)
       ? { ...(data as Record<string, unknown>), link: openLink(id) }
       : data;
-  return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+  };
 }
 
 function requireScope(scopes: string[], scope: string, toolName: string): void {
@@ -501,7 +513,7 @@ export async function executeMCPToolViaHubProtocol(
       const result = await discover({
         caller,
         userId,
-        scopes: apiKeyScopes,
+        authScopes: apiKeyScopes,
         detail: (args.detail as "light" | "full" | undefined) ?? "light",
         scope: args.scope as
           | Array<"workspaces" | "projects" | "profiles">
@@ -685,7 +697,8 @@ export async function executeMCPToolViaHubProtocol(
       // user doesn't want. Surface the degradation loudly and create nothing;
       // the caller tells the user the AI service is temporarily unavailable.
       if ((structured as { degraded?: boolean }).degraded === true) {
-        const reason = (structured as { degradedReason?: string }).degradedReason;
+        const reason = (structured as { degradedReason?: string })
+          .degradedReason;
         return ok({
           degraded: true,
           degradedReason: reason,

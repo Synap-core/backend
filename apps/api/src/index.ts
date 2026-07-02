@@ -321,8 +321,40 @@ app.get("/admin/connect", (c) => {
 // chat clients) will NOT linkify a raw `synap://` URL, so we serve a tiny https
 // page that immediately redirects to it. The app's deep-link handler
 // (`useDeepLinkHandler.ts`) understands `synap://open/<type>/<id>` for
-// proposal | entity | view | document | cell. No auth here: this only forwards a
+// proposal | entity | view | document | cell | channel. No auth here: this only forwards a
 // scheme; the target surface is access-gated inside the app.
+// Renders the tiny https page that immediately redirects to the given
+// `synap://` deep link. `deep` contains only validated/known-safe chars, so it
+// interpolates into href/JS without escaping concerns. If the app isn't
+// installed the redirect is a no-op, so after a short delay we reveal a
+// fallback block (with a manual retry link) rather than stranding the user on
+// "Opening…" forever.
+function renderDeepLinkPage(deep: string): string {
+  return (
+    `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
+    `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `<title>Opening in Synap…</title>` +
+    `<script>location.replace(${JSON.stringify(deep)});` +
+    `setTimeout(function(){var f=document.getElementById('fallback');if(f)f.style.display='block';},1500);</script>` +
+    `<style>html,body{height:100%}body{margin:0;font-family:system-ui,-apple-system,sans-serif;` +
+    `background:#0b0b0c;color:#e9e9ec;display:flex;align-items:center;justify-content:center}` +
+    `a{color:#10b981}main{text-align:center;max-width:24rem;padding:2rem}` +
+    `h1{font-size:1rem;font-weight:500;margin:0}` +
+    `.spinner{width:1.5rem;height:1.5rem;margin:0 auto 1rem;border-radius:50%;` +
+    `border:2px solid #2a2a2e;border-top-color:#10b981;animation:spin .8s linear infinite}` +
+    `#fallback{display:none;margin-top:1.5rem;font-size:.875rem;color:#a1a1aa}` +
+    `#fallback a{text-decoration:underline}` +
+    `@keyframes spin{to{transform:rotate(360deg)}}` +
+    `@media (prefers-reduced-motion:reduce){.spinner{animation:none}}</style>` +
+    `</head><body><main>` +
+    `<div class="spinner" aria-hidden="true"></div>` +
+    `<h1 role="status" aria-live="polite">Opening in Synap…</h1>` +
+    `<div id="fallback"><p>Didn't open? Make sure the Synap app is installed.</p>` +
+    `<p><a href="${deep}">Open in Synap</a></p></div>` +
+    `</main></body></html>`
+  );
+}
+
 app.get("/open/:type/:id", (c) => {
   const ALLOWED = new Set(["proposal", "entity", "view", "document", "cell"]);
   const type = c.req.param("type");
@@ -332,19 +364,93 @@ app.get("/open/:type/:id", (c) => {
   if (!ALLOWED.has(type) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
     return c.text("Invalid deep link", 400);
   }
-  const deep = `synap://open/${type}/${id}`;
-  const html =
-    `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
-    `<meta name="viewport" content="width=device-width,initial-scale=1">` +
-    `<title>Opening Synap…</title>` +
-    `<script>location.replace(${JSON.stringify(deep)});</script>` +
-    `<style>html,body{height:100%}body{margin:0;font-family:system-ui,-apple-system,sans-serif;` +
-    `background:#0b0b0c;color:#e9e9ec;display:flex;align-items:center;justify-content:center}` +
-    `a{color:#10b981;text-decoration:none}main{text-align:center;max-width:24rem;padding:2rem}</style>` +
-    `</head><body><main><p>Opening in Synap…</p>` +
-    `<p><a href="${deep}">Open the ${type}</a> if it doesn't open automatically.</p>` +
-    `</main></body></html>`;
-  return c.html(html);
+  return c.html(renderDeepLinkPage(`synap://open/${type}/${id}`));
+});
+
+// ── Canonical bare-id deep-link bounce (public, no auth) ─────────────────────
+// The one link shape every create/propose response emits: `${PUBLIC_URL}/open/
+// <id>` (see packages/api/src/utils/deep-links.ts). We resolve the id's type
+// here — probing proposal → entity → view → document (same order as
+// hub-protocol/rest/resolve.ts) — then serve the same bounce page to
+// `synap://open/<type>/<id>`. This is a public id→type map ONLY, so it uses a
+// service DB handle (no user API key); the target surface is access-gated inside
+// the app. Unknown ids gracefully bounce to `synap://open/<id>`.
+app.get("/open/:id", async (c) => {
+  const id = c.req.param("id");
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
+    return c.text("Invalid deep link", 400);
+  }
+  const { getDb, eq } = await import("@synap/database");
+  const { proposals, entities, views, documents, channels } =
+    await import("@synap/database/schema");
+  const database = await getDb();
+
+  const exists = async (query: () => Promise<unknown[]>): Promise<boolean> => {
+    try {
+      const [row] = await query();
+      return Boolean(row);
+    } catch {
+      return false;
+    }
+  };
+
+  let type: string | undefined;
+  if (
+    await exists(() =>
+      database
+        .select({ id: proposals.id })
+        .from(proposals)
+        .where(eq(proposals.id, id))
+        .limit(1)
+    )
+  ) {
+    type = "proposal";
+  } else if (
+    await exists(() =>
+      database
+        .select({ id: entities.id })
+        .from(entities)
+        .where(eq(entities.id, id))
+        .limit(1)
+    )
+  ) {
+    type = "entity";
+  } else if (
+    await exists(() =>
+      database
+        .select({ id: views.id })
+        .from(views)
+        .where(eq(views.id, id))
+        .limit(1)
+    )
+  ) {
+    type = "view";
+  } else if (
+    await exists(() =>
+      database
+        .select({ id: documents.id })
+        .from(documents)
+        .where(eq(documents.id, id))
+        .limit(1)
+    )
+  ) {
+    type = "document";
+  } else if (
+    await exists(() =>
+      database
+        .select({ id: channels.id })
+        .from(channels)
+        .where(eq(channels.id, id))
+        .limit(1)
+    )
+  ) {
+    // Channels back post_message / get_channel links; the browser deep-link
+    // handler opens `synap://open/channel/<id>` in the main panel.
+    type = "channel";
+  }
+
+  const deep = type ? `synap://open/${type}/${id}` : `synap://open/${id}`;
+  return c.html(renderDeepLinkPage(deep));
 });
 
 // Ory Kratos routes
@@ -1511,193 +1617,6 @@ ${
   return c.html(html);
 });
 
-// ── Internal signal route endpoint ────────────────────────────────────────────
-//
-// POST /internal/signal/route — loopback-only, gated by X-Bridge-Secret.
-// Used by the jobs package (proactive-post.ts) to delegate external-surface
-// delivery to routeSignal in @synap/api, avoiding a circular dep.
-//
-// This is NOT a public endpoint — it should never be exposed through Caddy.
-app.post("/internal/signal/route", async (c) => {
-  const secret = process.env.BRIDGE_SECRET;
-  if (secret) {
-    const incoming = c.req.header("x-bridge-secret") ?? "";
-    if (!safeTokenEqual(incoming, secret)) {
-      return c.json({ error: "Forbidden" }, 403);
-    }
-  }
-
-  try {
-    const body = await c.req.json();
-    const {
-      domain,
-      content,
-      userId,
-      workspaceId,
-      proactiveType,
-      metadata,
-      externalOverride,
-    } = body as {
-      domain?: string;
-      content?: string;
-      userId?: string;
-      workspaceId?: string;
-      proactiveType?: string;
-      metadata?: Record<string, unknown>;
-      externalOverride?: { provider: string; channelRef: string };
-    };
-
-    if (!domain || !content || !userId || !workspaceId) {
-      return c.json(
-        { error: "domain, content, userId, workspaceId are required" },
-        400
-      );
-    }
-
-    const apiModule = (await import("@synap/api")) as unknown as {
-      routeSignal: (
-        input: Record<string, unknown>
-      ) => Promise<{ delivered: boolean; messageId?: string }>;
-    };
-    const result = await apiModule.routeSignal({
-      domain,
-      content,
-      userId,
-      workspaceId,
-      proactiveType,
-      metadata,
-      externalOverride,
-    });
-
-    return c.json(result);
-  } catch (err) {
-    apiLogger.error({ err }, "/internal/signal/route failed");
-    return c.json({ error: "internal_error" }, 500);
-  }
-});
-
-// ── Internal mail-feed run endpoint ───────────────────────────────────────────
-//
-// POST /internal/mail-feed/run — loopback-only, gated by X-Bridge-Secret.
-// Used by the jobs `mail-feed-cron` worker to run the capability-heavy mail feed
-// (gmail_search + IS triage + post) which lives in @synap/api, avoiding a
-// circular dep. NOT public — never exposed through Caddy.
-app.post("/internal/mail-feed/run", async (c) => {
-  // FAIL-CLOSED: require BRIDGE_SECRET. Without it the endpoint refuses (503),
-  // so a misconfigured deploy (or the Caddy :80 catch-all reaching /internal/*)
-  // cannot drive gmail reads / LLM calls unauthenticated.
-  const secret = process.env.BRIDGE_SECRET;
-  if (!secret) return c.json({ error: "not_configured" }, 503);
-  if (!safeTokenEqual(c.req.header("x-bridge-secret") ?? "", secret)) {
-    return c.json({ error: "Forbidden" }, 403);
-  }
-
-  try {
-    const apiModule = (await import("@synap/api")) as unknown as {
-      runMailFeed: () => Promise<Record<string, unknown>>;
-    };
-    const result = await apiModule.runMailFeed();
-    return c.json(result);
-  } catch (err) {
-    apiLogger.error({ err }, "/internal/mail-feed/run failed");
-    return c.json({ error: "internal_error" }, 500);
-  }
-});
-
-// ── Internal event-sync run endpoint ──────────────────────────────────────────
-//
-// POST /internal/event-sync/run — loopback-only, gated by X-Bridge-Secret.
-// Used by the jobs `event-sync-cron` worker to run the capability-heavy event
-// sync (event entities + Stellar deadlines + Google Calendar → native Discord
-// scheduled events) which lives in @synap/api, avoiding a circular dep. NOT
-// public — never exposed through Caddy.
-app.post("/internal/event-sync/run", async (c) => {
-  // FAIL-CLOSED: require BRIDGE_SECRET (see /internal/mail-feed/run).
-  const secret = process.env.BRIDGE_SECRET;
-  if (!secret) return c.json({ error: "not_configured" }, 503);
-  if (!safeTokenEqual(c.req.header("x-bridge-secret") ?? "", secret)) {
-    return c.json({ error: "Forbidden" }, 403);
-  }
-
-  try {
-    const apiModule = (await import("@synap/api")) as unknown as {
-      runEventSync: () => Promise<Record<string, unknown>>;
-    };
-    const result = await apiModule.runEventSync();
-    return c.json(result);
-  } catch (err) {
-    apiLogger.error({ err }, "/internal/event-sync/run failed");
-    return c.json({ error: "internal_error" }, 500);
-  }
-});
-
-// ── Internal capability-execute endpoint ──────────────────────────────────────
-//
-// POST /internal/capabilities/execute — loopback-only, gated by X-Bridge-Secret.
-// Bridges the jobs `automation-executor` skill/capability nodes to the canonical
-// capability router `executeCapability` (which routes all 3 tiers — builtin /
-// declarative / code — and gates internally). jobs cannot import @synap/api
-// (circular dep: api → jobs → database), so — exactly like /internal/mail-feed/run
-// — it POSTs this loopback endpoint instead. NOT public — never exposed via Caddy.
-app.post("/internal/capabilities/execute", async (c) => {
-  // FAIL-CLOSED: require BRIDGE_SECRET (see /internal/mail-feed/run).
-  const secret = process.env.BRIDGE_SECRET;
-  if (!secret) return c.json({ error: "not_configured" }, 503);
-  if (!safeTokenEqual(c.req.header("x-bridge-secret") ?? "", secret)) {
-    return c.json({ error: "Forbidden" }, 403);
-  }
-
-  try {
-    const body = (await c.req.json().catch(() => ({}))) as {
-      verbId?: string;
-      skillId?: string;
-      parameters?: Record<string, unknown>;
-      workspaceId?: string | null;
-      userId?: string;
-      connectionSelector?: {
-        connectionId?: string;
-        contextObjectId?: string;
-      } | null;
-      suppressProposal?: boolean;
-    };
-
-    if (!body.userId) {
-      return c.json({ error: "userId is required" }, 400);
-    }
-
-    const apiModule = (await import("@synap/api")) as unknown as {
-      executeCapability: (input: {
-        verbId?: string;
-        skillId?: string;
-        parameters?: Record<string, unknown>;
-        workspaceId: string | null;
-        userId: string;
-        connectionSelector?: {
-          connectionId?: string;
-          contextObjectId?: string;
-        } | null;
-        suppressProposal?: boolean;
-      }) => Promise<Record<string, unknown>>;
-    };
-
-    // Return the discriminated result verbatim (kind: run|proposed|deny|dry-run|
-    // not_found) — the caller maps it to the automation step output / error.
-    const result = await apiModule.executeCapability({
-      verbId: body.verbId,
-      skillId: body.skillId,
-      parameters: body.parameters,
-      workspaceId: body.workspaceId ?? null,
-      userId: body.userId,
-      connectionSelector: body.connectionSelector ?? null,
-      suppressProposal: body.suppressProposal ?? false,
-    });
-    return c.json(result);
-  } catch (err) {
-    apiLogger.error({ err }, "/internal/capabilities/execute failed");
-    return c.json({ error: "internal_error" }, 500);
-  }
-});
-
 // 404 handler
 app.notFound((c) => {
   return c.json({ error: "Not found" }, 404);
@@ -1907,6 +1826,31 @@ try {
               });
             });
             apiLogger.info("Registered import-corpus handler (IoC)");
+          }
+
+          // IoC: fill the capability / signal / feed-runner slots owned by
+          // @synap/jobs with the @synap/api implementations. The pg-boss workers
+          // run IN this process, but @synap/jobs can't statically import
+          // @synap/api (circular dep) — so we inject here at boot. This replaces
+          // the former /internal/* HTTP loopback + BRIDGE_SECRET: everything is a
+          // direct in-process call now.
+          {
+            const { registerCapabilityExecutor } =
+              await import("@synap/jobs/workers/automation-executor.js");
+            const { registerMailFeedRunner } =
+              await import("@synap/jobs/workers/mail-feed-cron.js");
+            const { registerEventSyncRunner } =
+              await import("@synap/jobs/workers/event-sync-cron.js");
+            const { registerSignalRouter } =
+              await import("@synap/jobs/utils/proactive-post.js");
+            const api = await import("@synap/api");
+            registerCapabilityExecutor((input) => api.executeCapability(input));
+            registerMailFeedRunner(() => api.runMailFeed());
+            registerEventSyncRunner(() => api.runEventSync());
+            registerSignalRouter((input) => api.routeSignal(input));
+            apiLogger.info(
+              "Registered capability / mail-feed / event-sync / signal handlers (IoC)"
+            );
           }
 
           await registerCronSchedules();

@@ -30,6 +30,7 @@ import {
   getDefaultActiveService,
 } from "../../../utils/intelligence-routing.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
+import { openLink } from "../../../utils/deep-links.js";
 import { materializeCompositeGraph } from "../../../utils/materialize-composite.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
@@ -888,15 +889,10 @@ export function registerCaptureRoutes(app: HubHono): void {
       });
 
       const proposalId = (created as { id?: string })?.id;
-      // Clickable review link: the pod's public /open/:type/:id route serves an
-      // https page that redirects to synap://open/proposal/<id> (opens the app).
-      // https is what Discord linkifies — synap:// alone is not clickable there.
-      const pub = process.env.PUBLIC_URL?.replace(/^http:/, "https:").replace(
-        /\/$/,
-        ""
-      );
-      const reviewUrl =
-        pub && proposalId ? `${pub}/open/proposal/${proposalId}` : undefined;
+      // Clickable review link: the pod's public /open/:id route resolves the id
+      // to its type server-side and redirects to synap://open/<type>/<id> (opens
+      // the app). https is what Discord linkifies — synap:// alone is not.
+      const reviewUrl = proposalId ? openLink(proposalId) : undefined;
       logger.info(
         {
           userId,

@@ -28,6 +28,7 @@ import type { WorkspaceSettings, AgentMetadata } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { deriveAuthorshipMode } from "../services/agent-identity-service.js";
 import { logEvent } from "../lib/event-helpers.js";
+import { openLink, openPath } from "./deep-links.js";
 import {
   decideAgentPolicy,
   findMatchingPattern,
@@ -90,9 +91,9 @@ export type PermissionResult =
       summary: string;
       /** The AI's reasoning, echoed back so callers can surface it to the user. */
       reasoning: string;
-      /** Pod-relative path for the review UI: `/proposals/{id}`. */
+      /** Pod-relative path into the app: `/open/{id}`. */
       reviewPath: string;
-      /** Absolute URL to review the proposal (e.g., studio.synap.live). */
+      /** Absolute clickable link into the app: `${PUBLIC_URL}/open/{id}`. */
       reviewUrl: string;
     }
   | { denied: true; reason: string };
@@ -112,14 +113,6 @@ type EntityPreviousData = {
   documentId?: string | null;
   properties?: Record<string, unknown>;
 };
-
-/**
- * Base URL of the Synap Studio app where proposals are reviewed.
- * Override via `SYNAP_APP_URL` env var (e.g., self-hosted: `https://app.my-pod.com`).
- * Default: `https://studio.synap.live`.
- */
-export const STUDIO_APP_URL =
-  process.env.SYNAP_APP_URL?.replace(/\/$/, "") ?? "https://studio.synap.live";
 
 // DEFAULT_AUTO_APPROVE, DESTRUCTIVE_ACTIONS, and ADMIN_ACTIONS moved to
 // @synap/governance-policy (imported + re-exported above for back-compat).
@@ -752,14 +745,13 @@ export function buildProposalResponseFields(opts: {
     opts.action,
     opts.data
   );
-  const reviewPath = `/proposals/${opts.proposalId}`;
   return {
     summary,
     reasoning:
       opts.reasoning ??
       `${opts.action} ${opts.subjectType} requires your approval`,
-    reviewPath,
-    reviewUrl: `${STUDIO_APP_URL}${reviewPath}`,
+    reviewPath: openPath(opts.proposalId),
+    reviewUrl: openLink(opts.proposalId),
   };
 }
 
@@ -1063,15 +1055,14 @@ async function createProposal(opts: {
   // Post-commit notifications (broadcast / side-effects / notification center).
   await notifyProposalCreated(proposal, pendingInput);
 
-  const reviewPath = `/proposals/${proposal.id}`;
   return {
     granted: false,
     proposalId: proposal.id,
     proposalType: `${subjectType}.${action}`,
     summary,
     reasoning: reasoning ?? `${action} ${singularType} requires your approval`,
-    reviewPath,
-    reviewUrl: `${STUDIO_APP_URL}${reviewPath}`,
+    reviewPath: openPath(proposal.id),
+    reviewUrl: openLink(proposal.id),
   };
 }
 
@@ -1167,8 +1158,8 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
       proposalType: "join",
       summary,
       reasoning,
-      reviewPath: `/proposals/${existing.id}`,
-      reviewUrl: `${STUDIO_APP_URL}/proposals/${existing.id}`,
+      reviewPath: openPath(existing.id),
+      reviewUrl: openLink(existing.id),
     };
   }
 
@@ -1210,8 +1201,8 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
     proposalType: "join",
     summary,
     reasoning,
-    reviewPath: `/proposals/${row.id}`,
-    reviewUrl: `${STUDIO_APP_URL}/proposals/${row.id}`,
+    reviewPath: openPath(row.id),
+    reviewUrl: openLink(row.id),
   };
 }
 

@@ -219,14 +219,15 @@ type CapabilityDispatchResult =
   | { kind: "not_found"; message: string };
 
 /**
- * Dispatch a capability (verb or skill) through the CANONICAL router
- * `executeCapability` — which routes all 3 tiers (builtin / declarative / code)
- * + connectionSelector and gates internally. Bridged over a loopback HTTP call to
- * the api process (`/internal/capabilities/execute`) because jobs ⊥ api (circular
- * dep) — the SAME pattern the mail-feed / event-sync crons use. Reuses the same
- * API_INTERNAL_URL + BRIDGE_SECRET env contract as `mail-feed-cron.ts`.
+ * IoC slot for the canonical capability router `executeCapability` (in @synap/api).
+ *
+ * The workers here run IN the backend (apps/api) process — pg-boss is started
+ * in-process — but this package (@synap/jobs) cannot statically import @synap/api
+ * (circular dep: api → jobs → database). So apps/api, the one place that may
+ * import both, fills this slot at boot via `registerCapabilityExecutor()` — the
+ * SAME IoC pattern as `registerImportCorpusHandler`. No HTTP, no shared secret.
  */
-async function dispatchViaCapabilityRouter(input: {
+export type CapabilityExecutorInput = {
   verbId?: string;
   skillId?: string;
   parameters?: Record<string, unknown>;
@@ -236,44 +237,40 @@ async function dispatchViaCapabilityRouter(input: {
     connectionId?: string;
     contextObjectId?: string;
   } | null;
-}): Promise<CapabilityDispatchResult> {
-  const apiUrl = process.env.API_INTERNAL_URL ?? "http://localhost:4000";
-  const secret = process.env.BRIDGE_SECRET;
-  // Fail fast with a clear message rather than sending no header → an opaque 503.
-  if (!secret) {
+  suppressProposal?: boolean;
+};
+
+type CapabilityExecutor = (
+  input: CapabilityExecutorInput
+) => Promise<CapabilityDispatchResult>;
+
+let capabilityExecutor: CapabilityExecutor | null = null;
+
+export function registerCapabilityExecutor(fn: CapabilityExecutor): void {
+  capabilityExecutor = fn;
+}
+
+/**
+ * Dispatch a capability (verb or skill) through the CANONICAL router
+ * `executeCapability` — which routes all 3 tiers (builtin / declarative / code)
+ * + connectionSelector and gates internally. In-process via the IoC slot above.
+ *
+ * Intentionally THROWS if the slot is unregistered — unlike the cron/signal-router
+ * slots (which warn+skip), a dropped automation step must not silently vanish; it
+ * surfaces as a step failure (pg-boss retries) rather than a no-op.
+ */
+async function dispatchViaCapabilityRouter(
+  input: Omit<CapabilityExecutorInput, "suppressProposal">
+): Promise<CapabilityDispatchResult> {
+  if (!capabilityExecutor) {
     throw new Error(
-      "BRIDGE_SECRET is not configured in the jobs runtime — cannot dispatch a capability/skill node through /internal/capabilities/execute."
+      "Capability executor not registered — apps/api must call registerCapabilityExecutor() at boot"
     );
   }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 60_000);
-  let res: Response;
-  try {
-    res = await fetch(`${apiUrl}/internal/capabilities/execute`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Bridge-Secret": secret,
-      },
-      // Automations have NO interactive review surface — suppress proposal
-      // persistence so a recurring run can't flood the proposal queue; an
-      // unapproved verb returns a plain `deny` (fail-closed below).
-      body: JSON.stringify({ ...input, suppressProposal: true }),
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-  } catch (err) {
-    clearTimeout(timer);
-    throw err;
-  }
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Capability dispatch failed: ${res.status} ${body}`);
-  }
-
-  return (await res.json()) as CapabilityDispatchResult;
+  // Automations have NO interactive review surface — suppress proposal
+  // persistence so a recurring run can't flood the proposal queue; an
+  // unapproved verb returns a plain `deny` (fail-closed by the caller).
+  return capabilityExecutor({ ...input, suppressProposal: true });
 }
 
 /**

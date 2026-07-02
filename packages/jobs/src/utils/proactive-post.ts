@@ -352,59 +352,66 @@ async function postProactiveNotification(
 }
 
 /**
- * Delegate external (Discord / Telegram / …) delivery to the API process via
- * a loopback HTTP call to POST /internal/signal/route.
+ * IoC slot for `routeSignal` (external Discord / Telegram / … delivery), which
+ * lives in @synap/api.
  *
- * The jobs package cannot import @synap/api (circular dep), so this is the
- * canonical bridge. The endpoint is internal-only (bound to loopback / behind
- * the same process network; no public auth needed — uses BRIDGE_SECRET).
+ * This runs IN the backend (apps/api) process, but @synap/jobs cannot statically
+ * import @synap/api (circular dep). So apps/api fills this slot at boot via
+ * `registerSignalRouter()` — the IoC pattern used across this package.
+ *
+ * The input mirrors @synap/api's `RouteSignalInput` structurally (which we can't
+ * import across the boundary) — `domain` reuses `keyof DeliveryPreferences` and
+ * `proactiveType` the local `ProactiveMessageType`, both @synap/database-derived,
+ * so apps/api can register `routeSignal` with NO cast.
+ */
+type SignalRouter = (input: {
+  domain: keyof DeliveryPreferences;
+  content: string;
+  userId: string;
+  workspaceId: string;
+  proactiveType?: ProactiveMessageType;
+  metadata?: Record<string, unknown>;
+}) => Promise<{ delivered?: boolean; messageId?: string }>;
+
+let signalRouter: SignalRouter | null = null;
+
+export function registerSignalRouter(fn: SignalRouter): void {
+  signalRouter = fn;
+}
+
+/**
+ * Delegate external (Discord / Telegram / …) delivery to `routeSignal` in
+ * @synap/api via the in-process IoC slot above.
  */
 async function postToExternalViaBridge(
   options: PostProactiveOptions
 ): Promise<PostProactiveResult> {
-  const apiUrl = process.env.API_INTERNAL_URL ?? "http://localhost:4000";
-  const secret = process.env.BRIDGE_SECRET ?? "";
+  if (!signalRouter) {
+    logger.warn(
+      { userId: options.userId },
+      "signal router not registered — skipping external delivery"
+    );
+    return { posted: false, reason: "signal_router_unregistered" };
+  }
 
   try {
-    const res = await fetch(`${apiUrl}/internal/signal/route`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(secret ? { "X-Bridge-Secret": secret } : {}),
-      },
-      body: JSON.stringify({
-        domain: "proactive",
-        content: options.content,
-        userId: options.userId,
-        workspaceId: options.workspaceId,
-        proactiveType: options.proactiveType,
-        metadata: options.metadata,
-      }),
-      signal: AbortSignal.timeout(10_000),
+    const result = await signalRouter({
+      domain: "proactive",
+      content: options.content,
+      userId: options.userId,
+      workspaceId: options.workspaceId,
+      proactiveType: options.proactiveType,
+      metadata: options.metadata,
     });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      logger.warn(
-        { status: res.status, body: text, userId: options.userId },
-        "external delivery bridge returned non-OK status"
-      );
-      return { posted: false, reason: `bridge_http_${res.status}` };
-    }
-
-    const body = (await res.json()) as {
-      delivered?: boolean;
-      messageId?: string;
-    };
-    return { posted: body.delivered ?? false, messageId: body.messageId };
+    return { posted: result.delivered ?? false, messageId: result.messageId };
   } catch (err) {
     logger.warn(
       { err, userId: options.userId, workspaceId: options.workspaceId },
-      "external delivery bridge call failed"
+      "external delivery via routeSignal failed"
     );
     return {
       posted: false,
-      reason: err instanceof Error ? err.message : "bridge_error",
+      reason: err instanceof Error ? err.message : "signal_router_error",
     };
   }
 }
@@ -473,10 +480,8 @@ export async function routeProactiveMessage(
           case "notification":
             return postProactiveNotification(options);
           case "external":
-            // jobs package cannot import @synap/api (circular dep) so external
-            // delivery is delegated to the API process via an internal HTTP call
-            // to POST /internal/signal/route — the API's routeSignal behind a
-            // thin internal-only endpoint (no auth token needed: loopback-only).
+            // Delegates to @synap/api's `routeSignal` via the in-process IoC
+            // `signalRouter` slot (see its definition above).
             return postToExternalViaBridge(options);
           default:
             // `surfaces` is a stored string[]; an unrecognized surface is a

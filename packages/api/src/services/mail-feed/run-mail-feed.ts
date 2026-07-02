@@ -1,8 +1,8 @@
 /**
  * Mail Feed — capability-heavy orchestration (api-side).
  *
- * Runs on a schedule (via the jobs `mail-feed-cron` worker POSTing the loopback
- * endpoint `/internal/mail-feed/run`). For the pod's Discord tool with a
+ * Runs on a schedule: the jobs `mail-feed-cron` worker invokes this in-process
+ * via the `registerMailFeedRunner` IoC slot. For the pod's Discord tool with a
  * `metadata.discord.mailFeed` config it:
  *   1. gmail_search — fetch recent emails (metadata + snippet only, no bodies)
  *   2. watermark    — skip anything at/older than the last processed timestamp

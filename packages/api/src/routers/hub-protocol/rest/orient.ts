@@ -70,7 +70,7 @@ export function registerOrientRoutes(app: HubHono): void {
       const result = await discover({
         caller,
         userId,
-        scopes,
+        authScopes: scopes,
         detail,
         scope,
         workspaceId,

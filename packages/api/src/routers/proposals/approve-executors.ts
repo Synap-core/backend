@@ -19,6 +19,7 @@ import {
   skills,
   documents,
   documentVersions,
+  focusSessions,
   eq,
   getWorkspaceMembership,
   normalizeDocumentType,
@@ -33,6 +34,7 @@ import { ProposalStatus } from "@synap/database/schema";
 import type { ProposalMaterializedRecord } from "@synap-core/types";
 import { storage } from "@synap/storage";
 import { auditLog } from "../../utils/audit-log.js";
+import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { channelsRouter } from "../channels.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import {
@@ -440,6 +442,102 @@ export function registerApproveExecutors(): void {
         .set({
           status: ProposalStatus.APPROVED,
           data: createPayload,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── focus_session / create ──────────────────────────────────────────────────
+  // A gated createFocusSession (AI caller in a review-required workspace) lands
+  // here on approval. Without this executor the `*/*` catch-all flipped the
+  // proposal APPROVED but NEVER inserted the session row — approving a
+  // focus-session proposal materialized NOTHING, and update/list/complete (which
+  // scope by the operator userId) could never find it. Structure mirrors
+  // entity/create; the insert mirrors services/focus-sessions/create-session.ts.
+  //
+  // CONSERVATIVE NOTE: createFocusSession only persists { goal, templateId } into
+  // the permission `data` at propose time, so subjectEntityId / channelId /
+  // expectedOutputs / agentIds are NOT carried through the proposal — they default
+  // to null/[] here. Preserving them would require widening the gate `data` in
+  // create-session.ts (flagged for review). workspaceId / projectId come from the
+  // proposal row.
+  registerProposalExecutor({
+    key: "focus_session/create",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const goal = innerData.goal as string | undefined;
+      if (!goal) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Focus session proposal is missing goal",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch and the row
+      // uses a fixed id, so skip if this proposal was already materialized.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const [created] = await db
+        .insert(focusSessions)
+        .values({
+          // id = proposal.targetId so any link built at propose time resolves.
+          id: proposal.targetId,
+          workspaceId: proposal.workspaceId,
+          projectId: proposal.projectId,
+          subjectEntityId:
+            (innerData.subjectEntityId as string | undefined) ?? null,
+          // userId = the operator/approver so update/list/complete (scoped by
+          // operator userId) can resolve this session.
+          userId,
+          goal,
+          templateId: (innerData.templateId as string | undefined) ?? null,
+          expectedOutputs:
+            (innerData.expectedOutputs as unknown[] | undefined) ?? [],
+          channelId: (innerData.channelId as string | undefined) ?? null,
+          agentIds: (innerData.agentIds as string[] | undefined) ?? [],
+          status: "active",
+        })
+        .onConflictDoNothing()
+        .returning();
+
+      // Mirror create-session.ts:134 so the browser mirrors the new session live.
+      if (created) {
+        emitHubRealtimeEvent({
+          eventType: "focus_session.create.completed",
+          subjectId: created.id,
+          userId,
+          data: {
+            id: created.id,
+            workspaceId: created.workspaceId,
+            status: created.status,
+            goal: created.goal,
+            progress: created.progress,
+          },
+        });
+      }
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),

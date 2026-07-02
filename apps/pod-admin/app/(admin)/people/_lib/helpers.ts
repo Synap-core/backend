@@ -17,7 +17,7 @@
  * in its auth provider and calling `updateWorkspaceId`. Until then, this
  * helper is best-effort: the URL opens Studio on its default workspace.
  *
- * In dev, `NEXT_PUBLIC_STUDIO_URL` points to the local Studio dev server.
+ * In dev, `NEXT_PUBLIC_SYNAP_HUB_URL` points to the local Hub dev server.
  */
 
 export function formatRelative(date: Date): string {
@@ -46,11 +46,11 @@ export function formatExpiresAt(date: Date): string {
   return `${days}d left`;
 }
 
-const STUDIO_BASE =
-  process.env.NEXT_PUBLIC_STUDIO_URL ?? "https://studio.synap.live";
+const HUB_BASE =
+  process.env.NEXT_PUBLIC_SYNAP_HUB_URL ?? "https://hub.synap.live";
 
 export function studioDeepLinkForWorkspace(workspaceId: string): string {
-  const url = new URL(STUDIO_BASE);
+  const url = new URL(HUB_BASE);
   url.searchParams.set("ws", workspaceId);
   return url.toString();
 }
@@ -58,7 +58,7 @@ export function studioDeepLinkForWorkspace(workspaceId: string): string {
 export function studioDeepLinkForWorkspaceSettings(
   workspaceId: string
 ): string {
-  const url = new URL("/settings/workspace/general", STUDIO_BASE);
+  const url = new URL("/settings/workspace/general", HUB_BASE);
   url.searchParams.set("ws", workspaceId);
   return url.toString();
 }

@@ -38,7 +38,7 @@ export type DiscoverScope = "workspaces" | "projects" | "profiles";
 
 const ALL_SCOPES: DiscoverScope[] = ["workspaces", "projects", "profiles"];
 
-export interface DiscoverOptions {
+interface DiscoverOptions {
   detail?: DiscoverDetail;
   scope?: DiscoverScope[];
   workspaceId?: string;
@@ -49,7 +49,8 @@ export interface DiscoverParams extends DiscoverOptions {
   /** A hub-protocol caller (for profiles.listProfiles). Built by the call site. */
   caller: HubProtocolCaller;
   userId: string;
-  scopes: string[];
+  /** The caller's auth scopes — echoed to `me.scopes` (NOT the section filter). */
+  authScopes: string[];
 }
 
 interface OnboardingSpec {
@@ -57,7 +58,7 @@ interface OnboardingSpec {
   [k: string]: unknown;
 }
 
-export interface DiscoverWorkspace {
+interface DiscoverWorkspace {
   id: string;
   name: string;
   /** Operational-domain label: settings.workspaceSubtype ?? workspaceType. */
@@ -71,7 +72,7 @@ export interface DiscoverWorkspace {
   profiles?: Array<{ slug: string; name: string }>;
 }
 
-export interface DiscoverProject {
+interface DiscoverProject {
   id: string;
   name: string;
   description: string | null;
@@ -80,7 +81,7 @@ export interface DiscoverProject {
   homeWorkspace: string | null;
 }
 
-export interface DiscoverResult {
+interface DiscoverResult {
   me: { userId: string; scopes: string[] };
   detail: DiscoverDetail;
   projects: DiscoverProject[];
@@ -124,7 +125,7 @@ function buildNote(projectCount: number, workspaceCount: number): string {
 export async function discover(
   params: DiscoverParams
 ): Promise<DiscoverResult> {
-  const { caller, userId, scopes, workspaceId, projectId } = params;
+  const { caller, userId, authScopes, workspaceId, projectId } = params;
   const detail: DiscoverDetail = params.detail ?? "light";
   const wantScopes =
     params.scope && params.scope.length ? params.scope : ALL_SCOPES;
@@ -290,7 +291,7 @@ export async function discover(
   }
 
   return {
-    me: { userId, scopes },
+    me: { userId, scopes: authScopes },
     detail,
     projects: projectsOut,
     projectCount: projectsOut.length,

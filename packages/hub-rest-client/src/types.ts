@@ -564,14 +564,14 @@ export interface HubGovernanceResult {
    */
   reasoning?: string;
   /**
-   * Pod-relative path for the review UI: `/proposals/{id}`.
+   * Pod-relative path into the app: `/open/{id}`.
    * Present on `proposed` responses.
    */
   reviewPath?: string;
   /**
-   * Absolute URL for the review UI (defaults to `studio.synap.live`,
-   * overridable via `SYNAP_APP_URL` on the pod). Surface this directly to
-   * the user so they can approve without digging through the app.
+   * Absolute clickable link into the app: `${PUBLIC_URL}/open/{id}`. The pod
+   * resolves the id's type server-side and bounces to the Electron app. Surface
+   * this directly to the user so they can approve without digging through the app.
    */
   reviewUrl?: string;
 }

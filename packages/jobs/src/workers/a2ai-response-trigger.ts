@@ -85,6 +85,13 @@ async function callIntelligenceHub(
     sourceMessageId: payload.sourceMessageId,
     focusSessionId: payload.focusSessionId,
     agentUserId: payload.agentUserId,
+    // REQUIRED: without this the IS chat-stream takes its non-streaming branch
+    // (`if (!input.stream)` → agent.execute → plain JSON response), so this
+    // worker's SSE parser finds no `data:` lines and the reply is always dropped
+    // as "empty". The model ran fine all along — the response FORMAT never
+    // matched the parser. With stream:true the IS emits SSE (content deltas +
+    // the authoritative `complete` event), which the loop below consumes.
+    stream: true,
   });
 
   const headers: Record<string, string> = {
@@ -109,6 +116,8 @@ async function callIntelligenceHub(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let acc = "";
+  let completeContent = "";
+  let streamError = "";
   let buf = "";
 
   while (true) {
@@ -122,7 +131,12 @@ async function callIntelligenceHub(
       const raw = line.slice(6).trim();
       if (!raw || raw === "[DONE]") continue;
       try {
-        const evt = JSON.parse(raw) as { type?: string; content?: string };
+        const evt = JSON.parse(raw) as {
+          type?: string;
+          content?: string;
+          error?: string;
+          data?: { content?: string };
+        };
         // The IS chat-stream emits incremental text as `{type:"content"}`
         // (see routes/chat-stream.ts onContent). This worker previously matched
         // `type:"chunk"`, which never exists — so every content event was dropped
@@ -132,6 +146,14 @@ async function callIntelligenceHub(
         if (evt.type === "content" && evt.content) {
           acc += evt.content;
           onChunk(evt.content);
+        } else if (evt.type === "complete") {
+          // Authoritative final text — the IS also sends the full response in the
+          // `complete` event (chat-stream.ts → data.content = result.content).
+          // Prefer this when the incremental stream produced nothing (e.g. the
+          // agent emitted text only via the final message, not token deltas).
+          completeContent = evt.data?.content ?? "";
+        } else if (evt.type === "error") {
+          streamError = evt.error ?? "unknown IS stream error";
         }
       } catch {
         // ignore malformed lines
@@ -139,7 +161,24 @@ async function callIntelligenceHub(
     }
   }
 
-  return acc;
+  const finalText = acc || completeContent;
+  logger.info(
+    {
+      streamedLen: acc.length,
+      completeLen: completeContent.length,
+      finalLen: finalText.length,
+      streamError: streamError || undefined,
+    },
+    "A2AI SSE drained"
+  );
+  if (streamError && !finalText) {
+    logger.error(
+      { streamError },
+      "A2AI IS stream returned error with no content"
+    );
+  }
+
+  return finalText;
 }
 
 export async function handleA2AIResponseTrigger(
