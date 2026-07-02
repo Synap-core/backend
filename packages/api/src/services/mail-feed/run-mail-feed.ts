@@ -16,6 +16,14 @@
  * because gmail_search (executeCapability) + the IS triage call are api-side; the
  * jobs `mail-feed-cron` worker invokes it in-process via the `registerMailFeedRunner`
  * IoC slot (jobs can't import @synap/api).
+ *
+ * STAGED-MIGRATION HOLDOUT (backend-agnostic rule): the canonical target is the
+ * config-first `mail-feed.automation.json` template composing the same verbs
+ * (gmail_search → ai.triage → feed.post). This bespoke service persists ONLY
+ * because `updateWatermark` + `senderAllow/Deny` filtering are not yet expressible
+ * as automation nodes. Migrate the AI+post steps to the template and keep only a
+ * thin watermark/filter helper once the DSL supports them; do not add new
+ * feature logic here.
  */
 
 import { db, tools, eq, drizzleSql } from "@synap/database";

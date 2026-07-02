@@ -30,6 +30,7 @@ export {
   resolveIntelligenceServiceByAgentId,
   resolveAgent,
   getDefaultActiveService,
+  setDefaultIntelligenceService,
 } from "./intelligence-routing.js";
 
 export type {

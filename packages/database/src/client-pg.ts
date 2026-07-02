@@ -33,6 +33,15 @@ const DATABASE_URL =
 // with PgBouncer) so API + pg-boss + admin stay under it.
 const DB_POOL_SIZE = parseInt(process.env.DB_POOL_SIZE || "50", 10);
 
+// Idle connection timeout (seconds).
+//
+// Default raised from 20 → 120 to avoid reconnect cold-starts after typical
+// agent think-time pauses. Set DB_IDLE_TIMEOUT to override.
+const DB_IDLE_TIMEOUT_RAW = parseInt(process.env.DB_IDLE_TIMEOUT || "120", 10);
+const DB_IDLE_TIMEOUT = Number.isFinite(DB_IDLE_TIMEOUT_RAW)
+  ? DB_IDLE_TIMEOUT_RAW
+  : 120;
+
 logger.info({
   poolSize: DB_POOL_SIZE,
   url: DATABASE_URL.replace(/:[^:@]+@/, ":***@"), // Hide password in logs
@@ -42,7 +51,7 @@ logger.info({
 // PostgreSQL connection configuration
 const connectionConfig = {
   max: DB_POOL_SIZE, // Connection pool size (env DB_POOL_SIZE, default 50)
-  idle_timeout: 20, // Close idle connections after 20s
+  idle_timeout: DB_IDLE_TIMEOUT, // Close idle connections after N seconds (env DB_IDLE_TIMEOUT, default 120)
   connect_timeout: 10, // Fail fast if DB unreachable
   onnotice: () => {}, // Suppress NOTICE messages
   debug: process.env.DB_DEBUG === "true", // Enable query logging if needed

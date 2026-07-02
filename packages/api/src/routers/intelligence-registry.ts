@@ -41,6 +41,7 @@ import { encryptServiceKey } from "../utils/service-key-crypto.js";
 import { auditLog } from "../utils/audit-log.js";
 import { getServiceEntry } from "../utils/agent-services/index.js";
 import { scopedProcedure } from "../middleware/api-key-auth.js";
+import { setDefaultIntelligenceService } from "../utils/intelligence-routing.js";
 import { SecretsVaultRepository } from "@synap/database";
 import {
   encryptConfig,
@@ -143,6 +144,17 @@ export const intelligenceRegistryRouter = router({
       );
 
       return service;
+    }),
+
+  /**
+   * Switch the pod's default intelligence service — flips the `is_default` flag
+   * the resolver picks when no workspace/user preference applies.
+   */
+  setDefault: protectedProcedure
+    .input(z.object({ serviceId: z.string() }))
+    .mutation(async ({ input }) => {
+      await setDefaultIntelligenceService(input.serviceId);
+      return { success: true, serviceId: input.serviceId };
     }),
 
   /**

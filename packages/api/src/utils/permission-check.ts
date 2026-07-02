@@ -831,31 +831,34 @@ async function notifyProposalCreated(
   proposal: typeof proposals.$inferSelect,
   input: CreatePendingProposalInput
 ): Promise<void> {
-  try {
-    const requestId =
-      typeof input.data.requestId === "string"
-        ? input.data.requestId
-        : proposal.id;
-    await broadcastNotification({
-      userId: input.userId,
-      requestId,
-      message: {
-        type: "proposal:created",
-        data: {
-          proposalId: proposal.id,
-          targetType: input.targetType,
-          targetId: input.targetId,
-          changeType: input.proposalType,
-          status: ProposalStatus.PENDING,
-        },
-        requestId,
-        status: "success",
-        timestamp: new Date().toISOString(),
+  const requestId =
+    typeof input.data.requestId === "string"
+      ? input.data.requestId
+      : proposal.id;
+  // Fire-and-forget: the proposal is already durably committed above. The
+  // realtime broadcast is a best-effort nudge and must NOT block the response —
+  // awaiting it hangs every proposal for the full fetch timeout (~5s) whenever
+  // the realtime service is unreachable. Mirrors the fire-and-forget pattern
+  // used for NotificationService.fromProposal below.
+  void broadcastNotification({
+    userId: input.userId,
+    requestId,
+    message: {
+      type: "proposal:created",
+      data: {
+        proposalId: proposal.id,
+        targetType: input.targetType,
+        targetId: input.targetId,
+        changeType: input.proposalType,
+        status: ProposalStatus.PENDING,
       },
-    });
-  } catch {
+      requestId,
+      status: "success",
+      timestamp: new Date().toISOString(),
+    },
+  }).catch(() => {
     // Broadcast failure is non-critical.
-  }
+  });
 
   emitSideEffects({
     subjectType: "proposal",

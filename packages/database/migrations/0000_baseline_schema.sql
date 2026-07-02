@@ -1816,9 +1816,11 @@ CREATE TABLE IF NOT EXISTS "intelligence_services" (
   "created_at"          timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"          timestamp with time zone NOT NULL DEFAULT now(),
   "last_health_check"   timestamp with time zone,
-  "last_health_status"  text
+  "last_health_status"  text,
+  "is_default"          boolean NOT NULL DEFAULT false
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "is_default" boolean NOT NULL DEFAULT false;
 ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "service_id" text;
 ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "name" text;
 ALTER TABLE "intelligence_services" ADD COLUMN IF NOT EXISTS "description" text;

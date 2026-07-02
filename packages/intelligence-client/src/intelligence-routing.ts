@@ -1,10 +1,13 @@
 /**
  * Intelligence Service Routing Helper
  *
- * Determines which intelligence service to use based on:
- * 1. Workspace preferences (if in workspace context)
- * 2. User preferences (capability-specific or default)
- * 3. Fallback to environment variable service
+ * Determines which intelligence service to use, in precedence order:
+ * 0. Capability-first (a service advertising the requested capability)
+ * 1. Workspace preference (if in workspace context)
+ * 2. User preference (capability-specific or default)
+ * 3. Pod default (the `is_default` service)
+ * 4. Failover (any active+enabled service with a real key)
+ * 5. Fallback to the environment-variable service
  */
 
 import { db, eq, and, drizzleSql } from "@synap/database";
@@ -204,11 +207,25 @@ export async function resolveIntelligenceService(
     ),
   });
   if (selectedDefault) {
-    logger.info(
-      { serviceId: selectedDefault.serviceId, source: "is_default" },
-      "IS resolved via the pod's selected default (is_default)"
+    // Skip a placeholder-key default: replica pods stamp synced rows with
+    // SYNC_PLACEHOLDER (the real key is per-pod). Without this guard an
+    // is_default placeholder row would short-circuit the failover's own real-key
+    // check below and send a dead key → guaranteed 401.
+    const hasRealKey =
+      !!selectedDefault.apiKey &&
+      selectedDefault.apiKey !== "SYNC_PLACEHOLDER" &&
+      selectedDefault.apiKey.length > 0;
+    if (hasRealKey) {
+      logger.info(
+        { serviceId: selectedDefault.serviceId, source: "is_default" },
+        "IS resolved via the pod's selected default (is_default)"
+      );
+      return { ...createClient(selectedDefault), agentUserId };
+    }
+    logger.debug(
+      { serviceId: selectedDefault.serviceId },
+      "Step 3: is_default service has a placeholder key — falling through to failover"
     );
-    return { ...createClient(selectedDefault), agentUserId };
   }
 
   // 4. Failover: if no service matched so far, check if ANY active+enabled service
@@ -216,7 +233,7 @@ export async function resolveIntelligenceService(
   //    This covers replica pods that received IS metadata via sync but whose preferred
   //    service lookup in steps 1-2 didn't match (no workspace/user preference set).
   logger.debug(
-    "Step 3: Checking for any active intelligence service (failover)"
+    "Step 4: Checking for any active intelligence service (failover)"
   );
   const anyActiveService = await db.query.intelligenceServices.findFirst({
     where: and(
@@ -247,13 +264,13 @@ export async function resolveIntelligenceService(
 
     logger.debug(
       { serviceId: anyActiveService.serviceId },
-      "Step 3: Found synced service but credentials are placeholder — falling through to env"
+      "Step 4: Found synced service but credentials are placeholder — falling through to env"
     );
   }
 
-  // 4. Fallback to default service from environment
+  // 5. Fallback to default service from environment
   logger.debug(
-    "Step 4: No DB-registered service matched — falling back to env default"
+    "Step 5: No DB-registered service matched — falling back to env default"
   );
   const defaultService = createDefaultClient();
   logger.info(
@@ -440,8 +457,23 @@ export async function getDefaultActiveService(): Promise<{
   // Thin facade over the ONE canonical resolver. Callers just ask for "the IS";
   // resolveIntelligenceService() decides (capability → workspace → user →
   // is_default → any active → env). No separate resolution logic lives here.
-  const svc = await resolveIntelligenceService();
-  return { endpoint: svc.endpoint, apiKey: svc.serviceApiKey };
+  //
+  // MUST NOT THROW: the fire-and-forget callers (proposal telemetry, mail-feed
+  // triage, background jobs) don't all guard this call, and a corrupted or
+  // undecryptable stored key makes resolveServiceKey()/createClient() throw.
+  // Degrade to the env client on any failure — the same never-throw contract
+  // this had before the resolver consolidation.
+  try {
+    const svc = await resolveIntelligenceService();
+    return { endpoint: svc.endpoint, apiKey: svc.serviceApiKey };
+  } catch (err) {
+    logger.warn(
+      { err },
+      "getDefaultActiveService: resolver threw — degrading to env fallback"
+    );
+    const ep = createDefaultClient();
+    return { endpoint: ep.endpoint, apiKey: ep.serviceApiKey };
+  }
 }
 
 /**
@@ -454,6 +486,17 @@ export async function setDefaultIntelligenceService(
   serviceId: string
 ): Promise<void> {
   await db.transaction(async (tx) => {
+    // Verify the target exists BEFORE clearing the current default — otherwise a
+    // stale/typo serviceId would clear the default and set nothing, silently
+    // leaving the pod with no default at all.
+    const [target] = await tx
+      .select({ id: intelligenceServices.id })
+      .from(intelligenceServices)
+      .where(eq(intelligenceServices.serviceId, serviceId))
+      .limit(1);
+    if (!target) {
+      throw new Error(`Intelligence service "${serviceId}" not found`);
+    }
     await tx
       .update(intelligenceServices)
       .set({ isDefault: false, updatedAt: new Date() })
