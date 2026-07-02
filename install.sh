@@ -37,7 +37,13 @@ INTELLIGENCE_API_KEY="${SYNAP_INTELLIGENCE_API_KEY:-}"
 ADMIN_EMAIL="${SYNAP_ADMIN_EMAIL:-}"
 BACKEND_VERSION_FLAG="${SYNAP_BACKEND_VERSION:-}"
 POD_AGENT_VERSION_FLAG="${SYNAP_POD_AGENT_VERSION:-}"
-CONTROL_PLANE_URL_FLAG="${SYNAP_CONTROL_PLANE_URL:-}"
+# Default to the Synap Control Plane so the capability MARKETPLACE catalog syncs
+# out of the box (empty → the pod-local template cache never populates → `cap add`
+# shows nothing). This is SAFE: CP JWT trust is gated by the `trusted_issuers`
+# registry (see trusted-issuer-service.ts), NOT by this URL — it drives the public
+# marketplace fetch + legacy JWKS only. Self-hosted installs override with
+# `--control-plane-url <url>` or `SYNAP_CONTROL_PLANE_URL=<url>`.
+CONTROL_PLANE_URL_FLAG="${SYNAP_CONTROL_PLANE_URL:-https://api.synap.live}"
 # PROVISIONING_TOKEN is used by setup-openclaw.sh to create agent users and
 # API keys. It is NOT used for CP trust (seed-trust uses ES256 JWTs instead).
 # Managed pods can inject a pre-generated token; self-hosted installs generate one.
@@ -357,6 +363,22 @@ SECRETS_EOF
   if ! grep -q "^VAULT_SERVER_KEY=" "$INSTALL_DIR/.env" 2>/dev/null; then
     printf '\n# Secret-vault encryption key (backfilled on update)\nVAULT_SERVER_KEY=%s\n' "$(openssl rand -hex 32)" >> "$INSTALL_DIR/.env"
     info "Backfilled VAULT_SERVER_KEY into .env (vault self-heal)"
+    RECREATE_FOR_CORS=1
+  fi
+
+  # Self-heal: backfill CONTROL_PLANE_URL (drives the capability MARKETPLACE
+  # catalog sync). Pods provisioned without --control-plane-url have it empty or
+  # missing, so the pod-local template cache never populates and `cap add` shows
+  # nothing to install. SAFE: CP JWT trust is gated by `trusted_issuers`, NOT this
+  # URL (see trusted-issuer-service.ts). Fill when absent OR empty; never overwrite
+  # an explicit value, so a self-hosted opt-out (a real URL, or a deliberate edit)
+  # is preserved.
+  _cp_cur="$(grep -E '^CONTROL_PLANE_URL=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
+  if [[ -z "$_cp_cur" ]]; then
+    # Drop any empty assignment first so we don't leave a duplicate line.
+    sed -i '/^CONTROL_PLANE_URL=/d' "$INSTALL_DIR/.env" 2>/dev/null || true
+    printf '\n# Capability marketplace / Control Plane base (backfilled on update)\nCONTROL_PLANE_URL=%s\n' "$CONTROL_PLANE_URL_FLAG" >> "$INSTALL_DIR/.env"
+    info "Backfilled CONTROL_PLANE_URL=$CONTROL_PLANE_URL_FLAG into .env (marketplace self-heal)"
     RECREATE_FOR_CORS=1
   fi
 else
