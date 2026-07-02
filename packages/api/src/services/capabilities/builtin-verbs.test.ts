@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
   })),
   createChannel: vi.fn(async () => ({ channelId: "ch-new" })),
   createCaller: vi.fn(),
+  placeArtboardDeck: vi.fn(() => ({ viewId: "board-1", slideCount: 2 })),
+  triageEmails: vi.fn(async () => []),
 }));
 
 vi.mock("@synap/database", () => ({
@@ -45,19 +47,27 @@ vi.mock("../../routers/channels.js", () => ({
   },
 }));
 
+// Mock only the emit (placeArtboardDeck); keep the REAL zod schemas the handler
+// uses at module load (ArtboardDeckSlideSchema / BoardPlacementOptionsSchema).
+vi.mock("./place-artboard-deck.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./place-artboard-deck.js")>();
+  return { ...actual, placeArtboardDeck: h.placeArtboardDeck };
+});
+
+vi.mock("../mail-feed/triage.js", () => ({ triageEmails: h.triageEmails }));
+
 import { BUILTIN_VERBS } from "./builtin-verbs.js";
 
 const ctx = { userId: "u1", workspaceId: "ws1" };
 const CHANNEL_ID = "11111111-1111-4111-8111-111111111111";
+const BOARD_ID = "22222222-2222-4222-8222-222222222222";
 
 describe("BUILTIN_VERBS registry", () => {
-  it("registers channel.create and feed.post", () => {
+  it("registers channel.create, feed.post, and output.generate", () => {
     expect(typeof BUILTIN_VERBS["channel.create"]).toBe("function");
     expect(typeof BUILTIN_VERBS["feed.post"]).toBe("function");
-    expect(Object.keys(BUILTIN_VERBS).sort()).toEqual([
-      "channel.create",
-      "feed.post",
-    ]);
+    expect(typeof BUILTIN_VERBS["output.generate"]).toBe("function");
   });
 });
 
@@ -143,5 +153,71 @@ describe("feed.post handler", () => {
       BUILTIN_VERBS["feed.post"]({ channelId: CHANNEL_ID, content: "x" }, ctx)
     ).rejects.toThrow();
     expect(h.insertChannelMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("output.generate handler", () => {
+  const deckArgs = {
+    boardId: BOARD_ID,
+    preset: "carousel",
+    title: "Deck",
+    slides: [{ html: "<h1>1</h1>" }, { html: "<h1>2</h1>", title: "Two" }],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getWorkspaceMembership.mockResolvedValue({ role: "owner" });
+    h.placeArtboardDeck.mockReturnValue({ viewId: BOARD_ID, slideCount: 2 });
+  });
+
+  it("delegates to the shared placeArtboardDeck emit after a membership check", async () => {
+    const out = await BUILTIN_VERBS["output.generate"](deckArgs, ctx);
+
+    expect(out).toEqual({ boardId: BOARD_ID, slideCount: 2 });
+    // Membership verified for the acting (workspaceId, operator) pair.
+    expect(h.getWorkspaceMembership).toHaveBeenCalledWith(
+      expect.anything(),
+      "ws1",
+      "u1"
+    );
+    // Emit goes through the SHARED function with the deck resource shape.
+    expect(h.placeArtboardDeck).toHaveBeenCalledWith(
+      expect.objectContaining({
+        viewId: BOARD_ID,
+        deck: expect.objectContaining({
+          preset: "carousel",
+          title: "Deck",
+          slides: deckArgs.slides,
+        }),
+      })
+    );
+  });
+
+  it("rejects a pod-wide run (placement is workspace-scoped)", async () => {
+    await expect(
+      BUILTIN_VERBS["output.generate"](deckArgs, {
+        userId: "u1",
+        workspaceId: null,
+      })
+    ).rejects.toThrow();
+    expect(h.placeArtboardDeck).not.toHaveBeenCalled();
+  });
+
+  it("rejects when the operator has no workspace access", async () => {
+    h.getWorkspaceMembership.mockResolvedValueOnce(null);
+    await expect(
+      BUILTIN_VERBS["output.generate"](deckArgs, ctx)
+    ).rejects.toThrow();
+    expect(h.placeArtboardDeck).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed args (empty slides)", async () => {
+    await expect(
+      BUILTIN_VERBS["output.generate"](
+        { boardId: BOARD_ID, preset: "carousel", slides: [] },
+        ctx
+      )
+    ).rejects.toThrow();
+    expect(h.placeArtboardDeck).not.toHaveBeenCalled();
   });
 });

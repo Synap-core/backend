@@ -10,6 +10,7 @@ import {
   CreatePropertyDefRequestSchema,
   ListProfilesQuerySchema,
   ListPropertyDefsQuerySchema,
+  WireProfileDigestSchema,
   WireProfileSchema,
   WirePropertyDefSchema,
 } from "./_codecs/profile.js";
@@ -36,8 +37,12 @@ export function registerProfilesRoutes(app: HubHono): void {
     },
     responses: {
       200: {
-        description: "Array of profiles",
-        schema: z.array(WireProfileSchema),
+        description:
+          "Array of profiles. Default: lightweight digest (id, slug, displayName, entityScope, description, icon). Pass ?detail=full for the complete row.",
+        schema: z.union([
+          z.array(WireProfileDigestSchema),
+          z.array(WireProfileSchema),
+        ]),
       },
       400: { description: "Missing required query param", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
@@ -106,7 +111,11 @@ export function registerProfilesRoutes(app: HubHono): void {
   });
 
   /**
-   * GET /profiles?userId=...&workspaceId=...
+   * GET /profiles?userId=...&workspaceId=...&detail=full
+   *
+   * Default (no `detail` param): lightweight digest per profile —
+   *   { id, slug, displayName, entityScope, description, icon }
+   * Pass `?detail=full` to receive the complete profile row.
    */
   app.get("/profiles", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
@@ -120,13 +129,38 @@ export function registerProfilesRoutes(app: HubHono): void {
     if (!userId || !workspaceId) {
       return c.json({ error: "userId and workspaceId are required" }, 400);
     }
+    const detail = c.req.query("detail");
     try {
       const caller = await getCaller(c, { userId, workspaceId });
       const result = await caller.profiles.listProfiles({
         userId,
         workspaceId,
       });
-      return c.json(result);
+      if (detail === "full") {
+        return c.json(result);
+      }
+      // Default: lightweight digest — strip heavy JSONB renderer/hint columns
+      const profiles = Array.isArray(result)
+        ? result
+        : ((result as unknown as { profiles: unknown[] }).profiles ?? []);
+      const digests = (
+        profiles as Array<{
+          id: string;
+          slug: string;
+          displayName: string;
+          entityScope?: string;
+          description?: string | null;
+          icon?: string | null;
+        }>
+      ).map((p) => ({
+        id: p.id,
+        slug: p.slug,
+        displayName: p.displayName,
+        entityScope: p.entityScope,
+        description: p.description ?? null,
+        icon: p.icon ?? null,
+      }));
+      return c.json(digests);
     } catch (err) {
       logger.error({ err }, "listProfiles failed");
       return c.json(

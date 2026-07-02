@@ -143,13 +143,20 @@ export const tools = {
       {
         name: "synap_list_profiles",
         description:
-          "List all available entity types in the workspace — system profiles (always present) plus custom types. ALWAYS call at session start before creating entities. Never assume 'deal' or custom types exist — workspaces differ. Returns slug, displayName, entityScope (pod-wide vs workspace-scoped), and property definitions.",
+          "List all available entity types (profiles) — system profiles plus custom types. ALWAYS call at session start before creating entities. Never assume 'deal' or custom types exist — workspaces differ. Returns a lightweight digest per profile: id, slug, displayName, entityScope (pod-wide vs workspace-scoped), description, icon. For full property schemas use synap_orient or GET /discover.",
         inputSchema: {
           type: "object",
           properties: {
             workspaceId: {
               type: "string",
-              description: "Workspace ID (optional)",
+              description:
+                "Workspace ID (optional — omit to list across all workspaces)",
+            },
+            detail: {
+              type: "string",
+              enum: ["full"],
+              description:
+                "Pass 'full' to receive the complete profile row including renderer and uiHints columns. Omit for the lightweight digest (default).",
             },
           },
           required: [],

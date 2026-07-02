@@ -29,6 +29,12 @@ import {
   insertChannelMessage,
 } from "@synap/database";
 import type { Context } from "../../context.js";
+import {
+  placeArtboardDeck,
+  ArtboardDeckSlideSchema,
+  BoardPlacementOptionsSchema,
+} from "./place-artboard-deck.js";
+import { triageEmails } from "../mail-feed/triage.js";
 
 export interface BuiltinVerbContext {
   /** The acting operator (bearer's user id). */
@@ -168,6 +174,97 @@ const feedPostHandler: BuiltinVerbHandler = async (params, ctx) => {
 };
 
 /**
+ * output.generate — place a multi-slide artboard deck (carousel/deck) onto a
+ * whiteboard, IN-PROCESS, through the SAME `placeArtboardDeck` emit the Hub REST
+ * `POST /whiteboards/:viewId/place` route calls. This is the governed, discoverable
+ * capability surface for "generate output": any client finds it via
+ * list_capabilities and runs it via run_capability, while the existing IS-tool →
+ * /whiteboards/place path keeps working unchanged (hybrid, not a migration).
+ *
+ * The args mirror the existing place resource: a board id (viewId) + workspace
+ * lens + the artboard-deck fields (preset, title, slides[{html,title?}]). The
+ * emit itself is NOT reimplemented here — it delegates to the shared function so
+ * the socket event shape has exactly one home.
+ */
+const outputGenerateParams = z.object({
+  /** The whiteboard view id (board) to place the deck onto. */
+  boardId: z.string().uuid(),
+  /** Deck preset (e.g. a layout/style key the board client understands). */
+  preset: z.string().min(1),
+  /** Optional deck title. */
+  title: z.string().max(500).optional(),
+  /** One or more slides, each with HTML content + optional title. */
+  slides: z.array(ArtboardDeckSlideSchema).min(1),
+  /** Optional layout hints forwarded to the board client verbatim. */
+  options: BoardPlacementOptionsSchema.optional(),
+});
+
+const outputGenerateHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = outputGenerateParams.parse(params);
+
+  // Placing onto a whiteboard is a workspace-scoped operation (the Hub route
+  // membership-checks the board's workspace); a builtin output.generate needs an
+  // acting workspace lens, not a pod-wide run. Bound WHICH workspace the run
+  // targets — the capability gate already governs THAT this operator may run it.
+  if (!ctx.workspaceId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "output.generate requires a workspace context (workspaceId).",
+    });
+  }
+
+  // Confirm the operator is a member of the acting workspace — the same guard the
+  // Hub route applies via verifyWorkspaceAccess before emitting a placement.
+  const membership = await getWorkspaceMembership(
+    db,
+    ctx.workspaceId,
+    ctx.userId
+  );
+  if (!membership) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "No access to the acting workspace.",
+    });
+  }
+
+  // Delegate to the SHARED emit — the SAME function the /whiteboards/:id/place
+  // route uses. No duplicated event logic.
+  const result = placeArtboardDeck({
+    viewId: input.boardId,
+    deck: { preset: input.preset, title: input.title, slides: input.slides },
+    options: input.options,
+  });
+
+  return { boardId: result.viewId, slideCount: result.slideCount };
+};
+
+/**
+ * ai.triage — batch-classify emails (relevance + category + summary) via the IS
+ * `mail_triage` tool. AI-backed: unlike the pure first-party pilots above, its
+ * handler DOES call the IS internally (that's the classification) — but the verb
+ * itself still runs in-process + governed, so it's a builtin, not an IS-executed
+ * code skill. Reuses the exact triage call the mail-feed runner uses.
+ */
+const aiTriageParams = z.object({
+  emails: z.array(
+    z.object({
+      id: z.string(),
+      subject: z.string().optional(),
+      from: z.string().optional(),
+      date: z.string().optional(),
+      snippet: z.string().optional(),
+    })
+  ),
+  mutedCategories: z.array(z.string()).optional(),
+});
+
+const aiTriageHandler: BuiltinVerbHandler = async (params) => {
+  const input = aiTriageParams.parse(params);
+  const results = await triageEmails(input.emails, input.mutedCategories ?? []);
+  return { results };
+};
+
+/**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5.
  * Keep names namespaced (`channel.create`, `feed.post`) to mirror the
  * `connector.action` convention used for external verbs.
@@ -175,4 +272,6 @@ const feedPostHandler: BuiltinVerbHandler = async (params, ctx) => {
 export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "channel.create": channelCreateHandler,
   "feed.post": feedPostHandler,
+  "output.generate": outputGenerateHandler,
+  "ai.triage": aiTriageHandler,
 };

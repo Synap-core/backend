@@ -209,6 +209,37 @@ function applyResponseShape(
   return out;
 }
 
+// ── request builder (interpolation SEAM shared by run + dry-run) ──────────────
+//
+// Turns a spec + params into the exact HTTP request `executeSingleCall` WOULD
+// dispatch: paramMapping → interpolate path/query/body. Exported so the Hub
+// dry-run door can PREVIEW the request without sending it — same interpolation,
+// never a copy. `mapped` is returned because response shaping needs it too.
+export interface ProviderRequestParts {
+  method: ProviderVerbSpec["method"];
+  /** Interpolated pathTemplate, WITHOUT the query string appended. */
+  path: string;
+  /** `key=value&…` query string (empty when no query). */
+  query: string;
+  body: Record<string, unknown> | undefined;
+  /** Fully mapped params (defaults/clamps applied) — needed for responseShape. */
+  mapped: Record<string, unknown>;
+}
+
+export function buildProviderRequest(
+  spec: DetailSpec,
+  parameters: Record<string, unknown>
+): ProviderRequestParts {
+  const mapped = applyParamMapping(spec, parameters);
+  const mappedForPath = encodeForPath(spec, mapped);
+  const path = interpolateString(spec.pathTemplate, mappedForPath);
+  const query = buildQueryString(spec.query, mapped);
+  const body = spec.body
+    ? (interpolateDeep(spec.body, mapped) as Record<string, unknown>)
+    : undefined;
+  return { method: spec.method, path, query, body, mapped };
+}
+
 // ── single provider call (used by the top-level verb AND each expand detail) ──
 
 type SingleOutcome =
@@ -221,21 +252,21 @@ async function executeSingleCall(
   parameters: Record<string, unknown>,
   ctx: CallCtx
 ): Promise<SingleOutcome> {
-  const mapped = applyParamMapping(spec, parameters);
-  const mappedForPath = encodeForPath(spec, mapped);
+  const {
+    method,
+    path: basePath,
+    query,
+    body,
+    mapped,
+  } = buildProviderRequest(spec, parameters);
 
-  let path = interpolateString(spec.pathTemplate, mappedForPath);
-  const qs = buildQueryString(spec.query, mapped);
-  if (qs) path += (path.includes("?") ? "&" : "?") + qs;
-
-  const body = spec.body
-    ? (interpolateDeep(spec.body, mapped) as Record<string, unknown>)
-    : undefined;
+  let path = basePath;
+  if (query) path += (path.includes("?") ? "&" : "?") + query;
 
   const result = await triggerProviderAction({
     userId: ctx.userId,
     provider: ctx.tool,
-    method: spec.method,
+    method,
     path,
     body,
     baseUrlOverride: spec.baseUrlOverride,

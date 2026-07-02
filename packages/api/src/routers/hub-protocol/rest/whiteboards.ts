@@ -8,7 +8,7 @@
 
 import { z } from "zod";
 import { db, views, eq } from "@synap/database";
-import { emitChatEvent } from "../../../utils/chat-realtime-broadcast.js";
+import { emitBoardPlace } from "../../../services/capabilities/place-artboard-deck.js";
 import {
   hasScope,
   logger,
@@ -239,14 +239,12 @@ export function registerWhiteboardsRoutes(app: HubHono) {
     }
 
     try {
-      await emitChatEvent({
-        event: "board:place",
-        data: {
-          viewId,
-          resources: body.resources,
-          options: body.options,
-        },
+      // Shared emit — the SAME function the builtin `output.generate` verb calls,
+      // so the `board:place` event shape is identical across both placement paths.
+      emitBoardPlace({
         viewId,
+        resources: body.resources,
+        options: body.options,
       });
 
       return c.json({

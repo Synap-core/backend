@@ -43,11 +43,32 @@ export const WirePropertyDefSchema = z
   })
   .openapi("PropertyDef");
 
+/**
+ * Lightweight digest shape for list responses — strips the six heavy JSONB
+ * renderer/hint columns that are dead weight for type-discovery.
+ */
+export const WireProfileDigestSchema = z
+  .object({
+    id: z.string(),
+    slug: z.string(),
+    displayName: z.string(),
+    entityScope: z.enum(["pod", "workspace"]).optional(),
+    description: z.string().nullable().optional(),
+    icon: z.string().nullable().optional(),
+  })
+  .openapi("ProfileDigest");
+
 /** GET /profiles query. */
 export const ListProfilesQuerySchema = z
   .object({
     userId: z.string(),
     workspaceId: z.string(),
+    detail: z
+      .enum(["full"])
+      .optional()
+      .describe(
+        "Pass `detail=full` to receive the complete profile row including renderer/hint columns. Omit for the lightweight digest (default)."
+      ),
   })
   .openapi("ListProfilesQuery");
 

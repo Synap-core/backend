@@ -22,7 +22,8 @@ import { db, tools, eq, drizzleSql } from "@synap/database";
 import { ensureExternalChannel, insertChannelMessage } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { executeCapability } from "../capabilities/execute-capability.js";
-import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
+import { triageEmails } from "./triage.js";
+import type { EmailHit, TriagedEmail } from "./triage.js";
 
 const logger = createLogger({ module: "mail-feed" });
 
@@ -51,22 +52,9 @@ interface DiscordToolMetadata {
   [k: string]: unknown;
 }
 
-/** One gmail_search hit (metadata + snippet — no body). */
-export interface EmailHit {
-  id: string;
-  subject?: string;
-  from?: string;
-  date?: string;
-  snippet?: string;
-}
-
-interface TriagedEmail {
-  id: string;
-  relevant: boolean;
-  category: string;
-  summary: string;
-  suggestedAction: string;
-}
+// EmailHit / TriagedEmail + triageEmails moved to ./triage.ts (shared with the
+// `ai.triage` builtin verb). Re-exported for external importers of this module.
+export type { EmailHit, TriagedEmail } from "./triage.js";
 
 export interface RunMailFeedResult {
   skipped?: boolean;
@@ -159,42 +147,6 @@ export function buildMailMessage(
   if (triage.suggestedAction) lines.push(`→ ${triage.suggestedAction}`);
   lines.push(`[Open in Gmail](${link})`);
   return lines.join("\n");
-}
-
-// ── IS triage call ─────────────────────────────────────────────────────────────
-
-async function triageEmails(
-  emails: EmailHit[],
-  mutedCategories: string[]
-): Promise<TriagedEmail[]> {
-  // Resolve the IS endpoint + the pod's PER-CONNECTION key from the DB (the
-  // registered intelligence service), NEVER from env. mail_triage is a normal
-  // backend→IS AI op, so it authenticates with the same X-API-Key the IS verifies
-  // for every /api call (multiTenantAuth) — the internal key is CP↔IS only.
-  const { endpoint: isUrl, apiKey } = await getDefaultActiveService();
-  const res = await fetch(`${isUrl}/v1/tools/mail_triage`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-Key": apiKey,
-    },
-    body: JSON.stringify({
-      emails: emails.map((e) => ({
-        id: e.id,
-        from: e.from ?? "",
-        subject: e.subject ?? "",
-        snippet: e.snippet ?? "",
-      })),
-      mutedCategories,
-    }),
-    signal: AbortSignal.timeout(60_000),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`mail_triage IS call failed: ${res.status} ${text}`);
-  }
-  const data = (await res.json()) as { results?: TriagedEmail[] };
-  return Array.isArray(data.results) ? data.results : [];
 }
 
 // ── Watermark persistence (ATOMIC single-leaf write) ──────────────────────────

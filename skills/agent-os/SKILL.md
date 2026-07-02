@@ -148,6 +148,19 @@ For each newly created workspace:
 Don't dump all interviews at once. One workspace, complete it, then the next.
 The user can also defer: "set up CRM now, the rest later" is fine.
 
+**Autonomous fan-out (orchestrator).** When you're the orchestrator configuring
+several workspaces at once (not an interactive one-at-a-time session), don't run
+the interviews serially yourself — **fan out one scoped sub-agent per workspace**
+and consolidate. Activate the `connect` tools (`discover_tools(["connect"])`),
+then for each workspace call `dispatch_agent({ workspaceId: "<that ws id>",
+agentType: "onboarding", mode: "parallel", task: "Onboard this workspace from its
+settings.onboarding" })` — each sub-agent runs scoped to that workspace (loads
+only its tools + skills, cheap), returns `{ workspaceId, childThreadId }`. Track
+those, then `consolidate_branches([childThreadIds])` into ONE summary for the
+user. Order the strategic base first (Foundation/Brand before dependents). A
+single workspace: just onboard it inline, no fan-out. (See the connect-group
+skill for the exact sequence.)
+
 ### 8. Summarize
 
 "Your Company OS is ready: **CRM, Dev Dashboard, Project Management** — all under

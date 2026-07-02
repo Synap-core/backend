@@ -11676,7 +11676,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceIds?: string[] | undefined;
 				workspaceId?: string | null | undefined;
 				includePodWide?: boolean | undefined;
-				type?: "calendar" | "table" | "whiteboard" | "graph" | "list" | "all" | "timeline" | "kanban" | "grid" | "gallery" | "gantt" | "mindmap" | undefined;
+				type?: "calendar" | "table" | "whiteboard" | "graph" | "list" | "grid" | "all" | "timeline" | "kanban" | "gallery" | "gantt" | "mindmap" | undefined;
 				excludeAutoCreated?: boolean | undefined;
 			};
 			output: PaginatedResponse<{
@@ -12124,7 +12124,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					compactMode?: boolean | undefined;
 					fontSize?: string | undefined;
 					animations?: boolean | undefined;
-					defaultView?: "list" | "timeline" | "grid" | undefined;
+					defaultView?: "list" | "grid" | "timeline" | undefined;
 					entityOpenMode?: "side" | "floating" | "modal" | undefined;
 				} | undefined;
 				graphPreferences?: {

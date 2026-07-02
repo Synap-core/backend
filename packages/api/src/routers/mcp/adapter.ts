@@ -76,7 +76,8 @@ async function createHubProtocolCaller(
 /**
  * Extract the primary object id from a tool result, in field-priority order:
  *   proposalId → id → entityId → documentId → viewId → channelId →
- *   sessionId → knowledgeKey.id → nested data.id
+ *   sessionId → knowledgeKey.id → nested data.id → wrapped channel.id /
+ *   document.id
  * First string hit wins; returns undefined when none is present.
  *
  * `messageId` is intentionally excluded — messages aren't openable, and
@@ -109,6 +110,15 @@ function primaryObjectId(data: unknown): string | undefined {
     nested.id
   ) {
     return nested.id;
+  }
+  // Wrapped detail shapes: get_channel → { channel: { id } }, get_document →
+  // { document: { id } }. Both wrappers are openable, so their nested id yields a
+  // valid link. Only these known wrappers — never a generic deep scan.
+  for (const wrapper of ["channel", "document"] as const) {
+    const w = d[wrapper] as Record<string, unknown> | undefined;
+    if (w && typeof w === "object" && typeof w.id === "string" && w.id) {
+      return w.id;
+    }
   }
   return undefined;
 }
@@ -391,12 +401,37 @@ export async function executeMCPToolViaHubProtocol(
     case "synap_list_profiles": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
       const wsId = args.workspaceId as string | undefined;
+      const wantFull = (args.detail as string | undefined) === "full";
+
+      /** Map a raw profile row to the lightweight digest shape. */
+      const toDigest = (
+        p: Record<string, unknown>,
+        workspaceId?: string
+      ): Record<string, unknown> => {
+        const base: Record<string, unknown> = {
+          id: p.id,
+          slug: p.slug,
+          displayName: p.displayName,
+          entityScope: p.entityScope,
+          description: p.description ?? null,
+          icon: p.icon ?? null,
+        };
+        if (workspaceId !== undefined) base.workspaceId = workspaceId;
+        return base;
+      };
+
       if (wsId) {
         const result = await caller.profiles.listProfiles({
           userId,
           workspaceId: wsId,
         });
-        return ok(result);
+        if (wantFull) return ok(result);
+        const profiles = Array.isArray(result)
+          ? result
+          : ((result as unknown as { profiles: unknown[] }).profiles ?? []);
+        return ok(
+          (profiles as Array<Record<string, unknown>>).map((p) => toDigest(p))
+        );
       }
       const wsIds = await getUserWorkspaceIds(userId);
       if (wsIds.length === 0) return ok([]);
@@ -423,7 +458,7 @@ export async function executeMCPToolViaHubProtocol(
           const slug = p.slug as string;
           if (!seen.has(slug)) {
             seen.add(slug);
-            merged.push(p);
+            merged.push(wantFull ? p : toDigest(p, p.workspaceId as string));
           }
         }
       }

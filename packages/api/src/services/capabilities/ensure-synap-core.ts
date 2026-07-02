@@ -44,7 +44,7 @@ const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
   key: "synap-core",
   name: "Synap Core",
   description:
-    "First-party in-process Synap operations (Tier-0 builtin verbs). Runs on the pod, governed, with no Intelligence-Service hop.",
+    "First-party in-process Synap operations (Tier-0 builtin verbs), governed and run on the pod. Most need no Intelligence-Service hop; AI-backed verbs (e.g. ai.triage) call the IS internally but still execute in-process, not as an IS-routed skill.",
   tools: [],
   skills: [
     {
@@ -78,8 +78,53 @@ const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    {
+      name: "ai.triage",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Batch-classify emails (relevance + category + summary) via the IS mail_triage tool. AI-backed builtin used by the mail-feed automation.",
+      parameters: {
+        type: "object",
+        required: ["emails"],
+        properties: {
+          emails: { type: "array" },
+          mutedCategories: { type: "array" },
+        },
+      },
+    },
+    {
+      name: "output.generate",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Generate output: place a multi-slide artboard deck (carousel/deck) onto a whiteboard. Emits the same board:place placement the generate_carousel/generate_deck path produces.",
+      parameters: {
+        type: "object",
+        required: ["boardId", "preset", "slides"],
+        properties: {
+          boardId: { type: "string", format: "uuid" },
+          preset: { type: "string" },
+          title: { type: "string" },
+          slides: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["html"],
+              properties: {
+                html: { type: "string" },
+                title: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+    },
   ],
 };
+
+/** The builtin verb NAMES this seeder registers — used by the convergence guard. */
+const SYNAP_CORE_SKILL_NAMES = SYNAP_CORE_DEFINITION.skills.map((s) => s.name);
 
 /**
  * Resolve the pod-owner user id — the owner/admin member of the pod-admin system
@@ -109,7 +154,12 @@ async function resolvePodOwnerUserId(): Promise<string | null> {
  */
 export async function ensureSynapCoreCapability(): Promise<void> {
   try {
-    // Guard: skip if a pod-wide capability named "Synap Core" already exists.
+    // Convergence guard: skip ONLY when the pod-wide "Synap Core" capability
+    // exists AND every builtin verb the current definition declares is already
+    // seeded as a pod-wide skill. A pod that predates a newly-added verb (e.g.
+    // `output.generate`) is MISSING a skill → fall through and re-run the
+    // idempotent applier, which adds only the absent skills (existing ones are a
+    // no-op reuse). This lets the seeder converge existing pods, not just fresh ones.
     const [existing] = await db
       .select({ id: capabilities.id })
       .from(capabilities)
@@ -121,8 +171,31 @@ export async function ensureSynapCoreCapability(): Promise<void> {
       )
       .limit(1);
     if (existing) {
-      logger.debug("synap-core capability already present — skipping seed");
-      return;
+      const seededSkills = await db
+        .select({ name: skills.name })
+        .from(skills)
+        .where(
+          and(
+            isNull(skills.workspaceId),
+            inArray(skills.name, SYNAP_CORE_SKILL_NAMES)
+          )
+        );
+      const seededNames = new Set(seededSkills.map((s) => s.name));
+      const allPresent = SYNAP_CORE_SKILL_NAMES.every((n) =>
+        seededNames.has(n)
+      );
+      if (allPresent) {
+        logger.debug(
+          "synap-core capability + all builtin verbs already present — skipping seed"
+        );
+        return;
+      }
+      logger.info(
+        {
+          missing: SYNAP_CORE_SKILL_NAMES.filter((n) => !seededNames.has(n)),
+        },
+        "synap-core present but missing builtin verb(s) — converging"
+      );
     }
 
     const ownerUserId = await resolvePodOwnerUserId();

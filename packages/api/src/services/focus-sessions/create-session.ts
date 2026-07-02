@@ -96,7 +96,18 @@ export async function createFocusSession(
     subjectType: "focus_session",
     action: "create",
     source: "intelligence",
-    data: { goal, templateId },
+    // Carry the non-goal fields through the proposal so the approve executor
+    // (proposals/approve-executors.ts, focus_session/create) can materialize a
+    // full session — otherwise they'd be lost on the PROPOSED path. Only include
+    // when present to keep the persisted data lean.
+    data: {
+      goal,
+      templateId,
+      ...(subjectEntityId ? { subjectEntityId } : {}),
+      ...(channelId ? { channelId } : {}),
+      ...(expectedOutputs.length > 0 ? { expectedOutputs } : {}),
+      ...(agentIds.length > 0 ? { agentIds } : {}),
+    },
   });
 
   if ("denied" in perm && perm.denied) {

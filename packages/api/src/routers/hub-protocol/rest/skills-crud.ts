@@ -30,6 +30,7 @@ import { z } from "@hono/zod-openapi";
 import { db, eq, skills } from "@synap/database";
 
 import { skillsRouter } from "../../skills.js";
+import { buildProviderRequest } from "../../../services/capabilities/execute-provider-verb.js";
 import { resolveIntelligenceService } from "../../../utils/intelligence-routing.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 
@@ -462,23 +463,55 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
       // Tier-aware: builtin/declarative verbs run in-process (BUILTIN_VERBS /
-      // executeProviderVerb) with no IS isolate sandbox, so there is no dry-run
-      // path — return an explanatory result WITHOUT proxying to the IS (which
-      // has no such skill and would 404). Only code/instruction proxy below.
+      // executeProviderVerb) with no IS isolate sandbox, so proxying would 404
+      // (the IS has no such skill). Mirror the run path's kind-branch and
+      // synthesize the preview HERE instead. Only code/instruction proxy below.
       const [tierRow] = await db
-        .select({ kind: skills.kind })
+        .select({
+          kind: skills.kind,
+          name: skills.name,
+          providerSpec: skills.providerSpec,
+        })
         .from(skills)
         .where(eq(skills.id, id))
         .limit(1);
 
-      if (tierRow?.kind === "builtin" || tierRow?.kind === "declarative") {
+      // TIER 0 builtin → governed in-process handler. No external write happens
+      // in a dry-run; the tool-level gate runs only at real run time.
+      if (tierRow?.kind === "builtin") {
         return c.json(
           {
             result: {
-              kind: "dry-run-unavailable",
-              message: `Dry-run not available for ${tierRow.kind} verbs (they run in-process, not in the IS sandbox).`,
+              kind: "builtin",
+              verb: tierRow.name,
+              parameters: parameters ?? {},
+              message: `Verb "${tierRow.name}" runs in-process and is governed at run time. A dry-run performs no external write.`,
             },
-            dryRunEffects: [],
+            dryRunEffects: [{ type: "builtin", verb: tierRow.name }],
+          },
+          200
+        );
+      }
+
+      // TIER 1 declarative → preview the HTTP request the providerSpec WOULD
+      // send (same interpolation as the run path, never dispatched).
+      if (tierRow?.kind === "declarative") {
+        if (!tierRow.providerSpec) {
+          return c.json(
+            {
+              error: `Declarative verb "${tierRow.name}" is missing its providerSpec.`,
+            },
+            422
+          );
+        }
+        const { method, path, query, body } = buildProviderRequest(
+          tierRow.providerSpec,
+          parameters ?? {}
+        );
+        return c.json(
+          {
+            result: { request: { method, path, query, body } },
+            dryRunEffects: [{ type: "http_request", method, path }],
           },
           200
         );
