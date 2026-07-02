@@ -47,9 +47,12 @@ x-backend-env: &backend-env
   # Default to the Synap Control Plane so the capability MARKETPLACE catalog syncs
   # on ANY deploy path (docker compose up / synap.sh / eve — not just install.sh):
   # empty → the pod-local template cache never populates → `cap add` shows nothing.
-  # SAFE: CP JWT trust is gated by the `trusted_issuers` registry, NOT this URL
-  # (it drives the public marketplace fetch + legacy JWKS only). Self-hosted pods
-  # override CONTROL_PLANE_URL in deploy/.env.
+  # SECURITY — not trust-irrelevant: provisioning/user-exchange JWTs are gated by
+  # the `trusted_issuers` registry, but the invite / entity-share / sync / admin
+  # CP-JWT paths use this URL as the `iss` allowlist (empty = accept ANY signed
+  # HTTPS issuer, set = pin to it). Defaulting empty→CP TIGHTENS trust; never
+  # loosens. `:-` also substitutes an explicit empty value, so a self-hosted
+  # air-gap opt-out must use its own CP URL, not an empty string.
   CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-https://api.synap.live}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}

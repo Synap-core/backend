@@ -39,10 +39,16 @@ BACKEND_VERSION_FLAG="${SYNAP_BACKEND_VERSION:-}"
 POD_AGENT_VERSION_FLAG="${SYNAP_POD_AGENT_VERSION:-}"
 # Default to the Synap Control Plane so the capability MARKETPLACE catalog syncs
 # out of the box (empty → the pod-local template cache never populates → `cap add`
-# shows nothing). This is SAFE: CP JWT trust is gated by the `trusted_issuers`
-# registry (see trusted-issuer-service.ts), NOT by this URL — it drives the public
-# marketplace fetch + legacy JWKS only. Self-hosted installs override with
-# `--control-plane-url <url>` or `SYNAP_CONTROL_PLANE_URL=<url>`.
+# shows nothing).
+# SECURITY — do NOT read this as "CONTROL_PLANE_URL is trust-irrelevant":
+#   • Provisioning / user-exchange JWTs are gated by the `trusted_issuers` registry
+#     (trusted-issuer-service.ts); this URL plays no role there.
+#   • BUT the invite-accept / entity-share / sync / admin-source-configs paths
+#     verify CP JWTs with this URL as the `iss` ALLOWLIST: empty = accept ANY
+#     properly-signed HTTPS issuer (open mode), set = pin `iss` to it. So defaulting
+#     empty→CP TIGHTENS trust (open→pinned) — it never loosens. Removing or emptying
+#     it would REOPEN those paths to any signed issuer.
+# Self-hosted installs override with `--control-plane-url <url>` / `SYNAP_CONTROL_PLANE_URL`.
 CONTROL_PLANE_URL_FLAG="${SYNAP_CONTROL_PLANE_URL:-https://api.synap.live}"
 # PROVISIONING_TOKEN is used by setup-openclaw.sh to create agent users and
 # API keys. It is NOT used for CP trust (seed-trust uses ES256 JWTs instead).
@@ -369,10 +375,10 @@ SECRETS_EOF
   # Self-heal: backfill CONTROL_PLANE_URL (drives the capability MARKETPLACE
   # catalog sync). Pods provisioned without --control-plane-url have it empty or
   # missing, so the pod-local template cache never populates and `cap add` shows
-  # nothing to install. SAFE: CP JWT trust is gated by `trusted_issuers`, NOT this
-  # URL (see trusted-issuer-service.ts). Fill when absent OR empty; never overwrite
-  # an explicit value, so a self-hosted opt-out (a real URL, or a deliberate edit)
-  # is preserved.
+  # nothing to install. SECURITY: not a trust bypass — see the flag-default note
+  # above (defaulting empty→CP TIGHTENS the iss-allowlist JWT paths, never loosens).
+  # Fill when absent OR empty; never overwrite an explicit value, so a self-hosted
+  # opt-out (a real CP URL, or a deliberate edit) is preserved.
   _cp_cur="$(grep -E '^CONTROL_PLANE_URL=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
   if [[ -z "$_cp_cur" ]]; then
     # Drop any empty assignment first so we don't leave a duplicate line.
