@@ -12,6 +12,7 @@ import {
   type NewProfile,
   ProfileScope,
 } from "../schema/profiles.js";
+import { workspaceMembers } from "../schema/workspaces.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
 
@@ -103,20 +104,46 @@ export class ProfileRepository {
    * - Without workspaceId: returns only system or shared profiles (pod-wide concepts).
    *   Use this for contexts that have no workspace (scripts, system jobs, etc.).
    */
-  async getBySlug(slug: string, workspaceId?: string): Promise<Profile | null> {
+  async getBySlug(
+    slug: string,
+    workspaceId?: string,
+    userId?: string
+  ): Promise<Profile | null> {
     if (workspaceId) {
       return this.getBySlugForWorkspace(slug, workspaceId);
     }
-    // No workspace context — only pod-wide profiles
+    // No workspace context. Base floor = pod-wide concepts (SYSTEM + SHARED).
+    // When a userId is known, broaden to the caller's REAL floor: their own
+    // USER profiles + profiles owned by / shared to a MEMBER workspace (member
+    // workspaces only — never other users'/non-member private profiles). This
+    // mirrors getAccessibleProfiles' workspace-less branch so a slug `get`
+    // resolves the same set. Setup/system callers pass no userId → floor only.
+    const scopeBranches = [
+      eq(profiles.scope, ProfileScope.SYSTEM),
+      eq(profiles.scope, ProfileScope.SHARED),
+    ];
+    if (userId) {
+      const memberWorkspaceIds = this.db
+        .select({ id: workspaceMembers.workspaceId })
+        .from(workspaceMembers)
+        .where(eq(workspaceMembers.userId, userId));
+      scopeBranches.push(
+        and(
+          eq(profiles.scope, ProfileScope.USER),
+          eq(profiles.userId, userId)
+        )!,
+        and(
+          eq(profiles.scope, ProfileScope.WORKSPACE),
+          inArray(profiles.workspaceId, memberWorkspaceIds)
+        )!
+      );
+    }
     return (
       (await this.db.query.profiles.findFirst({
         where: and(
           eq(profiles.slug, slug),
           eq(profiles.isActive, true),
-          or(
-            eq(profiles.scope, ProfileScope.SYSTEM),
-            eq(profiles.scope, ProfileScope.SHARED)
-          )
+          or(...scopeBranches)
         ),
       })) ?? null
     );
@@ -259,6 +286,15 @@ export class ProfileRepository {
         )
       : eq(profileWorkspaceAccess.profileId, profiles.id);
 
+    // The caller's REAL floor of workspaces: the ones they're a MEMBER of.
+    // Used to broaden the workspace-less branch to member-scoped WORKSPACE +
+    // SHARED profiles (member workspaces only — never other users'/non-member
+    // private profiles), reproducing the union listMulti already computes.
+    const memberWorkspaceIds = this.db
+      .select({ id: workspaceMembers.workspaceId })
+      .from(workspaceMembers)
+      .where(eq(workspaceMembers.userId, userId));
+
     const scopeBranches = [
       eq(profiles.scope, ProfileScope.SYSTEM),
       and(eq(profiles.scope, ProfileScope.USER), eq(profiles.userId, userId)),
@@ -272,6 +308,25 @@ export class ProfileRepository {
         and(
           eq(profiles.scope, ProfileScope.SHARED),
           isNotNull(profileWorkspaceAccess.workspaceId)
+        )
+      );
+    } else {
+      // No active workspace: broaden to the caller's member-workspace floor
+      // instead of SYSTEM+USER only — mirrors user-visible-where's member-ws
+      // semi-join and the union listMulti computes. Correlated subqueries let
+      // Postgres run these as semi-joins (one round-trip, no client fan-out).
+      scopeBranches.push(
+        and(
+          eq(profiles.scope, ProfileScope.WORKSPACE),
+          inArray(profiles.workspaceId, memberWorkspaceIds)
+        ),
+        and(
+          eq(profiles.scope, ProfileScope.SHARED),
+          sql`EXISTS (
+            SELECT 1 FROM ${profileWorkspaceAccess}
+            WHERE ${profileWorkspaceAccess.profileId} = ${profiles.id}
+              AND ${profileWorkspaceAccess.workspaceId} IN (${memberWorkspaceIds})
+          )`
         )
       );
     }

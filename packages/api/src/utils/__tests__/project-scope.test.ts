@@ -13,7 +13,7 @@
  * What we verify:
  *   1. `BELONGS_TO_PROJECT` constant is "belongs_to_project".
  *   2. `projectMemberWhere` returns OR(inArray, inArray) keyed on entityIdColumn.
- *   3. `projectLensWhere` returns OR(eq, inArray) with eq matching projectLens.
+ *   3. `projectLensWhere` returns OR(inArray, inArray) with the anchor set as the first arm.
  *   4. `accessScopeWhere` ANDs floor + optional workspace/project lenses.
  *   5. `workspaceLens = null` narrows to pod-personal (no workspaceLensWhere).
  *   6. `workspaceLens = string` includes workspaceLensWhere arm.
@@ -119,14 +119,26 @@ describe("exposure axis (VISIBLE_TO / generic edges)", () => {
     expect(result.args[1].col).toBe(entityIdCol);
   });
 
-  it("exposureLensWhere returns OR(eq, inArray) with eq matching the anchor", () => {
+  it("exposureLensWhere returns OR(inArray, inArray) with the anchor set as the first arm", () => {
     const entityIdCol = col("id");
     const result = exposureLensWhere(entityIdCol, "client-entity-uuid") as any;
     expect(result._tag).toBe("or");
-    expect(result.args[0]._tag).toBe("eq");
+    // A single anchor is normalized to a one-element set: OR(inArray(col, [anchor]), inArray(col, exposedToAnchor)).
+    expect(result.args[0]._tag).toBe("inArray");
     expect(result.args[0].col).toBe(entityIdCol);
-    expect(result.args[0].val).toBe("client-entity-uuid");
+    expect(result.args[0].sub).toEqual(["client-entity-uuid"]);
     expect(result.args[1]._tag).toBe("inArray");
+  });
+
+  it("exposureLensWhere unions a SET of anchors in the first inArray arm", () => {
+    const entityIdCol = col("id");
+    const result = exposureLensWhere(entityIdCol, [
+      "anchor-a",
+      "anchor-b",
+    ]) as any;
+    expect(result._tag).toBe("or");
+    expect(result.args[0]._tag).toBe("inArray");
+    expect(result.args[0].sub).toEqual(["anchor-a", "anchor-b"]);
   });
 
   it("projectMemberWhere is the belongs_to_project preset of exposureMemberWhere", () => {
@@ -166,22 +178,23 @@ describe("projectMemberWhere", () => {
 });
 
 describe("projectLensWhere", () => {
-  it("returns an OR of eq + inArray", () => {
+  it("returns an OR of two inArray predicates", () => {
     const result = projectLensWhere(col("id"), "project-entity-uuid") as any;
 
     expect(result._tag).toBe("or");
     expect(result.args).toHaveLength(2);
-    expect(result.args[0]._tag).toBe("eq");
+    expect(result.args[0]._tag).toBe("inArray");
     expect(result.args[1]._tag).toBe("inArray");
   });
 
-  it("eq arm matches entityIdColumn to projectLens value", () => {
+  it("first arm matches entityIdColumn to the projectLens set", () => {
     const entityIdCol = col("id");
     const projectId = "proj-abc";
     const result = projectLensWhere(entityIdCol, projectId) as any;
 
     expect(result.args[0].col).toBe(entityIdCol);
-    expect(result.args[0].val).toBe(projectId);
+    // Single id normalized to a one-element set for the union.
+    expect(result.args[0].sub).toEqual([projectId]);
   });
 
   it("inArray arm is keyed on the same entityIdColumn", () => {
@@ -264,6 +277,17 @@ describe("accessScopeWhere", () => {
     expect(podPersonalArm).toBeDefined();
   });
 
+  // The project narrow is exposureLensWhere: OR(inArray(col, anchorSet), inArray(...)).
+  // Its first arm's `sub` is the literal anchor ARRAY — this distinguishes it from
+  // the floor's exposure-membership OR, whose inArray arms carry subquery objects.
+  const findProjectNarrow = (result: any) =>
+    result.args.find(
+      (a: any) =>
+        a?._tag === "or" &&
+        a.args?.[0]?._tag === "inArray" &&
+        Array.isArray(a.args[0].sub)
+    );
+
   it("includes project lens OR when projectLens is a string", () => {
     const result = accessScopeWhere({
       workspaceIdColumn: wsIdCol,
@@ -273,12 +297,9 @@ describe("accessScopeWhere", () => {
       projectLens: "proj-entity-id",
     }) as any;
 
-    // Project narrow is the projectLensWhere OR(eq, inArray)
-    const projNarrow = result.args.find(
-      (a: any) => a?._tag === "or" && a.args?.[0]?._tag === "eq"
-    );
+    const projNarrow = findProjectNarrow(result);
     expect(projNarrow).toBeDefined();
-    expect(projNarrow.args[0].val).toBe("proj-entity-id");
+    expect(projNarrow.args[0].sub).toEqual(["proj-entity-id"]);
   });
 
   it("omits project lens when projectLens is null", () => {
@@ -290,11 +311,7 @@ describe("accessScopeWhere", () => {
       projectLens: null,
     }) as any;
 
-    // No OR from projectLensWhere
-    const projNarrow = result.args.find(
-      (a: any) => a?._tag === "or" && a.args?.[0]?._tag === "eq"
-    );
-    expect(projNarrow).toBeUndefined();
+    expect(findProjectNarrow(result)).toBeUndefined();
   });
 
   it("omits project lens when projectLens is undefined", () => {
@@ -306,9 +323,6 @@ describe("accessScopeWhere", () => {
       // projectLens omitted
     }) as any;
 
-    const projNarrow = result.args.find(
-      (a: any) => a?._tag === "or" && a.args?.[0]?._tag === "eq"
-    );
-    expect(projNarrow).toBeUndefined();
+    expect(findProjectNarrow(result)).toBeUndefined();
   });
 });

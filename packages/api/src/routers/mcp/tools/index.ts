@@ -324,24 +324,33 @@ export const tools = {
       {
         name: "synap_orient",
         description:
-          "Returns a lightweight LENS MAP — your identity, projects (companies/initiatives), workspaces (operational domains), and a profile sample. Call first in every session. Drill into a workspace's full profiles via synap_list_profiles.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-          required: [],
-        },
-      },
-      {
-        name: "synap_list_projects",
-        description:
-          "List all projects for the user, optionally scoped to a workspace. Returns name, description, status, and workspaceId. Projects are a cross-cutting dimension, orthogonal to workspaces — compose both lenses.",
+          "Returns a lightweight LENS MAP — your identity, projects (companies/initiatives), workspaces (operational domains), and a profile sample. Call first in every session. This also lists your projects (it supersedes the old synap_list_projects tool) — pass scope:['projects'] and/or workspaceId to narrow. Pass detail:'full' for workspace descriptions, full onboarding specs, and per-workspace profiles. Drill into a workspace's full property schemas via synap_list_profiles.",
         inputSchema: {
           type: "object",
           properties: {
+            detail: {
+              type: "string",
+              enum: ["light", "full"],
+              description:
+                "light (default) = names/ids/domain/counts + onboarding goal; full = descriptions, full onboarding spec, and per-workspace profiles.",
+            },
+            scope: {
+              type: "array",
+              items: {
+                type: "string",
+                enum: ["workspaces", "projects", "profiles"],
+              },
+              description:
+                "Optional: restrict the map to these sections. Omit for all three.",
+            },
             workspaceId: {
               type: "string",
               description:
-                "Optional: scope to one workspace. Omit for all projects across all workspaces.",
+                "Optional: pin the map (and the profile sample) to one workspace.",
+            },
+            projectId: {
+              type: "string",
+              description: "Optional: pin the projects section to one project.",
             },
           },
           required: [],

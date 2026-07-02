@@ -22,26 +22,8 @@ import { ask } from "../../services/knowledge/ask.js";
 import { synthesizeAnswer } from "../../services/knowledge/synthesize.js";
 import { type ProfileCatalogEntry } from "../../services/retrieval/index.js";
 import { getDb } from "@synap/database";
-import {
-  db,
-  focusSessions,
-  knowledgeKeysRepository,
-  knowledgeRepository,
-  messages,
-  projects,
-  workspaceMembers,
-  workspaces,
-} from "@synap/database";
-import {
-  proposals,
-  ProposalStatus,
-  MessageRole,
-  eq,
-  and,
-  desc,
-  inArray,
-} from "@synap/database";
-import { randomUUID, createHash } from "crypto";
+import { db, knowledgeKeysRepository } from "@synap/database";
+import { getUserWorkspaceIds } from "../hub-protocol/rest/_shared.js";
 import type { Context } from "../../types/context.js";
 
 // ── tRPC caller factory ───────────────────────────────────────────────────────
@@ -101,14 +83,6 @@ function requireScope(scopes: string[], scope: string, toolName: string): void {
 }
 
 // ── Tool execution ────────────────────────────────────────────────────────────
-
-async function getUserWorkspaceIds(userId: string): Promise<string[]> {
-  const rows = await db
-    .select({ workspaceId: workspaceMembers.workspaceId })
-    .from(workspaceMembers)
-    .where(eq(workspaceMembers.userId, userId));
-  return rows.map((r) => r.workspaceId);
-}
 
 /**
  * Build the uniform graph envelope for any object — the shared core behind both
@@ -241,27 +215,14 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_list_proposals": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
-      const statusArg = (args.status as string) || "pending";
-      const statusMap: Record<string, ProposalStatus> = {
-        pending: ProposalStatus.PENDING,
-        approved: ProposalStatus.APPROVED,
-        rejected: ProposalStatus.REJECTED,
-      };
-      const status = statusMap[statusArg] ?? ProposalStatus.PENDING;
-
-      const proposalUserId = (args.userId as string) || userId;
-      const conditions = [eq(proposals.createdBy, proposalUserId)];
-      if (args.workspaceId)
-        conditions.push(eq(proposals.workspaceId, args.workspaceId as string));
-      if (statusArg !== "all") conditions.push(eq(proposals.status, status));
-
-      const result = await db
-        .select()
-        .from(proposals)
-        .where(and(...conditions))
-        .orderBy(desc(proposals.createdAt))
-        .limit((args.limit as number) || 20);
-
+      const { listCreatedProposals } =
+        await import("../../services/proposals/proposals-service.js");
+      const result = await listCreatedProposals({
+        createdBy: (args.userId as string) || userId,
+        workspaceId: args.workspaceId as string | undefined,
+        status: args.status as string | undefined,
+        limit: (args.limit as number) || undefined,
+      });
       return ok(result);
     }
 
@@ -318,25 +279,11 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_remember_fact": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
-      const fact = args.fact as string;
-      const factUserId = (args.userId as string) || userId;
-
-      // Embed the fact through the SAME path entity/recall writes use
-      // (`@synap/ai-embeddings`), so semantic search can actually rank it.
-      // Best-effort: if embedding is unavailable, fall back to a zero vector
-      // (keyword search still works) rather than failing the write.
-      let embedding: number[];
-      try {
-        const { generateEmbedding } = await import("@synap/ai-embeddings");
-        embedding = await generateEmbedding(fact);
-      } catch {
-        embedding = new Array(1536).fill(0);
-      }
-      await knowledgeRepository.saveFact({
-        userId: factUserId,
-        fact,
-        confidence: 0.8,
-        embedding,
+      const { rememberFact } =
+        await import("../../services/knowledge/remember-fact.js");
+      await rememberFact({
+        userId: (args.userId as string) || userId,
+        fact: args.fact as string,
       });
       return ok({ success: true, message: "Fact stored successfully" });
     }
@@ -494,115 +441,25 @@ export async function executeMCPToolViaHubProtocol(
     // messaging tool, not two.)
 
     // ── Session bootstrap & governance ──────────────────────────────────────
+    // Canonical lens map — delegates to the shared `discover()` service (the ONE
+    // place that shapes orient output; the REST /orient route + CLI `orient` go
+    // through the same function). ZERO bespoke data fetching here. `scope`
+    // subsumes the former synap_list_projects tool (scope:['projects']).
     case "synap_orient": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
-      // Fetch workspaces the user belongs to
-      const memberRows = await db
-        .select({ workspaceId: workspaceMembers.workspaceId })
-        .from(workspaceMembers)
-        .where(eq(workspaceMembers.userId, userId));
-      const wsIds = memberRows.map((r) => r.workspaceId);
-      const wsRaw =
-        wsIds.length > 0
-          ? await db
-              .select({
-                id: workspaces.id,
-                name: workspaces.name,
-                description: workspaces.description,
-                domain: workspaces.domain,
-                settings: workspaces.settings,
-              })
-              .from(workspaces)
-              .where(inArray(workspaces.id, wsIds))
-          : [];
-      // Surface the FULL onboarding spec: a workspace declares an onboarding
-      // spec (settings.onboarding) the shared `onboard` skill can run. Return
-      // the whole interview spec (goal / framing / collect / openingQuestions /
-      // doneWhen), not just `goal`, so an agent gets the complete framing. The
-      // skill itself checks sparseness before interviewing.
-      const wsList = wsRaw.map((w) => ({
-        id: w.id,
-        name: w.name,
-        description: w.description,
-        domain: w.domain,
-        onboarding:
-          (w.settings as { onboarding?: Record<string, unknown> } | null)
-            ?.onboarding ?? undefined,
-      }));
-      // Fetch profiles for first workspace as a representative sample — a LIGHT
-      // list (slug + name), not full definitions. Orient is a lens map, not a
-      // schema dump; drill into a workspace's full profiles on demand via
-      // synap_list_profiles(workspaceId).
-      // listProfiles returns { profiles: [...] } — NOT a bare array (matches the
-      // synap_ask handler's destructure). Take .profiles, then trim to slug+name.
-      const firstWsId = wsIds[0];
-      const profilesRes = firstWsId
-        ? await caller.profiles.listProfiles({ userId, workspaceId: firstWsId })
-        : { profiles: [] };
-      const profiles = (
-        (profilesRes.profiles ?? []) as Array<{
-          slug?: string;
-          name?: string;
-          displayName?: string;
-        }>
-      ).map((p) => ({ slug: p.slug, name: p.displayName ?? p.name ?? p.slug }));
-      // Fetch projects for the user. Annotate each with its home workspace
-      // name (in-memory join, no extra query) so composition is visible.
-      const wsNameById = new Map(wsRaw.map((w) => [w.id, w.name]));
-      const projectRows = (
-        await db
-          .select({
-            id: projects.id,
-            name: projects.name,
-            description: projects.description,
-            workspaceId: projects.workspaceId,
-            status: projects.status,
-          })
-          .from(projects)
-          .where(eq(projects.userId, userId))
-      ).map((p) => ({
-        ...p,
-        homeWorkspace: p.workspaceId
-          ? (wsNameById.get(p.workspaceId) ?? null)
-          : null,
-      }));
-      // Note = dynamic + action only. The lens model itself is taught once, in
-      // the synap_behavior prompt — don't re-teach it on every call.
-      return ok({
-        me: { userId, scopes: apiKeyScopes },
-        projects: projectRows,
-        projectCount: projectRows.length,
-        workspaces: wsList,
-        workspaceCount: wsList.length,
-        profiles,
-        note:
-          `Lens map: ${projectRows.length} project(s), ${wsList.length} workspace(s). ` +
-          (wsList.length > 1
-            ? `Reads auto-scope across all your workspaces; pass workspaceId to narrow to one domain, projectId to one project. `
-            : `Tools default to your one workspace; pass projectId on reads/recall to narrow to a project. `) +
-          (projectRows.length > 0
-            ? `A project's data can span workspaces — see synap_get_entities(projectId) or the project digest. `
-            : ``) +
-          `If a project clearly lacks an operational domain it needs (and the user hasn't declined it), offer once — see the agent-os skill.`,
+      const { discover } = await import("../../services/discover/discover.js");
+      const result = await discover({
+        caller,
+        userId,
+        scopes: apiKeyScopes,
+        detail: (args.detail as "light" | "full" | undefined) ?? "light",
+        scope: args.scope as
+          | Array<"workspaces" | "projects" | "profiles">
+          | undefined,
+        workspaceId: args.workspaceId as string | undefined,
+        projectId: args.projectId as string | undefined,
       });
-    }
-
-    case "synap_list_projects": {
-      requireScope(apiKeyScopes, "mcp.read", toolName);
-      const conditions = [eq(projects.userId, userId)];
-      if (args.workspaceId)
-        conditions.push(eq(projects.workspaceId, args.workspaceId as string));
-      const projectRows = await db
-        .select({
-          id: projects.id,
-          name: projects.name,
-          description: projects.description,
-          status: projects.status,
-          workspaceId: projects.workspaceId,
-        })
-        .from(projects)
-        .where(and(...conditions));
-      return ok(projectRows);
+      return ok(result);
     }
 
     // ── Focus sessions (work tracking) ──────────────────────────────────────
@@ -654,146 +511,49 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_update_session": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
-      const sessionId = args.sessionId as string;
-
-      // Load scoped by the operator userId — the floor that stops an agent key
-      // from touching another user's session (mirrors completeFocusSession).
-      const existing = await db.query.focusSessions.findFirst({
-        where: and(
-          eq(focusSessions.id, sessionId),
-          eq(focusSessions.userId, userId)
-        ),
-      });
-      if (!existing) {
-        return ok({ error: `Focus session ${sessionId} not found` });
-      }
-
-      // Governance membrane — AI callers route through proposals (same gate the
-      // Hub PATCH /focus-sessions/:id and synap_complete_session use).
-      const { checkPermissionOrPropose } =
-        await import("../../utils/permission-check.js");
-      const perm = await checkPermissionOrPropose({
+      const { updateFocusSession } =
+        await import("../../services/focus-sessions/update-session.js");
+      const result = await updateFocusSession({
+        sessionId: args.sessionId as string,
         userId,
         agentUserId,
-        workspaceId: existing.workspaceId ?? undefined,
-        subjectType: "focus_session",
-        action: "update",
-        source: "intelligence",
-        data: {
-          id: sessionId,
-          status: args.status as string | undefined,
-          progress: args.progress as number | undefined,
-        },
+        goal: args.goal as string | undefined,
+        status: args.status as "active" | "paused" | undefined,
+        progress: args.progress as number | undefined,
+        currentStage: args.currentStage as string | undefined,
+        addOutput: args.addOutput as
+          | { kind: string; label: string; icon?: string }
+          | undefined,
+        completeOutput: args.completeOutput as string | undefined,
+        expectedOutputs: args.expectedOutputs as
+          | Array<{
+              kind: string;
+              label: string;
+              icon?: string;
+              status?: "pending" | "done";
+            }>
+          | undefined,
       });
-      if ("denied" in perm && perm.denied) {
-        return ok({ error: perm.reason });
+      switch (result.status) {
+        case "not_found":
+          return ok({
+            error: `Focus session ${args.sessionId as string} not found`,
+          });
+        case "denied":
+          return ok({ error: result.reason });
+        case "proposed":
+          return ok({
+            status: "proposed",
+            message: "Focus session update proposed for review",
+            proposalId: result.proposalId,
+            summary: result.summary,
+            reviewPath: result.reviewPath,
+            reviewUrl: result.reviewUrl,
+            session: null,
+          });
+        case "updated":
+          return ok({ status: "updated", session: result.session });
       }
-      if ("proposalId" in perm) {
-        return ok({
-          status: "proposed",
-          message: "Focus session update proposed for review",
-          proposalId: perm.proposalId,
-          summary: perm.summary,
-          reviewPath: perm.reviewPath,
-          reviewUrl: perm.reviewUrl,
-          session: null,
-        });
-      }
-
-      // Build the field set. status is constrained to active|paused — closing a
-      // session is synap_complete_session's job (it also closes the running
-      // playbook_run); a raw status='closed' here would orphan that run.
-      const set: Partial<typeof focusSessions.$inferInsert> = {
-        updatedAt: new Date(),
-      };
-      if (args.goal !== undefined) set.goal = args.goal as string;
-      if (args.status !== undefined)
-        set.status = args.status as "active" | "paused";
-      if (args.progress !== undefined) set.progress = args.progress as number;
-      if (args.currentStage !== undefined)
-        set.currentStage = args.currentStage as string;
-
-      // addOutput / completeOutput / a full expectedOutputs replace mutate the
-      // JSONB deliverables array. Do the read-modify-write inside a transaction
-      // with a row lock (`FOR UPDATE`) so two concurrent edits can't both read
-      // the same base array and lose one's item (TOCTOU).
-      type OutputItem = {
-        kind: string;
-        label: string;
-        icon?: string;
-        status?: "pending" | "done";
-      };
-      const mutatesOutputs =
-        args.addOutput !== undefined ||
-        typeof args.completeOutput === "string" ||
-        args.expectedOutputs !== undefined;
-
-      const [updated] = await db.transaction(async (tx) => {
-        if (mutatesOutputs) {
-          const [locked] = await tx
-            .select({ expectedOutputs: focusSessions.expectedOutputs })
-            .from(focusSessions)
-            .where(eq(focusSessions.id, sessionId))
-            .for("update");
-          const current: OutputItem[] = Array.isArray(locked?.expectedOutputs)
-            ? (locked.expectedOutputs as OutputItem[])
-            : [];
-          let next: OutputItem[] =
-            (args.expectedOutputs as OutputItem[] | undefined) ?? current;
-          if (args.addOutput) {
-            const add = args.addOutput as OutputItem;
-            next = [
-              ...next,
-              {
-                kind: add.kind,
-                label: add.label,
-                icon: add.icon,
-                status: "pending",
-              },
-            ];
-          }
-          if (typeof args.completeOutput === "string") {
-            const label = args.completeOutput;
-            next = next.map((o) =>
-              o.label === label ? { ...o, status: "done" as const } : o
-            );
-          }
-          set.expectedOutputs = next;
-        }
-        return tx
-          .update(focusSessions)
-          .set(set)
-          .where(eq(focusSessions.id, sessionId))
-          .returning();
-      });
-
-      // Stage transition side-effect: when the active stage actually changes,
-      // emit `focus_session.stage_changed` so automations can react (mirrors the
-      // tRPC + Hub REST update doors). No-op for stageless / unchanged stages.
-      if (
-        args.currentStage !== undefined &&
-        args.currentStage !== existing.currentStage
-      ) {
-        const { emitSideEffects } = await import("@synap/events");
-        emitSideEffects({
-          subjectType: "focus_session",
-          action: "stage_changed",
-          subjectId: updated.id,
-          userId,
-          workspaceId: existing.workspaceId,
-          data: {
-            sessionId: updated.id,
-            subjectId: existing.subjectEntityId,
-            playbookId: existing.playbookId,
-            fromStage: existing.currentStage,
-            toStage: updated.currentStage,
-            workspaceId: existing.workspaceId,
-            userId,
-          },
-        });
-      }
-
-      return ok({ status: "updated", session: updated });
     }
 
     case "synap_governance": {
@@ -801,17 +561,10 @@ export async function executeMCPToolViaHubProtocol(
       const wsId = args.workspaceId as string;
       const { getEffectiveGovernance } =
         await import("../../utils/permission-check.js");
+      const { countPendingProposals } =
+        await import("../../services/proposals/proposals-service.js");
       const policy = await getEffectiveGovernance(wsId);
-      const pendingCount = await db
-        .select({ count: proposals.id })
-        .from(proposals)
-        .where(
-          and(
-            eq(proposals.workspaceId, wsId),
-            eq(proposals.status, ProposalStatus.PENDING)
-          )
-        )
-        .then((rows) => rows.length);
+      const pendingCount = await countPendingProposals(wsId);
       return ok({ ...policy, pendingProposals: pendingCount });
     }
 
@@ -822,13 +575,8 @@ export async function executeMCPToolViaHubProtocol(
       // Resolve workspace: use provided or fall back to user's first workspace
       let captureWsId = args.workspaceId as string | undefined;
       if (!captureWsId) {
-        const row = await db
-          .select({ workspaceId: workspaceMembers.workspaceId })
-          .from(workspaceMembers)
-          .where(eq(workspaceMembers.userId, userId))
-          .limit(1)
-          .then((r) => r[0]);
-        captureWsId = row?.workspaceId;
+        const wsIds = await getUserWorkspaceIds(userId);
+        captureWsId = wsIds[0];
       }
       if (!captureWsId) {
         return ok({ error: "No accessible workspace found for this user" });
@@ -1008,79 +756,32 @@ export async function executeMCPToolViaHubProtocol(
 
     case "synap_post_message": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
-      const channelId = args.channelId as string;
-      const content = args.content as string;
-      const role = (args.role as string) || "assistant";
-      const triggerAI = Boolean(args.triggerAI);
-      const msgId = randomUUID();
-      const hash = createHash("sha256")
-        .update(`${msgId}${content}`)
-        .digest("hex");
-      const roleEnum =
-        role === "user"
-          ? MessageRole.USER
-          : role === "system"
-            ? MessageRole.SYSTEM
-            : MessageRole.ASSISTANT;
-      await db.insert(messages).values({
-        id: msgId,
-        channelId,
-        role: roleEnum,
-        content,
+      const { postChannelMessage } =
+        await import("../../services/messaging/post-message.js");
+      const result = await postChannelMessage({
+        channelId: args.channelId as string,
+        content: args.content as string,
+        role: args.role as string | undefined,
+        triggerAI: Boolean(args.triggerAI),
         userId,
-        hash,
-        previousHash: "",
       });
-      if (triggerAI) {
-        const { emitChatEvent } =
-          await import("../../utils/chat-realtime-broadcast.js");
-        const { EventNames } = await import("@synap-core/types/events");
-        emitChatEvent({
-          event: EventNames.CHAT_MESSAGE,
-          data: {
-            threadId: channelId,
-            message: {
-              id: msgId,
-              threadId: channelId,
-              role: roleEnum,
-              content,
-              userId,
-              timestamp: new Date(),
-              previousHash: "",
-              hash,
-            },
-            userId,
-            triggerAI: true,
-          },
-          workspaceId: null,
-          userId,
-        });
-      }
-      return ok({ success: true, messageId: msgId, channelId });
+      return ok(result);
     }
 
     // ── Proposals & knowledge ─────────────────────────────────────────────────
     case "synap_revise_proposal": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
       const proposalId = args.proposalId as string;
-      const updateData: Record<string, unknown> = {};
-      if (args.summary !== undefined) updateData.summary = args.summary;
-      if (args.reasoning !== undefined) updateData.reasoning = args.reasoning;
-      if (Object.keys(updateData).length === 0) {
+      if (args.summary === undefined && args.reasoning === undefined) {
         return ok({ error: "Provide at least one of: summary, reasoning" });
       }
-      await db
-        .update(proposals)
-        .set({
-          ...(updateData as { summary?: string; reasoning?: string }),
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(proposals.id, proposalId),
-            eq(proposals.status, ProposalStatus.PENDING)
-          )
-        );
+      const { reviseProposal } =
+        await import("../../services/proposals/proposals-service.js");
+      await reviseProposal({
+        proposalId,
+        summary: args.summary as string | undefined,
+        reasoning: args.reasoning as string | undefined,
+      });
       return ok({ success: true, proposalId });
     }
 

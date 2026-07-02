@@ -535,6 +535,170 @@ export const viewsRouter = router({
     }),
 
   /**
+   * Resolve the canonical SCOPED SURFACE for a lens (workspace / project /
+   * session), auto-creating it if it doesn't exist yet.
+   *
+   * A scoped surface is the ONE canonical whiteboard / home / bento per lens —
+   * marked with `metadata.scopedSurface === true` and (for whiteboard/bento)
+   * unique per (type, workspace_id, project_id) via 0166's partial unique index.
+   * Ordinary user boards carry no marker and are unconstrained.
+   *
+   * Scoping (mirrors getHome): workspace access is gated via verifyPermission and
+   * the query is filtered on `workspace_id` so cross-workspace isolation holds.
+   * `project_id` is filtered as a direct column; session is ephemeral and lives in
+   * `metadata.sessionId` (no column).
+   *
+   * FIXES the bug where a whiteboard showed nothing under a project lens: the
+   * caller now resolves/creates a project-scoped board instead of dereferencing a
+   * workspace-only id that doesn't exist for that lens.
+   */
+  resolveScopedSurface: protectedProcedure
+    .input(
+      z.object({
+        type: z.string().min(1),
+        workspaceId: z.string().uuid().optional(),
+        projectId: z.string().uuid().optional(),
+        sessionId: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const workspaceId = input.workspaceId ?? null;
+      const projectId = input.projectId ?? null;
+      const sessionId = input.sessionId ?? null;
+
+      // Access gate — same workspace check getHome uses, so cross-workspace
+      // isolation holds. Pod-wide (no workspace) surfaces are user-owned.
+      if (workspaceId) {
+        const permResult = await verifyPermission({
+          db,
+          userId: ctx.userId,
+          workspace: { id: workspaceId },
+          requiredPermission: "read",
+        });
+        if (!permResult.allowed)
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: permResult.reason ?? "Insufficient permissions",
+          });
+      }
+
+      const isScopedSurface = (m: unknown) =>
+        (m as Record<string, unknown> | null)?.scopedSurface === true;
+      const metaSessionId = (m: unknown) =>
+        (m as Record<string, unknown> | null)?.sessionId ?? null;
+
+      // Find the marked canonical surface for this scope. Scope the query on the
+      // access columns (workspace_id via the lens floor, project_id direct) so a
+      // forged scope can never reach another workspace's surface.
+      const candidates = await db.query.views.findMany({
+        where: and(
+          eq(views.type, input.type),
+          workspaceId
+            ? and(
+                eq(views.workspaceId, workspaceId),
+                viewLensWhere(ctx.userId, workspaceId)
+              )
+            : and(isNull(views.workspaceId), eq(views.userId, ctx.userId)),
+          projectId ? eq(views.projectId, projectId) : isNull(views.projectId)
+        ),
+      });
+
+      const existing = candidates.find(
+        (v) =>
+          isScopedSurface(v.metadata) && metaSessionId(v.metadata) === sessionId
+      );
+      if (existing) return { view: existing, status: "resolved" as const };
+
+      // None found — CREATE the canonical surface for this scope.
+      const category = getViewCategory(input.type);
+      const viewId = randomUUID();
+
+      // Canvas surfaces (whiteboard, mindmap) need a document for Yjs + MinIO +
+      // versioning; a yjsRoomId is derived from it. Structured/bento surfaces
+      // store config directly in views.config.
+      let docId: string | null = null;
+      if (category === "canvas") {
+        const contentStr = JSON.stringify({});
+        const contentBuffer = Buffer.from(contentStr, "utf-8");
+        const storageKey = storage.buildPath(
+          ctx.userId,
+          input.type,
+          viewId,
+          "json"
+        );
+        const uploadResult = await storage.upload(storageKey, contentBuffer, {
+          contentType: "application/json",
+        });
+
+        docId = randomUUID();
+        const versionId = randomUUID();
+        const snapshot = await uploadDocumentVersionSnapshot({
+          userId: ctx.userId,
+          documentId: docId,
+          versionId,
+          documentType: input.type,
+          mimeType: "application/json",
+          content: contentStr,
+        });
+
+        const [doc] = await db
+          .insert(documents)
+          .values({
+            id: docId,
+            userId: ctx.userId,
+            workspaceId: workspaceId ?? undefined,
+            type: input.type,
+            title: input.type,
+            storageUrl: uploadResult.url,
+            storageKey: uploadResult.path,
+            size: uploadResult.size,
+            mimeType: "application/json",
+            currentVersion: 1,
+            lastSavedVersion: 1,
+          })
+          .returning();
+
+        await db.insert(documentVersions).values({
+          id: versionId,
+          documentId: doc.id,
+          version: 1,
+          ...storedVersionValues(snapshot),
+          author: "user",
+          authorId: ctx.userId,
+          message: "Initial version",
+        });
+      }
+
+      const yjsRoomId = docId ? `whiteboard-${docId}` : undefined;
+
+      const dbInstance = await getDb();
+      const eventRepo = new EventRepository(pgSql);
+      const viewRepo = new ViewRepository(dbInstance, eventRepo);
+
+      const createdView = await viewRepo.create(
+        {
+          id: viewId,
+          type: input.type,
+          name: input.type,
+          documentId: docId,
+          yjsRoomId,
+          workspaceId,
+          projectId,
+          userId: ctx.userId,
+          config: {},
+          metadata: {
+            scopedSurface: true,
+            createdBy: ctx.userId,
+            ...(sessionId ? { sessionId } : {}),
+          },
+        },
+        ctx.userId
+      );
+
+      return { view: createdView, status: "created" as const };
+    }),
+
+  /**
    * Get view with content
    */
   get: protectedProcedure

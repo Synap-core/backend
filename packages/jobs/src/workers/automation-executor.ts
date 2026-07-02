@@ -105,6 +105,16 @@ interface StepContext {
   };
   steps: Record<string, { output: Record<string, unknown> }>;
   loop?: { item: unknown; index: number };
+  // Set only inside array-pipe predicates/expressions (filter/map) so a
+  // predicate can reference the current item as `{{item.<field>}}`.
+  item?: unknown;
+  // Per-automation persistent state, snapshotted at trigger time. Templates
+  // resolve `{{automation.state.<key>}}`; the `set_state` output node reads
+  // `automation.id` to know which row to merge back into.
+  automation: {
+    id: string;
+    state: Record<string, unknown>;
+  };
 }
 
 /**
@@ -381,6 +391,183 @@ async function executeCommandStep(
     );
     throw err;
   }
+}
+
+/**
+ * Execute a `skill` node — resolve its inputMapping and dispatch through the
+ * CANONICAL router (all 3 tiers + gate). Extracted from the main switch so the
+ * SAME path runs both in the top-level pass AND per-item inside a loop body
+ * (where `context.loop` is set, so `{{loop.item}}` resolves per iteration).
+ *
+ * `stepRun` is only present in the main pass — when given, the resolved inputs
+ * are persisted to the step-run record for observability. Loop children have no
+ * per-child step-run row, so it is omitted there.
+ */
+async function executeSkillNode(
+  data: {
+    skillId?: string;
+    inputMapping?: Record<string, string>;
+  },
+  context: StepContext,
+  opts: {
+    workspaceId: string;
+    ownerId: string;
+    stepRun?: { id: string };
+  }
+): Promise<Record<string, unknown>> {
+  const skillId = data.skillId;
+  if (!skillId) throw new Error("Skill node has no skillId");
+
+  const inputMapping = data.inputMapping ?? {};
+  const resolvedInputs = resolveInputMapping(inputMapping, context);
+
+  if (opts.stepRun) {
+    await db
+      .update(automationStepRuns)
+      .set({ resolvedInputs })
+      .where(eq(automationStepRuns.id, opts.stepRun.id));
+  }
+
+  // ── Canonical dispatch (all 3 tiers + gate) ────────────────────────
+  // Route through `executeCapability` (via the loopback bridge) — it
+  // resolves the skill, GATES internally, and runs builtin/declarative/
+  // code tiers. An automation runs as the workspace OWNER (userId =
+  // ownerId, no agent identity), so the gate resolves:
+  //   • owner runs their OWN skill  → owner-bypass → run
+  //   • non-owner-owned + approved  → auto         → run
+  //   • non-owner-owned + UNapproved→ propose (FAILS CLOSED below)
+  // A mid-flow automation has no interactive review surface, so a
+  // propose/deny/not_found verdict FAILS CLOSED (throws); dry-run is
+  // honored as a no-op preview.
+  const skillDispatch = await dispatchViaCapabilityRouter({
+    skillId,
+    parameters: resolvedInputs,
+    workspaceId: opts.workspaceId,
+    userId: opts.ownerId,
+  });
+  if (skillDispatch.kind === "deny") {
+    throw new Error(
+      `Skill ${skillId} refused by capability gate: ${skillDispatch.reason}`
+    );
+  }
+  if (skillDispatch.kind === "proposed") {
+    throw new Error(
+      `Skill ${skillId} requires human approval and cannot run inside an automation; automation skill node refused.`
+    );
+  }
+  if (skillDispatch.kind === "not_found") {
+    throw new Error(
+      `Skill ${skillId} could not be dispatched: ${skillDispatch.message}`
+    );
+  }
+  if (skillDispatch.kind === "dry-run") {
+    // Grant resolved to dry-run preview — no external side effect.
+    return {
+      output: { dryRun: true, skillId: skillDispatch.skillId },
+      skillId: skillDispatch.skillId,
+    };
+  }
+  // kind === "run": preserve the prior step output shape — `output`
+  // carries the skill's execution result (the IS SkillExecutionResult
+  // for a code skill, the handler/provider return for builtin/declarative).
+  return {
+    output: skillDispatch.result,
+    skillId: skillDispatch.skillId,
+  };
+}
+
+/**
+ * Execute a `capability` node — the typed/governed Tool → Verb sibling of the
+ * `skill` node. A verb is BACKED BY A SKILL; dispatch routes verb → the
+ * canonical `executeCapability` router (same door as `executeSkillNode`).
+ * Extracted so the SAME path runs both in the main pass AND per-item in a loop.
+ *
+ * `stepRun` is only present in the main pass (see `executeSkillNode`).
+ */
+async function executeCapabilityNode(
+  data: {
+    capabilityId?: string;
+    verbId?: string;
+    inputMapping?: Record<string, string>;
+    connectionSelector?: {
+      connectionId?: string;
+      contextObjectId?: string;
+    };
+    connectionId?: string;
+  },
+  context: StepContext,
+  opts: {
+    workspaceId: string;
+    ownerId: string;
+    stepRun?: { id: string };
+  }
+): Promise<Record<string, unknown>> {
+  const verbId = data.verbId;
+  if (!verbId) throw new Error("Capability node has no verbId");
+
+  const capInputMapping = data.inputMapping ?? {};
+  const capResolvedInputs = resolveInputMapping(capInputMapping, context);
+
+  if (opts.stepRun) {
+    await db
+      .update(automationStepRuns)
+      .set({ resolvedInputs: capResolvedInputs })
+      .where(eq(automationStepRuns.id, opts.stepRun.id));
+  }
+
+  // Runtime 1-of-N connection selection (Wave 4): explicit selector, or
+  // a bare connectionId shorthand. Absent → default/authBinding behavior.
+  const connectionSelector =
+    data.connectionSelector ??
+    (data.connectionId ? { connectionId: data.connectionId } : null);
+
+  // ── Canonical dispatch (SAME door as `case "skill"`) ──────────────
+  // Runs as the workspace OWNER (userId = ownerId, no agent identity):
+  //   • owner runs their OWN skill  → owner-bypass → run
+  //   • non-owner-owned + approved  → auto         → run
+  //   • non-owner-owned + UNapproved→ propose (FAILS CLOSED below)
+  // A mid-flow automation has no interactive review surface, so a
+  // propose/deny/not_found verdict throws; dry-run is honored as a no-op.
+  const capDispatch = await dispatchViaCapabilityRouter({
+    verbId,
+    parameters: capResolvedInputs,
+    workspaceId: opts.workspaceId,
+    userId: opts.ownerId,
+    connectionSelector,
+  });
+  if (capDispatch.kind === "deny") {
+    throw new Error(
+      `Capability ${verbId} refused by capability gate: ${capDispatch.reason}`
+    );
+  }
+  if (capDispatch.kind === "proposed") {
+    throw new Error(
+      `Capability ${verbId} requires human approval and cannot run inside an automation; capability node refused.`
+    );
+  }
+  if (capDispatch.kind === "not_found") {
+    throw new Error(
+      `Capability ${verbId} could not be dispatched: ${capDispatch.message}`
+    );
+  }
+  if (capDispatch.kind === "dry-run") {
+    // Grant resolved to dry-run preview — no external side effect.
+    return {
+      output: {
+        dryRun: true,
+        verbId,
+        skillId: capDispatch.skillId,
+      },
+      verbId,
+      skillId: capDispatch.skillId,
+    };
+  }
+  // kind === "run": preserve the prior step output shape.
+  return {
+    output: capDispatch.result,
+    verbId,
+    skillId: capDispatch.skillId,
+  };
 }
 
 /**
@@ -885,6 +1072,44 @@ async function executeOutputStep(
       };
     }
 
+    case "set_state": {
+      // Persist per-automation state (watermark/cursor). `config` is a merge
+      // object (after template resolution) that is shallow-merged onto the
+      // automations.state jsonb via `||`. Author-controlled (explicit node) —
+      // NOT automatic. Templates in the config (e.g. {{steps.x.output.max}})
+      // are already resolved above.
+      //
+      // CONCURRENCY: two overlapping runs of the same automation both do
+      // `state || <their patch>`. The DB serializes the two UPDATEs, so the
+      // second overwrites keys the first set to a different value (last-writer
+      // wins per key). Keys the two runs don't share are both preserved. There
+      // is no read-modify-write in app code — the merge is a single atomic SQL
+      // statement — so no lost-update beyond that last-writer-per-key semantics.
+      // Acceptable for watermark/cursor use (monotonic advance): design the
+      // patch so the newest run carries the highest watermark.
+      const automationId = context.automation.id;
+      const patch = (config ?? {}) as Record<string, unknown>;
+
+      const [updated] = await db
+        .update(automations)
+        .set({
+          state: drizzleSql`${automations.state} || ${JSON.stringify(
+            patch
+          )}::jsonb`,
+          updatedAt: new Date(),
+        })
+        .where(eq(automations.id, automationId))
+        .returning({ state: automations.state });
+
+      // Reflect the merge into the live run context so later nodes in THIS run
+      // see the new value via {{automation.state.<key>}}.
+      if (updated?.state) {
+        context.automation.state = updated.state as Record<string, unknown>;
+      }
+
+      return { status: "state_set", keys: Object.keys(patch) };
+    }
+
     default:
       logger.warn({ outputType: data.outputType }, "Unknown output type");
       return { status: "unknown_output_type", outputType: data.outputType };
@@ -896,7 +1121,13 @@ async function executeOutputStep(
 /**
  * Execute a transform step.
  * Supports pipe-style expressions: "{{nodeId.output.field}} | uppercase"
- * Supported pipes: uppercase, lowercase, json, trim
+ * Scalar pipes: uppercase, lowercase, json, trim, url_extract
+ * Array-aware pipes (input must be an array; non-array → treated as []):
+ *   filter:<predicate>  keep items where the predicate is true (each item is
+ *                       exposed as `item`, e.g. "filter:item.score > 5")
+ *   map:<expr>          transform each item ("map:{{item.title}}")
+ *   unique              dedupe by JSON identity
+ *   slice:<n>           keep the first n items
  */
 function executeTransformStep(
   data: { expression: string },
@@ -930,6 +1161,78 @@ function executeTransformStep(
   let current: unknown = value;
 
   for (const pipe of pipes) {
+    // Array-aware pipes take an argument after ":" — split name from arg.
+    // Scalar pipes below have no ":" so `pipeName` === `pipe` for them.
+    const colonIdx = pipe.indexOf(":");
+    const pipeName = colonIdx === -1 ? pipe : pipe.slice(0, colonIdx).trim();
+    const pipeArg = colonIdx === -1 ? "" : pipe.slice(colonIdx + 1).trim();
+
+    // ── Array-aware pipes ───────────────────────────────────────────────
+    // Operate on an array input; a non-array input is treated as empty so a
+    // flow that expected a list degrades to [] rather than throwing.
+    if (
+      pipeName === "filter" ||
+      pipeName === "map" ||
+      pipeName === "unique" ||
+      pipeName === "slice"
+    ) {
+      const arr = Array.isArray(current) ? current : [];
+      switch (pipeName) {
+        case "filter": {
+          // Reuse the shared predicate evaluator. Each item is exposed as
+          // `item` (and `loop.item`) in a per-item context so the predicate
+          // can reference `item.<field>` — e.g. "filter:item.score > 5".
+          current = arr.filter((item, index) => {
+            const itemContext: StepContext = {
+              ...context,
+              loop: { item, index },
+              item,
+            };
+            return evaluateCondition(pipeArg, itemContext);
+          });
+          break;
+        }
+        case "map": {
+          // Resolve `pipeArg` as a template per item, exposing `item`. Returns
+          // the raw resolved value when the arg is a single `{{...}}` ref,
+          // otherwise the interpolated string.
+          const singleRef = pipeArg.match(/^\{\{(.+?)\}\}$/);
+          current = arr.map((item, index) => {
+            const itemContext: StepContext = {
+              ...context,
+              loop: { item, index },
+              item,
+            };
+            return singleRef
+              ? resolveContextPath(singleRef[1], itemContext)
+              : resolveTemplate(pipeArg, itemContext);
+          });
+          break;
+        }
+        case "unique": {
+          // Dedupe by JSON identity so objects/arrays compare structurally.
+          const seen = new Set<string>();
+          current = arr.filter((item) => {
+            const key =
+              typeof item === "object" && item !== null
+                ? JSON.stringify(item)
+                : String(item);
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+          break;
+        }
+        case "slice": {
+          const n = Number(pipeArg);
+          current = Number.isFinite(n) ? arr.slice(0, n) : arr;
+          break;
+        }
+      }
+      continue;
+    }
+
+    // ── Scalar pipes (unchanged) ────────────────────────────────────────
     switch (pipe) {
       case "uppercase":
         current =
@@ -1513,6 +1816,13 @@ async function executeAutomationFlow(params: {
       payload: (run.triggerPayload as Record<string, unknown>) ?? {},
     },
     steps: {},
+    // Snapshot of the automation's persistent state at trigger time. A
+    // `set_state` output node merges changes back onto the row (see
+    // executeOutputStep); the snapshot here is what templates read for this run.
+    automation: {
+      id: automation.id,
+      state: (automation.state as Record<string, unknown> | null) ?? {},
+    },
   };
 
   // If resuming from delay, reload previously completed step outputs
@@ -1777,13 +2087,16 @@ async function executeAutomationFlow(params: {
             }
 
             // The loop owns the CONTIGUOUS chain of SUPPORTED body nodes reachable
-            // from it — traversal STOPS at any unsupported node type (condition,
-            // switch, skill, delay, a nested loop, …). Those are BOUNDARIES: not
-            // owned by the loop, so they are neither dispatched per-item nor marked
-            // skipped — they run ONCE in the main topological pass (as before this
-            // rewrite). This keeps a linear per-item body (messages_query → command
-            // → session_update → entity_create) working while never silently
-            // dropping downstream branch/merge/post-loop logic.
+            // from it (LOOP_BODY_NODE_TYPES) — traversal STOPS at any node type
+            // NOT in that set (switch, delay, a nested loop, sub_automation, …).
+            // Those are BOUNDARIES: not owned by the loop, so they are neither
+            // dispatched per-item nor marked skipped — they run ONCE in the main
+            // topological pass. `condition`/`skill`/`capability` ARE body types:
+            // a per-item `condition` filters this item (continue-semantics), and
+            // skill/capability dispatch per item (MAX_LOOP_ITERATIONS caps the
+            // paid IS/provider fan-out). This keeps a per-item body (e.g.
+            // messages_query → condition → skill → entity_create) working while
+            // never silently dropping downstream branch/merge/post-loop logic.
             const nodeById = new Map(flow.nodes.map((n) => [n.id, n]));
             const bodyNodeIds = new Set<string>();
             {
@@ -1810,6 +2123,12 @@ async function executeAutomationFlow(params: {
               // Set loop context
               context.loop = { item: items[i], index: i };
 
+              // When a per-item `condition` filters THIS item out, we skip the
+              // remaining body nodes for this item ONLY (continue the outer
+              // for-loop). Signalled by this flag rather than a labeled break so
+              // the per-item error handling (try/catch) stays intact.
+              let itemFiltered = false;
+
               for (const childNode of bodyNodes) {
                 try {
                   let childOutput: Record<string, unknown> = {};
@@ -1830,6 +2149,47 @@ async function executeAutomationFlow(params: {
                         workspaceId,
                         automationContext,
                         ownerId
+                      );
+                      break;
+                    case "condition": {
+                      // PER-ITEM FILTER (continue-semantics). Evaluate the
+                      // condition against THIS item's context and, when false,
+                      // skip the rest of THIS item's body — do NOT touch
+                      // `skippedNodes` (that is the main-pass path that prunes
+                      // for the WHOLE run). Nodes AFTER the condition in the body
+                      // chain simply don't run for this item.
+                      const { expression } = childNode.data as {
+                        expression: string;
+                      };
+                      const result = evaluateCondition(expression, context);
+                      childOutput = { result };
+                      if (!result) itemFiltered = true;
+                      break;
+                    }
+                    case "skill":
+                      childOutput = await executeSkillNode(
+                        childNode.data as {
+                          skillId?: string;
+                          inputMapping?: Record<string, string>;
+                        },
+                        context,
+                        { workspaceId, ownerId }
+                      );
+                      break;
+                    case "capability":
+                      childOutput = await executeCapabilityNode(
+                        childNode.data as {
+                          capabilityId?: string;
+                          verbId?: string;
+                          inputMapping?: Record<string, string>;
+                          connectionSelector?: {
+                            connectionId?: string;
+                            contextObjectId?: string;
+                          };
+                          connectionId?: string;
+                        },
+                        context,
+                        { workspaceId, ownerId }
                       );
                       break;
                     case "playbook_run":
@@ -1903,6 +2263,10 @@ async function executeAutomationFlow(params: {
                     output: childOutput,
                   };
                   context.steps[childNode.id] = { output: childOutput };
+
+                  // Per-item filter tripped false → skip the rest of THIS item's
+                  // body (the condition's output is already recorded above).
+                  if (itemFiltered) break;
                 } catch (err) {
                   logger.error(
                     { err, nodeId: childNode.id, iteration: i },
@@ -2012,69 +2376,14 @@ async function executeAutomationFlow(params: {
           }
 
           case "skill": {
-            const data = node.data as {
-              skillId?: string;
-              inputMapping?: Record<string, string>;
-            };
-
-            const skillId = data.skillId;
-            if (!skillId) throw new Error("Skill node has no skillId");
-
-            const inputMapping = data.inputMapping ?? {};
-            const resolvedInputs = resolveInputMapping(inputMapping, context);
-
-            await db
-              .update(automationStepRuns)
-              .set({ resolvedInputs })
-              .where(eq(automationStepRuns.id, stepRun.id));
-
-            // ── Canonical dispatch (all 3 tiers + gate) ────────────────────────
-            // Route through `executeCapability` (via the loopback bridge) — it
-            // resolves the skill, GATES internally, and runs builtin/declarative/
-            // code tiers. An automation runs as the workspace OWNER (userId =
-            // ownerId, no agent identity), so the gate resolves:
-            //   • owner runs their OWN skill  → owner-bypass → run
-            //   • non-owner-owned + approved  → auto         → run
-            //   • non-owner-owned + UNapproved→ propose (FAILS CLOSED below)
-            // A mid-flow automation has no interactive review surface, so a
-            // propose/deny/not_found verdict FAILS CLOSED (throws); dry-run is
-            // honored as a no-op preview.
-            const skillDispatch = await dispatchViaCapabilityRouter({
-              skillId,
-              parameters: resolvedInputs,
-              workspaceId,
-              userId: ownerId,
-            });
-            if (skillDispatch.kind === "deny") {
-              throw new Error(
-                `Skill ${skillId} refused by capability gate: ${skillDispatch.reason}`
-              );
-            }
-            if (skillDispatch.kind === "proposed") {
-              throw new Error(
-                `Skill ${skillId} requires human approval and cannot run inside an automation; automation skill node refused.`
-              );
-            }
-            if (skillDispatch.kind === "not_found") {
-              throw new Error(
-                `Skill ${skillId} could not be dispatched: ${skillDispatch.message}`
-              );
-            }
-            if (skillDispatch.kind === "dry-run") {
-              // Grant resolved to dry-run preview — no external side effect.
-              output = {
-                output: { dryRun: true, skillId: skillDispatch.skillId },
-                skillId: skillDispatch.skillId,
-              };
-              break;
-            }
-            // kind === "run": preserve the prior step output shape — `output`
-            // carries the skill's execution result (the IS SkillExecutionResult
-            // for a code skill, the handler/provider return for builtin/declarative).
-            output = {
-              output: skillDispatch.result,
-              skillId: skillDispatch.skillId,
-            };
+            output = await executeSkillNode(
+              node.data as {
+                skillId?: string;
+                inputMapping?: Record<string, string>;
+              },
+              context,
+              { workspaceId, ownerId, stepRun }
+            );
             break;
           }
 
@@ -2089,85 +2398,20 @@ async function executeAutomationFlow(params: {
             // ALL 3 tiers (builtin / declarative / code) + a 1-of-N connection
             // selector. No parallel governance, no new tables: the router IS the
             // executor; the gate IS the door.
-            const data = node.data as {
-              capabilityId?: string;
-              verbId?: string;
-              inputMapping?: Record<string, string>;
-              connectionSelector?: {
+            output = await executeCapabilityNode(
+              node.data as {
+                capabilityId?: string;
+                verbId?: string;
+                inputMapping?: Record<string, string>;
+                connectionSelector?: {
+                  connectionId?: string;
+                  contextObjectId?: string;
+                };
                 connectionId?: string;
-                contextObjectId?: string;
-              };
-              connectionId?: string;
-            };
-
-            const verbId = data.verbId;
-            if (!verbId) throw new Error("Capability node has no verbId");
-
-            const capInputMapping = data.inputMapping ?? {};
-            const capResolvedInputs = resolveInputMapping(
-              capInputMapping,
-              context
+              },
+              context,
+              { workspaceId, ownerId, stepRun }
             );
-
-            await db
-              .update(automationStepRuns)
-              .set({ resolvedInputs: capResolvedInputs })
-              .where(eq(automationStepRuns.id, stepRun.id));
-
-            // Runtime 1-of-N connection selection (Wave 4): explicit selector, or
-            // a bare connectionId shorthand. Absent → default/authBinding behavior.
-            const connectionSelector =
-              data.connectionSelector ??
-              (data.connectionId ? { connectionId: data.connectionId } : null);
-
-            // ── Canonical dispatch (SAME door as `case "skill"`) ──────────────
-            // Runs as the workspace OWNER (userId = ownerId, no agent identity):
-            //   • owner runs their OWN skill  → owner-bypass → run
-            //   • non-owner-owned + approved  → auto         → run
-            //   • non-owner-owned + UNapproved→ propose (FAILS CLOSED below)
-            // A mid-flow automation has no interactive review surface, so a
-            // propose/deny/not_found verdict throws; dry-run is honored as a no-op.
-            const capDispatch = await dispatchViaCapabilityRouter({
-              verbId,
-              parameters: capResolvedInputs,
-              workspaceId,
-              userId: ownerId,
-              connectionSelector,
-            });
-            if (capDispatch.kind === "deny") {
-              throw new Error(
-                `Capability ${verbId} refused by capability gate: ${capDispatch.reason}`
-              );
-            }
-            if (capDispatch.kind === "proposed") {
-              throw new Error(
-                `Capability ${verbId} requires human approval and cannot run inside an automation; capability node refused.`
-              );
-            }
-            if (capDispatch.kind === "not_found") {
-              throw new Error(
-                `Capability ${verbId} could not be dispatched: ${capDispatch.message}`
-              );
-            }
-            if (capDispatch.kind === "dry-run") {
-              // Grant resolved to dry-run preview — no external side effect.
-              output = {
-                output: {
-                  dryRun: true,
-                  verbId,
-                  skillId: capDispatch.skillId,
-                },
-                verbId,
-                skillId: capDispatch.skillId,
-              };
-              break;
-            }
-            // kind === "run": preserve the prior step output shape.
-            output = {
-              output: capDispatch.result,
-              verbId,
-              skillId: capDispatch.skillId,
-            };
             break;
           }
 
@@ -2517,8 +2761,8 @@ function markDescendantsSkipped(
 
 // Node types a loop may dispatch per-item (mirrors the `switch (childNode.type)`
 // in the loop body). Traversal of a loop's body STOPS at any type not in this
-// set, so branch/control nodes (condition, switch, skill, delay, nested loop)
-// are boundaries that run once in the main pass rather than being swallowed.
+// set, so control/boundary nodes (switch, delay, nested loop, sub_automation)
+// run once in the main pass rather than being swallowed by the loop.
 const LOOP_BODY_NODE_TYPES = new Set<string>([
   "command",
   "output",
@@ -2527,6 +2771,14 @@ const LOOP_BODY_NODE_TYPES = new Set<string>([
   "query",
   "fetch",
   "transform",
+  // Per-item AI/gated verbs — dispatched once PER ITEM (MAX_LOOP_ITERATIONS
+  // caps the paid IS/provider fan-out). `condition` is a PER-ITEM FILTER with
+  // continue-semantics (skip the rest of THIS item's body), NOT the main-pass
+  // branch-pruning path. Nested `loop`/`switch` are deliberately EXCLUDED —
+  // they stay traversal boundaries to avoid exponential fan-out.
+  "condition",
+  "skill",
+  "capability",
 ]);
 
 /**

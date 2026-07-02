@@ -13,6 +13,7 @@ import { pgTable, uuid, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { workspaces } from "./workspaces.js";
 import { documents } from "./documents.js";
 import { profiles } from "./profiles.js";
+import { projects } from "./projects.js";
 
 export const views = pgTable("views", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -22,7 +23,12 @@ export const views = pgTable("views", {
     onDelete: "cascade",
   }),
   userId: text("user_id").notNull(), // Creator
-  // Projects: Use relations table (if view is linked to entity) or remove projectIds
+  // Project scope (cross-cutting lens): pins a scoped surface (whiteboard/home/
+  // bento) to a project, independently of workspace_id (domain lens). Nullable —
+  // ordinary views and pod/workspace surfaces leave it NULL. See 0166.
+  projectId: uuid("project_id").references(() => projects.id, {
+    onDelete: "cascade",
+  }),
 
   // View type (extensible)
   type: text("type").notNull(),

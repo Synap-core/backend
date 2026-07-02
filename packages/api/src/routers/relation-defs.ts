@@ -11,7 +11,7 @@ import { relationDefs } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { auditLog } from "../utils/audit-log.js";
-import { scopedDb, accessFor } from "../access/index.js";
+import { scopedDb, AccessContext } from "../access/index.js";
 
 const logger = createLogger({ module: "relation-defs-router" });
 
@@ -20,14 +20,15 @@ export const relationDefsRouter = router({
    * List all relation definitions for the current workspace
    */
   // Workspace is a LENS here: an active workspace → that workspace's defs +
-  // pod-wide base defs; no workspace (pod-wide/agent caller) → base defs only
-  // (`?? null`, consistent with widget-definitions/intelligence) instead of the
-  // old "Workspace ID required" 400. Scoping is the registered `workspace` rule
-  // (substrate: includeGlobalsInLens), applied centrally by scopedDb.
+  // pod-wide base defs; no workspace (pod-wide/agent caller) → the full floor
+  // (all member workspaces' defs + base defs), matching relations.listTypes
+  // exactly — both read relationDefs and MUST agree. `?? undefined` = full
+  // floor. Scoping is the registered `workspace` rule (substrate:
+  // includeGlobalsInLens), applied centrally by scopedDb.
   list: podProcedure.query(async ({ ctx }) => {
-    const defs = await scopedDb(accessFor(ctx)).findMany<
-      typeof relationDefs.$inferSelect
-    >(relationDefs, {
+    const defs = await scopedDb(
+      AccessContext.from(ctx).withLens(ctx.workspaceId ?? undefined)
+    ).findMany<typeof relationDefs.$inferSelect>(relationDefs, {
       orderBy: [asc(relationDefs.slug)],
     });
     return { relationDefs: defs };

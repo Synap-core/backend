@@ -6,9 +6,8 @@
  * scope keyed on the entity graph: an entity is "exposed to" an anchor iff it IS
  * that anchor entity, or it has a **whitelisted exposure edge** pointing at it
  * (source = exposed row, target = anchor entity). Anchor membership lives in the
- * `project_members` table (keyed on the project table id after the 0134 repoint),
- * so it is a fast indexed access-join — exactly like `workspace_members` for the
- * workspace axis.
+ * `project_members` table (keyed on `projects.id`), so it is a fast indexed
+ * access-join — exactly like `workspace_members` for the workspace axis.
  *
  * Two whitelisted exposure edges (`EXPOSURE_RELATION_TYPES`):
  *   - `belongs_to_project` — an entity belongs to a project (the original axis).
@@ -78,9 +77,9 @@ export const EXPOSURE_RELATION_TYPES = [
 export type ExposureRelationType = (typeof EXPOSURE_RELATION_TYPES)[number];
 
 /**
- * Subquery: the anchor entity ids the user is a member of (via `project_members`,
- * the generic anchor-membership table post-0134). Correlated/optimisable as a
- * semi-join by Postgres — one round-trip regardless of how many anchors.
+ * Subquery: the anchor ids the user is a member of (via `project_members`, keyed
+ * on `projects.id`). Correlated/optimisable as a semi-join by Postgres — one
+ * round-trip regardless of how many anchors.
  */
 function userAnchorIdsSubquery(userId: string) {
   return db
@@ -122,10 +121,8 @@ function exposedByAnyAnchorSubquery(
  * of — and nothing else there (the branch only admits rows exposed to their
  * anchors).
  *
- * Until `project_members.projectId` is repointed to `entities.id` (migration
- * 0134) this branch matches nothing (legacy ids won't collide with entity ids),
- * so it is safe to land ahead of the migration — it simply grants no exposure
- * access yet. Likewise it is dormant until `visible_to` edges actually exist.
+ * Project exposure is live: anchors are `projects.id` (`project_members.projectId`
+ * → `projects.id`), and exposure edges target that same id.
  */
 export function exposureMemberWhere(
   entityIdColumn: AnyPgColumn,
@@ -264,8 +261,8 @@ export function accessScopeWhere(args: {
       isNotNull(workspaceIdColumn),
       userVisibleWhere(workspaceIdColumn, userId)
     )!,
-    // Exposure membership over BOTH axes (project + visible_to) — dormant until
-    // anchors/edges exist, so this is additive (no behaviour change today).
+    // Exposure membership over BOTH axes (project + visible_to) — live: admits
+    // rows the user sees via anchor membership (`projects.id`) + exposure edges.
     exposureMemberWhere(entityIdColumn, userId, EXPOSURE_RELATION_TYPES)
   )!;
 

@@ -405,6 +405,15 @@ export const automations = pgTable(
     successCount: integer("success_count").default(0).notNull(),
     failureCount: integer("failure_count").default(0).notNull(),
 
+    // Per-automation persistent state (watermark/cursor). Read into the run
+    // context so templates can resolve {{automation.state.<key>}}; written back
+    // by an explicit `output` node with outputType "set_state" (author-controlled,
+    // never automatic). Concurrent runs last-writer-merge via jsonb `||`.
+    state: jsonb("state")
+      .$type<Record<string, unknown>>()
+      .default({})
+      .notNull(),
+
     // Metadata
     metadata: jsonb("metadata")
       .$type<{

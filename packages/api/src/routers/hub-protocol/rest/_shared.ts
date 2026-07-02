@@ -228,6 +228,21 @@ export async function getUserAccessibleWorkspaceIds(
 }
 
 /**
+ * Get the workspace IDs the user is an explicit MEMBER of (memberships only —
+ * NO pod-visible fallback). Used as the "first accessible workspace" lens
+ * fallback by the MCP adapter (recall catalog, relations, linking, capture).
+ * Kept distinct from {@link getUserAccessibleWorkspaceIds} so those callers
+ * preserve their membership-only semantics.
+ */
+export async function getUserWorkspaceIds(userId: string): Promise<string[]> {
+  const rows = await db
+    .select({ workspaceId: workspaceMembers.workspaceId })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.userId, userId));
+  return rows.map((r) => r.workspaceId);
+}
+
+/**
  * Verify a user has access to a specific workspace.
  */
 export async function verifyWorkspaceAccess(

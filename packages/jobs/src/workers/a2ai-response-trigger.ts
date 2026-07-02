@@ -123,7 +123,13 @@ async function callIntelligenceHub(
       if (!raw || raw === "[DONE]") continue;
       try {
         const evt = JSON.parse(raw) as { type?: string; content?: string };
-        if (evt.type === "chunk" && evt.content) {
+        // The IS chat-stream emits incremental text as `{type:"content"}`
+        // (see routes/chat-stream.ts onContent). This worker previously matched
+        // `type:"chunk"`, which never exists — so every content event was dropped
+        // and the accumulated response was always empty ("A2AI response was empty
+        // — skipping persist"). That is why background/CLI chat never produced a
+        // reply. Match the real event type.
+        if (evt.type === "content" && evt.content) {
           acc += evt.content;
           onChunk(evt.content);
         }

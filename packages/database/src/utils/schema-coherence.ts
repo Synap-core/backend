@@ -822,6 +822,23 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "status",
     addedBy: "0162_channel_egress.sql",
   },
+
+  // views — project scope column for scoped surfaces (whiteboard/home/bento per
+  // project lens). Absence means a pod is on a pre-0166 schema.
+  {
+    table: "views",
+    column: "project_id",
+    addedBy: "0166_views_project_id.sql",
+  },
+
+  // automations — per-automation persistent state (watermark/cursor). Absence
+  // means a pod is on a pre-0167 schema where the set_state output node and
+  // {{automation.state.*}} template resolution would hit a missing column.
+  {
+    table: "automations",
+    column: "state",
+    addedBy: "0167_automation_state.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

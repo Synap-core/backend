@@ -164,7 +164,7 @@ in one line; if the user says yes, run a **trimmed version of the flow** for tha
 single domain:
 
 1. **Reuse the project** — it already exists; you have its `projectId` from your
-   lens (`synap lens`) or `synap_list_projects`. Skip Steps 1–4.
+   lens (`synap lens`) or `synap_orient` (its `projects` section). Skip Steps 1–4.
 2. **Check the spine first.** If the domain you're adding consumes the strategic
    base — CRM, Marketing, Content, most business domains inherit `strategy`
    (Foundation) and `brand` (Brand Library) via `sourceRoles` — and the project

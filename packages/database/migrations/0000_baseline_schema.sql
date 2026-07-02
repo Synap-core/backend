@@ -851,6 +851,10 @@ CREATE INDEX IF NOT EXISTS "cell_instances_cell_type_idx"
 CREATE TABLE IF NOT EXISTS "views" (
   "id"                  uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
   "workspace_id"        uuid  REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  -- Bare uuid (NO inline FK): the `projects` table is created by a later
+  -- migration (0151), not in this baseline — mirrors proposals.project_id (0138).
+  -- The FK→projects(id) ON DELETE CASCADE is added by 0166 on existing pods.
+  "project_id"          uuid,
   "user_id"             text  NOT NULL,
   "type"                text  NOT NULL,
   "category"            text  NOT NULL,
@@ -876,6 +880,7 @@ CREATE TABLE IF NOT EXISTS "views" (
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
 ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
+ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "project_id" uuid;
 ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "user_id" text;
 ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "type" text;
 ALTER TABLE "views" ADD COLUMN IF NOT EXISTS "category" text;
@@ -907,6 +912,21 @@ CREATE INDEX IF NOT EXISTS "views_user_id_idx"
 
 CREATE INDEX IF NOT EXISTS "views_type_idx"
   ON "views" ("type");
+
+CREATE INDEX IF NOT EXISTS "views_project_id_idx"
+  ON "views" ("project_id");
+
+-- One canonical scoped surface per (type, workspace_id, project_id) for MARKED
+-- surfaces (metadata.scopedSurface = 'true') only. COALESCE the nullable scope
+-- columns to a sentinel so NULL workspace / NULL project participate in
+-- uniqueness. Mirrors 0166_views_project_id.sql.
+CREATE UNIQUE INDEX IF NOT EXISTS "views_scoped_surface_uniq_idx"
+  ON "views" (
+    "type",
+    COALESCE("workspace_id", '00000000-0000-0000-0000-000000000000'::uuid),
+    COALESCE("project_id",   '00000000-0000-0000-0000-000000000000'::uuid)
+  )
+  WHERE ("metadata"->>'scopedSurface') = 'true';
 
 -- ─── 18. channels ────────────────────────────────────────────────────────────
 
@@ -1835,6 +1855,7 @@ CREATE TABLE IF NOT EXISTS "automations" (
   "run_count"       integer NOT NULL DEFAULT 0,
   "success_count"   integer NOT NULL DEFAULT 0,
   "failure_count"   integer NOT NULL DEFAULT 0,
+  "state"           jsonb   NOT NULL DEFAULT '{}',
   "metadata"        jsonb   NOT NULL DEFAULT '{}',
   "created_at"      timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"      timestamp with time zone NOT NULL DEFAULT now()
@@ -1854,6 +1875,7 @@ ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "next_run_at" timestamp with 
 ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "run_count" integer DEFAULT 0;
 ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "success_count" integer DEFAULT 0;
 ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "failure_count" integer DEFAULT 0;
+ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "state" jsonb NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
 ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "automations" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();

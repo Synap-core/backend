@@ -178,7 +178,8 @@ export class ProfileResolutionService {
     // (workspace-less users in hydration).
     let profile = await this.profileRepo.getBySlug(
       identifier,
-      workspaceId ?? ""
+      workspaceId ?? "",
+      userId
     );
     if (profile) return profile;
 

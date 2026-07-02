@@ -83,6 +83,7 @@ import {
   registerSubscriptionsRoutes,
   registerManifestRoutes,
   registerDiscoverRoutes,
+  registerOrientRoutes,
   registerKeysRoutes,
   registerAiProvidersRoutes,
   registerFocusSessionsRoutes,
@@ -495,6 +496,7 @@ registerWebhooksRoutes(app); // /webhooks
 registerSubscriptionsRoutes(app); // /subscriptions*, /webhooks/:id/deliveries
 registerManifestRoutes(app); // /manifest
 registerDiscoverRoutes(app); // /discover
+registerOrientRoutes(app); // /orient
 registerKeysRoutes(app); // /keys/rotate-cli
 registerAiProvidersRoutes(app); // /ai-providers
 registerFocusSessionsRoutes(app); // /focus-sessions*
