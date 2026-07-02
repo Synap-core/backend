@@ -24,6 +24,7 @@ import { type ProfileCatalogEntry } from "../../services/retrieval/index.js";
 import { getDb } from "@synap/database";
 import { db, knowledgeKeysRepository } from "@synap/database";
 import { getUserWorkspaceIds } from "../hub-protocol/rest/_shared.js";
+import { openLink } from "../../utils/deep-links.js";
 import type { Context } from "../../types/context.js";
 
 // ── tRPC caller factory ───────────────────────────────────────────────────────
@@ -72,8 +73,48 @@ async function createHubProtocolCaller(
 
 // ── Tool result helpers ───────────────────────────────────────────────────────
 
+/**
+ * Extract the primary object id from a tool result, in field-priority order:
+ *   proposalId → id → entityId → documentId → viewId → channelId →
+ *   sessionId → messageId → knowledgeKey.id → nested data.id
+ * First string hit wins; returns undefined when none is present.
+ */
+function primaryObjectId(data: unknown): string | undefined {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
+  const d = data as Record<string, unknown>;
+  const keys = [
+    "proposalId",
+    "id",
+    "entityId",
+    "documentId",
+    "viewId",
+    "channelId",
+    "sessionId",
+    "messageId",
+  ] as const;
+  for (const key of keys) {
+    const v = d[key];
+    if (typeof v === "string" && v) return v;
+  }
+  const kk = d.knowledgeKey as Record<string, unknown> | undefined;
+  if (kk && typeof kk.id === "string" && kk.id) return kk.id;
+  const nested = d.data as Record<string, unknown> | undefined;
+  if (nested && typeof nested === "object" && typeof nested.id === "string" && nested.id) {
+    return nested.id;
+  }
+  return undefined;
+}
+
 function ok(data: unknown): CallToolResult {
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+  // Centrally inject the canonical clickable `link` (`${PUBLIC_URL}/open/<id>`)
+  // for EVERY MCP tool response — every handler flows through this one shaper,
+  // so no per-handler edits are needed.
+  const id = primaryObjectId(data);
+  const payload =
+    id && data && typeof data === "object" && !Array.isArray(data)
+      ? { ...(data as Record<string, unknown>), link: openLink(id) }
+      : data;
+  return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
 }
 
 function requireScope(scopes: string[], scope: string, toolName: string): void {
@@ -174,6 +215,15 @@ export async function executeMCPToolViaHubProtocol(
         retrieved.routedTo,
         workspaceId ?? null
       );
+      // Surface synthesis outages loudly instead of returning a null answer that
+      // looks like "no results". Retrieval/sources still stand.
+      if ((synthesis as { error?: string }).error === "synthesis_unavailable") {
+        return ok({
+          ...synthesis,
+          message:
+            "⚠️ AI synthesis is temporarily unavailable. The matched sources below are real; tell the user the AI answer layer is degraded (not that nothing was found).",
+        });
+      }
       return ok(synthesis);
     }
 
@@ -629,6 +679,22 @@ export async function executeMCPToolViaHubProtocol(
       // wait for review. The materialized entities come back in the result.
       const captureProposals =
         (structured as { proposals?: unknown[] }).proposals ?? [];
+      // DEGRADED GUARD: when the IS structurer is down, structure() returns a
+      // single raw-note fallback with `degraded: true`. Do NOT silently execute
+      // that note — it looks like a normal capture but is an outage artifact the
+      // user doesn't want. Surface the degradation loudly and create nothing;
+      // the caller tells the user the AI service is temporarily unavailable.
+      if ((structured as { degraded?: boolean }).degraded === true) {
+        const reason = (structured as { degradedReason?: string }).degradedReason;
+        return ok({
+          degraded: true,
+          degradedReason: reason,
+          executed: false,
+          message:
+            "⚠️ AI structuring is temporarily unavailable, so nothing was created. " +
+            "Tell the user their capture was NOT structured (the AI service is degraded) and to try again shortly — do not present this as a normal capture or save a raw note.",
+        });
+      }
       if (captureProposals.length === 0) {
         return ok({
           ...structured,
