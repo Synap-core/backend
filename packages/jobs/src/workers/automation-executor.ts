@@ -426,7 +426,7 @@ async function executeSkillNode(
   }
 
   // ── Canonical dispatch (all 3 tiers + gate) ────────────────────────
-  // Route through `executeCapability` (via the loopback bridge) — it
+  // Route through `executeCapability` (via the in-process IoC slot) — it
   // resolves the skill, GATES internally, and runs builtin/declarative/
   // code tiers. An automation runs as the workspace OWNER (userId =
   // ownerId, no agent identity), so the gate resolves:
@@ -2391,7 +2391,7 @@ async function executeAutomationFlow(params: {
             // A verb is BACKED BY A SKILL — its `id` is the requiring skill's
             // NAME (see ToolVerbCatalogEntry.id in schema/tools.ts). Dispatch
             // routes verb → the canonical `executeCapability` router (via the
-            // loopback bridge), which resolves the backing skill, GATES, and runs
+            // in-process IoC slot), which resolves the backing skill, GATES, and runs
             // ALL 3 tiers (builtin / declarative / code) + a 1-of-N connection
             // selector. No parallel governance, no new tables: the router IS the
             // executor; the gate IS the door.

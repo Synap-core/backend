@@ -37,6 +37,7 @@ import {
 import { createLogger, ServiceUnavailableError } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
 import { withRetry, FEED_RETRY_OPTIONS } from "@synap/shared-utils";
+import { getDefaultActiveService } from "@synap/intelligence-client";
 import type { SourceItem } from "@synap/feed-service";
 import { MessageRole, MessageAuthorType } from "@synap/database/schema";
 import type { FeedMessageMetadata } from "@synap-core/types/feeds";
@@ -161,8 +162,9 @@ async function classifyWithIS(
   _workspaceId: string | undefined,
   feedType: string
 ): Promise<Record<string, ClassificationResult>> {
-  const isUrl = process.env.INTELLIGENCE_HUB_URL;
-  const isApiKey = process.env.INTELLIGENCE_HUB_INTERNAL_KEY;
+  // Canonical IS credential resolution (decrypted DB key), not stale env — the
+  // env key rotates dead on a CP→pod re-provision (is-credential-env-vs-db-drift).
+  const { endpoint: isUrl, apiKey: isApiKey } = await getDefaultActiveService();
 
   if (!isUrl || !isApiKey) {
     logger.warn("IS not configured, skipping classification");

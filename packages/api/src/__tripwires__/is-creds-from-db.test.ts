@@ -25,7 +25,6 @@ import { join, relative } from "path";
 const ALLOWLIST = new Set<string>([
   "routers/ai-providers.ts",
   "routers/hub-protocol/rest/ai-providers.ts",
-  "routers/proposals.ts",
 ]);
 
 const BANNED = "process.env.INTELLIGENCE_HUB_INTERNAL_KEY";

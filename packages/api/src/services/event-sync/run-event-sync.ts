@@ -19,7 +19,8 @@
  * events prune themselves and the map never grows unbounded.
  *
  * Lives in `@synap/api` because `calendar_list` (executeCapability) is api-side;
- * the jobs package cannot import @synap/api, hence the loopback endpoint bridge.
+ * the jobs `event-sync-cron` worker invokes it in-process via the
+ * `registerEventSyncRunner` IoC slot (jobs can't import @synap/api).
  */
 
 import {

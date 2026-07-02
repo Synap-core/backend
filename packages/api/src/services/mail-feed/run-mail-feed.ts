@@ -14,7 +14,8 @@
  *
  * Phase 1 = post summaries only (no entity creation). Lives in `@synap/api`
  * because gmail_search (executeCapability) + the IS triage call are api-side; the
- * jobs package cannot import @synap/api, hence the loopback endpoint bridge.
+ * jobs `mail-feed-cron` worker invokes it in-process via the `registerMailFeedRunner`
+ * IoC slot (jobs can't import @synap/api).
  */
 
 import { db, tools, eq, drizzleSql } from "@synap/database";

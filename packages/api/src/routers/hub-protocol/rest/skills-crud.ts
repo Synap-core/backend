@@ -27,6 +27,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { db, eq, skills } from "@synap/database";
 
 import { skillsRouter } from "../../skills.js";
 import { resolveIntelligenceService } from "../../../utils/intelligence-routing.js";
@@ -459,6 +460,29 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
     try {
       const acting = await resolveActingContext(c, {});
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      // Tier-aware: builtin/declarative verbs run in-process (BUILTIN_VERBS /
+      // executeProviderVerb) with no IS isolate sandbox, so there is no dry-run
+      // path — return an explanatory result WITHOUT proxying to the IS (which
+      // has no such skill and would 404). Only code/instruction proxy below.
+      const [tierRow] = await db
+        .select({ kind: skills.kind })
+        .from(skills)
+        .where(eq(skills.id, id))
+        .limit(1);
+
+      if (tierRow?.kind === "builtin" || tierRow?.kind === "declarative") {
+        return c.json(
+          {
+            result: {
+              kind: "dry-run-unavailable",
+              message: `Dry-run not available for ${tierRow.kind} verbs (they run in-process, not in the IS sandbox).`,
+            },
+            dryRunEffects: [],
+          },
+          200
+        );
+      }
 
       // Resolve the IS endpoint + service key (same util external-dispatch uses).
       let endpoint: string;

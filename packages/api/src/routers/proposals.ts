@@ -231,18 +231,18 @@ function reportProposalOutcome(params: {
   source?: string | null | undefined;
   rejectionReason?: string | null | undefined;
 }): void {
-  const internalKey = process.env.INTELLIGENCE_HUB_INTERNAL_KEY;
   // Fire for AI proposals (have an agentUserId) AND for capture proposals
   // (no agentUserId, identified by proposalType 'capture.graph' or source 'capture')
   // so rejected captures also feed the IS learning sink.
   const isCaptureProposal =
     params.proposalType === "capture.graph" || params.source === "capture";
-  if (!internalKey || (!params.agentUserId && !isCaptureProposal)) return;
+  if (!params.agentUserId && !isCaptureProposal) return;
 
   void (async () => {
     try {
-      // Resolve hub endpoint from DB (registered IS) rather than env vars
-      const { endpoint: hubUrl } = await getDefaultActiveService();
+      // Resolve hub endpoint + per-connection key from DB (registered IS)
+      const { endpoint: hubUrl, apiKey } = await getDefaultActiveService();
+      if (!apiKey) return; // No registered IS — skip telemetry (non-fatal)
 
       // Resolve channelId (= Langfuse traceId) from sourceMessageId
       let traceId: string | undefined;
@@ -255,11 +255,11 @@ function reportProposalOutcome(params: {
         traceId = msg?.channelId ?? undefined;
       }
 
-      await fetch(`${hubUrl}/api/internal/telemetry/proposal-outcome`, {
+      await fetch(`${hubUrl}/api/telemetry/proposal-outcome`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Internal-Key": internalKey,
+          "X-API-Key": apiKey,
         },
         body: JSON.stringify({
           traceId,

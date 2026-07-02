@@ -394,16 +394,16 @@ export async function registerAllWorkers(): Promise<void> {
   );
   logger.info("Registered worker: crm-daily-digest");
 
-  // Mail feed (cron: every 2h) — triggers the api-side loopback endpoint that
-  // fetches + triages Gmail and posts relevant emails to the Discord-bound channel.
+  // Mail feed (cron: every 2h) — invokes the api-side mail-feed runner in-process
+  // (IoC slot) to fetch + triage Gmail and post relevant emails to the Discord-bound channel.
   await boss.work(MAIL_FEED_CRON_QUEUE, async ([job]: any[]) =>
     handleMailFeedCron(job)
   );
   logger.info("Registered worker: mail-feed-cron");
 
-  // Event sync (cron: every 6h) — triggers the api-side loopback endpoint that
-  // mirrors upcoming events + Stellar deadlines + Google Calendar into native
-  // Discord scheduled events.
+  // Event sync (cron: every 6h) — invokes the api-side event-sync runner in-process
+  // (IoC slot) to mirror upcoming events + Stellar deadlines + Google Calendar into
+  // native Discord scheduled events.
   await boss.work(EVENT_SYNC_CRON_QUEUE, async ([job]: any[]) =>
     handleEventSyncCron(job)
   );

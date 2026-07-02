@@ -428,12 +428,12 @@ export const capabilitiesRouter = router({
         };
       }
 
-      // Declarative verbs run in-process — no isolate dry-run sandbox.
-      if (skillRow.kind === "declarative") {
+      // Declarative and builtin verbs run in-process — no isolate dry-run sandbox.
+      if (skillRow.kind === "declarative" || skillRow.kind === "builtin") {
         return {
           kind: "dry-run-unavailable" as const,
           skillId: skillRow.id,
-          message: "Dry-run not available for declarative verbs.",
+          message: `Dry-run not available for ${skillRow.kind} verbs (they run in-process, not in the IS sandbox).`,
         };
       }
 
