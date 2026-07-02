@@ -24,6 +24,7 @@ import type { CapabilityRow } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
 
 /** A part the user can attach to a capability. Built-ins are tools (kind=builtin). */
@@ -258,10 +259,21 @@ export const capabilityContainersRouter = router({
           code: "NOT_FOUND",
           message: "Capability not found",
         });
-      await assertWorkspaceWrite(db, userId, {
-        workspaceId: existing.workspaceId,
-        ownerId: existing.createdBy,
-      });
+      // This path now CASCADES (deletes orphaned member tools/skills), so it
+      // must carry the SAME authorization floor as `capabilities.uninstall`:
+      // workspace OWNER for a workspace-scoped capability, pod admin for a
+      // pod-scoped one — not the weaker editor+ `assertWorkspaceWrite` floor.
+      if (existing.workspaceId !== null) {
+        const role = await getWorkspaceRole(userId, existing.workspaceId);
+        if (role !== "owner") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only workspace owners can remove workspace capabilities.",
+          });
+        }
+      } else {
+        await requirePodAdmin(userId);
+      }
       // Route through the canonical uninstaller so this path CASCADES: it drops
       // the member links, the container, AND any member tools/skills that are
       // left orphaned (not shared with another capability). Previously this

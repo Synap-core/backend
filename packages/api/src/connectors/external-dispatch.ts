@@ -32,6 +32,7 @@ import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { getMessagingConnector } from "./index.js";
 import { resolveNangoConnector } from "./index.js";
 import type { NangoConnector } from "./NangoConnector.js";
+import type { SyncConnectorConnection } from "./SyncConnector.js";
 import { resolveVaultSecret } from "../utils/vault-resolver.js";
 import { resolveCapabilityGrant } from "@synap/database";
 import { validateExternalUrl } from "../utils/validate-url.js";
@@ -48,6 +49,32 @@ async function getNangoConnector(): Promise<NangoConnector | undefined> {
   // TODO(W3/W4): becomes a capability cast (Pushable — proxyRequest/triggerAction).
   const connector = await resolveNangoConnector();
   return connector && connector.isConfigured() ? connector : undefined;
+}
+
+/**
+ * Pick the Nango connection for a provider from the user's live connections.
+ * Honors an explicit `accountHint` (matched as a substring of the connectionId,
+ * e.g. the exact connection a registry row pins); when a hint is given but
+ * matches nothing, falls back to the first match; with no hint, the
+ * most-recently-created. Returns null when the user has no connection for the
+ * provider. Shared by `nangoHandler` and `vaultDelegatedHandler` so the 1-of-N
+ * account pick stays identical on both routes.
+ */
+function pickNangoConnection(
+  connections: SyncConnectorConnection[],
+  providerConfigKey: string,
+  accountHint: string | undefined
+): SyncConnectorConnection | null {
+  const matching = connections.filter((c) => c.provider === providerConfigKey);
+  if (matching.length === 0) return null;
+  if (accountHint) {
+    return (
+      matching.find((c) => c.connectionId.includes(accountHint)) ?? matching[0]!
+    );
+  }
+  return [...matching].sort(
+    (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+  )[0]!;
 }
 
 /**
@@ -704,33 +731,20 @@ const nangoHandler: SchemeHandler = async ({ input, tool }) => {
     (toolConfig.providerConfigKey as string) ??
     tool.credentialRef!.replace(/^nango:\/\//, "");
 
-  // Resolve user's connection for this provider
+  // Resolve user's connection for this provider (honor accountHint if given).
   const connections = await connector.listConnections(userId);
-  const matchingConnections = connections.filter(
-    (conn) => conn.provider === providerConfigKey
+  const connection = pickNangoConnection(
+    connections,
+    providerConfigKey,
+    accountHint
   );
-
-  if (matchingConnections.length === 0) {
+  if (!connection) {
     return {
       success: false,
       status: 404,
       errorCode: "not_found",
       error: `No connection found for provider "${providerConfigKey}". Connect it via Settings → Connectors first.`,
     };
-  }
-
-  // Pick by accountHint (match connectionId prefix) or default to most recent
-  let connection = matchingConnections[0]!;
-  if (accountHint) {
-    const hinted = matchingConnections.find((c) =>
-      c.connectionId.includes(accountHint)
-    );
-    if (hinted) connection = hinted;
-  } else {
-    // Most recently created (latest first from Nango)
-    connection = matchingConnections.sort(
-      (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
-    )[0]!;
   }
 
   const result = await connector.proxyRequest({
@@ -860,32 +874,20 @@ async function vaultDelegatedHandler(ctx: {
     const providerConfigKey =
       (bCfg.providerConfigKey as string) ?? integration.slug;
 
-    // Resolve user's connection for this provider
+    // Resolve user's connection for this provider (honor accountHint if given).
     const connections = await connector.listConnections(userId);
-    const matchingConnections = connections.filter(
-      (conn) => conn.provider === providerConfigKey
+    const connection = pickNangoConnection(
+      connections,
+      providerConfigKey,
+      accountHint
     );
-
-    if (matchingConnections.length === 0) {
+    if (!connection) {
       return {
         success: false,
         status: 404,
         errorCode: "not_found",
         error: `No Nango connection found for provider "${providerConfigKey}". Connect it via Settings → Connectors first.`,
       };
-    }
-
-    // Pick by accountHint or default to most recent
-    let connection = matchingConnections[0]!;
-    if (accountHint) {
-      const hinted = matchingConnections.find((c) =>
-        c.connectionId.includes(accountHint)
-      );
-      if (hinted) connection = hinted;
-    } else {
-      connection = matchingConnections.sort(
-        (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
-      )[0]!;
     }
 
     const result = await connector.proxyRequest({
