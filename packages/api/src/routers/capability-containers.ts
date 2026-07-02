@@ -24,6 +24,7 @@ import type { CapabilityRow } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
 
 /** A part the user can attach to a capability. Built-ins are tools (kind=builtin). */
 const PART_TYPES = ["tool", "skill"] as const;
@@ -261,15 +262,14 @@ export const capabilityContainersRouter = router({
         workspaceId: existing.workspaceId,
         ownerId: existing.createdBy,
       });
-      // Atomic: drop the member links AND the capability together, so a crash
-      // between them can't orphan one without the other.
-      await db.transaction(async (tx) => {
-        await tx
-          .delete(links)
-          .where(and(eq(links.toType, "capability"), eq(links.toId, input.id)));
-        await tx.delete(capabilities).where(eq(capabilities.id, input.id));
-      });
-      return { ok: true as const };
+      // Route through the canonical uninstaller so this path CASCADES: it drops
+      // the member links, the container, AND any member tools/skills that are
+      // left orphaned (not shared with another capability). Previously this
+      // procedure only removed the container + links, leaving orphaned tools that
+      // could shadow a re-installed capability's pod-wide tool (scope precedence)
+      // and break connection-selector resolution. Shared members are preserved.
+      const result = await uninstallCapability(input.id, ctx);
+      return { ok: true as const, deleted: result.deleted };
     }),
 
   /** Attach an existing part (tool/skill) to a capability via a member_of link. */
