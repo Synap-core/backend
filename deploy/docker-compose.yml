@@ -44,7 +44,13 @@ x-backend-env: &backend-env
   PUBLIC_URL: ${PUBLIC_URL:-http://backend:4000}
   # Parent domain for the derived first-party CORS allowlist (see install.sh .env)
   SYNAP_BASE_DOMAIN: ${SYNAP_BASE_DOMAIN:-}
-  CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-}
+  # Default to the Synap Control Plane so the capability MARKETPLACE catalog syncs
+  # on ANY deploy path (docker compose up / synap.sh / eve — not just install.sh):
+  # empty → the pod-local template cache never populates → `cap add` shows nothing.
+  # SAFE: CP JWT trust is gated by the `trusted_issuers` registry, NOT this URL
+  # (it drives the public marketplace fetch + legacy JWKS only). Self-hosted pods
+  # override CONTROL_PLANE_URL in deploy/.env.
+  CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-https://api.synap.live}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
