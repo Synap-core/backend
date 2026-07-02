@@ -97,6 +97,15 @@ import {
 
 const logger = createLogger({ module: "hub-protocol-rest" });
 
+/**
+ * Attach near-expiry warning headers when a validated key is within this many
+ * days of `expiresAt`. Pure addition — it does NOT change the hard-401-on-expiry
+ * behavior (that stays in `getApiKeyStatus`, which returns `status: "expired"`).
+ * The IS reads `X-Key-Expires-Soon` / `X-Key-Expires-At` on its responses (see
+ * packages/jobs intelligence-health-check) to surface a re-provision warning.
+ */
+const KEY_EXPIRY_WARNING_DAYS = 14;
+
 function extractBearerToken(authHeader: string | null): string | null {
   if (!authHeader) return null;
   const match = authHeader.match(/^Bearer\s+(.+)$/i);
@@ -251,6 +260,18 @@ app.use("/*", async (c, next) => {
     // Match the legacy validateApiKey side effect: bump last_used_at /
     // usage_count (debounced internally to once per minute per key id).
     apiKeyService.recordKeyUse(keyRecord.id);
+
+    // Near-expiry warning headers. Non-blocking — the request still succeeds;
+    // expiry itself is enforced upstream (getApiKeyStatus → 401). Set before
+    // next() so they persist onto whatever response the route handler emits.
+    if (keyRecord.expiresAt) {
+      const msLeft = keyRecord.expiresAt.getTime() - Date.now();
+      if (msLeft <= KEY_EXPIRY_WARNING_DAYS * 24 * 60 * 60 * 1000) {
+        c.header("X-Key-Expires-Soon", "true");
+        c.header("X-Key-Expires-At", keyRecord.expiresAt.toISOString());
+      }
+    }
+
     const allowed = apiKeyService.checkRateLimit(keyRecord.id, "request");
     if (!allowed) {
       return c.json({ error: "Rate limit exceeded" }, 429);

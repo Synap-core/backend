@@ -36,6 +36,10 @@ import {
   A2AI_TRIGGER_QUEUE,
 } from "./a2ai-response-trigger.js";
 import { handleIntelligenceHealthCheck } from "./intelligence-health-check.js";
+import {
+  handleApiKeyRotationCheck,
+  API_KEY_ROTATION_CHECK_QUEUE,
+} from "./api-key-rotation-check.js";
 import { handleAutomationTriggerMatch } from "./automation-trigger-matcher.js";
 import { handleAutomationExecute } from "./automation-executor.js";
 import { handleAutomationCronScheduler } from "./automation-cron-scheduler.js";
@@ -155,6 +159,7 @@ const ALL_QUEUES = [
   PROPOSAL_REVIEWED_NOTIFY_QUEUE,
   MEMORY_DECAY_QUEUE,
   CAPABILITY_TEMPLATE_SYNC_QUEUE,
+  API_KEY_ROTATION_CHECK_QUEUE,
 ];
 
 /**
@@ -277,6 +282,12 @@ export async function registerAllWorkers(): Promise<void> {
     handleIntelligenceHealthCheck()
   );
   logger.info("Registered worker: intelligence-health-check");
+
+  // API key rotation check (cron: daily) — flag-only, see worker header.
+  await boss.work(API_KEY_ROTATION_CHECK_QUEUE, async () =>
+    handleApiKeyRotationCheck()
+  );
+  logger.info("Registered worker: api-key-rotation-check");
 
   // Automation trigger matching (event → automation run)
   await boss.work("automation-trigger-match", async ([job]: any[]) =>

@@ -43,6 +43,11 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("intelligence-health-check", "*/2 * * * *", {});
   logger.info("Registered cron: intelligence-health-check (every 2min)");
 
+  // API key rotation check (daily at 04:00 UTC — flags agent hub keys whose
+  // rotation_scheduled_at has passed; flag-only, no auto-rotation)
+  await boss.schedule("api-key-rotation-check", "0 4 * * *", {});
+  logger.info("Registered cron: api-key-rotation-check (daily at 04:00 UTC)");
+
   // Automation cron scheduler (every 1 minute — checks due cron-triggered automations)
   await boss.schedule("automation-cron-scheduler", "* * * * *", {});
   logger.info("Registered cron: automation-cron-scheduler (every 1min)");

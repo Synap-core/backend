@@ -8621,6 +8621,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		setDefault: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				serviceId: string;
+			};
+			output: {
+				success: boolean;
+				serviceId: string;
+			};
+			meta: object;
+		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				status?: "active" | "inactive" | "suspended" | undefined;

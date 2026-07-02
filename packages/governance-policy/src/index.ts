@@ -71,14 +71,16 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
   "channel.create",
   "terminal.read_logs",
   // Playbooks & Capability Substrate — "creates are instant" platform-wide:
-  // automation/playbook/link/tool/skill creates auto-approve like data creates.
+  // automation/playbook/link creates auto-approve like data creates.
   // UPDATE/ARCHIVE/DELETE of the substrate still route to a proposal, and
   // ADMIN_ACTIONS (agent/apiKey/connector/intelligence) always propose.
+  // `tool.create` / `skill.create` are DELIBERATELY excluded: they define new
+  // EGRESS abilities, so an injected agent must not silently pre-stage one —
+  // creation still returns via propose (and GOVERNANCE_MODES.normal may re-grant
+  // it per-workspace when the operator opts in).
   "automation.create",
   "playbook.create",
   "link.create",
-  "tool.create",
-  "skill.create",
   "playbook.read",
   "tool.read",
   "link.read",

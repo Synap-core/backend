@@ -747,6 +747,22 @@ const nangoHandler: SchemeHandler = async ({ input, tool }) => {
     };
   }
 
+  // SSRF guard — a caller/agent-supplied baseUrlOverride would otherwise redirect
+  // this credentialed proxy call to an arbitrary host. Reuse the shared validator
+  // (blocks loopback/private/metadata). Only validate when an override is present;
+  // absent → Nango uses the provider's configured base URL.
+  if (baseUrlOverride) {
+    const checked = validateExternalUrl(baseUrlOverride);
+    if (!checked.valid) {
+      return {
+        success: false,
+        status: 400,
+        errorCode: "bad_request",
+        error: `Outbound baseUrlOverride rejected: ${checked.reason}`,
+      };
+    }
+  }
+
   const result = await connector.proxyRequest({
     connectionId: connection.connectionId,
     providerConfigKey,

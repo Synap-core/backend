@@ -143,10 +143,14 @@ registerVisibility({
 // rule delegating to `accessScopeWhere` (the canonical DATA-table resolver —
 // the same predicate documents.list / entities' entityVisibleWhere now use), so
 // a scopedDb read of either table is floored identically to the hand-rolled
-// path. relations/proposals carry a nullable workspace_id with no entity-graph
-// exposure axis of their own, so they use the flat `workspace` floor (pod-wide
-// NULL OR a member workspace) — the same predicate relations.list / proposals
-// .list reach for via userVisibleWhere.
+// path. `relations` carries a NOT-NULL `userId` owner, so it uses
+// `workspaceOwned` (owner floor AND workspace lens) — a NULL-workspace edge
+// stays owner-private instead of leaking pod-wide. `proposals` has NO human-
+// owner column (its `createdBy` is the AGENT user id for AI-authored proposals),
+// so it CANNOT be floored by an owner column without hiding AI proposals from
+// the human reviewer; it stays on the flat `workspace` floor (pod-wide NULL OR a
+// member workspace) — the same predicate proposals.list reaches for via
+// userVisibleWhere — until a human-owner column exists to floor it on.
 
 registerVisibility({
   table: entities,
@@ -183,7 +187,15 @@ registerVisibility({
 registerVisibility({
   table: relations,
   query: () => db.query.relations,
-  rule: { kind: "workspace", workspaceColumn: relations.workspaceId },
+  // `relations.userId` (NOT NULL) is the OWNER floor — the agent-key identity
+  // remap (hub/MCP) sets it to the operator the agent acts for, so a NULL-
+  // workspace (pod-personal) edge stays visible only to its owner instead of
+  // leaking pod-wide via the flat `workspace` rule's `IS NULL` branch.
+  rule: {
+    kind: "workspaceOwned",
+    workspaceColumn: relations.workspaceId,
+    userColumn: relations.userId,
+  },
 });
 registerVisibility({
   table: proposals,

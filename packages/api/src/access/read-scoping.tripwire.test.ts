@@ -23,6 +23,8 @@ import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
+import * as schema from "@synap/database/schema";
+import { Table, getTableColumns, is } from "drizzle-orm";
 
 const ROUTERS_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -88,6 +90,22 @@ const SCOPING_HELPERS = [
 // while leaving an input.workspaceId read unguarded is NOT falsely cleared.
 const USER_SCOPE_PATTERN =
   /userId\s*,\s*(ctx\.userId|requireUserId|authUserId)/;
+
+// A row-ownership floor applied OUTSIDE a WHERE: a manual `row.userId ===/!==
+// ctx.userId` guard after a by-id load (the documents/whiteboards version-preview
+// pattern — the version row has no owner of its own, so ownership is checked on
+// its parent). Recognized as a legitimate floor so those reads aren't flagged.
+const OWNER_COMPARE_PATTERN =
+  /\.userId\s*(===|!==)\s*(ctx\.userId|userId)\b|\b(ctx\.userId|userId)\s*(===|!==)\s*[a-zA-Z0-9_]*\.userId/;
+
+// Export names of every schema table carrying a `userId` owner column, resolved
+// by introspecting the live schema (stays correct as tables are added). These are
+// the tables whose rows belong to a single user — a by-id read of one MUST floor
+// by that owner, or another user's row leaks on an id guess.
+const USER_DATA_TABLES: string[] = Object.entries(schema)
+  .filter(([, v]) => is(v, Table))
+  .filter(([, v]) => "userId" in getTableColumns(v as Table))
+  .map(([name]) => name);
 
 // Procedures the static scan can't see are safe (the scoping lives in a
 // repository/helper call, not an inline WHERE). Justify each; may only shrink.
@@ -193,6 +211,64 @@ describe("read-scoping tripwire — no unguarded workspace-filtered reads", () =
       violations,
       `Unguarded workspace-filtered read(s) — route through the access layer ` +
         `(scopedDb/AccessContext) or userVisibleWhere:\n  ${violations.join("\n  ")}`
+    ).toEqual([]);
+  });
+
+  // WIDENED READ-LEAK CLASS: an unfloored by-id read of USER data. The scan
+  // above only catches reads filtered by `input.workspaceId`; it misses a raw
+  // point lookup `db.query.<t>.findFirst({ where: eq(t.id, input.id) })` on a
+  // table that carries a `userId` owner column but applies NO user floor — any
+  // authenticated caller passing another user's row id reads it. This flags such
+  // reads unless the procedure floors ownership (own-userId WHERE, a manual
+  // `row.userId === ctx.userId` guard, or a recognized scoping helper). The
+  // allowlist records PRE-EXISTING offenders to floor later; it may only SHRINK.
+  const USER_FLOOR_ALLOWLIST = new Set<string>([
+    // Returns a skill row fetched by id with NO owner floor — `skills` carries a
+    // `userId`, so a caller passing another user's skillId reads its row (only the
+    // linked-tools lookup below is user-scoped, not the skill row itself). Real
+    // gap: floor the skill read by owner, or confirm skills are pod-shared and
+    // register the table via scopedDb. Pre-existing; surfaced by this tripwire.
+    "skills.ts::getRequiredTools",
+  ]);
+
+  it("every by-id read of a userId-bearing table applies a user floor", () => {
+    const violations: string[] = [];
+    for (const file of FILES) {
+      const src = readFileSync(file, "utf8");
+      for (const proc of extractProcedures(file, src)) {
+        if (!SELF_SCOPE_BUILDERS.includes(proc.builder)) continue;
+        if (!/\.query\(/.test(proc.body)) continue;
+
+        // A by-id point lookup on a userId table that does NOT filter by that
+        // table's own userId column (the read itself is unfloored).
+        let table: string | undefined;
+        for (const t of USER_DATA_TABLES) {
+          if (!new RegExp(`db\\.query\\.${t}\\.findFirst\\(`).test(proc.body))
+            continue;
+          if (!new RegExp(`\\b${t}\\.id\\b`).test(proc.body)) continue;
+          if (new RegExp(`\\b${t}\\.userId\\b`).test(proc.body)) continue;
+          table = t;
+          break;
+        }
+        if (!table) continue;
+
+        // Cleared if ownership is enforced by ANY recognized signal (same
+        // heuristic guardrail as the scan above — see its note on partial scoping).
+        const hasHelper = SCOPING_HELPERS.some((h) => proc.body.includes(h));
+        const hasUserScope = USER_SCOPE_PATTERN.test(proc.body);
+        const hasOwnerCompare = OWNER_COMPARE_PATTERN.test(proc.body);
+        if (hasHelper || hasUserScope || hasOwnerCompare) continue;
+
+        const id = `${file.split("/routers/")[1]}::${proc.name}`;
+        if (!USER_FLOOR_ALLOWLIST.has(id)) violations.push(`${id} [${table}]`);
+      }
+    }
+
+    expect(
+      violations,
+      `Unfloored by-id read(s) of a userId-bearing table — floor by the owner ` +
+        `(eq(t.userId, ctx.userId) / a row.userId===ctx.userId guard) or route ` +
+        `through the access layer:\n  ${violations.join("\n  ")}`
     ).toEqual([]);
   });
 

@@ -42,6 +42,8 @@ import {
 import { NotificationService } from "../../../notifications/NotificationService.js";
 import { verifyCpJwt } from "../../../utils/jwks-client.js";
 import {
+  AGENT_KEY_ROTATION_LEAD_DAYS,
+  AGENT_KEY_TTL_DAYS,
   integrationHubIdFromIssuerUrl,
   revokeActiveHubInboundKeysForUser,
   SETUP_AGENT_HUB_SCOPES,
@@ -605,6 +607,13 @@ export function registerSetupRoutes(app: HubHono): void {
         revokedReason: "Re-provisioning — replaced by new key via setup/agent",
       });
 
+      // Agent hub keys now carry a bounded lifetime (SAFE 90d default — see
+      // AGENT_KEY_TTL_DAYS). rotationScheduledAt flags the key for the
+      // rotation-check cron a fixed lead before it expires; the inbound auth
+      // middleware also emits near-expiry warning headers so the caller can
+      // re-provision before the hard 401. Only NEW mints get an expiry.
+      const DAY_MS = 24 * 60 * 60 * 1000;
+      const nowMs = Date.now();
       const eventRepo = new EventRepository(sql);
       const apiKeyRepo = new ApiKeyRepository(db, eventRepo);
       const registration = await createAndVerifyHubInboundKey(
@@ -619,6 +628,10 @@ export function registerSetupRoutes(app: HubHono): void {
           keyType: "hub_inbound",
           description: `Hub Protocol auth token for ${agentLabel} agent — created via ${authMethod === "jwt" ? "CP-managed" : "self-hosted"} setup`,
           linkedUserId: resolvedLinkedUserId ?? null,
+          expiresAt: new Date(nowMs + AGENT_KEY_TTL_DAYS * DAY_MS),
+          rotationScheduledAt: new Date(
+            nowMs + (AGENT_KEY_TTL_DAYS - AGENT_KEY_ROTATION_LEAD_DAYS) * DAY_MS
+          ),
         },
         agentUserId,
         agentUserId

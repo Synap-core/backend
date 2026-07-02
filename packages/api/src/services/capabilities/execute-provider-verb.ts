@@ -3,14 +3,17 @@
  *
  * Executes a DECLARATIVE `ProviderVerbSpec` (a `kind:'declarative'` skill) directly
  * on the pod via the existing `triggerProviderAction` dispatcher — NO Intelligence
- * Service, NO sandbox isolate. Reserved for deterministic, READ-ONLY provider
- * verbs; AI + untrusted code stay on the `kind:'code'` → `executeSkillViaIS` path.
+ * Service, NO sandbox isolate. For deterministic provider verbs whose HTTP shape is
+ * fully declarative (reads AND writes); AI/branching logic stays on the
+ * `kind:'code'` → `executeSkillViaIS` path.
  *
  * The single chokepoint `executeCapability` branches on `skill.kind` and calls
  * this for provider verbs AFTER the skill-level approval gate has already run.
- * `alreadyApproved:true` is therefore passed to `triggerProviderAction` so its
- * tool-level gate does not double-propose — the SAME contract `approve-executors`
- * uses on the governed Door-2 re-entry.
+ * GOVERNANCE (method-conditional): a READ (GET/HEAD) passes `alreadyApproved:true`
+ * so the tool-level gate does not double-propose (same contract `approve-executors`
+ * uses on the governed Door-2 re-entry). A WRITE passes `alreadyApproved:false` so
+ * the tool-gate re-runs — a declarative write is governed IDENTICALLY to a
+ * `kind:'code'` write, never silently pre-approved by the skill gate alone.
  *
  * Pipeline (per call): paramMapping (defaults/clamps/required/encode) →
  * interpolate path/query/body → triggerProviderAction → shape the response. An
@@ -263,6 +266,14 @@ async function executeSingleCall(
   let path = basePath;
   if (query) path += (path.includes("?") ? "&" : "?") + query;
 
+  // READS (GET/HEAD) are pre-authorized by the skill-level gate that already ran
+  // in executeCapability → skip the redundant tool-gate (no double-propose; same
+  // contract as a Door-2 replay). WRITES re-check the tool-gate so a declarative
+  // write is governed IDENTICALLY to a code write (per-invocation propose/deny),
+  // never silently pre-approved by the skill gate alone.
+  // Fail-closed: an unknown/absent method is treated as a write (tool-gate runs).
+  const isReadMethod = /^(GET|HEAD)$/i.test(method ?? "");
+
   const result = await triggerProviderAction({
     userId: ctx.userId,
     provider: ctx.tool,
@@ -273,9 +284,7 @@ async function executeSingleCall(
     headers: spec.headers,
     workspaceId: ctx.workspaceId,
     connectionSelector: ctx.connectionSelector,
-    // Skill-level gate already ran in executeCapability → skip the tool gate so
-    // this Tier-1 dispatch does not double-propose (same contract as Door-2).
-    alreadyApproved: true,
+    alreadyApproved: isReadMethod,
   });
 
   if (result.proposed === true) return { kind: "proposed", result };
@@ -351,8 +360,9 @@ export async function executeProviderVerb(
   };
 
   const outcome = await executeSingleCall(spec, parameters ?? {}, ctx);
-  // A proposal/error envelope is returned as-is so the caller sees it inline
-  // (Tier-1 verbs are read-only + alreadyApproved, so neither is expected).
+  // A proposal/error envelope is returned as-is so the caller sees it inline. A
+  // read is alreadyApproved (no proposal expected); a WRITE re-checks the
+  // tool-gate, so it CAN return `proposed` (unapproved) — surfaced here.
   if (outcome.kind === "proposed") return outcome.result;
   if (outcome.kind === "error") return outcome.result;
 

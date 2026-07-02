@@ -17,6 +17,8 @@ export interface CreateApiKeyInput {
   hubId?: string;
   scope: string[];
   expiresAt?: Date;
+  /** When set, the rotation-check cron flags this key as due for rotation. */
+  rotationScheduledAt?: Date;
   userId: string;
   /** Categorical label for what this key is used for */
   keyType?: "hub_inbound" | "user_pat" | "system" | "service";
@@ -64,6 +66,7 @@ export class ApiKeyRepository extends BaseRepository<
         hubId: data.hubId,
         scope: data.scope,
         expiresAt: data.expiresAt,
+        rotationScheduledAt: data.rotationScheduledAt ?? null,
         userId: data.userId,
         isActive: true,
         usageCount: 0,
