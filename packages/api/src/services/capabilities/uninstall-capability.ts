@@ -24,7 +24,9 @@ import {
   tools as toolsTable,
   skills as skillsTable,
   links,
+  secrets as secretsTable,
 } from "@synap/database/schema";
+import { isNull } from "@synap/database";
 import type { Context } from "../../types/context.js";
 
 /**
@@ -127,6 +129,22 @@ export async function uninstallCapability(
     await tx
       .delete(capabilitiesTable)
       .where(eq(capabilitiesTable.id, containerId));
+
+    // ── 6. Soft-delete this capability's connection rows ──────────────────────
+    // The vault (`secrets`) IS the connection registry: rows with this
+    // `capability_id` are the capability's stored connections. With the
+    // capability gone they're meaningless, so soft-delete them (recoverable, and
+    // it keeps the vault free of dangling connection rows). Plain personal-vault
+    // entries (capability_id NULL) are never touched.
+    await tx
+      .update(secretsTable)
+      .set({ deletedAt: new Date(), isDefault: false })
+      .where(
+        and(
+          eq(secretsTable.capabilityId, containerId),
+          isNull(secretsTable.deletedAt)
+        )
+      );
 
     return { success: true as const, deleted: { tools: deletedTools, skills: deletedSkills } };
   });

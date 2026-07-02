@@ -184,6 +184,7 @@ export async function runResolvedSkill(
 ): Promise<
   | { kind: "run"; skillId: string; result: unknown }
   | { kind: "not_found"; message: string }
+  | { kind: "deny"; reason: string }
 > {
   if (skill.kind === "builtin") {
     const handler = BUILTIN_VERBS[skill.name];
@@ -215,6 +216,21 @@ export async function runResolvedSkill(
       connectionSelector: ctx.connectionSelector ?? null,
     });
     return { kind: "run", skillId: skill.id, result };
+  }
+
+  // A run-time connection pick can't reach the IS sandbox (`executeSkillViaIS`
+  // takes no selector). Rather than SILENTLY running against the capability's
+  // default credential — the wrong account, with no signal — refuse explicitly.
+  // Declarative/provider verbs (above) honor the selector; for a code-backed
+  // verb the user should set the capability's default connection instead.
+  if (
+    ctx.connectionSelector?.connectionId ||
+    ctx.connectionSelector?.contextObjectId
+  ) {
+    return {
+      kind: "deny",
+      reason: `Verb "${skill.name}" runs as a code skill and does not support run-time connection selection. Set the capability's default connection instead.`,
+    };
   }
 
   // TIER 2 (code/instruction): execute the backing skill in the IS sandbox.

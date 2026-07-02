@@ -878,6 +878,12 @@ export function registerApproveExecutors(): void {
           message: runOutcome.message,
         });
       }
+      if (runOutcome.kind === "deny") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: runOutcome.reason,
+        });
+      }
       const runResult = runOutcome.result;
 
       const materializedPayload = {
