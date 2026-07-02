@@ -612,6 +612,63 @@ export function registerApproveExecutors(): void {
     },
   });
 
+  // ── entity / delete ──────────────────────────────────────────────────────
+  // Materialize an approved delete proposal (agents can't delete directly —
+  // their role gates auto-execution, so a delete is proposed; this executor is
+  // what makes approval actually delete). The APPROVER (userId) authorizes it
+  // with their own role; the delete procedure re-checks and soft-deletes inline
+  // (owner holds `delete`). Without this, an approved delete proposal was a
+  // silent no-op.
+  registerProposalExecutor({
+    key: "entity/delete",
+    async execute({ proposal, payload, userId, input, deps }) {
+      void payload;
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const entityId = (innerData.id as string) || proposal.targetId;
+      // Workspace-scoped: verify the approver's membership + role. Pod-wide
+      // (null workspace): the approver owns the pod, run at pod scope.
+      const wsId = proposal.workspaceId ?? undefined;
+      let workspaceRole = "owner";
+      if (wsId) {
+        const membership = await getWorkspaceMembership(db, wsId, userId);
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        workspaceRole = membership.role;
+      }
+      const entityCaller = regularEntitiesRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        ...(wsId ? { workspaceId: wsId } : {}),
+        workspaceRole,
+      } as unknown as Context);
+      await entityCaller.delete({ id: entityId, source: "system" });
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
   // ── workspace / join ───────────────────────────────────────────────────────
   registerProposalExecutor({
     key: "workspace/join",

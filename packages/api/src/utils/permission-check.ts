@@ -461,6 +461,43 @@ export async function checkPermissionOrPropose(
           if (join) return join;
           // Not an agent user row (defence-in-depth) → fall through to deny.
         }
+        // AGENT + insufficient ROLE (a member, but its role lacks this
+        // permission — e.g. an editor agent attempting a destructive `delete`,
+        // which needs owner): route to a PROPOSAL rather than hard-denying.
+        // Extends the same "agent denial → reviewable proposal" philosophy as
+        // the workspace-join branch above — an agent's role gates AUTO
+        // execution, not the ability to PROPOSE. The human owner (who DOES hold
+        // the permission) authorizes it at approval time. Direct users are NOT
+        // affected: a user is the authority, so an under-privileged user is
+        // still correctly denied. Guarded to genuine agent user rows.
+        if (agentUserId && !isMembershipMiss) {
+          const [actorRow] = await db
+            .select({ userType: users.userType })
+            .from(users)
+            .where(eq(users.id, agentUserId))
+            .limit(1);
+          if (actorRow?.userType === "agent") {
+            return createProposal({
+              userId,
+              agentUserId,
+              workspaceId,
+              subjectType,
+              action,
+              source,
+              data,
+              correlationId,
+              requestedEventId,
+              reasoning:
+                opts.reasoning ??
+                `${action} ${subjectType} exceeds the agent's workspace role (${result.role ?? "member"}) — proposed for your approval`,
+              threadId,
+              commandRunId,
+              sourceMessageId,
+              sessionId,
+              projectId,
+            });
+          }
+        }
         logger.warn(
           {
             userId: effectiveUserId,
