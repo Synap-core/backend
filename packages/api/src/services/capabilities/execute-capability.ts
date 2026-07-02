@@ -45,6 +45,14 @@ export async function executeCapability(input: {
   userId: string;
   /** Runtime 1-of-N connection selector (Wave 4) — passed to a provider verb. */
   connectionSelector?: ConnectionSelector | null;
+  /**
+   * Callers with NO interactive review surface (e.g. the automation executor)
+   * set this so a `propose` verdict returns a plain `deny` INSTEAD of persisting
+   * a proposal row — otherwise a recurring automation with an unapproved verb
+   * would spawn a duplicate proposal every tick. Approve the skill to run it
+   * unattended.
+   */
+  suppressProposal?: boolean;
 }): Promise<ExecuteCapabilityResult> {
   const { verbId, skillId, parameters, workspaceId, userId } = input;
   if (!verbId && !skillId) {
@@ -111,6 +119,13 @@ export async function executeCapability(input: {
     return { kind: "dry-run", skillId: skillRow.id };
   }
   if (decision.decision === "propose") {
+    if (input.suppressProposal) {
+      return {
+        kind: "deny",
+        reason:
+          "Capability requires approval and no review surface is available (unattended run); approve the skill to run it.",
+      };
+    }
     const proposal = await createPendingProposal({
       userId,
       workspaceId,

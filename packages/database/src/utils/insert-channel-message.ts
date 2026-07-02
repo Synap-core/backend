@@ -13,7 +13,12 @@
 
 import { createHash } from "crypto";
 import { getDb } from "../client-pg.js";
-import { messages, MessageRole, MessageAuthorType } from "../schema/index.js";
+import {
+  messages,
+  MessageRole,
+  MessageAuthorType,
+  type MessageCategory,
+} from "../schema/index.js";
 import {
   mirrorMessageToBoundExternal,
   type MirrorChannelRef,
@@ -27,6 +32,8 @@ export interface InsertChannelMessageParams {
   role?: MessageRole;
   authorType?: MessageAuthorType;
   metadata?: Record<string, unknown>;
+  /** Message category (e.g. SYSTEM_NOTIFICATION for feed / system posts). */
+  messageCategory?: MessageCategory;
   /** Pass the channel row to let the mirror skip a lookup. */
   channel?: MirrorChannelRef;
 }
@@ -51,6 +58,7 @@ export async function insertChannelMessage(
     role = MessageRole.ASSISTANT,
     authorType = MessageAuthorType.BOT,
     metadata,
+    messageCategory,
     channel,
   } = params;
 
@@ -68,6 +76,7 @@ export async function insertChannelMessage(
       authorType,
       content,
       hash,
+      ...(messageCategory ? { messageCategory } : {}),
       ...(metadata
         ? { metadata: metadata as (typeof messages.$inferInsert)["metadata"] }
         : {}),

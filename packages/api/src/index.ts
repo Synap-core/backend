@@ -636,3 +636,8 @@ export {
   runEventSync,
   type RunEventSyncResult,
 } from "./services/event-sync/run-event-sync.js";
+export {
+  executeCapability,
+  type ExecuteCapabilityResult,
+} from "./services/capabilities/execute-capability.js";
+export type { ConnectionSelector } from "./connectors/external-dispatch.js";

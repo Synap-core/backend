@@ -55,7 +55,6 @@ import {
   ChannelStatus,
   MessageRole,
   MessageAuthorType,
-  skills,
 } from "@synap/database/schema";
 import type {
   FlowDefinition,
@@ -71,7 +70,6 @@ import {
   isVaultReference,
 } from "../utils/vault-resolver.js";
 import { checkAutomationWriteOrPropose } from "../utils/automation-governance.js";
-import { gateCapabilityExecution } from "@synap/capability-gate";
 import {
   resolveIntelligenceService,
   getDefaultActiveService,
@@ -197,6 +195,75 @@ function resolveInputMapping(
     resolved[key] = resolveTemplate(template, context);
   }
   return resolved;
+}
+
+/**
+ * Discriminated result mirror of `@synap/api`'s `ExecuteCapabilityResult`. jobs
+ * cannot import @synap/api (circular dep), so the shape is re-declared here.
+ */
+type CapabilityDispatchResult =
+  | { kind: "run"; skillId: string; result: unknown }
+  | { kind: "dry-run"; skillId: string }
+  | { kind: "proposed"; proposalId: string }
+  | { kind: "deny"; reason: string }
+  | { kind: "not_found"; message: string };
+
+/**
+ * Dispatch a capability (verb or skill) through the CANONICAL router
+ * `executeCapability` — which routes all 3 tiers (builtin / declarative / code)
+ * + connectionSelector and gates internally. Bridged over a loopback HTTP call to
+ * the api process (`/internal/capabilities/execute`) because jobs ⊥ api (circular
+ * dep) — the SAME pattern the mail-feed / event-sync crons use. Reuses the same
+ * API_INTERNAL_URL + BRIDGE_SECRET env contract as `mail-feed-cron.ts`.
+ */
+async function dispatchViaCapabilityRouter(input: {
+  verbId?: string;
+  skillId?: string;
+  parameters?: Record<string, unknown>;
+  workspaceId: string | null;
+  userId: string;
+  connectionSelector?: {
+    connectionId?: string;
+    contextObjectId?: string;
+  } | null;
+}): Promise<CapabilityDispatchResult> {
+  const apiUrl = process.env.API_INTERNAL_URL ?? "http://localhost:4000";
+  const secret = process.env.BRIDGE_SECRET;
+  // Fail fast with a clear message rather than sending no header → an opaque 503.
+  if (!secret) {
+    throw new Error(
+      "BRIDGE_SECRET is not configured in the jobs runtime — cannot dispatch a capability/skill node through /internal/capabilities/execute."
+    );
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60_000);
+  let res: Response;
+  try {
+    res = await fetch(`${apiUrl}/internal/capabilities/execute`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Bridge-Secret": secret,
+      },
+      // Automations have NO interactive review surface — suppress proposal
+      // persistence so a recurring run can't flood the proposal queue; an
+      // unapproved verb returns a plain `deny` (fail-closed below).
+      body: JSON.stringify({ ...input, suppressProposal: true }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+  } catch (err) {
+    clearTimeout(timer);
+    throw err;
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Capability dispatch failed: ${res.status} ${body}`);
+  }
+
+  return (await res.json()) as CapabilityDispatchResult;
 }
 
 /**
@@ -1953,57 +2020,6 @@ async function executeAutomationFlow(params: {
             const skillId = data.skillId;
             if (!skillId) throw new Error("Skill node has no skillId");
 
-            // ── Capability-execution gate (Wave 3a — automation door) ──────────
-            // FULL gate: now that `gateCapabilityExecution` lives in the shared
-            // `@synap/capability-gate` package (no longer trapped in @synap/api,
-            // which `@synap/jobs` cannot import without a cycle), this door runs
-            // the SAME approved + grant + exec-mode gate as the IS/operator doors.
-            // An automation runs as the workspace OWNER (no agent identity), so:
-            //   actorUserId = ownerId, agentUserId = null →
-            //     • owner runs their OWN skill          → owner-bypass → run
-            //     • non-owner-owned + approved          → auto         → run
-            //     • non-owner-owned + UNapproved        → propose
-            // A mid-flow automation has no interactive review surface, so a
-            // propose/deny verdict FAILS CLOSED (throws) — strictly stronger than
-            // the prior approved-only check (which also threw on unapproved), and
-            // honoring dry-run by skipping the external call. NOTE: any in-skill
-            // `callProvider` is ALREADY gated transitively by Site 1 (the IS
-            // provider call funnels through triggerProviderAction).
-            const [skillRow] = await db
-              .select({
-                id: skills.id,
-                approved: skills.approved,
-                userId: skills.userId,
-              })
-              .from(skills)
-              .where(eq(skills.id, skillId))
-              .limit(1);
-            const skillDecision = await gateCapabilityExecution({
-              capabilityKind: "skill",
-              capabilityId: skillId,
-              skill: skillRow ?? null,
-              actorUserId: ownerId,
-              agentUserId: null,
-              workspaceId,
-              issuer: "automation.skill-node",
-            });
-            if (skillDecision.decision === "deny") {
-              throw new Error(
-                `Skill ${skillId} refused by capability gate: ${skillDecision.reason}`
-              );
-            }
-            if (skillDecision.decision === "propose") {
-              throw new Error(
-                `Skill ${skillId} requires human approval and cannot run inside an automation; automation skill node refused.`
-              );
-            }
-            if (skillDecision.decision === "dry-run") {
-              // Grant resolved to dry-run preview — no external side effect.
-              output = { output: { dryRun: true, skillId }, skillId };
-              break;
-            }
-            // decision === "run" → fall through to execute the skill.
-
             const inputMapping = data.inputMapping ?? {};
             const resolvedInputs = resolveInputMapping(inputMapping, context);
 
@@ -2012,50 +2028,53 @@ async function executeAutomationFlow(params: {
               .set({ resolvedInputs })
               .where(eq(automationStepRuns.id, stepRun.id));
 
-            // Canonical IS credential resolution (decrypted DB key), not stale env.
-            const { endpoint: isUrl, apiKey: isApiKey } =
-              await getDefaultActiveService();
-
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 60_000);
-
-            let skillResponse: Response;
-            try {
-              // IS contract (routes/skills-route.ts): POST /api/skills/execute,
-              // skill id + inputs in the BODY ({ skillId, userId, parameters }).
-              // The prior `/:id/execute` path + `{ context }` body 404'd / dropped
-              // inputs — skill nodes never actually ran. Fixed to the real contract.
-              skillResponse = await fetch(`${isUrl}/api/skills/execute`, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "X-API-Key": isApiKey,
-                },
-                body: JSON.stringify({
-                  skillId,
-                  userId: ownerId,
-                  parameters: resolvedInputs,
-                }),
-                signal: controller.signal,
-              });
-              clearTimeout(timer);
-            } catch (err) {
-              clearTimeout(timer);
-              throw err;
-            }
-
-            if (!skillResponse.ok) {
-              const body = await skillResponse.text();
+            // ── Canonical dispatch (all 3 tiers + gate) ────────────────────────
+            // Route through `executeCapability` (via the loopback bridge) — it
+            // resolves the skill, GATES internally, and runs builtin/declarative/
+            // code tiers. An automation runs as the workspace OWNER (userId =
+            // ownerId, no agent identity), so the gate resolves:
+            //   • owner runs their OWN skill  → owner-bypass → run
+            //   • non-owner-owned + approved  → auto         → run
+            //   • non-owner-owned + UNapproved→ propose (FAILS CLOSED below)
+            // A mid-flow automation has no interactive review surface, so a
+            // propose/deny/not_found verdict FAILS CLOSED (throws); dry-run is
+            // honored as a no-op preview.
+            const skillDispatch = await dispatchViaCapabilityRouter({
+              skillId,
+              parameters: resolvedInputs,
+              workspaceId,
+              userId: ownerId,
+            });
+            if (skillDispatch.kind === "deny") {
               throw new Error(
-                `Skill execution failed: ${skillResponse.status} ${body}`
+                `Skill ${skillId} refused by capability gate: ${skillDispatch.reason}`
               );
             }
-
-            const skillResult = (await skillResponse.json()) as Record<
-              string,
-              unknown
-            >;
-            output = { output: skillResult.output ?? skillResult, skillId };
+            if (skillDispatch.kind === "proposed") {
+              throw new Error(
+                `Skill ${skillId} requires human approval and cannot run inside an automation; automation skill node refused.`
+              );
+            }
+            if (skillDispatch.kind === "not_found") {
+              throw new Error(
+                `Skill ${skillId} could not be dispatched: ${skillDispatch.message}`
+              );
+            }
+            if (skillDispatch.kind === "dry-run") {
+              // Grant resolved to dry-run preview — no external side effect.
+              output = {
+                output: { dryRun: true, skillId: skillDispatch.skillId },
+                skillId: skillDispatch.skillId,
+              };
+              break;
+            }
+            // kind === "run": preserve the prior step output shape — `output`
+            // carries the skill's execution result (the IS SkillExecutionResult
+            // for a code skill, the handler/provider return for builtin/declarative).
+            output = {
+              output: skillDispatch.result,
+              skillId: skillDispatch.skillId,
+            };
             break;
           }
 
@@ -2064,87 +2083,25 @@ async function executeAutomationFlow(params: {
             // A `capability` node is the structured sibling of the `skill` node:
             // the author picks a Tool (capabilityId) and a Verb on it (verbId).
             // A verb is BACKED BY A SKILL — its `id` is the requiring skill's
-            // NAME (see ToolVerbCatalogEntry.id in schema/tools.ts). So the case
-            // resolves verb → backing skill row, then runs it through the SAME
-            // governed path `case "skill"` uses (gateCapabilityExecution →
-            // run | propose | dry-run | deny). No parallel governance, no new
-            // tables: the skill IS the executor; the gate IS the door.
+            // NAME (see ToolVerbCatalogEntry.id in schema/tools.ts). Dispatch
+            // routes verb → the canonical `executeCapability` router (via the
+            // loopback bridge), which resolves the backing skill, GATES, and runs
+            // ALL 3 tiers (builtin / declarative / code) + a 1-of-N connection
+            // selector. No parallel governance, no new tables: the router IS the
+            // executor; the gate IS the door.
             const data = node.data as {
               capabilityId?: string;
               verbId?: string;
               inputMapping?: Record<string, string>;
+              connectionSelector?: {
+                connectionId?: string;
+                contextObjectId?: string;
+              };
+              connectionId?: string;
             };
 
             const verbId = data.verbId;
             if (!verbId) throw new Error("Capability node has no verbId");
-
-            // Resolve the backing skill by NAME (verbId = requiring skill's name),
-            // scoped exactly like the capability registry read-model: pod-wide
-            // (NULL workspace) OR this workspace OR owned by the automation owner.
-            const [skillRow] = await db
-              .select({
-                id: skills.id,
-                approved: skills.approved,
-                userId: skills.userId,
-              })
-              .from(skills)
-              .where(
-                and(
-                  eq(skills.name, verbId),
-                  or(
-                    isNull(skills.workspaceId),
-                    eq(skills.workspaceId, workspaceId),
-                    eq(skills.userId, ownerId)
-                  )
-                )
-              )
-              .limit(1);
-
-            if (!skillRow) {
-              throw new Error(
-                `Capability verb "${verbId}" has no backing skill in this workspace.`
-              );
-            }
-
-            const capSkillId = skillRow.id;
-
-            // ── Capability-execution gate (SAME door as `case "skill"`) ───────
-            // An automation runs as the workspace OWNER (no agent identity):
-            //   actorUserId = ownerId, agentUserId = null →
-            //     • owner runs their OWN skill          → owner-bypass → run
-            //     • non-owner-owned + approved          → auto         → run
-            //     • non-owner-owned + UNapproved        → propose (FAILS CLOSED)
-            // A mid-flow automation has no interactive review surface, so a
-            // propose/deny verdict throws; dry-run is honored as a no-op preview.
-            const capDecision = await gateCapabilityExecution({
-              capabilityKind: "skill",
-              capabilityId: capSkillId,
-              skill: skillRow,
-              actorUserId: ownerId,
-              agentUserId: null,
-              workspaceId,
-              issuer: "automation.capability-node",
-            });
-            if (capDecision.decision === "deny") {
-              throw new Error(
-                `Capability ${verbId} refused by capability gate: ${capDecision.reason}`
-              );
-            }
-            if (capDecision.decision === "propose") {
-              throw new Error(
-                `Capability ${verbId} requires human approval and cannot run inside an automation; capability node refused.`
-              );
-            }
-            if (capDecision.decision === "dry-run") {
-              // Grant resolved to dry-run preview — no external side effect.
-              output = {
-                output: { dryRun: true, verbId, skillId: capSkillId },
-                verbId,
-                skillId: capSkillId,
-              };
-              break;
-            }
-            // decision === "run" → execute the backing skill.
 
             const capInputMapping = data.inputMapping ?? {};
             const capResolvedInputs = resolveInputMapping(
@@ -2157,51 +2114,59 @@ async function executeAutomationFlow(params: {
               .set({ resolvedInputs: capResolvedInputs })
               .where(eq(automationStepRuns.id, stepRun.id));
 
-            // Canonical IS credential resolution (decrypted DB key), not stale env.
-            const { endpoint: capIsUrl, apiKey: capIsApiKey } =
-              await getDefaultActiveService();
+            // Runtime 1-of-N connection selection (Wave 4): explicit selector, or
+            // a bare connectionId shorthand. Absent → default/authBinding behavior.
+            const connectionSelector =
+              data.connectionSelector ??
+              (data.connectionId ? { connectionId: data.connectionId } : null);
 
-            const capController = new AbortController();
-            const capTimer = setTimeout(() => capController.abort(), 60_000);
-
-            let capResponse: Response;
-            try {
-              // IS contract: POST /api/skills/execute with { skillId, userId,
-              // parameters } in the body (see executeSkillViaIS + skills-route.ts).
-              capResponse = await fetch(`${capIsUrl}/api/skills/execute`, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "X-API-Key": capIsApiKey,
-                },
-                body: JSON.stringify({
-                  skillId: capSkillId,
-                  userId: ownerId,
-                  parameters: capResolvedInputs,
-                }),
-                signal: capController.signal,
-              });
-              clearTimeout(capTimer);
-            } catch (err) {
-              clearTimeout(capTimer);
-              throw err;
-            }
-
-            if (!capResponse.ok) {
-              const body = await capResponse.text();
+            // ── Canonical dispatch (SAME door as `case "skill"`) ──────────────
+            // Runs as the workspace OWNER (userId = ownerId, no agent identity):
+            //   • owner runs their OWN skill  → owner-bypass → run
+            //   • non-owner-owned + approved  → auto         → run
+            //   • non-owner-owned + UNapproved→ propose (FAILS CLOSED below)
+            // A mid-flow automation has no interactive review surface, so a
+            // propose/deny/not_found verdict throws; dry-run is honored as a no-op.
+            const capDispatch = await dispatchViaCapabilityRouter({
+              verbId,
+              parameters: capResolvedInputs,
+              workspaceId,
+              userId: ownerId,
+              connectionSelector,
+            });
+            if (capDispatch.kind === "deny") {
               throw new Error(
-                `Capability execution failed: ${capResponse.status} ${body}`
+                `Capability ${verbId} refused by capability gate: ${capDispatch.reason}`
               );
             }
-
-            const capResult = (await capResponse.json()) as Record<
-              string,
-              unknown
-            >;
+            if (capDispatch.kind === "proposed") {
+              throw new Error(
+                `Capability ${verbId} requires human approval and cannot run inside an automation; capability node refused.`
+              );
+            }
+            if (capDispatch.kind === "not_found") {
+              throw new Error(
+                `Capability ${verbId} could not be dispatched: ${capDispatch.message}`
+              );
+            }
+            if (capDispatch.kind === "dry-run") {
+              // Grant resolved to dry-run preview — no external side effect.
+              output = {
+                output: {
+                  dryRun: true,
+                  verbId,
+                  skillId: capDispatch.skillId,
+                },
+                verbId,
+                skillId: capDispatch.skillId,
+              };
+              break;
+            }
+            // kind === "run": preserve the prior step output shape.
             output = {
-              output: capResult.output ?? capResult,
+              output: capDispatch.result,
               verbId,
-              skillId: capSkillId,
+              skillId: capDispatch.skillId,
             };
             break;
           }

@@ -13,15 +13,9 @@ import type {
   ClassifiedItem,
   PublishedMessageMetadata,
 } from "../types/index.js";
-import { getDb } from "@synap/database";
-import {
-  messages,
-  MessageRole,
-  MessageAuthorType,
-  MessageCategory,
-} from "@synap/database/schema";
+import { insertChannelMessage } from "@synap/database";
+import { MessageCategory } from "@synap/database/schema";
 import { InternalServerError } from "@synap-core/core";
-import crypto from "crypto";
 
 /**
  * Channel message publisher configuration
@@ -217,27 +211,16 @@ export class ChannelMessagePublisher implements IFeedPublisher {
     destination: PublishDestination
   ): Promise<void> {
     try {
-      const db = await getDb();
-
-      // Generate hash for the message
-      const hash = crypto
-        .createHash("sha256")
-        .update(content + metadata.sourceUrl + metadata.feedItemId)
-        .digest("hex");
-
-      await db.insert(messages).values({
+      // Route through the SINGLE mirror-preserving writer so a Discord-bound feed
+      // channel delivers to Discord automatically. A raw `db.insert(messages)`
+      // skipped the mirror — the exact reason the mail-feed worker had to
+      // hand-roll insertChannelMessage instead of using this generic publisher.
+      await insertChannelMessage({
         channelId: destination.channelId,
         content,
-        role: MessageRole.ASSISTANT,
-        authorType: MessageAuthorType.BOT,
-        messageCategory: MessageCategory.SYSTEM_NOTIFICATION,
         userId: destination.userId,
-        metadata: {
-          // Store feed metadata in a generic way within the metadata structure
-          // The external source is indicated by authorType being BOT
-        },
-        hash,
-        previousHash: "", // Will be set by trigger or follow-up logic
+        messageCategory: MessageCategory.SYSTEM_NOTIFICATION,
+        metadata: metadata as unknown as Record<string, unknown>,
       });
 
       this.updateRateLimit();

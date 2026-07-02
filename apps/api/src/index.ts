@@ -1631,6 +1631,73 @@ app.post("/internal/event-sync/run", async (c) => {
   }
 });
 
+// ── Internal capability-execute endpoint ──────────────────────────────────────
+//
+// POST /internal/capabilities/execute — loopback-only, gated by X-Bridge-Secret.
+// Bridges the jobs `automation-executor` skill/capability nodes to the canonical
+// capability router `executeCapability` (which routes all 3 tiers — builtin /
+// declarative / code — and gates internally). jobs cannot import @synap/api
+// (circular dep: api → jobs → database), so — exactly like /internal/mail-feed/run
+// — it POSTs this loopback endpoint instead. NOT public — never exposed via Caddy.
+app.post("/internal/capabilities/execute", async (c) => {
+  // FAIL-CLOSED: require BRIDGE_SECRET (see /internal/mail-feed/run).
+  const secret = process.env.BRIDGE_SECRET;
+  if (!secret) return c.json({ error: "not_configured" }, 503);
+  if (!safeTokenEqual(c.req.header("x-bridge-secret") ?? "", secret)) {
+    return c.json({ error: "Forbidden" }, 403);
+  }
+
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      verbId?: string;
+      skillId?: string;
+      parameters?: Record<string, unknown>;
+      workspaceId?: string | null;
+      userId?: string;
+      connectionSelector?: {
+        connectionId?: string;
+        contextObjectId?: string;
+      } | null;
+      suppressProposal?: boolean;
+    };
+
+    if (!body.userId) {
+      return c.json({ error: "userId is required" }, 400);
+    }
+
+    const apiModule = (await import("@synap/api")) as unknown as {
+      executeCapability: (input: {
+        verbId?: string;
+        skillId?: string;
+        parameters?: Record<string, unknown>;
+        workspaceId: string | null;
+        userId: string;
+        connectionSelector?: {
+          connectionId?: string;
+          contextObjectId?: string;
+        } | null;
+        suppressProposal?: boolean;
+      }) => Promise<Record<string, unknown>>;
+    };
+
+    // Return the discriminated result verbatim (kind: run|proposed|deny|dry-run|
+    // not_found) — the caller maps it to the automation step output / error.
+    const result = await apiModule.executeCapability({
+      verbId: body.verbId,
+      skillId: body.skillId,
+      parameters: body.parameters,
+      workspaceId: body.workspaceId ?? null,
+      userId: body.userId,
+      connectionSelector: body.connectionSelector ?? null,
+      suppressProposal: body.suppressProposal ?? false,
+    });
+    return c.json(result);
+  } catch (err) {
+    apiLogger.error({ err }, "/internal/capabilities/execute failed");
+    return c.json({ error: "internal_error" }, 500);
+  }
+});
+
 // 404 handler
 app.notFound((c) => {
   return c.json({ error: "Not found" }, 404);
