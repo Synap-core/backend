@@ -260,6 +260,23 @@ export async function discover(
       })
       .from(projects)
       .where(and(...conditions));
+    // Resolve home-workspace NAMES for any project whose workspace wasn't loaded
+    // above (e.g. scope:['projects'] skips the workspaces query) — a project
+    // still has a real home workspace; don't mislabel it as null.
+    const missingWsIds = [
+      ...new Set(
+        rows
+          .map((p) => p.workspaceId)
+          .filter((id): id is string => !!id && !wsNameById.has(id))
+      ),
+    ];
+    if (missingWsIds.length) {
+      const names = await db
+        .select({ id: workspaces.id, name: workspaces.name })
+        .from(workspaces)
+        .where(inArray(workspaces.id, missingWsIds));
+      for (const w of names) wsNameById.set(w.id, w.name);
+    }
     projectsOut = rows.map((p) => ({
       id: p.id,
       name: p.name,
