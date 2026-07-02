@@ -9,6 +9,9 @@ const h = vi.hoisted(() => ({
     id: string;
     workspaceId: string | null;
   } | null,
+  // Board row returned by the views lookup in output.generate's boardId∈workspace
+  // guard. Null = board not found in the acting workspace.
+  boardRow: { id: "board-1" } as { id: string } | null,
   getWorkspaceMembership: vi.fn(
     async () => ({ role: "owner" }) as { role: string } | null
   ),
@@ -22,21 +25,34 @@ const h = vi.hoisted(() => ({
   triageEmails: vi.fn(async () => []),
 }));
 
-vi.mock("@synap/database", () => ({
-  db: {
-    select: () => ({
-      from: () => ({
-        where: () => ({
-          limit: async () => (h.channelRow ? [h.channelRow] : []),
+vi.mock("@synap/database", () => {
+  const channels = {};
+  const views = {};
+  return {
+    db: {
+      select: () => ({
+        from: (table: unknown) => ({
+          where: () => ({
+            limit: async () =>
+              table === views
+                ? h.boardRow
+                  ? [h.boardRow]
+                  : []
+                : h.channelRow
+                  ? [h.channelRow]
+                  : [],
+          }),
         }),
       }),
-    }),
-  },
-  eq: () => undefined,
-  channels: {},
-  getWorkspaceMembership: h.getWorkspaceMembership,
-  insertChannelMessage: h.insertChannelMessage,
-}));
+    },
+    eq: () => undefined,
+    and: () => undefined,
+    channels,
+    views,
+    getWorkspaceMembership: h.getWorkspaceMembership,
+    insertChannelMessage: h.insertChannelMessage,
+  };
+});
 
 vi.mock("../../routers/channels.js", () => ({
   channelsRouter: {
@@ -219,5 +235,14 @@ describe("output.generate handler", () => {
       )
     ).rejects.toThrow();
     expect(h.placeArtboardDeck).not.toHaveBeenCalled();
+  });
+
+  it("rejects a board that is not in the acting workspace", async () => {
+    h.boardRow = null; // views lookup finds no board in ctx.workspaceId
+    await expect(
+      BUILTIN_VERBS["output.generate"](deckArgs, ctx)
+    ).rejects.toThrow();
+    expect(h.placeArtboardDeck).not.toHaveBeenCalled();
+    h.boardRow = { id: "board-1" }; // restore for any later tests
   });
 });

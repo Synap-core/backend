@@ -24,7 +24,9 @@ import { TRPCError } from "@trpc/server";
 import {
   db,
   eq,
+  and,
   channels,
+  views,
   getWorkspaceMembership,
   insertChannelMessage,
 } from "@synap/database";
@@ -213,8 +215,8 @@ const outputGenerateHandler: BuiltinVerbHandler = async (params, ctx) => {
     });
   }
 
-  // Confirm the operator is a member of the acting workspace — the same guard the
-  // Hub route applies via verifyWorkspaceAccess before emitting a placement.
+  // Confirm the operator is a member of the acting workspace — an equivalent
+  // membership check to the Hub route's verifyWorkspaceAccess.
   const membership = await getWorkspaceMembership(
     db,
     ctx.workspaceId,
@@ -224,6 +226,24 @@ const outputGenerateHandler: BuiltinVerbHandler = async (params, ctx) => {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "No access to the acting workspace.",
+    });
+  }
+
+  // Confirm the target board actually lives in the acting workspace. Without
+  // this a member of workspace A could emit a board:place onto a board in
+  // workspace B by passing its viewId. (The verb is emit-only, no read leak,
+  // but this closes the cross-workspace placement surface the review flagged.)
+  const [board] = await db
+    .select({ id: views.id })
+    .from(views)
+    .where(
+      and(eq(views.id, input.boardId), eq(views.workspaceId, ctx.workspaceId))
+    )
+    .limit(1);
+  if (!board) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Board not found in the acting workspace.",
     });
   }
 
@@ -258,6 +278,8 @@ const aiTriageParams = z.object({
   mutedCategories: z.array(z.string()).optional(),
 });
 
+// pod-wide by design: triage is workspace-agnostic (triageEmails uses the pod's
+// default IS via getDefaultActiveService), so `ctx` is intentionally unused.
 const aiTriageHandler: BuiltinVerbHandler = async (params) => {
   const input = aiTriageParams.parse(params);
   const results = await triageEmails(input.emails, input.mutedCategories ?? []);
