@@ -1,0 +1,111 @@
+{
+  "name": "Proactive grant review (client message → team channel)",
+  "triggerType": "event",
+  "status": "draft",
+  "triggerConfig": {
+    "filters": { "provider": "discord" },
+    "eventPattern": "external_message.received.*"
+  },
+  "state": {
+    "teamChannelId": "<team-review-channel-uuid>"
+  },
+  "flowDefinition": {
+    "nodes": [
+      {
+        "id": "trigger",
+        "type": "trigger",
+        "position": { "x": 0, "y": 0 },
+        "data": {
+          "triggerType": "event",
+          "label": "Inbound client message",
+          "config": {
+            "filters": { "provider": "discord" },
+            "eventPattern": "external_message.received.*"
+          }
+        }
+      },
+      {
+        "id": "detect",
+        "type": "skill",
+        "position": { "x": 0, "y": 120 },
+        "data": {
+          "label": "Detect a review-needed milestone (AI)",
+          "skillName": "qualify-reply",
+          "inputMapping": {
+            "message": "{{trigger.payload.content}}",
+            "instruction": "Decide if the client is signalling a grant milestone that needs OUR review (e.g. 'finished the abstract', 'ready for review', 'submitted section X'). Return { reviewNeeded: boolean, milestone: string, reason: string }."
+          }
+        }
+      },
+      {
+        "id": "gate",
+        "type": "condition",
+        "position": { "x": 0, "y": 240 },
+        "data": {
+          "label": "Only continue if a review is actually needed",
+          "expression": "steps.detect.output.reviewNeeded === true"
+        }
+      },
+      {
+        "id": "post-flag",
+        "type": "output",
+        "position": { "x": 0, "y": 360 },
+        "data": {
+          "label": "Flag it on the TEAM channel (FIREWALL: never the client channel)",
+          "outputType": "channel_message",
+          "config": {
+            "channelId": "{{automation.state.teamChannelId}}",
+            "content": "🔔 **Review needed** — a client signalled: _{{steps.detect.output.milestone}}_\n> {{steps.detect.output.reason}}\nGrant: {{steps.resolve-client.output.grantDocUrl}}",
+            "channelType": "proactive"
+          }
+        }
+      },
+      {
+        "id": "review",
+        "type": "skill",
+        "position": { "x": 0, "y": 480 },
+        "data": {
+          "label": "Run the Stellar grant advisor on the grant doc",
+          "skillName": "stellar-scf-grants-advisor",
+          "inputMapping": {
+            "grantDocUrl": "{{steps.resolve-client.output.grantDocUrl}}",
+            "milestone": "{{steps.detect.output.milestone}}"
+          }
+        }
+      },
+      {
+        "id": "post-review",
+        "type": "output",
+        "position": { "x": 0, "y": 600 },
+        "data": {
+          "label": "Post the AI review to the TEAM channel",
+          "outputType": "channel_message",
+          "config": {
+            "channelId": "{{automation.state.teamChannelId}}",
+            "content": "🧠 **AI pre-review** ({{steps.detect.output.milestone}}):\n{{steps.review.output.summary}}",
+            "channelType": "proactive"
+          }
+        }
+      }
+    ],
+    "edges": [
+      { "id": "e1", "source": "trigger", "target": "detect" },
+      { "id": "e2", "source": "detect", "target": "gate" },
+      { "id": "e3", "source": "gate", "target": "post-flag" },
+      { "id": "e4", "source": "post-flag", "target": "review" },
+      { "id": "e5", "source": "review", "target": "post-review" }
+    ]
+  },
+  "metadata": {
+    "source": "stellar-grant-template",
+    "purpose": "PROACTIVE: when a client posts a milestone in their comms channel ('finished abstract', 'needs review'), the AI detects it, pre-reviews the grant with the Stellar advisor skill, and surfaces BOTH the flag and the review on the TEAM channel — so nobody has to launch an agent. FIREWALL: all AI output goes to the team channel, NEVER the client-comms source channel.",
+    "prerequisites": [
+      "FIREWALL (non-negotiable): every output node targets the team channel via automation.state.teamChannelId — NEVER {{trigger.channel}}. Do not repoint these at the source channel.",
+      "GAP 1 — client resolution: a `resolve-client` step must map the SOURCE channel → its client entity → grantDocUrl (set by 'Stellar grant — provision client Drive') → the client's team thread. Channels link to clients via the `links` table; the automation DSL has no link-traversal/query node for this yet. This is the #1 substrate limitation this feature reveals — needs a resolution verb (e.g. builtin `client.resolveFromChannel`) before the template runs end-to-end.",
+      "GAP 2 — `automation.state` is not seeded by bridge-setup: the create endpoint drops `state`, so `teamChannelId` must be set post-create (or via an update path that accepts state). Same limitation blocks the Drive-provision automation's clientsFolderId/grantTemplateFileId.",
+      "GAP 3 — the review skill (stellar-scf-grants-advisor) must read the grant doc: needs Google connected + a `docs_get` fetch of the grant content passed to the skill.",
+      "GAP 4 — activation: seeded as `draft`; activate once the resolution + team channel are wired.",
+      "The `detect`/`review` skill nodes reference `qualify-reply` (Agency capability) + `stellar-scf-grants-advisor` — both seeded; confirm the condition node evaluates `steps.detect.output.reviewNeeded`."
+    ]
+  }
+}
