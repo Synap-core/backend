@@ -6146,6 +6146,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				aiReactionMode?: "only_mentioned" | "when_confident" | "off" | undefined;
 				addAgentMemberId?: string | undefined;
 				removeAgentMemberId?: string | undefined;
+				contextObjectType?: "entity" | "document" | "view" | undefined;
+				contextObjectId?: string | undefined;
+				branchPurpose?: string | undefined;
 			};
 			output: {
 				status: string;
