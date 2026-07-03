@@ -69,6 +69,19 @@ export async function postChannelMessage(
       workspaceId: null,
       userId,
     });
+
+    // The socket emit above is a UI hint only — no consumer turns it into an IS
+    // reply. Fire the canonical one-path kickoff so a real headless turn is
+    // produced. The helper gates to THREAD/AGENT_COLLAB channels with a
+    // workspaceId (other channel types are a no-op today).
+    const { triggerAutoRespond } =
+      await import("../../utils/trigger-auto-respond.js");
+    await triggerAutoRespond({
+      channelId,
+      userMessageId: msgId,
+      content,
+      sourceUserId: userId,
+    });
   }
 
   return { success: true, messageId: msgId, channelId };

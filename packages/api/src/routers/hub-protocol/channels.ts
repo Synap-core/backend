@@ -44,14 +44,8 @@ import { emitTyped } from "../../utils/event-emit.js";
 import { makeExcerpt } from "../../utils/excerpt.js";
 import { EventNames } from "@synap-core/types/events";
 import type { OpenClawPlatform } from "@synap-core/types/events";
-import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
-import {
-  getBoss,
-  A2AI_TRIGGER_QUEUE,
-  A2AI_TRIGGER_JOB_OPTIONS,
-} from "@synap/jobs";
-import type { A2AIResponseTriggerData } from "@synap/jobs";
+import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
 import { TRPCError } from "@trpc/server";
 
 /**
@@ -601,34 +595,15 @@ export const channelsRouter = router({
           }
         );
       } else {
-        try {
-          const resolvedService = await resolveIntelligenceService({
-            userId: channel.userId,
-            workspaceId: channel.workspaceId,
-            capability: "chat",
-          });
-
-          const jobData: A2AIResponseTriggerData = {
-            channelId: input.channelId,
-            userMessageId: messageId,
-            content: input.content,
-            userId: channel.userId,
-            workspaceId: channel.workspaceId,
-            agentType: "meta",
-            sourceAgentUserId: input.agentUserId,
-            serviceUrl: resolvedService.endpoint,
-            serviceApiKey: resolvedService.serviceApiKey,
-            serviceId: resolvedService.serviceId,
-            agentUserId: resolvedService.agentUserId,
-          };
-
-          await getBoss().send(
-            A2AI_TRIGGER_QUEUE,
-            jobData,
-            A2AI_TRIGGER_JOB_OPTIONS
-          );
-          triggerQueued = true;
-        } catch (err) {
+        // Canonical one-path kickoff (resolves IS + enqueues the A2AI_TRIGGER
+        // pg-boss job). Best-effort: failures are logged inside the helper.
+        triggerQueued = await triggerAutoRespond({
+          channelId: input.channelId,
+          userMessageId: messageId,
+          content: input.content,
+          sourceUserId: input.agentUserId,
+        });
+        if (!triggerQueued) {
           triggerSkipReason = "intelligence_service_unresolved_or_queue_failed";
           console.error(
             "[hub-protocol] A2AI reply trigger failed — could not resolve IS or enqueue job; no agent will respond.",
@@ -638,7 +613,6 @@ export const channelsRouter = router({
               workspaceId: channel.workspaceId,
               sourceAgentUserId: input.agentUserId,
               reason: triggerSkipReason,
-              error: err instanceof Error ? err.message : String(err),
             }
           );
         }
@@ -887,6 +861,17 @@ export const channelsRouter = router({
         },
         workspaceId: input.workspaceId,
         userId: input.userId,
+      });
+
+      // The socket emit above only patches connected browser caches — it does
+      // NOT enqueue the IS. Fire the canonical one-path kickoff so a real
+      // headless turn is produced. Gated to THREAD/AGENT_COLLAB channels with a
+      // workspaceId inside the helper (PERSONAL channels are a no-op today).
+      await triggerAutoRespond({
+        channelId: input.channelId,
+        userMessageId: messageId,
+        content,
+        sourceUserId: input.userId,
       });
 
       return {

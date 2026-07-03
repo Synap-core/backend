@@ -59,6 +59,7 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
+import { triggerAutoRespond } from "../../../utils/trigger-auto-respond.js";
 
 export function registerThreadsRoutes(app: HubHono): void {
   // ── GET /threads ────────────────────────────────────────────────────────
@@ -773,48 +774,12 @@ export function registerThreadsRoutes(app: HubHono): void {
         if (lastUserIdx >= 0) {
           const lastUser = items[lastUserIdx];
           const lastUserMsgId = messageIds[lastUserIdx];
-          const channel = await db.query.channels.findFirst({
-            where: eq(channels.id, threadId),
+          await triggerAutoRespond({
+            channelId: threadId,
+            userMessageId: lastUserMsgId,
+            content: lastUser.content,
+            sourceUserId: lastUser.userId,
           });
-          if (
-            channel?.workspaceId &&
-            (channel.channelType === ChannelType.THREAD ||
-              channel.channelType === ChannelType.AGENT_COLLAB)
-          ) {
-            try {
-              const { resolveIntelligenceService } =
-                await import("../../../utils/intelligence-routing.js");
-              const { getBoss, A2AI_TRIGGER_QUEUE, A2AI_TRIGGER_JOB_OPTIONS } =
-                await import("@synap/jobs");
-              const resolvedService = await resolveIntelligenceService({
-                userId: channel.userId,
-                workspaceId: channel.workspaceId,
-                capability: "chat",
-              });
-              await getBoss().send(
-                A2AI_TRIGGER_QUEUE,
-                {
-                  channelId: threadId,
-                  userMessageId: lastUserMsgId,
-                  content: lastUser.content,
-                  userId: channel.userId,
-                  workspaceId: channel.workspaceId,
-                  agentType: "meta",
-                  sourceAgentUserId: lastUser.userId,
-                  serviceUrl: resolvedService.endpoint,
-                  serviceApiKey: resolvedService.serviceApiKey,
-                  serviceId: resolvedService.serviceId,
-                  agentUserId: resolvedService.agentUserId,
-                },
-                A2AI_TRIGGER_JOB_OPTIONS
-              );
-            } catch (err) {
-              logger.warn(
-                { err, threadId },
-                "postMessagesBatch autoRespond trigger failed"
-              );
-            }
-          }
         }
       }
 
@@ -895,48 +860,12 @@ export function registerThreadsRoutes(app: HubHono): void {
       });
 
       if (body.autoRespond === true && body.role === "user") {
-        const channel = await db.query.channels.findFirst({
-          where: eq(channels.id, threadId),
+        await triggerAutoRespond({
+          channelId: threadId,
+          userMessageId: msgId,
+          content: body.content,
+          sourceUserId: body.userId,
         });
-        if (
-          channel?.workspaceId &&
-          (channel.channelType === ChannelType.THREAD ||
-            channel.channelType === ChannelType.AGENT_COLLAB)
-        ) {
-          try {
-            const { resolveIntelligenceService } =
-              await import("../../../utils/intelligence-routing.js");
-            const { getBoss, A2AI_TRIGGER_QUEUE, A2AI_TRIGGER_JOB_OPTIONS } =
-              await import("@synap/jobs");
-            const resolvedService = await resolveIntelligenceService({
-              userId: channel.userId,
-              workspaceId: channel.workspaceId,
-              capability: "chat",
-            });
-            await getBoss().send(
-              A2AI_TRIGGER_QUEUE,
-              {
-                channelId: threadId,
-                userMessageId: msgId,
-                content: body.content,
-                userId: channel.userId,
-                workspaceId: channel.workspaceId,
-                agentType: "meta",
-                sourceAgentUserId: body.userId,
-                serviceUrl: resolvedService.endpoint,
-                serviceApiKey: resolvedService.serviceApiKey,
-                serviceId: resolvedService.serviceId,
-                agentUserId: resolvedService.agentUserId,
-              },
-              A2AI_TRIGGER_JOB_OPTIONS
-            );
-          } catch (err) {
-            logger.warn(
-              { err, threadId },
-              "postMessage autoRespond trigger failed"
-            );
-          }
-        }
       }
 
       return c.json({ success: true as const, messageId: msgId }, 200);
