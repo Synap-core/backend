@@ -23,25 +23,33 @@ import {
   channels,
   MessageRole,
   MessageAuthorType,
+  type MessageCategory,
   type RoutedSource,
 } from "../schema/index.js";
 
 export interface PersistAssistantReplyParams {
   channelId: string;
-  /** Id of the message that triggered this reply (its user/trigger message). */
-  userMessageId: string;
-  /** Content of that triggering message — the prevHash input. */
-  triggerContent: string;
   /** The assistant's reply text. */
   content: string;
   /** Author identity to stamp on the row. */
   userId: string;
   /** Provenance metadata (aiSteps + service/agent ids, or the a2ai marker). */
   metadata: Record<string, unknown>;
+  /**
+   * Chain link. Provide EITHER the trigger message's id + content (the reply
+   * chains off `sha256(userMessageId + triggerContent)`) OR an explicit
+   * `previousHash` (e.g. an inbound message's already-recorded hash). One is
+   * required.
+   */
+  userMessageId?: string;
+  triggerContent?: string;
+  previousHash?: string;
   /** IS-memory session this turn belongs to, when tracked. */
   sessionId?: string | null;
   /** Routed-teammate attribution for multiplayer rooms; null for single-responder. */
   routed?: { teammateId: string; source: RoutedSource } | null;
+  /** Message category override (e.g. CHAT for external-bridge replies). */
+  messageCategory?: MessageCategory;
 }
 
 export interface PersistAssistantReplyResult {
@@ -53,10 +61,20 @@ export interface PersistAssistantReplyResult {
 export async function persistAssistantReply(
   params: PersistAssistantReplyParams
 ): Promise<PersistAssistantReplyResult> {
+  const previousHash =
+    params.previousHash ??
+    (params.userMessageId !== undefined && params.triggerContent !== undefined
+      ? createHash("sha256")
+          .update(`${params.userMessageId}${params.triggerContent}`)
+          .digest("hex")
+      : undefined);
+  if (previousHash === undefined) {
+    throw new Error(
+      "persistAssistantReply: provide either previousHash or userMessageId+triggerContent"
+    );
+  }
+
   const assistantId = randomUUID();
-  const previousHash = createHash("sha256")
-    .update(`${params.userMessageId}${params.triggerContent}`)
-    .digest("hex");
   const hash = createHash("sha256")
     .update(`${assistantId}${params.content}${previousHash}`)
     .digest("hex");
@@ -71,6 +89,9 @@ export async function persistAssistantReply(
     previousHash,
     hash,
     metadata: params.metadata as (typeof messages.$inferInsert)["metadata"],
+    ...(params.messageCategory
+      ? { messageCategory: params.messageCategory }
+      : {}),
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     ...(params.routed
       ? {

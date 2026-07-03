@@ -26,7 +26,6 @@
  * as it does for browser chat.
  */
 
-import { createHash, randomUUID } from "crypto";
 import { z } from "@hono/zod-openapi";
 import { getPodCallback } from "../../../utils/pod-callback.js";
 import {
@@ -37,8 +36,8 @@ import {
   eq,
   and,
   MessageRole,
-  MessageAuthorType,
   MessageCategory,
+  persistAssistantReply,
 } from "@synap/database";
 import type { HubResponse } from "@synap-core/types";
 import { recordInboundMessage } from "../../../services/connectors/inbound-recorder.js";
@@ -428,20 +427,15 @@ export function registerDiscordRoutes(app: HubHono): void {
       // turn reading the client-comms thread can't pick up an internal reply.
       const firewalled = !!deliverToExternalChannelId || suppressReply;
       if (assistantContent && !firewalled) {
-        const assistantId = randomUUID();
-        const assistantHash = createHash("sha256")
-          .update(`${assistantId}${assistantContent}${inboundHash}`)
-          .digest("hex");
-        await db.insert(messages).values({
-          id: assistantId,
+        // Same shared hash-chain writer as the interactive + a2ai paths; the
+        // reply chains off the already-recorded inbound message's hash.
+        await persistAssistantReply({
           channelId,
-          userId,
-          role: MessageRole.ASSISTANT,
-          authorType: MessageAuthorType.AI_AGENT,
-          messageCategory: MessageCategory.CHAT,
           content: assistantContent,
+          userId,
+          metadata: {},
           previousHash: inboundHash,
-          hash: assistantHash,
+          messageCategory: MessageCategory.CHAT,
         });
       }
 
