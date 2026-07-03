@@ -25,12 +25,27 @@ import {
   db,
   eq,
   and,
+  or,
+  isNull,
+  desc,
+  drizzleSql,
   channels,
   views,
+  entities,
+  relations,
+  messages,
   getWorkspaceMembership,
   insertChannelMessage,
 } from "@synap/database";
+import type { SQL } from "drizzle-orm";
 import type { Context } from "../../context.js";
+// Type-only imports (erased at runtime). The heavy access layer + the channel
+// util are LAZY-imported inside the read/write handlers (mirroring how
+// channelCreateHandler lazy-imports channelsRouter), so this module's load graph
+// stays light — the visibility registry is never dragged into callers that only
+// touch the pilot verbs.
+import type { ScopedDb } from "../../access/scoped-db.js";
+import type { ContextObjectType } from "../../utils/resolve-or-create-channel.js";
 import {
   placeArtboardDeck,
   ArtboardDeckSlideSchema,
@@ -286,8 +301,522 @@ const aiTriageHandler: BuiltinVerbHandler = async (params) => {
   return { results };
 };
 
+// ── Read/resolve half (W6) ────────────────────────────────────────────────────
+//
+// Six GENERIC primitives that READ or RESOLVE the pod substrate. They are
+// deliberately feature-AGNOSTIC — every CRM/feature-shaped choice (which channel
+// type, which relation type, which profile) is a PARAMETER, never a constant, so
+// feature behavior lives in capability JSON (the CP catalog), not in these verbs.
+//
+// The four READ verbs (entity.query, channel.resolve, graph.relations, feed.read)
+// read THROUGH the access layer: `scopedDb(AccessContext…).findMany(table, …)`
+// AND-s each table's registered visibility predicate onto the query, so a read
+// physically cannot return rows outside the caller's floor (own + member
+// workspaces + pod-wide globals), narrowed by the acting workspace lens. They are
+// marked read-only (READ_ONLY_BUILTIN_VERBS) so the capability gate auto-runs
+// them without a grant/propose — their scope is enforced by the access layer, not
+// the gate (see execute-capability.ts + the gate's `readOnly` short-circuit).
+//
+// The two WRITE verbs (channel.ensure, graph.link) delegate to the EXISTING
+// governed write paths — `resolveOrCreateChannel` (the by-context find-or-create
+// used by MCP `get_channel`) and the `relations.create` caller (which runs
+// `checkPermissionOrPropose` internally) — so a write is governed IDENTICALLY to
+// the hand-rolled routes: membership-checked + proposal-or-run. They are NOT
+// read-only, so they flow through the full capability gate unchanged.
+//
+// The access layer is LAZY-imported (not top-level) so this module never drags
+// the visibility registry into the pilot-verb callers — mirroring the
+// channelsRouter lazy-import convention above.
+
+/** Build a ScopedDb bound to the operator's floor, narrowed to a workspace lens.
+ *  `undefined` lens = the full user floor (all member workspaces + globals); a
+ *  workspace id narrows to it (+ globals). We use `undefined` (not `null`) when no
+ *  workspace is active so a pod-wide read still returns the caller's own rows —
+ *  the DATA-table floor, per the access layer's `accessFor` note. */
+async function getReadScope(
+  userId: string,
+  lens: string | null | undefined
+): Promise<ScopedDb> {
+  const { AccessContext, scopedDb } = await import("../../access/index.js");
+  const access = AccessContext.operator({ userId }).withLens(lens ?? undefined);
+  return scopedDb(access);
+}
+
+/** entity.query — READ entities of a profile, scoped by the caller's floor. */
+const entityQueryParams = z.object({
+  /** Entity profile slug (e.g. "task", "deal") — the `type` discriminator. */
+  profileSlug: z.string().min(1).max(200),
+  /** Optional JSONB property equality filter: { key: value } pairs. */
+  filter: z.record(z.string(), z.unknown()).optional(),
+  /** Optional workspace lens; omit for the full user floor (pod-wide). */
+  workspaceId: z.string().uuid().optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+});
+
+const entityQueryHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = entityQueryParams.parse(params);
+  const limit = input.limit ?? 20;
+
+  // The lens is the query's explicit workspaceId, else the acting lens.
+  const scoped = await getReadScope(
+    ctx.userId,
+    input.workspaceId ?? ctx.workspaceId ?? undefined
+  );
+
+  const conditions: SQL[] = [eq(entities.type, input.profileSlug)];
+  // JSONB property equality — mirror executeQueryStep's filter semantics.
+  for (const [key, value] of Object.entries(input.filter ?? {})) {
+    if (value !== undefined && value !== null) {
+      conditions.push(
+        drizzleSql`${entities.properties}->>${key} = ${String(value)}`
+      );
+    }
+  }
+
+  const rows = await scoped.findMany<{
+    id: string;
+    type: string;
+    title: string | null;
+    preview: string | null;
+    properties: unknown;
+    createdAt: Date;
+    updatedAt: Date;
+  }>(entities, {
+    where: and(...conditions),
+    columns: {
+      id: true,
+      type: true,
+      title: true,
+      preview: true,
+      properties: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+    orderBy: desc(entities.updatedAt),
+    limit,
+  });
+
+  return { entities: rows, count: rows.length };
+};
+
 /**
- * verbName (= skill.name = verbId) → in-process handler. Populated by W5.
+ * channel.resolve — READ the channel(s) bound to a context object, optionally
+ * filtered by channelType. GENERIC: `channelType` is a PARAMETER (e.g. "thread",
+ * "external", "feed") — this verb makes NO assumption about which type is the
+ * "client" channel. Reads through the access layer (channels carry a custom
+ * visibility rule), so it never returns a channel the caller may not see.
+ *
+ * FIREWALL: this verb only RESOLVES — it never posts. A resolved channel whose
+ * type/purpose is client-comms (an external client conversation) MUST NEVER be
+ * used as a post target by callers: AI/proactive output to a client-comms channel
+ * is blocked downstream (delivery-router / insertChannelMessage). Resolve to READ
+ * the conversation, not to write into it.
+ */
+const channelResolveParams = z.object({
+  /** Context-object kind (entity/document/view/…), a generic string. */
+  contextObjectType: z.string().min(1).max(50),
+  contextObjectId: z.string().uuid(),
+  /** Optional channelType filter (parameter, never a constant). */
+  channelType: z.string().max(50).optional(),
+});
+
+const channelResolveHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = channelResolveParams.parse(params);
+  const scoped = await getReadScope(ctx.userId, ctx.workspaceId ?? undefined);
+
+  const conditions: SQL[] = [
+    eq(channels.contextObjectType, input.contextObjectType),
+    eq(channels.contextObjectId, input.contextObjectId),
+  ];
+  if (input.channelType) {
+    // channelType is a GENERIC string param; the column is a typed enum, so
+    // compare via a SQL literal rather than the enum-narrowed `eq` overload.
+    conditions.push(drizzleSql`${channels.channelType} = ${input.channelType}`);
+  }
+
+  const rows = await scoped.findMany<{
+    id: string;
+    channelType: string;
+    title: string | null;
+    workspaceId: string | null;
+    branchPurpose: string | null;
+    contextObjectType: string | null;
+    contextObjectId: string | null;
+    updatedAt: Date;
+  }>(channels, {
+    where: and(...conditions),
+    columns: {
+      id: true,
+      channelType: true,
+      title: true,
+      workspaceId: true,
+      branchPurpose: true,
+      contextObjectType: true,
+      contextObjectId: true,
+      updatedAt: true,
+    },
+    orderBy: desc(channels.updatedAt),
+  });
+
+  return { channelId: rows[0]?.id ?? null, channels: rows };
+};
+
+/**
+ * channel.ensure — WRITE: find-or-create a THREAD channel bound to a context
+ * object (delegates to the governed `resolveOrCreateChannel` find-or-create, the
+ * same path MCP `get_channel` mode by-context uses). Membership-checked like
+ * channel.create. `created` reports whether a new row was inserted.
+ */
+const channelEnsureParams = z.object({
+  contextObjectType: z.string().min(1).max(50),
+  contextObjectId: z.string().uuid(),
+  title: z.string().max(500).optional(),
+  agentSlug: z.string().max(100).optional(),
+});
+
+const channelEnsureHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = channelEnsureParams.parse(params);
+
+  // A context-bound THREAD is workspace-scoped (resolveOrCreateChannel THREAD
+  // requires a workspaceId) → needs an acting workspace lens, not a pod-wide run.
+  if (!ctx.workspaceId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "channel.ensure requires a workspace context (workspaceId).",
+    });
+  }
+
+  // Enforce membership before the write (mirror channel.create).
+  const membership = await getWorkspaceMembership(
+    db,
+    ctx.workspaceId,
+    ctx.userId
+  );
+  if (!membership) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "No access to the acting workspace.",
+    });
+  }
+
+  // Pre-existence probe (owner-scoped, same key resolveOrCreateChannel upserts on)
+  // so we can report `created`. resolveOrCreateChannel is find-or-create but does
+  // not itself signal which happened.
+  const [existing] = await db
+    .select({ id: channels.id })
+    .from(channels)
+    .where(
+      and(
+        eq(channels.userId, ctx.userId),
+        eq(channels.workspaceId, ctx.workspaceId),
+        eq(channels.contextObjectType, input.contextObjectType),
+        eq(channels.contextObjectId, input.contextObjectId)
+      )
+    )
+    .limit(1);
+
+  const { resolveOrCreateChannel } =
+    await import("../../utils/resolve-or-create-channel.js");
+  const channel = await resolveOrCreateChannel({
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    channelType: "thread",
+    contextObjectType: input.contextObjectType as ContextObjectType,
+    contextObjectId: input.contextObjectId,
+    agentSlug: input.agentSlug,
+  });
+
+  return { channelId: channel.id, created: !existing };
+};
+
+/**
+ * channel.bind — WRITE: bind an ALREADY-EXISTING channel to a context object
+ * (the inbound-first case: channel.ensure CREATES, but an inbound Discord channel
+ * already exists and just needs its contextObjectId set). Delegates the write to
+ * the governed `channelsRouter.updateChannel` caller (which re-checks channel
+ * ownership + emits channel:updated) — it does NOT raw-UPDATE the channels table.
+ *
+ * Membership floor: a caller may only bind a channel in a workspace they belong
+ * to. We load the channel first to (a) 404 cleanly, (b) confine the bind to the
+ * acting workspace lens (mirror feed.post), and (c) enforce workspace membership
+ * before delegating. `branchPurpose` (the firewall role label) is passed through
+ * when provided. This verb only SETS a binding — it never posts, so the delivery
+ * firewall is untouched.
+ */
+const channelBindParams = z.object({
+  channelId: z.string().uuid(),
+  // Narrowed to what the channels binding column + updateChannel accept: a channel
+  // binds to an entity/document/view — NOT the broad thread-context set.
+  contextObjectType: z.enum(["entity", "document", "view"]),
+  contextObjectId: z.string().uuid(),
+  /** Optional firewall role label (e.g. "client-comms" | "team"). */
+  branchPurpose: z.string().max(500).optional(),
+});
+
+const channelBindHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = channelBindParams.parse(params);
+
+  // Load the target channel: a clean 404 instead of a downstream error, and the
+  // seam for the acting-workspace + membership floors below. Only the acting
+  // operator (channels.userId) can bind via updateChannel's ownership guard — for
+  // the inbound-Discord case the channel is owned by that same operator.
+  const [channel] = await db
+    .select({ id: channels.id, workspaceId: channels.workspaceId })
+    .from(channels)
+    .where(eq(channels.id, input.channelId))
+    .limit(1);
+  if (!channel) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found." });
+  }
+  if (
+    channel.workspaceId &&
+    ctx.workspaceId &&
+    channel.workspaceId !== ctx.workspaceId
+  ) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Channel is not in the acting workspace.",
+    });
+  }
+
+  // Membership floor: a caller may only bind a channel in a workspace they belong
+  // to. (A workspace-less channel has no membership to check — updateChannel's
+  // ownership guard is then the sole floor.)
+  let workspaceRole = "member";
+  if (channel.workspaceId) {
+    const membership = await getWorkspaceMembership(
+      db,
+      channel.workspaceId,
+      ctx.userId
+    );
+    if (!membership) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "No access to the channel's workspace.",
+      });
+    }
+    workspaceRole = membership.role;
+  }
+
+  // Delegate the write to the governed updateChannel caller — no raw UPDATE here.
+  const { channelsRouter } = await import("../../routers/channels.js");
+  const caller = channelsRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: channel.workspaceId ?? ctx.workspaceId ?? null,
+    workspaceRole,
+  } as unknown as Context);
+
+  await caller.updateChannel({
+    channelId: input.channelId,
+    contextObjectType: input.contextObjectType,
+    contextObjectId: input.contextObjectId,
+    ...(input.branchPurpose !== undefined
+      ? { branchPurpose: input.branchPurpose }
+      : {}),
+  });
+
+  return { bound: true as const, channelId: input.channelId };
+};
+
+/** graph.relations — READ typed edges touching an entity, scoped by caller floor. */
+const graphRelationsParams = z.object({
+  entityId: z.string().uuid(),
+  /** "outbound" (entity is source), "inbound" (entity is target), or "both". */
+  direction: z.enum(["outbound", "inbound", "both"]).optional(),
+  /** Optional relation-type filter. */
+  relationType: z.string().max(200).optional(),
+  limit: z.number().int().min(1).max(200).optional(),
+});
+
+const graphRelationsHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = graphRelationsParams.parse(params);
+  const direction = input.direction ?? "both";
+  const limit = input.limit ?? 100;
+  const scoped = await getReadScope(ctx.userId, ctx.workspaceId ?? undefined);
+
+  const endpoint =
+    direction === "outbound"
+      ? eq(relations.sourceEntityId, input.entityId)
+      : direction === "inbound"
+        ? eq(relations.targetEntityId, input.entityId)
+        : or(
+            eq(relations.sourceEntityId, input.entityId),
+            eq(relations.targetEntityId, input.entityId)
+          );
+
+  const conditions: SQL[] = [endpoint as SQL];
+  if (input.relationType) {
+    conditions.push(eq(relations.type, input.relationType));
+  }
+
+  const rows = await scoped.findMany<{
+    id: string;
+    sourceEntityId: string | null;
+    targetEntityId: string | null;
+    type: string;
+    metadata: unknown;
+    createdAt: Date;
+  }>(relations, {
+    where: and(...conditions),
+    columns: {
+      id: true,
+      sourceEntityId: true,
+      targetEntityId: true,
+      type: true,
+      metadata: true,
+      createdAt: true,
+    },
+    orderBy: desc(relations.createdAt),
+    limit,
+  });
+
+  // Annotate each edge's direction relative to the queried entity.
+  const annotated = rows.map((r) => ({
+    ...r,
+    direction: r.sourceEntityId === input.entityId ? "outbound" : "inbound",
+  }));
+
+  return { relations: annotated };
+};
+
+/**
+ * graph.link — WRITE: create a typed relation via the governed relations.create
+ * caller (which runs checkPermissionOrPropose internally), the same path MCP
+ * link_entities uses. Governed IDENTICALLY: it may return a proposal.
+ */
+const graphLinkParams = z.object({
+  fromEntityId: z.string().uuid(),
+  toEntityId: z.string().uuid(),
+  relationType: z.string().min(1).max(200),
+});
+
+const graphLinkHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = graphLinkParams.parse(params);
+
+  // relations.create is workspace-scoped (needs a workspaceId for the permission
+  // check + relation-def validation) → requires an acting workspace lens.
+  if (!ctx.workspaceId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "graph.link requires a workspace context (workspaceId).",
+    });
+  }
+
+  // Enforce membership before delegating (mirror channel.create).
+  const membership = await getWorkspaceMembership(
+    db,
+    ctx.workspaceId,
+    ctx.userId
+  );
+  if (!membership) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "No access to the acting workspace.",
+    });
+  }
+
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const caller = relationsRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    workspaceRole: membership.role,
+  } as unknown as Context);
+
+  // relations.create governs the write (checkPermissionOrPropose): it returns
+  // either the created relation OR { status: "proposed", proposalId }. Surface
+  // that verbatim under `linked` so an unapproved link is not reported as done.
+  const result = await caller.create({
+    sourceEntityId: input.fromEntityId,
+    targetEntityId: input.toEntityId,
+    type: input.relationType,
+    workspaceId: ctx.workspaceId,
+  });
+
+  return { linked: result };
+};
+
+/**
+ * feed.read — READ a channel's messages (chronological). Resolution: an explicit
+ * `channelId` wins; else the most-recent channel bound to `subjectEntityId`
+ * (contextObjectType='entity'). GENERIC: unlike the CRM-shaped mail-feed reader,
+ * it does NOT hardcode a channelType (e.g. EXTERNAL) when resolving by subject —
+ * callers who need a specific type resolve it via channel.resolve first and pass
+ * the channelId. Channel visibility is enforced through the access layer BEFORE
+ * any message is read, so it never reads a channel outside the caller's floor.
+ */
+const feedReadParams = z
+  .object({
+    channelId: z.string().uuid().optional(),
+    subjectEntityId: z.string().uuid().optional(),
+    limit: z.number().int().min(1).max(200).optional(),
+  })
+  .refine((v) => v.channelId || v.subjectEntityId, {
+    message: "feed.read requires channelId or subjectEntityId.",
+  });
+
+const feedReadHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = feedReadParams.parse(params);
+  const limit = input.limit ?? 40;
+  const scoped = await getReadScope(ctx.userId, ctx.workspaceId ?? undefined);
+
+  // Resolve the target channel THROUGH the access layer so it is provably
+  // visible to the caller before any message read (no cross-floor leak).
+  let channelId: string | null = null;
+  if (input.channelId) {
+    const ch = await scoped.findFirst<{ id: string }>(channels, {
+      where: eq(channels.id, input.channelId),
+      columns: { id: true },
+    });
+    channelId = ch?.id ?? null;
+  } else if (input.subjectEntityId) {
+    const ch = await scoped.findFirst<{ id: string }>(channels, {
+      where: and(
+        eq(channels.contextObjectType, "entity"),
+        eq(channels.contextObjectId, input.subjectEntityId)
+      ),
+      columns: { id: true },
+      orderBy: desc(channels.updatedAt),
+    });
+    channelId = ch?.id ?? null;
+  }
+
+  if (!channelId) {
+    return { messages: [], channelId: null };
+  }
+
+  const rows = await db
+    .select({
+      role: messages.role,
+      content: messages.content,
+      metadata: messages.metadata,
+      timestamp: messages.timestamp,
+    })
+    .from(messages)
+    .where(and(eq(messages.channelId, channelId), isNull(messages.deletedAt)))
+    .orderBy(desc(messages.timestamp))
+    .limit(limit);
+
+  // Re-order oldest → newest for downstream sequential reading.
+  const ordered = rows.reverse().map((m) => ({
+    role: m.role,
+    content: m.content,
+    authorName:
+      (m.metadata as { sender?: { name?: string } } | null)?.sender?.name ??
+      null,
+    createdAt:
+      m.timestamp instanceof Date ? m.timestamp.toISOString() : m.timestamp,
+  }));
+
+  return { messages: ordered, channelId };
+};
+
+/**
+ * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
+ * write/emit pilots) + W6 (the read/resolve half).
  * Keep names namespaced (`channel.create`, `feed.post`) to mirror the
  * `connector.action` convention used for external verbs.
  */
@@ -296,4 +825,28 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "feed.post": feedPostHandler,
   "output.generate": outputGenerateHandler,
   "ai.triage": aiTriageHandler,
+  // W6 — read/resolve half.
+  "entity.query": entityQueryHandler,
+  "channel.resolve": channelResolveHandler,
+  "channel.ensure": channelEnsureHandler,
+  "channel.bind": channelBindHandler,
+  "graph.relations": graphRelationsHandler,
+  "graph.link": graphLinkHandler,
+  "feed.read": feedReadHandler,
 };
+
+/**
+ * The READ-ONLY builtin verbs — those whose execution only READS (no mutation).
+ * executeCapability consults this set to mark the capability gate `readOnly`, so
+ * a read auto-runs (no grant, no propose) once it clears the approval gate; its
+ * scope is enforced by the access layer inside each handler, NOT by the gate.
+ * WRITE verbs (channel.ensure, channel.bind, graph.link, channel.create,
+ * feed.post, output.generate) are intentionally ABSENT — they flow through the
+ * full gate.
+ */
+export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
+  "entity.query",
+  "channel.resolve",
+  "graph.relations",
+  "feed.read",
+]);

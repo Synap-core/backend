@@ -32,13 +32,13 @@ import {
   db,
   agents,
   messages,
-  channels,
   eq,
   and,
   MessageRole,
   MessageCategory,
   persistAssistantReply,
 } from "@synap/database";
+import { resolveClientBinding } from "../../../utils/resolve-client-binding.js";
 import type { HubResponse } from "@synap-core/types";
 import { recordInboundMessage } from "../../../services/connectors/inbound-recorder.js";
 
@@ -377,38 +377,15 @@ export function registerDiscordRoutes(app: HubHono): void {
       let deliverToExternalChannelId: string | undefined;
       let suppressReply = false;
       try {
-        const here = await db.query.channels.findFirst({
-          where: eq(channels.id, channelId),
-          columns: {
-            branchPurpose: true,
-            contextObjectId: true,
-            parentChannelId: true,
-          },
-        });
-        if (here?.branchPurpose === "client-comms") {
-          // Sibling team channel = same bound entity, else same parent room.
-          let team: { externalId: string | null } | undefined;
-          if (here.contextObjectId) {
-            team = await db.query.channels.findFirst({
-              where: and(
-                eq(channels.branchPurpose, "team"),
-                eq(channels.externalSource, "discord"),
-                eq(channels.contextObjectId, here.contextObjectId)
-              ),
-              columns: { externalId: true },
-            });
-          } else if (here.parentChannelId) {
-            team = await db.query.channels.findFirst({
-              where: and(
-                eq(channels.branchPurpose, "team"),
-                eq(channels.externalSource, "discord"),
-                eq(channels.parentChannelId, here.parentChannelId)
-              ),
-              columns: { externalId: true },
-            });
-          }
-          if (team?.externalId) {
-            deliverToExternalChannelId = team.externalId;
+        // Firewall resolution extracted to the shared helper (its ONE home).
+        // Behavior is byte-identical: client-comms + team sibling → redirect to
+        // the team channel; client-comms + no team → suppress; not client-comms →
+        // reply in place.
+        const { isClientComms, teamExternalId } =
+          await resolveClientBinding(channelId);
+        if (isClientComms) {
+          if (teamExternalId) {
+            deliverToExternalChannelId = teamExternalId;
           } else {
             suppressReply = true;
           }

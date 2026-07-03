@@ -3338,6 +3338,14 @@ export const channelsRouter = router({
         addAgentMemberId: z.string().uuid().optional(),
         /** Unbind an agent INSTANCE from this channel. */
         removeAgentMemberId: z.string().uuid().optional(),
+        /** Bind this channel to a context object (e.g. a client entity). Set all
+         *  three (or the pair) together — the governed home for "point this
+         *  existing channel at this object", used by the channel.bind builtin verb
+         *  for the inbound-first case where the channel already exists. */
+        contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
+        contextObjectId: z.string().uuid().optional(),
+        /** Firewall role label ("client-comms" / "team") — see the delivery firewall. */
+        branchPurpose: z.string().max(500).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -3366,6 +3374,15 @@ export const channelsRouter = router({
           }),
           ...(input.aiReactionMode !== undefined && {
             aiReactionMode: input.aiReactionMode,
+          }),
+          ...(input.contextObjectType !== undefined && {
+            contextObjectType: input.contextObjectType,
+          }),
+          ...(input.contextObjectId !== undefined && {
+            contextObjectId: input.contextObjectId,
+          }),
+          ...(input.branchPurpose !== undefined && {
+            branchPurpose: input.branchPurpose,
           }),
           updatedAt: new Date(),
         })

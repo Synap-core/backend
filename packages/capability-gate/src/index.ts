@@ -79,6 +79,18 @@ export interface GateCapabilityExecutionInput {
   actorUserId: string;
   /** The agent identity, when the run is agent-initiated. */
   agentUserId?: string | null;
+  /**
+   * READ-ONLY capability marker — set for a capability whose execution only
+   * READS (no mutation). Mirrors execute-provider-verb's `isReadMethod →
+   * alreadyApproved:true`: a read is not a mutation, so once it clears the
+   * APPROVAL gate it never needs a grant and never proposes — its scope is
+   * enforced downstream by the access layer (caller's row floor), NOT by this
+   * governance gate. Builtin verbs have no HTTP method, so the caller
+   * (executeCapability) sets this explicitly from the read-verb set. Absent
+   * (the normal case) → the full grant/propose ladder applies. It NEVER weakens
+   * the approval gate above (an unapproved read is still denied).
+   */
+  readOnly?: boolean;
   workspaceId?: string | null;
   sessionId?: string | null;
   playbookId?: string | null;
@@ -209,6 +221,19 @@ export async function gateCapabilityExecution(
       reason:
         "Capability is not approved. Approve it (setApproved) before running, or use dry-run to test it.",
     };
+  }
+
+  // ── READ-ONLY short-circuit — mirrors execute-provider-verb's
+  //    `isReadMethod → alreadyApproved:true`. A read is not a mutation: once it
+  //    clears the APPROVAL gate above, it never needs a grant and never proposes.
+  //    Its SCOPE is enforced downstream by the access layer (the caller's row
+  //    floor), not by this governance gate — so a read can never leak
+  //    cross-workspace rows here, and can never spawn a proposal. Applies to
+  //    EVERY caller (operator AND agent), which is why it precedes owner-bypass
+  //    and the grant-existence check. WRITES leave `readOnly` unset and fall
+  //    through to the full ladder below.
+  if (input.readOnly) {
+    return { decision: "run" };
   }
 
   // ── 1. Owner bypass — only a GENUINE human owner run (no agentUserId) skips the

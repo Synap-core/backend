@@ -5717,7 +5717,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				aiSteps?: undefined;
 			} | {
 				channelId: string;
-				messageId: `${string}-${string}-${string}-${string}-${string}`;
+				messageId: string;
 				content: string;
 				entities: {
 					type: string;

@@ -120,6 +120,125 @@ const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    // ── Read/resolve half (W6) — GENERIC primitives (no feature/CRM logic) ──────
+    {
+      name: "entity.query",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "READ entities of a profile, scoped to the caller's floor. Optional JSONB property-equality filter and workspace lens. Returns { entities[], count }. Read-only: auto-runs, scoped by the access layer.",
+      parameters: {
+        type: "object",
+        required: ["profileSlug"],
+        properties: {
+          profileSlug: { type: "string" },
+          filter: {
+            type: "object",
+            description: "Property equality pairs { key: value } (JSONB ->>).",
+          },
+          workspaceId: { type: "string", format: "uuid" },
+          limit: { type: "number", minimum: 1, maximum: 100 },
+        },
+      },
+    },
+    {
+      name: "channel.resolve",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "READ the channel(s) bound to a context object, optionally filtered by channelType (a PARAMETER — no assumption about which type is 'the client channel'). Returns { channelId|null, channels[] }. Read-only. A client-comms result must never be used as a post target (the firewall blocks it).",
+      parameters: {
+        type: "object",
+        required: ["contextObjectType", "contextObjectId"],
+        properties: {
+          contextObjectType: { type: "string" },
+          contextObjectId: { type: "string", format: "uuid" },
+          channelType: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "channel.ensure",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Find-or-create a THREAD channel bound to a context object (governed find-or-create; membership-checked). Returns { channelId, created }.",
+      parameters: {
+        type: "object",
+        required: ["contextObjectType", "contextObjectId"],
+        properties: {
+          contextObjectType: { type: "string" },
+          contextObjectId: { type: "string", format: "uuid" },
+          title: { type: "string" },
+          agentSlug: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "channel.bind",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Bind an ALREADY-EXISTING channel to a context object (inbound-first case). Delegates to the governed updateChannel path (ownership + membership checked); passes branchPurpose (firewall role) through. Returns { bound, channelId }. Sets a binding only — never posts.",
+      parameters: {
+        type: "object",
+        required: ["channelId", "contextObjectType", "contextObjectId"],
+        properties: {
+          channelId: { type: "string", format: "uuid" },
+          contextObjectType: { type: "string" },
+          contextObjectId: { type: "string", format: "uuid" },
+          branchPurpose: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "graph.relations",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "READ typed relation edges touching an entity (direction outbound|inbound|both, optional relationType filter), scoped to the caller's floor. Returns { relations[] }. Read-only.",
+      parameters: {
+        type: "object",
+        required: ["entityId"],
+        properties: {
+          entityId: { type: "string", format: "uuid" },
+          direction: { type: "string", enum: ["outbound", "inbound", "both"] },
+          relationType: { type: "string" },
+          limit: { type: "number", minimum: 1, maximum: 200 },
+        },
+      },
+    },
+    {
+      name: "graph.link",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Create a typed relation between two entities via the governed relations.create path (checkPermissionOrPropose). May return a proposal. Returns { linked }.",
+      parameters: {
+        type: "object",
+        required: ["fromEntityId", "toEntityId", "relationType"],
+        properties: {
+          fromEntityId: { type: "string", format: "uuid" },
+          toEntityId: { type: "string", format: "uuid" },
+          relationType: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "feed.read",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "READ a channel's messages (chronological). Resolve by explicit channelId or by subjectEntityId (most-recent bound channel). Channel visibility enforced through the access layer before any read. Returns { messages[], channelId }. Read-only.",
+      parameters: {
+        type: "object",
+        properties: {
+          channelId: { type: "string", format: "uuid" },
+          subjectEntityId: { type: "string", format: "uuid" },
+          limit: { type: "number", minimum: 1, maximum: 200 },
+        },
+      },
+    },
   ],
 };
 

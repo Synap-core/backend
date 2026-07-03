@@ -20,7 +20,7 @@ import { db, skills, eq, and, or, isNull, desc } from "@synap/database";
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
 import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
-import { BUILTIN_VERBS } from "./builtin-verbs.js";
+import { BUILTIN_VERBS, READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
 import type { ConnectionSelector } from "../../connectors/external-dispatch.js";
 import { createPendingProposal } from "../../utils/permission-check.js";
 
@@ -102,6 +102,14 @@ export async function executeCapability(input: {
     };
   }
 
+  // A read-only BUILTIN verb is not a mutation — mark the gate `readOnly` so it
+  // auto-runs (no grant, no propose) once it clears the approval gate; its scope
+  // is enforced by the access layer inside the handler, NOT by the gate. Mirrors
+  // execute-provider-verb's `isReadMethod → alreadyApproved:true`. WRITE builtins
+  // (and every non-builtin) leave this false and flow through the full ladder.
+  const readOnly =
+    skillRow.kind === "builtin" && READ_ONLY_BUILTIN_VERBS.has(skillRow.name);
+
   const decision = await gateCapabilityExecution({
     capabilityKind: "skill",
     capabilityId: skillRow.id,
@@ -110,6 +118,7 @@ export async function executeCapability(input: {
     agentUserId: null,
     workspaceId,
     issuer: "hub.capabilities-execute",
+    readOnly,
   });
 
   if (decision.decision === "deny") {
