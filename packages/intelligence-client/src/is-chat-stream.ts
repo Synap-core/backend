@@ -58,8 +58,11 @@ export async function* iterateISChatStream(
         let frame: ISChatStreamFrame;
         try {
           frame = JSON.parse(raw) as ISChatStreamFrame;
-        } catch {
-          continue; // tolerate malformed lines
+        } catch (parseError) {
+          // Tolerate malformed frames, but surface them — a silently-dropped
+          // frame is exactly how the stream:true / type-drift bugs stayed hidden.
+          console.error("Failed to parse IS SSE frame:", raw, parseError);
+          continue;
         }
         yield frame;
       }
@@ -79,7 +82,7 @@ export async function* iterateISChatStream(
 export async function drainISChatStream(
   response: Response,
   onContent?: (chunk: string) => void
-): Promise<{ text: string; completeContent: string; error: string | null }> {
+): Promise<{ text: string; error: string | null }> {
   let acc = "";
   let completeContent = "";
   let streamError: string | null = null;
@@ -93,5 +96,5 @@ export async function drainISChatStream(
       streamError = streamError ?? frame.error ?? "unknown IS stream error";
     }
   }
-  return { text: acc || completeContent, completeContent, error: streamError };
+  return { text: acc || completeContent, error: streamError };
 }
