@@ -34,6 +34,7 @@ import {
   isNull,
   exists,
   drizzleSql,
+  persistAssistantReply,
 } from "@synap/database";
 import {
   channels,
@@ -48,7 +49,6 @@ import {
   FeedScope,
   ChannelStatus,
   MessageRole,
-  MessageAuthorType,
   type ChannelContextObjectType,
   ChannelContextRelationshipType,
   proposals,
@@ -2297,11 +2297,8 @@ export const channelsRouter = router({
         }
       }
 
-      // Save assistant message
-      const assistantMessageId = randomUUID();
-      const assistantMessageHash = createHash("sha256")
-        .update(`${assistantMessageId}${fullContent}${userMessageHash}`)
-        .digest("hex");
+      // Save assistant message — via the shared hash-chain writer
+      // (persistAssistantReply), the same one the a2ai worker uses.
       // Provenance metadata: IS + agent that produced this message. Surfaces
       // a "Synap · agent-name" badge in chat clients (Eve, Relay, Studio).
       const messageMetadata = {
@@ -2311,31 +2308,29 @@ export const channelsRouter = router({
         agentType: effectiveAgentType,
       };
 
-      await db.insert(messages).values({
-        id: assistantMessageId,
-        channelId,
-        role: MessageRole.ASSISTANT,
-        authorType: MessageAuthorType.AI_AGENT,
-        content: fullContent,
-        userId,
-        previousHash: userMessageHash,
-        hash: assistantMessageHash,
-        metadata: messageMetadata as (typeof messages.$inferInsert)["metadata"],
-        sessionId: activeSessionId ?? undefined,
-        // Routed attribution: stamp which teammate answered and how it was selected.
-        // Null for non-routed (single-responder) messages — back-compat.
-        ...(routingDecision
-          ? {
-              routedTeammateId: routingDecision.teammateId,
-              routedSource:
-                routingDecision.source === "mention"
-                  ? RoutedSource.MENTION
-                  : routingDecision.source === "orchestrator"
-                    ? RoutedSource.ORCHESTRATOR
-                    : RoutedSource.DIRECT,
-            }
-          : {}),
-      });
+      const { assistantId: assistantMessageId, hash: assistantMessageHash } =
+        await persistAssistantReply({
+          channelId,
+          userMessageId,
+          triggerContent: content,
+          content: fullContent,
+          userId,
+          metadata: messageMetadata,
+          sessionId: activeSessionId ?? null,
+          // Routed attribution: which teammate answered + how it was selected.
+          // Null for non-routed (single-responder) messages — back-compat.
+          routed: routingDecision
+            ? {
+                teammateId: routingDecision.teammateId,
+                source:
+                  routingDecision.source === "mention"
+                    ? RoutedSource.MENTION
+                    : routingDecision.source === "orchestrator"
+                      ? RoutedSource.ORCHESTRATOR
+                      : RoutedSource.DIRECT,
+              }
+            : null,
+        });
 
       // Lazily enroll the human owner + AI agent in channel_members so
       // listRoomMembers returns real data for personal channels that were

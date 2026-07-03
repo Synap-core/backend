@@ -19,6 +19,8 @@ import type {
   CreatedProposal,
 } from "@synap-core/types";
 
+import { iterateISChatStream } from "./is-chat-stream.js";
+
 /**
  * Structured follow-up the IS `structure` endpoint may emit instead of a plain
  * string question. Mirrors `@synap/hub-rest-client` and the frontend
@@ -561,60 +563,42 @@ export class IntelligenceHubClient {
       );
     }
 
-    // Parse SSE stream
-    const reader = response.body?.getReader();
-    const decoder = new TextDecoder();
-
-    if (!reader) {
+    // Parse SSE stream — one shared reader (see is-chat-stream.ts). Map each
+    // raw IS frame to the typed HubStreamEvent vocabulary (content → chunk).
+    if (!response.body) {
       recordFailure(this.baseUrl);
       throw new Error("No response body");
     }
 
-    let buffer = "";
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-
-        if (done) {
-          yield { type: "complete" };
-          break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6));
-
-              if (data.type === "content" && data.content) {
-                yield { type: "chunk", content: data.content };
-              } else if (data.type === "step" && data.step) {
-                yield { type: "step", step: data.step };
-              } else if (data.type === "entities" && data.entities) {
-                yield { type: "entities", entities: data.entities };
-              } else if (data.type === "branch_decision" && data.decision) {
-                yield { type: "branch_decision", decision: data.decision };
-              } else if (data.type === "route_to_channel" && data.routing) {
-                yield { type: "route_to_channel", routing: data.routing };
-              } else if (data.type === "error") {
-                yield { type: "error", error: data.error };
-              } else if (data.type === "complete") {
-                yield { type: "complete", data: data.data };
-              }
-            } catch (parseError) {
-              console.error("Failed to parse SSE data:", line, parseError);
-            }
-          }
-        }
+    for await (const frame of iterateISChatStream(response)) {
+      if (frame.type === "content" && frame.content) {
+        yield { type: "chunk", content: frame.content };
+      } else if (frame.type === "step" && frame.step) {
+        yield { type: "step", step: frame.step as HubStreamEvent["step"] };
+      } else if (frame.type === "entities" && frame.entities) {
+        yield {
+          type: "entities",
+          entities: frame.entities as HubStreamEvent["entities"],
+        };
+      } else if (frame.type === "branch_decision" && frame.decision) {
+        yield {
+          type: "branch_decision",
+          decision: frame.decision as HubStreamEvent["decision"],
+        };
+      } else if (frame.type === "route_to_channel" && frame.routing) {
+        yield {
+          type: "route_to_channel",
+          routing: frame.routing as HubStreamEvent["routing"],
+        };
+      } else if (frame.type === "error") {
+        yield { type: "error", error: frame.error };
+      } else if (frame.type === "complete") {
+        yield { type: "complete", data: frame.data };
       }
-      recordSuccess(this.baseUrl);
-    } finally {
-      reader.releaseLock();
     }
+    // Terminal synthetic complete (preserves prior on-`done` behavior).
+    yield { type: "complete" };
+    recordSuccess(this.baseUrl);
   }
 
   /**

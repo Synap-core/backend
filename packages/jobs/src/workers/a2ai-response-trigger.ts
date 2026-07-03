@@ -8,20 +8,16 @@
  * Retry policy: 3 attempts, 10s delay between retries, expires after 5 minutes.
  *
  * Self-contained: accepts pre-resolved service URL + API key in job data to
- * avoid circular dependency between @synap/api and @synap/jobs.
+ * avoid a circular dependency between @synap/api and @synap/jobs. The SSE parse
+ * and the assistant-reply persist are the SHARED primitives (drainISChatStream
+ * in @synap/intelligence-client, persistAssistantReply in @synap/database) that
+ * the interactive `channels.sendMessage` path also uses — one reader, one chain.
  */
 
 import type PgBoss from "pg-boss";
 import { createLogger } from "@synap-core/core";
-import { db, eq } from "@synap/database";
-import {
-  channels,
-  messages,
-  MessageRole,
-  MessageAuthorType,
-} from "@synap/database/schema";
-import { randomUUID } from "crypto";
-import { createHash } from "crypto";
+import { drainISChatStream } from "@synap/intelligence-client";
+import { persistAssistantReply } from "@synap/database";
 
 const logger = createLogger({ module: "a2ai-response-trigger" });
 
@@ -56,9 +52,9 @@ export const A2AI_TRIGGER_JOB_OPTIONS: PgBoss.SendOptions = {
 export const A2AI_TRIGGER_QUEUE = "a2ai-response-trigger";
 
 /**
- * Call the intelligence hub and return the full response text.
- * Uses plain fetch (no IntelligenceHubClient) to avoid circular deps.
- * Attempts streaming first; falls back to non-streaming on error.
+ * Call the intelligence hub and return the full response text. Uses plain fetch
+ * (no IntelligenceHubClient) to avoid the api↔jobs circular dep, but shares the
+ * SSE parser with every other consumer via drainISChatStream.
  */
 async function callIntelligenceHub(
   serviceUrl: string,
@@ -72,8 +68,7 @@ async function callIntelligenceHub(
     sourceMessageId: string;
     focusSessionId?: string | null;
     agentUserId?: string;
-  },
-  onChunk: (chunk: string) => void
+  }
 ): Promise<string> {
   const body = JSON.stringify({
     query: payload.query,
@@ -85,12 +80,10 @@ async function callIntelligenceHub(
     sourceMessageId: payload.sourceMessageId,
     focusSessionId: payload.focusSessionId,
     agentUserId: payload.agentUserId,
-    // REQUIRED: without this the IS chat-stream takes its non-streaming branch
-    // (`if (!input.stream)` → agent.execute → plain JSON response), so this
-    // worker's SSE parser finds no `data:` lines and the reply is always dropped
-    // as "empty". The model ran fine all along — the response FORMAT never
-    // matched the parser. With stream:true the IS emits SSE (content deltas +
-    // the authoritative `complete` event), which the loop below consumes.
+    // REQUIRED: without stream:true the IS chat-stream takes its non-streaming
+    // branch (plain JSON), so the SSE reader finds no frames and the reply is
+    // dropped as empty. With stream:true the IS emits SSE (content deltas + the
+    // authoritative `complete` event), which drainISChatStream consumes.
     stream: true,
   });
 
@@ -112,63 +105,10 @@ async function callIntelligenceHub(
     throw new Error(`Intelligence hub returned ${res.status}`);
   }
 
-  // Parse SSE stream
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let acc = "";
-  let completeContent = "";
-  let streamError = "";
-  let buf = "";
+  const { text: finalText, error: streamError } = await drainISChatStream(res);
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const lines = buf.split("\n");
-    buf = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const raw = line.slice(6).trim();
-      if (!raw || raw === "[DONE]") continue;
-      try {
-        const evt = JSON.parse(raw) as {
-          type?: string;
-          content?: string;
-          error?: string;
-          data?: { content?: string };
-        };
-        // The IS chat-stream emits incremental text as `{type:"content"}`
-        // (see routes/chat-stream.ts onContent). This worker previously matched
-        // `type:"chunk"`, which never exists — so every content event was dropped
-        // and the accumulated response was always empty ("A2AI response was empty
-        // — skipping persist"). That is why background/CLI chat never produced a
-        // reply. Match the real event type.
-        if (evt.type === "content" && evt.content) {
-          acc += evt.content;
-          onChunk(evt.content);
-        } else if (evt.type === "complete") {
-          // Authoritative final text — the IS also sends the full response in the
-          // `complete` event (chat-stream.ts → data.content = result.content).
-          // Prefer this when the incremental stream produced nothing (e.g. the
-          // agent emitted text only via the final message, not token deltas).
-          completeContent = evt.data?.content ?? "";
-        } else if (evt.type === "error") {
-          streamError = evt.error ?? "unknown IS stream error";
-        }
-      } catch {
-        // ignore malformed lines
-      }
-    }
-  }
-
-  const finalText = acc || completeContent;
   logger.info(
-    {
-      streamedLen: acc.length,
-      completeLen: completeContent.length,
-      finalLen: finalText.length,
-      streamError: streamError || undefined,
-    },
+    { finalLen: finalText.length, streamError: streamError || undefined },
     "A2AI SSE drained"
   );
   if (streamError && !finalText) {
@@ -205,25 +145,16 @@ export async function handleA2AIResponseTrigger(
 
   let fullContent: string;
   try {
-    fullContent = await callIntelligenceHub(
-      serviceUrl,
-      serviceApiKey,
-      {
-        query: content,
-        threadId: channelId,
-        userId,
-        workspaceId,
-        agentType,
-        sourceMessageId: userMessageId,
-        focusSessionId: job.data.focusSessionId,
-        agentUserId,
-      },
-      (_chunk) => {
-        // Note: streaming chunks are not forwarded from the worker — the A2AI channel
-        // response is persisted to DB and the frontend picks it up via subscription.
-        // Real-time streaming is only needed for interactive (non-background) chat.
-      }
-    );
+    fullContent = await callIntelligenceHub(serviceUrl, serviceApiKey, {
+      query: content,
+      threadId: channelId,
+      userId,
+      workspaceId,
+      agentType,
+      sourceMessageId: userMessageId,
+      focusSessionId: job.data.focusSessionId,
+      agentUserId,
+    });
   } catch (err) {
     logger.error(
       { err, channelId, userMessageId },
@@ -240,36 +171,17 @@ export async function handleA2AIResponseTrigger(
     return;
   }
 
-  const assistantId = randomUUID();
-  const prevHash = createHash("sha256")
-    .update(`${userMessageId}${content}`)
-    .digest("hex");
-  const assistantHash = createHash("sha256")
-    .update(`${assistantId}${fullContent}${prevHash}`)
-    .digest("hex");
-
-  await db.insert(messages).values({
-    id: assistantId,
+  const { assistantId } = await persistAssistantReply({
     channelId,
-    role: MessageRole.ASSISTANT,
-    authorType: MessageAuthorType.AI_AGENT,
+    userMessageId,
+    triggerContent: content,
     content: fullContent,
     userId,
-    previousHash: prevHash,
-    hash: assistantHash,
-    metadata: { serviceId, a2ai: true, sourceAgentUserId } as Record<
-      string,
-      unknown
-    > as (typeof messages.$inferInsert)["metadata"],
+    metadata: { serviceId, a2ai: true, sourceAgentUserId },
   });
 
-  await db
-    .update(channels)
-    .set({ updatedAt: new Date() })
-    .where(eq(channels.id, channelId));
-
-  // Note: chat events are emitted by the API layer on DB subscription.
-  // The worker only writes to DB — real-time socket events are handled separately.
-
-  logger.info({ channelId, assistantId, serviceId }, "A2AI response persisted");
+  logger.info(
+    { channelId, assistantId, serviceId },
+    "A2AI response persisted"
+  );
 }

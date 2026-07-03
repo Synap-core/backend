@@ -21,6 +21,7 @@ import { z } from "zod";
 import { db, eq, and } from "@synap/database";
 import { workspaceMembers } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
+import { iterateISChatStream } from "@synap/intelligence-client";
 import { getPodCallback } from "../../utils/pod-callback.js";
 import {
   ensureAgentThread,
@@ -660,15 +661,11 @@ openaiCompatApp.post(
 
     // Transform IS SSE → OpenAI SSE
     const encoder = new TextEncoder();
-    const decoder = new TextDecoder();
 
     let sentRole = false;
     let streamFinished = false;
     const transformStream = new ReadableStream({
       async start(controller) {
-        const reader = isResponse.body!.getReader();
-        let buffer = "";
-
         function sendDone() {
           if (streamFinished) return;
           streamFinished = true;
@@ -692,70 +689,40 @@ openaiCompatApp.post(
         }
 
         try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+          for await (const frame of iterateISChatStream(isResponse)) {
+            // Only convert "content" frames to OpenAI deltas
+            if (frame.type === "content" && frame.content) {
+              const delta: Record<string, string> = {};
 
-            buffer += decoder.decode(value, { stream: true });
+              // Send role in first chunk
+              if (!sentRole) {
+                delta.role = "assistant";
+                sentRole = true;
+              }
+              delta.content = frame.content;
 
-            // Process complete SSE lines
-            const lines = buffer.split("\n");
-            // Keep the last potentially incomplete line in the buffer
-            buffer = lines.pop() ?? "";
-
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed || !trimmed.startsWith("data: ")) continue;
-
-              const dataStr = trimmed.slice(6); // Remove "data: "
-              if (dataStr === "[DONE]") continue;
-
-              let event: {
-                type: string;
-                content?: string;
-                data?: { content?: string };
-                error?: string;
+              const chunk = {
+                id: completionId,
+                object: "chat.completion.chunk",
+                created,
+                model: requestedModel,
+                choices: [
+                  {
+                    index: 0,
+                    delta,
+                    finish_reason: null,
+                  },
+                ],
               };
-              try {
-                event = JSON.parse(dataStr);
-              } catch {
-                continue; // skip malformed lines
-              }
 
-              // Only convert "content" events to OpenAI deltas
-              if (event.type === "content" && event.content) {
-                const delta: Record<string, string> = {};
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
+              );
+            }
 
-                // Send role in first chunk
-                if (!sentRole) {
-                  delta.role = "assistant";
-                  sentRole = true;
-                }
-                delta.content = event.content;
-
-                const chunk = {
-                  id: completionId,
-                  object: "chat.completion.chunk",
-                  created,
-                  model: requestedModel,
-                  choices: [
-                    {
-                      index: 0,
-                      delta,
-                      finish_reason: null,
-                    },
-                  ],
-                };
-
-                controller.enqueue(
-                  encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
-                );
-              }
-
-              // "complete" or "error" event means we're done
-              if (event.type === "complete" || event.type === "error") {
-                sendDone();
-              }
+            // "complete" or "error" frame means we're done
+            if (frame.type === "complete" || frame.type === "error") {
+              sendDone();
             }
           }
 

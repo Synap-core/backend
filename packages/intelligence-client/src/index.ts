@@ -41,3 +41,10 @@ export type {
 export { resolveAgentForTask } from "./agent-routing.js";
 
 export type { AgentResolutionContext, ResolvedAgent } from "./agent-routing.js";
+
+export {
+  iterateISChatStream,
+  drainISChatStream,
+} from "./is-chat-stream.js";
+
+export type { ISChatStreamFrame } from "./is-chat-stream.js";
