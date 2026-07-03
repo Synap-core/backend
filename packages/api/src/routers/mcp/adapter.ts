@@ -656,12 +656,25 @@ export async function executeMCPToolViaHubProtocol(
     // ── Cell authoring & renderer binding (external-agent surface) ──────────
     case "synap_create_cell": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
+      const cellWorkspaceId = (args.workspaceId as string | undefined) ?? null;
+      // Gate the workspace-scoped write exactly as the REST door does
+      // (rest/cells.ts) — defineCell trusts its caller, so the door must verify
+      // the acting user is a member of the target workspace.
+      if (cellWorkspaceId) {
+        const { verifyWorkspaceAccess } =
+          await import("../hub-protocol/rest/_shared.js");
+        if (!(await verifyWorkspaceAccess(userId, cellWorkspaceId))) {
+          throw new Error(
+            `Forbidden: no access to workspace ${cellWorkspaceId}`
+          );
+        }
+      }
       const { defineCell } =
         await import("../../services/cells/define-cell.js");
       const result = await defineCell({
         name: args.name as string,
         rendererSource: args.rendererSource as string,
-        workspaceId: (args.workspaceId as string | undefined) ?? null,
+        workspaceId: cellWorkspaceId,
         description: args.description as string | undefined,
         userId,
       });
