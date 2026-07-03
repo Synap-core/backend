@@ -184,6 +184,8 @@ export const automationsRouter = router({
         }),
         status: z.enum(["draft", "active", "paused", "error"]).default("draft"),
         metadata: z.record(z.string(), z.unknown()).optional(),
+        /** Per-automation persistent config/state — resolves {{automation.state.*}}. */
+        state: z.record(z.string(), z.unknown()).optional(),
         /** Explicit agent user ID for AI-created automations */
         agentUserId: z.string().uuid().optional(),
         source: z
@@ -272,6 +274,7 @@ export const automationsRouter = router({
           triggerConfig: input.triggerConfig,
           flowDefinition: input.flowDefinition as unknown as FlowDefinition,
           status: input.status,
+          state: input.state ?? {},
           metadata: {
             ...(input.metadata ?? {}),
             createdVia:
@@ -309,6 +312,7 @@ export const automationsRouter = router({
           .optional(),
         status: z.enum(["draft", "active", "paused", "error"]).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
+        state: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -364,6 +368,7 @@ export const automationsRouter = router({
         updates.flowDefinition = input.flowDefinition;
       if (input.status !== undefined) updates.status = input.status;
       if (input.metadata !== undefined) updates.metadata = input.metadata;
+      if (input.state !== undefined) updates.state = input.state;
 
       await database
         .update(automations)

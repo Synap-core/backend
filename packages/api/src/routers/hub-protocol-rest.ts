@@ -61,6 +61,7 @@ import {
   registerRelationDefsRoutes,
   registerSearchRoutes,
   registerSessionsRoutes,
+  registerPlaybooksRoutes,
   registerSetupRoutes,
   registerSkillsRoutes,
   registerSkillsCrudRoutes,
@@ -494,6 +495,7 @@ registerLinksRoutes(app); // /links (config/runtime graph; knowledge↔config br
 registerRoutingRoutes(app); // /routing (centralised knowledge-routing SSoT — P7b)
 registerRelationDefsRoutes(app); // /relation-defs*
 registerSessionsRoutes(app); // /sessions*, /compacted-states*
+registerPlaybooksRoutes(app); // /playbooks/promote-from-session (governed)
 registerWidgetDefinitionsRoutes(app); // /widget-definitions
 registerCellsRoutes(app); // /cells, /cells/install, /cells/:typeKey
 registerCellInstancesRoutes(app); // /cell-instances, /cell-instances/html, /cell-instances/:id*

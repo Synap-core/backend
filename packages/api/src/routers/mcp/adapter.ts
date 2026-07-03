@@ -653,6 +653,51 @@ export async function executeMCPToolViaHubProtocol(
       }
     }
 
+    // ── Cell authoring & renderer binding (external-agent surface) ──────────
+    case "synap_create_cell": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      const { defineCell } =
+        await import("../../services/cells/define-cell.js");
+      const result = await defineCell({
+        name: args.name as string,
+        rendererSource: args.rendererSource as string,
+        workspaceId: (args.workspaceId as string | undefined) ?? null,
+        description: args.description as string | undefined,
+        userId,
+      });
+      return ok({ status: result.changeType, ...result });
+    }
+
+    case "synap_promote_cell_to_renderer": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      // Governed: for an AI agent this returns `status: 'proposed'` (binding an
+      // AI-generated cell as a durable renderer is consequential); an operator
+      // auto-applies.
+      const result = await caller.profiles.setRenderer({
+        userId,
+        workspaceId: args.workspaceId as string | undefined,
+        profileSlug: args.profileSlug as string,
+        slot: args.slot as "list" | "detail" | "dashboard",
+        cellKey: args.cellKey as string,
+        props: args.props as Record<string, unknown> | undefined,
+        scope: args.scope as "workspace" | "pod" | undefined,
+        ...(agentUserId ? { agentUserId } : {}),
+      });
+      return ok(result);
+    }
+
+    case "synap_promote_session_to_playbook": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      // Governed via the regular `playbooks.promote` — agent → proposed,
+      // operator → promoted.
+      const result = await caller.playbooks.promote({
+        userId,
+        sessionId: args.sessionId as string,
+        ...(agentUserId ? { agentUserId } : {}),
+      });
+      return ok(result);
+    }
+
     case "synap_governance": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
       const wsId = args.workspaceId as string;

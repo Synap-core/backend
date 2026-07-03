@@ -228,6 +228,71 @@ export function registerProfilesRoutes(app: HubHono): void {
   });
 
   /**
+   * POST /profiles/renderer
+   * Bind a cell as a profile's renderer. GOVERNED: agent callers get a proposal
+   * (`status: 'proposed'`), operators auto-apply (`status: 'applied'`).
+   * Body: { userId, profileSlug, slot, cellKey, props?, scope?, workspaceId? }
+   */
+  app.post("/profiles/renderer", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const body = (await c.req.json().catch(() => null)) as {
+      userId?: string;
+      workspaceId?: string;
+      profileSlug?: string;
+      slot?: "list" | "detail" | "dashboard";
+      cellKey?: string;
+      props?: Record<string, unknown>;
+      scope?: "workspace" | "pod";
+      reasoning?: string;
+      agentUserId?: string;
+      sourceMessageId?: string;
+    } | null;
+    if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
+    if (!body.userId || !body.profileSlug || !body.slot || !body.cellKey) {
+      return c.json(
+        { error: "userId, profileSlug, slot and cellKey are required" },
+        400
+      );
+    }
+    try {
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
+      const actorResolution = await resolveActorId(
+        resolvedAgentUserId,
+        body.userId
+      );
+      if ("error" in actorResolution)
+        return c.json({ error: actorResolution.error }, 400);
+      const actorId = actorResolution.actorId;
+      const caller = await getCaller(c, {
+        userId: actorId,
+        workspaceId: body.workspaceId,
+        sourceMessageId: body.sourceMessageId,
+      });
+      const result = await caller.profiles.setRenderer({
+        userId: body.userId,
+        workspaceId: body.workspaceId,
+        profileSlug: body.profileSlug,
+        slot: body.slot,
+        cellKey: body.cellKey,
+        props: body.props,
+        scope: body.scope,
+        reasoning: body.reasoning,
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
+      });
+      return c.json(result);
+    } catch (err) {
+      logger.error({ err }, "profiles.setRenderer failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
    * GET /property-defs?userId=...&workspaceId=...&profileId=...
    */
   app.get("/property-defs", async (c) => {

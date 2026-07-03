@@ -1,9 +1,17 @@
 /**
  * Real-time notification broadcasting utility
  *
- * This utility is used by Inngest handlers to broadcast notifications
- * to connected WebSocket clients via Cloudflare Durable Objects.
+ * Used by pg-boss workers + the permission gate to broadcast notifications to
+ * connected clients. Delivery goes through the Realtime server's Socket.IO
+ * bridge (`POST ${REALTIME_URL}/bridge/emit`) — the SAME contract the working
+ * `domain-event-bridge` + `chat-realtime-broadcast` use. The notification
+ * `type` becomes the Socket.IO event name; the whole message rides as `data`
+ * and is delivered to the target user's room (`user:${userId}`).
  */
+
+function getRealtimeUrl(): string {
+  return process.env.REALTIME_URL || "http://localhost:4001";
+}
 
 export interface NotificationMessage {
   type: string;
@@ -21,10 +29,13 @@ export interface BroadcastOptions {
 }
 
 /**
- * Broadcast notification to connected clients
+ * Broadcast notification to connected clients via the Realtime bridge.
  *
- * Sends a notification to both the user's room and the request's room (if requestId provided).
- * This allows clients to subscribe either by userId or by requestId.
+ * Targets the user's Socket.IO room (`user:${userId}`). Any `requestId` stays
+ * inside the message payload for client-side correlation — the bridge has no
+ * per-request room, so a single emit to the user room replaces the old
+ * two-room (user + request) fan-out. Fire-and-forget: failures are returned,
+ * never thrown, so a broadcast miss never blocks the caller.
  *
  * @param options - Broadcast options
  * @returns Promise resolving to broadcast results
@@ -32,65 +43,36 @@ export interface BroadcastOptions {
 export async function broadcastNotification(
   options: BroadcastOptions
 ): Promise<{ success: boolean; broadcastCount?: number; error?: string }> {
-  const {
-    userId,
-    requestId,
-    message,
-    realtimeUrl = process.env.REALTIME_URL || "https://realtime.synap.app",
-  } = options;
+  const { userId, message, realtimeUrl = getRealtimeUrl() } = options;
 
   try {
-    // Broadcast to user room
-    const userRoomId = `user_${userId}`;
-    const userResponse = await fetch(
-      `${realtimeUrl}/rooms/${userRoomId}/broadcast`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(message),
-        signal: AbortSignal.timeout(5_000),
-      }
-    );
+    const response = await fetch(`${realtimeUrl}/bridge/emit`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(process.env.BRIDGE_SECRET
+          ? { "X-Bridge-Secret": process.env.BRIDGE_SECRET }
+          : {}),
+      },
+      body: JSON.stringify({
+        event: message.type,
+        userId,
+        data: message,
+      }),
+      signal: AbortSignal.timeout(5_000),
+    });
 
-    let userBroadcastCount = 0;
-    if (userResponse.ok) {
-      const userResult = (await userResponse.json()) as {
-        broadcastCount?: number;
+    if (!response.ok) {
+      return {
+        success: false,
+        error: `Broadcast failed: ${response.status}`,
       };
-      userBroadcastCount = userResult.broadcastCount || 0;
     }
 
-    // Also broadcast to request room if requestId provided
-    let requestBroadcastCount = 0;
-    if (requestId) {
-      const requestRoomId = `request_${requestId}`;
-      const requestResponse = await fetch(
-        `${realtimeUrl}/rooms/${requestRoomId}/broadcast`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(message),
-          signal: AbortSignal.timeout(5_000),
-        }
-      );
-
-      if (requestResponse.ok) {
-        const requestResult = (await requestResponse.json()) as {
-          broadcastCount?: number;
-        };
-        requestBroadcastCount = requestResult.broadcastCount || 0;
-      }
-    }
-
-    const totalBroadcastCount = userBroadcastCount + requestBroadcastCount;
-
+    const result = (await response.json()) as { emitCount?: number };
     return {
       success: true,
-      broadcastCount: totalBroadcastCount,
+      broadcastCount: result.emitCount ?? 0,
     };
   } catch (error) {
     console.error("Failed to broadcast notification:", error);

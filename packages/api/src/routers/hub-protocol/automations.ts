@@ -33,6 +33,7 @@ export const hubAutomationsRouter = router({
         }),
         status: z.enum(["draft", "active", "paused", "error"]).default("draft"),
         metadata: z.record(z.string(), z.unknown()).optional(),
+        state: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -53,6 +54,7 @@ export const hubAutomationsRouter = router({
         flowDefinition: input.flowDefinition,
         status: input.status,
         metadata: input.metadata,
+        state: input.state,
         agentUserId: input.agentUserId,
         source: input.agentUserId ? "agent" : "intelligence",
       });
@@ -134,6 +136,7 @@ export const hubAutomationsRouter = router({
           .optional(),
         status: z.enum(["draft", "active", "paused", "error"]).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
+        state: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -153,6 +156,7 @@ export const hubAutomationsRouter = router({
         flowDefinition: input.flowDefinition,
         status: input.status,
         metadata: input.metadata,
+        state: input.state,
       });
     }),
 

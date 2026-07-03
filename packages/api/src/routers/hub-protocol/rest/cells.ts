@@ -6,6 +6,7 @@ import { z } from "zod";
 import { getDb, and, eq, isNull, or } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
+import { defineCell } from "../../../services/cells/define-cell.js";
 import {
   hasScope,
   logger,
@@ -290,102 +291,16 @@ export function registerCellsRoutes(app: HubHono): void {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
 
-    const slug = name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "");
-    const typeKey = parsed.data.typeKey ?? `generated:${slug}`;
-
-    const values = {
-      typeKey,
-      workspaceId: workspaceId ?? null,
-      name,
-      description: description ?? null,
-      category: "installed" as const,
-      rendererType: "frame" as const,
-      rendererSource,
-      deps: (deps ?? {}) as Record<string, string>,
-      configSchema: {},
-      defaultConfig: {},
-      defaultSize: defaultSize ?? { w: 6, h: 4 },
-      isActive: true,
-      trustLevel: "generated" as const,
-    };
-
     try {
-      const db = await getDb();
-      let changeType: "created" | "updated" = "created";
-
-      if (workspaceId) {
-        // Workspace-scoped: unique constraint on (typeKey, workspaceId) works normally
-        const result = await db
-          .insert(widgetDefinitions)
-          .values(values)
-          .onConflictDoUpdate({
-            target: [widgetDefinitions.typeKey, widgetDefinitions.workspaceId],
-            set: {
-              name,
-              description: description ?? null,
-              rendererSource,
-              deps: (deps ?? {}) as Record<string, string>,
-              isActive: true,
-              updatedAt: new Date(),
-            },
-          })
-          .returning({
-            id: widgetDefinitions.id,
-            updatedAt: widgetDefinitions.updatedAt,
-            createdAt: widgetDefinitions.createdAt,
-          });
-        const row = result[0];
-        if (
-          row &&
-          row.updatedAt &&
-          row.createdAt &&
-          row.updatedAt.getTime() !== row.createdAt.getTime()
-        ) {
-          changeType = "updated";
-        }
-      } else {
-        // Pod-global (workspaceId IS NULL): PostgreSQL treats NULLs as distinct
-        // in unique indexes, so onConflictDoUpdate won't fire. Manual upsert.
-        const updated = await db
-          .update(widgetDefinitions)
-          .set({
-            name,
-            description: description ?? null,
-            rendererSource,
-            deps: (deps ?? {}) as Record<string, string>,
-            isActive: true,
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(widgetDefinitions.typeKey, typeKey),
-              isNull(widgetDefinitions.workspaceId)
-            )
-          )
-          .returning({ id: widgetDefinitions.id });
-        if (updated.length === 0) {
-          await db.insert(widgetDefinitions).values(values);
-        } else {
-          changeType = "updated";
-        }
-      }
-
-      emitHubRealtimeEvent({
-        eventType:
-          changeType === "created"
-            ? "widget_definition.create.completed"
-            : "widget_definition.update.completed",
-        subjectId: typeKey,
+      const { typeKey } = await defineCell({
+        name,
+        rendererSource,
+        workspaceId: workspaceId ?? null,
+        typeKey: parsed.data.typeKey,
+        description,
+        defaultSize,
+        deps,
         userId: userId ?? "",
-        data: {
-          id: typeKey,
-          typeKey,
-          workspaceId: workspaceId ?? undefined,
-          changeType,
-        },
       });
 
       return c.json({ success: true, typeKey }, 201);

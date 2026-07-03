@@ -32,7 +32,9 @@ import {
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import type { ProposalMaterializedRecord } from "@synap-core/types";
+import type { RendererRef } from "@synap/database";
 import { storage } from "@synap/storage";
+import { setProfileRenderer } from "../../services/profiles/set-profile-renderer.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { channelsRouter } from "../channels.js";
@@ -533,6 +535,70 @@ export function registerApproveExecutors(): void {
           },
         });
       }
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── profile / renderer.set ──────────────────────────────────────────────────
+  // Materializes an approved "bind a cell as a profile renderer" proposal via
+  // the SAME shared write path the governed Hub route uses on operator
+  // auto-apply. Without this the proposal would fall to the `*/*` catch-all,
+  // which emits a `.validated` event but never writes the renderer.
+  registerProposalExecutor({
+    key: "profile/renderer.set",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const profileSlug = innerData.profileSlug as string | undefined;
+      const slot = innerData.slot as
+        | "list"
+        | "detail"
+        | "dashboard"
+        | undefined;
+      const ref = innerData.ref as RendererRef | undefined;
+      const scope =
+        (innerData.scope as "workspace" | "pod" | undefined) ?? "workspace";
+      if (!profileSlug || !slot || !ref) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Renderer proposal is missing profileSlug/slot/ref",
+        });
+      }
+
+      // Idempotency: skip if already materialized.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      await setProfileRenderer({
+        userId,
+        workspaceId: proposal.workspaceId,
+        profileSlug,
+        slot,
+        ref,
+        scope,
+      });
 
       await db
         .update(proposals)

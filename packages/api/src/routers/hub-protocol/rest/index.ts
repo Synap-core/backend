@@ -39,6 +39,7 @@ export { registerLinksRoutes } from "./links.js";
 export { registerRoutingRoutes } from "./routing.js";
 export { registerRelationDefsRoutes } from "./relation-defs.js";
 export { registerSessionsRoutes } from "./sessions.js";
+export { registerPlaybooksRoutes } from "./playbooks.js";
 export { registerWidgetDefinitionsRoutes } from "./widget-definitions.js";
 export { registerCellsRoutes } from "./cells.js";
 export { registerCellInstancesRoutes } from "./cell-instances.js";

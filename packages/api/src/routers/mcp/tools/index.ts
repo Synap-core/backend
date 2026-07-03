@@ -530,6 +530,90 @@ export const tools = {
           required: ["sessionId"],
         },
       },
+      // ── Cell authoring & renderer binding ───────────────────────────────────
+      {
+        name: "synap_create_cell",
+        description:
+          "Define (create or update) a ViewFrame cell from raw renderer source — the way an external agent ships an AI-generated cell. Idempotent upsert keyed on the cell's typeKey (derived from `name`) + workspace: pass a workspaceId to scope the cell to one workspace, or omit it to make the cell pod-global (visible in every workspace). Returns the resolved `typeKey`. This creates the cell definition ONLY; to surface it as a profile's renderer, follow up with synap_promote_cell_to_renderer.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description:
+                "Human-readable cell name; also the basis for the generated typeKey (`generated:<slug>`).",
+            },
+            rendererSource: {
+              type: "string",
+              description: "The cell's renderer source (HTML/JS frame source).",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional workspace UUID. Omit for a pod-global cell (visible in all workspaces).",
+            },
+            description: {
+              type: "string",
+              description: "Optional short description of the cell.",
+            },
+          },
+          required: ["name", "rendererSource"],
+        },
+      },
+      {
+        name: "synap_promote_cell_to_renderer",
+        description:
+          "Bind a cell as a profile's renderer for a slot (list | detail | dashboard). GOVERNANCE: because binding an AI-generated cell as a durable renderer is consequential, an AI agent caller gets back `status: 'proposed'` with a proposalId — the change is NOT applied until a human approves it (an operator caller auto-applies with `status: 'applied'`). scope 'workspace' (default) sets a per-workspace overlay; scope 'pod' sets the profile's system default across all workspaces.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            profileSlug: {
+              type: "string",
+              description: "Slug of the profile to bind the renderer on.",
+            },
+            slot: {
+              type: "string",
+              enum: ["list", "detail", "dashboard"],
+              description: "Which renderer slot to set.",
+            },
+            cellKey: {
+              type: "string",
+              description:
+                "The cell typeKey to bind (e.g. from synap_create_cell).",
+            },
+            props: {
+              type: "object",
+              description: "Optional props passed to the cell renderer.",
+            },
+            scope: {
+              type: "string",
+              enum: ["workspace", "pod"],
+              description:
+                "'workspace' (default) = per-workspace overlay; 'pod' = profile system default. Workspace scope requires workspaceId.",
+            },
+            workspaceId: {
+              type: "string",
+              description: "Workspace UUID (required for scope 'workspace').",
+            },
+          },
+          required: ["profileSlug", "slot", "cellKey"],
+        },
+      },
+      {
+        name: "synap_promote_session_to_playbook",
+        description:
+          "Promote a validated focus session into a reusable Playbook (runtime → config): re-grants the capabilities the session used and records lineage. GOVERNED — an AI agent caller gets `status: 'proposed'` (awaiting review); an operator gets `status: 'promoted'`.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: {
+              type: "string",
+              description: "The focus session ID to promote into a playbook.",
+            },
+          },
+          required: ["sessionId"],
+        },
+      },
       {
         name: "synap_governance",
         description:

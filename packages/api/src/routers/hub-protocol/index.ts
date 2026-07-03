@@ -36,6 +36,7 @@ import { hubAutomationsRouter } from "./automations.js";
 import { hubCommandsRouter } from "./commands.js";
 import { signalsRouter } from "./signals.js";
 import { hubRelationDefsRouter } from "./relation-defs.js";
+import { hubPlaybooksRouter } from "./playbooks.js";
 
 export const hubProtocolRouter = router({
   /**
@@ -67,4 +68,5 @@ export const hubProtocolRouter = router({
   commands: hubCommandsRouter,
   signals: signalsRouter,
   relationDefs: hubRelationDefsRouter,
+  playbooks: hubPlaybooksRouter,
 });

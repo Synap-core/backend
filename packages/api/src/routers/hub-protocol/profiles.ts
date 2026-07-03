@@ -12,11 +12,14 @@
  */
 
 import { z } from "zod";
+import type { RendererRef } from "@synap/database";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { profilesRouter as regularProfilesRouter } from "../profiles.js";
 import { propertyDefsRouter as regularPropertyDefsRouter } from "../property-defs.js";
 import { createHubProtocolCallerContext } from "./utils.js";
+import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { setProfileRenderer } from "../../services/profiles/set-profile-renderer.js";
 
 export const hubProfilesRouter = router({
   /**
@@ -145,6 +148,82 @@ export const hubProfilesRouter = router({
       return caller.getEffectiveRenderers({
         profileSlug: input.profileSlug,
       });
+    }),
+
+  /**
+   * Bind a cell as a profile's renderer (list | detail | dashboard).
+   * Requires: hub-protocol.write scope.
+   *
+   * GOVERNANCE (locked): binding an AI-generated cell as a durable renderer is
+   * consequential, so this routes through `checkPermissionOrPropose` with the
+   * `profile` / `renderer.set` action — which is DELIBERATELY absent from
+   * DEFAULT_AUTO_APPROVE (unlike `profile.update`). Agent callers therefore get
+   * `status: 'proposed'` (awaiting review); operators get `status: 'applied'`.
+   * The `profile/renderer.set` proposal executor materializes an approved
+   * proposal via the SAME `setProfileRenderer` service used here.
+   *
+   * scope 'workspace' (default) writes the per-workspace overlay; scope 'pod'
+   * writes the profile's system default (visible in every workspace).
+   */
+  setRenderer: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        workspaceId: z.string().uuid().optional(),
+        profileSlug: z.string().min(1),
+        slot: z.enum(["list", "detail", "dashboard"]),
+        cellKey: z.string().min(1),
+        props: z.record(z.string(), z.unknown()).optional(),
+        scope: z.enum(["workspace", "pod"]).optional(),
+        agentUserId: z.string().uuid().optional(),
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const scope = input.scope ?? "workspace";
+      const workspaceId = input.workspaceId ?? null;
+      const ref: RendererRef = {
+        kind: "cell",
+        cellKey: input.cellKey,
+        props: input.props ?? {},
+      };
+
+      const perm = await checkPermissionOrPropose({
+        userId: input.userId,
+        agentUserId: input.agentUserId,
+        workspaceId,
+        subjectType: "profile",
+        action: "renderer.set",
+        source: "intelligence",
+        reasoning: input.reasoning,
+        data: {
+          profileSlug: input.profileSlug,
+          slot: input.slot,
+          scope,
+          ref,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new Error(perm.reason);
+      }
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+        };
+      }
+
+      // Granted (operator) → apply immediately via the shared write path.
+      await setProfileRenderer({
+        userId: input.userId,
+        workspaceId,
+        profileSlug: input.profileSlug,
+        slot: input.slot,
+        ref,
+        scope,
+      });
+      return { status: "applied" as const, proposalId: null };
     }),
 
   /**
