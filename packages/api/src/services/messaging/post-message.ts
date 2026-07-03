@@ -64,7 +64,6 @@ export async function postChannelMessage(
           hash,
         },
         userId,
-        triggerAI: true,
       },
       workspaceId: null,
       userId,

@@ -567,7 +567,6 @@ export const channelsRouter = router({
             metadata: { agentUserId: input.agentUserId },
           },
           userId: channel.userId,
-          triggerAI: true, // hint for any real-time listeners
         },
         workspaceId: input.workspaceId ?? null,
         userId: channel.userId,
@@ -857,7 +856,6 @@ export const channelsRouter = router({
             },
           },
           userId: input.userId,
-          triggerAI: true,
         },
         workspaceId: input.workspaceId,
         userId: input.userId,
