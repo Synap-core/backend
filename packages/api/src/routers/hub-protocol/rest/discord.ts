@@ -410,7 +410,6 @@ export function registerDiscordRoutes(app: HubHono): void {
           channelId,
           content: assistantContent,
           userId,
-          metadata: {},
           previousHash: inboundHash,
           messageCategory: MessageCategory.CHAT,
         });

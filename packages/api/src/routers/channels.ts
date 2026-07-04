@@ -2543,10 +2543,8 @@ export const channelsRouter = router({
         })();
       }
 
-      await db
-        .update(channels)
-        .set({ updatedAt: new Date() })
-        .where(eq(channels.id, channelId));
+      // channels.updatedAt was already bumped by persistAssistantReply (the
+      // assistant-reply write) — no second update needed on this path.
 
       return {
         channelId,
@@ -3360,6 +3358,24 @@ export const channelsRouter = router({
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Channel not found",
+        });
+      }
+
+      // FIREWALL (non-negotiable): the `client-comms` label is IMMUTABLE once set.
+      // The delivery firewall keys off branchPurpose === 'client-comms' to redirect/
+      // suppress bot/AI output; letting a caller (incl. channel.bind) flip a
+      // client-comms channel to 'team' or clear it would route AI output straight
+      // into a real client's conversation. Mirror ensure-external-channel.ts's
+      // "never override a non-null purpose" invariant at this write path too.
+      if (
+        input.branchPurpose !== undefined &&
+        channel.branchPurpose === "client-comms" &&
+        input.branchPurpose !== "client-comms"
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Cannot reclassify a client-comms channel — the firewall label is immutable.",
         });
       }
 

@@ -15,8 +15,15 @@
  *   const result = await routeProactiveMessage({ userId, workspaceId, content, proactiveType });
  */
 
-import { randomUUID, createHash } from "crypto";
-import { db, eq, and, gte, eventRepository } from "@synap/database";
+import { randomUUID } from "crypto";
+import {
+  db,
+  eq,
+  and,
+  gte,
+  eventRepository,
+  computeMessageHash,
+} from "@synap/database";
 import {
   messages,
   workspaces,
@@ -223,9 +230,7 @@ async function postToProactiveFeed(
   }
 
   const messageId = randomUUID();
-  const messageHash = createHash("sha256")
-    .update(`${messageId}${content}`)
-    .digest("hex");
+  const messageHash = computeMessageHash(messageId, content);
 
   // Feed items can include per-item actions in metadata
   // (primaryAction + secondaryActions) for client rendering.
@@ -280,9 +285,7 @@ async function postToPersonalChat(
 
   const channel = await ensurePersonalChatChannel(userId, workspaceId);
   const messageId = randomUUID();
-  const messageHash = createHash("sha256")
-    .update(`${messageId}${content}`)
-    .digest("hex");
+  const messageHash = computeMessageHash(messageId, content);
 
   const messageMetadata = { ...metadata, proactiveType, proactiveAi: true };
 

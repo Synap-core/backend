@@ -1,23 +1,25 @@
 /**
- * persistAssistantReply — the ONE writer for an AI assistant reply in a channel.
+ * persistAssistantReply — the ONE writer for an AI assistant REPLY-to-a-trigger
+ * in a channel (the interactive `channels.sendMessage`, the `a2ai-response-trigger`
+ * worker, and the Discord bridge). It collapses the copy-pasted reply-chain those
+ * three paths shared into one function so the reply chain can never drift.
  *
- * Both real agent-turn paths persist an assistant message with the same
- * hash-chain: `previousHash = sha256(userMessageId + triggerContent)` and
- * `hash = sha256(assistantId + content + previousHash)`. That chain was
- * copy-pasted in `channels.sendMessage` (interactive) and the
- * `a2ai-response-trigger` worker (headless); this collapses the two into one
- * function so the chain can never drift.
+ * The underlying hash FORMULA (`sha256(id + content + previousHash)`) is shared
+ * even more widely — with the proactive-post writers — via `computeMessageHash`;
+ * this helper is specifically the reply-to-trigger writer built on top of it.
  *
- * It performs only the DB write (insert + `channels.updatedAt` bump). It does
- * NOT emit the realtime event (`emitChatEvent` lives in `@synap/api`) — the
- * interactive caller broadcasts separately; headless callers rely on the
- * channel-room subscription. Returns the generated id + hashes so callers can
- * build their own downstream events (e.g. the CHAT_MESSAGE broadcast).
+ * The caller MUST have already authorized `channelId` (this does a raw insert,
+ * not a scoped write). It performs only the DB write (insert + `channels.updatedAt`
+ * bump). It does NOT emit the realtime event (`emitChatEvent` lives in
+ * `@synap/api`) — the interactive caller broadcasts separately; headless callers
+ * rely on the channel-room subscription. Returns the generated id + hashes so
+ * callers can build their own downstream events (e.g. the CHAT_MESSAGE broadcast).
  */
 
-import { createHash, randomUUID } from "crypto";
+import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../client-pg.js";
+import { computeMessageHash } from "./message-hash.js";
 import {
   messages,
   channels,
@@ -33,8 +35,8 @@ export interface PersistAssistantReplyParams {
   content: string;
   /** Author identity to stamp on the row. */
   userId: string;
-  /** Provenance metadata (aiSteps + service/agent ids, or the a2ai marker). */
-  metadata: Record<string, unknown>;
+  /** Provenance metadata (aiSteps + service/agent ids, or the a2ai marker). Omit to leave NULL. */
+  metadata?: Record<string, unknown>;
   /**
    * Chain link. Provide EITHER the trigger message's id + content (the reply
    * chains off `sha256(userMessageId + triggerContent)`) OR an explicit
@@ -64,9 +66,7 @@ export async function persistAssistantReply(
   const previousHash =
     params.previousHash ??
     (params.userMessageId !== undefined && params.triggerContent !== undefined
-      ? createHash("sha256")
-          .update(`${params.userMessageId}${params.triggerContent}`)
-          .digest("hex")
+      ? computeMessageHash(params.userMessageId, params.triggerContent)
       : undefined);
   if (previousHash === undefined) {
     throw new Error(
@@ -75,9 +75,7 @@ export async function persistAssistantReply(
   }
 
   const assistantId = randomUUID();
-  const hash = createHash("sha256")
-    .update(`${assistantId}${params.content}${previousHash}`)
-    .digest("hex");
+  const hash = computeMessageHash(assistantId, params.content, previousHash);
 
   await db.insert(messages).values({
     id: assistantId,
@@ -88,7 +86,9 @@ export async function persistAssistantReply(
     userId: params.userId,
     previousHash,
     hash,
-    metadata: params.metadata as (typeof messages.$inferInsert)["metadata"],
+    ...(params.metadata
+      ? { metadata: params.metadata as (typeof messages.$inferInsert)["metadata"] }
+      : {}),
     ...(params.messageCategory
       ? { messageCategory: params.messageCategory }
       : {}),
