@@ -118,7 +118,7 @@ export const GOVERNANCE_MODES = {
   },
   normal: {
     label:
-      "Normal — creates are instant, updates & deletes need approval (recommended)",
+      "Normal — creating & editing are instant, deletes need approval (recommended)",
     autoApproveFor: [
       "search.*",
       "memory.recall",
@@ -134,6 +134,18 @@ export const GOVERNANCE_MODES = {
       "profile.create",
       "property_def.create",
       "channel.create",
+      // Non-destructive DATA edits are instant too — a PATCH MERGES (it never
+      // wipes unspecified fields), so an update is no more destructive than a
+      // create. Governance splits on DESTRUCTIVENESS, not create-vs-update:
+      // deletes/archive/purge stay proposal-gated (DESTRUCTIVE_ACTIONS), as do
+      // substrate updates and ADMIN_ACTIONS. Aligns with DEFAULT_AUTO_APPROVE
+      // (which already auto-approves entity/profile/property_def .update).
+      "entity.update",
+      "document.update",
+      "relation.update",
+      "view.update",
+      "profile.update",
+      "property_def.update",
       // Capability-substrate creates. Under Normal "creates are instant": both
       // behavior-wiring (automation/playbook/link — orchestrate existing
       // capabilities) AND power-granting (tool/skill — define new abilities)

@@ -8,6 +8,7 @@ import {
   agentHasCapability,
   isBlockedFilesystemPath,
   resolveChannelCapabilityDecision,
+  GOVERNANCE_MODES,
   DEFAULT_AUTO_APPROVE,
   ADMIN_ACTIONS,
   DESTRUCTIVE_ACTIONS,
@@ -526,6 +527,20 @@ describe("constants are intact", () => {
       "relation.create",
     ]) {
       expect(DEFAULT_AUTO_APPROVE).toContain(k);
+    }
+  });
+  it("NORMAL mode is operation-symmetric: non-destructive create AND update are instant, deletes are not", () => {
+    const normal = GOVERNANCE_MODES.normal.autoApproveFor;
+    // Creates instant (as before)
+    expect(normal).toContain("entity.create");
+    expect(normal).toContain("document.create");
+    // Non-destructive edits ALSO instant — a PATCH merges, never wipes fields.
+    expect(normal).toContain("entity.update");
+    expect(normal).toContain("document.update");
+    // Destructive stays proposal-gated (never auto-approved by NORMAL).
+    for (const d of DESTRUCTIVE_ACTIONS) {
+      expect(normal).not.toContain(`entity.${d}`);
+      expect(normal).not.toContain(`document.${d}`);
     }
   });
   it("ADMIN_ACTIONS contains the privileged verbs", () => {
