@@ -1299,7 +1299,7 @@ export const entitiesRouter = router({
           isNull(entities.deletedAt),
           entityVisibleWhere(ctx.userId)
         ),
-        columns: { id: true, workspaceId: true },
+        columns: { id: true, workspaceId: true, type: true },
       });
       if (!existing) {
         throw new TRPCError({
@@ -1358,6 +1358,16 @@ export const entitiesRouter = router({
         },
       });
 
+      // Scope/identity-bearing edits are NOT field patches: promoting a
+      // workspace entity to pod-wide (global) or changing its profile TYPE
+      // changes the record's visibility/identity. These must ALWAYS be reviewed,
+      // even when entity.update otherwise auto-approves — so force a proposal.
+      const promotesToGlobal =
+        input.global === true && existing.workspaceId !== null;
+      const changesProfileType =
+        input.profileSlug !== undefined && input.profileSlug !== existing.type;
+      const forcePropose = promotesToGlobal || changesProfileType;
+
       // 2. Permission check
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
@@ -1367,6 +1377,7 @@ export const entitiesRouter = router({
         action: "update",
         source: input.source,
         issuer,
+        forcePropose,
         reasoning: input.reasoning,
         correlationId,
         requestedEventId: requestedEvent?.id,

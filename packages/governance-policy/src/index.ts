@@ -441,6 +441,15 @@ export interface AgentPolicyInput {
    * `block` mode.
    */
   capabilityExecMode?: "auto" | "propose" | null;
+  /**
+   * Force a PROPOSAL even when the action would otherwise auto-approve. Set by a
+   * caller for a scope/identity-bearing write that must always be reviewed
+   * (e.g. promoting an entity workspace→pod-wide, or changing its profile TYPE).
+   * Honored AFTER the CBAC deny (rung 1) and ADMIN (rung 2) rungs, so a
+   * capability-denied or admin action is unaffected, but BEFORE every execute
+   * path below. Absent/false → no effect (all existing verdicts unchanged).
+   */
+  forcePropose?: boolean;
 }
 
 /**
@@ -465,6 +474,8 @@ export const PROPOSE_REASON = {
   USER_OBSERVATION_INFERENCE:
     "AI-inferred observation about the user requires human validation before it is stored.",
   CAPABILITY_PROPOSE: "Capability execution requires human approval.",
+  SCOPE_IDENTITY_CHANGE:
+    "This change alters the record's scope or identity and requires human approval.",
 } as const;
 
 const CHANNEL_BLOCK_REASON =
@@ -497,6 +508,17 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // 2. ADMIN_ACTIONS → always propose (even for owned workspace).
   if (ADMIN_ACTIONS.includes(eventKey)) {
     return { verdict: "propose", reason: PROPOSE_REASON.ADMIN };
+  }
+
+  // 2.1 CALLER-FORCED PROPOSAL — a scope/identity-bearing write.
+  // The caller signalled that this edit changes the record's SCOPE or IDENTITY
+  // (not a field patch), e.g. promoting a workspace entity to pod-wide, or
+  // changing its profile TYPE. Such a change must always be reviewed even when
+  // the action would otherwise auto-approve. Sits after CBAC (rung 1) and ADMIN
+  // (rung 2) so a capability-denied action still denies and admin actions are
+  // unaffected, but BEFORE every execute path below.
+  if (input.forcePropose === true) {
+    return { verdict: "propose", reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE };
   }
 
   // 2.5 GOVERNANCE BY KIND — user_observation.
