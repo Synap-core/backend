@@ -15,6 +15,7 @@ import {
 } from "@synap/database";
 import { createHmac } from "crypto";
 import { createLogger } from "@synap-core/core";
+import { safeExternalFetch } from "@synap/shared-utils";
 
 const logger = createLogger({ module: "webhook-worker" });
 
@@ -63,7 +64,7 @@ export async function handleWebhookDelivery(
     let responseStatus = 0;
 
     try {
-      const response = await fetch(sub.url, {
+      const response = await safeExternalFetch(sub.url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

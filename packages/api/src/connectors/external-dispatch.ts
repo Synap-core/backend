@@ -35,7 +35,7 @@ import type { NangoConnector } from "./NangoConnector.js";
 import type { SyncConnectorConnection } from "./SyncConnector.js";
 import { resolveVaultSecret } from "../utils/vault-resolver.js";
 import { resolveCapabilityGrant } from "@synap/database";
-import { validateExternalUrl } from "@synap/shared-utils";
+import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
 import { createPendingProposal } from "../utils/permission-check.js";
@@ -1088,7 +1088,7 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
 
   let res: Response;
   try {
-    res = await fetch(url.toString(), {
+    res = await safeExternalFetch(url.toString(), {
       method: method.toUpperCase(),
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,

@@ -19,6 +19,7 @@ import {
 } from "../services/links/links-service.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { safeExternalFetch } from "@synap/shared-utils";
 import {
   checkPermissionOrPropose,
   createPendingProposal,
@@ -707,7 +708,14 @@ export const skillsRouter = router({
         Accept: "text/plain, text/markdown, application/toml, */*",
       };
       try {
-        const res = await fetch(input.url, { headers: fetchHeaders });
+        // SSRF guard: validate every hop (including redirects) against internal
+        // targets. No credentials are sent, so a small redirect budget preserves
+        // the original redirect-following behaviour for skill hosts.
+        const res = await safeExternalFetch(
+          input.url,
+          { headers: fetchHeaders },
+          5
+        );
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         }
@@ -734,9 +742,11 @@ export const skillsRouter = router({
           ? input.url.replace(/\.toml$/i, ".md")
           : `${input.url}.md`;
         try {
-          const companionRes = await fetch(companionUrl, {
-            headers: fetchHeaders,
-          });
+          const companionRes = await safeExternalFetch(
+            companionUrl,
+            { headers: fetchHeaders },
+            5
+          );
           if (companionRes.ok) {
             const ct = companionRes.headers.get("content-type") ?? "";
             // Only accept text responses (markdown, plain text) — reject HTML/JSON/binary

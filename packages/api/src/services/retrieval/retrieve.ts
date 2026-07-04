@@ -42,6 +42,9 @@ import {
   type ProfileCatalogEntry,
   type QueryUnderstanding,
 } from "./understand-query.js";
+import { createLogger } from "@synap-core/core";
+
+const logger: any = createLogger({ module: "retrieval" });
 
 export interface RetrieveParams {
   query: string;
@@ -323,10 +326,27 @@ export async function retrieve(
   // query relevance; L=0 this phase). Batches its signals over the pool ids.
   const runHorizon = async (): Promise<HorizonScored<EntityRow>[]> => {
     const ids = ordered.map((r) => r.id);
+    // Each Horizon signal degrades independently: a failed fetch (e.g. the
+    // `entity_centrality` table missing before the Phase-3 migration has run, or
+    // any DB error) falls back to a degraded signal instead of rejecting the
+    // whole rank, so Horizon still computes. (The signal modules already swallow
+    // errors internally; these catches are belt-and-suspenders.)
     const [viewCounts, lastTouch, pageRank] = await Promise.all([
-      viewCountsByEntity(ids, userId),
+      viewCountsByEntity(ids, userId).catch((err) => {
+        logger.warn(
+          { err },
+          "horizon reinforcement signal failed — degrading to empty"
+        );
+        return new Map<string, number>();
+      }),
       latestEventTimestamps(ids, userId),
-      centralityByEntity(ids, userId),
+      centralityByEntity(ids, userId).catch((err) => {
+        logger.warn(
+          { err },
+          "horizon centrality signal failed — degrading to graph proxy"
+        );
+        return new Map<string, number>();
+      }),
     ]);
     // C = global PageRank from entity_centrality (Phase 3). Graceful fallback:
     // if the batch job hasn't populated any of the pool ids yet, drop back to the
@@ -345,20 +365,36 @@ export async function retrieve(
     });
   };
 
+  // Whole-Horizon guard: recall must NEVER error because the Horizon ranker
+  // threw. If runHorizon rejects for ANY reason we fall back to baseline (normal
+  // path) or omit the horizon side (compare path) — baseline stays intact.
+  const runHorizonSafe = async (): Promise<HorizonScored<EntityRow>[] | null> =>
+    runHorizon().catch((err) => {
+      logger.warn({ err }, "horizon ranker failed — falling back to baseline");
+      return null;
+    });
+
   let finalRows: EntityRow[];
   let comparison: RankComparison | undefined;
   if (compare) {
     const [baseRanked, horizonScored] = await Promise.all([
       runBaseline(),
-      runHorizon(),
+      runHorizonSafe(),
     ]);
-    comparison = buildComparison(baseRanked, horizonScored, limit);
-    // The active strategy still decides the NORMAL (non-compare) return.
+    // On Horizon failure the comparison's horizon side is empty; baseline intact.
+    comparison = buildComparison(baseRanked, horizonScored ?? [], limit);
+    // The active strategy still decides the NORMAL (non-compare) return; if
+    // Horizon failed, the active output falls back to baseline.
     const active =
-      strategy === "horizon" ? horizonScored.map((x) => x.row) : baseRanked;
+      strategy === "horizon" && horizonScored
+        ? horizonScored.map((x) => x.row)
+        : baseRanked;
     finalRows = active.slice(0, limit);
   } else if (strategy === "horizon") {
-    finalRows = (await runHorizon()).map((x) => x.row).slice(0, limit);
+    const horizonScored = await runHorizonSafe();
+    finalRows = (
+      horizonScored ? horizonScored.map((x) => x.row) : await runBaseline()
+    ).slice(0, limit);
   } else {
     finalRows = (await runBaseline()).slice(0, limit);
   }

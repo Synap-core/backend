@@ -16,6 +16,7 @@
 
 import { createHmac } from "node:crypto";
 import { db, webhookSubscriptions, eq, and, drizzleSql } from "@synap/database";
+import { safeExternalFetch } from "@synap/shared-utils";
 
 export function dispatchWebhooksForEvent(
   eventType: string,
@@ -61,7 +62,7 @@ export function dispatchWebhooksForEvent(
             .digest("hex");
           headers["X-Synap-Signature"] = `sha256=${sig}`;
         }
-        fetch(sub.url, {
+        safeExternalFetch(sub.url, {
           method: "POST",
           headers,
           body,

@@ -2453,7 +2453,7 @@ provisionRouter.post("/trigger-update", async (c) => {
   // Spawn detached updater container via Docker socket.
   // The updater runs update-pod.sh which: pulls, migrates, restarts, health-checks,
   // and calls back to CP with the result. It survives the backend container restart.
-  const { exec } = await import("child_process");
+  const { execFile } = await import("child_process");
 
   const callbackUrl = payload.callbackUrl || "";
   const callbackJwt = payload.callbackJwt || "";
@@ -2461,19 +2461,26 @@ provisionRouter.post("/trigger-update", async (c) => {
 
   // install.sh places docker-compose.yml directly at $INSTALL_DIR (e.g. /opt/synap/docker-compose.yml)
   // without a deploy/ subdir. Use the systemd WorkingDirectory (/opt/synap) as the implicit dir.
-  const cmd = [
-    "docker compose",
-    "-f /opt/synap/docker-compose.yml",
-    "--profile updater",
-    "run -d --rm updater",
+  // Pass each value as a discrete argv element (no shell) so callbackUrl/callbackJwt/updateId
+  // can never break out via `$(...)`, backticks, or quotes.
+  const args = [
+    "compose",
+    "-f",
+    "/opt/synap/docker-compose.yml",
+    "--profile",
+    "updater",
+    "run",
+    "-d",
+    "--rm",
+    "updater",
     sanitizedVersion,
     updateId,
-    `"${callbackUrl}"`,
-    `"${callbackJwt}"`,
-  ].join(" ");
+    callbackUrl,
+    callbackJwt,
+  ];
 
   updateInProgress = true;
-  exec(cmd, { timeout: 30_000 }, (err, stdout, stderr) => {
+  execFile("docker", args, { timeout: 30_000 }, (err, stdout, stderr) => {
     if (err) {
       logger.error(
         { err: err.message, stderr },

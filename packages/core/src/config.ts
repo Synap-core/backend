@@ -39,8 +39,15 @@ const StorageConfigSchema = z.object({
   r2PublicUrl: z.string().optional(),
   // MinIO config
   minioEndpoint: z.string().default("http://localhost:9000"),
-  minioAccessKeyId: z.string().default("minioadmin"),
-  minioSecretAccessKey: z.string().default("minioadmin"),
+  // SECURITY: the well-known "minioadmin" default is dev-only. In production an
+  // unset credential resolves to "" and is rejected at load time (see loadConfig)
+  // when MinIO is the active provider — never a silent default admin credential.
+  minioAccessKeyId: z
+    .string()
+    .default(process.env.NODE_ENV === "production" ? "" : "minioadmin"),
+  minioSecretAccessKey: z
+    .string()
+    .default(process.env.NODE_ENV === "production" ? "" : "minioadmin"),
   minioBucketName: z.string().default("synap-storage"),
   minioPublicUrl: z.string().optional(),
 });
@@ -290,6 +297,18 @@ function loadConfig(): Config {
         provider: explicitProvider || detectedProvider, // Use explicit or auto-detected
       },
     };
+
+    // SECURITY: production MinIO must never fall back to an empty/default
+    // credential. Dev keeps the "minioadmin" convenience default (set above).
+    if (
+      config.server.nodeEnv === "production" &&
+      config.storage.provider === "minio" &&
+      (!config.storage.minioAccessKeyId || !config.storage.minioSecretAccessKey)
+    ) {
+      throw new Error(
+        "Production MinIO storage requires MINIO_ACCESS_KEY_ID and MINIO_SECRET_ACCESS_KEY (refusing to use a default credential)"
+      );
+    }
 
     // Log configuration status (without secrets)
     configLogger.info(

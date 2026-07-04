@@ -18,14 +18,16 @@
  */
 
 import type { Executor, RunContext, RunResult } from "@synap/playbooks";
-import { validateExternalUrl } from "@synap/shared-utils";
+import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 
 /** Fire-and-forget POST with a hard timeout; never throws. */
 async function postWebhook(url: string, body: unknown): Promise<boolean> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
   try {
-    const res = await fetch(url, {
+    // safeExternalFetch re-validates every hop and rejects redirects, closing the
+    // redirect-to-internal SSRF gap left by the pre-validate at the call site.
+    const res = await safeExternalFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

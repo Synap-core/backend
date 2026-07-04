@@ -75,7 +75,7 @@ import {
   makeRoutedTeammateContext,
   type RoutedTeammateContext,
 } from "../utils/permission-check.js";
-import { validateExternalUrl } from "@synap/shared-utils";
+import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import { resolveOrCreateChannel } from "../utils/resolve-or-create-channel.js";
 import {
   ensureAgentInstanceThread,
@@ -451,7 +451,7 @@ async function relayToExternalChannel(opts: {
     return;
   }
 
-  await fetch(`${service.endpoint}/v1/chat/completions`, {
+  await safeExternalFetch(`${service.endpoint}/v1/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
