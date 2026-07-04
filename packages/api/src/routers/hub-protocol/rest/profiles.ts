@@ -250,19 +250,21 @@ export function registerProfilesRoutes(app: HubHono): void {
       sourceMessageId?: string;
     } | null;
     if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
-    if (!body.userId || !body.profileSlug || !body.slot || !body.cellKey) {
+    if (!body.profileSlug || !body.slot || !body.cellKey) {
       return c.json(
-        { error: "userId, profileSlug, slot and cellKey are required" },
+        { error: "profileSlug, slot and cellKey are required" },
         400
       );
     }
     try {
+      // The acting identity is the authenticated owner resolved by the auth
+      // middleware (the IS acts as the operator via its is_internal key remap) —
+      // NOT the request body. Mirrors /cells/define; a body userId is ignored.
+      const userId = c.get("userId") as string;
+      if (!userId) return c.json({ error: "Unauthenticated" }, 403);
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
-      const actorResolution = await resolveActorId(
-        resolvedAgentUserId,
-        body.userId
-      );
+      const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       const actorId = actorResolution.actorId;
@@ -272,7 +274,7 @@ export function registerProfilesRoutes(app: HubHono): void {
         sourceMessageId: body.sourceMessageId,
       });
       const result = await caller.profiles.setRenderer({
-        userId: body.userId,
+        userId,
         workspaceId: body.workspaceId,
         profileSlug: body.profileSlug,
         slot: body.slot,

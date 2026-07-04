@@ -16678,10 +16678,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: Record<string, never> | undefined;
 			output: {
 				seeded: boolean;
-				message: string;
-				counts?: undefined;
-			} | {
-				seeded: boolean;
 				counts: {
 					apps: number;
 					services: number;
@@ -16690,7 +16686,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					environments: number;
 					recipes: number;
 				};
-				message?: undefined;
 			};
 			meta: object;
 		}>;

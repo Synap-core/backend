@@ -16,6 +16,7 @@ import {
   count,
   drizzleSql,
   workspaces,
+  linkEntityToProject,
 } from "@synap/database";
 import { entities, secrets } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
@@ -293,40 +294,62 @@ export const devplaneRouter = router({
   seedSynapProjectData: workspaceProcedure
     .input(z.object({}).optional())
     .mutation(async ({ ctx }) => {
-      const existing = await db
-        .select({ n: count() })
-        .from(entities)
-        .where(
-          and(
-            eq(entities.type, "devplane_app"),
-            eq(entities.userId, ctx.userId)
-          )
-        );
-
-      if ((existing[0]?.n ?? 0) > 0) {
-        return { seeded: false, message: "Synap project data already exists" };
-      }
-
       const now = new Date();
       const ws = ctx.workspaceId;
       const uid = ctx.userId;
+      // Target project = the active project lens (X-Project-Id header), the same
+      // seam entities.create / capture file into. When set, each seeded entity is
+      // stamped with `belongs_to_project` so it is visible to project-scoped
+      // recall. Absent lens → entities are still (re)created, just not filed.
+      const projectId = ctx.projectId;
 
-      const ins = (
+      // Idempotent upsert helper. Reuses an existing entity's id (natural key =
+      // user + type + title) so a RE-RUN reconciles rows created by an earlier
+      // run instead of duplicating them — and thereby BACKFILLS the project edge
+      // on those pre-existing rows via linkEntityToProject below. First-run rows
+      // get a fresh id. `onConflictDoNothing` keeps the re-insert a no-op.
+      const ins = async (
         type: string,
         title: string,
         props: Record<string, unknown>
-      ) =>
-        db.insert(entities).values({
-          id: crypto.randomUUID(),
-          userId: uid,
-          workspaceId: ws,
-          profileId: null,
-          type,
-          title,
-          properties: props,
-          createdAt: now,
-          updatedAt: now,
+      ) => {
+        const existingEntity = await db.query.entities.findFirst({
+          where: and(
+            eq(entities.userId, uid),
+            eq(entities.type, type),
+            eq(entities.title, title)
+          ),
+          columns: { id: true },
         });
+        const id = existingEntity?.id ?? crypto.randomUUID();
+
+        await db
+          .insert(entities)
+          .values({
+            id,
+            userId: uid,
+            workspaceId: ws,
+            profileId: null,
+            type,
+            title,
+            properties: props,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .onConflictDoNothing();
+
+        // Stamp project membership — the write the original seed omitted, which
+        // orphaned these entities from the project lens. Idempotent via
+        // relations_belongs_to_project_unique, so a re-run only backfills.
+        if (projectId) {
+          await linkEntityToProject(db, {
+            entityId: id,
+            projectId,
+            userId: uid,
+            workspaceId: ws,
+          });
+        }
+      };
 
       // ── Apps ──────────────────────────────────────────────────────────────
       await ins("devplane_app", "synap-backend", {

@@ -25,6 +25,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
       name?: string;
       description?: string;
       reasoning?: string;
+      sourceMessageId?: string;
     } | null;
     if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
     if (!body.sessionId) {
@@ -33,7 +34,9 @@ export function registerPlaybooksRoutes(app: HubHono): void {
     try {
       const userId = c.get("userId") as string;
       const agentUserId = c.get("agentUserId") as string | undefined;
-      const caller = await getCaller(c);
+      const caller = await getCaller(c, {
+        sourceMessageId: body.sourceMessageId,
+      });
       const result = await caller.playbooks.promote({
         userId,
         sessionId: body.sessionId,

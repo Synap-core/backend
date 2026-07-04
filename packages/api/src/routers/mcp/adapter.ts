@@ -7,6 +7,7 @@
  */
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import { hubProtocolRouter } from "../hub-protocol/index.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "../hub-protocol/utils.js";
@@ -656,7 +657,24 @@ export async function executeMCPToolViaHubProtocol(
     // ── Cell authoring & renderer binding (external-agent surface) ──────────
     case "synap_create_cell": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
-      const cellWorkspaceId = (args.workspaceId as string | undefined) ?? null;
+      // Validate the shape before trusting the cast args (defineCell handles the
+      // npm-dep allowlist itself — this only guards the required primitives).
+      const parsed = z
+        .object({
+          name: z.string().min(1),
+          rendererSource: z.string().min(1),
+          workspaceId: z.string().optional(),
+          description: z.string().optional(),
+        })
+        .safeParse(args);
+      if (!parsed.success) {
+        throw new Error(
+          `Invalid synap_create_cell args: ${parsed.error.issues
+            .map((i) => i.message)
+            .join(", ")}`
+        );
+      }
+      const cellWorkspaceId = parsed.data.workspaceId ?? null;
       // Gate the workspace-scoped write exactly as the REST door does
       // (rest/cells.ts) — defineCell trusts its caller, so the door must verify
       // the acting user is a member of the target workspace.
@@ -672,10 +690,10 @@ export async function executeMCPToolViaHubProtocol(
       const { defineCell } =
         await import("../../services/cells/define-cell.js");
       const result = await defineCell({
-        name: args.name as string,
-        rendererSource: args.rendererSource as string,
+        name: parsed.data.name,
+        rendererSource: parsed.data.rendererSource,
         workspaceId: cellWorkspaceId,
-        description: args.description as string | undefined,
+        description: parsed.data.description,
         userId,
       });
       return ok({ status: result.changeType, ...result });

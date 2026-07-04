@@ -241,7 +241,8 @@ export function requiredPermissionFor(action: string): RequiredPermission {
     action === "add" ||
     action === "place" ||
     action === "remove" ||
-    action === "updateRole"
+    action === "updateRole" ||
+    action === "renderer.set"
   ) {
     return "write";
   }
