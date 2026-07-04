@@ -26,7 +26,8 @@ export interface A2AIResponseTriggerData {
   userMessageId: string;
   content: string;
   userId: string;
-  workspaceId: string;
+  /** null for PERSONAL (pod-scoped) channels — the IS runs personal context. */
+  workspaceId: string | null;
   agentType: string;
   sourceAgentUserId: string;
   /** Active focus session ID — forwarded to the IS so the agent runs
@@ -63,7 +64,9 @@ async function callIntelligenceHub(
     query: string;
     threadId: string;
     userId: string;
-    workspaceId: string;
+    // Omitted from the IS body when undefined (personal channels), matching
+    // the interactive path — the IS then runs the turn in personal context.
+    workspaceId?: string;
     agentType: string;
     sourceMessageId: string;
     focusSessionId?: string | null;
@@ -149,7 +152,8 @@ export async function handleA2AIResponseTrigger(
       query: content,
       threadId: channelId,
       userId,
-      workspaceId,
+      // null (personal) → undefined so JSON.stringify omits it from the IS body.
+      workspaceId: workspaceId ?? undefined,
       agentType,
       sourceMessageId: userMessageId,
       focusSessionId: job.data.focusSessionId,
