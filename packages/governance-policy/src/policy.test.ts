@@ -529,15 +529,19 @@ describe("constants are intact", () => {
       expect(DEFAULT_AUTO_APPROVE).toContain(k);
     }
   });
-  it("NORMAL mode is operation-symmetric: non-destructive create AND update are instant, deletes are not", () => {
+  it("NORMAL mode: non-destructive create + merge-update instant; full-replace & destructive gated", () => {
     const normal = GOVERNANCE_MODES.normal.autoApproveFor;
     // Creates instant (as before)
     expect(normal).toContain("entity.create");
     expect(normal).toContain("document.create");
-    // Non-destructive edits ALSO instant — a PATCH merges, never wipes fields.
+    // Non-destructive (merge / field-level partial) edits ALSO instant.
     expect(normal).toContain("entity.update");
-    expect(normal).toContain("document.update");
-    // Destructive stays proposal-gated (never auto-approved by NORMAL).
+    expect(normal).toContain("relation.update");
+    // Full-REPLACE writes stay proposal-gated — they can silently drop unrestated
+    // content (document = full body, view = full config), so NEVER auto-approved.
+    expect(normal).not.toContain("document.update");
+    expect(normal).not.toContain("view.update");
+    // Destructive stays proposal-gated too.
     for (const d of DESTRUCTIVE_ACTIONS) {
       expect(normal).not.toContain(`entity.${d}`);
       expect(normal).not.toContain(`document.${d}`);

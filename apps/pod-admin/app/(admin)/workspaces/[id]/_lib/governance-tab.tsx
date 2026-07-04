@@ -87,7 +87,7 @@ const PRESET_DISPLAY: Record<GovernanceMode, { title: string; hint: string }> =
     },
     normal: {
       title: "Normal",
-      hint: "Creates instant, updates need approval",
+      hint: "Creates & edits instant, deletes need approval",
     },
     crazy: {
       title: "Crazy",

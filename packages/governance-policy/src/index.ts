@@ -99,7 +99,8 @@ export const DESTRUCTIVE_ACTIONS: readonly string[] = [
  * Applied to workspace settings.aiGovernance at bridge-setup time.
  *
  * SAFE:   everything is proposed — human gates every mutation.
- * NORMAL: creates auto-execute, updates & deletes are proposed (recommended).
+ * NORMAL: creates + non-destructive (merge/partial) edits auto-execute; deletes,
+ *         full-REPLACE writes (document/view content), and ADMIN stay proposed (recommended).
  * CRAZY:  everything auto-executes — revert is the safety net (needs revert-without-proposal).
  */
 export const GOVERNANCE_MODES = {
@@ -134,16 +135,19 @@ export const GOVERNANCE_MODES = {
       "profile.create",
       "property_def.create",
       "channel.create",
-      // Non-destructive DATA edits are instant too — a PATCH MERGES (it never
-      // wipes unspecified fields), so an update is no more destructive than a
-      // create. Governance splits on DESTRUCTIVENESS, not create-vs-update:
-      // deletes/archive/purge stay proposal-gated (DESTRUCTIVE_ACTIONS), as do
-      // substrate updates and ADMIN_ACTIONS. Aligns with DEFAULT_AUTO_APPROVE
-      // (which already auto-approves entity/profile/property_def .update).
+      // Non-destructive DATA edits are instant too — these write paths MERGE or
+      // do a field-level partial (they never wipe unspecified fields), so an edit
+      // is no more destructive than a create. Governance splits on the write
+      // being non-destructive, NOT on create-vs-update.
+      //   entity.update / profile.update / property_def.update — already in
+      //     DEFAULT_AUTO_APPROVE; NORMAL previously (wrongly) re-gated them.
+      //   relation.update — field-level partial (type/metadata only-if-present).
+      // DELIBERATELY EXCLUDED (full-REPLACE writes — can silently drop unrestated
+      // content, so they stay proposal-gated): document.update (full-body replace),
+      // view.update (full-config replace). Plus deletes/archive/purge
+      // (DESTRUCTIVE_ACTIONS), substrate updates, and ADMIN_ACTIONS.
       "entity.update",
-      "document.update",
       "relation.update",
-      "view.update",
       "profile.update",
       "property_def.update",
       // Capability-substrate creates. Under Normal "creates are instant": both
