@@ -183,6 +183,10 @@ export * from "./links.js";
 // Playbook run ledger (RUNTIME) — one row per playbook execution (executor spine, P3).
 export * from "./playbook-runs.js";
 
+// Entity centrality (Horizon Phase 3) — batch-computed global PageRank score per
+// entity. Side table, recomputed by the pagerank-centrality job; read by Horizon.
+export * from "./entity-centrality.js";
+
 // (capability_templates removed in migration 0154 — capability templates live on
 // the Control Plane only; the pod stores none.)
 //

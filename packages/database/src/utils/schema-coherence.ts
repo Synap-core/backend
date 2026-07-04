@@ -839,6 +839,15 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "state",
     addedBy: "0167_automation_state.sql",
   },
+
+  // entity_centrality — global PageRank score per entity (Horizon Phase 3, 0168).
+  // Absence means a pod is on a pre-0168 schema; the Horizon `C` read gracefully
+  // falls back to the propagation proxy, but the tripwire still flags the drift.
+  {
+    table: "entity_centrality",
+    column: "score",
+    addedBy: "0168_entity_centrality.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

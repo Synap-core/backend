@@ -106,6 +106,10 @@ import {
   handleCapabilityTemplateSync,
   CAPABILITY_TEMPLATE_SYNC_QUEUE,
 } from "./capability-template-sync.js";
+import {
+  handlePageRankCentrality,
+  PAGERANK_CENTRALITY_QUEUE,
+} from "./pagerank-centrality.js";
 
 const logger = createLogger({ module: "workers" });
 
@@ -160,6 +164,7 @@ const ALL_QUEUES = [
   MEMORY_DECAY_QUEUE,
   CAPABILITY_TEMPLATE_SYNC_QUEUE,
   API_KEY_ROTATION_CHECK_QUEUE,
+  PAGERANK_CENTRALITY_QUEUE,
 ];
 
 /**
@@ -445,6 +450,14 @@ export async function registerAllWorkers(): Promise<void> {
     handleCapabilityTemplateSync()
   );
   logger.info("Registered worker: capability-template-sync");
+
+  // PageRank centrality (cron: every 6h + on startup — recomputes global
+  // PageRank over each user's relation graph into entity_centrality, which
+  // Horizon reads as its centrality signal C).
+  await boss.work(PAGERANK_CENTRALITY_QUEUE, async () =>
+    handlePageRankCentrality()
+  );
+  logger.info("Registered worker: pagerank-centrality");
 
   logger.info("All workers registered");
 }

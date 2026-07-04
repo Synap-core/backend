@@ -394,7 +394,8 @@ const entityQueryParams = z.object({
   filter: z.record(z.string(), z.unknown()).optional(),
   /** Optional workspace lens; omit for the full user floor (pod-wide). */
   workspaceId: z.string().uuid().optional(),
-  limit: z.number().int().min(1).max(100).optional(),
+  // coerce: the CLI + automation engine pass params as strings ("50").
+  limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
 const entityQueryHandler: BuiltinVerbHandler = async (params, ctx) => {
@@ -675,7 +676,7 @@ const graphRelationsParams = z.object({
   direction: z.enum(["outbound", "inbound", "both"]).optional(),
   /** Optional relation-type filter. */
   relationType: z.string().max(200).optional(),
-  limit: z.number().int().min(1).max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
 });
 
 const graphRelationsHandler: BuiltinVerbHandler = async (params, ctx) => {
@@ -800,7 +801,7 @@ const feedReadParams = z
   .object({
     channelId: z.string().uuid().optional(),
     subjectEntityId: z.string().uuid().optional(),
-    limit: z.number().int().min(1).max(200).optional(),
+    limit: z.coerce.number().int().min(1).max(200).optional(),
   })
   .refine((v) => v.channelId || v.subjectEntityId, {
     message: "feed.read requires channelId or subjectEntityId.",

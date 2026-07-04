@@ -3580,3 +3580,17 @@ CREATE TABLE IF NOT EXISTS "channel_egress" (
 );
 CREATE INDEX IF NOT EXISTS "channel_egress_status_created_idx"
   ON "channel_egress" ("status", "created_at");
+
+-- entity_centrality — global PageRank score per entity (Horizon Phase 3, 0168).
+-- SIDE table (not a column on the hot `entities` table) so the score is freely
+-- recomputable by the PageRank batch job. `score` is raw PageRank mass; Horizon
+-- normalizes it to [0,1] over the candidate pool at read time.
+CREATE TABLE IF NOT EXISTS "entity_centrality" (
+  "entity_id"   uuid        PRIMARY KEY
+                REFERENCES "entities"("id") ON DELETE CASCADE,
+  "user_id"     text        NOT NULL,
+  "score"       double precision NOT NULL DEFAULT 0,
+  "computed_at" timestamp with time zone NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS "idx_entity_centrality_user"
+  ON "entity_centrality" ("user_id");

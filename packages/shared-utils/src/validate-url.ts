@@ -100,3 +100,48 @@ export function validateExternalUrl(raw: string): ValidateUrlResult {
 
   return { valid: true, url };
 }
+
+/**
+ * fetch() wrapper that enforces the SSRF guard on the initial URL AND on every
+ * redirect hop. `validateExternalUrl` alone only vets the first URL, so a
+ * public host answering `302 Location: http://169.254.169.254/` would be
+ * followed straight to an internal target. Here redirects are handled manually
+ * (`redirect: "manual"`) and each hop is re-validated.
+ *
+ * `maxRedirects` defaults to 0 — redirects are REJECTED. This is deliberate for
+ * callers that send secrets in headers (automation webhooks resolve `vault://`
+ * refs into Authorization): following a redirect to a different host would leak
+ * those headers to the redirect target. Pass a higher limit only for callers
+ * that send no credentials and genuinely need to follow redirects.
+ *
+ * Does NOT defend against DNS rebinding (a public hostname resolving to a
+ * private IP at connect time) — that needs a resolve-then-pin egress proxy.
+ */
+export async function safeExternalFetch(
+  rawUrl: string,
+  init: RequestInit = {},
+  maxRedirects = 0
+): Promise<Response> {
+  let currentUrl = rawUrl;
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    const check = validateExternalUrl(currentUrl);
+    if (!check.valid) {
+      throw new Error(`Blocked outbound request: ${check.reason}`);
+    }
+    const res = await fetch(check.url.toString(), {
+      ...init,
+      redirect: "manual",
+    });
+    if (res.status < 300 || res.status >= 400) {
+      return res;
+    }
+    const location = res.headers.get("location");
+    if (!location) {
+      return res; // 3xx without a Location — nothing to follow
+    }
+    currentUrl = new URL(location, check.url).toString();
+  }
+  throw new Error(
+    "Blocked outbound request: redirect to a new host is not allowed"
+  );
+}

@@ -18147,6 +18147,36 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 	}>>;
+	activity: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		summary: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				projectId?: string | undefined;
+			};
+			output: {
+				unit: "session";
+				counts: {
+					id: string;
+					needsAttention: number;
+				}[];
+			} | {
+				unit: "project";
+				counts: {
+					id: string;
+					needsAttention: number;
+				}[];
+			};
+			meta: object;
+		}>;
+	}>>;
 	artifacts: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;

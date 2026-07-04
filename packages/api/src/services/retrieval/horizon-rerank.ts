@@ -6,7 +6,9 @@
  *   R  recency        = exp(-ln2·Δt/halfLife) = 2^(-ageDays/halfLife) from the
  *                       event-chain last-touch (falls back to `updatedAt`).
  *   F  reinforcement  = log(1+viewCount) / log(1+maxViewCount).
- *   C  centrality     = graph propagation weight / max (from graph-signal.ts).
+ *   C  centrality     = global PageRank / max (from entity_centrality, computed
+ *                       by the pagerank-centrality batch job). Falls back to the
+ *                       graph-propagation-weight proxy until the job has run.
  *   Q  query relevance= fused recall position (top = 1), already in `rows` order.
  *   L  lens PageRank  = 0 THIS PHASE (Phase 3 batch job — see TODO below).
  * A validity gate (1 live / 0.1 deleted) multiplies the weighted sum.
@@ -57,7 +59,8 @@ export interface HorizonOpts {
   viewCounts: Map<string, number>;
   /** event-chain last-touch per id; falls back to `row.updatedAt` (recency R). */
   lastTouch: Map<string, Date>;
-  /** graph propagation weight per id (centrality C). Missing ⇒ 0. */
+  /** centrality C per id — global PageRank (entity_centrality), else the graph
+   * propagation-weight proxy fallback. Raw scores; normalized here. Missing ⇒ 0. */
   centrality: Map<string, number>;
 }
 
@@ -116,7 +119,8 @@ export function horizonScore<T extends HorizonRow>(
       // F — reinforcement, log-compressed then normalized to the pool max.
       const vc = opts.viewCounts.get(row.id) ?? 0;
       const F = lnMaxViews > 0 ? Math.log(1 + vc) / lnMaxViews : 0;
-      // C — graph centrality (propagation weight), normalized to the pool max.
+      // C — global PageRank centrality (or the propagation-weight fallback),
+      // normalized to the pool max.
       const cRaw = opts.centrality.get(row.id) ?? 0;
       const C = maxCentrality > 0 ? cRaw / maxCentrality : 0;
       // L — lens PageRank. 0 this phase; Phase 3 batch job populates it.

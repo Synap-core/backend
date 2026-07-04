@@ -70,7 +70,7 @@ import {
   isVaultReference,
 } from "../utils/vault-resolver.js";
 import { checkAutomationWriteOrPropose } from "../utils/automation-governance.js";
-import { validateExternalUrl } from "@synap/shared-utils";
+import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import {
   resolveIntelligenceService,
   getDefaultActiveService,
@@ -754,7 +754,7 @@ async function executeOutputStep(
       const timer = setTimeout(() => controller.abort(), 30_000);
 
       try {
-        const response = await fetch(url, {
+        const response = await safeExternalFetch(url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -1334,7 +1334,7 @@ async function executeFetchStep(
   const timer = setTimeout(() => controller.abort(), 30_000);
 
   try {
-    const response = await fetch(resolvedUrl, {
+    const response = await safeExternalFetch(resolvedUrl, {
       method: data.method ?? "GET",
       headers: finalHeaders,
       body: bodyPayload,

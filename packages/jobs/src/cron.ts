@@ -11,6 +11,10 @@ import {
   CAPABILITY_TEMPLATE_SYNC_QUEUE,
   CAPABILITY_TEMPLATE_SYNC_CRON,
 } from "./workers/capability-template-sync.js";
+import {
+  PAGERANK_CENTRALITY_QUEUE,
+  PAGERANK_CENTRALITY_CRON,
+} from "./workers/pagerank-centrality.js";
 
 const logger = createLogger({ module: "cron-scheduler" });
 
@@ -125,6 +129,14 @@ export async function registerCronSchedules(): Promise<void> {
   logger.info("Registered cron: capability-template-sync (every 10min)");
   await boss.send(CAPABILITY_TEMPLATE_SYNC_QUEUE, {});
   logger.info("Enqueued startup run: capability-template-sync");
+
+  // PageRank centrality (every 6h + one startup run so a cold pod populates
+  // entity_centrality without waiting for the first tick — this is also the
+  // "devplane re-seed"-style on-demand trigger: boss.send(PAGERANK_CENTRALITY_QUEUE)).
+  await boss.schedule(PAGERANK_CENTRALITY_QUEUE, PAGERANK_CENTRALITY_CRON, {});
+  logger.info("Registered cron: pagerank-centrality (every 6h at :20)");
+  await boss.send(PAGERANK_CENTRALITY_QUEUE, {});
+  logger.info("Enqueued startup run: pagerank-centrality");
 
   logger.info("All cron schedules registered");
 }

@@ -34,6 +34,7 @@ import { latestEventTimestamps } from "./temporal-signal.js";
 import { compositeRerank } from "./composite-rerank.js";
 import { resolveRankStrategy } from "./rank-strategy.js";
 import { viewCountsByEntity } from "./reinforcement-signal.js";
+import { centralityByEntity } from "./centrality-signal.js";
 import { horizonScore, type HorizonScored } from "./horizon-rerank.js";
 import { gradeResults, rekey, type RetrievalVerdict } from "./grade.js";
 import {
@@ -322,11 +323,19 @@ export async function retrieve(
   // query relevance; L=0 this phase). Batches its signals over the pool ids.
   const runHorizon = async (): Promise<HorizonScored<EntityRow>[]> => {
     const ids = ordered.map((r) => r.id);
-    const [viewCounts, lastTouch] = await Promise.all([
+    const [viewCounts, lastTouch, pageRank] = await Promise.all([
       viewCountsByEntity(ids, userId),
       latestEventTimestamps(ids, userId),
+      centralityByEntity(ids, userId),
     ]);
-    const centrality = new Map(graphHits.map((h) => [h.id, h.score]));
+    // C = global PageRank from entity_centrality (Phase 3). Graceful fallback:
+    // if the batch job hasn't populated any of the pool ids yet, drop back to the
+    // graph-propagation-weight proxy (the pre-Phase-3 behavior) so Horizon still
+    // ranks. horizonScore normalizes whichever map to [0,1] over the pool.
+    const centrality =
+      pageRank.size > 0
+        ? pageRank
+        : new Map(graphHits.map((h) => [h.id, h.score]));
     return horizonScore(ordered, {
       lens: projectId ? "project" : "workspace",
       now,

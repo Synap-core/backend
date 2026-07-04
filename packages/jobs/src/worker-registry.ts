@@ -141,6 +141,15 @@ export const workerRegistry: WorkerMetadata[] = [
   // Shared Workers (cross-cutting concerns)
   // ============================================================================
   {
+    id: "pagerank-centrality",
+    name: "PageRank Centrality",
+    description:
+      "Every 6h (and on startup), recomputes a global PageRank over each user's relations graph and UPSERTs the per-entity score into entity_centrality. Horizon reads it as its centrality signal C. In-memory, one batched edge read per user, bounded iterations.",
+    triggers: ["cron:20 */6 * * *"],
+    outputs: ["entity_centrality.upsert"],
+    category: "shared",
+  },
+  {
     id: "webhook-broker",
     name: "Webhook Broker",
     description: "Delivers events to external webhook subscribers",

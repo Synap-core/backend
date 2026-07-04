@@ -63,6 +63,7 @@ import { focusSessionsRouter } from "./routers/focus-sessions.js";
 import { playbooksRouter } from "./routers/playbooks.js";
 import { playbookRunsRouter } from "./routers/playbook-runs.js";
 import { agentRunsRouter } from "./routers/agent-runs.js";
+import { activityRouter } from "./routers/activity.js";
 import { artifactsRouter } from "./routers/artifacts.js";
 import { projectsRouter } from "./routers/projects.js";
 
@@ -135,6 +136,7 @@ export const coreRouter = router({
   playbooks: playbooksRouter,
   playbookRuns: playbookRunsRouter,
   agentRuns: agentRunsRouter,
+  activity: activityRouter,
   artifacts: artifactsRouter,
   projects: projectsRouter,
 });

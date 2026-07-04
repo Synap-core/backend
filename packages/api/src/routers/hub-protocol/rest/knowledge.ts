@@ -607,6 +607,18 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     workspaceId: z.string().optional(),
     projectId: z.string().optional(),
     limit: z.number().int().min(1).max(100).optional(),
+    /**
+     * A/B diagnostic — run BOTH rankers on the same pool and attach the
+     * `comparison` block. READ-ONLY: does not change the normal answer.
+     */
+    compare: z.boolean().optional(),
+  });
+
+  const rankedItemSchema = z.object({
+    id: z.string(),
+    title: z.string(),
+    score: z.number(),
+    rank: z.number(),
   });
 
   const retrievalResponseSchema = z.object({
@@ -624,6 +636,24 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     degraded: z.array(z.string()),
     understanding: z.record(z.string(), z.unknown()),
     verdict: z.enum(["confident", "ambiguous", "empty"]),
+    // A/B ranker comparison — present ONLY when `compare` was requested.
+    comparison: z
+      .object({
+        baseline: z.array(rankedItemSchema),
+        horizon: z.array(rankedItemSchema),
+        diff: z.object({
+          overlapAtN: z.number(),
+          moved: z.array(
+            z.object({
+              id: z.string(),
+              title: z.string(),
+              baselineRank: z.number(),
+              horizonRank: z.number(),
+            })
+          ),
+        }),
+      })
+      .optional(),
   });
 
   /**
@@ -637,6 +667,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       workspaceId?: string;
       projectId?: string;
       limit?: number;
+      compare?: boolean;
     },
     getCatalog: (wsId: string) => Promise<HubProtocolCaller>
   ) {
@@ -670,6 +701,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       projectId: body.projectId ?? null,
       limit: body.limit,
       catalog,
+      // Additive A/B diagnostic — attaches `comparison` only when set.
+      compare: body.compare || undefined,
     });
   }
 

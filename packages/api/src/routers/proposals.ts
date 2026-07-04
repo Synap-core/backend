@@ -2047,6 +2047,12 @@ export const proposalsRouter = router({
               throwOnError: true,
               subjectId,
               userId,
+              // The CHANGE was authored by the proposing agent (the human here is
+              // only the APPROVER, kept in data.approvedBy). Stamp the agent so the
+              // resulting activity attributes to it — "the agent did this, you
+              // approved it" — instead of collapsing under the operator. Absent
+              // (operator-authored proposal) → owner write, is_agent stays null.
+              agentUserId: proposal.agentUserId ?? undefined,
               workspaceId: proposal.workspaceId ?? undefined,
               correlationId: proposalCorrelationId,
               data: {

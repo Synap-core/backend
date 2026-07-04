@@ -20,6 +20,40 @@ import { propertyDefsRouter as regularPropertyDefsRouter } from "../property-def
 import { createHubProtocolCallerContext } from "./utils.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { setProfileRenderer } from "../../services/profiles/set-profile-renderer.js";
+import { getDb, eq } from "@synap/database";
+import { widgetDefinitions } from "@synap/database/schema";
+
+/**
+ * Build a RendererRef from a cellKey — mirrors the browser's buildCellRendererRef
+ * so both surfaces produce a renderable ref. A generated/published cell (a
+ * widget_definition, e.g. `generated:*`) is NOT a registered cellRegistry key; it
+ * renders only through the `iframe-widget` host by its typeKey. So when the cellKey
+ * names a widget_definition, wrap it as `{ cellKey:'iframe-widget', props:{ typeKey } }`;
+ * an already-wrapped `iframe-widget` ref or a genuinely-registered built-in cellKey
+ * passes through unchanged. Without this, an agent-bound renderer (cellKey = the
+ * create_cell typeKey) resolves to nothing at render time.
+ */
+async function buildCellRendererRef(
+  cellKey: string,
+  props?: Record<string, unknown>
+): Promise<RendererRef> {
+  if (cellKey !== "iframe-widget") {
+    const db = await getDb();
+    const rows = await db
+      .select({ id: widgetDefinitions.id })
+      .from(widgetDefinitions)
+      .where(eq(widgetDefinitions.typeKey, cellKey))
+      .limit(1);
+    if (rows.length > 0) {
+      return {
+        kind: "cell",
+        cellKey: "iframe-widget",
+        props: { typeKey: cellKey, ...(props ?? {}) },
+      };
+    }
+  }
+  return { kind: "cell", cellKey, props: props ?? {} };
+}
 
 export const hubProfilesRouter = router({
   /**
@@ -182,11 +216,10 @@ export const hubProfilesRouter = router({
     .mutation(async ({ input }) => {
       const scope = input.scope ?? "workspace";
       const workspaceId = input.workspaceId ?? null;
-      const ref: RendererRef = {
-        kind: "cell",
-        cellKey: input.cellKey,
-        props: input.props ?? {},
-      };
+      const ref: RendererRef = await buildCellRendererRef(
+        input.cellKey,
+        input.props
+      );
 
       const perm = await checkPermissionOrPropose({
         userId: input.userId,
