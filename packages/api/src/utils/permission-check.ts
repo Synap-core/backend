@@ -340,6 +340,15 @@ export interface PermissionCheckOpts {
   sessionId?: string;
   /** Active project lens → proposals.project_id → belongs_to_project at materialize */
   projectId?: string | null;
+  /**
+   * Force a PROPOSAL even when the action would otherwise auto-approve. Set by
+   * callers for scope/identity-bearing writes that must always be reviewed
+   * (e.g. promoting an entity workspace→pod-wide, or changing its profile TYPE).
+   * Honored only on the AI/agent governance paths — a trusted operator is the
+   * authority and is never forced to self-propose. RBAC/CBAC denials still take
+   * precedence over the forced proposal.
+   */
+  forcePropose?: boolean;
 }
 
 /**
@@ -618,6 +627,7 @@ export async function checkPermissionOrPropose(
           channelCapabilities,
           subjectProfileSlug,
           subjectUoValidated,
+          forcePropose: opts.forcePropose,
         });
 
         if (decision.verdict === "deny") {
@@ -709,7 +719,7 @@ export async function checkPermissionOrPropose(
         (settings as Record<string, unknown> | undefined)?.aiAutoApprove ??
         false;
 
-      if (!aiAutoApprove) {
+      if (!aiAutoApprove || opts.forcePropose) {
         return createProposal({
           userId,
           agentUserId,

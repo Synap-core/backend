@@ -103,7 +103,23 @@ export class RelationRepository extends BaseRepository<
   ): Promise<Relation> {
     const updates: Partial<NewRelation> = {};
     if (data.type !== undefined) updates.type = data.type;
-    if (data.metadata !== undefined) updates.metadata = data.metadata as any;
+
+    // relation.update is a NON-DESTRUCTIVE partial edit (it auto-approves under
+    // NORMAL governance). A partial `metadata` payload must MERGE into the row's
+    // existing metadata rather than REPLACE it — otherwise an agent resending a
+    // subset of keys silently drops the keys it did not restate. Load the current
+    // metadata and shallow-merge the provided keys over it.
+    if (data.metadata !== undefined) {
+      const [current] = await this.db
+        .select({ metadata: relations.metadata })
+        .from(relations)
+        .where(and(eq(relations.id, id), eq(relations.userId, userId)))
+        .limit(1);
+      updates.metadata = {
+        ...((current?.metadata as Record<string, unknown> | null) ?? {}),
+        ...(data.metadata as Record<string, unknown>),
+      } as any;
+    }
 
     const [relation] = await this.db
       .update(relations)

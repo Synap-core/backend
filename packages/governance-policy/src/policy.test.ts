@@ -324,6 +324,71 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
   });
 });
 
+describe("decideAgentPolicy — forcePropose (scope/identity change)", () => {
+  it("forces a proposal for an otherwise auto-approved write (entity.update)", () => {
+    // entity.update auto-approves via DEFAULT_AUTO_APPROVE (step 8); forcePropose
+    // (step 2.1) escalates it to a proposal.
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "update",
+      forcePropose: true,
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
+    });
+  });
+
+  it("forces a proposal even in an agent-owned workspace (beats step 3 execute)", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "update",
+      isAgentOwnedWorkspace: true,
+      forcePropose: true,
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
+    });
+  });
+
+  it("forces a proposal even with a broad explicit autoApproveFor (beats step 4 execute)", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "update",
+      autoApproveFor: ["*"],
+      forcePropose: true,
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
+    });
+  });
+
+  it("CBAC deny still wins over forcePropose (deny-precedence preserved)", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "update",
+      agentCapabilities: ["entity.read"],
+      forcePropose: true,
+    });
+    expect(v.verdict).toBe("deny");
+  });
+
+  it("absent/false forcePropose leaves the verdict unchanged (execute)", () => {
+    expect(
+      decideAgentPolicy({ subjectType: "entity", action: "update" }).verdict
+    ).toBe("execute");
+    expect(
+      decideAgentPolicy({
+        subjectType: "entity",
+        action: "update",
+        forcePropose: false,
+      }).verdict
+    ).toBe("execute");
+  });
+});
+
 describe("decideAgentPolicy — governance by KIND (user_observation)", () => {
   it("INFERENCE (uo_validated !== true) → propose, regardless of workspace", () => {
     // Inference in an agent-owned workspace would normally execute (step 3);
