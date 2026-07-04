@@ -43,6 +43,16 @@ export async function executeCapability(input: {
   workspaceId: string | null;
   /** The acting operator (bearer's user). */
   userId: string;
+  /**
+   * The acting AGENT (agent-user id) when the call originates from an agent — the
+   * MCP `run_capability` tool or a Hub agent key — else null for a genuine
+   * operator run. Threaded to the gate: an agent WRITE verb without an active
+   * grant routes to a PROPOSAL (never auto-runs under the operator's identity);
+   * READ-only verbs auto-run regardless (the readOnly short-circuit precedes the
+   * grant check). This is what makes "AI mutations → checkPermissionOrPropose"
+   * hold at this door instead of laundering the agent into the operator.
+   */
+  agentUserId?: string | null;
   /** Runtime 1-of-N connection selector (Wave 4) — passed to a provider verb. */
   connectionSelector?: ConnectionSelector | null;
   /**
@@ -115,7 +125,7 @@ export async function executeCapability(input: {
     capabilityId: skillRow.id,
     skill: skillRow,
     actorUserId: userId,
-    agentUserId: null,
+    agentUserId: input.agentUserId ?? null,
     workspaceId,
     issuer: "hub.capabilities-execute",
     readOnly,

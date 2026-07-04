@@ -70,6 +70,7 @@ import {
   isVaultReference,
 } from "../utils/vault-resolver.js";
 import { checkAutomationWriteOrPropose } from "../utils/automation-governance.js";
+import { validateExternalUrl } from "@synap/shared-utils";
 import {
   resolveIntelligenceService,
   getDefaultActiveService,
@@ -736,6 +737,13 @@ async function executeOutputStep(
 
       if (!url) throw new Error("webhook output requires url in config");
 
+      // SSRF guard: reject internal/reserved targets BEFORE resolving any
+      // vault secrets into headers (never leak a secret to a private address).
+      const webhookUrlCheck = validateExternalUrl(url);
+      if (!webhookUrlCheck.valid) {
+        throw new Error(`webhook output blocked: ${webhookUrlCheck.reason}`);
+      }
+
       // Resolve vault references in headers (e.g., Authorization: vault://secret-id)
       const hasVaultHeaders = Object.values(headers).some(isVaultReference);
       if (hasVaultHeaders) {
@@ -1314,6 +1322,13 @@ async function executeFetchStep(
   }
 
   if (!resolvedUrl) throw new Error("fetch node: url is required");
+
+  // SSRF guard: the URL is content/template-derived, so an untrusted source
+  // could otherwise steer it at an internal address.
+  const fetchUrlCheck = validateExternalUrl(resolvedUrl);
+  if (!fetchUrlCheck.valid) {
+    throw new Error(`fetch node blocked: ${fetchUrlCheck.reason}`);
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30_000);

@@ -7,6 +7,9 @@
  * Use before every outbound fetch() call whose URL comes from user input or
  * the database (service registrations, relay endpoints, webhook targets).
  *
+ * Lives in @synap/shared-utils so low-level packages (jobs) can reach it
+ * without depending on @synap/api (which would be a circular dependency).
+ *
  * Example:
  *   const check = validateExternalUrl(service.endpoint);
  *   if (!check.valid) { logger.warn(check.reason); return; }

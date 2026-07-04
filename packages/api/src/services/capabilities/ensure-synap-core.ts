@@ -94,6 +94,39 @@ const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       },
     },
     {
+      name: "ai.generate",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Synchronous single-shot LLM completion via the IS generate tool. Returns { output } where output is the raw text, or (when json:true) the parsed JSON object — used DIRECTLY as an automation step's output so downstream nodes read steps.<id>.output.<field>. Read-only (pure compute, no mutation): auto-runs inside an automation without a proposal.",
+      parameters: {
+        type: "object",
+        required: ["prompt"],
+        properties: {
+          system: {
+            type: "string",
+            description: "Optional system instruction.",
+          },
+          prompt: {
+            type: "string",
+            description:
+              "The user prompt (fenced as untrusted content IS-side).",
+          },
+          json: {
+            type: "boolean",
+            description:
+              "When true, parse the model output as JSON and return the object as `output`.",
+          },
+          maxTokens: {
+            type: "number",
+            minimum: 1,
+            maximum: 2000,
+            description: "Completion token cap (default 800).",
+          },
+        },
+      },
+    },
+    {
       name: "output.generate",
       kind: "builtin",
       scope: "pod",

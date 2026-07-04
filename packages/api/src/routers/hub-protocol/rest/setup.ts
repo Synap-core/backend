@@ -56,6 +56,16 @@ import {
 import { kratosAdmin } from "@synap/auth";
 import { logger, type HubHono } from "./_shared.js";
 
+/** Escape a user-derived value before interpolating it into an HTML string. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 const SURFACE_AGENT_TYPES = [
   "claude-code",
   "claude-desktop",
@@ -1392,8 +1402,8 @@ export function registerSetupRoutes(app: HubHono): void {
   /** HTML review page opened by the CLI in the user's browser. */
   app.get("/setup/agent/pending/:keyId/review", async (c) => {
     const keyId = c.req.param("keyId");
-    const agentType = c.req.query("agentType") ?? "agent";
-    const keyShort = keyId.slice(0, 8);
+    const agentType = escapeHtml(c.req.query("agentType") ?? "agent");
+    const keyShort = escapeHtml(keyId.slice(0, 8));
 
     const html = `<!DOCTYPE html>
 <html lang="en"><head>

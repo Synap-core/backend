@@ -3,7 +3,26 @@
  * See team/platform/retrieval-architecture.mdx for the architecture + roadmap.
  */
 export { retrieve } from "./retrieve.js";
-export type { RetrieveParams, RetrieveResult } from "./retrieve.js";
+export type {
+  RetrieveParams,
+  RetrieveResult,
+  RankComparison,
+  RankedItem,
+  MovedItem,
+} from "./retrieve.js";
+export { resolveRankStrategy, type RankStrategy } from "./rank-strategy.js";
+export { viewCountsByEntity } from "./reinforcement-signal.js";
+export {
+  horizonScore,
+  horizonRerank,
+  HORIZON_WEIGHTS,
+  HORIZON_HALF_LIFE_DAYS,
+  type HorizonLens,
+  type HorizonWeights,
+  type HorizonRow,
+  type HorizonOpts,
+  type HorizonScored,
+} from "./horizon-rerank.js";
 export { hybridRecall, embedQuery, rrf } from "./hybrid-recall.js";
 export type {
   HybridRecallParams,

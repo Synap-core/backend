@@ -66,37 +66,77 @@ export function registerTerminalRoutes(app: HubHono): void {
       );
     }
 
+    // `since` is interpolated into a shell command below — allow ONLY the two
+    // forms docker `--since` accepts (relative duration like "10m"/"2h30m"/"90s"
+    // or an RFC3339 timestamp). This rejects any shell metacharacter, so nothing
+    // injectable can survive into the exec string.
+    if (
+      since &&
+      !/^(\d+[smhd])+$/.test(since) &&
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/.test(
+        since
+      )
+    ) {
+      return c.json(
+        {
+          error:
+            'Invalid "since": expected a relative duration (e.g. 10m, 2h30m, 3d) or an RFC3339 timestamp.',
+        },
+        400
+      );
+    }
+
     const containerName = ALLOWED_SERVICES[service];
 
-    try {
-      const { exec } = await import("child_process");
-      const { promisify } = await import("util");
-      const execAsync = promisify(exec);
+    // Case-insensitive line filter, applied in-process. NEVER shell out the
+    // filter: `docker logs ... | grep <filter>` let `$(...)`/backticks in the
+    // user-supplied pattern execute on the host.
+    const applyFilter = (text: string): string => {
+      if (!filter) return text;
+      const needle = filter.toLowerCase();
+      return text
+        .split("\n")
+        .filter((line) => line.toLowerCase().includes(needle))
+        .join("\n");
+    };
 
-      // Build docker logs command
-      let cmd = `docker logs --tail=${lines}`;
-      if (since) cmd += ` --since=${since}`;
-      cmd += ` ${containerName} 2>&1`;
-      if (filter) cmd += ` | grep -i ${JSON.stringify(filter)}`;
+    try {
+      const { execFile } = await import("child_process");
+      const { promisify } = await import("util");
+      const execFileAsync = promisify(execFile);
+      const runOpts = { timeout: 10_000, maxBuffer: 100 * 1024 } as const;
+
+      // Args are passed as an array (no shell), so `since` and the container
+      // name can never be interpreted as shell syntax.
+      const dockerArgs = ["logs", `--tail=${lines}`];
+      if (since) dockerArgs.push(`--since=${since}`);
+      dockerArgs.push(containerName);
 
       let output: string;
       try {
-        const { stdout } = await execAsync(cmd, {
-          timeout: 10_000,
-          maxBuffer: 100 * 1024,
-        });
-        output = stdout;
+        const { stdout, stderr } = await execFileAsync(
+          "docker",
+          dockerArgs,
+          runOpts
+        );
+        output = applyFilter(`${stdout}${stderr}`);
       } catch {
-        // Fallback: journalctl
-        let jCmd = `journalctl -u synap-${service} -n ${lines} --no-pager`;
-        if (since) jCmd += ` --since="${since} ago"`;
-        if (filter) jCmd += ` | grep -i ${JSON.stringify(filter)}`;
+        // Fallback: journalctl (also shell-free)
+        const jArgs = [
+          "-u",
+          `synap-${service}`,
+          "-n",
+          String(lines),
+          "--no-pager",
+        ];
+        if (since) jArgs.push("--since", `${since} ago`);
         try {
-          const { stdout } = await execAsync(jCmd, {
-            timeout: 10_000,
-            maxBuffer: 100 * 1024,
-          });
-          output = stdout;
+          const { stdout, stderr } = await execFileAsync(
+            "journalctl",
+            jArgs,
+            runOpts
+          );
+          output = applyFilter(`${stdout}${stderr}`);
         } catch {
           output = `[No logs available for service "${service}". Docker and journalctl both unavailable.]`;
         }

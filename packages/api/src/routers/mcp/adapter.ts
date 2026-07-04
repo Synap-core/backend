@@ -221,6 +221,7 @@ export async function executeMCPToolViaHubProtocol(
           p.slug ? [{ slug: p.slug, displayName: p.displayName ?? p.slug }] : []
         );
       }
+      const compare = args.compare === true;
       // Retrieve across all substrates (same call as /knowledge/search).
       const retrieved = await ask({
         query: args.query as string,
@@ -229,7 +230,20 @@ export async function executeMCPToolViaHubProtocol(
         projectId: (args.projectId as string | undefined) ?? null,
         limit: (args.limit as number) || undefined,
         catalog,
+        compare: compare || undefined,
       });
+
+      // A/B DIAGNOSTIC — when `compare` is set, return the ranker comparison
+      // (baseline vs Horizon on the same pool) directly, skipping IS synthesis.
+      // Read-only: this is a ranking diff, not an answer.
+      if (compare) {
+        return ok({
+          mode: "compare",
+          query: args.query,
+          understanding: retrieved.understanding,
+          comparison: retrieved.comparison ?? null,
+        });
+      }
 
       // Build context + sources, then synthesize via IS.
       const synthesis = await synthesizeAnswer(
@@ -1026,6 +1040,10 @@ export async function executeMCPToolViaHubProtocol(
         parameters: args.parameters as Record<string, unknown> | undefined,
         workspaceId: wsId,
         userId,
+        // Thread the acting agent (set on agent-key remap) so an agent WRITE verb
+        // is governed by grant/propose — consistent with every other write proc
+        // in this adapter. Omitting it laundered agent writes into operator runs.
+        agentUserId: agentUserId ?? null,
       });
       // Surface the same discriminated outcome the hub door returns, in a shape
       // the agent reads naturally (proposed is NOT an error).

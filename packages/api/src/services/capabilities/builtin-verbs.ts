@@ -52,6 +52,7 @@ import {
   BoardPlacementOptionsSchema,
 } from "./place-artboard-deck.js";
 import { triageEmails } from "../mail-feed/triage.js";
+import { generateViaIS } from "../mail-feed/generate.js";
 
 export interface BuiltinVerbContext {
   /** The acting operator (bearer's user id). */
@@ -301,6 +302,49 @@ const aiTriageHandler: BuiltinVerbHandler = async (params) => {
   return { results };
 };
 
+/**
+ * ai.generate — synchronous single-shot LLM completion via the IS `generate`
+ * tool. The keystone sync-AI step for automations: an automation's AI node (e.g.
+ * classify-then-gate, summarize) runs THIS in-process and reads its output
+ * directly, unlike the fire-and-forget task path. AI-backed like ai.triage — its
+ * handler calls the IS internally, but the verb still runs in-process + governed.
+ *
+ * OUTPUT CONTRACT: the handler returns the IS `output` VALUE DIRECTLY (no
+ * envelope), so an automation step's `steps.<id>.output` IS that value. With
+ * `json:true` the model output is parsed IS-side, so `steps.detect.output` is the
+ * parsed object and `steps.detect.output.reviewNeeded` resolves.
+ *
+ * COERCION: the automation engine stringifies every inputMapping value (String()),
+ * so `json` arrives as the string "true"/"false" and `maxTokens` as a numeric
+ * string. `json` is coerced with an explicit "true" check (z.coerce.boolean would
+ * treat "false" as truthy); `maxTokens` via z.coerce.number.
+ *
+ * pod-wide by design: like ai.triage, it uses the pod's default IS
+ * (getDefaultActiveService), so `ctx` is intentionally unused.
+ */
+const aiGenerateParams = z.object({
+  system: z.string().optional(),
+  prompt: z.string().min(1),
+  // Engine passes "true"/"false" strings — coerce explicitly (z.coerce.boolean
+  // would map "false" → true). Accept a real boolean too (direct callers).
+  json: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .optional()
+    .transform((v) => v === true || v === "true"),
+  maxTokens: z.coerce.number().int().min(1).max(2000).optional(),
+});
+
+const aiGenerateHandler: BuiltinVerbHandler = async (params) => {
+  const input = aiGenerateParams.parse(params);
+  // Return the IS output value DIRECTLY — no wrapping envelope (see contract).
+  return generateViaIS({
+    system: input.system,
+    prompt: input.prompt,
+    json: input.json,
+    maxTokens: input.maxTokens,
+  });
+};
+
 // ── Read/resolve half (W6) ────────────────────────────────────────────────────
 //
 // Six GENERIC primitives that READ or RESOLVE the pod substrate. They are
@@ -456,6 +500,10 @@ const channelResolveHandler: BuiltinVerbHandler = async (params, ctx) => {
       updatedAt: true,
     },
     orderBy: desc(channels.updatedAt),
+    // Bound the read — a context object realistically has a handful of channels;
+    // rows[0] (most-recent) is the resolved channel, the rest are returned for
+    // callers that want the full set.
+    limit: 50,
   });
 
   return { channelId: rows[0]?.id ?? null, channels: rows };
@@ -825,6 +873,7 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "feed.post": feedPostHandler,
   "output.generate": outputGenerateHandler,
   "ai.triage": aiTriageHandler,
+  "ai.generate": aiGenerateHandler,
   // W6 — read/resolve half.
   "entity.query": entityQueryHandler,
   "channel.resolve": channelResolveHandler,
@@ -849,4 +898,10 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   "channel.resolve",
   "graph.relations",
   "feed.read",
+  // ai.generate is PURE COMPUTE — it mutates nothing (calls the IS for a
+  // completion). readOnly here means "no mutation → auto-run" so a classification
+  // step inside an automation runs without spawning a proposal (which would stall
+  // the flow, since a capability node refuses on a propose verdict). Scope is N/A:
+  // it reads no DB rows, so there is no access-layer floor to enforce.
+  "ai.generate",
 ]);

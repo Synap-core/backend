@@ -18,6 +18,22 @@ import {
   resolveCompositeRef,
   type CompositeProposalOperation,
 } from "@synap-core/types/proposals";
+import { createLogger } from "@synap-core/core";
+import { DEFAULT_RELATION_DEFS } from "@synap/database";
+
+const logger = createLogger({ module: "materialize-composite" });
+
+/**
+ * Known built-in relation slugs (lowercased), O(1) lookup. Used to reject a
+ * materialized entity whose title/type collides with a relation type — a bad
+ * IS structure/import output can misclassify an edge-type string (e.g.
+ * "belongs_to_project") as a NODE title, and nothing downstream rejects it, so
+ * the junk relation-named entity leaks into the graph. Static set (no per-create
+ * DB query); custom user-defined relation collisions are out of scope.
+ */
+const RELATION_SLUGS: ReadonlySet<string> = new Set(
+  DEFAULT_RELATION_DEFS.map((d) => d.slug.toLowerCase())
+);
 
 /**
  * Create relations from ref-based ops against a ref→realId map. The ONE
@@ -219,6 +235,27 @@ export async function materializeCompositeGraph(
   for (let i = 0; i < operations.length; i++) {
     const op = operations[i];
     if (op.op !== "create_entity") continue;
+
+    // Guard (narrow, exact-match): drop a materialized entity whose title OR
+    // profileSlug EXACTLY equals a known relation slug (trimmed, case-insensitive)
+    // — a misclassified edge-type from IS structure/import output. Skip + warn;
+    // NEVER throw, so the rest of a multi-entity batch still materializes.
+    const titleKey = op.title?.trim().toLowerCase();
+    const slugKey = op.profileSlug?.trim().toLowerCase();
+    if (
+      (titleKey && RELATION_SLUGS.has(titleKey)) ||
+      (slugKey && RELATION_SLUGS.has(slugKey))
+    ) {
+      logger.warn(
+        {
+          title: op.title,
+          profileSlug: op.profileSlug,
+          source: options?.source ?? "system",
+        },
+        "Skipping materialized entity: title/type collides with a known relation slug (likely misclassified edge-type from IS structure/import output)"
+      );
+      continue;
+    }
 
     let realId: string;
     let linkedExisting = false;

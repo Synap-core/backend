@@ -17,11 +17,12 @@
  * `capability.run` approve-executor). Mirrors the worker exactly: one decision
  * core, multiple doors.
  *
- * Identity scope: this REST door runs as the OPERATOR/owner (the bearer's user).
- * Agent-initiated capability runs flow through the IS agent loop + the automation
- * worker, NOT this door — so no `agentUserId` is accepted here, which keeps the
- * gate's owner-bypass clean (the bearer who applied the capability owns the skill
- * → runs directly; a non-owner/unapproved skill routes to `propose`).
+ * Identity scope: a genuine OPERATOR run (Kratos cookie / operator key, no
+ * agentUserId) owns the applied skill → owner-bypass runs it directly. An AGENT
+ * run (agent key sets `agentUserId`) threads that identity into the gate: a
+ * read-only verb still auto-runs, but an agent WRITE verb without an active grant
+ * routes to `propose` — so an agent can't launder itself into an ungoverned
+ * operator write ("AI mutations → checkPermissionOrPropose" holds here too).
  */
 
 import { z } from "@hono/zod-openapi";
@@ -142,6 +143,10 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
         parameters,
         workspaceId: acting.workspaceId,
         userId,
+        // Thread the acting agent (agent-key runs set this) so an agent WRITE
+        // verb is governed by grant/propose instead of laundering into an
+        // ungoverned operator run. A genuine operator (Kratos cookie) has none.
+        agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
         connectionSelector,
       });
 

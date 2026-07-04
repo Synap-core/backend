@@ -19,12 +19,21 @@ import { storage } from "@synap/storage";
 
 // Get MinIO client from environment
 const getS3Client = (): S3Client => {
+  const accessKeyId = process.env.MINIO_ACCESS_KEY;
+  const secretAccessKey = process.env.MINIO_SECRET_KEY;
+  // Fail closed — never fall back to the well-known "minioadmin" default, which
+  // would leave object storage accessible with public credentials.
+  if (!accessKeyId || !secretAccessKey) {
+    throw new Error(
+      "MINIO_ACCESS_KEY and MINIO_SECRET_KEY must be set to access object storage."
+    );
+  }
   return new S3Client({
     region: process.env.MINIO_REGION || "us-east-1",
     endpoint: process.env.MINIO_ENDPOINT || "http://localhost:9000",
     credentials: {
-      accessKeyId: process.env.MINIO_ACCESS_KEY || "minioadmin",
-      secretAccessKey: process.env.MINIO_SECRET_KEY || "minioadmin",
+      accessKeyId,
+      secretAccessKey,
     },
     forcePathStyle: true,
   });

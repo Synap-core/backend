@@ -21,7 +21,7 @@ import {
   isEncryptedServiceKey,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import type { HubHono } from "./_shared.js";
+import { hasScope, type HubHono } from "./_shared.js";
 
 const logger = createLogger({ module: "hub-ai-providers" });
 
@@ -117,6 +117,9 @@ const UpsertBody = z.object({
 export function registerAiProvidersRoutes(app: HubHono): void {
   // GET /ai-providers
   app.get("/ai-providers", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
     const rows = await db.query.aiProviders.findMany({
       orderBy: (t, { asc }) => [asc(t.priority)],
     });
@@ -131,6 +134,9 @@ export function registerAiProvidersRoutes(app: HubHono): void {
 
   // POST /ai-providers — upsert
   app.post("/ai-providers", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     let body: z.infer<typeof UpsertBody>;
     try {
       body = UpsertBody.parse(await c.req.json());
@@ -175,6 +181,9 @@ export function registerAiProvidersRoutes(app: HubHono): void {
 
   // POST /ai-providers/sync — re-push all to IS (must be before /:id routes)
   app.post("/ai-providers/sync", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     const count = await db.query.aiProviders.findMany().then((r) => r.length);
     await syncToIS();
     return c.json({ ok: true, count });
@@ -182,6 +191,9 @@ export function registerAiProvidersRoutes(app: HubHono): void {
 
   // POST /ai-providers/:id/enable
   app.post("/ai-providers/:id/enable", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     const providerId = c.req.param("id");
     await db
       .update(aiProviders)
@@ -193,6 +205,9 @@ export function registerAiProvidersRoutes(app: HubHono): void {
 
   // POST /ai-providers/:id/disable
   app.post("/ai-providers/:id/disable", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     const providerId = c.req.param("id");
     await db
       .update(aiProviders)
@@ -204,6 +219,9 @@ export function registerAiProvidersRoutes(app: HubHono): void {
 
   // POST /ai-providers/:id/probe — live connectivity test via IS admin
   app.post("/ai-providers/:id/probe", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     const providerId = c.req.param("id");
     if (!IS_URL || !IS_ADMIN_KEY) {
       return c.json({ error: "IS not configured" }, 503);
@@ -231,6 +249,9 @@ export function registerAiProvidersRoutes(app: HubHono): void {
 
   // DELETE /ai-providers/:id
   app.delete("/ai-providers/:id", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     const providerId = c.req.param("id");
     await db.delete(aiProviders).where(eq(aiProviders.providerId, providerId));
     await syncToIS();

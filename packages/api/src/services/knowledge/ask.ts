@@ -21,7 +21,11 @@
  * See team/platform/unified-knowledge-access.mdx.
  */
 import { knowledgeRepository, knowledgeKeysRepository } from "@synap/database";
-import { retrieve, type RetrieveResult } from "../retrieval/retrieve.js";
+import {
+  retrieve,
+  type RetrieveResult,
+  type RankComparison,
+} from "../retrieval/retrieve.js";
 import type {
   ProfileCatalogEntry,
   QueryUnderstanding,
@@ -42,6 +46,12 @@ export interface AskParams {
   /** Profile catalog for the semantic engine's type inference. */
   catalog: ProfileCatalogEntry[];
   limit?: number;
+  /**
+   * A/B diagnostic — forward to the semantic engine to run BOTH rankers on the
+   * same pool and return the comparison. READ-ONLY: does not change the normal
+   * answer. Defaults false.
+   */
+  compare?: boolean;
 }
 
 export interface AskAnswer {
@@ -72,6 +82,8 @@ export interface AskResult {
   understanding: QueryUnderstanding;
   /** The semantic engine's CRAG verdict. */
   verdict: RetrievalVerdict;
+  /** A/B ranker comparison — present only when `compare` was requested. */
+  comparison?: RankComparison;
 }
 
 type Settled = { status: "ok" | "error"; items: Record<string, unknown>[] };
@@ -100,7 +112,7 @@ async function settle(p: Promise<unknown[]>): Promise<Settled> {
 }
 
 export async function ask(params: AskParams): Promise<AskResult> {
-  const { query, userId, workspaceId, projectId, catalog } = params;
+  const { query, userId, workspaceId, projectId, catalog, compare } = params;
   const limit = params.limit ?? 10;
   const { substrates, primary: intent } = classifySubstrates(query);
 
@@ -114,6 +126,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
     projectId,
     catalog,
     limit,
+    compare,
   });
   // knowledge_keys has no user column; scope to the user's namespace (workspaceId
   // slot), matching GET /knowledge/search — `undefined` would read UNFILTERED
@@ -202,5 +215,6 @@ export async function ask(params: AskParams): Promise<AskResult> {
     degraded,
     understanding: semantic.understanding,
     verdict: semantic.verdict,
+    ...(semantic.comparison ? { comparison: semantic.comparison } : {}),
   };
 }

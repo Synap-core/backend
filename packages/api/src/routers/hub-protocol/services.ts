@@ -25,7 +25,7 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq } from "@synap/database";
 import { intelligenceServices } from "@synap/database/schema";
-import { validateExternalUrl } from "../../utils/validate-url.js";
+import { validateExternalUrl } from "@synap/shared-utils";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "hub-protocol-services" });

@@ -43,6 +43,11 @@ export const tools = {
               type: "number",
               description: "Max results per substrate (default: 10)",
             },
+            compare: {
+              type: "boolean",
+              description:
+                "A/B DIAGNOSTIC: run BOTH the baseline and Horizon rankers on the same candidate pool and return { baseline, horizon, diff:{ overlapAtN, moved } } instead of a synthesized answer. Read-only — does NOT change normal recall. For evaluating ranking changes.",
+            },
           },
           required: ["query"],
         },

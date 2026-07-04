@@ -32,6 +32,9 @@ import { embedQuery, hybridRecall, rrf } from "./hybrid-recall.js";
 import { graphExpand, type Seed } from "./graph-signal.js";
 import { latestEventTimestamps } from "./temporal-signal.js";
 import { compositeRerank } from "./composite-rerank.js";
+import { resolveRankStrategy } from "./rank-strategy.js";
+import { viewCountsByEntity } from "./reinforcement-signal.js";
+import { horizonScore, type HorizonScored } from "./horizon-rerank.js";
 import { gradeResults, rekey, type RetrievalVerdict } from "./grade.js";
 import {
   understandQuery,
@@ -53,6 +56,41 @@ export interface RetrieveParams {
   limit?: number;
   /** The workspace's real profile catalog (drives type inference). */
   catalog: ProfileCatalogEntry[];
+  /**
+   * A/B diagnostic: run BOTH the `baseline` and `horizon` rankers on the SAME
+   * fused pool and attach the comparison to the result. READ-ONLY — the normal
+   * `entities` returned are STILL the active strategy's output; compare only
+   * ADDS a `comparison` block. Defaults false.
+   */
+  compare?: boolean;
+}
+
+/** One ranked entry in an A/B comparison list (top-`limit`). */
+export interface RankedItem {
+  id: string;
+  title: string;
+  score: number;
+  rank: number;
+}
+
+/** An entity that appears in BOTH top-`limit` lists at a different rank. */
+export interface MovedItem {
+  id: string;
+  title: string;
+  baselineRank: number;
+  horizonRank: number;
+}
+
+/** The A/B comparison payload attached when `compare` is set. */
+export interface RankComparison {
+  baseline: RankedItem[];
+  horizon: RankedItem[];
+  diff: {
+    /** How many ids are shared between the two top-`limit` lists. */
+    overlapAtN: number;
+    /** Shared ids whose rank differs between the two strategies. */
+    moved: MovedItem[];
+  };
 }
 
 export interface RetrieveResult {
@@ -62,6 +100,8 @@ export interface RetrieveResult {
   source: "hybrid" | "typesense";
   /** CRAG verdict on the result set. */
   verdict: RetrievalVerdict;
+  /** A/B ranker comparison — present only when `compare` was requested. */
+  comparison?: RankComparison;
 }
 
 const GRAPH_SEED_CAP = 10;
@@ -116,6 +156,56 @@ async function resolveProjectIds(projectId: string): Promise<Set<string>> {
   );
   ids.add(projectId); // the project entity itself is part of its own lens
   return ids;
+}
+
+const titleOf = (r: EntityRow): string => r.title ?? "";
+
+/**
+ * Build the A/B comparison from the two rankings over the SAME pool. Baseline
+ * scores are rank-normalized (the composite ranker exposes only an ordering, by
+ * design); Horizon carries its real weighted score. Ranks are 1-based and
+ * authoritative — `overlapAtN` + `moved` are computed from them.
+ */
+function buildComparison(
+  baseRanked: EntityRow[],
+  horizonScored: HorizonScored<EntityRow>[],
+  limit: number
+): RankComparison {
+  const baseTop = baseRanked.slice(0, limit);
+  const horizonTop = horizonScored.slice(0, limit);
+
+  const baseline: RankedItem[] = baseTop.map((r, i) => ({
+    id: r.id,
+    title: titleOf(r),
+    // Composite exposes order, not a score — represent it as normalized rank.
+    score: Number(((baseTop.length - i) / baseTop.length).toFixed(4)),
+    rank: i + 1,
+  }));
+  const horizon: RankedItem[] = horizonTop.map((x, i) => ({
+    id: x.row.id,
+    title: titleOf(x.row),
+    score: Number(x.score.toFixed(4)),
+    rank: i + 1,
+  }));
+
+  const horizonRankById = new Map(horizon.map((h) => [h.id, h.rank]));
+  const baselineIds = new Set(baseline.map((b) => b.id));
+  const overlapAtN = horizon.filter((h) => baselineIds.has(h.id)).length;
+  const moved: MovedItem[] = baseline.flatMap((b) => {
+    const hr = horizonRankById.get(b.id);
+    return hr !== undefined && hr !== b.rank
+      ? [
+          {
+            id: b.id,
+            title: b.title,
+            baselineRank: b.rank,
+            horizonRank: hr,
+          },
+        ]
+      : [];
+  });
+
+  return { baseline, horizon, diff: { overlapAtN, moved } };
 }
 
 export async function retrieve(
@@ -204,23 +294,66 @@ export async function retrieve(
 
   const ordered = await fetchOrdered(fusedIds, userId, projectId);
 
-  // 4. Composite re-rank — fused position primary; property + temporal boosts are
-  //    bounded to a fraction of the position span (see composite-rerank.ts).
+  // 4. Rank — resolve the ACTIVE strategy (pod_settings JSONB; default 'baseline'
+  //    so this changes nothing until a pod admin opts in) then rank + slice.
+  //    `compare` runs BOTH strategies on the SAME pool for A/B; it only ADDS a
+  //    `comparison` block — the returned entities stay the active strategy's.
   const now = Date.now();
-  const eventTs = understanding.temporal
-    ? await latestEventTimestamps(
-        ordered.map((r) => r.id),
-        userId
-      )
-    : undefined;
-  const reranked = compositeRerank(ordered, {
-    propertyHints: understanding.propertyHints,
-    temporal: understanding.temporal,
-    now,
-    eventTs,
-  });
+  const strategy = await resolveRankStrategy();
+  const compare = params.compare === true;
 
-  const finalRows = reranked.slice(0, limit);
+  // baseline = the EXISTING composite re-rank, byte-identical to pre-Horizon.
+  const runBaseline = async (): Promise<EntityRow[]> => {
+    const eventTs = understanding.temporal
+      ? await latestEventTimestamps(
+          ordered.map((r) => r.id),
+          userId
+        )
+      : undefined;
+    return compositeRerank(ordered, {
+      propertyHints: understanding.propertyHints,
+      temporal: understanding.temporal,
+      now,
+      eventTs,
+    });
+  };
+
+  // horizon = the lens-weighted scorer (recency + reinforcement + centrality +
+  // query relevance; L=0 this phase). Batches its signals over the pool ids.
+  const runHorizon = async (): Promise<HorizonScored<EntityRow>[]> => {
+    const ids = ordered.map((r) => r.id);
+    const [viewCounts, lastTouch] = await Promise.all([
+      viewCountsByEntity(ids, userId),
+      latestEventTimestamps(ids, userId),
+    ]);
+    const centrality = new Map(graphHits.map((h) => [h.id, h.score]));
+    return horizonScore(ordered, {
+      lens: projectId ? "project" : "workspace",
+      now,
+      viewCounts,
+      lastTouch,
+      centrality,
+    });
+  };
+
+  let finalRows: EntityRow[];
+  let comparison: RankComparison | undefined;
+  if (compare) {
+    const [baseRanked, horizonScored] = await Promise.all([
+      runBaseline(),
+      runHorizon(),
+    ]);
+    comparison = buildComparison(baseRanked, horizonScored, limit);
+    // The active strategy still decides the NORMAL (non-compare) return.
+    const active =
+      strategy === "horizon" ? horizonScored.map((x) => x.row) : baseRanked;
+    finalRows = active.slice(0, limit);
+  } else if (strategy === "horizon") {
+    finalRows = (await runHorizon()).map((x) => x.row).slice(0, limit);
+  } else {
+    finalRows = (await runBaseline()).slice(0, limit);
+  }
+
   const verdict = gradeResults(
     understanding,
     finalRows.map((r) => r.type)
@@ -231,5 +364,6 @@ export async function retrieve(
     understanding,
     source,
     verdict,
+    ...(comparison ? { comparison } : {}),
   };
 }

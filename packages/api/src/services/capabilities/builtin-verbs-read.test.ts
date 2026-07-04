@@ -99,8 +99,10 @@ describe("W6 read/resolve verbs — registry", () => {
     }
   });
 
-  it("marks exactly the four reads as read-only (writes flow through the gate)", () => {
+  it("marks the reads (+ ai.generate pure-compute) as read-only (writes flow through the gate)", () => {
     expect([...READ_ONLY_BUILTIN_VERBS].sort()).toEqual([
+      // ai.generate is pure compute (no mutation) → auto-runs like the reads.
+      "ai.generate",
       "channel.resolve",
       "entity.query",
       "feed.read",

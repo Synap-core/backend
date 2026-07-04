@@ -35,7 +35,7 @@ import type { NangoConnector } from "./NangoConnector.js";
 import type { SyncConnectorConnection } from "./SyncConnector.js";
 import { resolveVaultSecret } from "../utils/vault-resolver.js";
 import { resolveCapabilityGrant } from "@synap/database";
-import { validateExternalUrl } from "../utils/validate-url.js";
+import { validateExternalUrl } from "@synap/shared-utils";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
 import { createPendingProposal } from "../utils/permission-check.js";

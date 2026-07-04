@@ -18,7 +18,7 @@
  */
 
 import type { Executor, RunContext, RunResult } from "@synap/playbooks";
-import { validateExternalUrl } from "../../../utils/validate-url.js";
+import { validateExternalUrl } from "@synap/shared-utils";
 
 /** Fire-and-forget POST with a hard timeout; never throws. */
 async function postWebhook(url: string, body: unknown): Promise<boolean> {

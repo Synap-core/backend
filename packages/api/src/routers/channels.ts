@@ -75,7 +75,7 @@ import {
   makeRoutedTeammateContext,
   type RoutedTeammateContext,
 } from "../utils/permission-check.js";
-import { validateExternalUrl } from "../utils/validate-url.js";
+import { validateExternalUrl } from "@synap/shared-utils";
 import { resolveOrCreateChannel } from "../utils/resolve-or-create-channel.js";
 import {
   ensureAgentInstanceThread,

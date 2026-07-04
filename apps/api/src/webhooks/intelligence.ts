@@ -42,19 +42,18 @@ const AnalysisCallbackSchema = z.object({
  * Called by intelligence services to return analysis results.
  */
 intelligenceWebhookRouter.post("/callback", async (c) => {
-  // Auth: Bearer token check
+  // Auth: Bearer token check. The key is REQUIRED — never fail open.
   const expectedToken = process.env.INTELLIGENCE_SERVICE_API_KEY;
-  if (expectedToken) {
-    const authHeader = c.req.header("Authorization") ?? "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
-    if (!safeCompare(token, expectedToken)) {
-      return c.json({ error: "Unauthorized" }, 401);
-    }
-  } else {
-    // TODO: INTELLIGENCE_SERVICE_API_KEY should be required in production
-    logger.warn(
-      "INTELLIGENCE_SERVICE_API_KEY not set — skipping auth (dev mode)"
+  if (!expectedToken) {
+    logger.error(
+      "INTELLIGENCE_SERVICE_API_KEY not set — rejecting intelligence callback"
     );
+    return c.json({ error: "Server misconfigured" }, 500);
+  }
+  const authHeader = c.req.header("Authorization") ?? "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  if (!safeCompare(token, expectedToken)) {
+    return c.json({ error: "Unauthorized" }, 401);
   }
 
   try {

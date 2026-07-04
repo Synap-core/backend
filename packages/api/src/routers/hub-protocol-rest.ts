@@ -15,6 +15,7 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { createLogger } from "@synap-core/core";
 
+import { db, users, eq } from "@synap/database";
 import { apiKeyService } from "../services/api-keys.js";
 import {
   isSubTokenFeatureEnabled,
@@ -370,6 +371,18 @@ app.use("/*", async (c, next) => {
     if (keyRecord.keyType === "is_internal") {
       const op = c.req.header("x-delegated-operator-id");
       if (op) {
+        // Validate the delegated operator names a real user on this pod before
+        // trusting it as the read floor. Without this, an is_internal caller
+        // could set an arbitrary header and read as any (or a non-existent) user.
+        const operator = await db.query.users.findFirst({
+          where: eq(users.id, op),
+          columns: { id: true },
+        });
+        if (!operator) {
+          return authErrorResponse(c, "no_auth", {
+            message: "x-delegated-operator-id does not resolve to a pod user.",
+          });
+        }
         c.set("userId", op); // operator owns/sees the entities (data floor)
         // Attribute writes to the key owner ONLY if it's a real agent user. A
         // self-hosted IS key is owned by the "system" sentinel (no users row,
