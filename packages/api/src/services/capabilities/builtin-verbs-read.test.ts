@@ -104,12 +104,19 @@ describe("W6 read/resolve verbs — registry", () => {
       // ai.generate is pure compute (no mutation) → auto-runs like the reads.
       "ai.generate",
       "channel.resolve",
+      "document.read",
       "entity.query",
       "feed.read",
       "graph.relations",
     ]);
     expect(READ_ONLY_BUILTIN_VERBS.has("channel.ensure")).toBe(false);
     expect(READ_ONLY_BUILTIN_VERBS.has("graph.link")).toBe(false);
+    // The new entity/document WRITE verbs must NOT be read-only — they flow the
+    // full capability gate (agent-without-grant → propose), never auto-run.
+    expect(READ_ONLY_BUILTIN_VERBS.has("entity.create")).toBe(false);
+    expect(READ_ONLY_BUILTIN_VERBS.has("entity.update")).toBe(false);
+    expect(READ_ONLY_BUILTIN_VERBS.has("document.create")).toBe(false);
+    expect(READ_ONLY_BUILTIN_VERBS.has("document.update")).toBe(false);
   });
 });
 
