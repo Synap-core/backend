@@ -272,6 +272,87 @@ const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    // ── Entity/document write + read half (Spine-2) ─────────────────────────
+    {
+      name: "entity.create",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Create an entity via the governed entities.create path (checkPermissionOrPropose). May return a proposal. Returns the created entity or { status: 'proposed', proposalId }.",
+      parameters: {
+        type: "object",
+        required: ["profileSlug", "title"],
+        properties: {
+          profileSlug: { type: "string" },
+          title: { type: "string" },
+          description: { type: "string" },
+          properties: { type: "object" },
+          workspaceId: { type: "string", format: "uuid" },
+        },
+      },
+    },
+    {
+      name: "entity.update",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Update an entity via the governed entities.update path (checkPermissionOrPropose). May return a proposal. Returns the updated entity or { status: 'proposed', proposalId }.",
+      parameters: {
+        type: "object",
+        required: ["entityId"],
+        properties: {
+          entityId: { type: "string", format: "uuid" },
+          title: { type: "string" },
+          description: { type: "string" },
+          properties: { type: "object" },
+        },
+      },
+    },
+    {
+      name: "document.create",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Create a document in the acting workspace via the governed documents.create path.",
+      parameters: {
+        type: "object",
+        required: ["title"],
+        properties: {
+          title: { type: "string" },
+          content: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "document.update",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Update a document via the governed documents.update path (owner-gated).",
+      parameters: {
+        type: "object",
+        required: ["documentId"],
+        properties: {
+          documentId: { type: "string" },
+          content: { type: "string" },
+          title: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "document.read",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "READ a document's metadata by id, scoped to the caller's floor. Returns { document }. Read-only.",
+      parameters: {
+        type: "object",
+        required: ["documentId"],
+        properties: {
+          documentId: { type: "string" },
+        },
+      },
+    },
   ],
 };
 
