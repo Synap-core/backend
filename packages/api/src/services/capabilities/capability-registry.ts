@@ -37,6 +37,7 @@ import type {
   ExecMode,
   ExecutorRef,
 } from "@synap/playbooks";
+import { getDefaultActiveService } from "@synap/intelligence-client";
 
 export interface CapabilityRegistryContext {
   workspaceId: string;
@@ -99,6 +100,54 @@ function buildVerbStates(
     granted,
     effectiveExecMode: grant ? grant.execMode : v.govDefault,
   }));
+}
+
+// ── IS-native tool manifest (Spine 2 / 2b) ────────────────────────────────────
+// The IS publishes its in-process tool registry at GET /api/manifest/tools. We
+// fetch it (cached, TTL below) and map each tool to a `builtin-tool` capability
+// so IS-native tools (web_search, graph_traverse, …) are discoverable AND
+// governable through the ONE registry — filling the historical `builtinCaps: []`
+// gap without hardcoding a list that would drift from the IS. Failure is
+// graceful: `listCapabilities` never breaks if the IS is unreachable (returns
+// the last good cache, else nothing).
+interface ISManifestTool {
+  name: string;
+  category?: string;
+  description?: string;
+}
+let isManifestCache: { at: number; caps: Capability[] } | null = null;
+const IS_MANIFEST_TTL_MS = 60_000;
+
+async function fetchISNativeCapabilities(): Promise<Capability[]> {
+  if (isManifestCache && Date.now() - isManifestCache.at < IS_MANIFEST_TTL_MS) {
+    return isManifestCache.caps;
+  }
+  try {
+    const svc = await getDefaultActiveService();
+    const res = await fetch(`${svc.endpoint}/api/manifest/tools`, {
+      headers: { "X-API-Key": svc.apiKey },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!res.ok) return isManifestCache?.caps ?? [];
+    const body = (await res.json()) as { tools?: ISManifestTool[] };
+    const caps: Capability[] = (body.tools ?? []).map((t) => ({
+      kind: "builtin-tool" as CapabilityKind,
+      id: `is-native:${t.name}`,
+      name: t.name,
+      description: t.description ?? null,
+      inputSchema: {},
+      executor: "is-agent" as ExecutorRef,
+      // Conservative default (like commands): IS-native tools route through a
+      // proposal until per-tool read/write governance is modeled. Actual
+      // execution is gated separately by the capability gate regardless.
+      governance: deriveGovernance(undefined),
+    }));
+    isManifestCache = { at: Date.now(), caps };
+    return caps;
+  } catch {
+    // IS down / no active service — never break the capability read-model.
+    return isManifestCache?.caps ?? [];
+  }
 }
 
 /**
@@ -217,9 +266,9 @@ export async function listCapabilities(
     governance: deriveGovernance(undefined),
   }));
 
-  // TODO(phase-1): builtin IS tools — requires an IS manifest endpoint; returns
-  // nothing today rather than hardcoding a list that would drift from IS.
-  const builtinCaps: Capability[] = [];
+  // IS-native tools, fetched (cached) from the IS manifest endpoint — see
+  // fetchISNativeCapabilities above. Graceful: [] when the IS is unreachable.
+  const builtinCaps: Capability[] = await fetchISNativeCapabilities();
 
   return [...builtinCaps, ...toolCaps, ...skillCaps, ...commandCaps];
 }
