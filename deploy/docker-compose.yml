@@ -267,6 +267,15 @@ services:
       HUB_PROTOCOL_API_KEY: ${HUB_PROTOCOL_API_KEY:-}
       HUB_PROTOCOL_API_KEYS: ${HUB_PROTOCOL_API_KEYS:-}
       NODE_ENV: production
+      # loadConfig() (imported by migrate.js via @synap-core/core) validates ALL
+      # config eagerly on import, incl. storage — and the production guard refuses
+      # a default MinIO credential. Migrations never touch storage, but the eager
+      # validation does, so the migrate runner needs the SAME MinIO creds as the
+      # backend service or `node migrate.js` throws at loadConfig before running.
+      STORAGE_PROVIDER: minio
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
     # Run migrations then seed hub protocol API keys in one shot
     # (Merged from former backend-init service to avoid orphaned container issues)
     #
