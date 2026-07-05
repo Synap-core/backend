@@ -34,6 +34,7 @@ import {
   entities,
   relations,
   messages,
+  documents,
   getWorkspaceMembership,
   insertChannelMessage,
 } from "@synap/database";
@@ -863,9 +864,259 @@ const feedReadHandler: BuiltinVerbHandler = async (params, ctx) => {
   return { messages: ordered, channelId };
 };
 
+// ── Entity/document write + read half (Spine-2) ──────────────────────────────
+//
+// Four GENERIC write verbs that let the capability substrate WRITE entities and
+// documents (until now it could only read via entity.query), plus one READ verb
+// for a single document. Same two shapes as above:
+//   entity.create / entity.update  → delegate to the governed `entitiesRouter`
+//     caller (`create` / `update`, both `podProcedure` — tolerant of a null
+//     workspace for pod-scoped profiles), which runs `checkPermissionOrPropose`
+//     internally. Its return is surfaced VERBATIM (it may be
+//     `{ status: "proposed", proposalId }`).
+//   document.create → delegates to the governed `documentsRouter.create`
+//     caller (`workspaceProcedure` — requires an acting workspace lens),
+//     mirroring channel.create / graph.link's membership pre-check.
+//   document.update → delegates to `documentsRouter.update` (`protectedProcedure`
+//     — its own gate is direct row ownership, not workspace membership, so
+//     there is no workspace lens to pre-check here).
+//   document.read   → READS through the access layer (`documents` already
+//     carries a registered VisibilityRule), mirroring entity.query — metadata
+//     only (not the MinIO-stored body), so it stays a pure access-layer read.
+
+/** entity.create — create an entity through the governed `entitiesRouter.create` caller. */
+const entityCreateParams = z.object({
+  /** Entity profile slug (e.g. "task", "person") — the `type` discriminator. */
+  profileSlug: z.string().min(1).max(200),
+  title: z.string().min(1).max(500),
+  description: z.string().max(5000).optional(),
+  properties: z.record(z.string(), z.unknown()).optional(),
+  /** Optional explicit workspace lens; defaults to the acting workspace (or
+   *  pod-wide, for a pod-scoped profile, when neither is set). */
+  workspaceId: z.string().uuid().optional(),
+});
+
+const entityCreateHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = entityCreateParams.parse(params);
+
+  // entities.create is a podProcedure — unlike the workspace-scoped writes
+  // above it tolerates a null workspace (pod-default profiles), so we only
+  // enforce membership when a workspace lens IS in play.
+  const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
+  let workspaceRole: string | undefined;
+  if (workspaceId) {
+    const membership = await getWorkspaceMembership(
+      db,
+      workspaceId,
+      ctx.userId
+    );
+    if (!membership) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "No access to the acting workspace.",
+      });
+    }
+    workspaceRole = membership.role;
+  }
+
+  const { entitiesRouter } = await import("../../routers/entities.js");
+  const caller = entitiesRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId,
+    workspaceRole,
+  } as unknown as Context);
+
+  // entities.create governs the write (checkPermissionOrPropose): it returns
+  // either the created entity OR { status: "proposed", proposalId }. Surface
+  // that verbatim so an unapproved create is not reported as done.
+  const result = await caller.create({
+    profileSlug: input.profileSlug,
+    title: input.title,
+    description: input.description,
+    properties: input.properties,
+  });
+
+  return result;
+};
+
+/** entity.update — update an entity through the governed `entitiesRouter.update` caller. */
+const entityUpdateParams = z.object({
+  entityId: z.string().uuid(),
+  title: z.string().max(500).optional(),
+  description: z.string().max(5000).optional(),
+  properties: z.record(z.string(), z.unknown()).optional(),
+});
+
+const entityUpdateHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = entityUpdateParams.parse(params);
+
+  // Mirror entity.create: entities.update is also a podProcedure, so only
+  // enforce membership when the acting run carries a workspace lens.
+  let workspaceRole: string | undefined;
+  if (ctx.workspaceId) {
+    const membership = await getWorkspaceMembership(
+      db,
+      ctx.workspaceId,
+      ctx.userId
+    );
+    if (!membership) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "No access to the acting workspace.",
+      });
+    }
+    workspaceRole = membership.role;
+  }
+
+  const { entitiesRouter } = await import("../../routers/entities.js");
+  const caller = entitiesRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    workspaceRole,
+  } as unknown as Context);
+
+  // entities.update governs the write (checkPermissionOrPropose): it returns
+  // either the updated entity OR { status: "proposed", proposalId }. Surface
+  // that verbatim so an unapproved update is not reported as done.
+  const result = await caller.update({
+    id: input.entityId,
+    title: input.title,
+    description: input.description,
+    properties: input.properties,
+  });
+
+  return result;
+};
+
+/** document.create — create a document through the governed `documentsRouter.create` caller. */
+const documentCreateParams = z.object({
+  title: z.string().min(1).max(500),
+  content: z.string().max(200000).optional(),
+});
+
+const documentCreateHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = documentCreateParams.parse(params);
+
+  // documents.create is workspaceProcedure — requires an acting workspace lens,
+  // mirroring channel.create / graph.link.
+  if (!ctx.workspaceId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "document.create requires a workspace context (workspaceId).",
+    });
+  }
+
+  const membership = await getWorkspaceMembership(
+    db,
+    ctx.workspaceId,
+    ctx.userId
+  );
+  if (!membership) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "No access to the acting workspace.",
+    });
+  }
+
+  const { documentsRouter } = await import("../../routers/documents.js");
+  const caller = documentsRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    workspaceRole: membership.role,
+  } as unknown as Context);
+
+  const result = await caller.create({
+    title: input.title,
+    content: input.content,
+  });
+
+  return result;
+};
+
+/** document.update — update a document through the governed `documentsRouter.update` caller. */
+const documentUpdateParams = z.object({
+  documentId: z.string().min(1),
+  content: z.string().max(200000).optional(),
+  title: z.string().max(500).optional(),
+});
+
+const documentUpdateHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = documentUpdateParams.parse(params);
+
+  // documents.update is a protectedProcedure whose gate is direct row
+  // ownership (documents.userId = ctx.userId), not workspace membership — it
+  // takes no workspaceId input, so there is no workspace lens to pre-check
+  // here (unlike the workspace-scoped writes above).
+  const { documentsRouter } = await import("../../routers/documents.js");
+  const caller = documentsRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+  } as unknown as Context);
+
+  const result = await caller.update({
+    documentId: input.documentId,
+    delta:
+      input.content !== undefined ? [{ content: input.content }] : undefined,
+    title: input.title,
+  });
+
+  return result;
+};
+
+/**
+ * document.read — READ a document's metadata by id, scoped by the caller's
+ * floor. Mirrors entity.query: reads THROUGH the access layer (`documents`
+ * already carries a registered VisibilityRule), so it never returns a document
+ * outside the caller's floor. Metadata only — the MinIO-stored body is NOT
+ * fetched here (that's `documentsRouter.get`'s job); this verb stays a pure
+ * access-layer read like its W6 siblings.
+ */
+const documentReadParams = z.object({
+  documentId: z.string().min(1),
+});
+
+const documentReadHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = documentReadParams.parse(params);
+  const scoped = await getReadScope(ctx.userId, ctx.workspaceId ?? undefined);
+
+  const doc = await scoped.findFirst<{
+    id: string;
+    title: string;
+    type: string;
+    workspaceId: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }>(documents, {
+    where: eq(documents.id, input.documentId),
+    columns: {
+      id: true,
+      title: true,
+      type: true,
+      workspaceId: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+
+  if (!doc) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Document not found." });
+  }
+
+  return { document: doc };
+};
+
 /**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
- * write/emit pilots) + W6 (the read/resolve half).
+ * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
+ * write + read).
  * Keep names namespaced (`channel.create`, `feed.post`) to mirror the
  * `connector.action` convention used for external verbs.
  */
@@ -883,6 +1134,12 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "graph.relations": graphRelationsHandler,
   "graph.link": graphLinkHandler,
   "feed.read": feedReadHandler,
+  // Spine-2 — entity/document write + read.
+  "entity.create": entityCreateHandler,
+  "entity.update": entityUpdateHandler,
+  "document.create": documentCreateHandler,
+  "document.update": documentUpdateHandler,
+  "document.read": documentReadHandler,
 };
 
 /**
@@ -891,8 +1148,8 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
  * a read auto-runs (no grant, no propose) once it clears the approval gate; its
  * scope is enforced by the access layer inside each handler, NOT by the gate.
  * WRITE verbs (channel.ensure, channel.bind, graph.link, channel.create,
- * feed.post, output.generate) are intentionally ABSENT — they flow through the
- * full gate.
+ * feed.post, output.generate, entity.create, entity.update, document.create,
+ * document.update) are intentionally ABSENT — they flow through the full gate.
  */
 export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   "entity.query",
@@ -905,4 +1162,6 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // the flow, since a capability node refuses on a propose verdict). Scope is N/A:
   // it reads no DB rows, so there is no access-layer floor to enforce.
   "ai.generate",
+  // document.read — pure access-layer read (see handler doc above).
+  "document.read",
 ]);
