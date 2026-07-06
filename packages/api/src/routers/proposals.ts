@@ -167,7 +167,7 @@ async function stampProjectMembership(
 function emitProposalReviewed(
   proposalId: string,
   workspaceId: string | null | undefined,
-  status: "approved" | "rejected",
+  status: "approved" | "rejected" | "reopened",
   userId?: string
 ): void {
   // A null-workspace (pod-wide) proposal still needs its reviewed event so the
@@ -179,6 +179,11 @@ function emitProposalReviewed(
     data: { proposalId, status, ...(workspaceId ? { workspaceId } : {}) },
     ...(workspaceId ? { workspaceId } : { userId: userId! }),
   });
+  // "reopened" = rejected → pending: the proposal is actionable again, so it must
+  // NOT fire the approve/reject automation triggers, mark its notification
+  // actioned, or notify a waiting agent of a terminal review. The realtime event
+  // above is enough to move it back into the pending queue on every client.
+  if (status === "reopened") return;
   // Automation side-effects (proposal.approved/rejected.completed) are
   // workspace-scoped triggers; only emit them when a workspace is present.
   if (workspaceId) {
@@ -1668,6 +1673,59 @@ export const proposalsRouter = router({
           userId
         );
       }
+
+      return { success: true };
+    }),
+
+  /**
+   * Reopen a REJECTED proposal — the inverse of `reject`. Rejecting is
+   * non-destructive (it only flips status + records the reason; the full change
+   * payload is kept), so a denied proposal can be put back into the pending
+   * queue and approved normally. Symmetric with `revert` (which undoes an
+   * APPROVED one). The one-click "Accept instead" in the UI is `reopen` then
+   * `approve`, so approve's full governance still runs on the re-apply.
+   */
+  reopen: protectedProcedure
+    .input(z.object({ proposalId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      const proposal = await db.query.proposals.findFirst({
+        where: eq(proposals.id, input.proposalId),
+        columns: { status: true, workspaceId: true },
+      });
+      if (!proposal) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
+      }
+      if (proposal.status !== ProposalStatus.REJECTED) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only a rejected proposal can be reopened.",
+        });
+      }
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.PENDING,
+          rejectionReason: null,
+          reviewedBy: null,
+          reviewedAt: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // Realtime-only refresh (no approve/reject side effects — see helper): moves
+      // the proposal from the rejected list back into the pending queue everywhere.
+      emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "reopened",
+        userId
+      );
 
       return { success: true };
     }),

@@ -3321,6 +3321,18 @@ export interface ReconcileReport {
 		skipped: string[];
 		deferred: string[];
 	};
+	/**
+	 * Schema-level links between entity types (relation_defs + profile_relations).
+	 * `added` = a (source, target, type) edge that did not exist and was created.
+	 * `skipped` = already present (idempotent no-op).
+	 * `unresolved` = a source/target profile slug could not be resolved to a live
+	 * profile in this workspace — left untouched, non-fatal.
+	 */
+	entityLinks: {
+		added: string[];
+		skipped: string[];
+		unresolved: string[];
+	};
 }
 /**
  * View Query Types
@@ -11300,15 +11312,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileIds: string[];
 				viewIds: string[];
 				entityIds?: undefined;
+				reconciled?: undefined;
 			} | {
 				workspaceId: string;
 				entityIds: never[];
+				reconciled: ReconcileReport | undefined;
 				status?: undefined;
 				profileIds?: undefined;
 				viewIds?: undefined;
 			} | {
 				status: "created" | "pending";
 				workspaceId: string;
+				reconciled: ReconcileReport | undefined;
 				profileIds?: undefined;
 				viewIds?: undefined;
 				entityIds?: undefined;
@@ -11318,6 +11333,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileIds: string[];
 				viewIds: string[];
 				entityIds: string[];
+				reconciled?: undefined;
 			};
 			meta: object;
 		}>;
@@ -11380,6 +11396,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						description?: string | undefined;
 						defaultView?: boolean | undefined;
 						colorBy?: string | undefined;
+					}[] | undefined;
+					entityLinks?: {
+						sourceProfileSlug: string;
+						targetProfileSlug: string;
+						type: string;
+						label?: string | undefined;
 					}[] | undefined;
 				};
 				dryRun?: boolean | undefined;

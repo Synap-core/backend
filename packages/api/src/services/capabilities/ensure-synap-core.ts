@@ -81,6 +81,7 @@ const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
           agentSlug: { type: "string" },
           parentChannelId: { type: "string", format: "uuid" },
           branchPurpose: { type: "string" },
+          metadata: { type: "object" },
         },
       },
     },
@@ -96,6 +97,7 @@ const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         properties: {
           channelId: { type: "string", format: "uuid" },
           content: { type: "string" },
+          metadata: { type: "object" },
         },
       },
     },
@@ -171,6 +173,7 @@ const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
               },
             },
           },
+          options: { type: "object" },
         },
       },
     },
