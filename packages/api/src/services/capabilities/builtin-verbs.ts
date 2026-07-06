@@ -311,9 +311,13 @@ const aiTriageHandler: BuiltinVerbHandler = async (params) => {
  * handler calls the IS internally, but the verb still runs in-process + governed.
  *
  * OUTPUT CONTRACT: the handler returns the IS `output` VALUE DIRECTLY (no
- * envelope), so an automation step's `steps.<id>.output` IS that value. With
- * `json:true` the model output is parsed IS-side, so `steps.detect.output` is the
- * parsed object and `steps.detect.output.reviewNeeded` resolves.
+ * envelope at the verb level). But a CAPABILITY NODE in an automation double-wraps
+ * every verb result: executeCapabilityNode returns `{ output: <verbResult>, verbId,
+ * skillId }`, which the engine then stores as `steps.<id> = { output: <that> }`. So
+ * from a template the value lives at `steps.<id>.output.output.<field>` (TWO
+ * `.output` hops), NOT `steps.<id>.output.<field>`. With `json:true` the model
+ * output is parsed IS-side, so e.g. `steps.detect.output.output.reviewNeeded`
+ * resolves. (Same convention as skill nodes — do NOT special-case-unwrap here.)
  *
  * COERCION: the automation engine stringifies every inputMapping value (String()),
  * so `json` arrives as the string "true"/"false" and `maxTokens` as a numeric
@@ -464,6 +468,11 @@ const channelResolveParams = z.object({
   contextObjectId: z.string().uuid(),
   /** Optional channelType filter (parameter, never a constant). */
   channelType: z.string().max(50).optional(),
+  /** Optional branchPurpose filter (e.g. "team" | "client-comms") — the firewall
+   *  ROLE, distinct from channelType (external/thread/feed). This is how team-vs-
+   *  client channels are distinguished, so resolving "the client's TEAM channel"
+   *  filters on this, not channelType. */
+  branchPurpose: z.string().max(50).optional(),
 });
 
 const channelResolveHandler: BuiltinVerbHandler = async (params, ctx) => {
@@ -478,6 +487,9 @@ const channelResolveHandler: BuiltinVerbHandler = async (params, ctx) => {
     // channelType is a GENERIC string param; the column is a typed enum, so
     // compare via a SQL literal rather than the enum-narrowed `eq` overload.
     conditions.push(drizzleSql`${channels.channelType} = ${input.channelType}`);
+  }
+  if (input.branchPurpose) {
+    conditions.push(eq(channels.branchPurpose, input.branchPurpose));
   }
 
   const rows = await scoped.findMany<{

@@ -98,7 +98,7 @@ const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       kind: "builtin",
       scope: "pod",
       description:
-        "Synchronous single-shot LLM completion via the IS generate tool. Returns { output } where output is the raw text, or (when json:true) the parsed JSON object — used DIRECTLY as an automation step's output so downstream nodes read steps.<id>.output.<field>. Read-only (pure compute, no mutation): auto-runs inside an automation without a proposal.",
+        "Synchronous single-shot LLM completion via the IS generate tool. Returns the raw text, or (when json:true) the parsed JSON object. Inside an automation the capability node double-wraps the result, so downstream nodes read steps.<id>.output.output.<field> (two .output hops). Read-only (pure compute, no mutation): auto-runs inside an automation without a proposal.",
       parameters: {
         type: "object",
         required: ["prompt"],
@@ -179,7 +179,7 @@ const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       kind: "builtin",
       scope: "pod",
       description:
-        "READ the channel(s) bound to a context object, optionally filtered by channelType (a PARAMETER — no assumption about which type is 'the client channel'). Returns { channelId|null, channels[] }. Read-only. A client-comms result must never be used as a post target (the firewall blocks it).",
+        "READ the channel(s) bound to a context object, optionally filtered by channelType and/or branchPurpose (both PARAMETERS — no assumption about which is 'the client channel'). Pass branchPurpose:'team' to resolve the firewall-safe team channel. Returns { channelId|null, channels[] }. Read-only. A client-comms result must never be used as a post target (the firewall blocks it).",
       parameters: {
         type: "object",
         required: ["contextObjectType", "contextObjectId"],
@@ -187,6 +187,7 @@ const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
           contextObjectType: { type: "string" },
           contextObjectId: { type: "string", format: "uuid" },
           channelType: { type: "string" },
+          branchPurpose: { type: "string" },
         },
       },
     },

@@ -2714,7 +2714,13 @@ function evaluateCondition(expression: string, context: StepContext): boolean {
     const [, leftPath, operator, rightRaw] = match;
     const leftValue = resolveTemplate(`{{${leftPath.trim()}}}`, context);
 
-    // Parse right side: remove quotes for strings, parse numbers
+    // Parse right side: quoted → string literal, numeric → number, a bare
+    // context path (trigger./steps./automation./loop./item.) → resolve it as a
+    // template too so a condition can compare two resolved paths, e.g.
+    // `trigger.payload.subjectId !== trigger.payload.data.channelId`. The left
+    // operand is always resolved; without this the right path would be compared
+    // as the literal string "trigger.payload.data.channelId" and never match.
+    // Anything else (e.g. `true`, `active`) stays a bare string literal.
     let rightValue: string | number = rightRaw.trim();
     if (
       (rightValue.startsWith("'") && rightValue.endsWith("'")) ||
@@ -2723,6 +2729,8 @@ function evaluateCondition(expression: string, context: StepContext): boolean {
       rightValue = rightValue.slice(1, -1);
     } else if (!isNaN(Number(rightValue))) {
       rightValue = Number(rightValue);
+    } else if (/^(trigger|steps|automation|loop|item)\./.test(rightValue)) {
+      rightValue = resolveTemplate(`{{${rightValue}}}`, context);
     }
 
     const left = typeof rightValue === "number" ? Number(leftValue) : leftValue;

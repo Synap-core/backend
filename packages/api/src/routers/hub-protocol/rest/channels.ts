@@ -744,6 +744,27 @@ export function registerChannelsRoutes(app: HubHono): void {
       //     (fat-fingered /link-channel, mis-inferred auto-link) must be
       //     correctable, exactly like the workspace/entity self-heal above.
       if (body.branchPurpose) {
+        // FIREWALL (non-negotiable): the `client-comms` role is IMMUTABLE once
+        // set — even an explicit relink may not flip it. Reclassifying a
+        // client-comms channel to `team` would route bot/AI output straight into
+        // a real client's conversation. This mirrors the updateChannel guard
+        // (which this REST path bypasses); the self-heal escape hatch below
+        // stays available for every OTHER role transition.
+        if (body.relink && body.branchPurpose !== "client-comms") {
+          const existing = await db.query.channels.findFirst({
+            where: eq(channelsTable.id, channelId),
+            columns: { branchPurpose: true },
+          });
+          if (existing?.branchPurpose === "client-comms") {
+            return c.json(
+              {
+                error:
+                  "Cannot reclassify a client-comms channel — the firewall label is immutable.",
+              },
+              403
+            );
+          }
+        }
         await db
           .update(channelsTable)
           .set({ branchPurpose: body.branchPurpose, updatedAt: new Date() })
