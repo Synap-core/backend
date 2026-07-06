@@ -49,8 +49,19 @@ export async function setChannelBranchPurpose(args: {
   ) {
     throw new ChannelFirewallImmutableError(args.channelId);
   }
-  await db
-    .update(channels)
-    .set({ branchPurpose: args.branchPurpose, updatedAt: new Date() })
-    .where(eq(channels.id, args.channelId));
+  try {
+    await db
+      .update(channels)
+      .set({ branchPurpose: args.branchPurpose, updatedAt: new Date() })
+      .where(eq(channels.id, args.channelId));
+  } catch (err) {
+    // The DB trigger (0169) is the floor beneath the check above. If a
+    // concurrent write flipped the row to client-comms between our read and
+    // this UPDATE (TOCTOU), the trigger raises SQLSTATE 23514 — translate it to
+    // the same typed error so every caller's existing catch maps it to 403.
+    if ((err as { code?: string })?.code === "23514") {
+      throw new ChannelFirewallImmutableError(args.channelId);
+    }
+    throw err;
+  }
 }

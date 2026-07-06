@@ -17,8 +17,14 @@ BEGIN
     RAISE EXCEPTION
       'firewall: channel % branch_purpose ''client-comms'' is immutable — refused reclassify to %',
       OLD.id, COALESCE(NEW.branch_purpose, 'NULL')
-      USING ERRCODE = 'check_violation';   -- SQLSTATE 23514 -> app maps to 403
+      -- SQLSTATE 23514: setChannelBranchPurpose() catches this and rethrows
+      -- ChannelFirewallImmutableError, which the HTTP callers map to 403. A raw
+      -- SQL writer that bypasses the door gets the raw 23514 (still fail-closed).
+      USING ERRCODE = 'check_violation';
   END IF;
+  -- NOTE: a superuser session with `SET session_replication_role='replica'`
+  -- disables origin triggers and can bypass this floor — superuser-only, out of
+  -- the app's threat model.
   RETURN NEW;
 END;
 $$;

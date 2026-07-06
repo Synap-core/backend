@@ -182,9 +182,13 @@ export function resolveTemplate(
       current = (current as Record<string, unknown>)[part];
     }
     if (current == null) return "";
-    // Non-scalars (arrays/objects) are JSON-encoded, NOT String()-ed — a bare
-    // `String({...})` yields "[object Object]", silently corrupting any object
-    // interpolated into a prompt/config (e.g. graph relations fed to an AI step).
+    // A Date renders as an ISO string (not JSON-quoted) — keep the old
+    // human-readable passthrough for raw Date fields (e.g. a query step's
+    // createdAt), since JSON.stringify would wrap it in quotes.
+    if (current instanceof Date) return current.toISOString();
+    // Other non-scalars (arrays/objects) are JSON-encoded, NOT String()-ed — a
+    // bare `String({...})` yields "[object Object]", silently corrupting any
+    // object interpolated into a prompt/config (e.g. graph relations to an AI step).
     if (typeof current === "object") return JSON.stringify(current);
     return String(current);
   });
@@ -2628,12 +2632,13 @@ async function executeAutomationFlow(params: {
   const completedStepEntries = Object.entries(context.steps);
   const lastCompletedWithOutput = completedStepEntries
     .reverse()
-    .find(
-      ([, s]) =>
-        s.output != null &&
-        typeof s.output === "object" &&
-        Object.keys(s.output).length > 0
-    );
+    .find(([, s]) => {
+      if (s.output == null) return false;
+      // Post-flatten a step's output can be a scalar (string/number) — still a
+      // valid "last output"; only an empty object counts as no-output.
+      if (typeof s.output === "object") return Object.keys(s.output).length > 0;
+      return true;
+    });
   const outputSummary: Record<string, unknown> | null = lastCompletedWithOutput
     ? {
         lastStepOutput: lastCompletedWithOutput[1].output,

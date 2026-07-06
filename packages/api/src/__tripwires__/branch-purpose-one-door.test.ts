@@ -21,7 +21,12 @@ import { join, relative } from "path";
  * the allowlist.
  *
  * SCOPE: scans BOTH api/src AND database/src, because the door lives in
- * @synap/database and a leaker (e.g. ensure-external-channel) can too.
+ * @synap/database and a leaker (e.g. ensure-external-channel) can too. NOT
+ * scanned: @synap/jobs (no branchPurpose writer today; the DB trigger backstops
+ * any future one) and the `.set({ ...spreadObject })` form — a channel UPDATE
+ * that spreads a variable can't be caught by a literal-token regex. The second
+ * test below closes the one real spread path (channel-repository's
+ * UpdateChannelData) by asserting branchPurpose can never enter that interface.
  */
 
 // The ONE door — the only file permitted to `.set({ branchPurpose })`.
@@ -64,5 +69,25 @@ describe("tripwire: channel branchPurpose has one write door", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it("branchPurpose is NOT a field of UpdateChannelData (spread-write blind spot)", () => {
+    // channel-repository.ts does `.update(channels).set({ ...data })` with
+    // `data: UpdateChannelData` — a spread the token regex can't see. As long as
+    // branchPurpose is absent from that interface, that path can't write it.
+    // Adding it here would silently defeat both the tripwire AND the one door.
+    const repo = join(
+      process.cwd(),
+      "..",
+      "database",
+      "src",
+      "repositories",
+      "channel-repository.ts"
+    );
+    const iface = readFileSync(repo, "utf8").match(
+      /export interface UpdateChannelData \{([^}]*)\}/s
+    );
+    expect(iface, "UpdateChannelData interface not found").toBeTruthy();
+    expect(iface![1]).not.toMatch(/branchPurpose/);
   });
 });

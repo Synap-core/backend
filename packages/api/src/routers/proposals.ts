@@ -36,6 +36,7 @@ import {
   type LinkType,
   linkEntityToProject,
   setChannelBranchPurpose,
+  ChannelFirewallImmutableError,
 } from "@synap/database";
 import type { EventRecord } from "@synap/database";
 import {
@@ -1450,10 +1451,21 @@ export const proposalsRouter = router({
                 });
               }
             } catch (err) {
-              logger.warn(
-                { err, binding: b },
-                "onboarding: channel bind failed (entities kept)"
-              );
+              if (err instanceof ChannelFirewallImmutableError) {
+                // Fail-SAFE: the channel stays client-comms (the protected
+                // outcome). Surface it distinctly so it's not lost in generic
+                // bind noise — an onboarding binding tried to reclassify a
+                // client-comms channel and was refused.
+                logger.warn(
+                  { channelId: err.channelId, binding: b },
+                  "onboarding: refused to reclassify a client-comms channel (firewall) — left unchanged"
+                );
+              } else {
+                logger.warn(
+                  { err, binding: b },
+                  "onboarding: channel bind failed (entities kept)"
+                );
+              }
             }
           }
         }

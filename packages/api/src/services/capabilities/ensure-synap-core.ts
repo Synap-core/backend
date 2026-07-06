@@ -452,9 +452,12 @@ export async function ensureSynapCoreCapability(): Promise<void> {
           // order, so a plain JSON.stringify would report false drift on key
           // order alone → re-applying every boot. Sorting keys makes it
           // order-insensitive so we only re-project on a REAL param change.
+          // Normalize absent params to {} on BOTH sides — the create path
+          // stores `{}` for a param-less verb, so a bare `?? null` here would
+          // report false drift and re-apply every boot.
           return (
-            canonicalJson(seeded.parameters) !==
-            canonicalJson(codeSkill.parameters)
+            canonicalJson(seeded.parameters ?? {}) !==
+            canonicalJson(codeSkill.parameters ?? {})
           );
         })
         .map((s) => s.name);
