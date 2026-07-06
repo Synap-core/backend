@@ -79,6 +79,37 @@ function inferEkType(
   return undefined;
 }
 
+// ── Dedup candidate scoring (honest title similarity) ───────────────────────
+// Typesense `text_match` is a BM25-style keyword-relevance integer, NOT a
+// similarity score — it is meaningless outside a single query's own ranking.
+// Normalizing by the batch's own max (old code) made the #1 result of EVERY
+// query score 1.0, even fuzzy junk, which the frontend's AUTO_LINK_THRESHOLD
+// (0.85) treats as "safe to auto-merge". Score title similarity directly
+// instead: exact (case/whitespace-insensitive) match = 1.0, otherwise a
+// Jaccard token-overlap ratio in [0,1).
+function titleSimilarity(a: string, b: string): number {
+  const normA = a.toLowerCase().trim();
+  const normB = b.toLowerCase().trim();
+  if (!normA || !normB) return 0;
+  if (normA === normB) return 1;
+
+  const tokensA = new Set(normA.split(/\s+/).filter(Boolean));
+  const tokensB = new Set(normB.split(/\s+/).filter(Boolean));
+  if (tokensA.size === 0 || tokensB.size === 0) return 0;
+
+  let intersection = 0;
+  for (const token of tokensA) {
+    if (tokensB.has(token)) intersection++;
+  }
+  const union = tokensA.size + tokensB.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
+// Below this similarity, a Typesense hit is fuzzy/keyword noise, not a real
+// dedup candidate — drop it rather than surface it at a misleadingly low
+// score (the frontend already treats "any candidate present" as a hint).
+const DEDUP_SIMILARITY_FLOOR = 0.5;
+
 // ── Schema-complete profile hints for the structuring LLM ──────────────────
 // "Read before write": the one-shot /structure call has no tool loop, so the
 // caller pre-reads each profile's real property schema and hands it to the model.
@@ -726,19 +757,21 @@ export const captureRouter = router({
               { userId, workspaceId: workspaceId ?? undefined, limit: 3 }
             );
 
-            // Typesense textMatch is a large integer; normalize to 0-1
-            const maxScore = searchResult.results.reduce(
-              (max, r) => Math.max(max, r.textMatch),
-              1
-            );
+            // Score by honest title similarity, not Typesense's raw
+            // text_match (see titleSimilarity doc comment above) — and drop
+            // anything below the floor so fuzzy junk never reaches callers.
             dedupCandidates[entity.tempId] = searchResult.results
               .filter((r) => r.document?.id !== undefined)
               .map((r) => ({
                 entityId: r.document.id as string,
                 title: (r.document.title as string) || "",
                 profileSlug: (r.document.entityType as string) || "note",
-                score: r.textMatch / maxScore,
-              }));
+                score: titleSimilarity(
+                  entity.title,
+                  (r.document.title as string) || ""
+                ),
+              }))
+              .filter((c) => c.score >= DEDUP_SIMILARITY_FLOOR);
           } catch (err) {
             // Search failed for this entity — skip dedup
             dedupSkipped = true;

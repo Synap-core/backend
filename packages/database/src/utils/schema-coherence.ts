@@ -902,6 +902,23 @@ export async function checkSchemaCoherence(): Promise<SchemaCoherenceResult> {
  * the migration that should have added it.
  */
 export async function validateSchemaCoherence(): Promise<void> {
+  // Firewall floor (0169): the client-comms immutability trigger MUST exist —
+  // without it the DB-layer firewall is down. Refuse to boot if it's missing.
+  const trig = await sql<Array<{ present: boolean }>>`
+    SELECT EXISTS (
+      SELECT 1 FROM pg_trigger
+       WHERE tgname = 'trg_channels_branch_purpose_immutable'
+         AND NOT tgisinternal
+    ) AS present
+  `;
+  if (!trig[0]?.present) {
+    throw new Error(
+      "SCHEMA COHERENCE CHECK FAILED — firewall trigger " +
+        "'trg_channels_branch_purpose_immutable' is missing (migration 0169). " +
+        "The client-comms immutability floor is down; the pod refuses to start."
+    );
+  }
+
   const result = await checkSchemaCoherence();
 
   if (result.ok) {

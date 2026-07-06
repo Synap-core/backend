@@ -9,6 +9,11 @@ export default defineConfig(({ mode }) => {
     test: {
       globals: true,
       environment: "node",
+      // Only collect tests that live under src/ (covers src/**/__tests__/ and
+      // co-located src/**/*.test.ts). Prevents a stale/misplaced top-level file
+      // from silently failing collection and rotting the gate.
+      include: ["src/**/*.test.ts"],
+      exclude: ["**/node_modules/**", "**/dist/**"],
       env: {
         // Ensure environment variables available for tests
         DATABASE_URL:

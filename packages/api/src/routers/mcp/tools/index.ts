@@ -243,6 +243,11 @@ export const tools = {
               description:
                 "Typed entity properties (profileSlug-specific fields)",
             },
+            projectId: {
+              type: "string",
+              description:
+                "Optional project id to file the created entity into — stamps belongs_to_project membership.",
+            },
           },
           required: ["profileSlug", "title"],
         },
@@ -619,6 +624,28 @@ export const tools = {
           required: ["sessionId"],
         },
       },
+      // ── Playbooks (reusable session templates) ──────────────────────────────
+      {
+        name: "synap_list_playbooks",
+        description:
+          "List existing playbooks (reusable process/session templates) visible in a workspace. Call this to discover what already exists BEFORE improvising a new process. A playbook can then be started as a runtime session via synap_start_session, passing its id as templateId.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: {
+              type: "string",
+              description:
+                "Workspace ID (optional — falls back to the user's first workspace if omitted).",
+            },
+            status: {
+              type: "string",
+              enum: ["draft", "active", "paused", "archived"],
+              description: "Optional status filter.",
+            },
+          },
+          required: [],
+        },
+      },
       {
         name: "synap_governance",
         description:
@@ -661,6 +688,11 @@ export const tools = {
                 "Optional stable key (namespace:slug, e.g. 'deploy:backend') for a global runbook — derived from the text if omitted.",
             },
             workspaceId: { type: "string" },
+            projectId: {
+              type: "string",
+              description:
+                "Optional project id to file the created entities into — stamps belongs_to_project membership.",
+            },
           },
           required: ["text"],
         },
@@ -682,6 +714,24 @@ export const tools = {
             proposalId: {
               type: "string",
               description: "Idempotency key (optional)",
+            },
+          },
+          required: ["name"],
+        },
+      },
+      {
+        name: "synap_create_project",
+        description:
+          "Create a project — a cross-cutting lens for an initiative or venture (e.g. a company, a client, a cross-workspace effort), as opposed to a workspace, which is a domain lens (e.g. Builder, Marketing). Use this when the user describes a new initiative/venture that should organize entities across one or more workspaces. Pass workspaceId as the project's HOME workspace (omit to use the user's first workspace). Response may be 'created' (projectId returned) or 'proposed' (awaiting human review, proposalId returned) — NEVER treat 'proposed' as an error.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Project display name" },
+            description: { type: "string" },
+            workspaceId: {
+              type: "string",
+              description:
+                "The project's HOME workspace (optional — falls back to the user's first workspace if omitted).",
             },
           },
           required: ["name"],

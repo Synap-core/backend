@@ -70,11 +70,49 @@ import {
   safeTokenEqual,
 } from "@synap/auth";
 import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
+import { createRequire } from "node:module";
+import { readFileSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 // Setup event broadcasting to SSE clients
 const apiLogger = createLogger({ module: "api-server" });
 setupEventBroadcasting();
 apiLogger.info("Event broadcasting initialized");
+
+// ── Running-build version (for /status/release) ─────────────────────────────
+// Reads the ACTUAL @synap/api package version off disk at runtime — this is the
+// router code the pod is executing right now, so a stale/partial deploy shows a
+// version that lags the repo. Resolved once and memoized. The exports map on
+// @synap/api does NOT expose ./package.json, so we resolve the package main and
+// walk up to the nearest package.json whose name matches.
+const nodeRequire = createRequire(import.meta.url);
+let cachedApiVersion: string | null | undefined;
+function getRunningApiVersion(): string | null {
+  if (cachedApiVersion !== undefined) return cachedApiVersion;
+  try {
+    let dir = dirname(nodeRequire.resolve("@synap/api"));
+    for (let i = 0; i < 6; i++) {
+      const candidate = join(dir, "package.json");
+      if (existsSync(candidate)) {
+        const pkg = JSON.parse(readFileSync(candidate, "utf-8")) as {
+          name?: string;
+          version?: string;
+        };
+        if (pkg.name === "@synap/api") {
+          cachedApiVersion = pkg.version ?? null;
+          return cachedApiVersion;
+        }
+      }
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {
+    // fall through to null
+  }
+  cachedApiVersion = null;
+  return cachedApiVersion;
+}
 
 // Validate configuration at startup
 try {
@@ -274,6 +312,92 @@ app.get("/metrics", async (c) => {
   const metrics = await getMetrics();
   return c.text(metrics, 200, {
     "Content-Type": "text/plain; version=0.0.4; charset=utf-8",
+  });
+});
+
+// ── Deploy verification (public, no auth) ──────────────────────────────────
+// GET /status/release answers "is the latest actually deployed, and did the
+// migration apply?" in one call. Every lookup is wrapped so a missing table or
+// failed check degrades to null + a note — it never 500s. Kept OUT of /health
+// so the liveness probe stays cheap and its api-types compat literal is
+// untouched.
+app.get("/status/release", async (c) => {
+  // version — the running @synap/api build (off disk, not a literal)
+  const version = getRunningApiVersion();
+
+  // migrations — the hand-written migration ledger (_migrations, public schema)
+  let migrations: {
+    lastApplied: string | null;
+    lastAppliedAt: string | null;
+    count: number;
+    note?: string;
+  } = { lastApplied: null, lastAppliedAt: null, count: 0 };
+  try {
+    const { sql } = await import("@synap/database");
+    const rows = await sql<Array<{ filename: string; applied_at: string }>>`
+      SELECT filename, applied_at
+        FROM _migrations
+       ORDER BY applied_at DESC, id DESC
+    `;
+    migrations = {
+      lastApplied: rows[0]?.filename ?? null,
+      lastAppliedAt: rows[0]?.applied_at
+        ? new Date(rows[0].applied_at).toISOString()
+        : null,
+      count: rows.length,
+    };
+  } catch (err) {
+    migrations = {
+      lastApplied: null,
+      lastAppliedAt: null,
+      count: 0,
+      note: `Could not read _migrations: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
+
+  // schemaCoherence — reuse the pod-startup drift validator (one query)
+  let schemaCoherence: {
+    ok: boolean | null;
+    drift: Array<{ table: string; column: string; addedBy: string }>;
+    checked?: number;
+    note?: string;
+  } = { ok: null, drift: [] };
+  try {
+    const { checkSchemaCoherence } = await import("@synap/database");
+    const result = await checkSchemaCoherence();
+    schemaCoherence = {
+      ok: result.ok,
+      drift: result.missing.map((m) => ({
+        table: m.table,
+        column: m.column,
+        addedBy: m.addedBy,
+      })),
+      checked: result.checked,
+    };
+  } catch (err) {
+    schemaCoherence = {
+      ok: null,
+      drift: [],
+      note: `Coherence check failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
+
+  // buildStamp — no commit/build stamp is plumbed into the image today. Report
+  // null rather than fabricate; a real stamp needs a small build step (inject
+  // GIT_SHA/BUILD_TIME at image build) as a follow-up.
+  const buildStamp: string | null = null;
+
+  return c.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    version,
+    migrations,
+    schemaCoherence,
+    buildStamp,
   });
 });
 

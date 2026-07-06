@@ -310,14 +310,12 @@ const aiTriageHandler: BuiltinVerbHandler = async (params) => {
  * directly, unlike the fire-and-forget task path. AI-backed like ai.triage — its
  * handler calls the IS internally, but the verb still runs in-process + governed.
  *
- * OUTPUT CONTRACT: the handler returns the IS `output` VALUE DIRECTLY (no
- * envelope at the verb level). But a CAPABILITY NODE in an automation double-wraps
- * every verb result: executeCapabilityNode returns `{ output: <verbResult>, verbId,
- * skillId }`, which the engine then stores as `steps.<id> = { output: <that> }`. So
- * from a template the value lives at `steps.<id>.output.output.<field>` (TWO
- * `.output` hops), NOT `steps.<id>.output.<field>`. With `json:true` the model
- * output is parsed IS-side, so e.g. `steps.detect.output.output.reviewNeeded`
- * resolves. (Same convention as skill nodes — do NOT special-case-unwrap here.)
+ * OUTPUT CONTRACT: the handler returns the IS `output` value directly, and the
+ * automation engine stores every node's result flat — so from a template the
+ * value lives at `steps.<id>.output.<field>` (ONE `.output`, same rule for every
+ * node type; capability/skill nodes no longer double-wrap). With `json:true` the
+ * model output is parsed IS-side, so e.g. `steps.detect.output.reviewNeeded`
+ * resolves.
  *
  * COERCION: the automation engine stringifies every inputMapping value (String()),
  * so `json` arrives as the string "true"/"false" and `maxTokens` as a numeric

@@ -35,6 +35,8 @@ import {
   exists,
   drizzleSql,
   persistAssistantReply,
+  setChannelBranchPurpose,
+  ChannelFirewallImmutableError,
 } from "@synap/database";
 import {
   channels,
@@ -3361,24 +3363,6 @@ export const channelsRouter = router({
         });
       }
 
-      // FIREWALL (non-negotiable): the `client-comms` label is IMMUTABLE once set.
-      // The delivery firewall keys off branchPurpose === 'client-comms' to redirect/
-      // suppress bot/AI output; letting a caller (incl. channel.bind) flip a
-      // client-comms channel to 'team' or clear it would route AI output straight
-      // into a real client's conversation. Mirror ensure-external-channel.ts's
-      // "never override a non-null purpose" invariant at this write path too.
-      if (
-        input.branchPurpose !== undefined &&
-        channel.branchPurpose === "client-comms" &&
-        input.branchPurpose !== "client-comms"
-      ) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message:
-            "Cannot reclassify a client-comms channel — the firewall label is immutable.",
-        });
-      }
-
       await db
         .update(channels)
         .set({
@@ -3397,12 +3381,26 @@ export const channelsRouter = router({
           ...(input.contextObjectId !== undefined && {
             contextObjectId: input.contextObjectId,
           }),
-          ...(input.branchPurpose !== undefined && {
-            branchPurpose: input.branchPurpose,
-          }),
           updatedAt: new Date(),
         })
         .where(eq(channels.id, input.channelId));
+
+      // FIREWALL role via the ONE door — client-comms is immutable (the door
+      // throws, the DB trigger is the floor). Written separately from the .set()
+      // above so the invariant lives in exactly one place.
+      if (input.branchPurpose !== undefined) {
+        try {
+          await setChannelBranchPurpose({
+            channelId: input.channelId,
+            branchPurpose: input.branchPurpose,
+          });
+        } catch (err) {
+          if (err instanceof ChannelFirewallImmutableError) {
+            throw new TRPCError({ code: "FORBIDDEN", message: err.message });
+          }
+          throw err;
+        }
+      }
 
       // Per-instance agent binding lives in channel_members (assignedAgentId is
       // a template-only FK and cannot reference an agent-user instance).

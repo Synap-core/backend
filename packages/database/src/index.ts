@@ -85,6 +85,10 @@ export type {
 } from "./utils/insert-channel-message.js";
 export { ensureExternalChannel } from "./utils/ensure-external-channel.js";
 export type { EnsureExternalChannelArgs } from "./utils/ensure-external-channel.js";
+export {
+  setChannelBranchPurpose,
+  ChannelFirewallImmutableError,
+} from "./utils/set-channel-branch-purpose.js";
 export { enqueueChannelEgress } from "./utils/channel-egress.js";
 export type {
   ChannelEgressKind,

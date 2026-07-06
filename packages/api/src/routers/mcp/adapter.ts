@@ -10,6 +10,8 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { hubProtocolRouter } from "../hub-protocol/index.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
+import { projectsRouter } from "../projects.js";
+import { playbooksRouter } from "../playbooks.js";
 import { createHubProtocolCallerContext } from "../hub-protocol/utils.js";
 import {
   getObjectGraph,
@@ -202,6 +204,9 @@ export async function executeMCPToolViaHubProtocol(
     // reaches for recall before acting.
     case "synap_ask": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
+      if (typeof args.query !== "string" || args.query.trim() === "") {
+        return ok({ error: "query is required" });
+      }
       const workspaceId = args.workspaceId as string | undefined;
       // The semantic engine's catalog (type inference) needs a concrete
       // workspace; resolve the user's first accessible one when no lens is
@@ -743,6 +748,35 @@ export async function executeMCPToolViaHubProtocol(
       return ok(result);
     }
 
+    // ── Playbooks (reusable session templates) ──────────────────────────────
+    case "synap_list_playbooks": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      let playbookWsId = args.workspaceId as string | undefined;
+      if (!playbookWsId) {
+        const wsIds = await getUserWorkspaceIds(userId);
+        playbookWsId = wsIds[0];
+      }
+      if (!playbookWsId) return ok({ error: "No accessible workspace found" });
+      const playbookCtx = await createHubProtocolCallerContext(
+        userId,
+        apiKeyScopes,
+        playbookWsId,
+        undefined,
+        undefined,
+        agentUserId
+      );
+      const playbookCaller = playbooksRouter.createCaller(playbookCtx);
+      const result = await playbookCaller.list({
+        status: args.status as
+          | "draft"
+          | "active"
+          | "paused"
+          | "archived"
+          | undefined,
+      });
+      return ok(result);
+    }
+
     case "synap_governance": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
       const wsId = args.workspaceId as string;
@@ -914,6 +948,37 @@ export async function executeMCPToolViaHubProtocol(
           createdBy: "provisioning",
         });
       return ok({ workspaceId: newWsId, created });
+    }
+
+    case "synap_create_project": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      if (typeof args.name !== "string" || args.name.trim() === "") {
+        return ok({ error: "name is required" });
+      }
+      // Resolve the HOME workspace: use provided or fall back to the user's
+      // first workspace (same fallback synap_capture uses).
+      let projectWsId = args.workspaceId as string | undefined;
+      if (!projectWsId) {
+        const wsIds = await getUserWorkspaceIds(userId);
+        projectWsId = wsIds[0];
+      }
+      if (!projectWsId) {
+        return ok({ error: "No accessible workspace found for this user" });
+      }
+      const projectCtx = await createHubProtocolCallerContext(
+        userId,
+        apiKeyScopes,
+        projectWsId,
+        undefined,
+        undefined,
+        agentUserId
+      );
+      const projectCaller = projectsRouter.createCaller(projectCtx);
+      const result = await projectCaller.create({
+        name: args.name as string,
+        description: args.description as string | undefined,
+      });
+      return ok(result);
     }
 
     case "synap_create_view": {

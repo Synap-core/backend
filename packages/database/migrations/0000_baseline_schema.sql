@@ -3594,3 +3594,31 @@ CREATE TABLE IF NOT EXISTS "entity_centrality" (
 );
 CREATE INDEX IF NOT EXISTS "idx_entity_centrality_user"
   ON "entity_centrality" ("user_id");
+
+-- ── Firewall floor (0169) ─────────────────────────────────────────────────────
+-- The 'client-comms' branch_purpose role is IMMUTABLE. A BEFORE UPDATE trigger
+-- (not a CHECK — CHECK cannot see OLD) refuses reclassifying a client-comms
+-- channel away from client-comms, regardless of app code. Idempotent for fresh
+-- pods. See migration 0169.
+CREATE OR REPLACE FUNCTION synap_guard_branch_purpose_immutable()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF OLD.branch_purpose = 'client-comms'
+     AND NEW.branch_purpose IS DISTINCT FROM 'client-comms' THEN
+    RAISE EXCEPTION
+      'firewall: channel % branch_purpose ''client-comms'' is immutable — refused reclassify to %',
+      OLD.id, COALESCE(NEW.branch_purpose, 'NULL')
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_channels_branch_purpose_immutable ON channels;
+CREATE TRIGGER trg_channels_branch_purpose_immutable
+  BEFORE UPDATE OF branch_purpose ON channels
+  FOR EACH ROW
+  WHEN (OLD.branch_purpose IS DISTINCT FROM NEW.branch_purpose)
+  EXECUTE FUNCTION synap_guard_branch_purpose_immutable();

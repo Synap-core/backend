@@ -11,6 +11,7 @@ export default defineConfig({
       "src/repositories/**/__tests__/*.test.ts",
       "src/__tests__/channel-type-canon.test.ts",
       "src/__tests__/mirror-to-external.test.ts",
+      "src/utils/set-channel-branch-purpose.test.ts",
     ],
     env: {
       NODE_ENV: "test",

@@ -19,6 +19,8 @@ import {
   db,
   entities,
   relations,
+  documents,
+  documentVersions,
   and,
   eq,
   inArray,
@@ -110,7 +112,15 @@ export interface RetrieveResult {
 
 const GRAPH_SEED_CAP = 10;
 
-type EntityRow = typeof entities.$inferSelect;
+type EntityRow = typeof entities.$inferSelect & {
+  /**
+   * The linked document's body (current-version content, up to the storage
+   * layer's preview cap). Attached ADDITIVELY in `fetchOrdered` — entities
+   * with no `documentId` (or whose document has no version row yet) simply
+   * don't get this field. Synthesis (`synthesize.ts`) is the consumer.
+   */
+  content?: string;
+};
 
 async function fetchOrdered(
   ids: string[],
@@ -133,7 +143,41 @@ async function fetchOrdered(
         ...(projectId ? [projectLensWhere(entities.id, projectId)] : [])
       )
     );
-  const byId = new Map(rows.map((r) => [r.id, r]));
+
+  // Attach the entity BODY. `entities` has no content column — the full body
+  // lives on the linked `documents` row's CURRENT VERSION (`document_versions
+  // .content`, a generous 64k-char preview — see uploadDocumentVersionSnapshot
+  // in @synap/database). Batch-joined once per call, purely additive: every
+  // existing field on the row is untouched, we only ADD `content`.
+  const docIds = rows
+    .map((r) => r.documentId)
+    .filter((id): id is string => id !== null && id !== undefined);
+  const contentByDocId = new Map<string, string>();
+  if (docIds.length > 0) {
+    const bodies = await db
+      .select({ documentId: documents.id, content: documentVersions.content })
+      .from(documents)
+      .innerJoin(
+        documentVersions,
+        and(
+          eq(documentVersions.documentId, documents.id),
+          eq(documentVersions.version, documents.currentVersion)
+        )
+      )
+      .where(inArray(documents.id, docIds));
+    for (const b of bodies) {
+      if (b.content) contentByDocId.set(b.documentId, b.content);
+    }
+  }
+
+  const byId = new Map<string, EntityRow>(
+    rows.map((r) => [
+      r.id,
+      r.documentId && contentByDocId.has(r.documentId)
+        ? { ...r, content: contentByDocId.get(r.documentId) }
+        : r,
+    ])
+  );
   return ids
     .map((id) => byId.get(id))
     .filter((r): r is EntityRow => r !== undefined);

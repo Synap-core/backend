@@ -35,6 +35,7 @@ import {
   type LinkEndpointType,
   type LinkType,
   linkEntityToProject,
+  setChannelBranchPurpose,
 } from "@synap/database";
 import type { EventRecord } from "@synap/database";
 import {
@@ -1438,12 +1439,16 @@ export const proposalsRouter = router({
                 .set({
                   contextObjectType: "entity",
                   contextObjectId: entityId,
-                  ...(b.branchPurpose
-                    ? { branchPurpose: b.branchPurpose }
-                    : {}),
                   updatedAt: new Date(),
                 })
                 .where(eq(channels.id, channelId));
+              // Firewall role goes through the ONE door (client-comms immutable).
+              if (b.branchPurpose) {
+                await setChannelBranchPurpose({
+                  channelId,
+                  branchPurpose: b.branchPurpose,
+                });
+              }
             } catch (err) {
               logger.warn(
                 { err, binding: b },

@@ -404,12 +404,26 @@ export async function createCapabilityFromDefinition(
       )
       .limit(1);
     if (existingSkill) {
+      // Reconcile ALL code-owned (definition) fields — not just kind/code/
+      // providerSpec — so a verb that gains a parameter or changes its
+      // description/scope on re-seed actually projects into the catalog (the
+      // catalog read-model derives typed params from skills.parameters; the old
+      // shallow update left them stale forever — e.g. channel.resolve's new
+      // branchPurpose param). STATE fields (approved/status/errorMessage/
+      // metadata) are deliberately NOT touched — DB owns those.
       await db
         .update(skillsTable)
         .set({
           kind: s.kind ?? "code",
           code: s.code ?? null,
           providerSpec: s.providerSpec ?? null,
+          description: s.description,
+          parameters: s.parameters,
+          scope: s.scope ?? "pod",
+          category: s.category,
+          agentTypes: s.agentTypes,
+          executionMode: s.executionMode ?? "sync",
+          timeoutSeconds: s.timeoutSeconds ?? 30,
           updatedAt: new Date(),
         })
         .where(eq(skillsTable.id, existingSkill.id));

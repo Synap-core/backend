@@ -39,6 +39,27 @@ import type { Context } from "../../context.js";
 
 const logger = createLogger({ module: "ensure-synap-core" });
 
+/**
+ * Deterministic JSON with recursively sorted object keys — for comparing a
+ * jsonb-stored value (whose key order Postgres normalizes) against a code object
+ * without reporting false drift on key ordering alone.
+ */
+function canonicalJson(value: unknown): string {
+  const sort = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(sort);
+    if (v && typeof v === "object") {
+      return Object.keys(v as Record<string, unknown>)
+        .sort()
+        .reduce<Record<string, unknown>>((acc, k) => {
+          acc[k] = sort((v as Record<string, unknown>)[k]);
+          return acc;
+        }, {});
+    }
+    return v;
+  };
+  return JSON.stringify(sort(value ?? null));
+}
+
 /** The inline definition applied through the governed creation door. */
 const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
   key: "synap-core",
@@ -98,7 +119,7 @@ const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       kind: "builtin",
       scope: "pod",
       description:
-        "Synchronous single-shot LLM completion via the IS generate tool. Returns the raw text, or (when json:true) the parsed JSON object. Inside an automation the capability node double-wraps the result, so downstream nodes read steps.<id>.output.output.<field> (two .output hops). Read-only (pure compute, no mutation): auto-runs inside an automation without a proposal.",
+        "Synchronous single-shot LLM completion via the IS generate tool. Returns the raw text, or (when json:true) the parsed JSON object — stored flat as the automation step's output, so downstream nodes read steps.<id>.output.<field> (one .output, same rule for every node). Read-only (pure compute, no mutation): auto-runs inside an automation without a proposal.",
       parameters: {
         type: "object",
         required: ["prompt"],
@@ -406,7 +427,7 @@ export async function ensureSynapCoreCapability(): Promise<void> {
       .limit(1);
     if (existing) {
       const seededSkills = await db
-        .select({ name: skills.name })
+        .select({ name: skills.name, parameters: skills.parameters })
         .from(skills)
         .where(
           and(
@@ -414,21 +435,38 @@ export async function ensureSynapCoreCapability(): Promise<void> {
             inArray(skills.name, SYNAP_CORE_SKILL_NAMES)
           )
         );
-      const seededNames = new Set(seededSkills.map((s) => s.name));
-      const allPresent = SYNAP_CORE_SKILL_NAMES.every((n) =>
-        seededNames.has(n)
+      const seededByName = new Map(seededSkills.map((s) => [s.name, s]));
+      const missing = SYNAP_CORE_SKILL_NAMES.filter(
+        (n) => !seededByName.has(n)
       );
-      if (allPresent) {
+      // Definition-drift detection: a seeded verb whose stored `parameters`
+      // differ from the code definition (the catalog "lying" — e.g. a param was
+      // added in code but the name-only guard never re-projected it). Falling
+      // through re-runs the (now field-refreshing) applier, which self-heals the
+      // catalog — no manual backfill migration needed.
+      const drifted = SYNAP_CORE_DEFINITION.skills
+        .filter((codeSkill) => {
+          const seeded = seededByName.get(codeSkill.name);
+          if (!seeded) return false; // absence handled by `missing`
+          // Canonical (key-sorted) compare: jsonb does NOT preserve insertion
+          // order, so a plain JSON.stringify would report false drift on key
+          // order alone → re-applying every boot. Sorting keys makes it
+          // order-insensitive so we only re-project on a REAL param change.
+          return (
+            canonicalJson(seeded.parameters) !==
+            canonicalJson(codeSkill.parameters)
+          );
+        })
+        .map((s) => s.name);
+      if (missing.length === 0 && drifted.length === 0) {
         logger.debug(
-          "synap-core capability + all builtin verbs already present — skipping seed"
+          "synap-core capability + all builtin verbs present and in sync — skipping seed"
         );
         return;
       }
       logger.info(
-        {
-          missing: SYNAP_CORE_SKILL_NAMES.filter((n) => !seededNames.has(n)),
-        },
-        "synap-core present but missing builtin verb(s) — converging"
+        { missing, drifted },
+        "synap-core needs convergence (missing verb(s) and/or definition drift) — re-projecting"
       );
     }
 

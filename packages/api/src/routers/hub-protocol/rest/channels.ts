@@ -12,6 +12,8 @@ import {
   desc,
   isNull,
   enqueueChannelEgress,
+  setChannelBranchPurpose,
+  ChannelFirewallImmutableError,
 } from "@synap/database";
 // Note: channelsTable.externalId is the canonical dedup field — same as externalChannelId at insert time.
 
@@ -712,16 +714,13 @@ export function registerChannelsRoutes(app: HubHono): void {
       // 3. Establish the parent/child (thread-in-room) shape when requested.
       //    Set parentChannelId only when it's still NULL so a re-link never
       //    clobbers or re-parents an existing thread (idempotent + additive).
-      //    branchPurpose is the thread's role label ("client-comms" / "team");
-      //    we set it alongside the parent link on first establishment.
+      //    branchPurpose (the firewall role) is handled separately in 3b via the
+      //    one-door — it is NEVER written here.
       if (body.parentChannelId) {
         await db
           .update(channelsTable)
           .set({
             parentChannelId: body.parentChannelId,
-            ...(body.branchPurpose
-              ? { branchPurpose: body.branchPurpose }
-              : {}),
             updatedAt: new Date(),
           })
           .where(
@@ -732,50 +731,38 @@ export function registerChannelsRoutes(app: HubHono): void {
           );
       }
 
-      // 3b. Persist the channel's firewall role (branchPurpose) INDEPENDENTLY of
-      //     the parent/child shape. The explicit-pick and auto-link paths set
-      //     branchPurpose WITHOUT a parentChannelId — a top-level bound channel
-      //     still needs its 'client-comms' / 'team' role for the firewall to
-      //     work. Without this, those channels land branchPurpose=NULL and the
-      //     firewall can't distinguish a client-facing channel from a team one.
-      //     Idempotent by default: only stamp when not already set, so a normal
-      //     re-link never clobbers the role. An EXPLICIT `relink` DOES overwrite
-      //     it — the firewall keys entirely on branchPurpose, so a wrong role
-      //     (fat-fingered /link-channel, mis-inferred auto-link) must be
-      //     correctable, exactly like the workspace/entity self-heal above.
+      // 3b. Persist the channel's firewall role (branchPurpose) via the ONE door
+      //     (setChannelBranchPurpose), which enforces client-comms immutability
+      //     (and the DB trigger is the floor beneath it). Idempotent by default:
+      //     a normal link only stamps when the role is unset (never clobbers an
+      //     existing role). An EXPLICIT `relink` overwrites a NON-client-comms
+      //     role (self-heal for a fat-fingered team/null) — but the one-door
+      //     still refuses to flip a client-comms channel, returning 403.
       if (body.branchPurpose) {
-        // FIREWALL (non-negotiable): the `client-comms` role is IMMUTABLE once
-        // set — even an explicit relink may not flip it. Reclassifying a
-        // client-comms channel to `team` would route bot/AI output straight into
-        // a real client's conversation. This mirrors the updateChannel guard
-        // (which this REST path bypasses); the self-heal escape hatch below
-        // stays available for every OTHER role transition.
-        if (body.relink && body.branchPurpose !== "client-comms") {
-          const existing = await db.query.channels.findFirst({
-            where: eq(channelsTable.id, channelId),
-            columns: { branchPurpose: true },
-          });
-          if (existing?.branchPurpose === "client-comms") {
-            return c.json(
-              {
-                error:
-                  "Cannot reclassify a client-comms channel — the firewall label is immutable.",
-              },
-              403
-            );
+        try {
+          if (body.relink) {
+            await setChannelBranchPurpose({
+              channelId,
+              branchPurpose: body.branchPurpose,
+            });
+          } else {
+            const existing = await db.query.channels.findFirst({
+              where: eq(channelsTable.id, channelId),
+              columns: { branchPurpose: true },
+            });
+            if (existing?.branchPurpose == null) {
+              await setChannelBranchPurpose({
+                channelId,
+                branchPurpose: body.branchPurpose,
+              });
+            }
           }
+        } catch (err) {
+          if (err instanceof ChannelFirewallImmutableError) {
+            return c.json({ error: err.message }, 403);
+          }
+          throw err;
         }
-        await db
-          .update(channelsTable)
-          .set({ branchPurpose: body.branchPurpose, updatedAt: new Date() })
-          .where(
-            body.relink
-              ? eq(channelsTable.id, channelId)
-              : and(
-                  eq(channelsTable.id, channelId),
-                  isNull(channelsTable.branchPurpose)
-                )
-          );
       }
 
       const channel = await db.query.channels.findFirst({

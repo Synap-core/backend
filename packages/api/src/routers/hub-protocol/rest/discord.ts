@@ -46,6 +46,8 @@ import { resolveIntelligenceServiceByAgentId } from "../../../utils/intelligence
 import { resolveExistingExternalUser } from "../../../services/external-user-mapping.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
+import { runMailFeed } from "../../../services/mail-feed/run-mail-feed.js";
+import { runEventSync } from "../../../services/event-sync/run-event-sync.js";
 import {
   hasScope,
   logger,
@@ -99,6 +101,30 @@ const AgentTurnResponseSchema = z
     discordUserId: z.string().optional(),
   })
   .openapi("DiscordAgentTurnResponse");
+
+// On-demand trigger responses — mirror the runner result shapes so the bridge's
+// `/mail-feed run` / `/events sync` commands can report what actually happened
+// (posted/created counts) instead of a blind "queued".
+const MailFeedRunResponseSchema = z
+  .object({
+    skipped: z.boolean().optional(),
+    reason: z.string().optional(),
+    processed: z.number().optional(),
+    posted: z.number().optional(),
+    skippedMuted: z.number().optional(),
+    deniedDropped: z.number().optional(),
+  })
+  .openapi("DiscordMailFeedRunResponse");
+
+const EventSyncRunResponseSchema = z
+  .object({
+    skipped: z.boolean().optional(),
+    reason: z.string().optional(),
+    processed: z.number().optional(),
+    created: z.number().optional(),
+    skippedExisting: z.number().optional(),
+  })
+  .openapi("DiscordEventSyncRunResponse");
 
 export function registerDiscordRoutes(app: HubHono): void {
   // ── POST /discord/ingest (static; registered before /discord/agent-turn) ──
@@ -436,6 +462,83 @@ export function registerDiscordRoutes(app: HubHono): void {
         { err, discordChannelId: body.discordChannelId },
         "POST /discord/agent-turn failed"
       );
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /discord/mail-feed/run ────────────────────────────────────────────
+  // On-demand trigger for the mail feed — the SAME api-side runner the
+  // `mail-feed-cron` fires, invoked in-process so the caller gets the
+  // posted/processed counts synchronously (a tight test loop instead of waiting
+  // for the 2h cron). No body: the runner resolves the pod's Discord tool +
+  // its owner itself and no-ops when mailFeed is disabled. Idempotent (watermark).
+  registerOpenApi(app, {
+    method: "post",
+    path: "/discord/mail-feed/run",
+    tags: ["Discord"],
+    summary: "Run the Gmail mail feed now (on-demand)",
+    description:
+      "Invokes the mail-feed runner in-process (gmail_search → triage → post into the Discord-bound channel) and returns the run summary. No-ops when the Discord tool's mailFeed is disabled. Idempotent via the watermark.",
+    responses: {
+      200: { description: "Run summary", schema: MailFeedRunResponseSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/discord/mail-feed/run", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    try {
+      const result = await runMailFeed();
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err }, "POST /discord/mail-feed/run failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /discord/event-sync/run ───────────────────────────────────────────
+  // On-demand trigger for the event sync — the SAME api-side runner the
+  // `event-sync-cron` fires. Returns the created/processed counts synchronously.
+  // No body: the runner resolves the Discord tool + owner and no-ops when
+  // eventSync is disabled. Idempotent (dedup map in the tool metadata).
+  registerOpenApi(app, {
+    method: "post",
+    path: "/discord/event-sync/run",
+    tags: ["Discord"],
+    summary: "Run the Google Calendar event sync now (on-demand)",
+    description:
+      "Invokes the event-sync runner in-process (event entities + stellar deadlines + calendar_list → native Discord scheduled events) and returns the run summary. No-ops when the Discord tool's eventSync is disabled. Idempotent via the dedup map.",
+    responses: {
+      200: { description: "Run summary", schema: EventSyncRunResponseSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/discord/event-sync/run", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    try {
+      const result = await runEventSync();
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err }, "POST /discord/event-sync/run failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

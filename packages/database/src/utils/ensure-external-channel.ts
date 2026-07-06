@@ -14,6 +14,7 @@
 import { getDb } from "../client-pg.js";
 import { channels, ChannelType, ChannelScope } from "../schema/channels.js";
 import { and, eq, isNotNull } from "drizzle-orm";
+import { setChannelBranchPurpose } from "./set-channel-branch-purpose.js";
 
 export interface EnsureExternalChannelArgs {
   provider: string;
@@ -48,10 +49,12 @@ export async function ensureExternalChannel(
     // would silently drop feed posts. NEVER override an existing non-null purpose
     // (that would let a 'client-comms' channel be reclassified as team).
     if (args.branchPurpose && existing.branchPurpose == null) {
-      await database
-        .update(channels)
-        .set({ branchPurpose: args.branchPurpose, updatedAt: new Date() })
-        .where(eq(channels.id, existing.id));
+      // Upgrade a NULL role only, via the one door (which also enforces
+      // client-comms immutability — a no-op here since we gate on `== null`).
+      await setChannelBranchPurpose({
+        channelId: existing.id,
+        branchPurpose: args.branchPurpose,
+      });
     }
     return { channelId: existing.id, created: false };
   }

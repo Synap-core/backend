@@ -100,11 +100,16 @@ interface ExecutionPayload {
 }
 
 /** Context built up during execution — step outputs available to later steps */
-interface StepContext {
+export interface StepContext {
   trigger: {
     payload: Record<string, unknown>;
   };
-  steps: Record<string, { output: Record<string, unknown> }>;
+  // `output` is the RAW result of the node (whatever the verb/skill/handler
+  // returned — object, array, string, number). ONE rule for every node type:
+  // templates read `steps.<id>.output.<field>`. No node double-wraps (the old
+  // skill/capability/sub_automation `{ output: <result>, verbId }` envelope is
+  // gone — provenance is not consumed downstream, so it is not re-nested here).
+  steps: Record<string, { output: unknown }>;
   loop?: { item: unknown; index: number };
   // Set only inside array-pipe predicates/expressions (filter/map) so a
   // predicate can reference the current item as `{{item.<field>}}`.
@@ -122,7 +127,7 @@ interface StepContext {
  * Topological sort of nodes based on edges.
  * Returns nodes in execution order (parents before children).
  */
-function topoSort(
+export function topoSort(
   nodes: AutomationNode[],
   edges: AutomationEdge[]
 ): AutomationNode[] {
@@ -165,7 +170,10 @@ function topoSort(
  * Resolve template variables in a string.
  * Supports: {{trigger.payload.field}}, {{steps.stepId.output.field}}, {{loop.item}}
  */
-function resolveTemplate(template: string, context: StepContext): string {
+export function resolveTemplate(
+  template: string,
+  context: StepContext
+): string {
   return template.replace(/\{\{(.+?)\}\}/g, (_, path: string) => {
     const parts = path.trim().split(".");
     let current: unknown = context;
@@ -173,7 +181,12 @@ function resolveTemplate(template: string, context: StepContext): string {
       if (current == null || typeof current !== "object") return "";
       current = (current as Record<string, unknown>)[part];
     }
-    return current != null ? String(current) : "";
+    if (current == null) return "";
+    // Non-scalars (arrays/objects) are JSON-encoded, NOT String()-ed — a bare
+    // `String({...})` yields "[object Object]", silently corrupting any object
+    // interpolated into a prompt/config (e.g. graph relations fed to an AI step).
+    if (typeof current === "object") return JSON.stringify(current);
+    return String(current);
   });
 }
 
@@ -412,7 +425,7 @@ async function executeSkillNode(
     ownerId: string;
     stepRun?: { id: string };
   }
-): Promise<Record<string, unknown>> {
+): Promise<unknown> {
   const skillId = data.skillId;
   if (!skillId) throw new Error("Skill node has no skillId");
 
@@ -460,18 +473,12 @@ async function executeSkillNode(
   }
   if (skillDispatch.kind === "dry-run") {
     // Grant resolved to dry-run preview — no external side effect.
-    return {
-      output: { dryRun: true, skillId: skillDispatch.skillId },
-      skillId: skillDispatch.skillId,
-    };
+    return { dryRun: true, skillId: skillDispatch.skillId };
   }
-  // kind === "run": preserve the prior step output shape — `output`
-  // carries the skill's execution result (the IS SkillExecutionResult
-  // for a code skill, the handler/provider return for builtin/declarative).
-  return {
-    output: skillDispatch.result,
-    skillId: skillDispatch.skillId,
-  };
+  // kind === "run": return the skill's execution result DIRECTLY as the node
+  // output (the IS SkillExecutionResult for a code skill, the handler/provider
+  // return for builtin/declarative). Stored flat → `steps.<id>.output.<field>`.
+  return skillDispatch.result;
 }
 
 /**
@@ -499,7 +506,7 @@ async function executeCapabilityNode(
     ownerId: string;
     stepRun?: { id: string };
   }
-): Promise<Record<string, unknown>> {
+): Promise<unknown> {
   const verbId = data.verbId;
   if (!verbId) throw new Error("Capability node has no verbId");
 
@@ -550,22 +557,11 @@ async function executeCapabilityNode(
   }
   if (capDispatch.kind === "dry-run") {
     // Grant resolved to dry-run preview — no external side effect.
-    return {
-      output: {
-        dryRun: true,
-        verbId,
-        skillId: capDispatch.skillId,
-      },
-      verbId,
-      skillId: capDispatch.skillId,
-    };
+    return { dryRun: true, verbId, skillId: capDispatch.skillId };
   }
-  // kind === "run": preserve the prior step output shape.
-  return {
-    output: capDispatch.result,
-    verbId,
-    skillId: capDispatch.skillId,
-  };
+  // kind === "run": return the verb result DIRECTLY as the node output. Stored
+  // flat → `steps.<id>.output.<field>` (ONE rule, same as every other node).
+  return capDispatch.result;
 }
 
 /**
@@ -1821,6 +1817,17 @@ async function executeAutomationFlow(params: {
 
   // Sort nodes topologically
   const sortedNodes = topoSort(flow.nodes, flow.edges);
+  // Fail LOUD on a cycle: Kahn's algorithm cannot order nodes in a cycle, so
+  // they are dropped from `sortedNodes` and would otherwise silently never run.
+  if (sortedNodes.length < flow.nodes.length) {
+    const ordered = new Set(sortedNodes.map((n) => n.id));
+    const cyclic = flow.nodes
+      .filter((n) => !ordered.has(n.id))
+      .map((n) => n.id);
+    throw new Error(
+      `Automation flow has a cycle — these nodes cannot be ordered and would never run: ${cyclic.join(", ")}`
+    );
+  }
 
   // Build execution context
   const context: StepContext = {
@@ -1855,6 +1862,10 @@ async function executeAutomationFlow(params: {
 
   // Track which nodes to skip (condition branches not taken)
   const skippedNodes = new Set<string>();
+  // Edges on an untaken condition/switch branch. A node is only pruned when ALL
+  // its incoming edges are dead (pruned or from a skipped source) — this is what
+  // keeps a join/merge node reachable from the TAKEN branch alive (diamond fix).
+  const prunedEdges = new Set<AutomationEdge>();
   let stepsCompleted = 0;
   let stepsFailed = 0;
 
@@ -1904,7 +1915,7 @@ async function executeAutomationFlow(params: {
 
     let lastError: unknown = undefined;
     let succeeded = false;
-    let output: Record<string, unknown> = {};
+    let output: unknown = {};
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       if (attempt > 0) {
@@ -1968,8 +1979,14 @@ async function executeAutomationFlow(params: {
               node.id,
               untakenHandle
             );
+            for (const edge of untakenEdges) prunedEdges.add(edge);
             for (const edge of untakenEdges) {
-              markDescendantsSkipped(edge.target, flow.edges, skippedNodes);
+              markDescendantsSkipped(
+                edge.target,
+                flow.edges,
+                skippedNodes,
+                prunedEdges
+              );
             }
             break;
           }
@@ -2024,7 +2041,12 @@ async function executeAutomationFlow(params: {
 
             await db
               .update(automationStepRuns)
-              .set({ status: "completed", output, completedAt: new Date() })
+              // jsonb column accepts any JSON; cast satisfies the Record type.
+              .set({
+                status: "completed",
+                output: output as Record<string, unknown>,
+                completedAt: new Date(),
+              })
               .where(eq(automationStepRuns.id, stepRun.id));
 
             // Update run to show partial progress
@@ -2143,7 +2165,7 @@ async function executeAutomationFlow(params: {
 
               for (const childNode of bodyNodes) {
                 try {
-                  let childOutput: Record<string, unknown> = {};
+                  let childOutput: unknown = {};
 
                   switch (childNode.type) {
                     case "command":
@@ -2371,8 +2393,14 @@ async function executeAutomationFlow(params: {
             for (const c of data.cases ?? []) {
               if (c.value !== matched) {
                 const caseEdges = getOutEdges(flow.edges, node.id, c.value);
+                for (const edge of caseEdges) prunedEdges.add(edge);
                 for (const edge of caseEdges) {
-                  markDescendantsSkipped(edge.target, flow.edges, skippedNodes);
+                  markDescendantsSkipped(
+                    edge.target,
+                    flow.edges,
+                    skippedNodes,
+                    prunedEdges
+                  );
                 }
               }
             }
@@ -2380,8 +2408,14 @@ async function executeAutomationFlow(params: {
             // If no case matched, skip all outgoing edges
             if (matched === null) {
               const allOutEdges = getOutEdges(flow.edges, node.id);
+              for (const edge of allOutEdges) prunedEdges.add(edge);
               for (const edge of allOutEdges) {
-                markDescendantsSkipped(edge.target, flow.edges, skippedNodes);
+                markDescendantsSkipped(
+                  edge.target,
+                  flow.edges,
+                  skippedNodes,
+                  prunedEdges
+                );
               }
             }
             break;
@@ -2496,11 +2530,8 @@ async function executeAutomationFlow(params: {
               },
             });
 
-            output = {
-              output: childOutput,
-              automationId: targetId,
-              runId: childRunId,
-            };
+            // Return the child automation's output DIRECTLY (flat) — one rule.
+            output = childOutput;
             break;
           }
 
@@ -2552,9 +2583,10 @@ async function executeAutomationFlow(params: {
 
       await db
         .update(automationStepRuns)
+        // jsonb column accepts any JSON (object/array/scalar); cast for the type.
         .set({
           status: "completed",
-          output,
+          output: output as Record<string, unknown>,
           completedAt: new Date(),
         })
         .where(eq(automationStepRuns.id, stepRun.id));
@@ -2596,7 +2628,12 @@ async function executeAutomationFlow(params: {
   const completedStepEntries = Object.entries(context.steps);
   const lastCompletedWithOutput = completedStepEntries
     .reverse()
-    .find(([, s]) => s.output && Object.keys(s.output).length > 0);
+    .find(
+      ([, s]) =>
+        s.output != null &&
+        typeof s.output === "object" &&
+        Object.keys(s.output).length > 0
+    );
   const outputSummary: Record<string, unknown> | null = lastCompletedWithOutput
     ? {
         lastStepOutput: lastCompletedWithOutput[1].output,
@@ -2699,83 +2736,103 @@ export async function handleAutomationExecute(job: {
  * Safe condition evaluator.
  * Supports simple comparisons — NO eval().
  * Format: "path.to.value === 'expected'" or "path.to.value > 5"
+ *
+ * FAILS CLOSED: an unparseable expression or unknown operator THROWS (the step
+ * fails and the run errors loudly), rather than the old fail-OPEN-to-true which
+ * let a broken gate silently proceed down both branches. Numeric comparisons
+ * treat a missing/empty operand as NaN (→ false), NOT Number("")===0 which let a
+ * missing value silently satisfy `< N`.
  */
-function evaluateCondition(expression: string, context: StepContext): boolean {
-  try {
-    // Parse simple comparison: left op right
-    const match = expression.match(
-      /^(.+?)\s*(===|!==|==|!=|>=|<=|>|<)\s*(.+)$/
+export function evaluateCondition(
+  expression: string,
+  context: StepContext
+): boolean {
+  // Parse simple comparison: left op right
+  const match = expression.match(/^(.+?)\s*(===|!==|==|!=|>=|<=|>|<)\s*(.+)$/);
+  if (!match) {
+    throw new Error(
+      `Automation condition could not be parsed (fail-closed): "${expression}"`
     );
-    if (!match) {
-      logger.warn({ expression }, "Cannot parse condition — defaulting true");
-      return true;
-    }
+  }
 
-    const [, leftPath, operator, rightRaw] = match;
-    const leftValue = resolveTemplate(`{{${leftPath.trim()}}}`, context);
+  const [, leftPath, operator, rightRaw] = match;
+  const leftValue = resolveTemplate(`{{${leftPath.trim()}}}`, context);
 
-    // Parse right side: quoted → string literal, numeric → number, a bare
-    // context path (trigger./steps./automation./loop./item.) → resolve it as a
-    // template too so a condition can compare two resolved paths, e.g.
-    // `trigger.payload.subjectId !== trigger.payload.data.channelId`. The left
-    // operand is always resolved; without this the right path would be compared
-    // as the literal string "trigger.payload.data.channelId" and never match.
-    // Anything else (e.g. `true`, `active`) stays a bare string literal.
-    let rightValue: string | number = rightRaw.trim();
-    if (
-      (rightValue.startsWith("'") && rightValue.endsWith("'")) ||
-      (rightValue.startsWith('"') && rightValue.endsWith('"'))
-    ) {
-      rightValue = rightValue.slice(1, -1);
-    } else if (!isNaN(Number(rightValue))) {
-      rightValue = Number(rightValue);
-    } else if (/^(trigger|steps|automation|loop|item)\./.test(rightValue)) {
-      rightValue = resolveTemplate(`{{${rightValue}}}`, context);
-    }
+  // Parse right side: quoted → string literal, numeric → number, a bare
+  // context path (trigger./steps./automation./loop./item.) → resolve it as a
+  // template too so a condition can compare two resolved paths, e.g.
+  // `trigger.payload.subjectId !== trigger.payload.data.channelId`. The left
+  // operand is always resolved; without this the right path would be compared
+  // as the literal string "trigger.payload.data.channelId" and never match.
+  // Anything else (e.g. `true`, `active`) stays a bare string literal.
+  let rightValue: string | number = rightRaw.trim();
+  if (
+    (rightValue.startsWith("'") && rightValue.endsWith("'")) ||
+    (rightValue.startsWith('"') && rightValue.endsWith('"'))
+  ) {
+    rightValue = rightValue.slice(1, -1);
+  } else if (rightValue !== "" && !isNaN(Number(rightValue))) {
+    rightValue = Number(rightValue);
+  } else if (/^(trigger|steps|automation|loop|item)\./.test(rightValue)) {
+    rightValue = resolveTemplate(`{{${rightValue}}}`, context);
+  }
 
-    const left = typeof rightValue === "number" ? Number(leftValue) : leftValue;
+  // Empty string → NaN (not 0) so a missing operand fails a numeric compare
+  // instead of silently satisfying `< N`.
+  const toNum = (v: string | number): number => (v === "" ? NaN : Number(v));
 
-    switch (operator) {
-      case "===":
-      case "==":
-        return left === rightValue;
-      case "!==":
-      case "!=":
-        return left !== rightValue;
-      case ">":
-        return Number(left) > Number(rightValue);
-      case "<":
-        return Number(left) < Number(rightValue);
-      case ">=":
-        return Number(left) >= Number(rightValue);
-      case "<=":
-        return Number(left) <= Number(rightValue);
-      default:
-        return true;
-    }
-  } catch {
-    logger.warn(
-      { expression },
-      "Condition evaluation failed — defaulting true"
-    );
-    return true;
+  const left = typeof rightValue === "number" ? toNum(leftValue) : leftValue;
+
+  switch (operator) {
+    case "===":
+    case "==":
+      return left === rightValue;
+    case "!==":
+    case "!=":
+      return left !== rightValue;
+    case ">":
+      return toNum(left) > toNum(rightValue);
+    case "<":
+      return toNum(left) < toNum(rightValue);
+    case ">=":
+      return toNum(left) >= toNum(rightValue);
+    case "<=":
+      return toNum(left) <= toNum(rightValue);
+    default:
+      throw new Error(
+        `Automation condition has an unknown operator "${operator}" (fail-closed): "${expression}"`
+      );
   }
 }
 
 /**
- * Mark all descendant nodes as skipped (for untaken condition branches).
+ * Prune the untaken branch of a condition/switch, WITHOUT over-pruning a
+ * join/merge node that is also reachable from the taken branch (diamond fix).
+ *
+ * A node is skipped only when it has NO live incoming edge — a live edge is one
+ * that is not itself pruned AND whose source is not skipped. The caller must add
+ * the directly-untaken edges to `prunedEdges` BEFORE calling this on their
+ * targets, so a target whose only parent is the untaken edge gets skipped, but a
+ * target that also has a taken-branch parent survives.
  */
-function markDescendantsSkipped(
+export function markDescendantsSkipped(
   nodeId: string,
   edges: AutomationEdge[],
-  skippedNodes: Set<string>
+  skippedNodes: Set<string>,
+  prunedEdges: Set<AutomationEdge>
 ): void {
   if (skippedNodes.has(nodeId)) return;
-  skippedNodes.add(nodeId);
 
-  const outEdges = edges.filter((e) => e.source === nodeId);
-  for (const edge of outEdges) {
-    markDescendantsSkipped(edge.target, edges, skippedNodes);
+  const inEdges = edges.filter((e) => e.target === nodeId);
+  const hasLiveParent = inEdges.some(
+    (e) => !prunedEdges.has(e) && !skippedNodes.has(e.source)
+  );
+  if (hasLiveParent) return; // reachable from a taken branch — keep it
+
+  skippedNodes.add(nodeId);
+  for (const edge of edges.filter((e) => e.source === nodeId)) {
+    prunedEdges.add(edge);
+    markDescendantsSkipped(edge.target, edges, skippedNodes, prunedEdges);
   }
 }
 

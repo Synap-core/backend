@@ -33,6 +33,19 @@ export interface SynthesisResult {
 }
 
 const MAX_CONTEXT_CHARS = 16_000;
+/** Per-snippet-field slice — generous enough to carry a real body/verdict/
+ * conclusion instead of the old 300-char stub, while MAX_CONTEXT_CHARS still
+ * bounds the total context sent to the IS. */
+const MAX_FIELD_CHARS = 1500;
+/** Common JSONB `properties` keys that hold prose worth surfacing verbatim. */
+const PROPERTY_TEXT_KEYS = [
+  "content",
+  "conclusion",
+  "description",
+  "summary",
+  "body",
+  "notes",
+];
 
 /**
  * Build context + sources from retrieved answer blocks, then call the IS
@@ -64,14 +77,38 @@ export async function synthesizeAnswer(
 
       if (id) sources.push({ substrate: block.substrate, id, title });
 
-      // Short snippet: title + a few key string props.
+      // Snippet: title + the entity BODY + a few key string props. The body
+      // is the fix — without it synthesis only ever saw title/metadata and
+      // could never answer questions whose answer lives in the content.
       const snippetBits: string[] = [String(title)];
+
+      // 1. The attached document body (retrieve.ts's `fetchOrdered` join) —
+      //    the actual long-form content, not a metadata field.
+      if (typeof rec.content === "string" && rec.content.trim()) {
+        snippetBits.push(`content: ${rec.content.slice(0, MAX_FIELD_CHARS)}`);
+      }
+
+      // 2. Prose buried inside the JSONB `properties` object — previously
+      //    dropped entirely because it's an object, not a top-level string.
+      if (rec.properties && typeof rec.properties === "object") {
+        const props = rec.properties as Record<string, unknown>;
+        for (const key of PROPERTY_TEXT_KEYS) {
+          const v = props[key];
+          if (typeof v === "string" && v.trim()) {
+            snippetBits.push(`${key}: ${v.slice(0, MAX_FIELD_CHARS)}`);
+          }
+        }
+      }
+
+      // 3. Fall back to other short top-level string props (pre-existing
+      //    behavior), skipping fields already handled above.
       for (const [k, v] of Object.entries(rec)) {
-        if (k === "id" || k === "name" || k === "title") continue;
+        if (["id", "name", "title", "content", "properties"].includes(k))
+          continue;
         if (typeof v === "string" && v.trim()) {
           snippetBits.push(`${k}: ${v.slice(0, 300)}`);
         }
-        if (snippetBits.length >= 5) break;
+        if (snippetBits.length >= 8) break;
       }
       const entry = `- [${block.substrate}] ${snippetBits.join(" · ")}`;
       if (contextLen + entry.length > MAX_CONTEXT_CHARS) break;
