@@ -753,7 +753,7 @@ export const tools = {
               type: "string",
               enum: ["auto", "ask", "locked"],
               description:
-                "How to place the capture across workspaces when no explicit workspaceId is pinned. 'auto' (default) = file into the workspace the AI infers is the right domain (returned as movedToWorkspace) so the user needn't think about workspaces. 'ask' = don't move; return pendingWorkspaceSwitch so you can confirm with the user first (safe mode). 'locked' = never move; use the caller's default workspace. An explicit workspaceId always wins regardless of this setting.",
+                "How to place the capture across workspaces. 'auto' (default) = the AI files it into the workspace it infers is the right domain (returned as movedToWorkspace) — this WINS over the session/ambient workspace so the user needn't think about workspaces (only applied on sufficient confidence + membership). 'ask' = don't move; return pendingWorkspaceSwitch so you can confirm with the user first (safe mode). 'locked' = never move; keep the caller's/session workspace. Use 'locked' (not a bare workspaceId) when you need to force a specific workspace.",
             },
           },
           required: ["text"],

@@ -909,20 +909,25 @@ export async function executeMCPToolViaHubProtocol(
         }
         return p;
       });
-      // Workspace routing. In AUTO mode (default) — when the caller did NOT pin
-      // a workspace — honor the AI-resolved target so a capture lands in the
-      // right domain without the user having to think about workspaces. A pinned
-      // (explicit) workspaceId always wins; ASK surfaces the suggestion instead
-      // of moving (safe mode), LOCKED never moves. Guarded by membership: never
-      // route into a workspace the user isn't part of.
+      // Workspace routing. In AUTO mode (default) the AI's confidently-resolved
+      // target workspace WINS over the ambient/session workspace — the whole
+      // point is that a capture lands in the right domain without the user (or
+      // the calling agent's session default, which is almost never a deliberate
+      // per-capture pin) having to think about it. A caller that wants a hard
+      // pin uses routing:"locked" (or ASK to confirm first). Guards: only move
+      // on sufficient confidence AND into a workspace the user is a member of.
       const routing =
         (args.workspaceRouting as "auto" | "ask" | "locked" | undefined) ??
         "auto";
-      const pinnedWs =
-        typeof args.workspaceId === "string" ? args.workspaceId : undefined;
       const aiTargetWs =
         (structured as { targetWorkspaceId?: string | null })
           .targetWorkspaceId || undefined;
+      const aiTargetConfidence =
+        (structured as { targetWorkspaceConfidence?: number | null })
+          .targetWorkspaceConfidence ?? 0;
+      // Below this the AI's guess is too weak to override where the capture is —
+      // leave it in the ambient workspace rather than risk a wrong move.
+      const AUTO_ROUTE_MIN_CONFIDENCE = 0.6;
       let movedToWorkspace: string | undefined;
       let pendingWorkspaceSwitch:
         | {
@@ -931,8 +936,11 @@ export async function executeMCPToolViaHubProtocol(
             confidence: number | null;
           }
         | undefined;
-      if (!pinnedWs && aiTargetWs && aiTargetWs !== captureWsId) {
-        if (routing === "auto") {
+      if (aiTargetWs && aiTargetWs !== captureWsId) {
+        if (
+          routing === "auto" &&
+          aiTargetConfidence >= AUTO_ROUTE_MIN_CONFIDENCE
+        ) {
           const userWsIds = await getUserWorkspaceIds(userId);
           if (userWsIds.includes(aiTargetWs)) movedToWorkspace = aiTargetWs;
         } else if (routing === "ask") {
@@ -946,6 +954,7 @@ export async function executeMCPToolViaHubProtocol(
                 .targetWorkspaceConfidence ?? null,
           };
         }
+        // routing === "locked": never move — the ambient/pinned workspace stands.
       }
       const executed = await captureCaller.execute({
         entities: mergedProposals as Parameters<

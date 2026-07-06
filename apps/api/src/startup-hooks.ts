@@ -22,6 +22,7 @@ import {
 import { randomUUID, randomBytes } from "crypto";
 import { sql as drizzleSql } from "drizzle-orm";
 import { setDynamicCorsOrigins, ensureSynapCoreCapability } from "@synap/api";
+import { reconcileWorkspacesToTemplates } from "./startup/reconcile-workspaces-to-templates.js";
 
 const logger = createLogger({ module: "startup-hooks" });
 
@@ -458,6 +459,20 @@ export async function runStartupHooks(): Promise<void> {
     logger.warn(
       { err },
       "Failed to seed system profiles on startup (non-fatal)"
+    );
+  }
+
+  // Converge every workspace to its canonical template (crm.yaml, content-studio.yaml,
+  // …) — additively creates missing profiles / overlay properties / entity links.
+  // Must run AFTER ensureSystemProfiles so templates can overlay onto system profiles.
+  // Server-side + idempotent: a template change (e.g. a new `partner` profile) lands on
+  // EXISTING workspaces on the next boot, with no dependency on any frontend loading.
+  try {
+    await reconcileWorkspacesToTemplates();
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to reconcile workspaces to templates on startup (non-fatal)"
     );
   }
 
