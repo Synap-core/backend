@@ -10,7 +10,14 @@
  * Returns immediately — no async event pipeline.
  */
 
-import { db, proposals, eq, and, entities } from "@synap/database";
+import {
+  db,
+  proposals,
+  eq,
+  and,
+  entities,
+  ProfileResolutionService,
+} from "@synap/database";
 import {
   users,
   workspaces,
@@ -545,6 +552,43 @@ export async function checkPermissionOrPropose(
         sessionId,
         projectId,
       });
+    }
+
+    // 4c. GUARDRAIL (fail-fast): an entity CREATE that names a profile which
+    // does not exist is rejected HERE — before any proposal is created — so the
+    // agent gets immediate, actionable feedback instead of a user accepting a
+    // proposal that later throws ProfileNotFoundError at APPLY time (the bug
+    // this fixes: an agent proposed profileSlug "partner", which isn't seeded;
+    // the accepted apply threw "Profile not found: partner").
+    //
+    // Scoped precisely: ONLY entity + create + a set profileSlug. It never fires
+    // for entity UPDATE (the entity already exists), for other subject types, or
+    // when profileSlug is absent (read defensively, mirroring the existing gate).
+    //
+    // Resolution MIRRORS EntityRepository.create's apply-time
+    // `resolveProfile(slug, userId, workspaceId ?? "")` (and the entities router's
+    // own direct-create resolution) so the guardrail and the apply agree — a
+    // valid pod-global (SYSTEM/SHARED) profile resolves in both paths and is
+    // never falsely rejected. Placed BEFORE the agent branch so it also catches a
+    // direct owner create with a bad profile, and before both the auto-run
+    // (execute) and propose verdicts.
+    if (subjectType === "entity" && action === "create") {
+      const createProfileSlug =
+        typeof data?.profileSlug === "string" ? data.profileSlug : undefined;
+      if (createProfileSlug) {
+        const profileResolution = new ProfileResolutionService(db);
+        const resolvedProfile = await profileResolution.resolveProfile(
+          createProfileSlug,
+          userId,
+          workspaceId ?? ""
+        );
+        if (!resolvedProfile) {
+          return {
+            denied: true,
+            reason: `Profile '${createProfileSlug}' does not exist in this workspace. Create it first, or use an existing profile (call list_profiles to see available types).`,
+          };
+        }
+      }
     }
 
     // 5. AI policy check

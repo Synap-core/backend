@@ -20,11 +20,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // vi.hoisted ensures these refs exist before the vi.mock factory is hoisted
 // to the top of the file (vitest hoists vi.mock calls at transform time, which
 // runs before const declarations in module scope).
-const { mockVerifyPermission, mockDbSelect, mockDbInsert } = vi.hoisted(() => ({
-  mockVerifyPermission: vi.fn().mockResolvedValue({ allowed: true }),
-  mockDbSelect: vi.fn(),
-  mockDbInsert: vi.fn(),
-}));
+const { mockVerifyPermission, mockDbSelect, mockDbInsert, mockResolveProfile } =
+  vi.hoisted(() => ({
+    mockVerifyPermission: vi.fn().mockResolvedValue({ allowed: true }),
+    mockDbSelect: vi.fn(),
+    mockDbInsert: vi.fn(),
+    // Default: profile resolves (existing profile). Individual tests override
+    // to null to exercise the missing-profile guardrail.
+    mockResolveProfile: vi
+      .fn()
+      .mockResolvedValue({ id: "profile-1", slug: "task" }),
+  }));
 
 vi.mock("@synap/database", async () => {
   const { randomUUID } = await import("crypto");
@@ -53,6 +59,9 @@ vi.mock("@synap/database", async () => {
     eq: vi.fn((a, b) => ({ field: a, value: b })),
     verifyPermission: mockVerifyPermission,
     ProposalStatus: { PENDING: "pending", AUTO_APPROVED: "auto_approved" },
+    ProfileResolutionService: class {
+      resolveProfile = mockResolveProfile;
+    },
   };
 });
 
@@ -679,5 +688,86 @@ describe("checkPermissionOrPropose — ADMIN_ACTIONS always propose", () => {
     });
 
     expect("granted" in result && result.granted === false).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: entity-create profile-existence guardrail (fail-fast)
+// ---------------------------------------------------------------------------
+
+describe("checkPermissionOrPropose — entity-create profile guardrail", () => {
+  beforeEach(() => {
+    mockVerifyPermission.mockResolvedValue({ allowed: true });
+    mockResolveProfile.mockReset();
+    mockResolveProfile.mockResolvedValue({ id: "profile-1", slug: "task" });
+    // Reset select mock to the benign default (no agent row) so the guardrail,
+    // not the agent branch, is what's under test on the non-agent paths.
+    mockDbSelect.mockImplementation(() => ({
+      from: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue([]),
+    }));
+  });
+
+  it("denies an entity create whose profileSlug does not exist, with an actionable reason", async () => {
+    mockResolveProfile.mockResolvedValueOnce(null);
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      subjectType: "entity",
+      action: "create",
+      data: { id: "ent-xyz", profileSlug: "partner", title: "Acme" },
+    });
+
+    expect(result).toMatchObject({ denied: true });
+    const reason = (result as { denied: true; reason: string }).reason;
+    expect(reason).toContain("partner");
+    expect(reason).toMatch(/does not exist/i);
+    expect(reason).toMatch(/list_profiles/);
+  });
+
+  it("does NOT deny (resolves) an entity create for an existing profile", async () => {
+    mockResolveProfile.mockResolvedValue({ id: "profile-1", slug: "task" });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      subjectType: "entity",
+      action: "create",
+      data: { id: "ent-xyz", profileSlug: "task", title: "My Task" },
+    });
+
+    expect("denied" in result).toBe(false);
+    expect(mockResolveProfile).toHaveBeenCalledWith(
+      "task",
+      BASE_OPTS.userId,
+      BASE_OPTS.workspaceId
+    );
+  });
+
+  it("does NOT fire the guardrail for an entity UPDATE with a bad profileSlug", async () => {
+    mockResolveProfile.mockResolvedValue(null);
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      subjectType: "entity",
+      action: "update",
+      data: { id: "ent-xyz", profileSlug: "partner" },
+    });
+
+    // UPDATE targets an existing entity — guardrail is scoped to create only.
+    expect("denied" in result).toBe(false);
+    expect(mockResolveProfile).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fire the guardrail for an entity create WITHOUT a profileSlug", async () => {
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      subjectType: "entity",
+      action: "create",
+      data: { id: "ent-xyz", title: "No profile here" },
+    });
+
+    expect("denied" in result).toBe(false);
+    expect(mockResolveProfile).not.toHaveBeenCalled();
   });
 });

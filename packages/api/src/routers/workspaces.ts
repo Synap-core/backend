@@ -2476,6 +2476,31 @@ export const workspacesRouter = router({
         await assertPackageTierAccess(ctx.userId, input.packageSlug);
       }
 
+      // Additive template sync for an ALREADY-provisioned workspace. When a
+      // caller re-runs createFromDefinition and hits the idempotent "already
+      // exists" path, bring the live workspace up to the CURRENT template
+      // NON-DESTRUCTIVELY: add missing profiles / property-defs / entityLinks
+      // (e.g. an older CRM workspace gaining the `partner` profile + its links),
+      // never delete or mutate existing data. This is the automatic re-apply
+      // trigger — every consumer that provisions on launch/signup picks up
+      // template drift for free. Best-effort: a reconcile failure must never
+      // break the (successful) idempotent return, so it is caught + logged.
+      const reconcileExisting = async (workspaceId: string) => {
+        try {
+          return await reconcileWorkspaceFromDefinition({
+            workspaceId,
+            userId: ctx.userId,
+            definition: input.definition as unknown as WorkspaceDefinitionInput,
+          });
+        } catch (err) {
+          logger.warn(
+            { err, workspaceId },
+            "createFromDefinition: additive template reconcile failed (non-fatal)"
+          );
+          return undefined;
+        }
+      };
+
       // Serialise concurrent calls with the same (userId, proposalId) so a
       // hung retry can't race the original. No-op when proposalId is missing.
       return withWorkspaceProposalIdLock(
@@ -2577,9 +2602,17 @@ export const workspacesRouter = router({
                   /* non-fatal */
                 }
               }
+              // Active workspace already exists → additively sync it to the
+              // current template (add-only). Skipped for non-active (pending)
+              // workspaces to avoid racing an in-flight provisioning build.
+              const reconciled =
+                provStatus === "active"
+                  ? await reconcileExisting(ws.id)
+                  : undefined;
               return {
                 workspaceId: ws.id,
                 entityIds: [],
+                reconciled,
               };
             }
           }
@@ -2670,12 +2703,20 @@ export const workspacesRouter = router({
                 },
                 "createFromDefinition: returning existing workspace (idempotent)"
               );
+              // Active workspace already exists → additively sync it to the
+              // current template (add-only). Skipped for pending workspaces to
+              // avoid racing an in-flight provisioning build.
+              const reconciled =
+                provStatus === "active"
+                  ? await reconcileExisting(ws.id)
+                  : undefined;
               return {
                 status:
                   provStatus === "active"
                     ? ("created" as const)
                     : ("pending" as const),
                 workspaceId: ws.id,
+                reconciled,
               };
             }
           }
@@ -3112,6 +3153,16 @@ export const workspacesRouter = router({
                 description: z.string().optional(),
                 defaultView: z.boolean().optional(),
                 colorBy: z.string().optional(),
+              })
+            )
+            .optional(),
+          entityLinks: z
+            .array(
+              z.object({
+                sourceProfileSlug: z.string(),
+                targetProfileSlug: z.string(),
+                type: z.string(),
+                label: z.string().optional(),
               })
             )
             .optional(),

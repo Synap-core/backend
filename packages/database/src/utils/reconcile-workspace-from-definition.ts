@@ -37,8 +37,11 @@ import { ProfileScope } from "../schema/profiles.js";
 import type { PropertyValueType } from "../schema/property-defs.js";
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
 import { ProfilePropertyRepository } from "../repositories/profile-property-repository.js";
+import { RelationDefRepository } from "../repositories/relation-def-repository.js";
+import { ProfileRelationRepository } from "../repositories/profile-relation-repository.js";
 import { ViewRepository } from "../repositories/view-repository.js";
 import { views } from "../schema/views.js";
+import { profileRelations } from "../schema/profile-relations.js";
 import { workspaces } from "../schema/workspaces.js";
 import type { WorkspaceSettings } from "../schema/workspaces.js";
 import type { WorkspaceDefinitionInput } from "./create-workspace-from-definition.js";
@@ -74,6 +77,14 @@ export interface ReconcileReport {
     }>;
   };
   views: { added: string[]; skipped: string[]; deferred: string[] };
+  /**
+   * Schema-level links between entity types (relation_defs + profile_relations).
+   * `added` = a (source, target, type) edge that did not exist and was created.
+   * `skipped` = already present (idempotent no-op).
+   * `unresolved` = a source/target profile slug could not be resolved to a live
+   * profile in this workspace — left untouched, non-fatal.
+   */
+  entityLinks: { added: string[]; skipped: string[]; unresolved: string[] };
 }
 
 const SCOPE_MAP: Record<string, string> = {
@@ -114,6 +125,7 @@ export async function reconcileWorkspaceFromDefinition(
     profiles: { added: [], reused: [] },
     properties: { added: [], skipped: [], conflicts: [] },
     views: { added: [], skipped: [], deferred: [] },
+    entityLinks: { added: [], skipped: [], unresolved: [] },
   };
 
   // ── 1. Settings merge (capabilities / subtype / visibility) ────────────────
@@ -334,6 +346,69 @@ export async function reconcileWorkspaceFromDefinition(
     }
   }
 
+  // ── 4. Entity links (schema relations) — idempotent add-only ────────────────
+  // Each entityLink = a relation_def (find-or-create by slug=type) + a
+  // profile_relation edge (source → target). Adding a link that already exists
+  // is a no-op; a re-run adds only the NEW edges (e.g. CRM's client/partner
+  // links appearing on an older workspace). Profile slugs are resolved from the
+  // profileMap built above, falling back to the live workspace lens for slugs
+  // not restated in definition.profiles (e.g. pod-wide system profiles).
+  const relDefRepo = new RelationDefRepository(dbConn);
+  const profileRelRepo = new ProfileRelationRepository(dbConn);
+  const resolveProfileId = async (slug: string): Promise<string | null> => {
+    if (profileMap[slug]) return profileMap[slug];
+    const p = await profileRepo.getBySlugForWorkspace(slug, workspaceId);
+    if (p) profileMap[slug] = p.id;
+    return p?.id ?? null;
+  };
+  for (const link of definition.entityLinks ?? []) {
+    const key = `${link.sourceProfileSlug}->${link.targetProfileSlug}:${link.type}`;
+    const sourceId = await resolveProfileId(link.sourceProfileSlug);
+    const targetId = await resolveProfileId(link.targetProfileSlug);
+    if (!sourceId || !targetId) {
+      report.entityLinks.unresolved.push(key);
+      continue;
+    }
+
+    // Does an edge for this (source, target, type) already exist? The relation
+    // def is looked up by slug within this workspace lens; if it exists, check
+    // for the profile_relation row before treating this as new.
+    const existingDef = await relDefRepo.getBySlug(link.type, workspaceId);
+    let alreadyLinked = false;
+    if (existingDef) {
+      const existingEdge = await dbConn.query.profileRelations.findFirst({
+        where: and(
+          eq(profileRelations.sourceProfileId, sourceId),
+          eq(profileRelations.targetProfileId, targetId),
+          eq(profileRelations.relationDefId, existingDef.id)
+        ),
+      });
+      alreadyLinked = !!existingEdge;
+    }
+    if (alreadyLinked) {
+      report.entityLinks.skipped.push(key);
+      continue;
+    }
+
+    report.entityLinks.added.push(key);
+    if (!dryRun) {
+      // find-or-create the workspace-scoped relation def, then link the profiles.
+      // Both repo calls are idempotent (relDef by slug+workspace; profile_relation
+      // by unique (source,target,relationDef) with onConflictDoUpdate).
+      const relDef = await relDefRepo.create({
+        slug: link.type,
+        displayName: link.label ?? link.type.replace(/_/g, " "),
+        workspaceId,
+        userId,
+      });
+      await profileRelRepo.link({
+        sourceProfileId: sourceId,
+        targetProfileId: targetId,
+        relationDefId: relDef.id,
+      });
+    }
+  }
+
   logger.info(
     {
       workspaceId,
@@ -342,6 +417,7 @@ export async function reconcileWorkspaceFromDefinition(
       propsAdded: report.properties.added.length,
       propConflicts: report.properties.conflicts.length,
       viewsAdded: report.views.added.length,
+      entityLinksAdded: report.entityLinks.added.length,
     },
     "Reconciled workspace from definition"
   );
