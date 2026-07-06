@@ -909,6 +909,44 @@ export async function executeMCPToolViaHubProtocol(
         }
         return p;
       });
+      // Workspace routing. In AUTO mode (default) — when the caller did NOT pin
+      // a workspace — honor the AI-resolved target so a capture lands in the
+      // right domain without the user having to think about workspaces. A pinned
+      // (explicit) workspaceId always wins; ASK surfaces the suggestion instead
+      // of moving (safe mode), LOCKED never moves. Guarded by membership: never
+      // route into a workspace the user isn't part of.
+      const routing =
+        (args.workspaceRouting as "auto" | "ask" | "locked" | undefined) ??
+        "auto";
+      const pinnedWs =
+        typeof args.workspaceId === "string" ? args.workspaceId : undefined;
+      const aiTargetWs =
+        (structured as { targetWorkspaceId?: string | null })
+          .targetWorkspaceId || undefined;
+      let movedToWorkspace: string | undefined;
+      let pendingWorkspaceSwitch:
+        | {
+            suggestedWorkspaceId: string;
+            reason: string | null;
+            confidence: number | null;
+          }
+        | undefined;
+      if (!pinnedWs && aiTargetWs && aiTargetWs !== captureWsId) {
+        if (routing === "auto") {
+          const userWsIds = await getUserWorkspaceIds(userId);
+          if (userWsIds.includes(aiTargetWs)) movedToWorkspace = aiTargetWs;
+        } else if (routing === "ask") {
+          pendingWorkspaceSwitch = {
+            suggestedWorkspaceId: aiTargetWs,
+            reason:
+              (structured as { targetWorkspaceReason?: string | null })
+                .targetWorkspaceReason ?? null,
+            confidence:
+              (structured as { targetWorkspaceConfidence?: number | null })
+                .targetWorkspaceConfidence ?? null,
+          };
+        }
+      }
       const executed = await captureCaller.execute({
         entities: mergedProposals as Parameters<
           typeof captureCaller.execute
@@ -917,6 +955,9 @@ export async function executeMCPToolViaHubProtocol(
           ((structured as { relations?: unknown[] }).relations as Parameters<
             typeof captureCaller.execute
           >[0]["relations"]) ?? [],
+        // Auto-routed workspace (guarded above) — execute already resolves
+        // `input.targetWorkspaceId ?? ctx.workspaceId`; the adapter just wires it.
+        ...(movedToWorkspace ? { targetWorkspaceId: movedToWorkspace } : {}),
         // File into the active project lens (belongs_to_project) when the caller
         // passed a projectId, OR when structure resolved a target project — so
         // capture fills the lens it was invoked in (execute already stamps the
@@ -930,7 +971,12 @@ export async function executeMCPToolViaHubProtocol(
           return pid ? { projectId: pid } : {};
         })(),
       });
-      return ok({ structured, executed });
+      return ok({
+        structured,
+        executed,
+        ...(movedToWorkspace ? { movedToWorkspace } : {}),
+        ...(pendingWorkspaceSwitch ? { pendingWorkspaceSwitch } : {}),
+      });
     }
 
     // ── Workspace & view creation ─────────────────────────────────────────────
@@ -978,6 +1024,53 @@ export async function executeMCPToolViaHubProtocol(
       const result = await projectCaller.create({
         name: args.name as string,
         description: args.description as string | undefined,
+      });
+      return ok(result);
+    }
+
+    case "synap_create_playbook": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      if (typeof args.name !== "string" || args.name.trim() === "") {
+        return ok({ error: "name is required" });
+      }
+      if (
+        typeof args.goalTemplate !== "string" ||
+        args.goalTemplate.trim() === ""
+      ) {
+        return ok({ error: "goalTemplate is required" });
+      }
+      let pbWsId = args.workspaceId as string | undefined;
+      if (!pbWsId) {
+        const wsIds = await getUserWorkspaceIds(userId);
+        pbWsId = wsIds[0];
+      }
+      if (!pbWsId) {
+        return ok({ error: "No accessible workspace found for this user" });
+      }
+      const pbCtx = await createHubProtocolCallerContext(
+        userId,
+        apiKeyScopes,
+        pbWsId,
+        undefined,
+        undefined,
+        agentUserId
+      );
+      const pbCaller = playbooksRouter.createCaller(pbCtx);
+      const result = await pbCaller.create({
+        name: args.name as string,
+        goalTemplate: args.goalTemplate as string,
+        description: args.description as string | undefined,
+        stages: args.stages as Record<string, unknown>[] | undefined,
+        // Default to `active` so a created template is immediately runnable via
+        // synap_start_session(templateId) — a draft would be invisible to run.
+        status:
+          (args.status as
+            | "draft"
+            | "active"
+            | "paused"
+            | "archived"
+            | undefined) ?? "active",
+        agentUserId,
       });
       return ok(result);
     }

@@ -647,6 +647,56 @@ export const tools = {
         },
       },
       {
+        name: "synap_create_playbook",
+        description:
+          "Create a reusable playbook (a staged process/session template) so a repeatable workflow — e.g. competitor analysis, market research, onboarding — can be discovered (synap_list_playbooks) and run (synap_start_session with templateId) later. Provide a name, a goalTemplate (the session goal, may contain {{param}} placeholders), and optional ordered stages. Created active by default. Governed — may return a proposal.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Playbook display name." },
+            goalTemplate: {
+              type: "string",
+              description:
+                "The session goal this playbook instantiates (e.g. 'Analyze competitors for {{market}}'). May contain {{param}} placeholders.",
+            },
+            description: {
+              type: "string",
+              description: "What this playbook is for.",
+            },
+            stages: {
+              type: "array",
+              description:
+                "Ordered stages. Each: { key, name, description?, goal?, suggestedTasks? }.",
+              items: {
+                type: "object",
+                properties: {
+                  key: { type: "string" },
+                  name: { type: "string" },
+                  description: { type: "string" },
+                  goal: { type: "string" },
+                  suggestedTasks: {
+                    type: "array",
+                    items: { type: "string" },
+                  },
+                },
+                required: ["key", "name"],
+              },
+            },
+            status: {
+              type: "string",
+              enum: ["draft", "active", "paused", "archived"],
+              description: "Defaults to 'active' (immediately runnable).",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Home workspace (optional — falls back to the user's first workspace).",
+            },
+          },
+          required: ["name", "goalTemplate"],
+        },
+      },
+      {
         name: "synap_governance",
         description:
           "Read workspace governance policy and count of pending proposals. Use before writes to understand auto-approve rules and whether proposals will be created.",
@@ -698,6 +748,12 @@ export const tools = {
               enum: ["title", "semantic", "both"],
               description:
                 "Dedup strategy for surfaced candidates: 'title' = string-similarity search only, 'semantic' = pgvector cosine search over entity embeddings (catches paraphrases with no shared words), 'both' (default) = run both and keep the strongest match per entity.",
+            },
+            workspaceRouting: {
+              type: "string",
+              enum: ["auto", "ask", "locked"],
+              description:
+                "How to place the capture across workspaces when no explicit workspaceId is pinned. 'auto' (default) = file into the workspace the AI infers is the right domain (returned as movedToWorkspace) so the user needn't think about workspaces. 'ask' = don't move; return pendingWorkspaceSwitch so you can confirm with the user first (safe mode). 'locked' = never move; use the caller's default workspace. An explicit workspaceId always wins regardless of this setting.",
             },
           },
           required: ["text"],
