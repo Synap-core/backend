@@ -4807,6 +4807,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					properties?: Record<string, unknown> | undefined;
 				}[] | undefined;
 				instructions?: string | undefined;
+				dedupMode?: "title" | "semantic" | "both" | undefined;
 			};
 			output: {
 				proposals: {
@@ -10127,7 +10128,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				entityId: string;
 				type?: string | undefined;
-				direction?: "source" | "target" | "both" | undefined;
+				direction?: "source" | "both" | "target" | undefined;
 				limit?: number | undefined;
 			};
 			output: {
@@ -10157,7 +10158,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				entityId: string;
 				type?: string | undefined;
-				direction?: "source" | "target" | "both" | undefined;
+				direction?: "source" | "both" | "target" | undefined;
 				limit?: number | undefined;
 			};
 			output: {

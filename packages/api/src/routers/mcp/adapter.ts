@@ -841,6 +841,7 @@ export async function executeMCPToolViaHubProtocol(
         context: args.profileSlug
           ? `Hint: profile is ${args.profileSlug}`
           : undefined,
+        dedupMode: args.dedupMode as "title" | "semantic" | "both" | undefined,
       });
       // Step 2 — ACTUALLY WRITE. structure() only previews; without execute()
       // the capture tool returns proposals that are never materialized — the

@@ -26,6 +26,10 @@ import {
   isNotNull,
   desc,
   getDb,
+  db,
+  entityVectors,
+  entities as entitiesTable,
+  drizzleSql,
   EventRepository,
   EntityRepository,
   RelationRepository,
@@ -41,7 +45,14 @@ import {
   type PropertyValueType,
   type IdentitySignal,
 } from "@synap/database";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
+import {
+  userVisibleWhere,
+  workspaceLensWhere,
+} from "../utils/user-visible-where.js";
+import {
+  embedQuery,
+  MAX_VECTOR_DISTANCE,
+} from "../services/retrieval/hybrid-recall.js";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
@@ -109,6 +120,91 @@ function titleSimilarity(a: string, b: string): number {
 // dedup candidate — drop it rather than surface it at a misleadingly low
 // score (the frontend already treats "any candidate present" as a hint).
 const DEDUP_SIMILARITY_FLOOR = 0.5;
+
+type DedupCandidate = {
+  entityId: string;
+  title: string;
+  profileSlug: string;
+  score: number;
+};
+
+/**
+ * Semantic dedup — cosine search over the SAME pgvector infra the retrieval
+ * engine uses (`embedQuery` + `entity_vectors`, see hybrid-recall.ts), rather
+ * than a second copy of it. Embeds the candidate title (+ a short content
+ * snippet when available) and finds existing entities whose stored embedding
+ * is close, so a paraphrase ("Q3 roadmap review" vs "Quarterly roadmap sync")
+ * can be caught even when the titles share no tokens.
+ *
+ * Workspace scoping mirrors hybridRecall's own limitation: `entity_vectors`
+ * carries no `workspaceId` column, so the vector half is joined to `entities`
+ * to apply the real workspace lens (hybridRecall's Typesense half is the one
+ * that workspace-scopes today; its pgvector half is userId-only). Degrades to
+ * an empty list — never throws — so a missing IS/embedding never blocks
+ * capture.
+ */
+async function semanticDedupCandidates(
+  title: string,
+  content: string | undefined,
+  userId: string,
+  workspaceId: string | null | undefined,
+  limit = 3
+): Promise<DedupCandidate[]> {
+  const text = content ? `${title}\n${content.slice(0, 500)}` : title;
+  const embedding = await embedQuery(text);
+  if (!embedding) return [];
+
+  const vecLiteral = `[${embedding.join(",")}]`;
+  try {
+    const rows = await db
+      .select({
+        entityId: entityVectors.entityId,
+        title: entityVectors.title,
+        entityType: entityVectors.entityType,
+        distance: drizzleSql<number>`${entityVectors.embedding} <=> ${vecLiteral}::vector`,
+      })
+      .from(entityVectors)
+      .innerJoin(entitiesTable, eq(entitiesTable.id, entityVectors.entityId))
+      .where(
+        and(
+          eq(entityVectors.userId, userId),
+          drizzleSql`${entityVectors.embedding} <=> ${vecLiteral}::vector <= ${MAX_VECTOR_DISTANCE}`,
+          workspaceLensWhere(
+            entitiesTable.workspaceId,
+            userId,
+            workspaceId ?? undefined
+          )
+        )
+      )
+      .orderBy(drizzleSql`${entityVectors.embedding} <=> ${vecLiteral}::vector`)
+      .limit(limit);
+
+    return rows.map((r) => ({
+      entityId: r.entityId,
+      title: r.title ?? "",
+      profileSlug: r.entityType || "note",
+      score: 1 - Number(r.distance),
+    }));
+  } catch (err) {
+    logger.warn(
+      { err, userId },
+      "Semantic dedup query failed — degrading to empty"
+    );
+    return [];
+  }
+}
+
+/** Merge candidate lists from multiple dedup sources, keeping the MAX score per entityId. */
+function mergeDedupCandidates(...lists: DedupCandidate[][]): DedupCandidate[] {
+  const byId = new Map<string, DedupCandidate>();
+  for (const list of lists) {
+    for (const c of list) {
+      const existing = byId.get(c.entityId);
+      if (!existing || c.score > existing.score) byId.set(c.entityId, c);
+    }
+  }
+  return [...byId.values()].sort((a, b) => b.score - a.score);
+}
 
 // ── Schema-complete profile hints for the structuring LLM ──────────────────
 // "Read before write": the one-shot /structure call has no tool loop, so the
@@ -464,6 +560,13 @@ export const captureRouter = router({
         // contact/company/lead; link to existing entities, don't duplicate").
         // Threaded verbatim into the IS structuring call. Absent → unchanged.
         instructions: z.string().max(2000).optional(),
+        /**
+         * Dedup strategy for `dedupCandidates`: "title" = existing Typesense
+         * title-similarity search (unchanged); "semantic" = pgvector cosine
+         * search over entity embeddings (see semanticDedupCandidates);
+         * "both" (default) = run both and keep the MAX score per candidate.
+         */
+        dedupMode: z.enum(["title", "semantic", "both"]).default("both"),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -746,41 +849,66 @@ export const captureRouter = router({
       // "didn't check". (published api-types clients that ignore it are unaffected)
       let dedupSkipped = false;
 
+      const dedupMode = input.dedupMode;
+      const wantTitle = dedupMode === "title" || dedupMode === "both";
+      const wantSemantic = dedupMode === "semantic" || dedupMode === "both";
+
       try {
         for (const entity of structureResult.entities) {
           if (!entity.title) continue;
 
+          let titleCandidates: DedupCandidate[] = [];
           try {
-            const searchResult = await searchService.searchCollection(
-              "entities",
-              entity.title,
-              { userId, workspaceId: workspaceId ?? undefined, limit: 3 }
-            );
+            if (wantTitle) {
+              const searchResult = await searchService.searchCollection(
+                "entities",
+                entity.title,
+                { userId, workspaceId: workspaceId ?? undefined, limit: 3 }
+              );
 
-            // Score by honest title similarity, not Typesense's raw
-            // text_match (see titleSimilarity doc comment above) — and drop
-            // anything below the floor so fuzzy junk never reaches callers.
-            dedupCandidates[entity.tempId] = searchResult.results
-              .filter((r) => r.document?.id !== undefined)
-              .map((r) => ({
-                entityId: r.document.id as string,
-                title: (r.document.title as string) || "",
-                profileSlug: (r.document.entityType as string) || "note",
-                score: titleSimilarity(
-                  entity.title,
-                  (r.document.title as string) || ""
-                ),
-              }))
-              .filter((c) => c.score >= DEDUP_SIMILARITY_FLOOR);
+              // Score by honest title similarity, not Typesense's raw
+              // text_match (see titleSimilarity doc comment above) — and drop
+              // anything below the floor so fuzzy junk never reaches callers.
+              titleCandidates = searchResult.results
+                .filter((r) => r.document?.id !== undefined)
+                .map((r) => ({
+                  entityId: r.document.id as string,
+                  title: (r.document.title as string) || "",
+                  profileSlug: (r.document.entityType as string) || "note",
+                  score: titleSimilarity(
+                    entity.title,
+                    (r.document.title as string) || ""
+                  ),
+                }))
+                .filter((c) => c.score >= DEDUP_SIMILARITY_FLOOR);
+            }
           } catch (err) {
-            // Search failed for this entity — skip dedup
+            // Search failed for this entity — skip title dedup
             dedupSkipped = true;
             logger.warn(
               { err, userId, tempId: entity.tempId },
-              "Dedup search failed for entity — marking dedupSkipped"
+              "Title dedup search failed for entity — marking dedupSkipped"
             );
-            dedupCandidates[entity.tempId] = [];
           }
+
+          // Semantic dedup degrades independently (embed/pgvector unavailable
+          // → empty list, never throws) so it never flips dedupSkipped on its
+          // own — a title-only result stays "checked, no duplicates".
+          const semanticCandidates: DedupCandidate[] = wantSemantic
+            ? await semanticDedupCandidates(
+                entity.title,
+                (entity.properties as Record<string, unknown> | undefined)
+                  ?.content as string | undefined,
+                userId,
+                workspaceId,
+                3
+              )
+            : [];
+
+          dedupCandidates[entity.tempId] = mergeDedupCandidates(
+            titleCandidates,
+            semanticCandidates
+          );
         }
       } catch (err) {
         // Typesense not available — skip all dedup

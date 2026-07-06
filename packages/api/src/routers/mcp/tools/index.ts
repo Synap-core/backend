@@ -693,6 +693,12 @@ export const tools = {
               description:
                 "Optional project id to file the created entities into — stamps belongs_to_project membership.",
             },
+            dedupMode: {
+              type: "string",
+              enum: ["title", "semantic", "both"],
+              description:
+                "Dedup strategy for surfaced candidates: 'title' = string-similarity search only, 'semantic' = pgvector cosine search over entity embeddings (catches paraphrases with no shared words), 'both' (default) = run both and keep the strongest match per entity.",
+            },
           },
           required: ["text"],
         },
