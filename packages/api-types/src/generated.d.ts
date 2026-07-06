@@ -6723,6 +6723,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		reopen: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+			};
+			output: {
+				success: boolean;
+			};
+			meta: object;
+		}>;
 		revert: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				proposalId: string;

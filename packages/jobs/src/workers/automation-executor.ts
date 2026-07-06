@@ -37,6 +37,7 @@ import {
   automationRuns,
   automationStepRuns,
   entities,
+  users,
   messages,
   channels,
   notifications,
@@ -45,6 +46,7 @@ import {
   playbookRuns,
   drizzleSql,
   EntityRepository,
+  materializeEntity,
   eventRepository,
   mirrorMessageToBoundExternal,
 } from "@synap/database";
@@ -657,9 +659,29 @@ async function executeOutputStep(
         return { status: "proposed", proposalId: gate.proposalId };
       }
 
-      // EntityRepository handles: profile resolution, pod-wide scoping, property indexing, event emission
-      const entityRepo = new EntityRepository(db, eventRepository);
-      const entity = await entityRepo.create(
+      // Attribution: this write is authored by the automation's owning
+      // principal (`ownerId`). For AI-created automations that principal IS an
+      // agent user; for manual automations it is a human. Resolve which, so the
+      // materialized row's provenance is honest (previously it defaulted to
+      // "human", mis-attributing agent-authored automation writes). We only
+      // reach this direct-write branch after the governance gate GRANTED.
+      const [ownerUser] = await db
+        .select({ userType: users.userType })
+        .from(users)
+        .where(eq(users.id, ownerId))
+        .limit(1);
+      const provenance =
+        ownerUser?.userType === "agent"
+          ? {
+              createdByKind: "ai_agent" as const,
+              agentUserId: ownerId,
+              createdByUserId: ownerId,
+            }
+          : { createdByKind: "system" as const, createdByUserId: ownerId };
+
+      // materializeEntity wraps EntityRepository.create: profile resolution,
+      // pod-wide scoping, property indexing, event emission — plus provenance.
+      const { entity } = await materializeEntity(
         {
           profileSlug,
           title,
@@ -668,7 +690,11 @@ async function executeOutputStep(
           userId: ownerId,
           skipValidation: true,
         },
-        ownerId
+        {
+          db,
+          eventRepo: eventRepository,
+          provenance,
+        }
       );
 
       return { status: "created", entityId: entity.id, title: entity.title };

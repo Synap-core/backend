@@ -22,7 +22,7 @@ import {
   eq,
   and,
   getDb,
-  EntityRepository,
+  materializeEntity,
   EventRepository,
 } from "@synap/database";
 import { OperationalEventTypes } from "@synap/events";
@@ -428,7 +428,8 @@ async function createEntityFromItem(
   workspaceId: string | undefined,
   classification: ClassificationResult | undefined,
   sourceConfigId: string,
-  entityRepo: EntityRepository
+  database: Awaited<ReturnType<typeof getDb>>,
+  eventRepo: EventRepository
 ): Promise<string> {
   const props: Record<string, unknown> = {
     url: item.url,
@@ -448,7 +449,11 @@ async function createEntityFromItem(
   const rawBody = (item.raw as Record<string, unknown>)?.bodyText;
   if (typeof rawBody === "string") props.bodyText = rawBody;
 
-  const entity = await entityRepo.create(
+  // Provenance = system: an automated feed-ingestion pipeline created this
+  // bookmark (no human clicked, no agent authored it). Funnel through the
+  // governed materializer so provenance is stamped explicitly rather than
+  // defaulting to "human".
+  const { entity } = await materializeEntity(
     {
       profileSlug: "bookmark",
       title: item.title.slice(0, 500),
@@ -457,7 +462,11 @@ async function createEntityFromItem(
       userId,
       workspaceId: workspaceId ?? null,
     },
-    userId
+    {
+      db: database,
+      eventRepo,
+      provenance: { createdByKind: "system" },
+    }
   );
 
   return entity.id;
@@ -581,10 +590,9 @@ export async function handleEntityExtract(job: {
   };
 
   try {
-    // 0. Resolve repository
+    // 0. Resolve db + event repo (entity creation funnels through materializeEntity)
     const database = await getDb();
     const eventRepo = new EventRepository(dbSql);
-    const entityRepo = new EntityRepository(database, eventRepo);
 
     // 1. Resolve subscription and feed config
     const subscription = await db.query.sourceSubscriptions.findFirst({
@@ -673,7 +681,8 @@ export async function handleEntityExtract(job: {
           workspaceId,
           classification,
           configId,
-          entityRepo
+          database,
+          eventRepo
         );
         result.itemsCreated++;
 

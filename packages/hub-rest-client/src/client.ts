@@ -819,13 +819,23 @@ export class HubRestClient {
   async listProposals(options?: {
     status?: "pending" | "approved" | "rejected";
     workspaceId?: string;
+    /**
+     * "workspace" (default) — applies the client workspaceId filter.
+     * "all" — omits workspaceId so results span every workspace the user can see.
+     */
+    scope?: "workspace" | "all";
     limit?: number;
   }): Promise<HubProposal[]> {
     const userId = await this.resolveUserId();
-    const wsId = options?.workspaceId ?? this.workspaceId;
     const params = new URLSearchParams({ userId });
+    // When scope === "all", intentionally omit workspaceId — matches searchEntities/
+    // getRecentEntities so a "review everything" caller isn't silently narrowed to
+    // just the connection's default workspace.
+    if (options?.scope !== "all") {
+      const wsId = options?.workspaceId ?? this.workspaceId;
+      if (wsId) params.set("workspaceId", wsId);
+    }
     if (options?.status) params.set("status", options.status);
-    if (wsId) params.set("workspaceId", wsId);
     if (options?.limit) params.set("limit", String(options.limit));
     const result = await this.request<
       HubProposal[] | HubListResponse<HubProposal>

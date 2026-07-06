@@ -19,7 +19,7 @@ import {
   documents,
   documentVersions,
   workspaceMembers,
-  EntityRepository,
+  materializeEntity,
   eventRepository,
   storedVersionValues,
   uploadDocumentVersionSnapshot,
@@ -191,11 +191,12 @@ export async function uploadBufferAsFileEntity(params: {
     return [doc];
   });
 
-  // Create entity via EntityRepository — handles profile resolution, property
-  // indexing, event emission. Merge caller-provided properties. Legacy callers
-  // can still choose the storage-key property, but brand uploads link through
-  // asset-document-id so asset-url remains an actual external URL field.
-  const entityRepo = new EntityRepository(db, eventRepository);
+  // Create entity via the governed materializer (wraps EntityRepository.create)
+  // — handles profile resolution, property indexing, event emission, plus
+  // provenance. A file upload is a direct HUMAN action, so provenance = human.
+  // Merge caller-provided properties. Legacy callers can still choose the
+  // storage-key property, but brand uploads link through asset-document-id so
+  // asset-url remains an actual external URL field.
   const effectiveStorageKeyProperty =
     profileSlug === "brand-asset" && storageKeyProperty === "asset-url"
       ? "storageKey"
@@ -211,7 +212,7 @@ export async function uploadBufferAsFileEntity(params: {
       : {};
   let createdEntity;
   try {
-    createdEntity = await entityRepo.create(
+    const materialized = await materializeEntity(
       {
         profileSlug,
         title: filename,
@@ -228,8 +229,13 @@ export async function uploadBufferAsFileEntity(params: {
           [effectiveStorageKeyProperty]: metadata.path,
         },
       },
-      userId
+      {
+        db,
+        eventRepo: eventRepository,
+        provenance: { createdByKind: "human", createdByUserId: userId },
+      }
     );
+    createdEntity = materialized.entity;
   } catch (createError) {
     try {
       await db.delete(documents).where(eq(documents.id, document.id));

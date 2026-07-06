@@ -19,21 +19,12 @@ import {
   type CompositeProposalOperation,
 } from "@synap-core/types/proposals";
 import { createLogger } from "@synap-core/core";
-import { DEFAULT_RELATION_DEFS } from "@synap/database";
+// RELATION_SLUGS is the single source of truth in @synap/database (owned by the
+// governed entity materializer). Imported here so this composite path and the
+// materializer's invariant-1 guard can never drift apart.
+import { RELATION_SLUGS } from "@synap/database";
 
 const logger = createLogger({ module: "materialize-composite" });
-
-/**
- * Known built-in relation slugs (lowercased), O(1) lookup. Used to reject a
- * materialized entity whose title/type collides with a relation type — a bad
- * IS structure/import output can misclassify an edge-type string (e.g.
- * "belongs_to_project") as a NODE title, and nothing downstream rejects it, so
- * the junk relation-named entity leaks into the graph. Static set (no per-create
- * DB query); custom user-defined relation collisions are out of scope.
- */
-const RELATION_SLUGS: ReadonlySet<string> = new Set(
-  DEFAULT_RELATION_DEFS.map((d) => d.slug.toLowerCase())
-);
 
 /**
  * Create relations from ref-based ops against a ref→realId map. The ONE

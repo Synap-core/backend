@@ -16,7 +16,8 @@ import {
   count,
   drizzleSql,
   workspaces,
-  linkEntityToProject,
+  materializeEntity,
+  eventRepository,
 } from "@synap/database";
 import { entities, secrets } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
@@ -294,7 +295,6 @@ export const devplaneRouter = router({
   seedSynapProjectData: workspaceProcedure
     .input(z.object({}).optional())
     .mutation(async ({ ctx }) => {
-      const now = new Date();
       const ws = ctx.workspaceId;
       const uid = ctx.userId;
       // Target project = the active project lens (X-Project-Id header), the same
@@ -303,52 +303,36 @@ export const devplaneRouter = router({
       // recall. Absent lens → entities are still (re)created, just not filed.
       const projectId = ctx.projectId;
 
-      // Idempotent upsert helper. Reuses an existing entity's id (natural key =
-      // user + type + title) so a RE-RUN reconciles rows created by an earlier
-      // run instead of duplicating them — and thereby BACKFILLS the project edge
-      // on those pre-existing rows via linkEntityToProject below. First-run rows
-      // get a fresh id. `onConflictDoNothing` keeps the re-insert a no-op.
+      // Idempotent upsert helper via the governed materializer (natural-key
+      // dedup → a RE-RUN reconciles rows created by an earlier run instead of
+      // duplicating them, and BACKFILLS the project edge on pre-existing rows).
       const ins = async (
         type: string,
         title: string,
         props: Record<string, unknown>
       ) => {
-        const existingEntity = await db.query.entities.findFirst({
-          where: and(
-            eq(entities.userId, uid),
-            eq(entities.type, type),
-            eq(entities.title, title)
-          ),
-          columns: { id: true },
-        });
-        const id = existingEntity?.id ?? crypto.randomUUID();
-
-        await db
-          .insert(entities)
-          .values({
-            id,
-            userId: uid,
-            workspaceId: ws,
-            profileId: null,
-            type,
+        // Funnel through the governed materializer: natural-key dedup (reuse the
+        // existing user+type+title row so a re-run reconciles instead of
+        // duplicating) + idempotent project-link (backfills the edge the
+        // original raw-insert seed omitted). `skipValidation` preserves the raw
+        // seed's store-as-is behavior; provenance = system (pod provisioning).
+        await materializeEntity(
+          {
+            profileSlug: type,
             title,
             properties: props,
-            createdAt: now,
-            updatedAt: now,
-          })
-          .onConflictDoNothing();
-
-        // Stamp project membership — the write the original seed omitted, which
-        // orphaned these entities from the project lens. Idempotent via
-        // relations_belongs_to_project_unique, so a re-run only backfills.
-        if (projectId) {
-          await linkEntityToProject(db, {
-            entityId: id,
-            projectId,
-            userId: uid,
             workspaceId: ws,
-          });
-        }
+            userId: uid,
+            skipValidation: true,
+          },
+          {
+            db,
+            eventRepo: eventRepository,
+            provenance: { createdByKind: "system" },
+            dedup: "natural-key",
+            projectId,
+          }
+        );
       };
 
       // ── Apps ──────────────────────────────────────────────────────────────
@@ -1105,24 +1089,32 @@ export const devplaneRouter = router({
         },
       ];
 
-      const now = new Date();
       for (const s of defaults) {
-        await db.insert(entities).values({
-          id: crypto.randomUUID(),
-          userId: ctx.userId,
-          workspaceId: ctx.workspaceId,
-          profileId: null,
-          type: "devplane_prompt_snippet",
-          title: s.title,
-          properties: {
-            snippetTitle: s.title,
-            snippetCategory: s.category,
-            snippetDescription: s.description,
-            snippetBody: s.body,
+        // Funnel through the governed materializer: natural-key dedup makes each
+        // snippet idempotent (fixes the every-run duplication when the outer
+        // guard is bypassed / seeded in a second workspace) + project-link.
+        await materializeEntity(
+          {
+            profileSlug: "devplane_prompt_snippet",
+            title: s.title,
+            properties: {
+              snippetTitle: s.title,
+              snippetCategory: s.category,
+              snippetDescription: s.description,
+              snippetBody: s.body,
+            },
+            workspaceId: ctx.workspaceId,
+            userId: ctx.userId,
+            skipValidation: true,
           },
-          createdAt: now,
-          updatedAt: now,
-        });
+          {
+            db,
+            eventRepo: eventRepository,
+            provenance: { createdByKind: "system" },
+            dedup: "natural-key",
+            projectId: ctx.projectId,
+          }
+        );
       }
 
       logger.info(
