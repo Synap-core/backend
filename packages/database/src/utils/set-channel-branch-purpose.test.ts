@@ -35,22 +35,25 @@ describe("setChannelBranchPurpose — firewall immutability", () => {
     ["team", "team"],
     ["team", null],
     ["null", "team"],
-  ])("allows %s -> %s", async (from, to) => {
+  ])("allows %s -> %s", async (from: string, to: string | null) => {
     findFirstMock.mockResolvedValue({
       branchPurpose: from === "null" ? null : from,
     });
-    await expect(call(to as string | null)).resolves.toBeUndefined();
+    await expect(call(to)).resolves.toBeUndefined();
     expect(whereMock).toHaveBeenCalledTimes(1); // the UPDATE ran
   });
 
   it.each([
     ["client-comms", "team"],
     ["client-comms", null],
-  ])("REFUSES %s -> %s (client-comms is immutable)", async (_from, to) => {
-    findFirstMock.mockResolvedValue({ branchPurpose: "client-comms" });
-    await expect(call(to as string | null)).rejects.toBeInstanceOf(
-      ChannelFirewallImmutableError
-    );
-    expect(whereMock).not.toHaveBeenCalled(); // no write happened
-  });
+  ])(
+    "REFUSES %s -> %s (client-comms is immutable)",
+    async (_from: string, to: string | null) => {
+      findFirstMock.mockResolvedValue({ branchPurpose: "client-comms" });
+      await expect(call(to)).rejects.toBeInstanceOf(
+        ChannelFirewallImmutableError
+      );
+      expect(whereMock).not.toHaveBeenCalled(); // no write happened
+    }
+  );
 });

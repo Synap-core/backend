@@ -26,6 +26,19 @@ import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 
 const logger: any = createLogger({ module: "retrieval" });
 
+/**
+ * Conservative floor on pgvector cosine similarity. pgvector's `<=>` operator
+ * (vector_cosine_ops) returns cosine DISTANCE = 1 - cosine_similarity, so a
+ * candidate is kept only when `distance <= 1 - MIN_VECTOR_SIMILARITY`. Applied
+ * IN the nearest-neighbour query (not post-filtered) so genuinely-unrelated
+ * rows never occupy a `widen` slot ahead of real hits. 0.25 was chosen to trim
+ * the long tail of near-orthogonal embeddings (the noise floor for our
+ * text-embedding model) without cutting into legitimate paraphrase-level
+ * matches, which typically score well above 0.4.
+ */
+export const MIN_VECTOR_SIMILARITY = 0.25;
+export const MAX_VECTOR_DISTANCE = 1 - MIN_VECTOR_SIMILARITY;
+
 /** Embed a query via the active Intelligence Service; null on any failure. */
 export async function embedQuery(query: string): Promise<number[] | null> {
   try {
@@ -110,7 +123,12 @@ export async function hybridRecall(
       // AND the project lens onto the vector query so the nearest-neighbour scan
       // returns project rows directly (no post-filter starvation). inArray over
       // OUR table is bounded by the project size.
-      const conds = [drizzleSql`${entityVectors.userId} = ${userId}`];
+      const conds = [
+        drizzleSql`${entityVectors.userId} = ${userId}`,
+        // Noise floor: drop candidates below MIN_VECTOR_SIMILARITY BEFORE they
+        // can occupy a `widen` slot or reach fusion/slice.
+        drizzleSql`${entityVectors.embedding} <=> ${vecLiteral}::vector <= ${MAX_VECTOR_DISTANCE}`,
+      ];
       if (profileSlug) conds.push(eq(entityVectors.entityType, profileSlug));
       if (projectIds)
         conds.push(inArray(entityVectors.entityId, [...projectIds]));
