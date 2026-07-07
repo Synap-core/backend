@@ -8,15 +8,16 @@
  * Retry policy: 3 attempts, 10s delay between retries, expires after 5 minutes.
  *
  * Self-contained: accepts pre-resolved service URL + API key in job data to
- * avoid a circular dependency between @synap/api and @synap/jobs. The SSE parse
- * and the assistant-reply persist are the SHARED primitives (drainISChatStream
- * in @synap/intelligence-client, persistAssistantReply in @synap/database) that
- * the interactive `channels.sendMessage` path also uses — one reader, one chain.
+ * avoid a circular dependency between @synap/api and @synap/jobs. The IS
+ * transport (fetch + Bearer auth + SSE drain) and the assistant-reply persist
+ * are the SHARED primitives (requestHeadlessChatText in
+ * @synap/intelligence-client, persistAssistantReply in @synap/database) that the
+ * interactive `channels.sendMessage` path also builds on — one reader, one chain.
  */
 
 import type PgBoss from "pg-boss";
 import { createLogger } from "@synap-core/core";
-import { drainISChatStream } from "@synap/intelligence-client";
+import { requestHeadlessChatText } from "@synap/intelligence-client";
 import { persistAssistantReply } from "@synap/database";
 
 const logger = createLogger({ module: "a2ai-response-trigger" });
@@ -53,9 +54,9 @@ export const A2AI_TRIGGER_JOB_OPTIONS: PgBoss.SendOptions = {
 export const A2AI_TRIGGER_QUEUE = "a2ai-response-trigger";
 
 /**
- * Call the intelligence hub and return the full response text. Uses plain fetch
- * (no IntelligenceHubClient) to avoid the api↔jobs circular dep, but shares the
- * SSE parser with every other consumer via drainISChatStream.
+ * Call the intelligence hub and return the full response text. Delegates the IS
+ * transport (fetch + Bearer auth + SSE drain) to the SSOT
+ * `requestHeadlessChatText` in @synap/intelligence-client — no raw fetch here.
  */
 async function callIntelligenceHub(
   serviceUrl: string,
@@ -73,42 +74,11 @@ async function callIntelligenceHub(
     agentUserId?: string;
   }
 ): Promise<string> {
-  const body = JSON.stringify({
-    query: payload.query,
-    threadId: payload.threadId,
-    userId: payload.userId,
-    workspaceId: payload.workspaceId,
-    agentId: "orchestrator",
-    agentType: payload.agentType,
-    sourceMessageId: payload.sourceMessageId,
-    focusSessionId: payload.focusSessionId,
-    agentUserId: payload.agentUserId,
-    // REQUIRED: without stream:true the IS chat-stream takes its non-streaming
-    // branch (plain JSON), so the SSE reader finds no frames and the reply is
-    // dropped as empty. With stream:true the IS emits SSE (content deltas + the
-    // authoritative `complete` event), which drainISChatStream consumes.
-    stream: true,
-  });
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (serviceApiKey) {
-    headers["Authorization"] = `Bearer ${serviceApiKey}`;
-  }
-
-  const res = await fetch(`${serviceUrl}/api/chat/stream`, {
-    method: "POST",
-    headers,
-    body,
-    signal: AbortSignal.timeout(60_000),
-  });
-
-  if (!res.ok || !res.body) {
-    throw new Error(`Intelligence hub returned ${res.status}`);
-  }
-
-  const { text: finalText, error: streamError } = await drainISChatStream(res);
+  const { text: finalText, error: streamError } = await requestHeadlessChatText(
+    serviceUrl,
+    serviceApiKey,
+    payload
+  );
 
   logger.info(
     { finalLen: finalText.length, streamError: streamError || undefined },
@@ -184,8 +154,5 @@ export async function handleA2AIResponseTrigger(
     metadata: { serviceId, a2ai: true, sourceAgentUserId },
   });
 
-  logger.info(
-    { channelId, assistantId, serviceId },
-    "A2AI response persisted"
-  );
+  logger.info({ channelId, assistantId, serviceId }, "A2AI response persisted");
 }

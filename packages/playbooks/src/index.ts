@@ -493,6 +493,22 @@ export interface CapabilityDefinition {
   vault?: CapabilityVaultDef[];
   tools: CapabilityToolDef[];
   skills: CapabilitySkillDef[];
+  /**
+   * Content-addressed hash of this template's canonical definition, injected by
+   * the Control Plane into the served definition (flows through
+   * `capability_template_cache.definition` jsonb). CONSUMED, never recomputed,
+   * by the pod: a fast equality check against an installed capability's
+   * `metadata.contentHash` short-circuits the reconcile drift diff. Absent on
+   * older cache rows — treat as "unknown" and fall back to a structural diff.
+   */
+  contentHash?: string;
+  /**
+   * How the boot-time/on-demand capability reconcile should converge a drifted
+   * install: `"auto"` (default) re-applies through the governed
+   * `createCapabilityFromDefinition` door; `"notify"` reports the drift as an
+   * `updatesAvailable` entry without applying, deferring to a human/UI decision.
+   */
+  updatePolicy?: "auto" | "notify";
 }
 
 // ── LoopDefinition — a config descriptor that INSTANTIATES an autonomy loop ────

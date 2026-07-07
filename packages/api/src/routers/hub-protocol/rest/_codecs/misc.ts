@@ -247,6 +247,13 @@ export const CaptureExecuteRequestSchema = z
         })
       )
       .optional(),
+    // Workspace routing (shared with the tRPC capture.execute contract). Forward
+    // the AI's structure hints + the caller's mode so this door auto-routes
+    // identically to MCP. Without them the capture stays in the ambient workspace.
+    workspaceRouting: z.enum(["auto", "ask", "locked"]).optional(),
+    aiWorkspaceId: z.string().uuid().nullish(),
+    aiWorkspaceConfidence: z.number().nullish(),
+    aiWorkspaceReason: z.string().nullish(),
   })
   .openapi("CaptureExecuteRequest");
 

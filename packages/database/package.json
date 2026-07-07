@@ -39,6 +39,7 @@
   },
   "dependencies": {
     "@synap-core/core": "workspace:*",
+    "@synap/governance-policy": "workspace:*",
     "@synap/storage": "workspace:*",
     "bcrypt": "^6.0.0",
     "dotenv": "^17.2.3",

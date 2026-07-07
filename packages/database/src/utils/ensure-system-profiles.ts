@@ -158,7 +158,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       {
         slug: "email",
         valueType: PropertyValueType.STRING,
-        constraints: {},
+        constraints: { format: "email" },
         uiHints: { label: "Email", inputType: "email" },
       },
       {
@@ -166,6 +166,26 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         valueType: PropertyValueType.STRING,
         constraints: {},
         uiHints: { label: "Phone", inputType: "phone" },
+      },
+      // Identity fields — searchable handles used to dedup people pod-wide
+      // (see entity-resolution + capture dedup). Base defs so a lookup by
+      // handle/alias resolves to the existing person across all workspaces.
+      {
+        slug: "discord-handle",
+        valueType: PropertyValueType.STRING,
+        constraints: {},
+        uiHints: { label: "Discord", inputType: "text", helpText: "username" },
+      },
+      {
+        slug: "aliases",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: {
+          label: "Aliases",
+          inputType: "tags",
+          itemValueType: "string",
+          helpText: "Other handles, nicknames, or former names",
+        },
       },
     ];
 
@@ -992,6 +1012,8 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           { slug: "title", required: true, displayOrder: 0 },
           { slug: "email", required: false, displayOrder: 1 },
           { slug: "phone", required: false, displayOrder: 2 },
+          { slug: "discord-handle", required: false, displayOrder: 16 },
+          { slug: "aliases", required: false, displayOrder: 17 },
           { slug: "telegramHandle", required: false, displayOrder: 3 },
           { slug: "linkedinUrl", required: false, displayOrder: 4 },
           { slug: "twitterHandle", required: false, displayOrder: 5 },

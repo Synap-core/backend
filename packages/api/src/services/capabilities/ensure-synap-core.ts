@@ -35,30 +35,10 @@ import { sql as drizzleSql } from "drizzle-orm";
 import type { CapabilityDefinition } from "@synap/playbooks";
 
 import { createCapabilityFromDefinition } from "./create-from-definition.js";
+import { capabilityDefinitionDrift } from "./capability-drift.js";
 import type { Context } from "../../context.js";
 
 const logger = createLogger({ module: "ensure-synap-core" });
-
-/**
- * Deterministic JSON with recursively sorted object keys — for comparing a
- * jsonb-stored value (whose key order Postgres normalizes) against a code object
- * without reporting false drift on key ordering alone.
- */
-function canonicalJson(value: unknown): string {
-  const sort = (v: unknown): unknown => {
-    if (Array.isArray(v)) return v.map(sort);
-    if (v && typeof v === "object") {
-      return Object.keys(v as Record<string, unknown>)
-        .sort()
-        .reduce<Record<string, unknown>>((acc, k) => {
-          acc[k] = sort((v as Record<string, unknown>)[k]);
-          return acc;
-        }, {});
-    }
-    return v;
-  };
-  return JSON.stringify(sort(value ?? null));
-}
 
 /** The inline definition applied through the governed creation door. */
 export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
@@ -430,7 +410,13 @@ export async function ensureSynapCoreCapability(): Promise<void> {
       .limit(1);
     if (existing) {
       const seededSkills = await db
-        .select({ name: skills.name, parameters: skills.parameters })
+        .select({
+          name: skills.name,
+          parameters: skills.parameters,
+          providerSpec: skills.providerSpec,
+          code: skills.code,
+          description: skills.description,
+        })
         .from(skills)
         .where(
           and(
@@ -438,32 +424,17 @@ export async function ensureSynapCoreCapability(): Promise<void> {
             inArray(skills.name, SYNAP_CORE_SKILL_NAMES)
           )
         );
-      const seededByName = new Map(seededSkills.map((s) => [s.name, s]));
-      const missing = SYNAP_CORE_SKILL_NAMES.filter(
-        (n) => !seededByName.has(n)
+      // Definition-drift detection: a seeded verb whose stored `providerSpec` /
+      // `parameters` / `code` / `description` differ from the code definition
+      // (the catalog "lying" — e.g. a param was added in code but the name-only
+      // guard never re-projected it). Falling through re-runs the (now
+      // field-refreshing) applier, which self-heals the catalog — no manual
+      // backfill migration needed. Shared with the general capability reconcile
+      // (`capability-drift.ts`) so both guards stay in lock-step.
+      const { missing, drifted } = capabilityDefinitionDrift(
+        seededSkills,
+        SYNAP_CORE_DEFINITION
       );
-      // Definition-drift detection: a seeded verb whose stored `parameters`
-      // differ from the code definition (the catalog "lying" — e.g. a param was
-      // added in code but the name-only guard never re-projected it). Falling
-      // through re-runs the (now field-refreshing) applier, which self-heals the
-      // catalog — no manual backfill migration needed.
-      const drifted = SYNAP_CORE_DEFINITION.skills
-        .filter((codeSkill) => {
-          const seeded = seededByName.get(codeSkill.name);
-          if (!seeded) return false; // absence handled by `missing`
-          // Canonical (key-sorted) compare: jsonb does NOT preserve insertion
-          // order, so a plain JSON.stringify would report false drift on key
-          // order alone → re-applying every boot. Sorting keys makes it
-          // order-insensitive so we only re-project on a REAL param change.
-          // Normalize absent params to {} on BOTH sides — the create path
-          // stores `{}` for a param-less verb, so a bare `?? null` here would
-          // report false drift and re-apply every boot.
-          return (
-            canonicalJson(seeded.parameters ?? {}) !==
-            canonicalJson(codeSkill.parameters ?? {})
-          );
-        })
-        .map((s) => s.name);
       if (missing.length === 0 && drifted.length === 0) {
         logger.debug(
           "synap-core capability + all builtin verbs present and in sync — skipping seed"

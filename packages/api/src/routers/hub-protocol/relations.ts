@@ -82,11 +82,13 @@ export const hubRelationsRouter = router({
         input.userId,
         ctx.scopes || [],
         input.workspaceId,
-        ctx.sourceMessageId ?? undefined
+        ctx.sourceMessageId ?? undefined,
+        ctx.sessionId ?? undefined
       );
       const caller = regularRelationsRouter.createCaller(callerContext);
 
       // relations.create already calls checkPermissionOrPropose internally
+      // (which reads ctx.sessionId, so the link proposal groups under the run)
       const result = await caller.create({
         sourceEntityId: input.sourceEntityId,
         targetEntityId: input.targetEntityId,

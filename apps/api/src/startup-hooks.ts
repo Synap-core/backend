@@ -21,7 +21,11 @@ import {
 } from "@synap/database";
 import { randomUUID, randomBytes } from "crypto";
 import { sql as drizzleSql } from "drizzle-orm";
-import { setDynamicCorsOrigins, ensureSynapCoreCapability } from "@synap/api";
+import {
+  setDynamicCorsOrigins,
+  ensureSynapCoreCapability,
+  reconcileCapabilitiesToTemplates,
+} from "@synap/api";
 import { reconcileWorkspacesToTemplates } from "./startup/reconcile-workspaces-to-templates.js";
 
 const logger = createLogger({ module: "startup-hooks" });
@@ -492,6 +496,21 @@ export async function runStartupHooks(): Promise<void> {
   // non-fatal; runs after the pod-owner invariant so an owner exists to attribute
   // the pod-wide skills to (pre-bootstrap pods are skipped and retried next boot).
   await ensureSynapCoreCapability();
+
+  // Converge every installed capability CONTAINER to its Control-Plane template
+  // (the capability-layer counterpart to reconcileWorkspacesToTemplates above) —
+  // additively re-projects drifted skills (e.g. a `providerSpec.baseUrlOverride`
+  // fix) onto pods that already installed an older version of the template.
+  // Must run AFTER ensureSynapCoreCapability so synap-core itself is present to
+  // be enumerated (though it self-converges via its own guard either way).
+  try {
+    await reconcileCapabilitiesToTemplates();
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to reconcile capabilities to templates on startup (non-fatal)"
+    );
+  }
 
   logger.info("✅ Startup hooks complete");
 }

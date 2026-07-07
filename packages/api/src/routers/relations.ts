@@ -683,6 +683,8 @@ export const relationsRouter = router({
         workspaceId: effectiveWorkspaceId,
         subjectType: "relation",
         action: "create",
+        // Group a link/relation proposal under the agent's active run session.
+        sessionId: ctx.sessionId ?? undefined,
         data: {
           id,
           title: buildRelationTitle(

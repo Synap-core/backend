@@ -44,11 +44,11 @@
 import {
   db,
   eq,
-  proposals,
   users,
   workspaces,
   verifyPermission,
   ProposalStatus,
+  insertPendingProposal,
 } from "@synap/database";
 import type { WorkspaceSettings, AgentMetadata } from "@synap/database/schema";
 import { randomUUID } from "crypto";
@@ -58,7 +58,6 @@ import { createLogger } from "@synap-core/core";
 import {
   decideAgentPolicy,
   requiredPermissionFor,
-  PROPOSAL_TTL_DAYS,
 } from "@synap/governance-policy";
 
 const logger = createLogger({ module: "automation-governance" });
@@ -89,6 +88,9 @@ export interface AutomationGovernanceOpts {
   /** Provenance: the automation run that triggered this write. */
   automationRunId?: string;
   correlationId?: string;
+  /** The focus session this run opened (see openRunSession) — stamped onto
+   *  the created proposal so it groups under the session's reviewable card. */
+  sessionId?: string;
 }
 
 /**
@@ -113,6 +115,7 @@ export async function checkAutomationWriteOrPropose(
     reasoning,
     automationRunId,
     correlationId,
+    sessionId,
   } = opts;
 
   // Map action → required RBAC permission (canonical map in @synap/governance-policy).
@@ -211,6 +214,7 @@ export async function checkAutomationWriteOrPropose(
       reasoning: reasoning ?? decision.reason,
       automationRunId,
       correlationId,
+      sessionId,
     });
   }
 
@@ -233,6 +237,9 @@ async function proposeAutomationWrite(opts: {
   reasoning?: string;
   automationRunId?: string;
   correlationId?: string;
+  /** The focus session this run opened — stamped onto the proposal row so it
+   *  groups under the session's reviewable card. */
+  sessionId?: string;
 }): Promise<{ proposed: true; proposalId: string }> {
   const {
     agentUserId,
@@ -243,6 +250,7 @@ async function proposeAutomationWrite(opts: {
     reasoning,
     automationRunId,
     correlationId,
+    sessionId,
   } = opts;
 
   const singularType = subjectType.endsWith("s")
@@ -253,31 +261,31 @@ async function proposeAutomationWrite(opts: {
   );
   const resolvedCorrelationId = correlationId ?? randomUUID();
 
-  const [proposal] = await db
-    .insert(proposals)
-    .values({
-      workspaceId,
-      targetType: singularType,
-      targetId,
-      proposalType: action,
-      data: {
-        ...data,
-        source: "automation",
-        agentUserId,
-        // autonomous: an agent acted on its own (no human in the loop for
-        // automation runs). Mirrors deriveAuthorshipMode(undefined, agentUserId).
-        authorshipMode: "autonomous",
-        reasoning: reasoning ?? "Automation write requires review",
-        correlationId: resolvedCorrelationId,
-        ...(automationRunId ? { automationRunId } : {}),
-      },
-      status: ProposalStatus.PENDING,
-      createdBy: agentUserId,
+  // Shared PENDING-proposal INSERT (SSOT in @synap/database) — the same row
+  // shape the chat-AI path uses via createPendingProposal. The hand-mirrored
+  // insert that used to live here (with its documented drift risk) is gone; the
+  // automation-specific `data` payload + side effects below stay here.
+  const proposal = await insertPendingProposal({
+    workspaceId,
+    targetType: singularType,
+    targetId,
+    proposalType: action,
+    data: {
+      ...data,
+      source: "automation",
       agentUserId,
+      // autonomous: an agent acted on its own (no human in the loop for
+      // automation runs). Mirrors deriveAuthorshipMode(undefined, agentUserId).
+      authorshipMode: "autonomous",
+      reasoning: reasoning ?? "Automation write requires review",
       correlationId: resolvedCorrelationId,
-      expiresAt: new Date(Date.now() + PROPOSAL_TTL_DAYS * 24 * 60 * 60 * 1000),
-    })
-    .returning({ id: proposals.id });
+      ...(automationRunId ? { automationRunId } : {}),
+    },
+    createdBy: agentUserId,
+    agentUserId,
+    correlationId: resolvedCorrelationId,
+    sessionId: sessionId ?? null,
+  });
 
   // Supplementary realtime nudge — the Reactions queue itself is DB-driven, so
   // a broadcast failure must never block governance.

@@ -35,7 +35,8 @@ import type { Context } from "../../types/context.js";
 async function createHubProtocolCaller(
   userId: string,
   scopes: string[],
-  agentUserId?: string
+  agentUserId?: string,
+  sessionId?: string | null
 ) {
   await getDb();
 
@@ -63,6 +64,10 @@ async function createHubProtocolCaller(
     // When set (agent-key remap), `userId` is the operator and `agentUserId` is
     // the acting agent — write procs gate on agentUserId so they propose.
     agentUserId: agentUserId ?? null,
+    // Link every write in this MCP call to the agent's active focus session so
+    // its proposals/entities group under the run. The hub routers propagate
+    // ctx.sessionId downward (see hub-protocol/entities.ts createEntity).
+    sessionId: sessionId ?? null,
     scopes: hubScopes,
     apiKeyId: "mcp",
     apiKeyName: "MCP Server",
@@ -188,10 +193,18 @@ export async function executeMCPToolViaHubProtocol(
   _sessionUserId?: string,
   agentUserId?: string
 ): Promise<CallToolResult> {
+  // Normalize once: sessionId flows to a `uuid` DB column, so a non-string arg
+  // is dropped here rather than `as`-cast blindly. (Malformed UUID *strings* are
+  // still rejected downstream by the mutation inputs' zod `.uuid()` schemas.)
+  // Reused by every write case below.
+  const sessionId =
+    typeof args.sessionId === "string" ? args.sessionId : undefined;
+
   const caller = await createHubProtocolCaller(
     userId,
     apiKeyScopes,
-    agentUserId
+    agentUserId,
+    sessionId
   );
 
   switch (toolName) {
@@ -829,7 +842,7 @@ export async function executeMCPToolViaHubProtocol(
         apiKeyScopes,
         captureWsId,
         undefined,
-        undefined,
+        sessionId,
         agentUserId
       );
       const captureCaller = captureRouter.createCaller(
@@ -909,53 +922,9 @@ export async function executeMCPToolViaHubProtocol(
         }
         return p;
       });
-      // Workspace routing. In AUTO mode (default) the AI's confidently-resolved
-      // target workspace WINS over the ambient/session workspace — the whole
-      // point is that a capture lands in the right domain without the user (or
-      // the calling agent's session default, which is almost never a deliberate
-      // per-capture pin) having to think about it. A caller that wants a hard
-      // pin uses routing:"locked" (or ASK to confirm first). Guards: only move
-      // on sufficient confidence AND into a workspace the user is a member of.
-      const routing =
-        (args.workspaceRouting as "auto" | "ask" | "locked" | undefined) ??
-        "auto";
-      const aiTargetWs =
-        (structured as { targetWorkspaceId?: string | null })
-          .targetWorkspaceId || undefined;
-      const aiTargetConfidence =
-        (structured as { targetWorkspaceConfidence?: number | null })
-          .targetWorkspaceConfidence ?? 0;
-      // Below this the AI's guess is too weak to override where the capture is —
-      // leave it in the ambient workspace rather than risk a wrong move.
-      const AUTO_ROUTE_MIN_CONFIDENCE = 0.6;
-      let movedToWorkspace: string | undefined;
-      let pendingWorkspaceSwitch:
-        | {
-            suggestedWorkspaceId: string;
-            reason: string | null;
-            confidence: number | null;
-          }
-        | undefined;
-      if (aiTargetWs && aiTargetWs !== captureWsId) {
-        if (
-          routing === "auto" &&
-          aiTargetConfidence >= AUTO_ROUTE_MIN_CONFIDENCE
-        ) {
-          const userWsIds = await getUserWorkspaceIds(userId);
-          if (userWsIds.includes(aiTargetWs)) movedToWorkspace = aiTargetWs;
-        } else if (routing === "ask") {
-          pendingWorkspaceSwitch = {
-            suggestedWorkspaceId: aiTargetWs,
-            reason:
-              (structured as { targetWorkspaceReason?: string | null })
-                .targetWorkspaceReason ?? null,
-            confidence:
-              (structured as { targetWorkspaceConfidence?: number | null })
-                .targetWorkspaceConfidence ?? null,
-          };
-        }
-        // routing === "locked": never move — the ambient/pinned workspace stands.
-      }
+      // Workspace routing is centralized in captureCaller.execute (see
+      // resolveCaptureRouting): the adapter just forwards the AI's structure
+      // hints + the caller's mode, so MCP routes identically to every other door.
       const executed = await captureCaller.execute({
         entities: mergedProposals as Parameters<
           typeof captureCaller.execute
@@ -964,9 +933,19 @@ export async function executeMCPToolViaHubProtocol(
           ((structured as { relations?: unknown[] }).relations as Parameters<
             typeof captureCaller.execute
           >[0]["relations"]) ?? [],
-        // Auto-routed workspace (guarded above) — execute already resolves
-        // `input.targetWorkspaceId ?? ctx.workspaceId`; the adapter just wires it.
-        ...(movedToWorkspace ? { targetWorkspaceId: movedToWorkspace } : {}),
+        workspaceRouting: args.workspaceRouting as
+          | "auto"
+          | "ask"
+          | "locked"
+          | undefined,
+        aiWorkspaceId: (structured as { targetWorkspaceId?: string | null })
+          .targetWorkspaceId,
+        aiWorkspaceConfidence: (
+          structured as { targetWorkspaceConfidence?: number | null }
+        ).targetWorkspaceConfidence,
+        aiWorkspaceReason: (
+          structured as { targetWorkspaceReason?: string | null }
+        ).targetWorkspaceReason,
         // File into the active project lens (belongs_to_project) when the caller
         // passed a projectId, OR when structure resolved a target project — so
         // capture fills the lens it was invoked in (execute already stamps the
@@ -980,11 +959,21 @@ export async function executeMCPToolViaHubProtocol(
           return pid ? { projectId: pid } : {};
         })(),
       });
+      // execute() returns movedToWorkspace / pendingWorkspaceSwitch when routing
+      // engaged — surface them at the top level for the caller.
+      const ex = executed as {
+        movedToWorkspace?: string;
+        pendingWorkspaceSwitch?: unknown;
+      };
       return ok({
         structured,
         executed,
-        ...(movedToWorkspace ? { movedToWorkspace } : {}),
-        ...(pendingWorkspaceSwitch ? { pendingWorkspaceSwitch } : {}),
+        ...(ex.movedToWorkspace
+          ? { movedToWorkspace: ex.movedToWorkspace }
+          : {}),
+        ...(ex.pendingWorkspaceSwitch
+          ? { pendingWorkspaceSwitch: ex.pendingWorkspaceSwitch }
+          : {}),
       });
     }
 
@@ -1026,7 +1015,7 @@ export async function executeMCPToolViaHubProtocol(
         apiKeyScopes,
         projectWsId,
         undefined,
-        undefined,
+        sessionId,
         agentUserId
       );
       const projectCaller = projectsRouter.createCaller(projectCtx);
@@ -1061,7 +1050,7 @@ export async function executeMCPToolViaHubProtocol(
         apiKeyScopes,
         pbWsId,
         undefined,
-        undefined,
+        sessionId,
         agentUserId
       );
       const pbCaller = playbooksRouter.createCaller(pbCtx);

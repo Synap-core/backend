@@ -42,6 +42,8 @@ export * from "./utils/materialize-entity.js";
 export * from "./utils/package-definition.js";
 export * from "./utils/message-hash.js";
 export * from "./utils/persist-assistant-reply.js";
+export * from "./utils/open-run-session.js";
+export * from "./utils/insert-pending-proposal.js";
 
 // Server-side vault encryption
 export {

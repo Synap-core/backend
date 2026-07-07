@@ -66,7 +66,10 @@ import {
   logger,
   type HubHono,
 } from "./_shared.js";
-import { collapseDuplicateEntities } from "./capture-graph-dedup.js";
+import {
+  collapseDuplicateEntities,
+  identityValues,
+} from "./capture-graph-dedup.js";
 
 export function registerCaptureRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -327,6 +330,11 @@ export function registerCaptureRoutes(app: HubHono): void {
         entities: body.entities,
         relations: body.relations ?? [],
         projectId: body.projectId ?? undefined,
+        // Forward workspace routing so this door auto-routes like MCP.
+        workspaceRouting: body.workspaceRouting,
+        aiWorkspaceId: body.aiWorkspaceId,
+        aiWorkspaceConfidence: body.aiWorkspaceConfidence,
+        aiWorkspaceReason: body.aiWorkspaceReason,
       });
       return c.json(result);
     } catch (err) {
@@ -803,19 +811,24 @@ export function registerCaptureRoutes(app: HubHono): void {
     // against pod-wide entities.
     const toResolve = graphEntities.filter((e) => !e.existingEntityId);
     if (toResolve.length > 0) {
-      const wantTitles = new Set(
-        toResolve.map((e) => (e.title ?? e.ref).trim().toLowerCase())
+      // Every identity value (name + email/discord-handle/aliases) the incoming
+      // entities answer to — an existing row is worth registering if it shares
+      // ANY of these, so a handle/alias match resolves just like a title match.
+      const wantValues = new Set(
+        toResolve.flatMap((e) => identityValues(e.title ?? e.ref, e.properties))
       );
       try {
-        // Fetch the workspace's live entities (capped) + their profile slug, then
-        // match in JS case-insensitively on (slug, title). Fetch-and-filter
-        // avoids a case-insensitive SQL IN; the cap keeps it bounded.
+        // Fetch the workspace's live entities (capped) + their profile slug and
+        // properties, then match in JS case-insensitively on (slug, identity
+        // value). Fetch-and-filter avoids a case-insensitive SQL IN; the cap
+        // keeps it bounded.
         const DEDUP_CAP = 5000;
         const existing = await db
           .select({
             id: entities.id,
             title: entities.title,
             slug: profiles.slug,
+            properties: entities.properties,
           })
           .from(entities)
           .innerJoin(profiles, eq(entities.profileId, profiles.id))
@@ -845,20 +858,27 @@ export function registerCaptureRoutes(app: HubHono): void {
             "capture/graph: dedup match pool hit the cap — some duplicates may slip through"
           );
         }
+        // Expand each existing row into ALL its identity keys (slug::value) so
+        // an incoming title/handle/alias can match on any of them. Only register
+        // rows that share a wanted value — keeps the map bounded. Earliest-
+        // created wins (rows are ordered by createdAt), so `!byKey.has(key)`
+        // preserves the first row per key.
         const byKey = new Map<string, string>();
         for (const r of existing) {
-          const key = `${r.slug}::${(r.title ?? "").trim().toLowerCase()}`;
-          if (
-            wantTitles.has((r.title ?? "").trim().toLowerCase()) &&
-            !byKey.has(key)
-          ) {
-            byKey.set(key, r.id);
+          const rowValues = identityValues(
+            r.title,
+            r.properties as Record<string, unknown> | undefined
+          );
+          if (!rowValues.some((v) => wantValues.has(v))) continue;
+          for (const v of rowValues) {
+            const key = `${r.slug}::${v}`;
+            if (!byKey.has(key)) byKey.set(key, r.id);
           }
         }
         for (const e of toResolve) {
-          const hit = byKey.get(
-            `${e.profileSlug}::${(e.title ?? e.ref).trim().toLowerCase()}`
-          );
+          const hit = identityValues(e.title ?? e.ref, e.properties)
+            .map((v) => byKey.get(`${e.profileSlug}::${v}`))
+            .find((id) => id !== undefined);
           if (hit) e.existingEntityId = hit; // link, don't create
         }
       } catch (err) {

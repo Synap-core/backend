@@ -24,6 +24,7 @@ import {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,
 } from "../../../services/capabilities/create-from-definition.js";
+import { reconcileCapabilitiesToTemplates } from "../../../services/capabilities/reconcile-capabilities-to-templates.js";
 import { capabilitiesRouter } from "../../capabilities.js";
 import { playbooksRouter } from "../../playbooks.js";
 import { createHubProtocolCallerContext } from "../utils.js";
@@ -180,6 +181,9 @@ const ApplyCapabilityResponseSchema = z.object({
     tools: z.array(z.record(z.string(), z.unknown())),
     skills: z.array(z.record(z.string(), z.unknown())),
     playbooks: z.array(z.record(z.string(), z.unknown())),
+    // `createCapabilityFromDefinition` returns an `automations` array too — keep
+    // this doc schema in lockstep with the actual `CreateCapabilityResult.created`.
+    automations: z.array(z.record(z.string(), z.unknown())),
   }),
   proposals: z.array(z.string()),
 });
@@ -190,6 +194,26 @@ const CapabilitiesListResponseSchema = z.object({
 
 const CapabilityContainersListResponseSchema = z.object({
   capabilities: z.array(z.record(z.string(), z.unknown())),
+});
+
+const ReconcileCapabilitiesRequestSchema = z.object({
+  dryRun: z.boolean().optional(),
+});
+
+const CapabilityReconcileEntrySchema = z.object({
+  containerId: z.string(),
+  name: z.string(),
+  templateKey: z.string().optional(),
+  reason: z.string(),
+});
+
+const ReconcileCapabilitiesResponseSchema = z.object({
+  checked: z.number(),
+  dryRun: z.boolean(),
+  applied: z.array(CapabilityReconcileEntrySchema),
+  skipped: z.array(CapabilityReconcileEntrySchema),
+  updatesAvailable: z.array(CapabilityReconcileEntrySchema),
+  conflicts: z.array(CapabilityReconcileEntrySchema),
 });
 
 // ── Register function ──────────────────────────────────────────────────────
@@ -427,6 +451,88 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       return c.json(result, 200);
     } catch (err) {
       logger.error({ err }, "capabilities apply failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /capabilities/reconcile ───────────────────────────────────────────
+  // On-demand trigger for the capability→template reconcile (the same pass the
+  // boot hook runs). Runs in-process and returns the report synchronously —
+  // both a manual "converge now" and the door to push an already-fixed CP
+  // template (e.g. the `nango-google` `calendar_list` fix) onto a running pod
+  // without waiting for the next restart.
+  registerOpenApi(app, {
+    method: "post",
+    path: "/capabilities/reconcile",
+    tags: ["Capabilities"],
+    summary:
+      "Reconcile installed capabilities to their Control-Plane templates",
+    description:
+      "Re-projects drifted capability-template skills (providerSpec/parameters/" +
+      "code/description) onto their installed containers through the governed " +
+      "`createCapabilityFromDefinition` applier — add-only, never touches a " +
+      "skill the template doesn't declare. `dryRun:true` computes the report " +
+      "without writing. Requires hub-protocol.write scope.",
+    request: { body: ReconcileCapabilitiesRequestSchema },
+    responses: {
+      200: {
+        description: "Reconcile report",
+        schema: ReconcileCapabilitiesResponseSchema,
+      },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/capabilities/reconcile", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const parsed = ReconcileCapabilitiesRequestSchema.safeParse(
+      await c.req.json().catch(() => ({}))
+    );
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.message }, 400);
+    }
+
+    // A non-dryRun reconcile fans out ADD-ONLY re-projection writes across every
+    // installed capability pod-wide (each attributed to its own owner). That is an
+    // operator/admin convergence action, NOT an agent action — an agent credential
+    // must never trigger a pod-wide re-projection (same stance as rejectAgentReviewer).
+    // A dryRun is read-only (no writes), so it's allowed for anyone with the scope.
+    const agentUserId = c.get("agentUserId");
+    if (agentUserId && !parsed.data.dryRun) {
+      logger.warn(
+        { agentUserId },
+        "agent credential attempted a pod-wide capability reconcile — blocked (operator action)"
+      );
+      return c.json(
+        {
+          error:
+            "An agent credential cannot trigger a pod-wide capability reconcile. Run it from a human/operator session, or pass { dryRun: true } to preview.",
+        },
+        403
+      );
+    }
+    // Resolve a trusted acting identity (not just a bearer scope) — closes the
+    // "any write-scoped key" gap; boot-time reconcile is unaffected (it never
+    // hits this route).
+    const acting = await resolveActingContext(c, {});
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+    try {
+      const report = await reconcileCapabilitiesToTemplates({
+        dryRun: parsed.data.dryRun,
+      });
+      return c.json(report, 200);
+    } catch (err) {
+      logger.error({ err }, "capabilities reconcile failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

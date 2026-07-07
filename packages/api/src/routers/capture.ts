@@ -11,6 +11,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import { requireUserId, requireWorkspaceId } from "../utils/user-scoped.js";
+import { getUserWorkspaceIds } from "../utils/workspace-membership.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import {
   resolveIntelligenceService,
@@ -120,6 +121,70 @@ function titleSimilarity(a: string, b: string): number {
 // dedup candidate — drop it rather than surface it at a misleadingly low
 // score (the frontend already treats "any candidate present" as a hint).
 const DEDUP_SIMILARITY_FLOOR = 0.5;
+
+// ── Workspace routing (shared across ALL capture doors) ─────────────────────
+// Below this confidence, the AI's workspace guess is too weak to override where
+// the capture is — leave it in the ambient workspace rather than risk a wrong move.
+export const AUTO_ROUTE_MIN_CONFIDENCE = 0.6;
+
+export type WorkspaceRoutingMode = "auto" | "ask" | "locked";
+
+export interface CaptureRoutingResult {
+  /** The workspace the entities will actually be created in. */
+  workspaceId: string;
+  /** Set when AUTO moved the capture off the ambient workspace. */
+  movedToWorkspace?: string;
+  /** Set in ASK mode — a suggestion the surface confirms before moving. */
+  pendingWorkspaceSwitch?: {
+    suggestedWorkspaceId: string;
+    reason: string | null;
+    confidence: number | null;
+  };
+}
+
+/**
+ * THE ONE place that decides which workspace a capture lands in — shared by every
+ * door (MCP, REST, CLI, Raycast, import) so routing behaves identically everywhere.
+ *
+ * - AUTO (default): the AI's confidently-resolved target WINS over the ambient/
+ *   session workspace, so a capture lands in the right domain without the user
+ *   pinning it. Guarded: only moves on confidence ≥ AUTO_ROUTE_MIN_CONFIDENCE AND
+ *   into a workspace the user is a member of.
+ * - ASK (safe mode): never moves; surfaces `pendingWorkspaceSwitch` to confirm.
+ * - LOCKED: never moves; the ambient/pinned workspace stands.
+ */
+export function resolveCaptureRouting(opts: {
+  mode: WorkspaceRoutingMode;
+  aiWorkspaceId?: string | null;
+  aiConfidence?: number | null;
+  aiReason?: string | null;
+  currentWorkspaceId: string;
+  memberWorkspaceIds: string[];
+}): CaptureRoutingResult {
+  const target = opts.aiWorkspaceId || undefined;
+  if (!target || target === opts.currentWorkspaceId) {
+    return { workspaceId: opts.currentWorkspaceId };
+  }
+  if (
+    opts.mode === "auto" &&
+    (opts.aiConfidence ?? 0) >= AUTO_ROUTE_MIN_CONFIDENCE &&
+    opts.memberWorkspaceIds.includes(target)
+  ) {
+    return { workspaceId: target, movedToWorkspace: target };
+  }
+  if (opts.mode === "ask") {
+    return {
+      workspaceId: opts.currentWorkspaceId,
+      pendingWorkspaceSwitch: {
+        suggestedWorkspaceId: target,
+        reason: opts.aiReason ?? null,
+        confidence: opts.aiConfidence ?? null,
+      },
+    };
+  }
+  // LOCKED, or AUTO below-threshold / non-member → stay put.
+  return { workspaceId: opts.currentWorkspaceId };
+}
 
 type DedupCandidate = {
   entityId: string;
@@ -1092,12 +1157,44 @@ export const captureRouter = router({
          * (`belongs_to_project`) — the project mirror of the active workspace.
          */
         projectId: z.string().uuid().nullish(),
+        /**
+         * Workspace routing mode (shared across all doors). Applied ONLY when the
+         * caller passes the AI's routing hints (`aiWorkspaceId`) AND does NOT pass
+         * a direct `targetWorkspaceId` override. Default: "auto".
+         */
+        workspaceRouting: z.enum(["auto", "ask", "locked"]).optional(),
+        /** The AI-resolved target workspace (from /capture/structure). */
+        aiWorkspaceId: z.string().uuid().nullish(),
+        /** Confidence (0..1) in the AI's workspace pick — gates AUTO moves. */
+        aiWorkspaceConfidence: z.number().nullish(),
+        /** One-line justification for the AI's workspace pick (surfaced in ASK). */
+        aiWorkspaceReason: z.string().nullish(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      // User-selected override wins over session workspace.
-      const workspaceId = input.targetWorkspaceId ?? ctx.workspaceId;
+      // Workspace placement — THE shared routing decision (see resolveCaptureRouting).
+      // A direct `targetWorkspaceId` override always wins (a caller that already
+      // resolved the workspace). Otherwise, when the caller forwards the AI's
+      // routing hints, apply auto/ask/locked so every door (MCP, REST, CLI,
+      // Raycast, import) routes identically. No hints → today's ambient behavior.
+      let workspaceId: string | null | undefined;
+      let routing: CaptureRoutingResult | undefined;
+      if (input.targetWorkspaceId) {
+        workspaceId = input.targetWorkspaceId;
+      } else if (input.aiWorkspaceId && ctx.workspaceId) {
+        routing = resolveCaptureRouting({
+          mode: input.workspaceRouting ?? "auto",
+          aiWorkspaceId: input.aiWorkspaceId,
+          aiConfidence: input.aiWorkspaceConfidence,
+          aiReason: input.aiWorkspaceReason,
+          currentWorkspaceId: ctx.workspaceId,
+          memberWorkspaceIds: await getUserWorkspaceIds(userId),
+        });
+        workspaceId = routing.workspaceId;
+      } else {
+        workspaceId = ctx.workspaceId;
+      }
 
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
@@ -1517,7 +1614,18 @@ export const captureRouter = router({
           .catch(() => {}); // non-blocking
       }
 
-      return { created, relations: createdRelations };
+      return {
+        created,
+        relations: createdRelations,
+        // Routing outcome (present only when routing engaged) — the surface can
+        // show "moved to X" / offer to confirm a suggested switch.
+        ...(routing?.movedToWorkspace
+          ? { movedToWorkspace: routing.movedToWorkspace }
+          : {}),
+        ...(routing?.pendingWorkspaceSwitch
+          ? { pendingWorkspaceSwitch: routing.pendingWorkspaceSwitch }
+          : {}),
+      };
     }),
 
   // ── executeWithSchema (batch property_def create + entity upsert) ──────

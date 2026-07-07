@@ -480,7 +480,18 @@ function renderDeepLinkPage(deep: string): string {
 }
 
 app.get("/open/:type/:id", (c) => {
-  const ALLOWED = new Set(["proposal", "entity", "view", "document", "cell"]);
+  // `project` / `workspace` are lens targets (not rows the app "opens" as a
+  // surface) — the browser deep-link handler switches the active lens and lands
+  // on that lens's home dashboard. Backs clickable statusline links (synap-cli).
+  const ALLOWED = new Set([
+    "proposal",
+    "entity",
+    "view",
+    "document",
+    "cell",
+    "project",
+    "workspace",
+  ]);
   const type = c.req.param("type");
   const id = c.req.param("id");
   // id is a UUID or a cell typeKey — allow only url/HTML-safe chars so it can be

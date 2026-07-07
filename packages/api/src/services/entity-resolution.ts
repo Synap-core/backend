@@ -8,7 +8,10 @@
  * agent from a blind writer into a gardener.
  *
  * SHALLOW by design (first dogfood iteration):
- *   - EXACT name match only, case-insensitive (no fuzzy / semantic match yet).
+ *   - EXACT name match, case-insensitive (no fuzzy / semantic match yet), PLUS
+ *     an identity fallback: a person's `email` / `discord-handle` (indexed) or
+ *     an `aliases[]` entry can also carry the name being resolved, so handles
+ *     and nicknames resolve to the existing person instead of a duplicate.
  *   - Same user-visible scope as every other read — reuses `userVisibleWhere`
  *     so resolution can never surface an entity the caller couldn't already see.
  *   - Partitioned into:
@@ -22,9 +25,13 @@
  * and never let it block the underlying write.
  */
 
-import { and, ilike, isNull } from "@synap/database";
+import { and, ilike, isNull, or, inArray, drizzleSql } from "@synap/database";
 import { db } from "@synap/database";
-import { entities } from "@synap/database/schema";
+import {
+  entities,
+  propertyDefs,
+  entityPropertyIndex,
+} from "@synap/database/schema";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 
 /** Minimal entity shape the resolver returns (ids + names + profile). */
@@ -112,11 +119,63 @@ export async function resolveEntityByName(params: {
   // EXACT name, case-insensitive. `ilike` with no wildcards is an exact CI match;
   // escape LIKE metacharacters so a name containing % or _ matches literally.
   const escaped = name.replace(/([%_\\])/g, "\\$1");
+  const lowerName = name.toLowerCase();
+
+  // IDENTITY FALLBACK: a person's `email`/`discord-handle` (indexed in
+  // entity_property_index) or an `aliases[]` entry (source JSONB) can carry the
+  // name we're resolving — so "0scr" / "oscar@x.com" resolves to the existing
+  // "Oscar Piveteau" person instead of spawning a duplicate. Base defs are
+  // global (profile_id/workspace_id NULL); if unseeded the list is empty and we
+  // silently fall back to title-only matching.
+  // `email` is intentionally NOT an auto-resolution signal — shared/generic
+  // inboxes (support@, hello@) would wrongly resolve two different people to one.
+  // `discord-handle` is near-unique; aliases (below) carry same-person forms.
+  const identityDefs = await db.query.propertyDefs.findMany({
+    where: and(
+      inArray(propertyDefs.slug, ["discord-handle"]),
+      isNull(propertyDefs.profileId),
+      isNull(propertyDefs.workspaceId)
+    ),
+    columns: { id: true },
+  });
+  const identityDefIds = identityDefs.map((d) => d.id);
+
+  // Entities whose indexed discord-handle equals the name (case-folded).
+  let identityEntityIds: string[] = [];
+  if (identityDefIds.length > 0) {
+    const idxRows = await db.query.entityPropertyIndex.findMany({
+      where: and(
+        inArray(entityPropertyIndex.propertyDefId, identityDefIds),
+        drizzleSql`lower(${entityPropertyIndex.valueText}) = ${lowerName}`
+      ),
+      columns: { entityId: true },
+      limit: params.limit ?? 25,
+    });
+    identityEntityIds = idxRows.map((r) => r.entityId);
+  }
+
+  // Match on title OR indexed handle OR an alias (JSONB containment, case-folded
+  // on the source `properties.aliases`). The CASE guard keeps
+  // jsonb_array_elements_text from erroring on a non-array `aliases` value.
+  const matchClauses = [ilike(entities.title, escaped)];
+  if (identityEntityIds.length > 0) {
+    matchClauses.push(inArray(entities.id, identityEntityIds));
+  }
+  matchClauses.push(
+    drizzleSql`EXISTS (
+      SELECT 1 FROM jsonb_array_elements_text(
+        CASE WHEN jsonb_typeof(${entities.properties} -> 'aliases') = 'array'
+             THEN ${entities.properties} -> 'aliases'
+             ELSE '[]'::jsonb END
+      ) AS alias
+      WHERE lower(alias) = ${lowerName}
+    )`
+  );
 
   const rows = await db.query.entities.findMany({
     where: and(
       isNull(entities.deletedAt),
-      ilike(entities.title, escaped),
+      or(...matchClauses),
       userVisibleWhere(entities.workspaceId, params.userId)
     ),
     columns: {

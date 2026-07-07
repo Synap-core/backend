@@ -42,6 +42,10 @@ export class EntityIndexer extends BaseIndexer<Entity> {
     const content =
       [entity.content, propsText].filter(Boolean).join("\n") || undefined;
 
+    // Flatten identity handles/aliases into a searchable string[] so a lookup
+    // by email/discord-handle/nickname finds the person (dedup + recall).
+    const searchAliases = collectSearchAliases(entity.properties);
+
     const doc: SearchDocument = {
       id: entity.id,
       title: entity.title,
@@ -53,6 +57,7 @@ export class EntityIndexer extends BaseIndexer<Entity> {
       entityType: entity.type,
       tags: entity.tags || undefined,
       status: entity.status || undefined,
+      searchAliases: searchAliases.length > 0 ? searchAliases : undefined,
       createdAt: this.toTimestamp(entity.createdAt),
       updatedAt: this.toTimestamp(entity.updatedAt),
       // Ranking signals (TODO: implement analytics)
@@ -63,4 +68,22 @@ export class EntityIndexer extends BaseIndexer<Entity> {
     this.validateDocument(doc);
     return doc;
   }
+}
+
+/** Flatten `email` + `discord-handle` + `aliases[]` into a deduped string[]. */
+function collectSearchAliases(
+  properties: Record<string, unknown> | null
+): string[] {
+  if (!properties) return [];
+  const out: string[] = [];
+  const push = (v: unknown) => {
+    if (typeof v === "string" && v.trim()) out.push(v.trim());
+    else if (Array.isArray(v))
+      for (const item of v)
+        if (typeof item === "string" && item.trim()) out.push(item.trim());
+  };
+  push(properties.email);
+  push(properties["discord-handle"]);
+  push(properties.aliases);
+  return [...new Set(out)];
 }

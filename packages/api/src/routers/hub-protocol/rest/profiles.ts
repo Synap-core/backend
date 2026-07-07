@@ -343,11 +343,15 @@ export function registerProfilesRoutes(app: HubHono): void {
       uiHints?: Record<string, unknown>;
       agentUserId?: string;
       sourceMessageId?: string;
+      reasoning?: string;
       /**
        * When true, create a workspace-scoped overlay def (invisible to other
        * workspaces using the same profile). Default false = base def.
        */
       overlay?: boolean;
+      required?: boolean;
+      defaultValue?: unknown;
+      displayOrder?: number;
     };
     try {
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
@@ -366,15 +370,18 @@ export function registerProfilesRoutes(app: HubHono): void {
       });
       const result = await caller.profiles.createPropertyDef({
         userId: body.userId,
+        workspaceId: body.workspaceId,
         profileId: body.profileId,
         slug: body.slug,
         valueType: body.valueType,
         constraints: body.constraints,
         uiHints: body.uiHints,
+        reasoning: body.reasoning,
+        overlay: body.overlay === true,
+        required: body.required,
+        defaultValue: body.defaultValue,
+        displayOrder: body.displayOrder,
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
-        ...(body.overlay
-          ? { overlay: true, workspaceId: body.workspaceId }
-          : {}),
       });
       return c.json(result);
     } catch (err) {

@@ -5,9 +5,12 @@
  * Profiles define entity types; property defs define custom fields.
  *
  * Governance:
- *   - All profile + property-def create/update ops are AUTO-APPROVED
+ *   - Profile create/update ops are routed through DEFAULT_AUTO_APPROVE
  *     (view.create, profile.create, profile.update, property_def.create, property_def.update
- *     are in DEFAULT_AUTO_APPROVE — schema evolution is non-destructive and reversible).
+ *     are in the whitelist — schema evolution is non-destructive and reversible),
+ *     but every write is still gated through `checkPermissionOrPropose` so a
+ *     workspace that opts into stricter review (SAFE mode / a narrowed
+ *     `autoApproveFor`) is honored instead of silently bypassed.
  *   - No delete endpoints exposed to agents.
  */
 
@@ -20,6 +23,7 @@ import { propertyDefsRouter as regularPropertyDefsRouter } from "../property-def
 import { createHubProtocolCallerContext } from "./utils.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { setProfileRenderer } from "../../services/profiles/set-profile-renderer.js";
+import { createAndLinkPropertyDef } from "../../services/profiles/create-and-link-property-def.js";
 import { getDb, eq } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 
@@ -260,10 +264,20 @@ export const hubProfilesRouter = router({
     }),
 
   /**
-   * Create a property definition for a profile.
+   * Create a property definition for a profile, and link it into
+   * `profile_properties` so it actually renders (a property def is invisible
+   * to a profile until linked — see `createAndLinkPropertyDef`).
    *
    * Requires: hub-protocol.write scope
-   * Governance: auto-approved (property_def.create in DEFAULT_AUTO_APPROVE)
+   *
+   * GOVERNANCE: routed through `checkPermissionOrPropose` with
+   * `subjectType: 'property_def'`, `action: 'create'` — mirrors the
+   * `entity/create` gate exactly. `property_def.create` is in
+   * DEFAULT_AUTO_APPROVE, so a default-governance workspace still gets
+   * instant apply; a workspace that narrows `autoApproveFor` (or runs in SAFE
+   * mode) now correctly gets `status: 'proposed'` instead of an ungoverned
+   * direct write. On approval, the `property_def/create` proposal executor
+   * materializes via the SAME `createAndLinkPropertyDef` helper used here.
    *
    * Phase 2 layered schemas: pass `overlay: true` with a `workspaceId` to
    * create a workspace-scoped overlay field (invisible to other workspaces).
@@ -275,6 +289,7 @@ export const hubProfilesRouter = router({
     .input(
       z.object({
         userId: z.string(),
+        workspaceId: z.string().uuid(),
         profileId: z.string().uuid().optional(),
         slug: z
           .string()
@@ -286,46 +301,83 @@ export const hubProfilesRouter = router({
         constraints: z.record(z.string(), z.unknown()).optional(),
         uiHints: z.record(z.string(), z.unknown()).optional(),
         agentUserId: z.string().uuid().optional(),
+        reasoning: z.string().optional(),
         /**
          * When true, create a workspace-scoped overlay (invisible to other
-         * workspaces). Requires `workspaceId`. Default false = base def.
+         * workspaces). Default false = base def.
          */
         overlay: z.boolean().optional(),
-        /** Target workspace for overlay creation. */
-        workspaceId: z.string().uuid().optional(),
+        /** profile_properties link options. */
+        required: z.boolean().optional(),
+        defaultValue: z.unknown().optional(),
+        displayOrder: z.number().int().optional(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input }) => {
       const overlay = input.overlay === true;
-      if (overlay && !input.workspaceId) {
-        throw new Error("createPropertyDef: overlay=true requires workspaceId");
-      }
-      const callerContext = await createHubProtocolCallerContext(
-        input.userId,
-        ctx.scopes || [],
-        // Overlays need workspace context so ctx.workspaceId is populated;
-        // base defs can skip it (the regular router's workspaceProcedure
-        // will still demand some workspace, but one will be resolved).
-        overlay ? input.workspaceId : input.workspaceId,
-        ctx.sourceMessageId ?? undefined
-      );
-      const caller = regularPropertyDefsRouter.createCaller(callerContext);
+      const valueType = input.valueType as
+        | "string"
+        | "number"
+        | "boolean"
+        | "object"
+        | "array"
+        | "date"
+        | "secret"
+        | "entity_id";
 
-      return caller.create({
+      const perm = await checkPermissionOrPropose({
+        userId: input.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: input.workspaceId,
+        subjectType: "property_def",
+        action: "create",
+        source: "intelligence",
+        reasoning: input.reasoning,
+        data: {
+          profileId: input.profileId,
+          slug: input.slug,
+          valueType,
+          constraints: input.constraints,
+          uiHints: input.uiHints,
+          overlay,
+          workspaceId: input.workspaceId,
+          required: input.required,
+          defaultValue: input.defaultValue,
+          displayOrder: input.displayOrder,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new Error(perm.reason);
+      }
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+        };
+      }
+
+      // Granted (operator, or agent within DEFAULT_AUTO_APPROVE) → apply
+      // immediately via the shared create+link path.
+      const { propertyDef, link } = await createAndLinkPropertyDef({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        profileId: input.profileId,
         slug: input.slug,
-        valueType: input.valueType as
-          | "string"
-          | "number"
-          | "boolean"
-          | "object"
-          | "array"
-          | "date"
-          | "secret"
-          | "entity_id",
+        valueType,
         constraints: input.constraints,
         uiHints: input.uiHints,
-        profileId: input.profileId,
         overlay,
+        required: input.required,
+        defaultValue: input.defaultValue,
+        displayOrder: input.displayOrder,
       });
+
+      return {
+        status: "applied" as const,
+        proposalId: null,
+        propertyDef,
+        link,
+      };
     }),
 });

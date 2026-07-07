@@ -53,7 +53,7 @@ export const linkingRouter = router({
         agentUserId: z.string().uuid().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       // Verify channel exists and resolve workspaceId
       const channel = await db.query.channels.findFirst({
         where: eq(channels.id, input.threadId),
@@ -79,6 +79,10 @@ export const linkingRouter = router({
         subjectType: "context",
         action: "link",
         source: "intelligence",
+        // Group this context-link proposal under the agent's active run session
+        // (else the "Link context" flood stays ungrouped — the exact case that
+        // motivated the session-grouping feature).
+        sessionId: ctx.sessionId ?? undefined,
         data: {
           threadId: input.threadId,
           entityId: input.entityId,
@@ -144,7 +148,7 @@ export const linkingRouter = router({
         agentUserId: z.string().uuid().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       // Verify channel exists and resolve workspaceId
       const channel = await db.query.channels.findFirst({
         where: eq(channels.id, input.threadId),
@@ -170,6 +174,8 @@ export const linkingRouter = router({
         subjectType: "context",
         action: "link",
         source: "intelligence",
+        // Group under the agent's active run session (see linkEntity above).
+        sessionId: ctx.sessionId ?? undefined,
         data: {
           threadId: input.threadId,
           documentId: input.documentId,

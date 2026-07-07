@@ -49,6 +49,14 @@ export class PropertyIndexService {
       "startTime", // Date filtering/sorting
       "endTime", // Date filtering/sorting
       "assignee", // Entity ID filtering
+      "email", // Identity dedup — scalar → value_text, (property_def_id, value_text) index
+      "discord-handle", // Identity dedup — scalar → value_text
+      // NOTE: `aliases` is intentionally NOT indexed here. It's an array; rather
+      // than invent a multi-value index scheme, dedup gates match it via JSONB
+      // containment on the source `entities.properties->'aliases'` at query time
+      // (see entity-resolution.ts). EntityPropertyIndexRepository.index() would
+      // route an array to `value_jsonb`, which the (property_def_id, value_text)
+      // lookup can't hit anyway.
     ];
 
     for (const prop of effectiveProperties) {

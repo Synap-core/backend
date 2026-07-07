@@ -8230,9 +8230,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				limit?: number | undefined;
+				offset?: number | undefined;
 				projectId?: string | undefined;
 				type?: "code" | "text" | "markdown" | "pdf" | "docx" | "html" | undefined;
-				limit?: number | undefined;
 			};
 			output: {
 				documents: {
@@ -8261,6 +8262,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					deletedAt: Date | null;
 				}[];
 				total: number;
+				pagination: {
+					hasMore: boolean;
+					total?: number;
+					limit: number;
+					offset: number;
+				};
 			};
 			meta: object;
 		}>;

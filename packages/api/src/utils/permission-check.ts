@@ -17,6 +17,7 @@ import {
   and,
   entities,
   ProfileResolutionService,
+  insertPendingProposal,
 } from "@synap/database";
 import {
   users,
@@ -41,9 +42,9 @@ import {
   findMatchingPattern,
   requiredPermissionFor,
   isBlockedFilesystemPath,
+  isAutoApproved,
   DEFAULT_AUTO_APPROVE,
   DESTRUCTIVE_ACTIONS,
-  PROPOSAL_TTL_DAYS,
   type ChannelCapabilityGrant,
 } from "@synap/governance-policy";
 
@@ -747,7 +748,6 @@ export async function checkPermissionOrPropose(
     }
 
     // Legacy AI source path (no agent user row, but caller signals AI-sourced action).
-    // Use the legacy aiAutoApprove workspace toggle.
     if (source === "ai" || source === "intelligence") {
       const [ws] = workspaceId
         ? await db
@@ -758,11 +758,34 @@ export async function checkPermissionOrPropose(
         : [undefined];
 
       const settings = ws?.settings as WorkspaceSettings | undefined;
+      const eventKey = `${subjectType}.${action}`;
+
+      // Modern whitelist, honored BEFORE the legacy aiAutoApprove fallback — a
+      // no-agentUserId AI call (e.g. the Discord channel-digest's entity.create /
+      // context.link, source:"intelligence") is governed by the SAME
+      // autoApproveFor SSOT as the agentUserId path, not just the legacy boolean.
+      // Destructive actions never auto-approve via this path (mirrors
+      // decideAgentPolicy's rung 2.5 hard floor), and forcePropose always wins.
+      const effectiveAutoApproveFor =
+        settings?.aiGovernance?.autoApproveFor ?? DEFAULT_AUTO_APPROVE;
+      const isDestructive = DESTRUCTIVE_ACTIONS.includes(action);
+      const whitelisted =
+        !isDestructive && isAutoApproved(eventKey, effectiveAutoApproveFor);
+
+      if (whitelisted && !opts.forcePropose) {
+        return { granted: true };
+      }
+
+      // Legacy aiAutoApprove workspace toggle — fallback when the action isn't
+      // covered (or is destructive) by the modern whitelist.
       const aiAutoApprove =
         settings?.aiGovernance?.autoApprove ??
         (settings as Record<string, unknown> | undefined)?.aiAutoApprove ??
         false;
 
+      // Note: reaching here with whitelisted === true means opts.forcePropose is
+      // true (the whitelisted-and-not-forced case already returned above), so
+      // this unconditionally still proposes for that case.
       if (!aiAutoApprove || opts.forcePropose) {
         return createProposal({
           userId,
@@ -791,8 +814,6 @@ export async function checkPermissionOrPropose(
   // 6. Permission granted
   return { granted: true };
 }
-
-// PROPOSAL_TTL_DAYS imported from @synap/governance-policy.
 
 /**
  * Build a short human-readable summary of what's being proposed.
@@ -867,11 +888,11 @@ export interface CreatePendingProposalInput {
 }
 
 /**
- * Canonical pending proposal insert path.
- *
- * Permission-gated mutations and explicit proposal requests both use this so
- * notifications, proposal_event automation hooks, provenance, and expiry stay
- * consistent.
+ * The chat-AI door onto pending-proposal creation: the raw INSERT is the shared
+ * SSOT `insertPendingProposal` (@synap/database) — the SAME row shape the
+ * automation door (`proposeAutomationWrite`) uses — and this wrapper adds the
+ * post-commit notifications / proposal_event hooks on top. (The automation door
+ * omits those by design.) Keeps provenance and expiry consistent across doors.
  */
 /** Drizzle transaction handle — same surface as `db` for our inserts. */
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -958,34 +979,29 @@ export async function createPendingProposal(
    */
   tx?: DbTx
 ) {
-  const executor = tx ?? db;
-  const [proposal] = await executor
-    .insert(proposals)
-    .values({
+  // Shared PENDING-proposal INSERT (SSOT in @synap/database) — the same row
+  // shape the automation write path uses via proposeAutomationWrite. createdBy
+  // keeps this path's fallback (explicit → agent → requesting user).
+  const proposal = await insertPendingProposal(
+    {
       workspaceId: input.workspaceId,
       targetType: input.targetType,
       targetId: input.targetId,
       proposalType: input.proposalType,
       data: input.data,
-      status: ProposalStatus.PENDING,
       createdBy: input.createdBy ?? input.agentUserId ?? input.userId,
-      expiresAt:
-        input.expiresAt ??
-        new Date(Date.now() + PROPOSAL_TTL_DAYS * 24 * 60 * 60 * 1000),
-      ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
-      ...(input.threadId ? { threadId: input.threadId } : {}),
-      ...(input.commandRunId ? { commandRunId: input.commandRunId } : {}),
-      ...(input.sourceMessageId
-        ? { sourceMessageId: input.sourceMessageId }
-        : {}),
-      ...(input.correlationId ? { correlationId: input.correlationId } : {}),
-      ...(input.requestedEventId
-        ? { requestedEventId: input.requestedEventId }
-        : {}),
-      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-      ...(input.projectId ? { projectId: input.projectId } : {}),
-    })
-    .returning();
+      agentUserId: input.agentUserId,
+      threadId: input.threadId,
+      commandRunId: input.commandRunId,
+      sourceMessageId: input.sourceMessageId,
+      correlationId: input.correlationId,
+      requestedEventId: input.requestedEventId,
+      sessionId: input.sessionId,
+      projectId: input.projectId,
+      expiresAt: input.expiresAt,
+    },
+    tx
+  );
 
   // Standalone callers get notifications inline; transaction callers run
   // notifyProposalCreated() themselves after commit.

@@ -171,6 +171,7 @@ export const hubViewsRouter = router({
         source: "intelligence",
         reasoning: input.reasoning,
         sourceMessageId: ctx.sourceMessageId ?? undefined,
+        sessionId: ctx.sessionId ?? undefined,
         data: {
           id: input.viewId,
           name: input.name,
@@ -246,6 +247,7 @@ export const hubViewsRouter = router({
         source: "intelligence",
         reasoning: input.reasoning,
         sourceMessageId: ctx.sourceMessageId ?? undefined,
+        sessionId: ctx.sessionId ?? undefined,
         data: { viewId: input.viewId, widgetCount: input.widgets.length },
       });
 

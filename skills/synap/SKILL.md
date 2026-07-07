@@ -1014,6 +1014,17 @@ POST /api/hub/relations
 
 This model enables renewals (new deal linking to existing client), multi-stakeholder deals (multiple `linked_to_deal` relations per deal), campaigns with mixed entity types (persons + companies + deals as members), and clean churn tracking. It matches Synap's core pattern: entities + relations = graph.
 
+## Resolution discipline — resolve BEFORE you create
+
+Extracting people/companies from a digest, an email/DM thread, or notes is a RESOLUTION problem, not a creation problem. Follow this method every time (it is generic — the specific team roster and known aliases are DATA you fetch, never hardcoded):
+
+1. **Search first, once (batched).** Before proposing any person/company, run a SINGLE batched query (`search_unified`, plus `list_entities` if needed) that covers ALL candidate names, handles, emails and aliases at once. Never run one query per candidate — that is a cost failure.
+2. **Reuse on match → add an alias.** If a candidate matches an existing entity, reference the existing entity by its real id (e.g. `existingEntityId` on `propose_entity_graph`) and add the newly-seen surface form (a handle, an alternate spelling) to the entity's `aliases` — do NOT create a second `person`/`company`. The `person` profile carries `email`, `discord-handle` and `aliases` for exactly this.
+3. **Never placeholder.** Never mint an entity whose identity is unstated — "Not publicly disclosed", "unknown", "TBD", an empty name, or a bare handle with no person behind it. Fold that unstated thing into the description of a related entity instead.
+4. **Team is not a contact.** Internal senders — your own side of a `client-comms` thread (the agency's own team) — are NEVER captured as the client's contacts. Only the external party becomes a person/company/deal.
+
+An extraction that creates a duplicate "Sarah Chen", or a `person` titled "Unknown sender", is a failure — resolve, reuse, and alias instead.
+
 ---
 
 ## Common mistakes

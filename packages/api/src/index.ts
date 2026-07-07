@@ -47,6 +47,24 @@ export { chatStreamApp } from "./routers/chat-stream.js";
 export { openaiCompatApp } from "./routers/external/openai-compat.js";
 export { apiKeysRouter } from "./routers/api-keys.js";
 export { ensureSynapCoreCapability } from "./services/capabilities/ensure-synap-core.js";
+export {
+  createCapabilityFromDefinition,
+  loadCapabilityTemplate,
+  type CreateCapabilityResult,
+  type CapabilityDefinitionWithPlaybooks,
+} from "./services/capabilities/create-from-definition.js";
+export {
+  capabilityDefinitionDrift,
+  canonicalJson,
+  type CapabilityDriftResult,
+  type InstalledSkillRow,
+  type DefinitionSkillRow,
+} from "./services/capabilities/capability-drift.js";
+export {
+  reconcileCapabilitiesToTemplates,
+  type CapabilityReconcileReport,
+  type CapabilityReconcileEntry,
+} from "./services/capabilities/reconcile-capabilities-to-templates.js";
 export { healthRouter } from "./routers/health.js";
 export { projectsRouter } from "./routers/projects.js";
 export { sourceConfigsRouter } from "./routers/source-configs.js";

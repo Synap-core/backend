@@ -251,6 +251,8 @@ export interface CaptureStructureResponse {
   followUp: string | StructuredFollowUp | null;
   formSpec?: DynamicFormSpec | null;
   targetWorkspaceId?: string | null;
+  targetWorkspaceConfidence?: number | null;
+  targetWorkspaceReason?: string | null;
   targetProjectId?: string | null;
   dedupCandidates?: Record<
     string,
@@ -275,6 +277,17 @@ export interface CaptureExecuteInput {
     confidence?: number;
   }>;
   relations?: CaptureRelation[];
+  /** Cross-cutting project lens to file the created entities into. */
+  projectId?: string | null;
+  /**
+   * Workspace routing (shared across all capture doors). Forward the AI's
+   * structure hints + the caller's mode so the door auto-routes; the backend
+   * decides the final workspace (auto/ask/locked, confidence + membership gated).
+   */
+  workspaceRouting?: "auto" | "ask" | "locked";
+  aiWorkspaceId?: string | null;
+  aiWorkspaceConfidence?: number | null;
+  aiWorkspaceReason?: string | null;
 }
 
 export interface CaptureExecuteResponse {
@@ -289,6 +302,14 @@ export interface CaptureExecuteResponse {
     targetTempId: string;
     relationType: string;
   }>;
+  /** Set when AUTO routing moved the capture to the AI-resolved workspace. */
+  movedToWorkspace?: string;
+  /** Set in ASK mode — a suggested switch for the surface to confirm. */
+  pendingWorkspaceSwitch?: {
+    suggestedWorkspaceId: string;
+    reason: string | null;
+    confidence: number | null;
+  };
 }
 
 // ─── Recall (ask) ──────────────────────────────────────────────────────────────

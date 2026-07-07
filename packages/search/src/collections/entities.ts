@@ -22,6 +22,10 @@ export const entitiesCollectionSchema: CollectionCreateSchema = {
     { name: "projectId", type: "string", facet: true, optional: true },
     { name: "tags", type: "string[]", facet: true, optional: true },
     { name: "status", type: "string", facet: true, optional: true },
+    // Identity handles/aliases (email, discord-handle, aliases[]) flattened for
+    // keyword search — so searching a handle finds the person. Populated by
+    // EntityIndexer.toSearchDocument.
+    { name: "searchAliases", type: "string[]", facet: false, optional: true },
 
     // Ranking signals
     { name: "viewCount", type: "int32", optional: true },

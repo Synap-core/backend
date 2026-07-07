@@ -52,6 +52,12 @@ vi.mock("@synap/database", async () => {
       // proposal+.requested path); return whatever the callback returns.
       transaction: vi.fn(async (cb) => cb({ insert: mockDbInsert })),
     },
+    // Shared PENDING-proposal INSERT (SSOT in @synap/database) — the proposal
+    // row shape createPendingProposal now delegates to. Returns a row with an id
+    // just like the mocked `db.insert(...).returning()` above.
+    insertPendingProposal: vi
+      .fn()
+      .mockImplementation(async () => ({ id: randomUUID() })),
     proposals: {},
     entities: {},
     users: { id: "id", userType: "userType", agentMetadata: "agentMetadata" },
@@ -694,6 +700,121 @@ describe("checkPermissionOrPropose — ADMIN_ACTIONS always propose", () => {
 // ---------------------------------------------------------------------------
 // Tests: entity-create profile-existence guardrail (fail-fast)
 // ---------------------------------------------------------------------------
+
+describe("checkPermissionOrPropose — legacy AI-sourced path (no agentUserId)", () => {
+  beforeEach(() => {
+    mockVerifyPermission.mockResolvedValue({ allowed: true });
+  });
+
+  function setupWorkspaceSettings(settings: Record<string, unknown>) {
+    mockDbSelect.mockImplementation(() => ({
+      from: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue([{ settings }]),
+    }));
+  }
+
+  it("auto-approves an AI-sourced context.link when the workspace autoApproveFor whitelists context.*", async () => {
+    setupWorkspaceSettings({
+      aiGovernance: { autoApproveFor: ["context.*"], autoApprove: false },
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      source: "intelligence",
+      subjectType: "context",
+      action: "link",
+      data: { id: "ctx-1" },
+    });
+
+    expect(result).toEqual({ granted: true });
+  });
+
+  it("auto-approves an AI-sourced entity.create when the workspace autoApproveFor whitelists entity.create", async () => {
+    setupWorkspaceSettings({
+      aiGovernance: { autoApproveFor: ["entity.create"], autoApprove: false },
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      source: "intelligence",
+      subjectType: "entity",
+      action: "create",
+      data: { title: "New contact" },
+    });
+
+    expect(result).toEqual({ granted: true });
+  });
+
+  it("still proposes an AI-sourced entity.delete even though autoApproveFor whitelists it (destructive floor)", async () => {
+    setupWorkspaceSettings({
+      aiGovernance: {
+        autoApproveFor: ["entity.delete", "entity.*"],
+        autoApprove: false,
+      },
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      source: "intelligence",
+      subjectType: "entity",
+      action: "delete",
+      data: { id: "ent-xyz" },
+    });
+
+    expect("granted" in result && result.granted === false).toBe(true);
+    expect((result as { proposalId: string }).proposalId).toBeDefined();
+  });
+
+  it("proposes an AI-sourced action that is in neither autoApproveFor nor legacy aiAutoApprove", async () => {
+    setupWorkspaceSettings({
+      aiGovernance: { autoApproveFor: ["search.*"], autoApprove: false },
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      source: "intelligence",
+      subjectType: "view",
+      action: "update",
+      data: { id: "view-1" },
+    });
+
+    expect("granted" in result && result.granted === false).toBe(true);
+  });
+
+  it("forcePropose always proposes even for a whitelisted AI-sourced action", async () => {
+    setupWorkspaceSettings({
+      aiGovernance: { autoApproveFor: ["entity.create"], autoApprove: false },
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      source: "intelligence",
+      subjectType: "entity",
+      action: "create",
+      data: { title: "New contact" },
+      forcePropose: true,
+    });
+
+    expect("granted" in result && result.granted === false).toBe(true);
+  });
+
+  it("preserves legacy behavior: aiAutoApprove=true still auto-approves an action outside the modern whitelist", async () => {
+    setupWorkspaceSettings({
+      aiGovernance: { autoApprove: true },
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      source: "intelligence",
+      subjectType: "view",
+      action: "update",
+      data: { id: "view-1" },
+    });
+
+    expect(result).toEqual({ granted: true });
+  });
+});
 
 describe("checkPermissionOrPropose — entity-create profile guardrail", () => {
   beforeEach(() => {

@@ -58,7 +58,7 @@ import { skillsRouter } from "../../routers/skills.js";
 import { capabilityContainersRouter } from "../../routers/capability-containers.js";
 import type { Context } from "../../types/context.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
-import { interpolateDeep } from "../_shared/interpolate.js";
+import { interpolateDeep, interpolateString } from "../_shared/interpolate.js";
 
 // Param interpolation (`{{var}}` scheme) is shared via services/_shared/interpolate.
 
@@ -207,12 +207,44 @@ export async function createCapabilityFromDefinition(
     }
   }
 
+  // A pod-scoped capability (all its skills are pod-scoped) exposes a POD-WIDE
+  // connection: its vault secret, credentialed tool, skills and container must be
+  // created with `workspace_id = null`, because every consumer reads pod-wide —
+  // the Hub vault list, and the IS→dispatcher tool lookup (which never forwards a
+  // workspaceId). Stamping the caller's ACTIVE workspace here is exactly what made
+  // a pod capability install as a hidden, unrunnable workspace-scoped one. A
+  // genuinely workspace-scoped capability (non-pod skills) keeps the workspace.
+  // (Playbooks + automations stay on `workspaceId` — they are workspace-scoped by
+  // construction.) Computed up-front (from RAW skills — `scope` is a fixed enum,
+  // never a `{{param}}`) so the required-param guard below can look a candidate
+  // secret up in the SAME scope createVaultSecret keys it by.
+  const skillScopes = (rawDef.skills ?? []).map((s) => s.scope ?? "pod");
+  const isPodScoped =
+    skillScopes.length > 0 && skillScopes.every((sc) => sc === "pod");
+  const connWorkspaceId = isPodScoped ? undefined : workspaceId;
+
   // Reject a missing REQUIRED param up front. Otherwise `{{param}}` interpolates
   // to "" and we would store a BLANK credential — which then reads as a falsely
   // "connected" connection (the bug that let `cap add` install a keyless cap).
+  //
+  // EXCEPTION (boot-time RECONCILE): a capability template is re-applied with `{}`
+  // params to converge drifted verb specs. A required param exists only to SEED a
+  // vault secret the FIRST time; on a re-apply that secret already exists, so the
+  // param is not needed again. When the secret this param feeds is already
+  // established (same userId + name + scope createVaultSecret keys by), SKIP the
+  // param and let the tool/skill upserts proceed. A genuinely fresh install (the
+  // secret does not exist yet) still throws exactly as before.
   for (const p of rawDef.params ?? []) {
     const required = (p as { required?: boolean }).required;
     if (required && effectiveParams[p.name] === undefined) {
+      const established = await requiredParamSecretsExist(
+        p.name,
+        rawDef,
+        effectiveParams,
+        userId,
+        connWorkspaceId
+      );
+      if (established) continue;
       throw new Error(
         `Capability "${rawDef.key}" requires parameter "${p.name}" — pass it in \`params\`.`
       );
@@ -235,20 +267,6 @@ export async function createCapabilityFromDefinition(
       }
     });
   }
-
-  // A pod-scoped capability (all its skills are pod-scoped) exposes a POD-WIDE
-  // connection: its vault secret, credentialed tool, skills and container must be
-  // created with `workspace_id = null`, because every consumer reads pod-wide —
-  // the Hub vault list, and the IS→dispatcher tool lookup (which never forwards a
-  // workspaceId). Stamping the caller's ACTIVE workspace here is exactly what made
-  // a pod capability install as a hidden, unrunnable workspace-scoped one. A
-  // genuinely workspace-scoped capability (non-pod skills) keeps the workspace.
-  // (Playbooks + automations stay on `workspaceId` — they are workspace-scoped by
-  // construction.)
-  const skillScopes = (def.skills ?? []).map((s) => s.scope ?? "pod");
-  const isPodScoped =
-    skillScopes.length > 0 && skillScopes.every((sc) => sc === "pod");
-  const connWorkspaceId = isPodScoped ? undefined : workspaceId;
 
   const proposals: string[] = [];
 
@@ -645,6 +663,38 @@ export async function createCapabilityFromDefinition(
       name: def.name,
       status: existingContainer ? "reused" : "created",
     };
+
+    // W1: stamp TEMPLATE PROVENANCE into the container's `metadata` jsonb — no
+    // migration, the column already exists. `templateKey` = `def.key` (a
+    // CapabilityDefinition's own identity IS the key `loadCapabilityTemplate`
+    // resolves it by). `contentHash` is read off the RAW (pre-interpolation)
+    // definition — the CP-injected hash describes the template as served, not a
+    // post-`{{param}}`-substitution artifact — and omitted when the definition
+    // carries none (inline/hashless apply, e.g. `ensureSynapCoreCapability`'s
+    // in-repo definition). Read-modify-write: preserves any other metadata keys,
+    // never clobbers. Re-applying (reused container) refreshes both fields, so a
+    // legacy container converges to having provenance on its next apply.
+    const [containerRow] = await db
+      .select({ metadata: capabilitiesTable.metadata })
+      .from(capabilitiesTable)
+      .where(eq(capabilitiesTable.id, containerId))
+      .limit(1);
+    const existingMetadata = (containerRow?.metadata ?? {}) as Record<
+      string,
+      unknown
+    >;
+    await db
+      .update(capabilitiesTable)
+      .set({
+        metadata: {
+          ...existingMetadata,
+          templateKey: def.key,
+          ...(rawDef.contentHash ? { contentHash: rawDef.contentHash } : {}),
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(capabilitiesTable.id, containerId));
+
     // Attach every created tool (connections + built-ins) and skill as a member.
     for (const toolId of toolIdByName.values()) {
       await containersCaller.addPart({
@@ -820,6 +870,55 @@ async function issueCapabilityGrant(
   });
 }
 
+// ── Re-apply guard helper — is a required param's secret already established? ──
+//
+// A credentialed template declares a `required` param whose ONLY job is to feed a
+// vault secret's `value` (`value: "{{apiKey}}"`) the first time it is installed. On
+// a boot-time RECONCILE the template is re-applied with `{}` params to converge
+// drifted verb specs — the param is absent, but the secret it feeds already exists,
+// so re-establishing it is neither needed nor possible. This returns TRUE when every
+// vault secret this param feeds already exists in the target scope (guard skips it),
+// and FALSE when the param feeds no secret OR any fed secret is missing (guard throws
+// — preserving fresh-install behaviour exactly). Existence is checked the SAME way
+// createVaultSecret keys a secret: userId + name + scope + not-deleted.
+async function requiredParamSecretsExist(
+  paramName: string,
+  rawDef: CapabilityDefinitionWithPlaybooks,
+  effectiveParams: Record<string, unknown>,
+  userId: string,
+  workspaceId: string | undefined
+): Promise<boolean> {
+  const token = `{{${paramName}}}`;
+  // The vault defs whose (raw, pre-interpolation) value is fed by THIS param.
+  const fed = (rawDef.vault ?? []).filter(
+    (v) => typeof v.value === "string" && v.value.includes(token)
+  );
+  // Param feeds no vault secret → its target isn't cleanly determinable → throw.
+  if (fed.length === 0) return false;
+  for (const v of fed) {
+    // A secret's stored `name` may carry OTHER (present) params — interpolate it
+    // with what we have; the missing required param never appears in a name.
+    const name = interpolateString(v.name, effectiveParams);
+    const [existing] = await db
+      .select({ id: secrets.id })
+      .from(secrets)
+      .where(
+        and(
+          eq(secrets.userId, userId),
+          eq(secrets.name, name),
+          workspaceId
+            ? eq(secrets.workspaceId, workspaceId)
+            : isNull(secrets.workspaceId),
+          isNull(secrets.deletedAt)
+        )
+      )
+      .limit(1);
+    // A fed secret is missing → genuine fresh install → let the guard throw.
+    if (!existing) return false;
+  }
+  return true;
+}
+
 // ── Vault helper — mirrors POST /vault/secrets server-encryption path ─────────
 
 async function createVaultSecret(
@@ -852,6 +951,15 @@ async function createVaultSecret(
     )
     .limit(1);
   if (existing) {
+    // BUG-2 guard: NEVER overwrite a live credential with a blank value. A re-apply
+    // that couldn't interpolate this secret's param yields `value === ""`; writing
+    // it would encrypt-and-store an empty string, WIPING the real credential. When
+    // the interpolated value is empty/blank AND a secret already exists, keep the
+    // existing credential untouched. (Bug-1's guard already prevents the common
+    // path; this is the defensive floor.)
+    if (typeof v.value !== "string" || v.value.trim() === "") {
+      return { vaultRef: `vault://${existing.id}`, secretId: existing.id };
+    }
     await db
       .update(secrets)
       .set({

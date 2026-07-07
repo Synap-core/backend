@@ -110,4 +110,107 @@ describe("collapseDuplicateEntities", () => {
 
     expect(result.entities).toHaveLength(3);
   });
+
+  it("collapses a person whose alias matches another person's title (0scr → Oscar Piveteau)", () => {
+    const entities: CaptureGraphEntity[] = [
+      { ref: "p1", profileSlug: "person", title: "Oscar Piveteau" },
+      {
+        ref: "p2",
+        profileSlug: "person",
+        title: "0scr",
+        properties: { aliases: ["Oscar Piveteau"] },
+      },
+    ];
+    const relations: CaptureGraphRelation[] = [
+      { sourceRef: "p2", targetRef: "company-x", type: "works_at" },
+    ];
+
+    const result = collapseDuplicateEntities(entities, relations, []);
+
+    expect(result.entities).toHaveLength(1);
+    expect(result.entities[0]?.ref).toBe("p1");
+    // The dropped ref's relation is rewired to the survivor.
+    expect(result.relations).toEqual([
+      { sourceRef: "p1", targetRef: "company-x", type: "works_at" },
+    ]);
+  });
+
+  it("collapses regardless of order when the alias-carrier comes first", () => {
+    const entities: CaptureGraphEntity[] = [
+      {
+        ref: "p2",
+        profileSlug: "person",
+        title: "0scr",
+        properties: { aliases: ["Oscar Piveteau"] },
+      },
+      { ref: "p1", profileSlug: "person", title: "Oscar Piveteau" },
+    ];
+
+    const result = collapseDuplicateEntities(entities, [], []);
+
+    expect(result.entities).toHaveLength(1);
+    expect(result.entities[0]?.ref).toBe("p2");
+  });
+
+  it("does NOT collapse two people sharing only an email (shared inbox risk)", () => {
+    // `email` is intentionally NOT an auto-merge signal — a shared/generic inbox
+    // (support@, hello@) must not silently merge two different people. They stay
+    // separate; a real same-person link is driven by discord-handle/alias instead.
+    const entities: CaptureGraphEntity[] = [
+      {
+        ref: "p1",
+        profileSlug: "person",
+        title: "Oscar",
+        properties: { email: "team@x.com" },
+      },
+      {
+        ref: "p2",
+        profileSlug: "person",
+        title: "Priya",
+        properties: { email: "Team@X.com" },
+      },
+    ];
+
+    const result = collapseDuplicateEntities(entities, [], []);
+
+    expect(result.entities).toHaveLength(2);
+  });
+
+  it("collapses two people sharing a discord-handle (case-folded)", () => {
+    const entities: CaptureGraphEntity[] = [
+      {
+        ref: "p1",
+        profileSlug: "person",
+        title: "Oscar Piveteau",
+        properties: { "discord-handle": "0scr" },
+      },
+      {
+        ref: "p2",
+        profileSlug: "person",
+        title: "0scr",
+        properties: { "discord-handle": "0SCR" },
+      },
+    ];
+
+    const result = collapseDuplicateEntities(entities, [], []);
+
+    expect(result.entities).toHaveLength(1);
+    expect(result.entities[0]?.ref).toBe("p1");
+  });
+
+  it("does not collapse an alias match across different profile slugs", () => {
+    const entities: CaptureGraphEntity[] = [
+      { ref: "p1", profileSlug: "person", title: "Oscar Piveteau" },
+      {
+        ref: "c1",
+        profileSlug: "company",
+        title: "Acme",
+        properties: { aliases: ["Oscar Piveteau"] },
+      },
+    ];
+
+    const result = collapseDuplicateEntities(entities, [], []);
+
+    expect(result.entities).toHaveLength(2);
+  });
 });

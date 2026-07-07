@@ -581,6 +581,9 @@ importers:
       '@synap-core/core':
         specifier: workspace:*
         version: link:../core
+      '@synap/governance-policy':
+        specifier: workspace:*
+        version: link:../governance-policy
       '@synap/storage':
         specifier: workspace:*
         version: link:../storage

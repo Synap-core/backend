@@ -49,6 +49,7 @@ import {
   materializeEntity,
   eventRepository,
   mirrorMessageToBoundExternal,
+  openRunSession,
 } from "@synap/database";
 import {
   ChannelType,
@@ -58,6 +59,7 @@ import {
   MessageRole,
   MessageAuthorType,
 } from "@synap/database/schema";
+import type { AutomationTriggerConfig } from "@synap/database/schema";
 import type {
   FlowDefinition,
   AutomationNode,
@@ -76,6 +78,7 @@ import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import {
   resolveIntelligenceService,
   getDefaultActiveService,
+  requestTaskExecute,
 } from "@synap/intelligence-client";
 import { createLogger } from "@synap-core/core";
 import {
@@ -96,6 +99,18 @@ interface ExecutionPayload {
     chainDepth: number;
     rootRunId: string;
     chainAutomationIds: string[];
+    /**
+     * The focus session opened for this run (non-playbook-delegate automations
+     * only — see `executeAutomationFlow`). Threaded through delay-resumption
+     * re-enqueues so a suspended run reuses the SAME session on resume instead
+     * of opening a second one. Deliberately NOT inherited by `sub_automation`
+     * children — each chained automation run is its own reviewable unit and
+     * gets its own session.
+     */
+    focusSessionId?: string;
+    /** True when this run created the session fresh (vs. reusing a channel's
+     *  existing active session) — only the owner closes it at genuine finish. */
+    focusSessionOwned?: boolean;
   };
   /** For delay resumption: skip nodes that were already executed */
   completedNodeIds?: string[];
@@ -370,36 +385,20 @@ async function executeCommandStep(
   const { endpoint: isUrl, apiKey: isApiKey } = await getDefaultActiveService();
 
   // ── Generic command execution ──────────────────────────────────────────
+  // IS transport (fetch + X-API-Key + 60s abort) is the SSOT
+  // `requestTaskExecute` in @synap/intelligence-client — no raw fetch here.
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 60_000); // 60s timeout for commands
-
-    const response = await fetch(`${isUrl}/api/tasks/execute`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-Key": isApiKey,
-      },
-      body: JSON.stringify({
-        taskId: data.commandId ?? "automation-command",
-        action: prompt,
-        context: resolvedInputs,
-        // Attribute the IS work to the automation's owning principal
-        // (automation.createdBy — the agent user id for AI-created automations)
-        // instead of the unattributed "system". Writes the IS performs back to
-        // the pod will then carry this identity through the governance gate.
-        userId: ownerId,
-        workspaceId,
-      }),
-      signal: controller.signal,
+    const result = await requestTaskExecute(isUrl, isApiKey, {
+      taskId: data.commandId ?? "automation-command",
+      action: prompt,
+      context: resolvedInputs,
+      // Attribute the IS work to the automation's owning principal
+      // (automation.createdBy — the agent user id for AI-created automations)
+      // instead of the unattributed "system". Writes the IS performs back to
+      // the pod will then carry this identity through the governance gate.
+      userId: ownerId,
+      workspaceId,
     });
-    clearTimeout(timer);
-
-    if (!response.ok) {
-      throw new Error(`IS returned ${response.status}: ${response.statusText}`);
-    }
-
-    const result = (await response.json()) as Record<string, unknown>;
     return { ...result, resolvedInputs };
   } catch (err) {
     logger.error(
@@ -649,6 +648,7 @@ async function executeOutputStep(
         reasoning: "Automation proposed creating an entity.",
         automationRunId: automationContext.automationRunId,
         correlationId: automationContext.rootRunId,
+        sessionId: automationContext.focusSessionId,
       });
       if ("denied" in gate) {
         throw new Error(`entity_create denied by governance: ${gate.reason}`);
@@ -717,6 +717,7 @@ async function executeOutputStep(
         reasoning: "Automation proposed updating an entity.",
         automationRunId: automationContext.automationRunId,
         correlationId: automationContext.rootRunId,
+        sessionId: automationContext.focusSessionId,
       });
       if ("denied" in gate) {
         throw new Error(`entity_update denied by governance: ${gate.reason}`);
@@ -1025,6 +1026,7 @@ async function executeOutputStep(
         reasoning: "Automation proposed updating a focus session.",
         automationRunId: automationContext.automationRunId,
         correlationId: automationContext.rootRunId,
+        sessionId: automationContext.focusSessionId,
       });
       if ("denied" in gate) {
         throw new Error(`session_update denied by governance: ${gate.reason}`);
@@ -1836,12 +1838,78 @@ async function executeAutomationFlow(params: {
   }
 
   const flow = automation.flowDefinition as FlowDefinition;
+
+  // ── Open (or resume) a focus session for this run ──────────────────────────
+  // Every non-playbook-delegate automation run gets a session so all proposals
+  // it creates carry the session's id and group under one reviewable card, and
+  // the automation's data lives ON the session (openRunSession's contract).
+  //
+  // A "playbook-delegate" automation is the single-node `playbook_run` flow
+  // shape `buildPlaybookRunFlowDefinition` produces (e.g. a scheduled
+  // playbook's backing cron automation) — `executePlaybookRun` already opens
+  // its OWN session for that case, so we must not double-open here.
+  const isPlaybookDelegate =
+    flow.nodes.length === 1 && flow.nodes[0]?.type === "playbook_run";
+
+  // `focusSessionId`/`focusSessionOwned` arrive already-set on `automationContext`
+  // when this call is a delay-resumption of an in-flight run (see the "delay"
+  // node case below) — reuse rather than reopen. Deliberately NOT inherited by
+  // `sub_automation` children (they spread the raw `automationContext`, not
+  // `runContext`) — each chained automation run is its own reviewable unit.
+  let runSessionId = automationContext.focusSessionId;
+  let sessionOwned = automationContext.focusSessionOwned ?? false;
+  let runSuspended = false;
+
+  if (!isPlaybookDelegate && !runSessionId) {
+    const [ownerUser] = await db
+      .select({ userType: users.userType })
+      .from(users)
+      .where(eq(users.id, ownerId))
+      .limit(1);
+
+    const boundChannelId =
+      (automation.triggerConfig as AutomationTriggerConfig | null)?.channelId ??
+      undefined;
+
+    const opened = await openRunSession({
+      userId: ownerId,
+      workspaceId,
+      goal: automation.name || `Automation run ${runId}`,
+      source: "automation",
+      automationId,
+      automationRunId: runId,
+      channelId: boundChannelId,
+      agentUserId: ownerUser?.userType === "agent" ? ownerId : undefined,
+    });
+    runSessionId = opened.sessionId;
+    sessionOwned = !opened.reused;
+  }
+
+  // Downstream propose calls and the delay-resumption re-enqueue thread THIS —
+  // never the raw `automationContext` — so proposals carry the session id.
+  const runContext: ExecutionPayload["automationContext"] = {
+    ...automationContext,
+    focusSessionId: runSessionId,
+    focusSessionOwned: sessionOwned,
+  };
+
+  const closeSessionIfOwned = async (): Promise<void> => {
+    if (sessionOwned && runSessionId && !runSuspended) {
+      await db
+        .update(focusSessions)
+        .set({ status: "closed", closedAt: new Date() })
+        .where(eq(focusSessions.id, runSessionId));
+    }
+  };
+
   if (!flow.nodes.length) {
     logger.warn({ automationId }, "Automation has no nodes — marking complete");
     await db
       .update(automationRuns)
       .set({ status: "completed", completedAt: new Date() })
       .where(eq(automationRuns.id, runId));
+    // Genuine finish (trivially) — close a freshly-opened session.
+    await closeSessionIfOwned();
     return {};
   }
 
@@ -1854,577 +1922,620 @@ async function executeAutomationFlow(params: {
     const cyclic = flow.nodes
       .filter((n) => !ordered.has(n.id))
       .map((n) => n.id);
+    // Nothing will run — close a freshly-opened session before failing loud so
+    // an unrunnable flow never leaks an orphaned active session.
+    await closeSessionIfOwned();
     throw new Error(
       `Automation flow has a cycle — these nodes cannot be ordered and would never run: ${cyclic.join(", ")}`
     );
   }
 
-  // Build execution context
-  const context: StepContext = {
-    trigger: {
-      payload: (run.triggerPayload as Record<string, unknown>) ?? {},
-    },
-    steps: {},
-    // Snapshot of the automation's persistent state at trigger time. A
-    // `set_state` output node merges changes back onto the row (see
-    // executeOutputStep); the snapshot here is what templates read for this run.
-    automation: {
-      id: automation.id,
-      state: (automation.state as Record<string, unknown> | null) ?? {},
-    },
-  };
-
-  // If resuming from delay, reload previously completed step outputs
-  if (alreadyCompleted.size > 0) {
-    const priorSteps = await db
-      .select()
-      .from(automationStepRuns)
-      .where(eq(automationStepRuns.runId, runId));
-
-    for (const step of priorSteps) {
-      if (step.status === "completed" && step.output) {
-        context.steps[step.nodeId] = {
-          output: step.output as Record<string, unknown>,
-        };
-      }
-    }
+  // Safety net: anything below that throws WITHOUT going through the per-node
+  // retry/catch (e.g. an infra failure in a db update between nodes) must not
+  // leak an orphaned active session — close it, then rethrow unchanged.
+  try {
+    return await executeSortedNodes();
+  } catch (err) {
+    await closeSessionIfOwned();
+    throw err;
   }
 
-  // Track which nodes to skip (condition branches not taken)
-  const skippedNodes = new Set<string>();
-  // Edges on an untaken condition/switch branch. A node is only pruned when ALL
-  // its incoming edges are dead (pruned or from a skipped source) — this is what
-  // keeps a join/merge node reachable from the TAKEN branch alive (diamond fix).
-  const prunedEdges = new Set<AutomationEdge>();
-  let stepsCompleted = 0;
-  let stepsFailed = 0;
+  async function executeSortedNodes(): Promise<Record<string, unknown>> {
+    // TS control-flow narrowing on `automation`/`run` (checked non-null above)
+    // doesn't cross into this nested function's closure — assert locally.
+    const loadedAutomation = automation!;
+    const loadedRun = run!;
+    // Build execution context
+    const context: StepContext = {
+      trigger: {
+        payload: (loadedRun.triggerPayload as Record<string, unknown>) ?? {},
+      },
+      steps: {},
+      // Snapshot of the automation's persistent state at trigger time. A
+      // `set_state` output node merges changes back onto the row (see
+      // executeOutputStep); the snapshot here is what templates read for this run.
+      automation: {
+        id: loadedAutomation.id,
+        state: (loadedAutomation.state as Record<string, unknown> | null) ?? {},
+      },
+    };
 
-  for (const node of sortedNodes) {
-    // Skip trigger node (already fired)
-    if (node.type === "trigger") continue;
+    // If resuming from delay, reload previously completed step outputs
+    if (alreadyCompleted.size > 0) {
+      const priorSteps = await db
+        .select()
+        .from(automationStepRuns)
+        .where(eq(automationStepRuns.runId, runId));
 
-    // Skip already-completed nodes (delay resumption)
-    if (alreadyCompleted.has(node.id)) continue;
-
-    // Skip if this node was excluded by a condition branch
-    if (skippedNodes.has(node.id)) {
-      await db.insert(automationStepRuns).values({
-        runId,
-        nodeId: node.id,
-        status: "skipped",
-      });
-      continue;
+      for (const step of priorSteps) {
+        if (step.status === "completed" && step.output) {
+          context.steps[step.nodeId] = {
+            output: step.output as Record<string, unknown>,
+          };
+        }
+      }
     }
 
-    // Create step run record
-    const [stepRun] = await db
-      .insert(automationStepRuns)
-      .values({
-        runId,
-        nodeId: node.id,
-        commandId:
-          node.type === "command"
-            ? ((node.data as Record<string, unknown>).commandId as
-                | string
-                | undefined)
-            : undefined,
-        status: "running",
-        startedAt: new Date(),
-      })
-      .returning({ id: automationStepRuns.id });
+    // Track which nodes to skip (condition branches not taken)
+    const skippedNodes = new Set<string>();
+    // Edges on an untaken condition/switch branch. A node is only pruned when ALL
+    // its incoming edges are dead (pruned or from a skipped source) — this is what
+    // keeps a join/merge node reachable from the TAKEN branch alive (diamond fix).
+    const prunedEdges = new Set<AutomationEdge>();
+    let stepsCompleted = 0;
+    let stepsFailed = 0;
 
-    // Resolve per-node error handling config
-    const nodeErrorHandling = ((node.data as Record<string, unknown>)
-      .errorHandling ?? {}) as NodeErrorHandling;
-    const maxRetries = Math.min(
-      Math.max(Number(nodeErrorHandling.maxRetries ?? 0), 0),
-      3
-    );
-    const retryDelay = Math.max(Number(nodeErrorHandling.retryDelay ?? 0), 0);
-    const continueOnError = nodeErrorHandling.continueOnError === true;
+    for (const node of sortedNodes) {
+      // Skip trigger node (already fired)
+      if (node.type === "trigger") continue;
 
-    let lastError: unknown = undefined;
-    let succeeded = false;
-    let output: unknown = {};
+      // Skip already-completed nodes (delay resumption)
+      if (alreadyCompleted.has(node.id)) continue;
 
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      if (attempt > 0) {
-        // Wait before retry
-        if (retryDelay > 0) {
-          await new Promise((resolve) => setTimeout(resolve, retryDelay));
-        }
-        logger.info(
-          { nodeId: node.id, attempt, maxRetries },
-          "Retrying automation step"
-        );
+      // Skip if this node was excluded by a condition branch
+      if (skippedNodes.has(node.id)) {
+        await db.insert(automationStepRuns).values({
+          runId,
+          nodeId: node.id,
+          status: "skipped",
+        });
+        continue;
       }
 
-      try {
-        switch (node.type) {
-          case "command": {
-            const data = node.data as {
-              commandId?: string;
-              commandTitle?: string;
-              inputMapping: Record<string, string>;
-              promptOverride?: string;
-            };
+      // Create step run record
+      const [stepRun] = await db
+        .insert(automationStepRuns)
+        .values({
+          runId,
+          nodeId: node.id,
+          commandId:
+            node.type === "command"
+              ? ((node.data as Record<string, unknown>).commandId as
+                  | string
+                  | undefined)
+              : undefined,
+          status: "running",
+          startedAt: new Date(),
+        })
+        .returning({ id: automationStepRuns.id });
 
-            const resolvedInputs = resolveInputMapping(
-              data.inputMapping ?? {},
-              context
-            );
+      // Resolve per-node error handling config
+      const nodeErrorHandling = ((node.data as Record<string, unknown>)
+        .errorHandling ?? {}) as NodeErrorHandling;
+      const maxRetries = Math.min(
+        Math.max(Number(nodeErrorHandling.maxRetries ?? 0), 0),
+        3
+      );
+      const retryDelay = Math.max(Number(nodeErrorHandling.retryDelay ?? 0), 0);
+      const continueOnError = nodeErrorHandling.continueOnError === true;
 
-            await db
-              .update(automationStepRuns)
-              .set({ resolvedInputs })
-              .where(eq(automationStepRuns.id, stepRun.id));
+      let lastError: unknown = undefined;
+      let succeeded = false;
+      let output: unknown = {};
 
-            // FOLLOW-UP (Wave 3b firewall): `intelligence_commands` has no
-            // `approved` column, so there is no per-capability approval-state to
-            // gate the command run on here. The command runs an IS task whose
-            // pod write-backs remain proposal-governed, and any provider call it
-            // makes funnels through Site 1's gate (triggerProviderAction). Full
-            // capability-grant/exec-mode gating for commands awaits the gate
-            // helper being extracted to a shared package (jobs cannot import
-            // @synap/api — circular dep).
-            output = await executeCommandStep(
-              data,
-              context,
-              workspaceId,
-              ownerId
-            );
-            break;
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        if (attempt > 0) {
+          // Wait before retry
+          if (retryDelay > 0) {
+            await new Promise((resolve) => setTimeout(resolve, retryDelay));
           }
+          logger.info(
+            { nodeId: node.id, attempt, maxRetries },
+            "Retrying automation step"
+          );
+        }
 
-          case "condition": {
-            const data = node.data as { expression: string };
-            const result = evaluateCondition(data.expression, context);
-            output = { result };
+        try {
+          switch (node.type) {
+            case "command": {
+              const data = node.data as {
+                commandId?: string;
+                commandTitle?: string;
+                inputMapping: Record<string, string>;
+                promptOverride?: string;
+              };
 
-            // Mark nodes on the untaken branch as skipped
-            const untakenHandle = result ? "no" : "yes";
-
-            const untakenEdges = getOutEdges(
-              flow.edges,
-              node.id,
-              untakenHandle
-            );
-            for (const edge of untakenEdges) prunedEdges.add(edge);
-            for (const edge of untakenEdges) {
-              markDescendantsSkipped(
-                edge.target,
-                flow.edges,
-                skippedNodes,
-                prunedEdges
+              const resolvedInputs = resolveInputMapping(
+                data.inputMapping ?? {},
+                context
               );
-            }
-            break;
-          }
 
-          case "delay": {
-            const data = node.data as { duration: string };
-            const delayMs = parseDuration(data.duration);
-            const resumeAt = new Date(Date.now() + delayMs);
+              await db
+                .update(automationStepRuns)
+                .set({ resolvedInputs })
+                .where(eq(automationStepRuns.id, stepRun.id));
 
-            logger.info(
-              {
-                nodeId: node.id,
-                duration: data.duration,
-                resumeAt: resumeAt.toISOString(),
-              },
-              "Delay step — re-enqueueing with startAfter"
-            );
-
-            // Record this step as completed
-            output = {
-              status: "delayed",
-              duration: data.duration,
-              resumeAfter: resumeAt.toISOString(),
-            };
-
-            // Collect all completed node IDs up to this point
-            const completedSoFar = [
-              ...alreadyCompleted,
-              ...sortedNodes
-                .filter((n) => n.type === "trigger" || context.steps[n.id])
-                .map((n) => n.id),
-              node.id,
-            ];
-
-            // Re-enqueue the rest of the DAG with startAfter
-            const boss = getBoss();
-            await boss.send(
-              "automation-execute",
-              {
-                runId,
-                automationId,
+              // FOLLOW-UP (Wave 3b firewall): `intelligence_commands` has no
+              // `approved` column, so there is no per-capability approval-state to
+              // gate the command run on here. The command runs an IS task whose
+              // pod write-backs remain proposal-governed, and any provider call it
+              // makes funnels through Site 1's gate (triggerProviderAction). Full
+              // capability-grant/exec-mode gating for commands awaits the gate
+              // helper being extracted to a shared package (jobs cannot import
+              // @synap/api — circular dep).
+              output = await executeCommandStep(
+                data,
+                context,
                 workspaceId,
-                automationContext,
-                completedNodeIds: completedSoFar,
-              },
-              { startAfter: resumeAt }
-            );
-
-            // Mark step as completed and return early — execution will resume after delay
-            context.steps[node.id] = { output };
-            stepsCompleted++;
-
-            await db
-              .update(automationStepRuns)
-              // jsonb column accepts any JSON; cast satisfies the Record type.
-              .set({
-                status: "completed",
-                output: output as Record<string, unknown>,
-                completedAt: new Date(),
-              })
-              .where(eq(automationStepRuns.id, stepRun.id));
-
-            // Update run to show partial progress
-            await db
-              .update(automationRuns)
-              .set({ stepsCompleted })
-              .where(eq(automationRuns.id, runId));
-
-            return {}; // Exit — execution resumes after delay
-          }
-
-          case "output": {
-            const data = node.data as {
-              label?: string;
-              outputType: string;
-              config: Record<string, unknown>;
-            };
-
-            const resolvedConfig = deepResolveTemplates(
-              data.config,
-              context
-            ) as Record<string, unknown>;
-
-            await db
-              .update(automationStepRuns)
-              .set({ resolvedInputs: resolvedConfig })
-              .where(eq(automationStepRuns.id, stepRun.id));
-
-            output = await executeOutputStep(
-              data,
-              context,
-              workspaceId,
-              automationContext,
-              ownerId
-            );
-            break;
-          }
-
-          case "loop": {
-            const data = node.data as {
-              iteratorExpression: string;
-              itemVariable: string;
-            };
-
-            // Resolve the collection to iterate over
-            const collection = resolveContextPath(
-              data.iteratorExpression,
-              context
-            );
-            const rawItems = Array.isArray(collection) ? collection : [];
-            // Hard cap loop width. A loop child may be `playbook_run` (each spawns
-            // a session + IS dispatch), and the iterator is an arbitrary context
-            // path (could resolve a large fetch/trigger array) — without a cap a
-            // single run could fan out into thousands of paid IS dispatches.
-            // Aligned with the query-node limit (100).
-            const MAX_LOOP_ITERATIONS = 100;
-            const items = rawItems.slice(0, MAX_LOOP_ITERATIONS);
-            if (rawItems.length > MAX_LOOP_ITERATIONS) {
-              logger.warn(
-                {
-                  nodeId: node.id,
-                  requested: rawItems.length,
-                  cap: MAX_LOOP_ITERATIONS,
-                },
-                "loop: iteration count exceeds cap — truncating"
+                ownerId
               );
-            }
-
-            if (items.length === 0) {
-              output = { status: "empty_collection", itemCount: 0 };
               break;
             }
 
-            // The loop owns the CONTIGUOUS chain of SUPPORTED body nodes reachable
-            // from it (LOOP_BODY_NODE_TYPES) — traversal STOPS at any node type
-            // NOT in that set (switch, delay, a nested loop, sub_automation, …).
-            // Those are BOUNDARIES: not owned by the loop, so they are neither
-            // dispatched per-item nor marked skipped — they run ONCE in the main
-            // topological pass. `condition`/`skill`/`capability` ARE body types:
-            // a per-item `condition` filters this item (continue-semantics), and
-            // skill/capability dispatch per item (MAX_LOOP_ITERATIONS caps the
-            // paid IS/provider fan-out). This keeps a per-item body (e.g.
-            // messages_query → condition → skill → entity_create) working while
-            // never silently dropping downstream branch/merge/post-loop logic.
-            const nodeById = new Map(flow.nodes.map((n) => [n.id, n]));
-            const bodyNodeIds = new Set<string>();
-            {
-              const stack = getOutEdges(flow.edges, node.id).map(
-                (e) => e.target
+            case "condition": {
+              const data = node.data as { expression: string };
+              const result = evaluateCondition(data.expression, context);
+              output = { result };
+
+              // Mark nodes on the untaken branch as skipped
+              const untakenHandle = result ? "no" : "yes";
+
+              const untakenEdges = getOutEdges(
+                flow.edges,
+                node.id,
+                untakenHandle
               );
-              while (stack.length) {
-                const id = stack.pop() as string;
-                if (bodyNodeIds.has(id)) continue;
-                const bn = nodeById.get(id);
-                if (!bn || !LOOP_BODY_NODE_TYPES.has(bn.type)) continue; // boundary
-                bodyNodeIds.add(id);
-                for (const e of getOutEdges(flow.edges, id))
-                  stack.push(e.target);
+              for (const edge of untakenEdges) prunedEdges.add(edge);
+              for (const edge of untakenEdges) {
+                markDescendantsSkipped(
+                  edge.target,
+                  flow.edges,
+                  skippedNodes,
+                  prunedEdges
+                );
               }
+              break;
             }
-            // Already topologically sorted — filter preserves the order so a
-            // child's inputs (earlier nodes in the chain) run before it.
-            const bodyNodes = sortedNodes.filter((n) => bodyNodeIds.has(n.id));
 
-            // Execute the body subgraph for each item
-            const iterationResults: unknown[] = [];
-            for (let i = 0; i < items.length; i++) {
-              // Set loop context
-              context.loop = { item: items[i], index: i };
+            case "delay": {
+              const data = node.data as { duration: string };
+              const delayMs = parseDuration(data.duration);
+              const resumeAt = new Date(Date.now() + delayMs);
 
-              // When a per-item `condition` filters THIS item out, we skip the
-              // remaining body nodes for this item ONLY (continue the outer
-              // for-loop). Signalled by this flag rather than a labeled break so
-              // the per-item error handling (try/catch) stays intact.
-              let itemFiltered = false;
+              logger.info(
+                {
+                  nodeId: node.id,
+                  duration: data.duration,
+                  resumeAt: resumeAt.toISOString(),
+                },
+                "Delay step — re-enqueueing with startAfter"
+              );
 
-              for (const childNode of bodyNodes) {
-                try {
-                  let childOutput: unknown = {};
+              // Record this step as completed
+              output = {
+                status: "delayed",
+                duration: data.duration,
+                resumeAfter: resumeAt.toISOString(),
+              };
 
-                  switch (childNode.type) {
-                    case "command":
-                      childOutput = await executeCommandStep(
-                        childNode.data as CommandNodeDef["data"],
-                        context,
-                        workspaceId,
-                        ownerId
-                      );
-                      break;
-                    case "output":
-                      childOutput = await executeOutputStep(
-                        childNode.data as OutputNodeDef["data"],
-                        context,
-                        workspaceId,
-                        automationContext,
-                        ownerId
-                      );
-                      break;
-                    case "condition": {
-                      // PER-ITEM FILTER (continue-semantics). Evaluate the
-                      // condition against THIS item's context and, when false,
-                      // skip the rest of THIS item's body — do NOT touch
-                      // `skippedNodes` (that is the main-pass path that prunes
-                      // for the WHOLE run). Nodes AFTER the condition in the body
-                      // chain simply don't run for this item.
-                      const { expression } = childNode.data as {
-                        expression: string;
-                      };
-                      const result = evaluateCondition(expression, context);
-                      childOutput = { result };
-                      if (!result) itemFiltered = true;
-                      break;
-                    }
-                    case "skill":
-                      childOutput = await executeSkillNode(
-                        childNode.data as {
-                          skillId?: string;
-                          inputMapping?: Record<string, string>;
-                        },
-                        context,
-                        { workspaceId, ownerId }
-                      );
-                      break;
-                    case "capability":
-                      childOutput = await executeCapabilityNode(
-                        childNode.data as {
-                          capabilityId?: string;
-                          verbId?: string;
-                          inputMapping?: Record<string, string>;
-                          connectionSelector?: {
-                            connectionId?: string;
-                            contextObjectId?: string;
-                          };
-                          connectionId?: string;
-                        },
-                        context,
-                        { workspaceId, ownerId }
-                      );
-                      break;
-                    case "playbook_run":
-                      childOutput = await executePlaybookRun(
-                        childNode.data as {
-                          playbookId?: string;
-                          playbookName?: string;
-                          paramsMapping?: Record<string, string>;
-                        },
-                        context,
-                        workspaceId,
-                        ownerId
-                      );
-                      break;
-                    case "messages_query":
-                      childOutput = await executeMessagesQueryStep(
-                        childNode.data as {
-                          subjectEntityId?: string;
-                          channelId?: string;
-                          limit?: number;
-                        },
-                        context,
-                        workspaceId
-                      );
-                      break;
-                    case "query":
-                      childOutput = await executeQueryStep(
-                        childNode.data as {
-                          profileSlug: string;
-                          filter: string;
-                          limit: number;
-                        },
-                        context,
-                        workspaceId
-                      );
-                      break;
-                    case "fetch":
-                      childOutput = await executeFetchStep(
-                        childNode.data as {
-                          method: string;
-                          url: string;
-                          headers: Record<string, string>;
-                          body: string;
-                        },
-                        context,
-                        ownerId
-                      );
-                      break;
-                    case "transform":
-                      childOutput = executeTransformStep(
-                        childNode.data as { expression: string },
-                        context
-                      );
-                      break;
-                    default:
-                      throw new Error(
-                        `Loop child node type "${childNode.type}" is not supported inside a loop`
-                      );
-                  }
+              // Collect all completed node IDs up to this point
+              const completedSoFar = [
+                ...alreadyCompleted,
+                ...sortedNodes
+                  .filter((n) => n.type === "trigger" || context.steps[n.id])
+                  .map((n) => n.id),
+                node.id,
+              ];
 
-                  iterationResults.push({
-                    iteration: i,
-                    nodeId: childNode.id,
-                    output: childOutput,
-                  });
+              // Re-enqueue the rest of the DAG with startAfter — carry runContext
+              // (not the raw automationContext) so the resumed invocation reuses
+              // this run's session instead of opening a second one.
+              const boss = getBoss();
+              await boss.send(
+                "automation-execute",
+                {
+                  runId,
+                  automationId,
+                  workspaceId,
+                  automationContext: runContext,
+                  completedNodeIds: completedSoFar,
+                },
+                { startAfter: resumeAt }
+              );
+              // Suspended, not finished — leave the session open across the delay.
+              runSuspended = true;
 
-                  // Store under BOTH the per-iteration key AND the plain id, so
-                  // a later node in the SAME iteration can reference it as
-                  // {{steps.<id>.output...}} (the natural authoring form).
-                  context.steps[`${childNode.id}_iter${i}`] = {
-                    output: childOutput,
-                  };
-                  context.steps[childNode.id] = { output: childOutput };
+              // Mark step as completed and return early — execution will resume after delay
+              context.steps[node.id] = { output };
+              stepsCompleted++;
 
-                  // Per-item filter tripped false → skip the rest of THIS item's
-                  // body (the condition's output is already recorded above).
-                  if (itemFiltered) break;
-                } catch (err) {
-                  logger.error(
-                    { err, nodeId: childNode.id, iteration: i },
-                    "Loop child step failed"
-                  );
-                  iterationResults.push({
-                    iteration: i,
-                    nodeId: childNode.id,
-                    error: err instanceof Error ? err.message : "unknown",
-                  });
-                  // The body is a dependent chain — abort the rest of THIS
-                  // item's steps and move to the next item.
-                  break;
+              await db
+                .update(automationStepRuns)
+                // jsonb column accepts any JSON; cast satisfies the Record type.
+                .set({
+                  status: "completed",
+                  output: output as Record<string, unknown>,
+                  completedAt: new Date(),
+                })
+                .where(eq(automationStepRuns.id, stepRun.id));
+
+              // Update run to show partial progress
+              await db
+                .update(automationRuns)
+                .set({ stepsCompleted })
+                .where(eq(automationRuns.id, runId));
+
+              return {}; // Exit — execution resumes after delay
+            }
+
+            case "output": {
+              const data = node.data as {
+                label?: string;
+                outputType: string;
+                config: Record<string, unknown>;
+              };
+
+              const resolvedConfig = deepResolveTemplates(
+                data.config,
+                context
+              ) as Record<string, unknown>;
+
+              await db
+                .update(automationStepRuns)
+                .set({ resolvedInputs: resolvedConfig })
+                .where(eq(automationStepRuns.id, stepRun.id));
+
+              output = await executeOutputStep(
+                data,
+                context,
+                workspaceId,
+                runContext,
+                ownerId
+              );
+              break;
+            }
+
+            case "loop": {
+              const data = node.data as {
+                iteratorExpression: string;
+                itemVariable: string;
+              };
+
+              // Resolve the collection to iterate over
+              const collection = resolveContextPath(
+                data.iteratorExpression,
+                context
+              );
+              const rawItems = Array.isArray(collection) ? collection : [];
+              // Hard cap loop width. A loop child may be `playbook_run` (each spawns
+              // a session + IS dispatch), and the iterator is an arbitrary context
+              // path (could resolve a large fetch/trigger array) — without a cap a
+              // single run could fan out into thousands of paid IS dispatches.
+              // Aligned with the query-node limit (100).
+              const MAX_LOOP_ITERATIONS = 100;
+              const items = rawItems.slice(0, MAX_LOOP_ITERATIONS);
+              if (rawItems.length > MAX_LOOP_ITERATIONS) {
+                logger.warn(
+                  {
+                    nodeId: node.id,
+                    requested: rawItems.length,
+                    cap: MAX_LOOP_ITERATIONS,
+                  },
+                  "loop: iteration count exceeds cap — truncating"
+                );
+              }
+
+              if (items.length === 0) {
+                output = { status: "empty_collection", itemCount: 0 };
+                break;
+              }
+
+              // The loop owns the CONTIGUOUS chain of SUPPORTED body nodes reachable
+              // from it (LOOP_BODY_NODE_TYPES) — traversal STOPS at any node type
+              // NOT in that set (switch, delay, a nested loop, sub_automation, …).
+              // Those are BOUNDARIES: not owned by the loop, so they are neither
+              // dispatched per-item nor marked skipped — they run ONCE in the main
+              // topological pass. `condition`/`skill`/`capability` ARE body types:
+              // a per-item `condition` filters this item (continue-semantics), and
+              // skill/capability dispatch per item (MAX_LOOP_ITERATIONS caps the
+              // paid IS/provider fan-out). This keeps a per-item body (e.g.
+              // messages_query → condition → skill → entity_create) working while
+              // never silently dropping downstream branch/merge/post-loop logic.
+              const nodeById = new Map(flow.nodes.map((n) => [n.id, n]));
+              const bodyNodeIds = new Set<string>();
+              {
+                const stack = getOutEdges(flow.edges, node.id).map(
+                  (e) => e.target
+                );
+                while (stack.length) {
+                  const id = stack.pop() as string;
+                  if (bodyNodeIds.has(id)) continue;
+                  const bn = nodeById.get(id);
+                  if (!bn || !LOOP_BODY_NODE_TYPES.has(bn.type)) continue; // boundary
+                  bodyNodeIds.add(id);
+                  for (const e of getOutEdges(flow.edges, id))
+                    stack.push(e.target);
                 }
               }
+              // Already topologically sorted — filter preserves the order so a
+              // child's inputs (earlier nodes in the chain) run before it.
+              const bodyNodes = sortedNodes.filter((n) =>
+                bodyNodeIds.has(n.id)
+              );
+
+              // Execute the body subgraph for each item
+              const iterationResults: unknown[] = [];
+              for (let i = 0; i < items.length; i++) {
+                // Set loop context
+                context.loop = { item: items[i], index: i };
+
+                // When a per-item `condition` filters THIS item out, we skip the
+                // remaining body nodes for this item ONLY (continue the outer
+                // for-loop). Signalled by this flag rather than a labeled break so
+                // the per-item error handling (try/catch) stays intact.
+                let itemFiltered = false;
+
+                for (const childNode of bodyNodes) {
+                  try {
+                    let childOutput: unknown = {};
+
+                    switch (childNode.type) {
+                      case "command":
+                        childOutput = await executeCommandStep(
+                          childNode.data as CommandNodeDef["data"],
+                          context,
+                          workspaceId,
+                          ownerId
+                        );
+                        break;
+                      case "output":
+                        childOutput = await executeOutputStep(
+                          childNode.data as OutputNodeDef["data"],
+                          context,
+                          workspaceId,
+                          runContext,
+                          ownerId
+                        );
+                        break;
+                      case "condition": {
+                        // PER-ITEM FILTER (continue-semantics). Evaluate the
+                        // condition against THIS item's context and, when false,
+                        // skip the rest of THIS item's body — do NOT touch
+                        // `skippedNodes` (that is the main-pass path that prunes
+                        // for the WHOLE run). Nodes AFTER the condition in the body
+                        // chain simply don't run for this item.
+                        const { expression } = childNode.data as {
+                          expression: string;
+                        };
+                        const result = evaluateCondition(expression, context);
+                        childOutput = { result };
+                        if (!result) itemFiltered = true;
+                        break;
+                      }
+                      case "skill":
+                        childOutput = await executeSkillNode(
+                          childNode.data as {
+                            skillId?: string;
+                            inputMapping?: Record<string, string>;
+                          },
+                          context,
+                          { workspaceId, ownerId }
+                        );
+                        break;
+                      case "capability":
+                        childOutput = await executeCapabilityNode(
+                          childNode.data as {
+                            capabilityId?: string;
+                            verbId?: string;
+                            inputMapping?: Record<string, string>;
+                            connectionSelector?: {
+                              connectionId?: string;
+                              contextObjectId?: string;
+                            };
+                            connectionId?: string;
+                          },
+                          context,
+                          { workspaceId, ownerId }
+                        );
+                        break;
+                      case "playbook_run":
+                        childOutput = await executePlaybookRun(
+                          childNode.data as {
+                            playbookId?: string;
+                            playbookName?: string;
+                            paramsMapping?: Record<string, string>;
+                          },
+                          context,
+                          workspaceId,
+                          ownerId
+                        );
+                        break;
+                      case "messages_query":
+                        childOutput = await executeMessagesQueryStep(
+                          childNode.data as {
+                            subjectEntityId?: string;
+                            channelId?: string;
+                            limit?: number;
+                          },
+                          context,
+                          workspaceId
+                        );
+                        break;
+                      case "query":
+                        childOutput = await executeQueryStep(
+                          childNode.data as {
+                            profileSlug: string;
+                            filter: string;
+                            limit: number;
+                          },
+                          context,
+                          workspaceId
+                        );
+                        break;
+                      case "fetch":
+                        childOutput = await executeFetchStep(
+                          childNode.data as {
+                            method: string;
+                            url: string;
+                            headers: Record<string, string>;
+                            body: string;
+                          },
+                          context,
+                          ownerId
+                        );
+                        break;
+                      case "transform":
+                        childOutput = executeTransformStep(
+                          childNode.data as { expression: string },
+                          context
+                        );
+                        break;
+                      default:
+                        throw new Error(
+                          `Loop child node type "${childNode.type}" is not supported inside a loop`
+                        );
+                    }
+
+                    iterationResults.push({
+                      iteration: i,
+                      nodeId: childNode.id,
+                      output: childOutput,
+                    });
+
+                    // Store under BOTH the per-iteration key AND the plain id, so
+                    // a later node in the SAME iteration can reference it as
+                    // {{steps.<id>.output...}} (the natural authoring form).
+                    context.steps[`${childNode.id}_iter${i}`] = {
+                      output: childOutput,
+                    };
+                    context.steps[childNode.id] = { output: childOutput };
+
+                    // Per-item filter tripped false → skip the rest of THIS item's
+                    // body (the condition's output is already recorded above).
+                    if (itemFiltered) break;
+                  } catch (err) {
+                    logger.error(
+                      { err, nodeId: childNode.id, iteration: i },
+                      "Loop child step failed"
+                    );
+                    iterationResults.push({
+                      iteration: i,
+                      nodeId: childNode.id,
+                      error: err instanceof Error ? err.message : "unknown",
+                    });
+                    // The body is a dependent chain — abort the rest of THIS
+                    // item's steps and move to the next item.
+                    break;
+                  }
+                }
+              }
+
+              // Clear loop context
+              delete context.loop;
+
+              // Mark body nodes as completed so the main loop skips them
+              for (const childId of bodyNodeIds) {
+                skippedNodes.add(childId);
+              }
+
+              output = {
+                status: "completed",
+                itemCount: items.length,
+                results: iterationResults,
+              };
+              break;
             }
 
-            // Clear loop context
-            delete context.loop;
-
-            // Mark body nodes as completed so the main loop skips them
-            for (const childId of bodyNodeIds) {
-              skippedNodes.add(childId);
+            case "transform": {
+              const data = node.data as { expression: string };
+              output = executeTransformStep(data, context);
+              break;
             }
 
-            output = {
-              status: "completed",
-              itemCount: items.length,
-              results: iterationResults,
-            };
-            break;
-          }
+            case "fetch": {
+              const data = node.data as {
+                method: string;
+                url: string;
+                headers: Record<string, string>;
+                body: string;
+              };
+              output = await executeFetchStep(data, context, ownerId);
+              break;
+            }
 
-          case "transform": {
-            const data = node.data as { expression: string };
-            output = executeTransformStep(data, context);
-            break;
-          }
+            case "query": {
+              const data = node.data as {
+                profileSlug: string;
+                filter: string;
+                limit: number;
+              };
+              output = await executeQueryStep(data, context, workspaceId);
+              break;
+            }
 
-          case "fetch": {
-            const data = node.data as {
-              method: string;
-              url: string;
-              headers: Record<string, string>;
-              body: string;
-            };
-            output = await executeFetchStep(data, context, ownerId);
-            break;
-          }
+            case "messages_query": {
+              const data = node.data as {
+                subjectEntityId?: string;
+                channelId?: string;
+                limit?: number;
+              };
+              output = await executeMessagesQueryStep(
+                data,
+                context,
+                workspaceId
+              );
+              break;
+            }
 
-          case "query": {
-            const data = node.data as {
-              profileSlug: string;
-              filter: string;
-              limit: number;
-            };
-            output = await executeQueryStep(data, context, workspaceId);
-            break;
-          }
+            case "switch": {
+              const data = node.data as {
+                expression: string;
+                cases: Array<{ value: string; label: string }>;
+              };
 
-          case "messages_query": {
-            const data = node.data as {
-              subjectEntityId?: string;
-              channelId?: string;
-              limit?: number;
-            };
-            output = await executeMessagesQueryStep(data, context, workspaceId);
-            break;
-          }
+              // Resolve the switch expression
+              const resolvedValue = resolveTemplate(data.expression, context);
 
-          case "switch": {
-            const data = node.data as {
-              expression: string;
-              cases: Array<{ value: string; label: string }>;
-            };
+              // Find the matching case
+              const matchedCase = (data.cases ?? []).find(
+                (c) => c.value === resolvedValue
+              );
+              const matched = matchedCase?.value ?? null;
 
-            // Resolve the switch expression
-            const resolvedValue = resolveTemplate(data.expression, context);
+              output = { matched, value: resolvedValue };
 
-            // Find the matching case
-            const matchedCase = (data.cases ?? []).find(
-              (c) => c.value === resolvedValue
-            );
-            const matched = matchedCase?.value ?? null;
+              // Skip descendants of all non-matching case branches
+              // Each case's edges have sourceHandle === case.value
+              for (const c of data.cases ?? []) {
+                if (c.value !== matched) {
+                  const caseEdges = getOutEdges(flow.edges, node.id, c.value);
+                  for (const edge of caseEdges) prunedEdges.add(edge);
+                  for (const edge of caseEdges) {
+                    markDescendantsSkipped(
+                      edge.target,
+                      flow.edges,
+                      skippedNodes,
+                      prunedEdges
+                    );
+                  }
+                }
+              }
 
-            output = { matched, value: resolvedValue };
-
-            // Skip descendants of all non-matching case branches
-            // Each case's edges have sourceHandle === case.value
-            for (const c of data.cases ?? []) {
-              if (c.value !== matched) {
-                const caseEdges = getOutEdges(flow.edges, node.id, c.value);
-                for (const edge of caseEdges) prunedEdges.add(edge);
-                for (const edge of caseEdges) {
+              // If no case matched, skip all outgoing edges
+              if (matched === null) {
+                const allOutEdges = getOutEdges(flow.edges, node.id);
+                for (const edge of allOutEdges) prunedEdges.add(edge);
+                for (const edge of allOutEdges) {
                   markDescendantsSkipped(
                     edge.target,
                     flow.edges,
@@ -2433,282 +2544,274 @@ async function executeAutomationFlow(params: {
                   );
                 }
               }
+              break;
             }
 
-            // If no case matched, skip all outgoing edges
-            if (matched === null) {
-              const allOutEdges = getOutEdges(flow.edges, node.id);
-              for (const edge of allOutEdges) prunedEdges.add(edge);
-              for (const edge of allOutEdges) {
-                markDescendantsSkipped(
-                  edge.target,
-                  flow.edges,
-                  skippedNodes,
-                  prunedEdges
+            case "skill": {
+              output = await executeSkillNode(
+                node.data as {
+                  skillId?: string;
+                  inputMapping?: Record<string, string>;
+                },
+                context,
+                { workspaceId, ownerId, stepRun }
+              );
+              break;
+            }
+
+            case "capability": {
+              // ── Typed/governed Tool → Verb step (Process builder) ─────────────
+              // A `capability` node is the structured sibling of the `skill` node:
+              // the author picks a Tool (capabilityId) and a Verb on it (verbId).
+              // A verb is BACKED BY A SKILL — its `id` is the requiring skill's
+              // NAME (see ToolVerbCatalogEntry.id in schema/tools.ts). Dispatch
+              // routes verb → the canonical `executeCapability` router (via the
+              // in-process IoC slot), which resolves the backing skill, GATES, and runs
+              // ALL 3 tiers (builtin / declarative / code) + a 1-of-N connection
+              // selector. No parallel governance, no new tables: the router IS the
+              // executor; the gate IS the door.
+              output = await executeCapabilityNode(
+                node.data as {
+                  capabilityId?: string;
+                  verbId?: string;
+                  inputMapping?: Record<string, string>;
+                  connectionSelector?: {
+                    connectionId?: string;
+                    contextObjectId?: string;
+                  };
+                  connectionId?: string;
+                },
+                context,
+                { workspaceId, ownerId, stepRun }
+              );
+              break;
+            }
+
+            case "sub_automation": {
+              const data = node.data as {
+                automationId?: string;
+                payloadMapping?: Record<string, string>;
+              };
+
+              const targetId = data.automationId;
+              if (!targetId)
+                throw new Error("sub_automation node has no automationId");
+
+              // Recursion guard
+              const currentChainDepth = automationContext.chainDepth ?? 0;
+              if (currentChainDepth >= 5) {
+                throw new Error("Maximum automation chain depth (5) exceeded");
+              }
+              if (automationContext.chainAutomationIds?.includes(targetId)) {
+                throw new Error(
+                  `Circular automation reference detected: ${targetId}`
                 );
               }
-            }
-            break;
-          }
 
-          case "skill": {
-            output = await executeSkillNode(
-              node.data as {
-                skillId?: string;
-                inputMapping?: Record<string, string>;
-              },
-              context,
-              { workspaceId, ownerId, stepRun }
-            );
-            break;
-          }
-
-          case "capability": {
-            // ── Typed/governed Tool → Verb step (Process builder) ─────────────
-            // A `capability` node is the structured sibling of the `skill` node:
-            // the author picks a Tool (capabilityId) and a Verb on it (verbId).
-            // A verb is BACKED BY A SKILL — its `id` is the requiring skill's
-            // NAME (see ToolVerbCatalogEntry.id in schema/tools.ts). Dispatch
-            // routes verb → the canonical `executeCapability` router (via the
-            // in-process IoC slot), which resolves the backing skill, GATES, and runs
-            // ALL 3 tiers (builtin / declarative / code) + a 1-of-N connection
-            // selector. No parallel governance, no new tables: the router IS the
-            // executor; the gate IS the door.
-            output = await executeCapabilityNode(
-              node.data as {
-                capabilityId?: string;
-                verbId?: string;
-                inputMapping?: Record<string, string>;
-                connectionSelector?: {
-                  connectionId?: string;
-                  contextObjectId?: string;
-                };
-                connectionId?: string;
-              },
-              context,
-              { workspaceId, ownerId, stepRun }
-            );
-            break;
-          }
-
-          case "sub_automation": {
-            const data = node.data as {
-              automationId?: string;
-              payloadMapping?: Record<string, string>;
-            };
-
-            const targetId = data.automationId;
-            if (!targetId)
-              throw new Error("sub_automation node has no automationId");
-
-            // Recursion guard
-            const currentChainDepth = automationContext.chainDepth ?? 0;
-            if (currentChainDepth >= 5) {
-              throw new Error("Maximum automation chain depth (5) exceeded");
-            }
-            if (automationContext.chainAutomationIds?.includes(targetId)) {
-              throw new Error(
-                `Circular automation reference detected: ${targetId}`
+              // Resolve payload
+              const payloadMapping = data.payloadMapping ?? {};
+              const resolvedPayload = resolveInputMapping(
+                payloadMapping,
+                context
               );
-            }
 
-            // Resolve payload
-            const payloadMapping = data.payloadMapping ?? {};
-            const resolvedPayload = resolveInputMapping(
-              payloadMapping,
-              context
-            );
-
-            // Create a child run record
-            const childRunId = randomUUID();
-            await db.insert(automationRuns).values({
-              id: childRunId,
-              automationId: targetId,
-              workspaceId,
-              triggeredBy: "automation",
-              status: "running",
-              triggerPayload: resolvedPayload,
-              startedAt: new Date(),
-            });
-
-            // Look up the child automation owner
-            const childAutomation = await db.query.automations.findFirst({
-              where: eq(automations.id, targetId),
-            });
-            if (!childAutomation) {
-              throw new Error(
-                `sub_automation: target automation ${targetId} not found`
-              );
-            }
-
-            // Execute synchronously
-            const childOutput = await executeAutomationFlow({
-              automationId: targetId,
-              runId: childRunId,
-              workspaceId,
-              ownerId: childAutomation.createdBy,
-              payload: resolvedPayload,
-              automationContext: {
-                ...automationContext,
-                chainDepth: currentChainDepth + 1,
-                chainAutomationIds: [
-                  ...(automationContext.chainAutomationIds ?? []),
-                  automationContext.automationId,
-                ],
-                automationRunId: childRunId,
+              // Create a child run record
+              const childRunId = randomUUID();
+              await db.insert(automationRuns).values({
+                id: childRunId,
                 automationId: targetId,
-              },
-            });
+                workspaceId,
+                triggeredBy: "automation",
+                status: "running",
+                triggerPayload: resolvedPayload,
+                startedAt: new Date(),
+              });
 
-            // Return the child automation's output DIRECTLY (flat) — one rule.
-            output = childOutput;
-            break;
-          }
+              // Look up the child automation owner
+              const childAutomation = await db.query.automations.findFirst({
+                where: eq(automations.id, targetId),
+              });
+              if (!childAutomation) {
+                throw new Error(
+                  `sub_automation: target automation ${targetId} not found`
+                );
+              }
 
-          case "playbook_run": {
-            const data = node.data as {
-              playbookId?: string;
-              playbookName?: string;
-              paramsMapping?: Record<string, string>;
-            };
+              // Execute synchronously
+              const childOutput = await executeAutomationFlow({
+                automationId: targetId,
+                runId: childRunId,
+                workspaceId,
+                ownerId: childAutomation.createdBy,
+                payload: resolvedPayload,
+                automationContext: {
+                  ...automationContext,
+                  chainDepth: currentChainDepth + 1,
+                  chainAutomationIds: [
+                    ...(automationContext.chainAutomationIds ?? []),
+                    automationContext.automationId,
+                  ],
+                  automationRunId: childRunId,
+                  automationId: targetId,
+                },
+              });
 
-            if (!data.playbookId && !data.playbookName)
-              throw new Error(
-                "playbook_run node has no playbookId or playbookName"
+              // Return the child automation's output DIRECTLY (flat) — one rule.
+              output = childOutput;
+              break;
+            }
+
+            case "playbook_run": {
+              const data = node.data as {
+                playbookId?: string;
+                playbookName?: string;
+                paramsMapping?: Record<string, string>;
+              };
+
+              if (!data.playbookId && !data.playbookName)
+                throw new Error(
+                  "playbook_run node has no playbookId or playbookName"
+                );
+
+              output = await executePlaybookRun(
+                {
+                  playbookId: data.playbookId,
+                  playbookName: data.playbookName,
+                  paramsMapping: data.paramsMapping,
+                },
+                context,
+                workspaceId,
+                ownerId
               );
+              break;
+            }
+          }
 
-            output = await executePlaybookRun(
-              {
-                playbookId: data.playbookId,
-                playbookName: data.playbookName,
-                paramsMapping: data.paramsMapping,
-              },
-              context,
-              workspaceId,
-              ownerId
+          // Step succeeded
+          succeeded = true;
+          lastError = undefined;
+          break; // Exit retry loop
+        } catch (err) {
+          lastError = err;
+          if (attempt < maxRetries) {
+            logger.warn(
+              { err, nodeId: node.id, attempt, maxRetries },
+              "Automation step failed — will retry"
             );
-            break;
           }
         }
+      } // end retry loop
 
-        // Step succeeded
-        succeeded = true;
-        lastError = undefined;
-        break; // Exit retry loop
-      } catch (err) {
-        lastError = err;
-        if (attempt < maxRetries) {
-          logger.warn(
-            { err, nodeId: node.id, attempt, maxRetries },
-            "Automation step failed — will retry"
-          );
+      if (succeeded) {
+        // Record step output
+        context.steps[node.id] = { output };
+        stepsCompleted++;
+
+        await db
+          .update(automationStepRuns)
+          // jsonb column accepts any JSON (object/array/scalar); cast for the type.
+          .set({
+            status: "completed",
+            output: output as Record<string, unknown>,
+            completedAt: new Date(),
+          })
+          .where(eq(automationStepRuns.id, stepRun.id));
+      } else {
+        // All attempts failed
+        stepsFailed++;
+        const errorMessage =
+          lastError instanceof Error ? lastError.message : "Unknown error";
+
+        logger.error(
+          { err: lastError, nodeId: node.id, runId },
+          "Automation step failed"
+        );
+
+        await db
+          .update(automationStepRuns)
+          .set({
+            status: "failed",
+            errorMessage,
+            completedAt: new Date(),
+          })
+          .where(eq(automationStepRuns.id, stepRun.id));
+
+        if (!continueOnError) {
+          // Stop execution on failure (fail-fast)
+          break;
         }
+
+        // continueOnError: record empty output and keep walking the DAG
+        logger.info(
+          { nodeId: node.id, runId },
+          "Step failed but continueOnError=true — continuing execution"
+        );
+        context.steps[node.id] = { output: { error: errorMessage } };
       }
-    } // end retry loop
-
-    if (succeeded) {
-      // Record step output
-      context.steps[node.id] = { output };
-      stepsCompleted++;
-
-      await db
-        .update(automationStepRuns)
-        // jsonb column accepts any JSON (object/array/scalar); cast for the type.
-        .set({
-          status: "completed",
-          output: output as Record<string, unknown>,
-          completedAt: new Date(),
-        })
-        .where(eq(automationStepRuns.id, stepRun.id));
-    } else {
-      // All attempts failed
-      stepsFailed++;
-      const errorMessage =
-        lastError instanceof Error ? lastError.message : "Unknown error";
-
-      logger.error(
-        { err: lastError, nodeId: node.id, runId },
-        "Automation step failed"
-      );
-
-      await db
-        .update(automationStepRuns)
-        .set({
-          status: "failed",
-          errorMessage,
-          completedAt: new Date(),
-        })
-        .where(eq(automationStepRuns.id, stepRun.id));
-
-      if (!continueOnError) {
-        // Stop execution on failure (fail-fast)
-        break;
-      }
-
-      // continueOnError: record empty output and keep walking the DAG
-      logger.info(
-        { nodeId: node.id, runId },
-        "Step failed but continueOnError=true — continuing execution"
-      );
-      context.steps[node.id] = { output: { error: errorMessage } };
     }
-  }
 
-  // Build outputSummary from the last completed step with output
-  const completedStepEntries = Object.entries(context.steps);
-  const lastCompletedWithOutput = completedStepEntries
-    .reverse()
-    .find(([, s]) => {
-      if (s.output == null) return false;
-      // Post-flatten a step's output can be a scalar (string/number) — still a
-      // valid "last output"; only an empty object counts as no-output.
-      if (typeof s.output === "object") return Object.keys(s.output).length > 0;
-      return true;
-    });
-  const outputSummary: Record<string, unknown> | null = lastCompletedWithOutput
-    ? {
-        lastStepOutput: lastCompletedWithOutput[1].output,
-        stepsCompleted,
-        status: stepsFailed > 0 ? "failed" : "completed",
-      }
-    : null;
-
-  // Update run with final status
-  const finalStatus = stepsFailed > 0 ? "failed" : "completed";
-  await db
-    .update(automationRuns)
-    .set({
-      status: finalStatus,
-      stepsCompleted,
-      stepsFailed,
-      completedAt: new Date(),
-      ...(outputSummary ? { outputSummary } : {}),
-    })
-    .where(eq(automationRuns.id, runId));
-
-  // Update automation stats
-  await db
-    .update(automations)
-    .set({
-      lastRunAt: new Date(),
-      runCount: drizzleSql`COALESCE(${automations.runCount}, 0) + 1`,
-      ...(finalStatus === "completed"
+    // Build outputSummary from the last completed step with output
+    const completedStepEntries = Object.entries(context.steps);
+    const lastCompletedWithOutput = completedStepEntries
+      .reverse()
+      .find(([, s]) => {
+        if (s.output == null) return false;
+        // Post-flatten a step's output can be a scalar (string/number) — still a
+        // valid "last output"; only an empty object counts as no-output.
+        if (typeof s.output === "object")
+          return Object.keys(s.output).length > 0;
+        return true;
+      });
+    const outputSummary: Record<string, unknown> | null =
+      lastCompletedWithOutput
         ? {
-            successCount: drizzleSql`COALESCE(${automations.successCount}, 0) + 1`,
+            lastStepOutput: lastCompletedWithOutput[1].output,
+            stepsCompleted,
+            status: stepsFailed > 0 ? "failed" : "completed",
           }
-        : {
-            failureCount: drizzleSql`COALESCE(${automations.failureCount}, 0) + 1`,
-          }),
-      updatedAt: new Date(),
-    })
-    .where(eq(automations.id, automationId));
+        : null;
 
-  logger.info(
-    { runId, automationId, stepsCompleted, stepsFailed, status: finalStatus },
-    "Automation run completed"
-  );
+    // Update run with final status
+    const finalStatus = stepsFailed > 0 ? "failed" : "completed";
+    await db
+      .update(automationRuns)
+      .set({
+        status: finalStatus,
+        stepsCompleted,
+        stepsFailed,
+        completedAt: new Date(),
+        ...(outputSummary ? { outputSummary } : {}),
+      })
+      .where(eq(automationRuns.id, runId));
 
-  return outputSummary ?? {};
+    // Update automation stats
+    await db
+      .update(automations)
+      .set({
+        lastRunAt: new Date(),
+        runCount: drizzleSql`COALESCE(${automations.runCount}, 0) + 1`,
+        ...(finalStatus === "completed"
+          ? {
+              successCount: drizzleSql`COALESCE(${automations.successCount}, 0) + 1`,
+            }
+          : {
+              failureCount: drizzleSql`COALESCE(${automations.failureCount}, 0) + 1`,
+            }),
+        updatedAt: new Date(),
+      })
+      .where(eq(automations.id, automationId));
+
+    logger.info(
+      { runId, automationId, stepsCompleted, stepsFailed, status: finalStatus },
+      "Automation run completed"
+    );
+
+    // Genuine finish (success or failure both land here) — close a
+    // freshly-opened session; a channel-reused session is left for the channel.
+    await closeSessionIfOwned();
+
+    return outputSummary ?? {};
+  } // end executeSortedNodes
 }
 
 /**

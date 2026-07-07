@@ -42,9 +42,16 @@ export { resolveAgentForTask } from "./agent-routing.js";
 
 export type { AgentResolutionContext, ResolvedAgent } from "./agent-routing.js";
 
-export {
-  iterateISChatStream,
-  drainISChatStream,
-} from "./is-chat-stream.js";
+export { iterateISChatStream, drainISChatStream } from "./is-chat-stream.js";
 
 export type { ISChatStreamFrame } from "./is-chat-stream.js";
+
+export {
+  requestHeadlessChatText,
+  requestTaskExecute,
+} from "./is-headless-transport.js";
+
+export type {
+  HeadlessChatRequest,
+  HeadlessTaskExecuteRequest,
+} from "./is-headless-transport.js";

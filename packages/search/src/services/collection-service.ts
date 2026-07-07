@@ -28,11 +28,16 @@ export class CollectionService {
     const client = getTypesenseAdminClient();
 
     for (const schema of this.schemas) {
+      let live: Awaited<
+        ReturnType<ReturnType<typeof client.collections>["retrieve"]>
+      > | null = null;
       try {
-        // Check if collection exists
-        await client.collections(schema.name).retrieve();
-        console.log(`Collection ${schema.name} already exists`);
+        live = await client.collections(schema.name).retrieve();
       } catch {
+        live = null;
+      }
+
+      if (!live) {
         // Collection doesn't exist, create it
         try {
           await client.collections().create(schema);
@@ -44,7 +49,50 @@ export class CollectionService {
           );
           throw createError;
         }
+        continue;
       }
+
+      // Collection exists — reconcile any NEW fields the schema gained since it
+      // was created. Typesense will NOT index a field the live collection has
+      // never heard of, so a schema field added in code (e.g. `searchAliases`)
+      // stays silently inert on an existing pod until we add it here. We only
+      // ADD missing fields (forced optional so it's safe on a populated
+      // collection); we never drop or retype. A backfill of existing docs still
+      // needs a reindex, but new/updated docs pick up the field immediately.
+      await this.reconcileNewFields(schema, live);
+    }
+  }
+
+  /** Add schema fields absent from the live collection. Additive only. */
+  private async reconcileNewFields(
+    schema: (typeof this.schemas)[number],
+    live: { fields?: Array<{ name: string }> }
+  ): Promise<void> {
+    const client = getTypesenseAdminClient();
+    const liveNames = new Set((live.fields ?? []).map((f) => f.name));
+    const missing = (schema.fields ?? []).filter(
+      (f) => f.name !== ".*" && !liveNames.has(f.name)
+    );
+    if (missing.length === 0) return;
+
+    try {
+      await client.collections(schema.name).update({
+        // Optional forced: adding a required field to a populated collection is
+        // rejected by Typesense; every reconciled field must tolerate absence.
+        fields: missing.map((f) => ({ ...f, optional: true })),
+      });
+      console.log(
+        `Reconciled collection ${schema.name}: added [${missing
+          .map((f) => f.name)
+          .join(", ")}]`
+      );
+    } catch (updateError) {
+      // Non-fatal: a failed alter must not block startup. Log loudly so the
+      // missing field (and its inert search recall) is visible in boot logs.
+      console.warn(
+        `Failed to reconcile fields on ${schema.name}:`,
+        updateError
+      );
     }
   }
 
