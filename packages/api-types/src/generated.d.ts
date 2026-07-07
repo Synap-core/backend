@@ -5030,6 +5030,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				aiWorkspaceId?: string | null | undefined;
 				aiWorkspaceConfidence?: number | null | undefined;
 				aiWorkspaceReason?: string | null | undefined;
+				sessionId?: string | undefined;
 			};
 			output: {
 				pendingWorkspaceSwitch?: {

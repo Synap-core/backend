@@ -15,7 +15,7 @@
  *   ACTION=disconnect node dist/scripts/provision.js
  *
  * Optional env vars:
- *   CP_URL       Control Plane URL (default: https://control.synap.live)
+ *   CP_URL       Control Plane URL (default: https://api.synap.live)
  */
 
 import "dotenv/config";
@@ -24,7 +24,7 @@ import { workspaces } from "@synap/database/schema";
 
 const action = process.env.ACTION ?? "status";
 const cpUrl =
-  process.env.CP_URL?.replace(/\/$/, "") ?? "https://control.synap.live";
+  process.env.CP_URL?.replace(/\/$/, "") ?? "https://api.synap.live";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
