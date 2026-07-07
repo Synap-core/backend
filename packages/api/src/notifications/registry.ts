@@ -412,6 +412,28 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     ],
   },
   {
+    type: "system.capability_update_available",
+    category: "system",
+    label: "Capability Updates Available",
+    icon: "package",
+    priority: "normal",
+    // `count` + `names` come from the boot reconcile report (the caller). One
+    // grouped bell item — never one-per-drifted-capability.
+    titleTemplate: "{{count}} capability updates available",
+    bodyTemplate: "Updated templates are ready to apply: {{names}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    actions: [
+      {
+        id: "review",
+        label: "Review",
+        variant: "primary",
+        // Apply lives on the capabilities surface (tRPC applyUpdates), not here.
+        handler: { type: "navigate", app: "capabilities" },
+      },
+    ],
+  },
+  {
     type: "pod.storage_warning",
     category: "system",
     label: "Storage Warning",

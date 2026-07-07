@@ -1296,6 +1296,21 @@ export function registerEntitiesRoutes(app: HubHono): void {
         );
       }
 
+      // A pod-scoped target (person / company / contact — entityScope 'pod', so
+      // the row's workspaceId is null) has no workspace to host the
+      // workspace-scoped `references` relation, and `relations.create` rejects a
+      // null workspace. Fall back to the caller's workspace (validated) so the
+      // file + link land in the caller's lens. SAFE: a null-workspace target is
+      // already gated above to the caller's OWN entities, so this can never
+      // inject into a foreign scope. This is what makes "attach a photo to a
+      // contact" work (the primary capture case), since contacts are pod-scoped.
+      let linkWorkspaceId: string | null = effectiveWorkspaceId;
+      if (!linkWorkspaceId && body.workspaceId) {
+        if (await verifyWorkspaceAccess(userId, body.workspaceId)) {
+          linkWorkspaceId = body.workspaceId;
+        }
+      }
+
       // 1. Obtain the file entity id — either freshly uploaded (upload+link) or
       //    the pre-stored orphan the caller referenced (link-only). Upload lands
       //    the `file` entity (document + v1 snapshot) in the target's workspace.
@@ -1308,7 +1323,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       } else {
         uploaded = await uploadBufferAsFileEntity({
           userId,
-          workspaceId: effectiveWorkspaceId,
+          workspaceId: linkWorkspaceId,
           buffer: buffer as Buffer,
           mimeType: body.mimeType as string,
           filename: body.filename as string,
@@ -1335,7 +1350,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       const relCtx = await createHubProtocolCallerContext(
         userId,
         scopes,
-        effectiveWorkspaceId ?? undefined,
+        linkWorkspaceId ?? undefined,
         undefined,
         undefined,
         relAgentUserId
@@ -1349,9 +1364,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
           sourceEntityId: entityId,
           targetEntityId: fileEntityId,
           type: "references",
-          ...(effectiveWorkspaceId
-            ? { workspaceId: effectiveWorkspaceId }
-            : {}),
+          ...(linkWorkspaceId ? { workspaceId: linkWorkspaceId } : {}),
         });
       } catch (relErr) {
         // The file entity IS created; surface the link failure without losing it.

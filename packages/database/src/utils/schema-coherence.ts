@@ -159,6 +159,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "external_id",
     addedBy: "0017_channels_external_id.sql",
   },
+  {
+    table: "channels",
+    column: "project_id",
+    addedBy: "0171_channels_project_id.sql",
+  },
 
   // inbox_items — 0003 created an early shape; the current Drizzle schema
   // grew to carry a full Life Feed payload but no numbered migration ever

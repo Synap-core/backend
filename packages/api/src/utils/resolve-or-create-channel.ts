@@ -90,6 +90,8 @@ export interface ResolveOrCreateChannelParams {
   agentSlug?: string;
   contextObjectType?: ContextObjectType;
   contextObjectId?: string;
+  /** Project lens tag for directly-created channels (sub_thread/thread). */
+  projectId?: string;
   /** Required for SUB_THREAD. */
   parentChannelId?: string;
   /** Optional task description for SUB_THREAD. */
@@ -111,6 +113,7 @@ export async function resolveOrCreateChannel(
     agentSlug,
     contextObjectType,
     contextObjectId,
+    projectId,
     parentChannelId,
     branchPurpose,
   } = params;
@@ -173,6 +176,7 @@ export async function resolveOrCreateChannel(
         id: randomUUID(),
         userId,
         workspaceId: workspaceId ?? parent.workspaceId ?? null,
+        projectId: projectId ?? null,
         parentChannelId,
         branchPurpose: branchPurpose ?? "Branch",
         assignedAgentId: orchestratorAgentId,
@@ -233,6 +237,7 @@ export async function resolveOrCreateChannel(
         id: randomUUID(),
         userId,
         workspaceId,
+        projectId: projectId ?? null,
         channelType: ChannelType.THREAD,
         contextObjectId,
         contextObjectType,

@@ -489,6 +489,8 @@ export type BranchNodeResult = {
 async function listChannelsWithFlags(params: {
   userId: string;
   workspaceId?: string;
+  /** Project lens (cross-cutting): filter channels tagged to this project. */
+  projectId?: string;
   channelType?: (typeof CHANNEL_TYPE_VALUES)[number];
   feedScope?: FeedScope;
   contextObjectId?: string;
@@ -523,6 +525,10 @@ async function listChannelsWithFlags(params: {
         eq(channels.channelType, ChannelType.FEED)
       )!
     );
+  }
+
+  if (params.projectId) {
+    conditions.push(eq(channels.projectId, params.projectId));
   }
 
   if (params.channelType) {
@@ -661,6 +667,7 @@ export const channelsRouter = router({
           ])
           .optional(),
         contextObjectId: z.string().uuid().optional(),
+        projectId: z.string().uuid().optional(),
         parentChannelId: z.string().uuid().optional(),
         branchPurpose: z.string().max(500).optional(),
         /** Agent UUID — preferred for PERSONAL channels when known. */
@@ -676,6 +683,7 @@ export const channelsRouter = router({
         channelType: input.channelType,
         contextObjectType: input.contextObjectType,
         contextObjectId: input.contextObjectId,
+        projectId: input.projectId,
         parentChannelId: input.parentChannelId,
         branchPurpose: input.branchPurpose,
         agentId: input.agentId,
@@ -693,6 +701,8 @@ export const channelsRouter = router({
       z.object({
         parentChannelId: z.string().uuid().optional(),
         branchPurpose: z.string().optional(),
+        /** Project lens (cross-cutting) to tag this channel with, if any. */
+        projectId: z.string().uuid().optional(),
         /** UUID of the agent to assign to this channel (from agents table). */
         agentId: z.string().uuid().optional(),
         /** Slug of the agent to assign (e.g. "orchestrator", "networking"). Resolved to UUID server-side. */
@@ -733,6 +743,7 @@ export const channelsRouter = router({
             id: branchChannelId,
             userId: ctx.userId,
             workspaceId: workspaceId ?? null,
+            projectId: input.projectId ?? null,
             parentChannelId: input.parentChannelId,
             branchPurpose: input.branchPurpose,
             agentConfig: input.agentConfig,
@@ -797,6 +808,7 @@ export const channelsRouter = router({
           id: channelId,
           userId: ctx.userId,
           workspaceId: workspaceId ?? null,
+          projectId: input.projectId ?? null,
           channelType: ChannelType.THREAD,
           status: ChannelStatus.ACTIVE,
           assignedAgentId: assignedAgentId ?? null,
@@ -1058,6 +1070,8 @@ export const channelsRouter = router({
         name: z.string().min(1).max(255),
         /** Human user IDs + AI agent user IDs that belong to this group. */
         participants: z.array(z.string().uuid()).optional(),
+        /** Project lens (cross-cutting) to tag this group room with, if any. */
+        projectId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1114,6 +1128,7 @@ export const channelsRouter = router({
         id: channelId,
         userId: ctx.userId,
         workspaceId,
+        projectId: input.projectId ?? null,
         channelType: ChannelType.GROUP,
         status: ChannelStatus.ACTIVE,
         title: input.name.slice(0, 255),
@@ -2788,6 +2803,8 @@ export const channelsRouter = router({
     .input(
       z.object({
         workspaceId: z.string().uuid().optional(),
+        /** Project lens (cross-cutting): filter channels tagged to this project. */
+        projectId: z.string().uuid().optional(),
         channelType: z.enum(CHANNEL_TYPE_VALUES).optional(),
         limit: z.number().min(1).max(100).default(20),
         contextObjectId: z.string().uuid().optional(),
@@ -2801,6 +2818,7 @@ export const channelsRouter = router({
       const channelsWithFlags = await listChannelsWithFlags({
         userId: ctx.userId,
         workspaceId: input.workspaceId,
+        projectId: input.projectId,
         channelType: input.channelType,
         contextObjectId: input.contextObjectId,
         contextObjectType: input.contextObjectType,

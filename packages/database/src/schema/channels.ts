@@ -24,6 +24,7 @@ import {
 import { isNotNull } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { agents } from "./agents.js";
+import { projects } from "./projects.js";
 
 /**
  * Channel Types (V2) — 7 canonical types per the channel-system spec
@@ -154,6 +155,15 @@ export const channels = pgTable(
     userId: text("user_id").notNull(),
     /** Workspace scope for listing/filtering; null = pod-scoped channel (personal-style thread, user feed). */
     workspaceId: uuid("workspace_id"),
+    /**
+     * Project scope (cross-cutting lens): pins a channel to a project so the
+     * Room UI can filter by the active PROJECT lens, independently of
+     * workspace_id (domain lens). Nullable — ordinary channels leave it NULL.
+     * See 0171.
+     */
+    projectId: uuid("project_id").references(() => projects.id, {
+      onDelete: "set null",
+    }),
 
     // Channel metadata
     title: text("title"),
@@ -279,6 +289,7 @@ export const channels = pgTable(
   (table) => ({
     userIdIdx: index("channels_user_id_idx").on(table.userId),
     workspaceIdIdx: index("channels_workspace_id_idx").on(table.workspaceId),
+    projectIdIdx: index("channels_project_id_idx").on(table.projectId),
     parentChannelIdx: index("channels_parent_channel_id_idx").on(
       table.parentChannelId
     ),
@@ -306,6 +317,7 @@ export interface Channel {
   id: string;
   userId: string;
   workspaceId: string | null;
+  projectId: string | null;
   title: string | null;
   channelType: ChannelType;
   scope: ChannelScope;

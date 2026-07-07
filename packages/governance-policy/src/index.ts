@@ -695,6 +695,23 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     return { verdict: "execute" };
   }
 
+  // 4.5 FOCUS-SESSION LIFECYCLE FLOOR — session create / stage advance / progress
+  // update are non-destructive work-orchestration (a container + its stage), not
+  // data mutations. They auto-approve for agents INCLUDING writesRequireProposal
+  // agents, so event mode / the capture channel opens + advances a session
+  // WITHOUT a proposal ("capture channel = no proposals"). Sits before rung 5
+  // (which would otherwise propose them) but AFTER admin (2) / destructive (2.5)
+  // / per-capability (2.7) gates, and after an explicit workspace autoApproveFor
+  // (rung 4). `focus_session.grant_capability` is DELIBERATELY excluded — it
+  // widens a session's egress abilities, so it stays proposal-gated; delete/
+  // archive are destructive and gated above.
+  if (
+    subjectType === "focus_session" &&
+    (action === "create" || action === "update" || action === "stage_changed")
+  ) {
+    return { verdict: "execute" };
+  }
+
   // 5. writesRequireProposal → propose on non-pure-read writes.
   if (
     input.writesRequireProposal === true &&

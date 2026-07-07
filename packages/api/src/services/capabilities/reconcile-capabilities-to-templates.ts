@@ -113,7 +113,7 @@ function buildContainerCtx(container: {
 }
 
 export async function reconcileCapabilitiesToTemplates(
-  opts: { dryRun?: boolean } = {}
+  opts: { dryRun?: boolean; containerIds?: string[] } = {}
 ): Promise<CapabilityReconcileReport> {
   const dryRun = !!opts.dryRun;
   const report: CapabilityReconcileReport = {
@@ -125,7 +125,16 @@ export async function reconcileCapabilitiesToTemplates(
     conflicts: [],
   };
 
-  const containers = await db.select().from(capabilities);
+  // `containerIds` NARROWS which containers are enumerated (the operator Apply
+  // door scoping to a named subset) — the per-container convergence logic below
+  // is unchanged; this only picks WHICH containers it runs over.
+  const containers =
+    opts.containerIds && opts.containerIds.length > 0
+      ? await db
+          .select()
+          .from(capabilities)
+          .where(inArray(capabilities.id, opts.containerIds))
+      : await db.select().from(capabilities);
   const cacheRows = await db
     .select({
       key: capabilityTemplateCache.key,

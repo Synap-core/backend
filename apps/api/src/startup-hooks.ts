@@ -25,6 +25,7 @@ import {
   setDynamicCorsOrigins,
   ensureSynapCoreCapability,
   reconcileCapabilitiesToTemplates,
+  notifyCapabilityUpdatesAvailable,
 } from "@synap/api";
 import { reconcileWorkspacesToTemplates } from "./startup/reconcile-workspaces-to-templates.js";
 
@@ -504,7 +505,10 @@ export async function runStartupHooks(): Promise<void> {
   // Must run AFTER ensureSynapCoreCapability so synap-core itself is present to
   // be enumerated (though it self-converges via its own guard either way).
   try {
-    await reconcileCapabilitiesToTemplates();
+    const report = await reconcileCapabilitiesToTemplates();
+    // Drift the engine deferred to a human (`updatePolicy:"notify"`) surfaces as
+    // ONE grouped bell item. Idempotent — no duplicate on an unchanged restart.
+    await notifyCapabilityUpdatesAvailable(report);
   } catch (err) {
     logger.warn(
       { err },

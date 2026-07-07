@@ -65,6 +65,10 @@ export {
   type CapabilityReconcileReport,
   type CapabilityReconcileEntry,
 } from "./services/capabilities/reconcile-capabilities-to-templates.js";
+export {
+  notifyCapabilityUpdatesAvailable,
+  CAPABILITY_UPDATE_GROUP_KEY,
+} from "./services/capabilities/notify-capability-updates.js";
 export { healthRouter } from "./routers/health.js";
 export { projectsRouter } from "./routers/projects.js";
 export { sourceConfigsRouter } from "./routers/source-configs.js";

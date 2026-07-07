@@ -934,6 +934,10 @@ CREATE TABLE IF NOT EXISTS "channels" (
   "id"                    uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"               text  NOT NULL,
   "workspace_id"          uuid,
+  -- Bare uuid (NO inline FK): the `projects` table is created by a later
+  -- migration (0151), not in this baseline — mirrors views.project_id (0166).
+  -- The FK→projects(id) ON DELETE SET NULL is added by 0171 on existing pods.
+  "project_id"            uuid,
   "title"                 text,
   "channel_type"          text  NOT NULL DEFAULT 'thread',
   "scope"                 text  NOT NULL DEFAULT 'workspace',
@@ -961,6 +965,7 @@ CREATE TABLE IF NOT EXISTS "channels" (
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "user_id" text;
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "project_id" uuid;
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "title" text;
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "channel_type" text DEFAULT 'thread';
 ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "scope" text DEFAULT 'workspace';
@@ -991,6 +996,9 @@ CREATE INDEX IF NOT EXISTS "channels_user_id_idx"
 
 CREATE INDEX IF NOT EXISTS "channels_workspace_id_idx"
   ON "channels" ("workspace_id");
+
+CREATE INDEX IF NOT EXISTS "channels_project_id_idx"
+  ON "channels" ("project_id");
 
 CREATE INDEX IF NOT EXISTS "channels_parent_channel_id_idx"
   ON "channels" ("parent_channel_id");

@@ -20,6 +20,8 @@ import {
   automations,
   skills,
   capabilities as capabilitiesTable,
+  notifications,
+  NotificationStatus,
   eq,
   and,
   or,
@@ -41,6 +43,8 @@ import {
 } from "../services/capabilities/create-from-definition.js";
 import { executeCapability } from "../services/capabilities/execute-capability.js";
 import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
+import { reconcileCapabilitiesToTemplates } from "../services/capabilities/reconcile-capabilities-to-templates.js";
+import { CAPABILITY_UPDATE_GROUP_KEY } from "../services/capabilities/notify-capability-updates.js";
 import {
   addConnection,
   listConnections,
@@ -352,6 +356,58 @@ export const capabilitiesRouter = router({
 
       return uninstallCapability(input.capabilityId, ctx);
     }),
+
+  /**
+   * Operator "Apply updates" door — converge installed capability CONTAINERS to
+   * their drifted Control-Plane templates (the WRITE half of the boot reconcile).
+   *
+   * Runs the SAME engine as the boot hook + Hub `POST /capabilities/reconcile`,
+   * but in-process with `dryRun:false`. This is `protectedProcedure`, so tRPC's
+   * Kratos-cookie transport gates it to the operator — agent keys can NEVER reach
+   * tRPC. That is the governance floor: NO re-implemented `agentUserId` block
+   * (that guard belongs only to the Hub/agent-key REST transport). Optional
+   * `containerIds` scopes the apply to just those containers.
+   */
+  applyUpdates: protectedProcedure
+    .input(
+      z
+        .object({ containerIds: z.array(z.string().uuid()).optional() })
+        .optional()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const report = await reconcileCapabilitiesToTemplates({
+        dryRun: false,
+        containerIds: input?.containerIds,
+      });
+
+      // Clear the "updates available" bell item for this operator now that the
+      // updates have been applied (dismiss by the stable groupKey). Only touches
+      // the acting operator's own open capability-update notification(s); the
+      // boot reconcile re-emits on the next restart if drift still remains.
+      await db
+        .update(notifications)
+        .set({ status: NotificationStatus.DISMISSED })
+        .where(
+          and(
+            eq(notifications.userId, userId),
+            eq(notifications.groupKey, CAPABILITY_UPDATE_GROUP_KEY),
+            eq(notifications.status, NotificationStatus.UNREAD)
+          )
+        );
+
+      return report;
+    }),
+
+  /**
+   * "Check for updates now" — explicit operator button (NOT polled). Dry-run
+   * convergence; returns only the drifted `updatePolicy:"notify"` capabilities
+   * awaiting a human. `protectedProcedure` → operator-gated by the transport.
+   */
+  checkUpdates: protectedProcedure.query(async () => {
+    const report = await reconcileCapabilitiesToTemplates({ dryRun: true });
+    return { updatesAvailable: report.updatesAvailable };
+  }),
 
   /**
    * Execute a registered capability — resolve a verb (= backing skill name) and

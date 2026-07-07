@@ -836,6 +836,31 @@ export const captureRouter = router({
         return degradedFallback("is_invalid_response");
       }
 
+      // 1a. Reconcile the workspace pick by NAME. The LLM reliably reasons the
+      // right workspace (its `targetWorkspaceReason`/`targetWorkspaceName` name
+      // the correct one) but often copies the WRONG UUID from the list. Trust the
+      // name it chose and resolve it to the real id from `availableWorkspaces`
+      // (the list WE built), overriding an unreliable LLM UUID. No name / no match
+      // → leave the LLM's id untouched.
+      const pickedWsName = (
+        structureResult as { targetWorkspaceName?: string | null }
+      ).targetWorkspaceName;
+      if (pickedWsName && availableWorkspaces.length > 0) {
+        const norm = (s: string) => s.toLowerCase().trim();
+        const wanted = norm(pickedWsName);
+        const match =
+          availableWorkspaces.find((w) => norm(w.name) === wanted) ??
+          availableWorkspaces.find(
+            (w) =>
+              norm(w.name).includes(wanted) || wanted.includes(norm(w.name))
+          );
+        if (match) {
+          (
+            structureResult as { targetWorkspaceId?: string | null }
+          ).targetWorkspaceId = match.id;
+        }
+      }
+
       // 1b. Silent-empty guard. The IS can return a well-formed 200 with ZERO
       // entities and no followUp — e.g. when the model is over budget, the
       // provider degraded, or the completion came back empty. Returning that as
