@@ -235,6 +235,16 @@ export interface RecordInboundMessageArgs {
    * source message.
    */
   messageId?: string;
+  /**
+   * Attachments carried on the inbound message (e.g. Discord photo embeds).
+   * Stored under `messages.metadata.attachments` (schema: {type,url} — `name` is
+   * dropped to match ConversationMessageMetadataSchema's AttachmentSchema) and
+   * surfaced (bounded) on the `external_message.received` event. ADDITIVE
+   * METADATA ONLY: attachments are never part of the idempotency hash
+   * (sha256(provider:idempotencySeed)) nor the tamper hash, so carrying them
+   * cannot affect either chain.
+   */
+  attachments?: { type: string; url: string; name?: string }[];
 }
 
 export interface RecordInboundMessageResult {
@@ -327,10 +337,22 @@ export async function recordInboundMessage(
       content: args.text,
       hash: inboundHash,
       timestamp: sentAt,
-      ...(senderMetadata
+      // ONE merged metadata object — `sender` (attribution) and `attachments`
+      // (inbound media) coexist. Attachments are stored as {type,url} to match
+      // ConversationMessageMetadataSchema.attachments (AttachmentSchema drops
+      // `name`) and bounded to 4. Written only when at least one is present so a
+      // plain text message keeps a null metadata column as before.
+      ...(senderMetadata || args.attachments?.length
         ? {
             metadata: {
-              sender: senderMetadata,
+              ...(senderMetadata ? { sender: senderMetadata } : {}),
+              ...(args.attachments?.length
+                ? {
+                    attachments: args.attachments
+                      .slice(0, 4)
+                      .map((a) => ({ type: a.type, url: a.url })),
+                  }
+                : {}),
             } as (typeof messages.$inferInsert)["metadata"],
           }
         : {}),
@@ -365,6 +387,17 @@ export async function recordInboundMessage(
       // an unbounded body would bloat the run log and over-expose message text.
       // 4k covers any real chat message (Discord caps at 2k/4k); links live early.
       content: args.text.slice(0, 4000),
+      // Bounded attachment list (cap 4, {type,url} only) so automations/webhooks
+      // can see inbound media. Same defensive bounding as `content`: this blob is
+      // persisted verbatim in automation_runs.trigger_payload + forwarded to
+      // webhook subscribers, so it must stay small.
+      ...(args.attachments?.length
+        ? {
+            attachments: args.attachments
+              .slice(0, 4)
+              .map((a) => ({ type: a.type, url: a.url })),
+          }
+        : {}),
     },
   }).catch((err) => {
     logger.warn({ err, channelId }, "emitSideEffects failed (non-fatal)");

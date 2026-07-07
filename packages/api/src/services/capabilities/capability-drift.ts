@@ -74,6 +74,15 @@ export function capabilityDefinitionDrift(
   const drifted: string[] = [];
 
   for (const skill of definition.skills ?? []) {
+    // A skill NAME carrying an unresolved `{{param}}` placeholder cannot be
+    // matched by exact name against an installed row — the live row's name was
+    // interpolated at install with params the reconcile doesn't have. Reporting
+    // it as "missing" would make a boot reconcile re-project the template with
+    // `{}` params and mint a junk skill named with a BLANK placeholder. Skip it;
+    // parameterized-name templates are handled as "manual re-apply" upstream.
+    // (Surfaced by dogfooding the team pod: generic-apikey's
+    // `{{name}} fetch-and-propose`.)
+    if (skill.name.includes("{{")) continue;
     const installed = installedByName.get(skill.name);
     if (!installed) {
       missing.push(skill.name);

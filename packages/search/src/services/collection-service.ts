@@ -71,7 +71,13 @@ export class CollectionService {
     const client = getTypesenseAdminClient();
     const liveNames = new Set((live.fields ?? []).map((f) => f.name));
     const missing = (schema.fields ?? []).filter(
-      (f) => f.name !== ".*" && !liveNames.has(f.name)
+      (f) =>
+        f.name !== ".*" &&
+        // `id` is Typesense's special document key: it is NOT echoed in the
+        // retrieved `fields` list and is un-alterable, so it must never be
+        // treated as "missing" — including it makes the whole update 400.
+        f.name !== "id" &&
+        !liveNames.has(f.name)
     );
     if (missing.length === 0) return;
 

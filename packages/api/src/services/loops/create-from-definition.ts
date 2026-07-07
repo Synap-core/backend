@@ -160,6 +160,8 @@ export async function createLoopFromDefinition(
       inputStrategy: pb.inputStrategy,
       channelSpec: pb.channelSpec,
       expectedOutputs: pb.expectedOutputs,
+      stages: pb.stages,
+      subjectProfile: pb.subjectProfile,
       schedule: pb.schedule,
       executor: pb.executor ?? "is-agent",
       agentUserId,

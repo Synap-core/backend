@@ -1976,15 +1976,21 @@ try {
               await import("@synap/jobs/workers/mail-feed-cron.js");
             const { registerEventSyncRunner } =
               await import("@synap/jobs/workers/event-sync-cron.js");
+            const { registerEventEndRunner } =
+              await import("@synap/jobs/workers/event-end-cron.js");
+            const { registerSessionRecapRunner } =
+              await import("@synap/jobs/workers/session-recap.js");
             const { registerSignalRouter } =
               await import("@synap/jobs/utils/proactive-post.js");
             const api = await import("@synap/api");
             registerCapabilityExecutor((input) => api.executeCapability(input));
             registerMailFeedRunner(() => api.runMailFeed());
             registerEventSyncRunner(() => api.runEventSync());
+            registerEventEndRunner(() => api.runEventEnd());
+            registerSessionRecapRunner((input) => api.runSessionRecap(input));
             registerSignalRouter((input) => api.routeSignal(input));
             apiLogger.info(
-              "Registered capability / mail-feed / event-sync / signal handlers (IoC)"
+              "Registered capability / mail-feed / event-sync / event-end / session-recap / signal handlers (IoC)"
             );
           }
 

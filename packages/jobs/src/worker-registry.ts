@@ -53,6 +53,24 @@ export const workerRegistry: WorkerMetadata[] = [
     category: "ai",
   },
   {
+    id: "event-end-cron",
+    name: "Event End",
+    description:
+      "Every 5min, runs the api-side event-end runner (in-process) which finds `event` entities whose endDate just crossed now and, for each with an ACTIVE focus session bound to it (event mode), flips that session into its `post` stage — emitting focus_session.stage_changed.post which triggers the session recap. Idempotent via a systemData.eventEndFired stamp on the event entity.",
+    triggers: ["cron:*/5 * * * *"],
+    outputs: ["focus_session.stage_changed.post"],
+    category: "ai",
+  },
+  {
+    id: "session-recap",
+    name: "Session Recap",
+    description:
+      "On-demand (enqueued by the session-recap reactor when a focus session advances to its `post` stage). Delegates to the api-side runner which reads the session's produced entities, asks the IS to summarize + propose follow-ups, posts the recap to the session's channel, and surfaces the follow-ups as ONE governed proposal.",
+    triggers: ["queue:session-recap"],
+    outputs: ["message.create.completed", "proposal.created"],
+    category: "ai",
+  },
+  {
     id: "proactive-intelligence",
     name: "Proactive Intelligence (scan)",
     description:

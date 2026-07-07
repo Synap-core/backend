@@ -269,6 +269,25 @@ export async function reconcileCapabilitiesToTemplates(
       const updatePolicy = cachedDef.updatePolicy ?? "auto";
       const driftReason = `missing=[${drift.missing.join(",")}] drifted=[${drift.drifted.join(",")}]`;
 
+      // A template that carries `{{param}}` in a skill NAME needs install-time
+      // params the reconcile doesn't have — re-projecting it with `{}` would
+      // interpolate the placeholder to a blank and mint a junk skill. Never
+      // auto-apply these; surface them for a human to re-apply WITH params.
+      // Paramless declarative templates (nango-google etc.) are unaffected —
+      // the common reconcile case. (Surfaced by dogfooding: generic-apikey.)
+      const needsInstallParams = (cachedDef.skills ?? []).some(
+        (s) => typeof s.name === "string" && s.name.includes("{{")
+      );
+      if (needsInstallParams) {
+        report.updatesAvailable.push({
+          containerId: container.id,
+          name: container.name,
+          templateKey,
+          reason: `${driftReason} — manual re-apply needed (template uses install-time params in skill names)`,
+        });
+        continue;
+      }
+
       if (updatePolicy === "notify") {
         report.updatesAvailable.push({
           containerId: container.id,

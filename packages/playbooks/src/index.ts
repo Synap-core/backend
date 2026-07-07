@@ -564,6 +564,12 @@ export interface LoopPlaybookDef {
   grants?: CapabilityRef[];
   /** Inline schedule — materializes the backing cron automation via the create path. */
   schedule?: PlaybookSchedule;
+  /** Conforms to PlaybookStage[]; stored loosely (validated at the boundary). The
+   * authored-loop path (create-from-definition) MUST thread these — playbooks.create
+   * already persists them; without this they were silently dropped. */
+  stages?: Record<string, unknown>[];
+  /** Subject-profile config (jsonb); stored loosely. Threaded alongside `stages`. */
+  subjectProfile?: Record<string, unknown>;
 }
 
 /**

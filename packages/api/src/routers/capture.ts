@@ -43,6 +43,9 @@ import {
   workspaces,
   workspaceMembers,
   projects,
+  links,
+  type LinkEndpointType,
+  type LinkType,
   type PropertyValueType,
   type IdentitySignal,
 } from "@synap/database";
@@ -1169,6 +1172,13 @@ export const captureRouter = router({
         aiWorkspaceConfidence: z.number().nullish(),
         /** One-line justification for the AI's workspace pick (surfaced in ASK). */
         aiWorkspaceReason: z.string().nullish(),
+        /**
+         * Active focus session (from the `X-Session-Id` header). When set, every
+         * captured entity is linked to it via `session --produced--> entity` —
+         * the SAME edge the entities router emits inline. This is what scopes
+         * captures to an event in "event mode". Optional / back-compat.
+         */
+        sessionId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1425,6 +1435,37 @@ export const captureRouter = router({
             userId,
             workspaceId: workspaceId ?? null,
           });
+        }
+      }
+
+      // Event/session scoping (event mode): when a focus session is active
+      // (X-Session-Id), link EVERY captured entity to it via
+      // `session --produced--> entity`. This mirrors the entities-router inline
+      // path — capture materializes directly via entityRepo.create (bypassing
+      // that router), so WITHOUT this the produced edge never fires for captured
+      // entities and the event's captured-set stays empty. Idempotent via the
+      // links unique-edge index; best-effort (never blocks the capture).
+      if (input.sessionId) {
+        for (const c of created) {
+          try {
+            await database
+              .insert(links)
+              .values({
+                workspaceId: workspaceId ?? null,
+                fromType: "session" as LinkEndpointType,
+                fromId: input.sessionId,
+                toType: "entity" as LinkEndpointType,
+                toId: c.entityId,
+                linkType: "produced" as LinkType,
+                metadata: {},
+              })
+              .onConflictDoNothing();
+          } catch (err) {
+            logger.warn(
+              { err, sessionId: input.sessionId, entityId: c.entityId },
+              "capture: session-produced link failed (non-fatal)"
+            );
+          }
         }
       }
 

@@ -78,6 +78,10 @@ const LoopPlaybookDefSchema = z.object({
   expectedOutputs: z.array(z.record(z.string(), z.unknown())).optional(),
   grants: z.array(GrantSchema).optional(),
   schedule: ScheduleSchema.optional(),
+  // First-class stages + subject profile — threaded into playbooks.create so the
+  // authored (.loop.json) path no longer drops them (root-cause fix).
+  stages: z.array(z.record(z.string(), z.unknown())).optional(),
+  subjectProfile: z.record(z.string(), z.unknown()).optional(),
 });
 
 const LoopTriggerDefSchema = z.object({

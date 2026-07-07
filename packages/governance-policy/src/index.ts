@@ -88,6 +88,16 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
   "automation.create",
   "playbook.create",
   "link.create",
+  // Focus-session lifecycle = non-destructive work-orchestration (open a
+  // session, advance its stage, update progress), less sensitive than the data
+  // creates above. Auto-approving lets an agent open/advance an event-mode
+  // session in the capture channel without a proposal ("capture channel = no
+  // proposals"). `focus_session.grant_capability` is DELIBERATELY excluded — it
+  // widens a session's egress abilities, so it still routes to a proposal.
+  // delete/archive remain destructive → proposal.
+  "focus_session.create",
+  "focus_session.update",
+  "focus_session.stage_changed",
   "playbook.read",
   "tool.read",
   "link.read",

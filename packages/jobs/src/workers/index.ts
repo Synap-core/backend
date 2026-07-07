@@ -88,6 +88,8 @@ import {
   handleEventSyncCron,
   EVENT_SYNC_CRON_QUEUE,
 } from "./event-sync-cron.js";
+import { handleEventEndCron, EVENT_END_CRON_QUEUE } from "./event-end-cron.js";
+import { handleSessionRecap, SESSION_RECAP_QUEUE } from "./session-recap.js";
 import { handleEntityExtract } from "./entity-extract-worker.js";
 import {
   handleHermesTrigger,
@@ -159,6 +161,8 @@ const ALL_QUEUES = [
   CRM_DAILY_DIGEST_QUEUE,
   MAIL_FEED_CRON_QUEUE,
   EVENT_SYNC_CRON_QUEUE,
+  EVENT_END_CRON_QUEUE,
+  SESSION_RECAP_QUEUE,
   PROACTIVE_SCAN_QUEUE,
   PROPOSAL_REVIEWED_NOTIFY_QUEUE,
   MEMORY_DECAY_QUEUE,
@@ -424,6 +428,22 @@ export async function registerAllWorkers(): Promise<void> {
     handleEventSyncCron(job)
   );
   logger.info("Registered worker: event-sync-cron");
+
+  // Event end (cron: every 5min) — invokes the api-side event-end runner
+  // in-process (IoC slot) to flip focus sessions bound to just-ended events into
+  // their `post` stage, which triggers the session recap.
+  await boss.work(EVENT_END_CRON_QUEUE, async ([job]: any[]) =>
+    handleEventEndCron(job)
+  );
+  logger.info("Registered worker: event-end-cron");
+
+  // Session recap (on-demand) — enqueued by the session-recap reactor when a
+  // focus session advances to the `post` stage. Delegates to the api-side runner
+  // (IoC slot) which summarizes the session's captures + posts a governed recap.
+  await boss.work(SESSION_RECAP_QUEUE, async ([job]: any[]) =>
+    handleSessionRecap(job)
+  );
+  logger.info("Registered worker: session-recap");
 
   // Proactive scan — cluster assembly → intelligence-service brain. Reachable as
   // an action a loop/automation can invoke (no parallel per-event auto-trigger).

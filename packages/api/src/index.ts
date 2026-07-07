@@ -655,6 +655,15 @@ export {
   type RunEventSyncResult,
 } from "./services/event-sync/run-event-sync.js";
 export {
+  runEventEnd,
+  type RunEventEndResult,
+} from "./services/event-end/run-event-end.js";
+export {
+  runSessionRecap,
+  type RunSessionRecapInput,
+  type RunSessionRecapResult,
+} from "./services/session-recap/run-session-recap.js";
+export {
   executeCapability,
   type ExecuteCapabilityResult,
 } from "./services/capabilities/execute-capability.js";

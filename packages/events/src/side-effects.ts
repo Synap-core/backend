@@ -168,6 +168,29 @@ const hydrationSummaryReactor: Reactor = {
   },
 };
 
+// 7. Session recap — event-mode recap trigger. When a focus session advances to
+// its `post` stage (in event mode: the bound event's endDate crossed and
+// run-event-end flipped the session), enqueue the recap worker. This is the ONE
+// decoupled seam: EVERY path that flips a session to `post` (cron, bridge,
+// manual) flows through a `focus_session.stage_changed` emit and lands here.
+// Fires pod-wide (no workspace required — sessions may be project-scoped).
+const sessionRecapReactor: Reactor = {
+  id: "session-recap-trigger",
+  match: (payload) =>
+    payload.subjectType === "focus_session" &&
+    payload.action === "stage_changed" &&
+    payload.data?.toStage === "post",
+  async handler(payload, { boss }) {
+    const sessionId =
+      (payload.data?.sessionId as string | undefined) ?? payload.subjectId;
+    await boss.send("session-recap", {
+      sessionId,
+      userId: payload.userId,
+      workspaceId: payload.workspaceId ?? null,
+    });
+  },
+};
+
 // Registration order === original inline order. Do not reorder.
 registerReactor(searchIndexReactor);
 registerReactor(entityEmbeddingReactor);
@@ -175,6 +198,7 @@ registerReactor(webhookDeliveryReactor);
 registerReactor(crossThreadNotifyReactor);
 registerReactor(automationTriggerMatchReactor);
 registerReactor(hydrationSummaryReactor);
+registerReactor(sessionRecapReactor);
 
 // ============================================================================
 

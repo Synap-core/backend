@@ -1,0 +1,73 @@
+{
+  "key": "lead-search-event",
+  "name": "Lead Search (Event Mode)",
+  "description": "Time-boxes the capture channel to an event: a stage-driven session template (prep → during → post) whose subject is the event entity. Captures during the event auto-link to it via the session--produced-->entity edge; at the event's endDate the session flips to the `post` stage and the pod-native session-recap reactor posts a recap + a governed follow-ups proposal. NOTE: the `focus_session.stage_changed.post -> session-recap` wiring is realized pod-natively by the session-recap reactor (@synap/events side-effects) — it needs NO per-template automation trigger, so none is declared here.",
+  "params": [
+    {
+      "name": "eventName",
+      "label": "Event name",
+      "type": "text",
+      "required": false,
+      "default": "the event",
+      "description": "Display name of the event this lead-search session works."
+    }
+  ],
+  "playbooks": [
+    {
+      "ref": "lead-search",
+      "name": "Lead Search — {{eventName}}",
+      "goalTemplate": "Work {{eventName}} as a lead-search session: prep beforehand, capture every person you meet (as a contact) plus notes during the event, then review the auto-generated recap and follow-ups.",
+      "description": "Event-mode lead capture. Instantiate one session per event, bound to the event entity as its subject; captures made during the window auto-attach to the event.",
+      "executor": "is-agent",
+      "subjectProfile": { "slug": "event" },
+      "channelSpec": {
+        "type": "AGENT_COLLAB",
+        "members": [],
+        "aiReactionMode": "when_confident"
+      },
+      "expectedOutputs": [
+        { "kind": "contact", "label": "Contacts found" },
+        { "kind": "note", "label": "Notes" },
+        { "kind": "report", "label": "Recap" }
+      ],
+      "stages": [
+        {
+          "key": "prep",
+          "name": "Prep",
+          "description": "Before the event.",
+          "goal": "Research who is attending and set concrete goals for {{eventName}}.",
+          "expectedOutputs": [{ "kind": "note", "label": "Prep notes" }],
+          "suggestedTasks": [
+            "List the people or companies you want to meet.",
+            "Note your objective for this event (leads, partners, hires)."
+          ]
+        },
+        {
+          "key": "during",
+          "name": "During",
+          "description": "While the event is running.",
+          "goal": "Capture every person you meet as a contact, with context notes, as you go.",
+          "expectedOutputs": [
+            { "kind": "contact", "label": "Contacts found" },
+            { "kind": "note", "label": "Conversation notes" }
+          ],
+          "suggestedTasks": [
+            "Capture each new contact with name, company, and what they care about.",
+            "Jot a one-line note per conversation while it is fresh."
+          ]
+        },
+        {
+          "key": "post",
+          "name": "Post",
+          "description": "After the event ends — reached automatically when the event's endDate crosses.",
+          "goal": "Review the auto-generated recap and act on the proposed follow-ups (intros, messages, deals).",
+          "expectedOutputs": [{ "kind": "report", "label": "Recap" }],
+          "suggestedTasks": [
+            "Review the recap posted to the channel.",
+            "Approve or edit the follow-ups proposal (intros / messages / deals)."
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -15,6 +15,7 @@ import {
   PAGERANK_CENTRALITY_QUEUE,
   PAGERANK_CENTRALITY_CRON,
 } from "./workers/pagerank-centrality.js";
+import { EVENT_END_CRON_QUEUE } from "./workers/event-end-cron.js";
 
 const logger = createLogger({ module: "cron-scheduler" });
 
@@ -105,6 +106,13 @@ export async function registerCronSchedules(): Promise<void> {
   // eventSync.enabled.
   await boss.schedule("event-sync-cron", "0 */6 * * *", {});
   logger.info("Registered cron: event-sync-cron (every 6h)");
+
+  // Event end (every 5 min — the cron worker invokes the api-side event-end
+  // runner in-process (IoC slot) which flips focus sessions bound to an event
+  // whose endDate just crossed into their `post` stage, triggering the recap).
+  // Idempotent via a systemData.eventEndFired stamp on the event entity.
+  await boss.schedule(EVENT_END_CRON_QUEUE, "*/5 * * * *", {});
+  logger.info("Registered cron: event-end-cron (every 5min)");
 
   // Hermes trigger (every 60s — dispatches idle devplane features to Hermes AI)
   // Only schedule when Hermes is configured.

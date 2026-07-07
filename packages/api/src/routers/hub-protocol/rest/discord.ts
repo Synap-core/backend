@@ -55,15 +55,35 @@ import {
   type HubHono,
 } from "./_shared.js";
 
+// Inbound attachment descriptor (Discord photo carry-through, Wave 1). The
+// bridge forwards each embed/attachment as { type, url, name? }. Stored under
+// `messages.metadata.attachments` (schema {type,url}) and surfaced — bounded —
+// on the `external_message.received` event. Capped at 4 to bound payload size.
+const AttachmentInputSchema = z.object({
+  type: z.string(),
+  url: z.string().url(),
+  name: z.string().optional(),
+});
+
 const IngestRequestSchema = z
   .object({
     workspaceId: z.string().uuid(),
     discordChannelId: z.string().min(1),
     discordUserId: z.string().min(1),
     discordUsername: z.string().min(1).optional(),
-    text: z.string().min(1).max(50_000),
+    // Relaxed from min(1): an attachment-only message (photo, no caption) is a
+    // valid inbound. The `.refine` below still rejects a wholly empty message.
+    text: z.string().max(50_000).optional().default(""),
     messageId: z.string().min(1),
+    attachments: z.array(AttachmentInputSchema).max(4).optional(),
   })
+  .refine(
+    (d) =>
+      Boolean(
+        (d.text && d.text.trim()) || (d.attachments && d.attachments.length)
+      ),
+    { message: "text or attachments required" }
+  )
   .openapi("DiscordIngestRequest");
 
 const IngestResponseSchema = z
@@ -76,13 +96,23 @@ const AgentTurnRequestSchema = z
     discordChannelId: z.string().min(1),
     discordUserId: z.string().min(1),
     discordUsername: z.string().min(1),
-    text: z.string().min(1).max(50_000),
+    // Relaxed from min(1): an attachment-only message (photo, no caption) is a
+    // valid inbound. The `.refine` below still rejects a wholly empty message.
+    text: z.string().max(50_000).optional().default(""),
     messageId: z.string().min(1),
+    attachments: z.array(AttachmentInputSchema).max(4).optional(),
     // Optional: a skill the bot's `/skill <name>` command wants force-loaded into
     // this turn. Passed through to the IS as forcedSkillName; the agent runs WITH
     // that skill's know-how loaded — the "Claude-Code-with-a-skill" model.
     skillName: z.string().min(1).max(200).optional(),
   })
+  .refine(
+    (d) =>
+      Boolean(
+        (d.text && d.text.trim()) || (d.attachments && d.attachments.length)
+      ),
+    { message: "text or attachments required" }
+  )
   .openapi("DiscordAgentTurnRequest");
 
 const AgentTurnResponseSchema = z
@@ -189,6 +219,7 @@ export function registerDiscordRoutes(app: HubHono): void {
         senderExternalId: body.discordUserId,
         senderKeyId: callerKeyId,
         messageId: body.messageId,
+        attachments: body.attachments,
       });
       return c.json({ recorded }, 200);
     } catch (err) {
@@ -310,6 +341,7 @@ export function registerDiscordRoutes(app: HubHono): void {
           senderExternalId: body.discordUserId,
           senderKeyId: callerKeyId,
           messageId: body.messageId,
+          attachments: body.attachments,
         });
 
       if (!recorded) {

@@ -5026,8 +5026,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				idempotencyKey?: string | undefined;
 				projectId?: string | null | undefined;
+				workspaceRouting?: "auto" | "ask" | "locked" | undefined;
+				aiWorkspaceId?: string | null | undefined;
+				aiWorkspaceConfidence?: number | null | undefined;
+				aiWorkspaceReason?: string | null | undefined;
 			};
 			output: {
+				pendingWorkspaceSwitch?: {
+					suggestedWorkspaceId: string;
+					reason: string | null;
+					confidence: number | null;
+				} | undefined;
+				movedToWorkspace?: string | undefined;
 				created: {
 					propertiesDropped?: true | undefined;
 					degradedFrom?: string | undefined;
