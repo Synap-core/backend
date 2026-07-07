@@ -6738,14 +6738,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reason?: string | undefined;
 			};
 			output: {
+				restoredEntityId?: string | undefined;
 				success: boolean;
 				reverted: ProposalMaterializedRecord;
 				alreadyReverted: boolean;
 			} | {
 				partialFailures?: string[] | undefined;
+				restoredEntityId?: string | undefined;
 				success: boolean;
 				reverted: ProposalMaterializedRecord;
-				alreadyReverted?: undefined;
 			};
 			meta: object;
 		}>;

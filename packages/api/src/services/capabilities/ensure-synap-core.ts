@@ -61,7 +61,7 @@ function canonicalJson(value: unknown): string {
 }
 
 /** The inline definition applied through the governed creation door. */
-const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
+export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
   key: "synap-core",
   name: "Synap Core",
   description:

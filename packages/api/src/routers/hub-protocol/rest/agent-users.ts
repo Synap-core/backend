@@ -4,6 +4,7 @@
 
 import { z } from "@hono/zod-openapi";
 import { db, eq, and, inArray } from "@synap/database";
+import { findUnsafeAutoApproveEntries } from "@synap/governance-policy";
 import { createNamedAgent } from "../../../services/agent-identity-service.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -211,8 +212,32 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       string,
       unknown
     > | null;
-    if (!body?.autoApproveFor || !Array.isArray(body.autoApproveFor)) {
+    if (
+      !body?.autoApproveFor ||
+      !Array.isArray(body.autoApproveFor) ||
+      !body.autoApproveFor.every((entry) => typeof entry === "string")
+    ) {
       return c.json({ error: "autoApproveFor (string[]) is required" }, 400);
+    }
+
+    // Reject entries that could silently auto-approve a destructive action
+    // (delete/archive/purge) — the DESTRUCTIVE_ACTIONS hard floor in
+    // decideAgentPolicy() catches this at read time too, but rejecting here
+    // keeps the persisted setting itself honest and gives the caller a clear
+    // error instead of a silently-neutered grant.
+    const unsafe = findUnsafeAutoApproveEntries(
+      body.autoApproveFor as string[]
+    );
+    if (unsafe.length > 0) {
+      return c.json(
+        {
+          error:
+            "autoApproveFor entries may not auto-approve destructive actions " +
+            "(delete/archive/purge). Rejected entries: " +
+            unsafe.join(", "),
+        },
+        400
+      );
     }
 
     try {

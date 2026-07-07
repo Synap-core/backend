@@ -52,6 +52,7 @@ import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
 // import { WorkspaceMemberEvents } from "../lib/event-helpers.js"; // unused — reserved for future member event hooks
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { findUnsafeAutoApproveEntries } from "@synap/governance-policy";
 import { auditLog } from "../utils/audit-log.js";
 import { assertPackageTierAccess } from "../utils/tier-check.js";
 import { emitSideEffects, getBoss } from "@synap/events";
@@ -493,6 +494,32 @@ export const workspacesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // 0. Reject an autoApproveFor grant that could silently auto-approve a
+      // destructive action (delete/archive/purge). The decideAgentPolicy()
+      // hard floor is the read-side backstop; this keeps the persisted
+      // settings.aiGovernance.autoApproveFor itself honest.
+      const autoApproveFor = (
+        input.settings?.aiGovernance as Record<string, unknown> | undefined
+      )?.autoApproveFor;
+      if (Array.isArray(autoApproveFor)) {
+        if (!autoApproveFor.every((entry) => typeof entry === "string")) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "settings.aiGovernance.autoApproveFor must be a string[]",
+          });
+        }
+        const unsafe = findUnsafeAutoApproveEntries(autoApproveFor as string[]);
+        if (unsafe.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "settings.aiGovernance.autoApproveFor may not auto-approve " +
+              "destructive actions (delete/archive/purge). Rejected entries: " +
+              unsafe.join(", "),
+          });
+        }
+      }
+
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,

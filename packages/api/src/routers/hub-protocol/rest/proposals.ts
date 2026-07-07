@@ -14,7 +14,13 @@ import {
   WireProposalSchema,
 } from "./_codecs/proposal.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  getCaller,
+  hasScope,
+  logger,
+  rejectAgentReviewer,
+  type HubHono,
+} from "./_shared.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
 import { proposalsRouter as mainProposalsRouter } from "../../proposals.js";
 import { createHubProtocolCallerContext } from "../utils.js";
@@ -253,6 +259,11 @@ export function registerProposalsRoutes(app: HubHono): void {
         403
       );
     }
+    // SECURITY — revert is a human review action (it executes ungated writes:
+    // deletes what a create made, or restores what a delete removed). Block agent
+    // credentials — same self-review class the /approve guard closes.
+    const blocked = rejectAgentReviewer(c, "revert");
+    if (blocked) return blocked;
     const proposalId = c.req.param("id");
     let reason: string | undefined;
     try {
@@ -303,6 +314,10 @@ export function registerProposalsRoutes(app: HubHono): void {
         403
       );
     }
+    // SECURITY — an AGENT credential must never APPROVE a proposal (the human
+    // review step). See rejectAgentReviewer for the full rationale.
+    const blocked = rejectAgentReviewer(c, "approve");
+    if (blocked) return blocked;
     const proposalId = c.req.param("id");
     try {
       const userId = c.get("userId") as string;
@@ -334,6 +349,11 @@ export function registerProposalsRoutes(app: HubHono): void {
    * POST /proposals/:id/reject
    * Reject a pending proposal. Delegates to the canonical `proposals.reject`
    * tRPC mutation so behavior is identical to the in-app reject flow.
+   *
+   * NOTE: unlike /approve and /revert, reject is INTENTIONALLY not guarded
+   * against agent credentials — rejection only prevents a pending change from
+   * landing, so it carries no self-approval / undo risk. (An agent auto-rejecting
+   * its own proposals is a no-op, not a governance bypass.)
    */
   app.post("/proposals/:id/reject", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {

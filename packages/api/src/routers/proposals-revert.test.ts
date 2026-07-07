@@ -16,7 +16,11 @@ import { describe, it, expect, vi } from "vitest";
 // would otherwise pull in postgres/storage so the pure planner is importable in
 // isolation. The planner itself touches none of these.
 vi.mock("@synap/database", () => ({
-  db: {},
+  db: {
+    query: { proposals: { findFirst: vi.fn() } },
+    select: vi.fn(),
+    update: vi.fn(),
+  },
   EventRepository: class {},
   proposals: {},
   documents: {},
@@ -45,6 +49,7 @@ vi.mock("@synap/database/schema", () => ({
     APPROVED: "approved",
     REJECTED: "rejected",
     AUTO_APPROVED: "auto_approved",
+    REVERTED: "reverted",
   },
   workspaces: {},
   messages: {},
@@ -53,10 +58,19 @@ vi.mock("@synap/database/schema", () => ({
 vi.mock("@synap/storage", () => ({ storage: {} }));
 vi.mock("@synap/events", () => ({ emitSideEffects: vi.fn() }));
 vi.mock("./channels.js", () => ({ channelsRouter: {} }));
-vi.mock("./entities.js", () => ({ entitiesRouter: {} }));
-vi.mock("./relations.js", () => ({ relationsRouter: {} }));
-vi.mock("./documents.js", () => ({ documentsRouter: {} }));
+vi.mock("./entities.js", () => ({
+  entitiesRouter: { createCaller: () => ({ delete: vi.fn() }) },
+}));
+vi.mock("./relations.js", () => ({
+  relationsRouter: { createCaller: () => ({ delete: vi.fn() }) },
+}));
+vi.mock("./documents.js", () => ({
+  documentsRouter: { createCaller: () => ({ delete: vi.fn() }) },
+}));
 vi.mock("../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
+vi.mock("../utils/split-brain-service.js", () => ({
+  isPodReadOnly: vi.fn().mockResolvedValue(false),
+}));
 vi.mock("../utils/event-backed-proposal.js", () => ({
   createEventBackedProposal: vi.fn(),
 }));
@@ -78,6 +92,8 @@ vi.mock("@synap-core/core", () => ({
   }),
 }));
 
+import { db } from "@synap/database";
+import { proposalsRouter } from "./proposals.js";
 import { planProposalRevert } from "./proposals.js";
 
 describe("planProposalRevert", () => {
@@ -167,7 +183,7 @@ describe("planProposalRevert", () => {
     }
   });
 
-  it("FAILS LOUD on a delete proposal (hard delete, nothing to restore)", () => {
+  it("plans a restore for an entity delete proposal (entity deletes are soft-deletes)", () => {
     const plan = planProposalRevert({
       status: "approved",
       targetType: "entity",
@@ -178,6 +194,25 @@ describe("planProposalRevert", () => {
         targetType: "entity",
         changeType: "delete",
         data: { id: "44444444-4444-4444-4444-444444444444" },
+      },
+    });
+    expect(plan).toEqual({
+      kind: "restore-delete",
+      entityId: "44444444-4444-4444-4444-444444444444",
+    });
+  });
+
+  it("FAILS LOUD on a non-entity delete proposal (relation/document deletes are hard deletes)", () => {
+    const plan = planProposalRevert({
+      status: "approved",
+      targetType: "relation",
+      targetId: "66666666-6666-6666-6666-666666666666",
+      proposalType: "delete",
+      data: {
+        requestId: "r5",
+        targetType: "relation",
+        changeType: "delete",
+        data: { id: "66666666-6666-6666-6666-666666666666" },
       },
     });
     expect(plan.kind).toBe("unsupported");
@@ -195,5 +230,110 @@ describe("planProposalRevert", () => {
       data: { requestId: "r4", targetType: "relation", changeType: "create" },
     });
     expect(plan.kind).toBe("unsupported");
+  });
+});
+
+describe("proposalsRouter.revert — restoring an approved delete proposal", () => {
+  const entityId = "77777777-7777-7777-7777-777777777777";
+  const proposalId = "88888888-8888-8888-8888-888888888888";
+
+  function makeUpdateChain(returningRows: Array<{ id: string }>) {
+    // `db.update(...).set(...).where(...)` is awaited directly by the entity
+    // restore (no `.returning()` call); the proposal status flip additionally
+    // calls `.returning()`. A promise with a `.returning()` property satisfies
+    // both call shapes with one mock.
+    const whereResult = Promise.resolve(undefined) as Promise<unknown> & {
+      returning: () => Promise<Array<{ id: string }>>;
+    };
+    whereResult.returning = vi.fn().mockResolvedValue(returningRows);
+    return { set: vi.fn(() => ({ where: vi.fn(() => whereResult) })) };
+  }
+
+  function setUpMocks(entityDeletedAt: Date | null) {
+    (db as any).query.proposals.findFirst = vi.fn().mockResolvedValue({
+      id: proposalId,
+      status: "approved",
+      targetType: "entity",
+      targetId: entityId,
+      proposalType: "delete",
+      workspaceId: null,
+      data: {
+        requestId: "r-revert-1",
+        targetType: "entity",
+        changeType: "delete",
+        data: { id: entityId },
+      },
+    });
+    (db as any).select = vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi
+            .fn()
+            .mockResolvedValue([{ id: entityId, deletedAt: entityDeletedAt }]),
+        })),
+      })),
+    }));
+    (db as any).update = vi.fn(() => makeUpdateChain([{ id: proposalId }]));
+  }
+
+  it("clears deletedAt on the target entity and flips the proposal to reverted", async () => {
+    setUpMocks(new Date("2026-01-01T00:00:00Z"));
+
+    const caller = proposalsRouter.createCaller({
+      authenticated: true,
+      userId: "user-1",
+    } as any);
+
+    const result = await caller.revert({ proposalId });
+
+    expect(result.success).toBe(true);
+    expect((result as any).restoredEntityId).toBe(entityId);
+
+    // The entity restore is the FIRST db.update call; the proposal status
+    // flip is the second.
+    const updateCalls = (db.update as unknown as { mock: { calls: unknown[] } })
+      .mock.calls;
+    expect(updateCalls.length).toBe(2);
+    const restoreSetCalls = (
+      (db.update as any).mock.results[0].value.set as {
+        mock: { calls: unknown[][] };
+      }
+    ).mock.calls;
+    expect(restoreSetCalls[0]?.[0]).toMatchObject({ deletedAt: null });
+  });
+
+  it("is idempotent when the entity was already restored (deletedAt already null)", async () => {
+    setUpMocks(null);
+
+    const caller = proposalsRouter.createCaller({
+      authenticated: true,
+      userId: "user-1",
+    } as any);
+
+    const result = await caller.revert({ proposalId });
+
+    expect(result.success).toBe(true);
+    expect((result as any).restoredEntityId).toBe(entityId);
+    // Only the proposal status flip should call db.update — no redundant
+    // entity write when deletedAt is already null.
+    expect((db.update as any).mock.calls.length).toBe(1);
+  });
+
+  it("fails loud when the entity row no longer exists (permanently purged)", async () => {
+    setUpMocks(new Date());
+    (db as any).select = vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn().mockResolvedValue([]), // row gone — hard-purged
+        })),
+      })),
+    }));
+
+    const caller = proposalsRouter.createCaller({
+      authenticated: true,
+      userId: "user-1",
+    } as any);
+
+    await expect(caller.revert({ proposalId })).rejects.toThrow(/purged/i);
   });
 });

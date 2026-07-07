@@ -13,6 +13,7 @@ import {
   ADMIN_ACTIONS,
   DESTRUCTIVE_ACTIONS,
   PROPOSE_REASON,
+  findUnsafeAutoApproveEntries,
 } from "./index.js";
 
 describe("requiredPermissionFor", () => {
@@ -197,6 +198,8 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
     ).toEqual({ verdict: "execute" });
   });
   it("3. isAgentOwnedWorkspace: destructive → propose", () => {
+    // The 2.5 DESTRUCTIVE_ACTIONS hard floor now intercepts before rung 3,
+    // so the reason is the hard-floor reason, not the ownership-specific one.
     expect(
       decideAgentPolicy({
         subjectType: "entity",
@@ -205,7 +208,7 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
       })
     ).toEqual({
       verdict: "propose",
-      reason: PROPOSE_REASON.AGENT_OWNED_DESTRUCTIVE,
+      reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
     });
   });
   it("3. ADMIN_ACTIONS still propose before isAgentOwnedWorkspace (step 2 wins)", () => {
@@ -250,6 +253,7 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
   });
 
   it("6. agent-owned mode + destructive → propose (governanceMode path)", () => {
+    // Hard floor (2.5) intercepts before rung 6 too.
     const v = decideAgentPolicy({
       subjectType: "entity",
       action: "delete",
@@ -257,7 +261,7 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
     });
     expect(v).toEqual({
       verdict: "propose",
-      reason: PROPOSE_REASON.AGENT_OWNED_DESTRUCTIVE,
+      reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
     });
   });
   it("6. standard mode + destructive (not whitelisted) → default propose", () => {
@@ -266,7 +270,10 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
       action: "delete",
       governanceMode: "default",
     });
-    expect(v).toEqual({ verdict: "propose" });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+    });
   });
 
   it("7. channel block → deny; channel propose → propose; channel act → fall through", () => {
@@ -319,8 +326,103 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
   });
 
   it("9. default (not whitelisted, nothing else triggers) → propose with no preset reason", () => {
-    const v = decideAgentPolicy({ subjectType: "entity", action: "delete" });
+    // Use a non-destructive, non-whitelisted action so the 2.5 hard floor
+    // doesn't shadow the plain default-propose path this test targets.
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "archive_note",
+    });
     expect(v).toEqual({ verdict: "propose" });
+  });
+
+  it("2.5 DESTRUCTIVE_ACTIONS hard floor: default propose carries the hard-floor reason", () => {
+    const v = decideAgentPolicy({ subjectType: "entity", action: "delete" });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+    });
+  });
+});
+
+describe("decideAgentPolicy — 2.5 DESTRUCTIVE_ACTIONS hard floor", () => {
+  it("a broad autoApproveFor entry does NOT auto-approve delete/archive/purge", () => {
+    for (const broad of ["entity.delete", "entity.*", "*"]) {
+      for (const action of ["delete", "archive", "purge"]) {
+        const v = decideAgentPolicy({
+          subjectType: "entity",
+          action,
+          autoApproveFor: [broad],
+        });
+        expect(v).toEqual({
+          verdict: "propose",
+          reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+        });
+      }
+    }
+  });
+
+  it("a non-destructive action in the same broad autoApproveFor list still auto-approves", () => {
+    // Note: bare "*" is not a supported glob in matchesActionPattern (only
+    // exact match or "<subject>.*" prefix) — that's a pre-existing, separate
+    // matching rule, not something this hard floor changes. "entity.*" is the
+    // broad pattern that actually matches here.
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      autoApproveFor: ["entity.*"],
+    });
+    expect(v).toEqual({ verdict: "execute" });
+  });
+
+  it("isAgentOwnedWorkspace destructive is still gated by the hard floor", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "delete",
+      isAgentOwnedWorkspace: true,
+      autoApproveFor: ["*"],
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+    });
+  });
+
+  it("allowDestructiveAutoApprove:true lets a matching autoApproveFor entry execute a destructive action", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "delete",
+      autoApproveFor: ["entity.delete"],
+      allowDestructiveAutoApprove: true,
+    });
+    expect(v).toEqual({ verdict: "execute" });
+  });
+
+  it("allowDestructiveAutoApprove:true still proposes when no rung below would execute", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "delete",
+      allowDestructiveAutoApprove: true,
+    });
+    expect(v).toEqual({ verdict: "propose" });
+  });
+
+  it("allowDestructiveAutoApprove does not affect non-destructive actions", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      allowDestructiveAutoApprove: true,
+    });
+    expect(v.verdict).toBe("execute"); // unchanged: entity.create auto-approved as before
+  });
+
+  it("ADMIN_ACTIONS still precede the hard floor (step 2 wins)", () => {
+    // workspace.delete is both an ADMIN_ACTIONS verb and a DESTRUCTIVE_ACTIONS
+    // verb — rung 2 (ADMIN) must win and attribute the ADMIN reason.
+    const v = decideAgentPolicy({
+      subjectType: "workspace",
+      action: "delete",
+    });
+    expect(v).toEqual({ verdict: "propose", reason: PROPOSE_REASON.ADMIN });
   });
 });
 
@@ -472,7 +574,10 @@ describe("decideAgentPolicy — rung 2.6 per-capability governance", () => {
     ).toBe("execute");
     expect(
       decideAgentPolicy({ subjectType: "entity", action: "delete" })
-    ).toEqual({ verdict: "propose" });
+    ).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+    });
     // Explicitly null fields are also a no-op.
     expect(
       decideAgentPolicy({
@@ -579,6 +684,63 @@ describe("decideAgentPolicy — rung 2.6 per-capability governance", () => {
       agentCapabilities: ["entity.*"], // no capability.run → deny first
     });
     expect(v.verdict).toBe("deny");
+  });
+});
+
+describe("findUnsafeAutoApproveEntries", () => {
+  it("flags exact destructive verbs and subject.verb forms", () => {
+    expect(findUnsafeAutoApproveEntries(["delete"])).toEqual(["delete"]);
+    expect(findUnsafeAutoApproveEntries(["archive"])).toEqual(["archive"]);
+    expect(findUnsafeAutoApproveEntries(["purge"])).toEqual(["purge"]);
+    expect(findUnsafeAutoApproveEntries(["entity.delete"])).toEqual([
+      "entity.delete",
+    ]);
+    expect(findUnsafeAutoApproveEntries(["document.archive"])).toEqual([
+      "document.archive",
+    ]);
+  });
+
+  it("trims + lower-cases before matching (hygiene)", () => {
+    expect(findUnsafeAutoApproveEntries(["entity.DELETE"])).toEqual([
+      "entity.DELETE",
+    ]);
+    expect(findUnsafeAutoApproveEntries(["  delete "])).toEqual(["  delete "]);
+  });
+
+  it("ALLOWS wildcards — the destructive hard floor is the real backstop, and `*` is the Crazy preset", () => {
+    // Rung 2.5 in decideAgentPolicy blocks destructive auto-approval regardless
+    // of the whitelist, so a wildcard can never auto-approve a delete. The built-in
+    // "Crazy" governance preset is literally `["*"]`; rejecting it here would break
+    // saving that preset (regression). Wildcards therefore pass validation.
+    expect(findUnsafeAutoApproveEntries(["*"])).toEqual([]);
+    expect(findUnsafeAutoApproveEntries(["*.*"])).toEqual([]);
+    expect(findUnsafeAutoApproveEntries(["entity.*"])).toEqual([]);
+    expect(findUnsafeAutoApproveEntries(["tool.*"])).toEqual([]);
+    expect(findUnsafeAutoApproveEntries(["search.*"])).toEqual([]);
+  });
+
+  it("allows ordinary non-destructive entries", () => {
+    expect(
+      findUnsafeAutoApproveEntries([
+        "entity.create",
+        "entity.update",
+        "entity.read",
+        "document.create",
+        "memory.recall",
+        "filesystem.read",
+      ])
+    ).toEqual([]);
+  });
+
+  it("reports only explicit-destructive entries in a mixed list, leaving safe ones (incl. wildcards) out", () => {
+    expect(
+      findUnsafeAutoApproveEntries([
+        "entity.create",
+        "entity.delete",
+        "search.*",
+        "*",
+      ])
+    ).toEqual(["entity.delete"]);
   });
 });
 

@@ -1153,6 +1153,39 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
 };
 
 /**
+ * Verb name → its Zod param schema (the SINGLE source of truth for what params a
+ * handler accepts). Paired with BUILTIN_VERBS above. A CI coherence test
+ * (`catalog-schema-coherence.tripwire.test.ts`) asserts every key here is
+ * advertised in the seeded catalog (`ensure-synap-core.ts`), so the handler's
+ * real contract and the discoverable catalog can never silently drift again
+ * (the class of bug that left `channel.resolve.branchPurpose` +
+ * `channel.create.metadata` + `feed.post.metadata` + `output.generate.options`
+ * undiscoverable). feed.read parses its params inline and is intentionally
+ * absent — the test skips verbs with no schema here.
+ */
+export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
+  string,
+  { readonly shape: Record<string, unknown> }
+> = {
+  "channel.create": channelCreateParams,
+  "feed.post": feedPostParams,
+  "output.generate": outputGenerateParams,
+  "ai.triage": aiTriageParams,
+  "ai.generate": aiGenerateParams,
+  "entity.query": entityQueryParams,
+  "channel.resolve": channelResolveParams,
+  "channel.ensure": channelEnsureParams,
+  "channel.bind": channelBindParams,
+  "graph.relations": graphRelationsParams,
+  "graph.link": graphLinkParams,
+  "entity.create": entityCreateParams,
+  "entity.update": entityUpdateParams,
+  "document.create": documentCreateParams,
+  "document.update": documentUpdateParams,
+  "document.read": documentReadParams,
+};
+
+/**
  * The READ-ONLY builtin verbs — those whose execution only READS (no mutation).
  * executeCapability consults this set to mark the capability gate `readOnly`, so
  * a read auto-runs (no grant, no propose) once it clears the approval gate; its

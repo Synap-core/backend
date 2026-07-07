@@ -6,6 +6,7 @@
  */
 
 import type { OpenAPIHono } from "@hono/zod-openapi";
+import type { Context } from "hono";
 import { createLogger } from "@synap-core/core";
 import {
   db,
@@ -81,6 +82,41 @@ export type HubHono = OpenAPIHono<{ Variables: HubVariables }>;
  */
 export function hasScope(scopes: string[], required: string): boolean {
   return scopes.includes(required);
+}
+
+/**
+ * SECURITY — reject a proposal REVIEW action (approve / revert) performed with
+ * an AGENT credential. A Hub key linked to an agent user is remapped to its
+ * human owner for entity ownership (see hub-protocol-rest.ts — `userId` becomes
+ * the owner, `agentUserId` keeps the agent). Approval/revert is the HUMAN review
+ * step. Without this an agent key could create-then-self-approve (or self-revert)
+ * its own proposals — including destructive deletes — because the remap makes the
+ * default `owner_and_admins` gate's `isOwner` check (`sourceId === userId`)
+ * trivially pass. Human review must come from a human session, not an agent key.
+ *
+ * Returns a 403 `Response` to return from the handler when the caller is an agent
+ * credential (and logs the blocked attempt — a meaningful security signal), else
+ * `null` to continue. The SINGLE source of truth for this guard across every
+ * review door. TODO: a future "trusted reviewer agent" could be an explicit,
+ * audited opt-in that bypasses this.
+ */
+export function rejectAgentReviewer(
+  c: Context<{ Variables: HubVariables }>,
+  action: "approve" | "revert"
+): Response | null {
+  const agentUserId = c.get("agentUserId");
+  if (!agentUserId) return null;
+  logger.warn(
+    { agentUserId, proposalId: c.req.param("id"), action },
+    "agent credential attempted to review a proposal — blocked (human review required)"
+  );
+  const Verb = action[0].toUpperCase() + action.slice(1);
+  return c.json(
+    {
+      error: `An agent credential cannot ${action} proposals — ${action} is human review. ${Verb} from a human session.`,
+    },
+    403
+  );
 }
 
 /**

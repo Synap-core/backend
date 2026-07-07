@@ -807,6 +807,10 @@ async function resolveMessagingAccountForPlatform(
  *
  * Update/edit proposals carry no recoverable before-snapshot, so reverting them
  * is `unsupported` and the mutation FAILS LOUD rather than fabricating a state.
+ *
+ *   - "restore-delete" → the proposal DELETED an entity; entity deletes in this
+ *     codebase are SOFT deletes (`entities.deletedAt`), so the inverse is to
+ *     clear `deletedAt` — the row survives unless it was later hard-purged.
  */
 export type ProposalRevertPlan =
   | {
@@ -815,6 +819,7 @@ export type ProposalRevertPlan =
       relationIds: string[];
       documentIds: string[];
     }
+  | { kind: "restore-delete"; entityId: string }
   | { kind: "unsupported"; reason: string };
 
 /**
@@ -886,13 +891,18 @@ export function planProposalRevert(
   }
 
   // Delete/archive: undoing a delete means RESTORING the target. Entity deletes
-  // in this codebase are HARD deletes (no soft-delete row survives), so there is
-  // nothing to restore — fail loud rather than silently no-op.
+  // in this codebase are SOFT deletes (entities.ts sets `deletedAt`, the row
+  // survives) — so an entity delete can be reverted by clearing `deletedAt`.
+  // Whether the row is STILL restorable (not later hard-purged) is checked at
+  // execution time in the `revert` mutation, since that requires a DB read.
+  // Document/relation deletes are hard deletes today — no recoverable target.
   if (isDelete) {
+    if (proposal.targetType === "entity" && proposal.targetId) {
+      return { kind: "restore-delete", entityId: proposal.targetId };
+    }
     return {
       kind: "unsupported",
-      reason:
-        "Revert of a delete proposal is not supported: deletes are hard-deletes with no recoverable before-snapshot to restore.",
+      reason: `Revert of a '${proposal.targetType}' delete proposal is not supported: no recoverable soft-delete for this target type.`,
     };
   }
 
@@ -1870,60 +1880,92 @@ export const proposalsRouter = router({
         revertCtx as unknown as Context
       );
 
-      // Apply the inverse through the SAME canonical routers approve uses, so the
-      // undo is governed and emits its own delete events. Each delete is
-      // idempotent (entities.delete soft/hard-deletes by id; relations/documents
-      // delete by id) so a partial earlier revert can be retried safely.
+      // Apply the inverse. Two shapes:
+      //   - "delete-creations": the proposal CREATED rows — undo by deleting
+      //     them through the SAME canonical routers approve uses, so the undo
+      //     is governed and emits its own delete events. Idempotent (entities
+      //     delete soft/hard-deletes by id; relations/documents delete by id)
+      //     so a partial earlier revert can be retried safely.
+      //   - "restore-delete": the proposal DELETED an entity (soft-delete) —
+      //     undo by clearing `deletedAt` directly, guarded against the row
+      //     having since been hard-purged.
       const deleted: ProposalMaterializedRecord = {
         entityIds: [],
         relationIds: [],
         documentIds: [],
       };
       const failures: string[] = [];
+      let restoredEntityId: string | undefined;
 
-      for (const relationId of plan.relationIds) {
-        try {
-          await relationCaller.delete({ id: relationId });
-          deleted.relationIds!.push(relationId);
-        } catch (err) {
-          logger.warn({ err, relationId }, "revert: relation delete failed");
-          failures.push(`relation ${relationId}`);
-        }
-      }
-      for (const entityId of plan.entityIds) {
-        try {
-          await entityCaller.delete({ id: entityId });
-          deleted.entityIds!.push(entityId);
-        } catch (err) {
-          logger.warn({ err, entityId }, "revert: entity delete failed");
-          failures.push(`entity ${entityId}`);
-        }
-      }
-      for (const documentId of plan.documentIds) {
-        try {
-          await documentCaller.delete({ documentId });
-          deleted.documentIds!.push(documentId);
-        } catch (err) {
-          logger.warn({ err, documentId }, "revert: document delete failed");
-          failures.push(`document ${documentId}`);
-        }
-      }
+      if (plan.kind === "restore-delete") {
+        const [entityRow] = await db
+          .select({ id: entities.id, deletedAt: entities.deletedAt })
+          .from(entities)
+          .where(eq(entities.id, plan.entityId))
+          .limit(1);
 
-      // If we mapped rows to undo but EVERY delete failed, treat the revert as
-      // failed rather than flipping the proposal to reverted with no effect.
-      const attempted =
-        plan.entityIds.length +
-        plan.relationIds.length +
-        plan.documentIds.length;
-      const succeeded =
-        deleted.entityIds!.length +
-        deleted.relationIds!.length +
-        deleted.documentIds!.length;
-      if (attempted > 0 && succeeded === 0) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: `Revert failed — could not undo: ${failures.join(", ")}`,
-        });
+        if (!entityRow) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message:
+              "Cannot restore — the entity was permanently purged and no longer exists.",
+          });
+        }
+
+        if (entityRow.deletedAt !== null) {
+          await db
+            .update(entities)
+            .set({ deletedAt: null, updatedAt: new Date() })
+            .where(eq(entities.id, plan.entityId));
+        }
+        // else: already restored (e.g. a concurrent revert won) — idempotent no-op.
+
+        restoredEntityId = plan.entityId;
+      } else {
+        for (const relationId of plan.relationIds) {
+          try {
+            await relationCaller.delete({ id: relationId });
+            deleted.relationIds!.push(relationId);
+          } catch (err) {
+            logger.warn({ err, relationId }, "revert: relation delete failed");
+            failures.push(`relation ${relationId}`);
+          }
+        }
+        for (const entityId of plan.entityIds) {
+          try {
+            await entityCaller.delete({ id: entityId });
+            deleted.entityIds!.push(entityId);
+          } catch (err) {
+            logger.warn({ err, entityId }, "revert: entity delete failed");
+            failures.push(`entity ${entityId}`);
+          }
+        }
+        for (const documentId of plan.documentIds) {
+          try {
+            await documentCaller.delete({ documentId });
+            deleted.documentIds!.push(documentId);
+          } catch (err) {
+            logger.warn({ err, documentId }, "revert: document delete failed");
+            failures.push(`document ${documentId}`);
+          }
+        }
+
+        // If we mapped rows to undo but EVERY delete failed, treat the revert
+        // as failed rather than flipping the proposal to reverted with no effect.
+        const attempted =
+          plan.entityIds.length +
+          plan.relationIds.length +
+          plan.documentIds.length;
+        const succeeded =
+          deleted.entityIds!.length +
+          deleted.relationIds!.length +
+          deleted.documentIds!.length;
+        if (attempted > 0 && succeeded === 0) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `Revert failed — could not undo: ${failures.join(", ")}`,
+          });
+        }
       }
 
       const revertedAt = new Date();
@@ -1965,14 +2007,20 @@ export const proposalsRouter = router({
       if (flipped.length === 0) {
         // A concurrent revert won; the rows are already undone. Report success
         // without double-auditing.
-        return { success: true, reverted: deleted, alreadyReverted: true };
+        return {
+          success: true,
+          reverted: deleted,
+          alreadyReverted: true,
+          ...(restoredEntityId ? { restoredEntityId } : {}),
+        };
       }
 
       // Audit the undo: a record that this proposal was reverted, plus a
-      // best-effort delete.completed for the target subject for attribution.
+      // best-effort delete.completed / restore.completed for the target
+      // subject for attribution.
       await auditLog({
         subjectType: "proposal",
-        action: "delete",
+        action: restoredEntityId ? "restore" : "delete",
         phase: "completed",
         subjectId: input.proposalId,
         userId,
@@ -1984,13 +2032,25 @@ export const proposalsRouter = router({
           deletedEntityIds: deleted.entityIds,
           deletedRelationIds: deleted.relationIds,
           deletedDocumentIds: deleted.documentIds,
+          ...(restoredEntityId ? { restoredEntityId } : {}),
         },
         source: "api",
       });
 
+      if (restoredEntityId) {
+        emitSideEffects({
+          subjectType: "entity",
+          action: "restore",
+          subjectId: restoredEntityId,
+          userId,
+          workspaceId: proposal.workspaceId ?? undefined,
+        });
+      }
+
       return {
         success: true,
         reverted: deleted,
+        ...(restoredEntityId ? { restoredEntityId } : {}),
         ...(failures.length > 0 ? { partialFailures: failures } : {}),
       };
     }),

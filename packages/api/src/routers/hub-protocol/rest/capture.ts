@@ -66,6 +66,7 @@ import {
   logger,
   type HubHono,
 } from "./_shared.js";
+import { collapseDuplicateEntities } from "./capture-graph-dedup.js";
 
 export function registerCaptureRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -753,7 +754,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       }
       refs.add(e.ref);
     }
-    const relations = Array.isArray(body.relations) ? body.relations : [];
+    let relations = Array.isArray(body.relations) ? body.relations : [];
     for (const r of relations) {
       if (!refs.has(r.sourceRef) || !refs.has(r.targetRef)) {
         return c.json(
@@ -764,7 +765,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         );
       }
     }
-    const bindings = Array.isArray(body.bindings) ? body.bindings : [];
+    let bindings = Array.isArray(body.bindings) ? body.bindings : [];
     for (const b of bindings) {
       if (!b.externalChannelId || !b.entityRef) {
         return c.json(
@@ -780,13 +781,28 @@ export function registerCaptureRoutes(app: HubHono): void {
       }
     }
 
+    // WITHIN-BATCH DEDUP: the agent may list the same person/company under two
+    // different `ref`s (neither persisted yet, so the persisted-dedup block
+    // below can't catch it). Collapse those before resolving against the DB —
+    // see capture-graph-dedup.ts for the exact key + rewrite semantics.
+    const collapsed = collapseDuplicateEntities(
+      body.entities,
+      relations,
+      bindings
+    );
+    const graphEntities = collapsed.entities;
+    relations = collapsed.relations;
+    bindings = collapsed.bindings;
+
     // IDEMPOTENCY: dedup against existing entities by (profileSlug, title) so a
     // re-run of /onboard (or accepting two proposals) LINKS to the existing
     // company/client/contact instead of creating a duplicate. We only resolve
     // entities the agent didn't already pin via existingEntityId. Defense-in-depth
-    // on top of the agent's own "reuse existing" instruction.
-    const toResolve = body.entities.filter((e) => !e.existingEntityId);
-    if (toResolve.length > 0 && body.workspaceId) {
+    // on top of the agent's own "reuse existing" instruction. Runs regardless of
+    // workspaceId — a pod-wide capture (no workspaceId) still needs to dedup
+    // against pod-wide entities.
+    const toResolve = graphEntities.filter((e) => !e.existingEntityId);
+    if (toResolve.length > 0) {
       const wantTitles = new Set(
         toResolve.map((e) => (e.title ?? e.ref).trim().toLowerCase())
       );
@@ -805,13 +821,17 @@ export function registerCaptureRoutes(app: HubHono): void {
           .innerJoin(profiles, eq(entities.profileId, profiles.id))
           .where(
             and(
-              // Match BOTH workspace-scoped AND pod-wide entities — a pod-wide
-              // company must dedup too, else /onboard re-runs shadow it with a
-              // workspace-scoped duplicate.
-              or(
-                eq(entities.workspaceId, body.workspaceId),
-                isNull(entities.workspaceId)
-              ),
+              // With a workspaceId: match BOTH workspace-scoped AND pod-wide
+              // entities — a pod-wide company must dedup too, else /onboard
+              // re-runs shadow it with a workspace-scoped duplicate. Without a
+              // workspaceId, there's no workspace to scope to — match pod-wide
+              // entities only (eq(..., undefined) would be invalid SQL).
+              body.workspaceId
+                ? or(
+                    eq(entities.workspaceId, body.workspaceId),
+                    isNull(entities.workspaceId)
+                  )
+                : isNull(entities.workspaceId),
               isNull(entities.deletedAt)
             )
           )
@@ -849,7 +869,7 @@ export function registerCaptureRoutes(app: HubHono): void {
 
     try {
       const operations: CompositeProposalOperation[] = [
-        ...body.entities.map((e) => ({
+        ...graphEntities.map((e) => ({
           op: "create_entity" as const,
           ref: e.ref,
           profileSlug: e.profileSlug,
@@ -872,7 +892,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         : "";
       const summary =
         body.summary ??
-        `Proposed graph: ${body.entities.length} entit${body.entities.length === 1 ? "y" : "ies"}, ${relations.length} link${relations.length === 1 ? "" : "s"}${bindingNote}`;
+        `Proposed graph: ${graphEntities.length} entit${graphEntities.length === 1 ? "y" : "ies"}, ${relations.length} link${relations.length === 1 ? "" : "s"}${bindingNote}`;
 
       const { proposal: created } = await createEventBackedProposal({
         userId,
@@ -897,7 +917,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         {
           userId,
           workspaceId: body.workspaceId,
-          entityCount: body.entities.length,
+          entityCount: graphEntities.length,
           relationCount: relations.length,
           proposalId,
         },
@@ -905,7 +925,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       );
       return c.json({
         proposalId,
-        entityCount: body.entities.length,
+        entityCount: graphEntities.length,
         relationCount: relations.length,
         bindingCount: bindings.length,
         reviewUrl,

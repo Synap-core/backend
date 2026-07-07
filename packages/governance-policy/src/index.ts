@@ -21,10 +21,17 @@
  * to be an agent user):
  *   1. CBAC capability allowlist  → deny if the agent lacks the capability
  *   2. ADMIN_ACTIONS              → always propose (even for owned workspace)
- *   2.5 user_observation by KIND  → INFERENCE propose / EXPLICIT execute
+ *   2.5 DESTRUCTIVE_ACTIONS hard floor → always propose (delete/archive/purge),
+ *                                    regardless of ANY override rung below
+ *                                    (ownership, explicit autoApproveFor,
+ *                                     DEFAULT_AUTO_APPROVE, capability
+ *                                     governance). EXCEPTION: caller opts in
+ *                                     via `allowDestructiveAutoApprove` (the
+ *                                     future "Crazy" mode) — see below.
+ *   2.6 user_observation by KIND  → INFERENCE propose / EXPLICIT execute
  *                                    (governs by the observation's nature, NOT
  *                                     the routing workspace — see below)
- *   2.6 per-capability governance → auto execute / propose / block deny
+ *   2.7 per-capability governance → auto execute / propose / block deny
  *                                    (capability RUNS only; no-ops for data
  *                                     writes; a channel grant may still tighten
  *                                     an "auto" capability — see below)
@@ -299,6 +306,37 @@ export function findMatchingPattern(
   );
 }
 
+/**
+ * Validate a caller-supplied `autoApproveFor` list for entries that EXPLICITLY
+ * name a DESTRUCTIVE action (delete/archive/purge). Used by the write-side gates
+ * (agent-users governance PATCH, workspace settings writer) to reject a grant
+ * BEFORE it is persisted.
+ *
+ * Only explicit destructive verbs are rejected — e.g. "delete", "purge",
+ * "entity.delete", "document.archive". Wildcards ("*", "*.*", "entity.*") are
+ * ALLOWED: the `decideAgentPolicy` DESTRUCTIVE_ACTIONS hard floor (rung 2.5) is
+ * the real backstop — it blocks destructive auto-approval regardless of the
+ * whitelist, so no wildcard can ever auto-approve a delete. Rejecting wildcards
+ * here (an earlier iteration did) would break the built-in "Crazy" governance
+ * preset, whose value is literally `["*"]`. This validator therefore only stops
+ * an operator from EXPLICITLY listing a destructive verb — a setting the floor
+ * would silently override anyway, so blocking it keeps the config honest.
+ *
+ * Entries are trimmed + lower-cased before matching. Returns the (original)
+ * entries that failed validation (empty = all OK).
+ */
+export function findUnsafeAutoApproveEntries(
+  entries: readonly string[]
+): string[] {
+  return entries.filter((raw) => {
+    const entry = raw.trim().toLowerCase();
+    const action = entry.includes(".")
+      ? entry.slice(entry.lastIndexOf(".") + 1)
+      : entry;
+    return (DESTRUCTIVE_ACTIONS as readonly string[]).includes(action);
+  });
+}
+
 /** True if the event key is auto-approved by the (possibly overridden) whitelist. */
 export function isAutoApproved(
   eventKey: string,
@@ -422,7 +460,7 @@ export interface AgentPolicyInput {
    * CAPABILITY EXECUTION (tool/skill/command run) rather than a data write.
    * Sourced from the capability read-model's `governance` field (today derived
    * from the tool/skill `approved` column) once it is backed by persisted state.
-   * Absent → not a capability run → rung 2.6 no-ops (data-write paths unchanged).
+   * Absent → not a capability run → rung 2.7 no-ops (data-write paths unchanged).
    */
   capabilityGovernance?: "auto" | "propose" | "block" | null;
   /**
@@ -430,7 +468,7 @@ export interface AgentPolicyInput {
    * ExecMode` — the PERSISTABLE truth: `auto | propose`). Narrows the
    * capability's own approval-state for THIS grant: "propose" forces a reviewable
    * per-run proposal even if the capability is "auto". When present it takes
-   * precedence over capabilityGovernance in rung 2.6.
+   * precedence over capabilityGovernance in rung 2.7.
    *
    * NOTE: exec-mode lives in TWO layers. `dry-run` is the third persistable
    * grant_exec_mode value but is a GATE-level concern — `gateCapabilityExecution`
@@ -450,6 +488,18 @@ export interface AgentPolicyInput {
    * path below. Absent/false → no effect (all existing verdicts unchanged).
    */
   forcePropose?: boolean;
+  /**
+   * Explicit opt-in that lets a DESTRUCTIVE action (delete/archive/purge) be
+   * resolved to "execute" by a downstream override rung (ownership, explicit
+   * autoApproveFor, DEFAULT_AUTO_APPROVE, capability governance). Absent/false
+   * (the default) → destructive actions ALWAYS propose, mirroring the
+   * ADMIN_ACTIONS hard floor. This is the raw escape hatch for the future
+   * "Crazy" mode (GOVERNANCE_MODES.crazy), where modes are not yet first-class
+   * on the agent/workspace record.
+   * TODO: wire to a first-class Crazy mode instead of a raw boolean once
+   * GOVERNANCE_MODES becomes a persisted, resolvable setting.
+   */
+  allowDestructiveAutoApprove?: boolean;
 }
 
 /**
@@ -476,6 +526,8 @@ export const PROPOSE_REASON = {
   CAPABILITY_PROPOSE: "Capability execution requires human approval.",
   SCOPE_IDENTITY_CHANGE:
     "This change alters the record's scope or identity and requires human approval.",
+  DESTRUCTIVE_HARD_FLOOR:
+    "Destructive action (delete/archive/purge) always requires human approval.",
 } as const;
 
 const CHANNEL_BLOCK_REASON =
@@ -521,7 +573,27 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     return { verdict: "propose", reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE };
   }
 
-  // 2.5 GOVERNANCE BY KIND — user_observation.
+  // 2.5 DESTRUCTIVE_ACTIONS hard floor — mirrors ADMIN_ACTIONS: a destructive
+  // action (delete/archive/purge) can NEVER be resolved to "execute" by ANY
+  // override rung below — ownership (rung 3), explicit autoApproveFor
+  // (rung 4), capability governance (rung 2.7), or DEFAULT_AUTO_APPROVE
+  // (rung 8). Without this floor, an operator whitelisting a broad pattern
+  // like "entity.*" or "*" via autoApproveFor would silently auto-approve
+  // deletes (rung 4 had no destructive check, unlike rungs 3 and 6).
+  // EXCEPTION: `allowDestructiveAutoApprove` is the raw opt-in for the future
+  // "Crazy" mode. Default (absent/false) → always propose.
+  // TODO: wire to a first-class Crazy mode instead of a raw boolean.
+  if (
+    DESTRUCTIVE_ACTIONS.includes(action) &&
+    input.allowDestructiveAutoApprove !== true
+  ) {
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR,
+    };
+  }
+
+  // 2.6 GOVERNANCE BY KIND — user_observation.
   // A `user_observation` entity is governed by the NATURE of the observation,
   // not by the routing workspace: an INFERENCE (AI-inferred about the user) is
   // always proposed for human validation; an EXPLICIT observation (user-stated,
@@ -543,7 +615,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
         };
   }
 
-  // 2.6 PER-CAPABILITY GOVERNANCE (capability runs only).
+  // 2.7 PER-CAPABILITY GOVERNANCE (capability runs only).
   // Fires ONLY when `capabilityGovernance` is present — i.e. the gate resolved a
   // tool/skill/command RUN. Orthogonal to DATA writes: a plain entity.create
   // carries no `capabilityGovernance`, so this rung no-ops for every data write
