@@ -38,6 +38,7 @@ import {
 
 import { requireUserId } from "../utils/user-scoped.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
+import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { randomUUID } from "crypto";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects, getBoss } from "@synap/events";
@@ -763,10 +764,9 @@ export const documentsRouter = router({
    */
   list: protectedProcedure
     .input(
-      z.object({
+      paginatedInput.extend({
         projectId: z.string().optional(),
         type: DocumentTypeSchema.optional(),
-        limit: z.number().min(1).max(100).default(50),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -794,9 +794,16 @@ export const documentsRouter = router({
         .from(documents)
         .where(and(...conditions))
         .orderBy(desc(documents.updatedAt))
-        .limit(input.limit);
+        .limit(input.limit + 1)
+        .offset(input.offset);
 
-      return { documents: docs, total: docs.length };
+      const { items, pagination } = buildPaginatedResponse(docs, input);
+
+      return {
+        documents: items,
+        total: items.length,
+        pagination,
+      };
     }),
 
   /**
