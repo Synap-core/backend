@@ -633,8 +633,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
       "Returns the entity row by ID. Verifies workspace access on shared pods.",
     request: {
       params: z.object({ id: z.string() }),
+      // No workspaceId: a single-entity fetch resolves visibility from the user
+      // floor (verified below against the entity's OWN workspace), never the
+      // caller's lens. The param was accepted and advertised in OpenAPI but the
+      // handler never read it.
       query: z.object({
-        workspaceId: z.string().optional(),
         userId: z.string().optional(),
       }),
     },

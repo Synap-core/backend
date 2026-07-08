@@ -14,7 +14,6 @@ import {
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
   getCaller,
-  getUserAccessibleWorkspaceIds,
   hasScope,
   logger,
   resolveActorId,
@@ -157,9 +156,11 @@ export function registerDocumentsRoutes(app: HubHono): void {
       return c.json({ error: "userId query is required" }, 400);
     }
     try {
-      const effectiveWsId =
-        (await getUserAccessibleWorkspaceIds(userId))[0] || undefined;
-      const caller = await getCaller(c, { workspaceId: effectiveWsId, userId });
+      // A single-document fetch resolves visibility from the user floor —
+      // verified below against the document's OWN workspace. No lens is threaded
+      // in: documents.get ignores ctx.workspaceId, so the previous "first
+      // accessible workspace" pick was dead and misleading.
+      const caller = await getCaller(c, { userId });
       const result = await caller.documents.getDocument({
         documentId,
         userId,
