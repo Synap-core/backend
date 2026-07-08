@@ -11,7 +11,7 @@
     "@hono/node-server": "^1.19.12",
     "@synap-core/core": "workspace:*",
     "@synap-core/hub-protocol": "workspace:*",
-    "@synap-core/workspace-templates": "^0.4.0",
+    "@synap-core/workspace-templates": "latest",
     "@synap/api": "workspace:*",
     "@synap/auth": "workspace:*",
     "@synap/database": "workspace:*",

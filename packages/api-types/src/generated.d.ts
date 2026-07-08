@@ -17336,13 +17336,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				grantId: string;
 				secretId: string;
 				secretName: string | null;
+				secretType: "identity" | "password" | "api_key" | "credential" | "note" | "card" | "ssh_key" | "certificate" | "env_variable" | "database" | "oauth" | null;
 				execMode: "auto" | "propose" | "dry-run";
 				grantedTo: string | null;
+				granteeLabel: string | null;
+				granteeType: "user" | "workspace" | "agent";
 				proposalId: string | null;
 				scope: "session" | "once" | "permanent";
 				expiresAt: string | null;
 				maxUses: number | null;
 				useCount: number;
+				usesRemaining: number | null;
+				workspaceId: string | null;
 				revokedAt: string | null;
 				createdAt: string;
 				active: boolean;

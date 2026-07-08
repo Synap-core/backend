@@ -68,6 +68,8 @@ export interface ReconcileReport {
     added: Array<{ profile: string; slug: string }>;
     /** Already present (same slug, same type) — left as-is. */
     skipped: Array<{ profile: string; slug: string }>;
+    /** Existing property whose enum options were synced to the template (values added). */
+    enumsUpdated: Array<{ profile: string; slug: string }>;
     /** Template type differs from the live type — NOT changed; needs a decision. */
     conflicts: Array<{
       profile: string;
@@ -123,7 +125,7 @@ export async function reconcileWorkspaceFromDefinition(
     dryRun,
     settings: { merged: [] },
     profiles: { added: [], reused: [] },
-    properties: { added: [], skipped: [], conflicts: [] },
+    properties: { added: [], skipped: [], enumsUpdated: [], conflicts: [] },
     views: { added: [], skipped: [], deferred: [] },
     entityLinks: { added: [], skipped: [], unresolved: [] },
   };
@@ -248,10 +250,51 @@ export async function reconcileWorkspaceFromDefinition(
             templateType: String(prop.valueType),
           });
         } else {
-          report.properties.skipped.push({
-            profile: profile.slug,
-            slug: prop.slug,
-          });
+          // Same slug + same type → the property EXISTS. Sync its enum options to
+          // the template when they drift — a non-destructive UNION (template order
+          // first, then any operator-added values not in the template). This lets a
+          // newly-added template value (e.g. a `prospect` entry status) appear in
+          // EXISTING workspaces' pickers without dropping anything. valueType /
+          // constraints are never mutated here (that stays a reported conflict).
+          const liveHints =
+            (live.uiHints as Record<string, unknown> | undefined) ?? undefined;
+          const liveEnum = Array.isArray(liveHints?.enumValues)
+            ? (liveHints!.enumValues as string[])
+            : undefined;
+          const tplEnum = Array.isArray(prop.enumValues)
+            ? (prop.enumValues as string[])
+            : undefined;
+          if (tplEnum && tplEnum.length) {
+            const merged = [
+              ...tplEnum,
+              ...(liveEnum ?? []).filter((v) => !tplEnum.includes(v)),
+            ];
+            const changed =
+              !liveEnum ||
+              merged.length !== liveEnum.length ||
+              merged.some((v, idx) => v !== liveEnum[idx]);
+            if (changed) {
+              if (!dryRun) {
+                await propDefRepo.update(live.id, {
+                  uiHints: { ...(liveHints ?? {}), enumValues: merged },
+                });
+              }
+              report.properties.enumsUpdated.push({
+                profile: profile.slug,
+                slug: prop.slug,
+              });
+            } else {
+              report.properties.skipped.push({
+                profile: profile.slug,
+                slug: prop.slug,
+              });
+            }
+          } else {
+            report.properties.skipped.push({
+              profile: profile.slug,
+              slug: prop.slug,
+            });
+          }
         }
         continue;
       }
