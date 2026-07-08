@@ -18,6 +18,7 @@ import {
   sql,
   eq,
   and,
+  isNull,
   inArray,
   drizzleSql,
   getWorkspaceMembership,
@@ -796,7 +797,9 @@ export const secretsVaultRouter = router({
         repo.getCompromisedCount(ctx.userId),
         repo.getWeakPasswordsCount(ctx.userId),
         repo.getOldPasswordsCount(ctx.userId, 90),
-        repo.list(ctx.userId, { limit: 1 }).then((r: unknown[]) => r.length),
+        // Real owner-scoped count(*) of non-deleted secrets — the old
+        // `list({ limit: 1 }).length` was capped at 1.
+        repo.getTotalCount(ctx.userId),
       ]
     );
 
@@ -1069,11 +1072,13 @@ export const secretsVaultRouter = router({
    */
   listAllGrants: protectedProcedure.query(async ({ ctx }) => {
     const owned = await db.query.secrets.findMany({
-      where: eq(secrets.userId, ctx.userId),
-      columns: { id: true, name: true },
+      // Exclude soft-deleted secrets — a grant on a deleted secret is dead
+      // (resolveVaultSecret returns null), so it must not show as active access.
+      where: and(eq(secrets.userId, ctx.userId), isNull(secrets.deletedAt)),
+      columns: { id: true, name: true, type: true },
     });
     if (owned.length === 0) return [];
-    const nameById = new Map(owned.map((s) => [s.id, s.name]));
+    const secretById = new Map(owned.map((s) => [s.id, s]));
 
     // Owner's "who has AI access to which of MY secrets" view — secret-kind
     // grants whose grantableId is one of the caller's owned secrets.
@@ -1088,25 +1093,62 @@ export const secretsVaultRouter = router({
       orderBy: (t, { desc }) => [desc(t.createdAt)],
     });
 
+    // Resolve grantee type (user vs agent) + display label with ONE batched
+    // users lookup — same pattern as getDetailBundle's actor resolution. A
+    // grant may be workspace-scoped (grantedTo null); those resolve to a null
+    // label and a "workspace" granteeType.
+    const granteeIds = [
+      ...new Set(
+        rows.map((g) => g.grantedTo).filter((id): id is string => !!id)
+      ),
+    ];
+    const granteeRows = granteeIds.length
+      ? await db.query.users.findMany({
+          where: inArray(users.id, granteeIds),
+          columns: { id: true, name: true, email: true, userType: true },
+        })
+      : [];
+    const granteeById = new Map(granteeRows.map((u) => [u.id, u]));
+
     const now = Date.now();
-    return rows.map((g) => ({
-      grantId: g.id,
-      secretId: g.grantableId,
-      secretName: nameById.get(g.grantableId) ?? null,
-      execMode: g.execMode,
-      grantedTo: g.grantedTo,
-      proposalId: g.proposalId,
-      scope: g.scope,
-      expiresAt: g.expiresAt ? g.expiresAt.toISOString() : null,
-      maxUses: g.maxUses,
-      useCount: g.useCount,
-      revokedAt: g.revokedAt ? g.revokedAt.toISOString() : null,
-      createdAt: g.createdAt.toISOString(),
-      active:
-        !g.revokedAt &&
-        (!g.expiresAt || g.expiresAt.getTime() > now) &&
-        (g.maxUses == null || g.useCount < g.maxUses),
-    }));
+    return rows.map((g) => {
+      const secret = secretById.get(g.grantableId);
+      const grantee = g.grantedTo ? granteeById.get(g.grantedTo) : undefined;
+      const granteeType: "user" | "agent" | "workspace" = g.grantedTo
+        ? grantee?.userType === "agent"
+          ? "agent"
+          : "user"
+        : "workspace";
+      return {
+        grantId: g.id,
+        secretId: g.grantableId,
+        secretName: secret?.name ?? null,
+        secretType: secret?.type ?? null,
+        execMode: g.execMode,
+        grantedTo: g.grantedTo,
+        // Resolved grantee display name (name → email → raw id). Null for a
+        // workspace-scoped grant with no specific principal.
+        granteeLabel: g.grantedTo
+          ? (grantee?.name ?? grantee?.email ?? g.grantedTo)
+          : null,
+        granteeType,
+        proposalId: g.proposalId,
+        scope: g.scope,
+        expiresAt: g.expiresAt ? g.expiresAt.toISOString() : null,
+        maxUses: g.maxUses,
+        useCount: g.useCount,
+        // Uses remaining: null = unlimited; clamped at 0 when exhausted.
+        usesRemaining:
+          g.maxUses == null ? null : Math.max(0, g.maxUses - g.useCount),
+        workspaceId: g.workspaceId ?? null,
+        revokedAt: g.revokedAt ? g.revokedAt.toISOString() : null,
+        createdAt: g.createdAt.toISOString(),
+        active:
+          !g.revokedAt &&
+          (!g.expiresAt || g.expiresAt.getTime() > now) &&
+          (g.maxUses == null || g.useCount < g.maxUses),
+      };
+    });
   }),
 
   /**

@@ -3663,6 +3663,79 @@ declare enum MessageLinkRelationshipType {
 	QUOTES = "quotes",// Message quotes this object
 	CONTEXT = "context"
 }
+declare const SECRET_TYPES: readonly [
+	"password",
+	"api_key",
+	"credential",
+	"note",
+	"card",
+	"identity",
+	"ssh_key",
+	"certificate",
+	"env_variable",
+	"database",
+	"oauth"
+];
+export type SecretType = (typeof SECRET_TYPES)[number];
+/** Kind of thing that consumes/uses a secret. */
+export type SecretConsumerType = "capability" | "tool" | "connection" | "entity" | "automation" | "url";
+/**
+ * One "this secret is used by X" record — surfaced in the Connections face.
+ * Backed by the `secret_usages` join (falls back to `capability_id`/context).
+ */
+export interface SecretUsage {
+	id: string;
+	secretId: string;
+	consumerType: SecretConsumerType;
+	consumerId: string;
+	consumerLabel: string;
+	contextType?: string | null;
+	contextId?: string | null;
+	workspaceId?: string | null;
+}
+/**
+ * A single grant of access to a secret (which agent/workspace can use it) —
+ * surfaced in the Access face. Backed by `vault_grants`.
+ */
+export interface SecretGrantView {
+	grantId: string;
+	grantedTo: string;
+	scope: string;
+	expiresAt?: string | null;
+	usesRemaining?: number | null;
+	workspaceId?: string | null;
+	revokedAt?: string | null;
+}
+/**
+ * A single audit event for a secret (created/revealed/copied/updated/shared) —
+ * surfaced in the Activity face. Backed by `secret_audit_log`.
+ */
+export interface SecretActivityEvent {
+	id: string;
+	action: string;
+	actorType: "user" | "agent";
+	actorLabel?: string | null;
+	createdAt: string;
+}
+/**
+ * The full four-faces bundle for a secret detail view — identity metadata plus
+ * where it is used, who can access it, and its recent activity. Fetched in one
+ * call to reduce detail round-trips.
+ */
+export interface SecretDetailBundle {
+	id: string;
+	name: string;
+	type: SecretType;
+	category?: string | null;
+	url?: string | null;
+	description?: string | null;
+	isFavorite: boolean;
+	createdAt: string;
+	updatedAt: string;
+	usages: SecretUsage[];
+	grants: SecretGrantView[];
+	recentActivity: SecretActivityEvent[];
+}
 export interface ImportModelingSuggestion {
 	profileSlug: string;
 	profileLabel: string;
@@ -5494,6 +5567,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId?: undefined;
 				proposalType?: undefined;
 				reviewUrl?: undefined;
+			};
+			meta: object;
+		}>;
+		moveToWorkspace: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				entityIds: string[];
+				workspaceId: string;
+				reason?: string | undefined;
+			};
+			output: {
+				moved: string[];
+				proposed: {
+					entityId: string;
+					proposalId: string;
+				}[];
+				errors: {
+					entityId: string;
+					error: string;
+				}[];
 			};
 			meta: object;
 		}>;
@@ -17264,6 +17356,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				success: boolean;
 			};
+			meta: object;
+		}>;
+		usedBy: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: SecretUsage[];
+			meta: object;
+		}>;
+		getDetailBundle: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+			};
+			output: SecretDetailBundle;
 			meta: object;
 		}>;
 	}>>;

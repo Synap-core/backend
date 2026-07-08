@@ -760,6 +760,22 @@ export class SecretsVaultRepository extends BaseRepository<
   }
 
   /**
+   * Get total count of a user's non-deleted secrets (owner-scoped).
+   *
+   * A real `count(*)` — unlike `list().length`, which is capped by its `limit`
+   * (default 100 / passing `{ limit: 1 }` caps it at 1). Used by the Watchtower
+   * `getSecurityStats.total`.
+   */
+  async getTotalCount(userId: string): Promise<number> {
+    const result = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(secrets)
+      .where(and(eq(secrets.userId, userId), isNull(secrets.deletedAt)));
+
+    return result[0]?.count ?? 0;
+  }
+
+  /**
    * Get compromised secrets count
    */
   async getCompromisedCount(userId: string): Promise<number> {
