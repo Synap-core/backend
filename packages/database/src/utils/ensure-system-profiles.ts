@@ -632,6 +632,97 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         constraints: {},
         uiHints: { label: "Focus Areas", inputType: "tags" },
       },
+      // `knowledge` profile properties (ek_*)
+      {
+        slug: "ek_type",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["gotcha", "lesson", "decision", "reference"] },
+        uiHints: { label: "Type", inputType: "select", required: true },
+      },
+      {
+        slug: "ek_claim",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 1000 },
+        uiHints: {
+          label: "Claim",
+          inputType: "text",
+          required: true,
+          placeholder: "One-line assertion",
+        },
+      },
+      {
+        slug: "ek_why",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 5000 },
+        uiHints: {
+          label: "Why",
+          inputType: "textarea",
+          placeholder: "Reasoning or context",
+        },
+      },
+      {
+        slug: "ek_evidence",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 2000 },
+        uiHints: {
+          label: "Evidence",
+          inputType: "text",
+          placeholder: "File path, URL, or code snippet",
+        },
+      },
+      {
+        slug: "ek_tags",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: {
+          label: "Tags",
+          inputType: "tags",
+          placeholder: "e.g. repo:synap-backend, layer:migrations",
+        },
+      },
+      // `user_observation` profile properties
+      {
+        slug: "uo_observation",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 1000 },
+        uiHints: {
+          label: "Observation",
+          inputType: "textarea",
+          required: true,
+          placeholder: "What the AI observed about the user",
+        },
+      },
+      {
+        slug: "uo_category",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: [
+            "working_style",
+            "communication",
+            "focus",
+            "preferences",
+            "habits",
+            "technical",
+          ],
+        },
+        uiHints: { label: "Category", inputType: "select", required: true },
+      },
+      {
+        slug: "uo_confidence",
+        valueType: PropertyValueType.NUMBER,
+        constraints: { min: 0, max: 1 },
+        uiHints: {
+          label: "Confidence",
+          inputType: "number",
+          placeholder: "0.0 – 1.0",
+        },
+      },
+      {
+        slug: "uo_validated",
+        valueType: PropertyValueType.BOOLEAN,
+        constraints: {},
+        uiHints: { label: "User confirmed", inputType: "checkbox" },
+      },
     ];
 
     for (const propDef of capturePropertyDefs) {
@@ -830,6 +921,28 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
             "An investigation: sources consulted, findings, confidence, and conclusion. Answers a question; informs a decision.",
         },
       },
+      // Knowledge — validated knowledge: gotchas, lessons, decisions, references.
+      {
+        slug: "knowledge",
+        displayName: "Knowledge",
+        uiHints: {
+          icon: "brain",
+          color: "#6366F1",
+          description:
+            "Validated knowledge: gotchas, lessons, decisions, references",
+        },
+      },
+      // User Observation — AI-inferred observations about the user.
+      {
+        slug: "user_observation",
+        displayName: "User Observation",
+        uiHints: {
+          icon: "user-search",
+          color: "#8B5CF6",
+          description:
+            "AI-inferred observations about the user: preferences, habits, working style",
+        },
+      },
     ];
 
     const createdProfiles = new Map<string, string>();
@@ -849,6 +962,8 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       "decision",
       "question",
       "research",
+      "knowledge",
+      "user_observation",
     ]);
 
     // First pass: create all profiles without parent links
@@ -1215,6 +1330,27 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           { slug: "tags", required: false, displayOrder: 6 },
           // description = method, scope, any context that doesn't fit conclusion
           { slug: "description", required: false, displayOrder: 7 },
+        ],
+      },
+      // Knowledge — ek_* properties
+      {
+        profileSlug: "knowledge",
+        propertySlugs: [
+          { slug: "ek_type", required: true, displayOrder: 0 },
+          { slug: "ek_claim", required: true, displayOrder: 1 },
+          { slug: "ek_why", required: false, displayOrder: 2 },
+          { slug: "ek_evidence", required: false, displayOrder: 3 },
+          { slug: "ek_tags", required: false, displayOrder: 4 },
+        ],
+      },
+      // User Observation — uo_* properties
+      {
+        profileSlug: "user_observation",
+        propertySlugs: [
+          { slug: "uo_observation", required: true, displayOrder: 0 },
+          { slug: "uo_category", required: true, displayOrder: 1 },
+          { slug: "uo_confidence", required: false, displayOrder: 2 },
+          { slug: "uo_validated", required: false, displayOrder: 3 },
         ],
       },
     ];

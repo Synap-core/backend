@@ -21,6 +21,7 @@ import {
   PropertyValidationError,
 } from "../errors/index.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { stampProvenance } from "../utils/stamp-provenance.js";
 
 export interface CreateEntityInput {
   /**
@@ -267,6 +268,11 @@ export class EntityRepository extends BaseRepository<
     }
 
     // 3. Create entity
+    const provenance = stampProvenance({
+      userId: data.createdByUserId ?? userId,
+      agentUserId: data.agentUserId,
+      createdByKind: data.createdByKind,
+    });
     const [entity] = await this.db
       .insert(entities)
       .values({
@@ -282,9 +288,8 @@ export class EntityRepository extends BaseRepository<
         documentId: data.documentId,
         properties: validatedProperties,
         // Provenance (Wave B3)
-        createdByKind:
-          data.createdByKind ?? (data.agentUserId ? "ai_agent" : "human"),
-        createdByUserId: data.createdByUserId ?? userId,
+        createdByKind: provenance.createdByKind,
+        createdByUserId: provenance.createdByUserId,
         agentUserId: data.agentUserId,
         sourceProposalId: data.sourceProposalId,
         correlationId: data.correlationId,

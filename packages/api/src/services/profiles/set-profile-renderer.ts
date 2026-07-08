@@ -67,12 +67,19 @@ export async function setProfileRenderer(
         message: `Profile '${profileSlug}' not found`,
       });
     }
-    const patch =
-      slot === "list"
+    const contentKind = SLOT_TO_CONTENT_KIND[slot];
+    const currentDefaultRenderers = (profile.defaultRenderers ?? {}) as Record<
+      string,
+      RendererRef | undefined
+    >;
+    const patch = {
+      ...(slot === "list"
         ? { defaultListRenderer: ref }
         : slot === "detail"
           ? { defaultDetailRenderer: ref }
-          : { defaultDashboardRenderer: ref };
+          : { defaultDashboardRenderer: ref }),
+      defaultRenderers: { ...currentDefaultRenderers, [contentKind]: ref },
+    };
     await profileRepo.update(profile.id, patch);
     return;
   }

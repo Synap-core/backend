@@ -166,9 +166,6 @@ export { consumeLinkToken } from "./utils/consume-link-token.js";
 // Re-export ensureDefaultWhiteboard from @synap/database for convenience
 export { ensureDefaultWhiteboard } from "@synap/database";
 
-// ✅ ADDED: Export entity embedding helper for jobs package (Issue #5)
-export { generateAndStoreEmbedding } from "./routers/entities-data.js";
-
 import { eventsRouter } from "./routers/events.js";
 import { captureRouter } from "./routers/capture.js";
 import { entitiesRouter } from "./routers/entities.js";

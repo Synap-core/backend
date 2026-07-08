@@ -35,6 +35,7 @@ import {
   type LinkEndpointType,
   type LinkType,
   linkEntityToProject,
+  stampProvenance,
 } from "@synap/database";
 import {
   entities,
@@ -556,10 +557,11 @@ export const entitiesRouter = router({
             profileSlug,
             // Provenance (Wave B3): inline (granted) write. source_proposal_id
             // stays null on the inline path per decision.
-            createdByKind: input.agentUserId ? "ai_agent" : "human",
-            createdByUserId: ctx.userId,
-            agentUserId: input.agentUserId,
-            correlationId,
+            ...stampProvenance({
+              userId: ctx.userId,
+              agentUserId: input.agentUserId,
+              correlationId,
+            }),
           },
           ctx.userId
         );

@@ -39,6 +39,7 @@ export * from "./utils/preferences.js";
 export * from "./utils/document-version-storage.js";
 export * from "./utils/entity-project-membership.js";
 export * from "./utils/materialize-entity.js";
+export * from "./utils/stamp-provenance.js";
 export * from "./utils/package-definition.js";
 export * from "./utils/message-hash.js";
 export * from "./utils/persist-assistant-reply.js";
