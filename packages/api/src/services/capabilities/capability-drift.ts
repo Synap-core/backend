@@ -46,8 +46,10 @@ export interface DefinitionSkillRow {
   name: string;
   providerSpec?: unknown;
   parameters?: unknown;
-  code?: string;
-  description?: string;
+  // Nullable-symmetric with InstalledSkillRow — the drift check compares the two
+  // and normalizes null/undefined (canonicalJson), so both rows accept null.
+  code?: string | null;
+  description?: string | null;
 }
 
 export interface CapabilityDriftResult {

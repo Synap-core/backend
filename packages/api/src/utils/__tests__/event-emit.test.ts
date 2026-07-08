@@ -108,16 +108,15 @@ describe("emitTyped — compile-time type safety", () => {
       // @ts-expect-error — unknown event name
       await emitTyped("not-an-event", {}, target);
 
-      const wrongType: Parameters<
-        typeof emitTyped<"import:file:progress">
-        // @ts-expect-error — index typed as number, given string
-      >[1] = {
-        batchId: "b",
-        path: "p",
-        index: "fast",
-        total: 1,
-        status: "processing",
-      };
+      const wrongType: Parameters<typeof emitTyped<"import:file:progress">>[1] =
+        {
+          batchId: "b",
+          path: "p",
+          // @ts-expect-error — index typed as number, given string
+          index: "fast",
+          total: 1,
+          status: "processing",
+        };
       void wrongType;
 
       // @ts-expect-error — missing required field `total`
