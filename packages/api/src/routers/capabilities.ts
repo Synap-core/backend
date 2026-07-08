@@ -379,22 +379,27 @@ export const capabilitiesRouter = router({
       const report = await reconcileCapabilitiesToTemplates({
         dryRun: false,
         containerIds: input?.containerIds,
+        // The operator clicking "Apply" IS the consent notify-policy defers to.
+        applyNotifyPolicy: true,
       });
 
-      // Clear the "updates available" bell item for this operator now that the
-      // updates have been applied (dismiss by the stable groupKey). Only touches
-      // the acting operator's own open capability-update notification(s); the
-      // boot reconcile re-emits on the next restart if drift still remains.
-      await db
-        .update(notifications)
-        .set({ status: NotificationStatus.DISMISSED })
-        .where(
-          and(
-            eq(notifications.userId, userId),
-            eq(notifications.groupKey, CAPABILITY_UPDATE_GROUP_KEY),
-            eq(notifications.status, NotificationStatus.UNREAD)
-          )
-        );
+      // Clear the "updates available" bell item ONLY when nothing is left to
+      // apply — `report.updatesAvailable` is what STILL needs a human after this
+      // pass (e.g. param-requiring templates the reconcile can't apply, or a
+      // subset apply that left other drift). Dismissing unconditionally would
+      // hide remaining updates until the next redeploy (pods restart rarely).
+      if (report.updatesAvailable.length === 0) {
+        await db
+          .update(notifications)
+          .set({ status: NotificationStatus.DISMISSED })
+          .where(
+            and(
+              eq(notifications.userId, userId),
+              eq(notifications.groupKey, CAPABILITY_UPDATE_GROUP_KEY),
+              eq(notifications.status, NotificationStatus.UNREAD)
+            )
+          );
+      }
 
       return report;
     }),

@@ -94,7 +94,7 @@ vi.mock("@synap-core/core", () => ({
 
 import { db } from "@synap/database";
 import { proposalsRouter } from "./proposals.js";
-import { planProposalRevert } from "./proposals.js";
+import { planProposalRevert, buildProposalChanges } from "./proposals.js";
 
 describe("planProposalRevert", () => {
   it("revert of a single-entity create soft-deletes the created entity (from materialized)", () => {
@@ -335,5 +335,60 @@ describe("proposalsRouter.revert — restoring an approved delete proposal", () 
     } as any);
 
     await expect(caller.revert({ proposalId })).rejects.toThrow(/purged/i);
+  });
+});
+
+describe("buildProposalChanges — generic non-entity fallback", () => {
+  it("flat property_def create payload yields one change per non-infra field", () => {
+    const changes = buildProposalChanges(
+      {
+        slug: "budget",
+        valueType: "number",
+        constraints: { min: 0 },
+        overlay: false,
+        required: true,
+        displayOrder: 3,
+        // infra keys that must be filtered out
+        workspaceId: "ws-1",
+        correlationId: "corr-1",
+        source: "intelligence",
+      },
+      "create"
+    );
+
+    expect(changes.length).toBeGreaterThan(0);
+    const paths = changes.map((c) => c.path);
+    // Meaningful, un-prefixed (NO "properties.") field paths surface…
+    expect(paths).toContain("slug");
+    expect(paths).toContain("valueType");
+    expect(paths).toContain("required");
+    // …and infra keys never leak as change rows.
+    expect(paths).not.toContain("workspaceId");
+    expect(paths).not.toContain("correlationId");
+    expect(paths).not.toContain("source");
+
+    const valueTypeChange = changes.find((c) => c.path === "valueType");
+    expect(valueTypeChange?.after).toBe("number");
+    expect(valueTypeChange?.operation).toBe("create");
+  });
+
+  it("entity create payload is unchanged by the fallback (only entity-shape + properties)", () => {
+    const changes = buildProposalChanges(
+      {
+        title: "My Task",
+        profileSlug: "task",
+        properties: { status: "todo", priority: "high" },
+      },
+      "create"
+    );
+    const paths = changes.map((c) => c.path);
+    // Entity path populates changes → the generic fallback never fires.
+    expect(paths).toContain("title");
+    expect(paths).toContain("profileSlug");
+    expect(paths).toContain("properties.status");
+    expect(paths).toContain("properties.priority");
+    // No un-prefixed property leakage from the fallback.
+    expect(paths).not.toContain("status");
+    expect(paths).not.toContain("priority");
   });
 });

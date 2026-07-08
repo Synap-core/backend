@@ -48,6 +48,10 @@ export { openaiCompatApp } from "./routers/external/openai-compat.js";
 export { apiKeysRouter } from "./routers/api-keys.js";
 export { ensureSynapCoreCapability } from "./services/capabilities/ensure-synap-core.js";
 export {
+  ensureCaptureAgent,
+  getCaptureAgentUserId,
+} from "./services/capture-agent/ensure-capture-agent.js";
+export {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,
   type CreateCapabilityResult,

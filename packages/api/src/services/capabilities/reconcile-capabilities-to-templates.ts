@@ -113,7 +113,18 @@ function buildContainerCtx(container: {
 }
 
 export async function reconcileCapabilitiesToTemplates(
-  opts: { dryRun?: boolean; containerIds?: string[] } = {}
+  opts: {
+    dryRun?: boolean;
+    containerIds?: string[];
+    /**
+     * Apply `updatePolicy:"notify"` drift too (default false → defer it to a
+     * human). The operator Apply door sets this true: clicking "Apply updates"
+     * IS the human consent that the notify policy defers to, so those updates
+     * must actually land. (Param-requiring templates still can't be applied
+     * with `{}` and stay in `updatesAvailable`.)
+     */
+    applyNotifyPolicy?: boolean;
+  } = {}
 ): Promise<CapabilityReconcileReport> {
   const dryRun = !!opts.dryRun;
   const report: CapabilityReconcileReport = {
@@ -124,6 +135,14 @@ export async function reconcileCapabilitiesToTemplates(
     updatesAvailable: [],
     conflicts: [],
   };
+
+  // An explicit empty `containerIds` means "reconcile NOTHING" — distinct from
+  // `undefined` ("reconcile everything"). Return the empty report rather than
+  // silently falling through to a full pod-wide reconcile (a landmine for a
+  // future "apply selected" caller).
+  if (opts.containerIds && opts.containerIds.length === 0) {
+    return report;
+  }
 
   // `containerIds` NARROWS which containers are enumerated (the operator Apply
   // door scoping to a named subset) — the per-container convergence logic below
@@ -297,7 +316,7 @@ export async function reconcileCapabilitiesToTemplates(
         continue;
       }
 
-      if (updatePolicy === "notify") {
+      if (updatePolicy === "notify" && !opts.applyNotifyPolicy) {
         report.updatesAvailable.push({
           containerId: container.id,
           name: container.name,

@@ -20,6 +20,7 @@ import {
   resolveActorId,
   type HubHono,
 } from "./_shared.js";
+import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 
 export function registerRelationsRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -149,7 +150,15 @@ export function registerRelationsRoutes(app: HubHono): void {
       return c.json({ error: "workspaceId is required" }, 400);
     }
     try {
-      const actorResolution = await resolveActorId(body.agentUserId, userId);
+      // On the capture path (X-Capture: 1) attribute the edge to the seeded
+      // Capture agent so relation.create auto-approves (its explicit
+      // autoApproveFor covers it); a body-supplied agentUserId still wins, and a
+      // non-capture caller keeps its own agent identity (normal governance).
+      const resolvedAgentUserId = await resolveCaptureActorUserId(
+        c,
+        body.agentUserId
+      );
+      const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       const actorId = actorResolution.actorId;
@@ -165,7 +174,7 @@ export function registerRelationsRoutes(app: HubHono): void {
         targetEntityId: body.targetEntityId,
         type: body.type,
         metadata: body.metadata,
-        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         reasoning: body.reasoning,
       });
       return c.json(result);

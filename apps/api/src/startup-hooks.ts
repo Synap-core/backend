@@ -24,6 +24,7 @@ import { sql as drizzleSql } from "drizzle-orm";
 import {
   setDynamicCorsOrigins,
   ensureSynapCoreCapability,
+  ensureCaptureAgent,
   reconcileCapabilitiesToTemplates,
   notifyCapabilityUpdatesAvailable,
 } from "@synap/api";
@@ -497,6 +498,17 @@ export async function runStartupHooks(): Promise<void> {
   // non-fatal; runs after the pod-owner invariant so an owner exists to attribute
   // the pod-wide skills to (pre-bootstrap pods are skipped and retried next boot).
   await ensureSynapCoreCapability();
+
+  // Seed the pod-level CAPTURE AGENT — substrate, not surface. Fundamental
+  // capture (text/photo → governed structured entity) needs a least-privilege
+  // human-owned agent to attribute its writes to. Idempotent + drift-healing +
+  // non-fatal; runs after ensureSynapCoreCapability so a pod owner exists to
+  // own it (pre-bootstrap pods are skipped and retried next boot).
+  try {
+    await ensureCaptureAgent();
+  } catch (err) {
+    logger.warn({ err }, "Failed to seed capture agent on startup (non-fatal)");
+  }
 
   // Converge every installed capability CONTAINER to its Control-Plane template
   // (the capability-layer counterpart to reconcileWorkspacesToTemplates above) —

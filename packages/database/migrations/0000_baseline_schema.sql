@@ -2280,6 +2280,33 @@ ALTER TABLE "secret_tags" ADD COLUMN IF NOT EXISTS "created_at" timestamp with t
 
 CREATE INDEX IF NOT EXISTS "idx_secret_tags_tag" ON "secret_tags" ("tag");
 
+-- secret_usages — many-to-many "this secret is used by X" join (0173)
+CREATE TABLE IF NOT EXISTS "secret_usages" (
+  "id"             uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
+  "secret_id"      uuid  NOT NULL REFERENCES "secrets"("id") ON DELETE CASCADE,
+  "consumer_type"  text  NOT NULL,
+  "consumer_id"    text  NOT NULL,
+  "consumer_label" text,
+  "workspace_id"   uuid,
+  "context_type"   text,
+  "context_id"     text,
+  "created_at"     timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT "secret_usages_unique"
+    UNIQUE ("secret_id", "consumer_type", "consumer_id", "context_id")
+);
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "secret_usages" ADD COLUMN IF NOT EXISTS "secret_id" uuid REFERENCES "secrets"("id") ON DELETE CASCADE;
+ALTER TABLE "secret_usages" ADD COLUMN IF NOT EXISTS "consumer_type" text;
+ALTER TABLE "secret_usages" ADD COLUMN IF NOT EXISTS "consumer_id" text;
+ALTER TABLE "secret_usages" ADD COLUMN IF NOT EXISTS "consumer_label" text;
+ALTER TABLE "secret_usages" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "secret_usages" ADD COLUMN IF NOT EXISTS "context_type" text;
+ALTER TABLE "secret_usages" ADD COLUMN IF NOT EXISTS "context_id" text;
+ALTER TABLE "secret_usages" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone NOT NULL DEFAULT now();
+
+CREATE INDEX IF NOT EXISTS "idx_secret_usages_secret_id" ON "secret_usages" ("secret_id");
+CREATE INDEX IF NOT EXISTS "idx_secret_usages_consumer"  ON "secret_usages" ("consumer_type", "consumer_id");
+
 CREATE TABLE IF NOT EXISTS "secret_shares" (
   "id"                       uuid  PRIMARY KEY DEFAULT gen_random_uuid(),
   "secret_id"                uuid  NOT NULL REFERENCES "secrets"("id") ON DELETE CASCADE,

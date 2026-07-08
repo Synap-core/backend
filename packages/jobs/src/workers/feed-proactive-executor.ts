@@ -15,8 +15,7 @@
  */
 
 import { randomUUID } from "crypto";
-import { createHash } from "crypto";
-import { db, eq, eventRepository } from "@synap/database";
+import { db, eq, eventRepository, computeMessageHash } from "@synap/database";
 import { getDefaultActiveService } from "@synap/intelligence-client";
 import { channels, messages } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -400,9 +399,7 @@ async function postDigest(
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
   try {
     const messageId = randomUUID();
-    const hash = createHash("sha256")
-      .update(`${messageId}${digest.content}`)
-      .digest("hex");
+    const hash = computeMessageHash(messageId, digest.content);
 
     const metadata: FeedMessageMetadata = {
       feedItem: true,

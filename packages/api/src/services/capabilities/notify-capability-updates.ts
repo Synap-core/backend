@@ -22,15 +22,12 @@ import { createLogger } from "@synap-core/core";
 import {
   db,
   notifications,
-  workspaces,
-  workspaceMembers,
   eq,
   and,
-  inArray,
   NotificationStatus,
 } from "@synap/database";
-import { sql as drizzleSql } from "drizzle-orm";
 import { NotificationService } from "../../notifications/NotificationService.js";
+import { resolvePodOwnerUserId } from "./pod-owner.js";
 import type { CapabilityReconcileReport } from "./reconcile-capabilities-to-templates.js";
 
 const logger = createLogger({ module: "notify-capability-updates" });
@@ -41,28 +38,6 @@ const logger = createLogger({ module: "notify-capability-updates" });
  * to the exact same key, so the "already-open?" guard fires.
  */
 export const CAPABILITY_UPDATE_GROUP_KEY = "system:capability_update_available";
-
-/**
- * Resolve the pod-owner user id — the owner/admin member of the pod-admin system
- * workspace (the notification recipient). Null on a pre-bootstrap pod. Mirrors
- * `ensure-synap-core`'s own resolver.
- */
-async function resolvePodOwnerUserId(): Promise<string | null> {
-  const podAdminWs = await db.query.workspaces.findFirst({
-    where: drizzleSql`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
-    columns: { id: true },
-  });
-  if (!podAdminWs) return null;
-
-  const owner = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, podAdminWs.id),
-      inArray(workspaceMembers.role, ["owner", "admin"])
-    ),
-    columns: { userId: true },
-  });
-  return owner?.userId ?? null;
-}
 
 /**
  * Emit ONE grouped "capability updates available" notification for the boot

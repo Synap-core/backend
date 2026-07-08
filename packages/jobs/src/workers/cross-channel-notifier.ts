@@ -17,29 +17,13 @@ import {
   eq,
   and,
   ne,
+  computeMessageHash,
 } from "@synap/database";
 import { ChannelContextObjectType, MessageRole } from "@synap/database/schema";
-import { randomUUID, createHash } from "crypto";
+import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "cross-channel-notifier" });
-
-function computeMessageHash(
-  channelId: string,
-  content: string,
-  role: string
-): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        channelId,
-        content,
-        role,
-        timestamp: new Date().toISOString(),
-      })
-    )
-    .digest("hex");
-}
 
 export async function handleCrossChannelNotify(
   job: PgBoss.Job<{
@@ -92,13 +76,15 @@ export async function handleCrossChannelNotify(
 
     for (const row of linkedRows) {
       const content = `[Cross-channel update] The ${entityType} "${entityLabel}" was updated in another conversation.`;
+      const id = randomUUID();
       await db.insert(messages).values({
-        id: randomUUID(),
+        id,
         channelId: row.channelId,
         role: MessageRole.SYSTEM,
         content,
         userId: row.userId || "system",
-        hash: computeMessageHash(row.channelId, content, "system"),
+        // Canonical tamper-hash: the ONE formula (see message-hash.ts).
+        hash: computeMessageHash(id, content),
       });
     }
 
@@ -144,13 +130,15 @@ export async function handleCrossChannelNotify(
 
     for (const row of linkedRows) {
       const content = `[Cross-channel update] The document "${docLabel}" was updated in another conversation.`;
+      const id = randomUUID();
       await db.insert(messages).values({
-        id: randomUUID(),
+        id,
         channelId: row.channelId,
         role: MessageRole.SYSTEM,
         content,
         userId: row.userId || "system",
-        hash: computeMessageHash(row.channelId, content, "system"),
+        // Canonical tamper-hash: the ONE formula (see message-hash.ts).
+        hash: computeMessageHash(id, content),
       });
     }
 

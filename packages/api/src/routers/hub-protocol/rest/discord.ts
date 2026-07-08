@@ -61,7 +61,13 @@ import {
 // on the `external_message.received` event. Capped at 4 to bound payload size.
 const AttachmentInputSchema = z.object({
   type: z.string(),
-  url: z.string().url(),
+  // https only — Discord CDN attachment URLs are always https, and this blocks a
+  // stored `javascript:`/`data:`/`file:` URL from becoming an XSS/SSRF vector in
+  // any downstream consumer (matches the shell.openExternal https-only rule).
+  url: z
+    .string()
+    .url()
+    .refine((u) => u.startsWith("https://"), "attachment url must be https"),
   name: z.string().optional(),
 });
 

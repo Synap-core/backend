@@ -28,6 +28,7 @@ import { createLinks } from "../../../services/links/links-service.js";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { emitSideEffects } from "@synap/events";
 import { createFocusSession } from "../../../services/focus-sessions/create-session.js";
+import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -348,13 +349,19 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
 
     try {
       // Delegate to the shared service (used by both Hub REST and MCP adapter).
+      // On the capture path (X-Capture: 1) attribute the write to the seeded
+      // Capture agent so focus_session.create auto-approves; otherwise keep the
+      // caller's own agent identity (normal governance).
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const agentUserId = await resolveCaptureActorUserId(c, ctxAgentUserId, {
+        workspaceId,
+      });
       const result = await createFocusSession({
         userId,
         workspaceId,
         projectId: body.projectId ?? null,
         goal: body.goal,
-        agentUserId: ctxAgentUserId,
+        agentUserId,
         correlationId: body.correlationId,
         channelId: body.channelId ?? null,
         agentIds: body.agentIds,
@@ -438,9 +445,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const { userId, workspaceId } = acting;
 
-      // Step 3: governance membrane.
+      // Step 3: governance membrane. On the capture path (X-Capture: 1) attribute
+      // the write to the seeded Capture agent so focus_session.update auto-approves;
+      // a body-supplied agentUserId still wins, and a non-capture caller keeps its
+      // own agent identity (normal governance).
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
-      const agentUserId = patch.agentUserId ?? ctxAgentUserId;
+      const agentUserId =
+        patch.agentUserId ??
+        (await resolveCaptureActorUserId(c, ctxAgentUserId, { workspaceId }));
 
       const perm = await checkPermissionOrPropose({
         userId,

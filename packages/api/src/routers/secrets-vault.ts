@@ -34,9 +34,20 @@ import {
 import {
   proposals,
   secrets,
+  secretUsages,
+  secretAuditLog,
   vaultGrants,
+  users,
+  capabilities,
   ProposalStatus,
 } from "@synap/database/schema";
+import type {
+  SecretUsage as SecretUsageDTO,
+  SecretGrantView,
+  SecretActivityEvent,
+  SecretDetailBundle,
+  SecretConsumerType,
+} from "@synap-core/types";
 import { auditLog } from "../utils/audit-log.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 
@@ -129,6 +140,66 @@ const setupVaultSchema = z.object({
 function getRepository(): SecretsVaultRepository {
   const eventRepo = new EventRepository(sql);
   return new SecretsVaultRepository(db, eventRepo);
+}
+
+/**
+ * Resolve the "used by" rows for a secret from the `secret_usages` join.
+ *
+ * The caller has ALREADY owner-scoped the secret (findById by ctx.userId), so
+ * this reads the join rows for that secret. When the join has no rows yet but the
+ * secret still carries a legacy `capability_id` (an un-backfilled connection),
+ * synthesize a single capability usage from the row so the Connections face is
+ * never empty for a secret that IS a connection. Labels are best-effort: the
+ * stored `consumer_label` (or `consumer_id`) for join rows; the capability name
+ * (falling back to the secret name / capability id) for the synthesized row.
+ */
+async function loadSecretUsages(secret: {
+  id: string;
+  name: string;
+  capabilityId: string | null;
+  contextType: string | null;
+  contextId: string | null;
+  workspaceId: string | null;
+}): Promise<SecretUsageDTO[]> {
+  const rows = await db.query.secretUsages.findMany({
+    where: eq(secretUsages.secretId, secret.id),
+    orderBy: (t, { asc }) => [asc(t.createdAt)],
+  });
+
+  if (rows.length > 0) {
+    return rows.map((r) => ({
+      id: r.id,
+      secretId: r.secretId,
+      consumerType: r.consumerType as SecretConsumerType,
+      consumerId: r.consumerId,
+      consumerLabel: r.consumerLabel ?? r.consumerId,
+      contextType: r.contextType,
+      contextId: r.contextId,
+      workspaceId: r.workspaceId,
+    }));
+  }
+
+  // Fallback: no join rows yet but the secret is a capability connection.
+  if (secret.capabilityId) {
+    const cap = await db.query.capabilities.findFirst({
+      where: eq(capabilities.id, secret.capabilityId),
+      columns: { name: true },
+    });
+    return [
+      {
+        id: `capability:${secret.capabilityId}`,
+        secretId: secret.id,
+        consumerType: "capability",
+        consumerId: secret.capabilityId,
+        consumerLabel: cap?.name ?? secret.name ?? secret.capabilityId,
+        contextType: secret.contextType,
+        contextId: secret.contextId,
+        workspaceId: secret.workspaceId,
+      },
+    ];
+  }
+
+  return [];
 }
 
 // ============================================================================
@@ -1091,5 +1162,114 @@ export const secretsVaultRouter = router({
       }
 
       return { success: true };
+    }),
+
+  // ==========================================================================
+  // Connected Vault (WP-B2) — "where is this secret used", + one-call bundle
+  // ==========================================================================
+
+  /**
+   * List where a secret is used (owner-only) — the Connections face.
+   *
+   * Reads `secret_usages WHERE secret_id = id`. When the join is still empty but
+   * the secret carries a legacy `capability_id`, a single capability usage is
+   * synthesized from the row (fallback for un-backfilled connections). Labels are
+   * resolved best-effort (stored consumer_label, else the capability name).
+   */
+  usedBy: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }): Promise<SecretUsageDTO[]> => {
+      // Owner-scoped: findById filters on ctx.userId — a user only sees usages
+      // for their own secret.
+      const repo = getRepository();
+      const secret = await repo.findById(input.id, ctx.userId);
+      if (!secret) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Secret not found" });
+      }
+      return loadSecretUsages(secret);
+    }),
+
+  /**
+   * One-call detail bundle (owner-only) — identity metadata (NOT the encrypted
+   * value) + usages + grants + recent activity. Reduces the detail view's
+   * round-trips (reveal stays a separate, explicit action).
+   */
+  getDetailBundle: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }): Promise<SecretDetailBundle> => {
+      const repo = getRepository();
+      // Owner-scoped ownership + metadata load (never the plaintext value).
+      const secret = await repo.findById(input.id, ctx.userId);
+      if (!secret) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Secret not found" });
+      }
+
+      const [usages, grantRows, auditRows] = await Promise.all([
+        loadSecretUsages(secret),
+        // Grants for this secret (same predicate as listGrants).
+        db.query.vaultGrants.findMany({
+          where: and(
+            eq(vaultGrants.grantableType, "secret"),
+            eq(vaultGrants.grantableId, secret.id)
+          ),
+          orderBy: (t, { desc }) => [desc(t.createdAt)],
+        }),
+        // Newest ~20 audit rows. Ownership was already verified by findById
+        // above, so read the log directly (typed) rather than via the repo.
+        db.query.secretAuditLog.findMany({
+          where: eq(secretAuditLog.secretId, secret.id),
+          orderBy: (t, { desc }) => [desc(t.createdAt)],
+          limit: 20,
+        }),
+      ]);
+
+      const grants: SecretGrantView[] = grantRows.map((g) => ({
+        grantId: g.id,
+        grantedTo: g.grantedTo ?? "",
+        scope: g.scope,
+        expiresAt: g.expiresAt ? g.expiresAt.toISOString() : null,
+        // Uses remaining: null = unlimited; clamped at 0 when exhausted.
+        usesRemaining:
+          g.maxUses == null ? null : Math.max(0, g.maxUses - g.useCount),
+        workspaceId: g.workspaceId ?? null,
+        revokedAt: g.revokedAt ? g.revokedAt.toISOString() : null,
+      }));
+
+      // Resolve actor type (user vs agent) for the audit rows — one batched
+      // users lookup, best-effort label (name → email → raw id).
+      const actorIds = [...new Set(auditRows.map((r) => r.userId))];
+      const actorRows = actorIds.length
+        ? await db.query.users.findMany({
+            where: inArray(users.id, actorIds),
+            columns: { id: true, name: true, email: true, userType: true },
+          })
+        : [];
+      const actorById = new Map(actorRows.map((u) => [u.id, u]));
+
+      const recentActivity: SecretActivityEvent[] = auditRows.map((r) => {
+        const actor = actorById.get(r.userId);
+        return {
+          id: r.id,
+          action: r.action,
+          actorType: actor?.userType === "agent" ? "agent" : "user",
+          actorLabel: actor?.name ?? actor?.email ?? r.userId,
+          createdAt: r.createdAt.toISOString(),
+        };
+      });
+
+      return {
+        id: secret.id,
+        name: secret.name,
+        type: secret.type,
+        category: secret.category ?? null,
+        url: secret.url ?? null,
+        description: secret.description ?? null,
+        isFavorite: secret.isFavorite,
+        createdAt: secret.createdAt.toISOString(),
+        updatedAt: secret.updatedAt.toISOString(),
+        usages,
+        grants,
+        recentActivity,
+      };
     }),
 });

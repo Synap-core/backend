@@ -73,8 +73,6 @@ x-backend-env: &backend-env
   # they do NOT use this secret; the old /internal/* loopback was removed.)
   # Generate once: openssl rand -hex 32
   BRIDGE_SECRET: ${BRIDGE_SECRET:-}
-  HERMES_TRIGGER_URL: ${HERMES_TRIGGER_URL:-}
-  HERMES_TRIGGER_KEY: ${HERMES_TRIGGER_KEY:-}
   T3CODE_URL: ${T3CODE_URL:-}
   T3CODE_API_KEY: ${T3CODE_API_KEY:-}
   # RSS Feed Provider Configuration

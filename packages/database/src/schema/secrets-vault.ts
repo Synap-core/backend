@@ -208,6 +208,70 @@ export const secretTags = pgTable(
 );
 
 // ============================================================================
+// Secret Usages (Many-to-Many "this secret is used by X")
+// ============================================================================
+
+/**
+ * Records WHERE a secret is used — the "Connections" face of the vault.
+ *
+ * A single secret can be consumed by many things (a capability connection, a
+ * bound tool credential, a channel connection, an entity binding, an automation,
+ * or a raw url match). This join makes that many-to-many explicit so the detail
+ * view can render a "Used by" list without scanning every consumer table.
+ *
+ * The connection registry columns already on `secrets` (`capability_id`,
+ * `context_type`/`context_id`) cover the 1:1 capability-connection case; this
+ * table generalizes it. `consumer_id` is polymorphic TEXT (no FK — it can point
+ * at a capability, tool, channel, entity, automation, or a url string), so the
+ * label is denormalized into `consumer_label` for cheap display.
+ *
+ * Written by the single connection/credential writers (capability-connections,
+ * tool credential binding); backfilled once from every `secrets` row that
+ * already carries a non-null `capability_id`.
+ */
+export const secretUsages = pgTable(
+  "secret_usages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    secretId: uuid("secret_id")
+      .notNull()
+      .references(() => secrets.id, { onDelete: "cascade" }),
+
+    // WHAT kind of thing consumes the secret. Polymorphic — no FK.
+    //   'capability' | 'tool' | 'connection' | 'entity' | 'automation' | 'url'
+    consumerType: text("consumer_type").notNull(),
+    consumerId: text("consumer_id").notNull(),
+    // Denormalized human label (capability name, connector, entity name, url).
+    consumerLabel: text("consumer_label"),
+
+    // Optional scoping / context binding, mirroring the secrets registry columns.
+    workspaceId: uuid("workspace_id"),
+    contextType: text("context_type"),
+    contextId: text("context_id"),
+
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    // One usage row per (secret, consumer, context). NULL context_id rows are
+    // distinct under Postgres unique semantics — intended (many context-less
+    // usages of the same secret by the same consumer never collide).
+    uniqueUsage: unique("secret_usages_unique").on(
+      table.secretId,
+      table.consumerType,
+      table.consumerId,
+      table.contextId
+    ),
+    secretIdIdx: index("idx_secret_usages_secret_id").on(table.secretId),
+    consumerIdx: index("idx_secret_usages_consumer").on(
+      table.consumerType,
+      table.consumerId
+    ),
+  })
+);
+
+// ============================================================================
 // Secret Shares (Workspace/User Sharing)
 // ============================================================================
 
@@ -444,6 +508,8 @@ export type Secret = typeof secrets.$inferSelect;
 export type NewSecret = typeof secrets.$inferInsert;
 export type SecretTag = typeof secretTags.$inferSelect;
 export type NewSecretTag = typeof secretTags.$inferInsert;
+export type SecretUsage = typeof secretUsages.$inferSelect;
+export type NewSecretUsage = typeof secretUsages.$inferInsert;
 export type SecretShare = typeof secretShares.$inferSelect;
 export type NewSecretShare = typeof secretShares.$inferInsert;
 export type SecretAuditLogEntry = typeof secretAuditLog.$inferSelect;
@@ -467,6 +533,7 @@ export const secretsRelations = relations(secrets, ({ one, many }) => ({
     references: [workspaces.id],
   }),
   tags: many(secretTags),
+  usages: many(secretUsages),
   shares: many(secretShares),
   auditLog: many(secretAuditLog),
   // NOTE: `vault_grants` is now polymorphic (grantable_type/grantable_id) — a
@@ -478,6 +545,13 @@ export const secretsRelations = relations(secrets, ({ one, many }) => ({
 export const secretTagsRelations = relations(secretTags, ({ one }) => ({
   secret: one(secrets, {
     fields: [secretTags.secretId],
+    references: [secrets.id],
+  }),
+}));
+
+export const secretUsagesRelations = relations(secretUsages, ({ one }) => ({
+  secret: one(secrets, {
+    fields: [secretUsages.secretId],
     references: [secrets.id],
   }),
 }));

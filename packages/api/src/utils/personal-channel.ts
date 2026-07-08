@@ -7,8 +7,8 @@
  *   - Proactive feed: AI-only broadcast channel, pod-scoped.
  */
 
-import { randomUUID, createHash } from "node:crypto";
-import { db, eq, and } from "@synap/database";
+import { randomUUID } from "node:crypto";
+import { db, eq, and, computeMessageHash } from "@synap/database";
 import {
   channels,
   channelMembers,
@@ -60,9 +60,7 @@ async function seedWelcomeMessage(
 ): Promise<void> {
   try {
     const messageId = randomUUID();
-    const hash = createHash("sha256")
-      .update(`${messageId}${AGENT_THREAD_WELCOME_MESSAGE}`)
-      .digest("hex");
+    const hash = computeMessageHash(messageId, AGENT_THREAD_WELCOME_MESSAGE);
     const seedMetadata = { agentType: "onboarding" };
     await db.insert(messages).values({
       id: messageId,

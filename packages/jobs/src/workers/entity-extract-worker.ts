@@ -16,7 +16,7 @@
  * Registered by: feed-source-executor (send, fire-and-forget)
  */
 
-import { randomUUID, createHash } from "crypto";
+import { randomUUID } from "crypto";
 import {
   db,
   eq,
@@ -28,6 +28,7 @@ import {
 import { OperationalEventTypes } from "@synap/events";
 import { sql as drizzleSql } from "drizzle-orm";
 import { sql as dbSql } from "@synap/database";
+import { computeMessageHash } from "@synap/database";
 import {
   channels,
   messages,
@@ -512,7 +513,7 @@ async function postToProactiveFeed(
   }
 
   const content = lines.join("\n");
-  const hash = createHash("sha256").update(`${runId}${content}`).digest("hex");
+  const hash = computeMessageHash(runId, content);
 
   let metadata: FeedMessageMetadata;
   try {

@@ -25,6 +25,7 @@ import {
   or,
   isNull,
   isNotNull,
+  inArray,
   desc,
   getDb,
   db,
@@ -69,6 +70,7 @@ import {
   createRelationsFromRefs,
 } from "../utils/materialize-composite.js";
 import { makeExternalLinkIdempotency } from "../utils/entity-link-idempotency.js";
+import { auditLog } from "../utils/audit-log.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 
 const logger = createLogger({ module: "capture-router" });
@@ -673,6 +675,7 @@ export const captureRouter = router({
           id: workspaces.id,
           name: workspaces.name,
           description: workspaces.description,
+          workspaceType: workspaces.workspaceType,
         })
         .from(workspaces)
         .innerJoin(
@@ -681,11 +684,15 @@ export const captureRouter = router({
         )
         .where(eq(workspaceMembers.userId, userId))
         .limit(5);
-      const availableWorkspaces = userWorkspaceRows.map((w) => ({
-        id: w.id,
-        name: w.name,
-        description: w.description ?? undefined,
-      }));
+      // Never surface system/admin workspaces (e.g. pod-admin) as routing
+      // candidates — user data must not be routed into an operational workspace.
+      const availableWorkspaces = userWorkspaceRows
+        .filter((w) => w.workspaceType !== "operational")
+        .map((w) => ({
+          id: w.id,
+          name: w.name,
+          description: w.description ?? undefined,
+        }));
 
       // 2b. Fetch user's PROJECTS (cross-cutting lenses) for routing hints.
       // Scoping mirrors the Hub `/projects` list: pod-wide projects visible to
@@ -1518,7 +1525,7 @@ export const captureRouter = router({
           const materializedEntityIds = created
             .filter((c) => !c.linked)
             .map((c) => c.entityId);
-          await createAutoApprovedProposal({
+          const { correlationId, proposal } = await createAutoApprovedProposal({
             userId,
             reviewedBy: userId,
             workspaceId: workspaceId ?? null,
@@ -1535,6 +1542,67 @@ export const captureRouter = router({
               materialized: { entityIds: materializedEntityIds },
             },
           });
+
+          // Provenance stamp — join the created entities back to the decision
+          // that produced them (shared correlationId) and the proposal that
+          // recorded the write, so a future feedback bridge can score AI
+          // decision quality by correlationId. BEST-EFFORT: never fail the
+          // capture over a stamping hiccup.
+          if (materializedEntityIds.length > 0) {
+            try {
+              await database
+                .update(entitiesTable)
+                .set({
+                  correlationId,
+                  sourceProposalId: proposal?.id ?? null,
+                })
+                .where(inArray(entitiesTable.id, materializedEntityIds));
+            } catch (err) {
+              logger.warn(
+                { err, userId, correlationId },
+                "Track 3: entity provenance stamp failed (capture preserved)"
+              );
+            }
+          }
+
+          // Observability flywheel foundation — record the workspace-routing
+          // decision as its own event, sharing the proposal's correlationId so
+          // the decision, the proposal, and the materialized entities can all
+          // be joined by a future feedback bridge. Only emitted when a routing
+          // decision was actually in play (an AI workspace hint was supplied).
+          // subjectType/action are OUTSIDE the closed SubjectType/EventAction
+          // unions (auditLog's own opts type is plain `string`, and the events
+          // table column is untyped text — see audit-log.ts) — the discriminator
+          // also lives in `data.kind` for any consumer that DOES enforce those
+          // unions downstream.
+          if (input.aiWorkspaceId) {
+            try {
+              await auditLog({
+                subjectType: "ai_decision",
+                action: "route",
+                phase: "completed",
+                subjectId: randomUUID(),
+                userId,
+                workspaceId: workspaceId ?? null,
+                source: "capture",
+                correlationId,
+                data: {
+                  kind: "route",
+                  chosenWorkspaceId: routing?.movedToWorkspace ?? workspaceId,
+                  confidence: input.aiWorkspaceConfidence ?? null,
+                  reason: input.aiWorkspaceReason ?? null,
+                  mode: input.workspaceRouting ?? "auto",
+                  applied: Boolean(routing?.movedToWorkspace),
+                  currentWorkspaceId: ctx.workspaceId,
+                },
+              });
+            } catch (err) {
+              logger.warn(
+                { err, userId },
+                "ai.decision routing event emit failed (capture preserved)"
+              );
+            }
+          }
         } catch (err) {
           logger.warn(
             { err, userId },

@@ -60,31 +60,6 @@ const synapReplyRoutedSchema = z.object({
   routedAt: z.string().min(1),
 });
 
-const hermesTaskQueuedSchema = z.object({
-  taskId: z.string().min(1),
-  kind: z.string().min(1),
-  source: z.string().min(1),
-  queuedAt: z.string().min(1),
-});
-
-const hermesTaskStartedSchema = z.object({
-  taskId: z.string().min(1),
-  kind: z.string().min(1),
-  startedAt: z.string().min(1),
-});
-
-const hermesTaskCompletedSchema = z.object({
-  taskId: z.string().min(1),
-  durationMs: z.number().int().nonnegative(),
-  completedAt: z.string().min(1),
-});
-
-const hermesTaskFailedSchema = z.object({
-  taskId: z.string().min(1),
-  error: z.string().min(1),
-  failedAt: z.string().min(1),
-});
-
 const importFileProgressSchema = z.object({
   batchId: z.string().min(1),
   path: z.string(),
@@ -184,10 +159,6 @@ export const EventSchemas: Partial<Record<EventName, z.ZodType>> = {
   // {actor}:{entity}:{action}
   "openclaw:message:received": openclawMessageReceivedSchema,
   "synap:reply:routed": synapReplyRoutedSchema,
-  "hermes:task:queued": hermesTaskQueuedSchema,
-  "hermes:task:started": hermesTaskStartedSchema,
-  "hermes:task:completed": hermesTaskCompletedSchema,
-  "hermes:task:failed": hermesTaskFailedSchema,
   "import:file:progress": importFileProgressSchema,
   "ui:focus": uiFocusSchema,
 

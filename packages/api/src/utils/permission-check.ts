@@ -19,6 +19,7 @@ import {
   ProfileResolutionService,
   insertPendingProposal,
 } from "@synap/database";
+import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
 import {
   users,
   workspaces,
@@ -32,13 +33,12 @@ import type { RequestShapedProposalData } from "@synap-core/types";
 import { isLikelyUUID } from "@synap-core/types/proposals";
 import { broadcastNotification } from "@synap/jobs";
 import { emitSideEffects } from "@synap/events";
-import type { WorkspaceSettings, AgentMetadata } from "@synap/database/schema";
+import type { WorkspaceSettings } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { deriveAuthorshipMode } from "../services/agent-identity-service.js";
 import { logEvent } from "../lib/event-helpers.js";
 import { openLink, openPath } from "./deep-links.js";
 import {
-  decideAgentPolicy,
   findMatchingPattern,
   requiredPermissionFor,
   isBlockedFilesystemPath,
@@ -597,117 +597,77 @@ export async function checkPermissionOrPropose(
     // Agent user path: agentUserId is the canonical signal that this is an AI action.
     // Source field is just metadata — not used to gate behaviour here.
     if (agentUserId) {
-      // Confirm the user row is actually an agent (defence-in-depth)
-      const [agentUser] = await db
-        .select({
-          userType: users.userType,
-          agentMetadata: users.agentMetadata,
-        })
-        .from(users)
-        .where(eq(users.id, agentUserId))
-        .limit(1);
+      // GOVERNANCE BY KIND (user_observation): surface the write subject's
+      // profile slug + its `uo_validated` flag to the policy so a user_observation
+      // is governed by the nature of the observation (inference vs explicit),
+      // not the routing workspace. Both signals ride in the gate `data` payload
+      // (entity create/update carries `profileSlug` + `properties`); we read
+      // them defensively (absent → rule no-ops in the policy).
+      const subjectProfileSlug =
+        typeof data?.profileSlug === "string" ? data.profileSlug : undefined;
+      const dataProperties = (data?.properties ?? null) as Record<
+        string,
+        unknown
+      > | null;
+      const subjectUoValidated =
+        typeof dataProperties?.uo_validated === "boolean"
+          ? dataProperties.uo_validated
+          : undefined;
 
-      if (agentUser?.userType === "agent") {
-        // Agent user: permission already verified via role above (or pod-owner
-        // scope). DEFAULT: all agent actions require a proposal. EXCEPTION:
-        // actions in the autoApproveFor whitelist bypass proposal. Workspace
-        // settings are the governance OVERRIDE source; at pod scope (no
-        // workspace) we fall back to agent-metadata + DEFAULT_AUTO_APPROVE.
-        const [ws] = workspaceId
-          ? await db
-              .select({
-                settings: workspaces.settings,
-                workspaceType: workspaces.workspaceType,
-              })
-              .from(workspaces)
-              .where(eq(workspaces.id, workspaceId))
-              .limit(1)
-          : [undefined];
+      // Agent governance ladder — steps (b) confirm-agent, (c) load workspace
+      // settings, (d) decideAgentPolicy, (e) verdict — are the SHARED SSOT
+      // `resolveAgentGovernanceDecision` (@synap/database), the SAME ladder the
+      // automation door runs. The chat door prefers the agent's own metadata
+      // autoApproveFor list over the workspace override
+      // (`preferAgentMetadataAutoApproveFor: true`). The propose/execute SIDE
+      // EFFECTS below are this door's own concern and stay here.
+      const gov = await resolveAgentGovernanceDecision({
+        db,
+        agentUserId,
+        workspaceId,
+        subjectType,
+        action,
+        channelCapabilities,
+        subjectProfileSlug,
+        subjectUoValidated,
+        forcePropose: opts.forcePropose,
+        preferAgentMetadataAutoApproveFor: true,
+      });
 
-        const settings = ws?.settings as WorkspaceSettings | undefined;
-        const isAgentOwnedWorkspace =
-          ws?.workspaceType === "agent" &&
-          settings?.linkedAgentId === agentUserId;
+      if (gov.decision === "deny") {
+        return { denied: true, reason: gov.reason };
+      }
 
-        const eventKey = `${subjectType}.${action}`;
-        // Pass the raw workspace value (may be undefined) so decideAgentPolicy
-        // can distinguish "workspace explicitly set a list" from "no override".
-        // Explicit list is checked before writesRequireProposal (overrides it);
-        // DEFAULT_AUTO_APPROVE is checked after as the last resort.
-        const explicitAutoApproveFor = settings?.aiGovernance?.autoApproveFor;
-
-        // Agent governance policy — SINGLE SOURCE OF TRUTH in
-        // @synap/governance-policy. decideAgentPolicy applies the full ladder
-        // (CBAC → ADMIN_ACTIONS → isAgentOwnedWorkspace → explicit autoApproveFor
-        // → writesRequireProposal → agent-owned mode destructive → per-channel
-        // grant → default autoApproveFor → default) and returns the verdict.
-        // Side effects stay here.
-        // GOVERNANCE BY KIND (user_observation): surface the write subject's
-        // profile slug + its `uo_validated` flag to the policy so a user_observation
-        // is governed by the nature of the observation (inference vs explicit),
-        // not the routing workspace. Both signals ride in the gate `data` payload
-        // (entity create/update carries `profileSlug` + `properties`); we read
-        // them defensively (absent → rule no-ops in the policy).
-        const subjectProfileSlug =
-          typeof data?.profileSlug === "string" ? data.profileSlug : undefined;
-        const dataProperties = (data?.properties ?? null) as Record<
-          string,
-          unknown
-        > | null;
-        const subjectUoValidated =
-          typeof dataProperties?.uo_validated === "boolean"
-            ? dataProperties.uo_validated
-            : undefined;
-
-        const agentMetadata = agentUser.agentMetadata as AgentMetadata | null;
-        const decision = decideAgentPolicy({
+      if (gov.decision === "propose") {
+        return createProposal({
+          userId,
+          agentUserId,
+          workspaceId,
           subjectType,
           action,
-          agentCapabilities: agentMetadata?.capabilities,
-          writesRequireProposal: agentMetadata?.writesRequireProposal === true,
-          governanceMode: settings?.governanceMode,
-          autoApproveFor:
-            agentMetadata?.autoApproveFor ?? explicitAutoApproveFor,
-          isAgentOwnedWorkspace,
-          channelCapabilities,
-          subjectProfileSlug,
-          subjectUoValidated,
-          forcePropose: opts.forcePropose,
+          source,
+          data,
+          correlationId,
+          requestedEventId,
+          // gov.reason carries the per-branch default reasoning; it is undefined
+          // for the plain default-propose case, preserving the prior behavior of
+          // passing the caller's reasoning through unchanged.
+          reasoning: opts.reasoning ?? gov.reason,
+          threadId,
+          commandRunId,
+          sourceMessageId,
+          sessionId,
+          projectId,
         });
+      }
 
-        if (decision.verdict === "deny") {
-          return { denied: true, reason: decision.reason };
-        }
-
-        if (decision.verdict === "propose") {
-          return createProposal({
-            userId,
-            agentUserId,
-            workspaceId,
-            subjectType,
-            action,
-            source,
-            data,
-            correlationId,
-            requestedEventId,
-            // decision.reason carries the per-branch default reasoning; it is
-            // undefined for the plain default-propose case, preserving the prior
-            // behavior of passing the caller's reasoning through unchanged.
-            reasoning: opts.reasoning ?? decision.reason,
-            threadId,
-            commandRunId,
-            sourceMessageId,
-            sessionId,
-            projectId,
-          });
-        }
-
-        // verdict === "execute": auto-approved. Record a secondary audit-trail
-        // row, then grant. The PRIMARY durable audit of an auto-approved action
-        // is the event spine (the caller still emits `{subject}.{action}`
-        // .requested/.completed), so this insert stays NON-BLOCKING — but it
-        // must never fail SILENTLY (that was the Wave-B gap), so failures are
-        // logged loudly instead of swallowed.
+      if (gov.decision === "execute") {
+        // Auto-approved. Record a secondary audit-trail row, then grant. The
+        // PRIMARY durable audit of an auto-approved action is the event spine
+        // (the caller still emits `{subject}.{action}` .requested/.completed), so
+        // this insert stays NON-BLOCKING — but it must never fail SILENTLY (that
+        // was the Wave-B gap), so failures are logged loudly instead of swallowed.
+        const eventKey = `${subjectType}.${action}`;
         const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
         db.insert(proposals)
           .values({
@@ -724,7 +684,7 @@ export async function checkPermissionOrPropose(
               _autoApprove: {
                 matchedPattern: findMatchingPattern(
                   eventKey,
-                  explicitAutoApproveFor ?? DEFAULT_AUTO_APPROVE
+                  gov.explicitAutoApproveFor ?? DEFAULT_AUTO_APPROVE
                 ),
                 approvedAt: new Date().toISOString(),
                 approvedBy: "system:auto_approve",
@@ -745,6 +705,9 @@ export async function checkPermissionOrPropose(
 
         return { granted: true };
       }
+
+      // gov.decision === "not-agent": the user row is not an agent (defence-in-
+      // depth) — fall through to the legacy AI-source path below, then grant.
     }
 
     // Legacy AI source path (no agent user row, but caller signals AI-sourced action).

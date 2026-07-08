@@ -7,17 +7,16 @@
  * so that per the agent's capabilities the write either auto-approves or
  * becomes a PENDING, ATTRIBUTED proposal in the Reactions queue.
  *
- * WHY THIS LIVES IN @synap/jobs (not @synap/api):
- *   The canonical gate is `checkPermissionOrPropose` in
- *   packages/api/src/utils/permission-check.ts. The automation-executor runs
- *   inside @synap/jobs, and @synap/api already depends on @synap/jobs (api →
- *   jobs), so importing the canonical gate here would be circular. This module
- *   is a forked MIRROR of that gate's agent policy — it never relaxes a check.
- *
- *   DRIFT RISK: the policy constants below (ADMIN_ACTIONS, DEFAULT_AUTO_APPROVE)
- *   are copied from permission-check.ts and will silently diverge if one side
- *   changes. TODO: extract the shared policy (constants + precedence) into a
- *   lower package both api and jobs import, and delete this fork.
+ * SHARED LADDER (no longer a fork):
+ *   This door runs the SAME agent-governance ladder as the chat door
+ *   (`checkPermissionOrPropose`). Steps (b)-(e) — confirm-agent → load workspace
+ *   settings → `decideAgentPolicy` → verdict — are the SINGLE SOURCE OF TRUTH
+ *   `resolveAgentGovernanceDecision` (@synap/database). The inline copy that
+ *   used to live here (with its documented drift risk) is gone. What stays here
+ *   is only this door's own concerns: step (a) RBAC + its simple deny, and the
+ *   `propose` side effect (`proposeAutomationWrite`). @synap/database is the
+ *   home because @synap/api → @synap/jobs (a helper in api would be a circular
+ *   import for this jobs-side door), and both layers already depend on it.
  *
  * ATTRIBUTION / Reactions queue: the Reactions queue is DB-driven — the
  * proposals router lists rows WHERE status = 'pending' AND agent_user_id IS NOT
@@ -26,8 +25,8 @@
  * exactly like `createPendingProposal` does. The realtime broadcast +
  * emitSideEffects are supplementary nudges, mirrored here for parity.
  *
- * Policy mirrored from checkPermissionOrPropose (in precedence order):
- *   1. RBAC via verifyPermission (effective user = owning agent's user id)
+ * Ladder (precedence order, all in `resolveAgentGovernanceDecision` except RBAC):
+ *   1. RBAC via verifyPermission (effective user = owning agent's user id) — here
  *   2. CBAC capabilities allowlist (deny if the agent lacks the capability)
  *   3. ADMIN_ACTIONS → always propose
  *   4. writesRequireProposal → propose on writes
@@ -43,22 +42,16 @@
 
 import {
   db,
-  eq,
-  users,
-  workspaces,
   verifyPermission,
   ProposalStatus,
   insertPendingProposal,
 } from "@synap/database";
-import type { WorkspaceSettings, AgentMetadata } from "@synap/database/schema";
+import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
 import { randomUUID } from "crypto";
 import { emitSideEffects } from "@synap/events";
 import { broadcastNotification } from "./realtime-broadcast.js";
 import { createLogger } from "@synap-core/core";
-import {
-  decideAgentPolicy,
-  requiredPermissionFor,
-} from "@synap/governance-policy";
+import { requiredPermissionFor } from "@synap/governance-policy";
 
 const logger = createLogger({ module: "automation-governance" });
 
@@ -142,21 +135,23 @@ export async function checkAutomationWriteOrPropose(
     };
   }
 
-  // 2. Resolve whether the owner is an AGENT user. Only then does the agent
-  //    governance policy apply (capabilities / propose-by-default). This is the
-  //    same userType === "agent" defence-in-depth check the canonical gate runs.
-  const [ownerUser] = await db
-    .select({
-      userType: users.userType,
-      agentMetadata: users.agentMetadata,
-    })
-    .from(users)
-    .where(eq(users.id, ownerId))
-    .limit(1);
+  // 2. Agent governance ladder — steps (b)-(e) are the SHARED SSOT
+  //    `resolveAgentGovernanceDecision` (@synap/database), the SAME ladder the
+  //    chat door runs. It confirms the owner is an agent user, loads the
+  //    workspace settings, and applies decideAgentPolicy. Automation writes are
+  //    never channel writes and never force a proposal, so the per-channel /
+  //    subject-kind / forcePropose inputs are omitted; `preferAgentMetadata
+  //    AutoApproveFor: false` preserves this door's workspace-only autoApproveFor.
+  const gov = await resolveAgentGovernanceDecision({
+    db,
+    agentUserId: ownerId,
+    workspaceId,
+    subjectType,
+    action,
+    preferAgentMetadataAutoApproveFor: false,
+  });
 
-  const isAgentOwner = ownerUser?.userType === "agent";
-
-  if (!isAgentOwner) {
+  if (gov.decision === "not-agent") {
     // Owner is a human (or an unresolved principal). A human-owned automation
     // write is governed by the human's RBAC only — identical to that human
     // acting directly. This is NOT a relaxation of agent governance: no agent
@@ -165,60 +160,31 @@ export async function checkAutomationWriteOrPropose(
     return { granted: true };
   }
 
-  // From here on the owner IS an agent user → apply agent governance policy.
-  const agentUserId = ownerId;
-
-  const [ws] = await db
-    .select({
-      settings: workspaces.settings,
-      workspaceType: workspaces.workspaceType,
-    })
-    .from(workspaces)
-    .where(eq(workspaces.id, workspaceId))
-    .limit(1);
-  const settings = ws?.settings as WorkspaceSettings | undefined;
-  const isAgentOwnedWorkspace =
-    ws?.workspaceType === "agent" && settings?.linkedAgentId === agentUserId;
-
-  const agentMeta = ownerUser?.agentMetadata as AgentMetadata | null;
-
-  // Agent governance policy — SINGLE SOURCE OF TRUTH in @synap/governance-policy.
-  // Automation writes are never channel writes, so there is no per-channel grant.
-  const decision = decideAgentPolicy({
-    subjectType,
-    action,
-    agentCapabilities: agentMeta?.capabilities,
-    writesRequireProposal: agentMeta?.writesRequireProposal === true,
-    governanceMode: settings?.governanceMode,
-    autoApproveFor: settings?.aiGovernance?.autoApproveFor,
-    isAgentOwnedWorkspace,
-  });
-
-  if (decision.verdict === "deny") {
+  if (gov.decision === "deny") {
     logger.warn(
       { ownerId, workspaceId, eventKey: `${subjectType}.${action}` },
       "Automation write denied by agent governance policy"
     );
-    return { denied: true, reason: decision.reason };
+    return { denied: true, reason: gov.reason };
   }
 
-  if (decision.verdict === "propose") {
+  if (gov.decision === "propose") {
     return proposeAutomationWrite({
-      agentUserId,
+      agentUserId: ownerId,
       workspaceId,
       subjectType,
       action,
       data,
-      // decision.reason carries the per-branch default; undefined for the plain
+      // gov.reason carries the per-branch default; undefined for the plain
       // default-propose case, where proposeAutomationWrite supplies its own.
-      reasoning: reasoning ?? decision.reason,
+      reasoning: reasoning ?? gov.reason,
       automationRunId,
       correlationId,
       sessionId,
     });
   }
 
-  // verdict === "execute": auto-approved → the caller may write directly.
+  // gov.decision === "execute": auto-approved → the caller may write directly.
   return { granted: true };
 }
 

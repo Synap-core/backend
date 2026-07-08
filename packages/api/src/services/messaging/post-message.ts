@@ -8,8 +8,8 @@
  * autoRespond trigger, so it is intentionally NOT unified here.)
  */
 
-import { randomUUID, createHash } from "crypto";
-import { db, messages, MessageRole } from "@synap/database";
+import { randomUUID } from "crypto";
+import { db, messages, MessageRole, computeMessageHash } from "@synap/database";
 
 export interface PostChannelMessageParams {
   channelId: string;
@@ -27,7 +27,7 @@ export async function postChannelMessage(
   const role = params.role || "assistant";
   const triggerAI = Boolean(params.triggerAI);
   const msgId = randomUUID();
-  const hash = createHash("sha256").update(`${msgId}${content}`).digest("hex");
+  const hash = computeMessageHash(msgId, content);
   const roleEnum =
     role === "user"
       ? MessageRole.USER

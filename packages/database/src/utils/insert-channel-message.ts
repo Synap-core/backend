@@ -11,8 +11,9 @@
  * the value this helper adds over a raw insert.
  */
 
-import { createHash } from "crypto";
+import { randomUUID } from "crypto";
 import { getDb } from "../client-pg.js";
+import { computeMessageHash } from "./message-hash.js";
 import {
   messages,
   MessageRole,
@@ -63,19 +64,24 @@ export async function insertChannelMessage(
   } = params;
 
   const database = await getDb();
-  const hash = createHash("sha256")
-    .update(`${channelId}:${Date.now()}:${content}`)
-    .digest("hex");
+  // Canonical tamper-hash: computeMessageHash(id, content, previousHash="") —
+  // the ONE formula (see message-hash.ts). Generate the id up front so the
+  // stored hash matches the row's id (the previous `channelId:ts:content`
+  // formula was drift, not comparable to the tamper chain).
+  const id = randomUUID();
+  const hash = computeMessageHash(id, content);
 
   const [msg] = await database
     .insert(messages)
     .values({
+      id,
       channelId,
       userId,
       role,
       authorType,
       content,
       hash,
+      previousHash: "",
       ...(messageCategory ? { messageCategory } : {}),
       ...(metadata
         ? { metadata: metadata as (typeof messages.$inferInsert)["metadata"] }

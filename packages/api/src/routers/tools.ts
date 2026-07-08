@@ -19,7 +19,13 @@ import {
   inArray,
   desc,
 } from "@synap/database";
-import { tools, skills, links, secrets } from "@synap/database/schema";
+import {
+  tools,
+  skills,
+  links,
+  secrets,
+  secretUsages,
+} from "@synap/database/schema";
 import type { Tool } from "@synap/database/schema";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
@@ -479,6 +485,36 @@ export const toolsRouter = router({
           updatedAt: new Date(),
         })
         .where(eq(secrets.id, input.secretId));
+
+      // Record the "used by" join for the vault Connections face: this secret is
+      // consumed by the tool, bound to a principal context. context_id carries
+      // the principal id (never '' here — a binding always has a principal), so
+      // re-binding the same secret to the same principal dedupes and refreshes
+      // the label.
+      await db
+        .insert(secretUsages)
+        .values({
+          secretId: input.secretId,
+          consumerType: "tool",
+          consumerId: input.toolId,
+          consumerLabel: tool.name,
+          workspaceId: tool.workspaceId ?? null,
+          contextType: input.principalType,
+          contextId: input.principalId,
+        })
+        .onConflictDoUpdate({
+          target: [
+            secretUsages.secretId,
+            secretUsages.consumerType,
+            secretUsages.consumerId,
+            secretUsages.contextId,
+          ],
+          set: {
+            consumerLabel: tool.name,
+            contextType: input.principalType,
+            workspaceId: tool.workspaceId ?? null,
+          },
+        });
       return { linkId: input.secretId };
     }),
 
@@ -508,6 +544,17 @@ export const toolsRouter = router({
         .update(secrets)
         .set({ contextType: null, contextId: null, updatedAt: new Date() })
         .where(eq(secrets.id, input.linkId));
+
+      // Drop the tool "used by" join row(s) for this secret — the binding is
+      // gone, so the Connections face must stop showing the tool as a consumer.
+      await db
+        .delete(secretUsages)
+        .where(
+          and(
+            eq(secretUsages.secretId, input.linkId),
+            eq(secretUsages.consumerType, "tool")
+          )
+        );
       return { ok: true };
     }),
 

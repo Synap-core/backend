@@ -16,8 +16,8 @@
  */
 
 import type PgBoss from "pg-boss";
-import { randomUUID, createHash } from "node:crypto";
-import { db, eq, and } from "@synap/database";
+import { randomUUID } from "node:crypto";
+import { db, eq, and, computeMessageHash } from "@synap/database";
 import {
   channels,
   messages,
@@ -256,9 +256,7 @@ export async function handleCrmDailyDigest(_job: PgBoss.Job): Promise<void> {
 
       const channelId = await resolvePersonalChannelId(userId);
       const tempId = randomUUID();
-      const hash = createHash("sha256")
-        .update(`${tempId}${content}`)
-        .digest("hex");
+      const hash = computeMessageHash(tempId, content);
 
       const [inserted] = await db
         .insert(messages)

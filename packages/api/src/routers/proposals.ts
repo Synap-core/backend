@@ -411,6 +411,7 @@ async function enrichProposalsForDisplay(
     const entityMeta = entityById.get(request.targetId);
     const targetName =
       request.targetName ??
+      titleFieldOverrideValue(request.targetType, payload) ??
       displayLabelFromRecord(payload) ??
       entityMeta?.title ??
       entityMeta?.preview ??
@@ -631,7 +632,62 @@ interface ProposalPreviousData {
  * @synap-core/types dist before it rebuilds with the new field. */
 type ProposalPreviousDataCarrier = { previousData?: ProposalPreviousData };
 
-function buildProposalChanges(
+/**
+ * Envelope/infra keys that must never surface as a user-facing change row in the
+ * generic (non-entity) fallback in `buildProposalChanges`. Mirrors the frontend
+ * INFRA_KEYS set (useProposalPresentation.ts) so the two derivations agree. The
+ * entity path never consults this — it only walks the explicit
+ * title/description/profileSlug/documentId + `properties.*` keys.
+ */
+const NON_ENTITY_INFRA_KEYS = new Set([
+  "source",
+  "sourceId",
+  "_summary",
+  "summary",
+  "changeType",
+  "operations",
+  "correlationId",
+  "requestId",
+  "requestedEventId",
+  "validatedEventId",
+  "completedEventId",
+  "workspaceId",
+  "targetType",
+  "targetId",
+  "data",
+  "global",
+  "reasoning",
+  "id",
+  "documentId",
+  "content",
+  "title",
+  "description",
+  "profileSlug",
+]);
+
+/**
+ * Per-subjectType override for which flat payload field names the proposal card.
+ * Consulted when resolving a proposal's `targetName` so a non-entity subject
+ * (e.g. a flat `property_def` payload that carries no title/name) still gets a
+ * human title (its slug) instead of falling through to "Untitled". Backend-local
+ * — deliberately NOT a new published type field (reuses existing plumbing).
+ */
+const TITLE_FIELD_OVERRIDES: Record<string, string> = {
+  property_def: "slug",
+};
+
+/** Resolve the title-override field value for a proposal's target type, if any. */
+function titleFieldOverrideValue(
+  targetType: string | undefined,
+  payload: Record<string, unknown> | undefined
+): string | undefined {
+  if (!targetType) return undefined;
+  const field = TITLE_FIELD_OVERRIDES[targetType];
+  if (!field) return undefined;
+  return stringProp(payload, field);
+}
+
+export function buildProposalChanges(
   data: Record<string, unknown>,
   changeType: string,
   current?: {
@@ -712,6 +768,28 @@ function buildProposalChanges(
       after: value,
       valueType: valueTypeOf(value),
     });
+  }
+
+  // Generic fallback: a non-entity proposal (e.g. a flat `property_def` payload of
+  // { slug, valueType, constraints, overlay, required, … }) matches none of the
+  // entity-shape keys above, so `changes` is still empty and the review card would
+  // render blank. Emit one change per non-infra top-level key (no "properties."
+  // prefix) so the payload renders. Entity/document/composite/session payloads
+  // always populate `changes` above, so this never fires for them — the entity
+  // path is preserved byte-for-byte.
+  if (changes.length === 0) {
+    for (const [key, value] of Object.entries(data)) {
+      if (NON_ENTITY_INFRA_KEYS.has(key)) continue;
+      if (value === undefined) continue;
+      changes.push({
+        path: key,
+        label: labelFromPath(key),
+        operation,
+        before: undefined,
+        after: value,
+        valueType: valueTypeOf(value),
+      });
+    }
   }
 
   return changes;
@@ -2045,6 +2123,37 @@ export const proposalsRouter = router({
           userId,
           workspaceId: proposal.workspaceId ?? undefined,
         });
+      }
+
+      // Feedback signal — a human reverted an auto-approved capture, i.e.
+      // rejected the whole AI decision behind it (not just one field). Only
+      // capture-originated proposals carry a decision-scoped correlationId
+      // worth scoring. Best-effort: never fail the revert over an audit hiccup.
+      if (
+        proposal.status === ProposalStatus.AUTO_APPROVED &&
+        proposal.proposalType === "capture.graph" &&
+        proposal.correlationId
+      ) {
+        try {
+          await auditLog({
+            subjectType: "ai_correction",
+            action: "revert",
+            phase: "completed",
+            subjectId: input.proposalId,
+            userId,
+            workspaceId: proposal.workspaceId ?? undefined,
+            data: {
+              kind: "capture",
+              correlationId: proposal.correlationId,
+            },
+            source: "api",
+          });
+        } catch (err) {
+          logger.warn(
+            { err, proposalId: input.proposalId },
+            "ai_correction revert emit failed (revert preserved)"
+          );
+        }
       }
 
       return {

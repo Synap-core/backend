@@ -14,6 +14,11 @@
       "types": "./dist/schema/index.d.ts",
       "import": "./dist/schema/index.js",
       "default": "./dist/schema/index.js"
+    },
+    "./agent-governance": {
+      "types": "./dist/utils/resolve-agent-governance-decision.d.ts",
+      "import": "./dist/utils/resolve-agent-governance-decision.js",
+      "default": "./dist/utils/resolve-agent-governance-decision.js"
     }
   },
   "files": [

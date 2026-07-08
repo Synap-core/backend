@@ -51,6 +51,7 @@ import {
 } from "@synap/database";
 import type { Context } from "../../../types/context.js";
 import { createHubProtocolCallerContext } from "../utils.js";
+import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
   CaptureExecuteRequestSchema,
@@ -318,10 +319,23 @@ export function registerCaptureRoutes(app: HubHono): void {
 
     try {
       const scopes = c.get("scopes") as string[];
+      // Thread the seeded Capture agent as the acting agent for the capture
+      // pipeline (always — this endpoint IS the capture flow). NOTE: /capture/
+      // execute is a direct first-party write (captureRouter.execute uses
+      // entityRepo.create directly and does NOT call checkPermissionOrPropose),
+      // so auto-apply does not depend on this — the actor is carried for
+      // provenance/consistency with the header-gated shared routes. Graceful
+      // fallback to the caller's own id if the Capture agent isn't seeded yet.
+      const captureActorUserId = await resolveCaptureActorUserId(c, undefined, {
+        always: true,
+      });
       const ctx = await createHubProtocolCallerContext(
         userId,
         scopes,
-        workspaceId
+        workspaceId,
+        null,
+        null,
+        captureActorUserId
       );
       const caller = captureRouter.createCaller(
         ctx as Parameters<typeof captureRouter.createCaller>[0]

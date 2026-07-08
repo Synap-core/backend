@@ -48,6 +48,7 @@ import { type Entity, EntitySchema } from "@synap-core/types";
 import { entityToWire } from "./hub-protocol/rest/_codecs/entity.js";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { resolveViewTrust } from "../services/view-trust-service.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects, getBoss } from "@synap/events";
@@ -1598,7 +1599,7 @@ export const entitiesRouter = router({
           isNull(entities.deletedAt),
           entityVisibleWhere(ctx.userId)
         ),
-        columns: { id: true, workspaceId: true },
+        columns: { id: true, workspaceId: true, correlationId: true },
       });
       if (!existing) {
         throw new TRPCError({
@@ -1727,7 +1728,184 @@ export const entitiesRouter = router({
         data: { profileSlug: deletedEntityRow?.type ?? undefined },
       });
 
+      // Feedback signal — a human deleted an entity the AI created (carries a
+      // correlationId back to the decision that produced it). Best-effort:
+      // never fail the delete over an audit-log hiccup.
+      if (existing.correlationId) {
+        try {
+          await auditLog({
+            subjectType: "ai_correction",
+            action: "delete",
+            phase: "completed",
+            subjectId: input.id,
+            userId: ctx.userId,
+            agentUserId: input.agentUserId,
+            workspaceId: governanceWorkspaceId,
+            data: {
+              kind: "extract",
+              entityId: input.id,
+              correlationId: existing.correlationId,
+            },
+          });
+        } catch (err) {
+          logger.warn(
+            { err, entityId: input.id },
+            "ai_correction delete emit failed (delete preserved)"
+          );
+        }
+      }
+
       return { status: "deleted", message: "Entity deleted" };
+    }),
+
+  /**
+   * Move entities to a different workspace — a governed operation distinct
+   * from `update`'s `global` flag (which only promotes to pod-wide/null).
+   *
+   * Two-sided access check:
+   *   - SOURCE: `checkPermissionOrPropose` gated on the entity's CURRENT
+   *     workspaceId (mirrors `update`'s governance so agent callers get
+   *     proposal-gated instead of blocked, per CLAUDE.md).
+   *   - TARGET: `assertWorkspaceWrite` — the caller must also be an editor+
+   *     member of the DESTINATION workspace, since moving an entity there is
+   *     a write to that workspace too (new check; `update`'s `global` path
+   *     never needed one because it only ever moves TO null).
+   *
+   * Best-effort per entity (mirrors `batchCreate`'s partial-success shape) —
+   * one entity's not-found/denied/proposed outcome never blocks the others.
+   */
+  moveToWorkspace: podProcedure
+    .input(
+      z.object({
+        entityIds: z.array(z.string().uuid()).min(1),
+        workspaceId: z.string().uuid(),
+        reason: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const database = await getDb();
+
+      // Target-side gate: caller must be able to write INTO the destination
+      // workspace. Membership check, not row-scoped (there is no row there yet).
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: input.workspaceId,
+      });
+
+      const moved: string[] = [];
+      const proposed: Array<{ entityId: string; proposalId: string }> = [];
+      const errors: Array<{ entityId: string; error: string }> = [];
+
+      for (const entityId of input.entityIds) {
+        try {
+          const existing = await db.query.entities.findFirst({
+            where: and(
+              eq(entities.id, entityId),
+              isNull(entities.deletedAt),
+              entityVisibleWhere(ctx.userId)
+            ),
+            columns: { id: true, workspaceId: true, correlationId: true },
+          });
+          if (!existing) {
+            errors.push({ entityId, error: "Entity not found" });
+            continue;
+          }
+          const fromWorkspaceId = existing.workspaceId;
+          const correlationId = randomUUID();
+
+          // 1. Emit .requested event
+          const requestedEvent = await auditLog({
+            subjectType: "entity",
+            action: "move",
+            phase: "requested",
+            subjectId: entityId,
+            userId: ctx.userId,
+            workspaceId: fromWorkspaceId,
+            correlationId,
+            data: {
+              fromWorkspaceId,
+              toWorkspaceId: input.workspaceId,
+              reason: input.reason,
+            },
+          });
+
+          // 2. Source-side permission check — gated on the CURRENT workspace,
+          // same governance ladder `update` uses (action mapped to "write" via
+          // requiredPermissionFor("update"); "move" itself isn't a registered
+          // action in @synap/governance-policy).
+          const perm = await checkPermissionOrPropose({
+            userId: ctx.userId,
+            workspaceId: fromWorkspaceId,
+            subjectType: "entity",
+            action: "update",
+            reasoning: input.reason,
+            correlationId,
+            requestedEventId: requestedEvent?.id,
+            data: { id: entityId, toWorkspaceId: input.workspaceId },
+          });
+
+          if ("denied" in perm && perm.denied) {
+            errors.push({ entityId, error: perm.reason });
+            continue;
+          }
+          if ("proposalId" in perm) {
+            proposed.push({ entityId, proposalId: perm.proposalId });
+            continue;
+          }
+
+          // 3. Materialize — inline DB write (auto-approved)
+          await database
+            .update(entities)
+            .set({ workspaceId: input.workspaceId })
+            .where(eq(entities.id, entityId));
+
+          // 4. Emit .completed event
+          await auditLog({
+            subjectType: "entity",
+            action: "move",
+            phase: "completed",
+            subjectId: entityId,
+            userId: ctx.userId,
+            workspaceId: input.workspaceId,
+            correlationId,
+          });
+
+          moved.push(entityId);
+
+          // Feedback signal (PRIMARY) — a human rerouted an entity the AI
+          // placed via a captured decision. Best-effort: never fail the move.
+          if (existing.correlationId) {
+            try {
+              await auditLog({
+                subjectType: "ai_correction",
+                action: "reroute",
+                phase: "completed",
+                subjectId: entityId,
+                userId: ctx.userId,
+                workspaceId: input.workspaceId,
+                data: {
+                  kind: "route",
+                  entityId,
+                  fromWorkspaceId,
+                  toWorkspaceId: input.workspaceId,
+                  correlationId: existing.correlationId,
+                },
+              });
+            } catch (err) {
+              logger.warn(
+                { err, entityId },
+                "ai_correction reroute emit failed (move preserved)"
+              );
+            }
+          }
+        } catch (err) {
+          errors.push({
+            entityId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      return { moved, proposed, errors };
     }),
 
   /**

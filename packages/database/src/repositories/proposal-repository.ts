@@ -10,14 +10,6 @@ import { eq, and, desc } from "drizzle-orm";
 import { proposals } from "../schema/index.js";
 import { type ProposalStatus } from "../schema/proposals.js";
 
-export interface CreateProposalInput {
-  workspaceId?: string | null;
-  targetType: string;
-  targetId: string;
-  request: Record<string, unknown>;
-  status?: string;
-}
-
 export interface UpdateProposalInput {
   status?: string;
   reviewedBy?: string;
@@ -27,22 +19,6 @@ export interface UpdateProposalInput {
 
 export class ProposalRepository {
   constructor(private db: any) {}
-
-  /**
-   * Create a new proposal
-   * NO EVENT EMISSION - proposals are part of the event flow
-   */
-  async create(data: CreateProposalInput): Promise<any> {
-    const [proposal] = await this.db
-      .insert(proposals)
-      .values({
-        ...data,
-        status: data.status || "pending",
-      })
-      .returning();
-
-    return proposal;
-  }
 
   /**
    * Update proposal status

@@ -107,36 +107,6 @@ export interface SynapReplyRoutedEvent {
   routedAt: string;
 }
 
-/** Hermes task lifecycle. `taskId` is the Hermes job/task identifier. */
-export interface HermesTaskQueuedEvent {
-  taskId: string;
-  /** Task kind (job-queue name / task-template id). */
-  kind: string;
-  /** What initiated the task — "user", "agent:<type>", "automation", "cron", etc. */
-  source: string;
-  queuedAt: string;
-}
-
-export interface HermesTaskStartedEvent {
-  taskId: string;
-  kind: string;
-  startedAt: string;
-}
-
-export interface HermesTaskCompletedEvent {
-  taskId: string;
-  /** Wall-clock duration in milliseconds (queued → completed). */
-  durationMs: number;
-  completedAt: string;
-}
-
-export interface HermesTaskFailedEvent {
-  taskId: string;
-  /** Human-readable error summary. Stack traces stay in logs. */
-  error: string;
-  failedAt: string;
-}
-
 export interface ImportFileProgressEvent {
   batchId: string;
   path: string;
@@ -254,10 +224,6 @@ export interface DomainServerToClientEvents {
   // {actor}:{entity}:{action} — new convention. New events MUST land here, not above.
   "openclaw:message:received": (data: OpenClawMessageReceivedEvent) => void;
   "synap:reply:routed": (data: SynapReplyRoutedEvent) => void;
-  "hermes:task:queued": (data: HermesTaskQueuedEvent) => void;
-  "hermes:task:started": (data: HermesTaskStartedEvent) => void;
-  "hermes:task:completed": (data: HermesTaskCompletedEvent) => void;
-  "hermes:task:failed": (data: HermesTaskFailedEvent) => void;
   "import:file:progress": (data: ImportFileProgressEvent) => void;
 
   // UI gateway
@@ -330,7 +296,6 @@ export type DomainEventName =
  * - `user` — direct human action
  * - `agent` — Synap agent (orchestrator, persona)
  * - `openclaw` — messaging ingress (external chat → Synap)
- * - `hermes` — execution daemon
  * - `synap` — the brain (notifications, channel routing, AI streaming)
  * - `system` — infra / cron / lifecycle
  *
@@ -353,10 +318,6 @@ export const EventNames = {
   // {actor}:{entity}:{action} — NEW convention. Add new events here.
   OPENCLAW_MESSAGE_RECEIVED: "openclaw:message:received",
   SYNAP_REPLY_ROUTED: "synap:reply:routed",
-  HERMES_TASK_QUEUED: "hermes:task:queued",
-  HERMES_TASK_STARTED: "hermes:task:started",
-  HERMES_TASK_COMPLETED: "hermes:task:completed",
-  HERMES_TASK_FAILED: "hermes:task:failed",
   IMPORT_FILE_PROGRESS: "import:file:progress",
 
   // UI gateway
@@ -368,7 +329,7 @@ export type EventName = (typeof EventNames)[keyof typeof EventNames];
 /**
  * Maps an event name to its payload shape via {@link DomainServerToClientEvents}.
  * Lets `emitTyped<E>` infer the right payload from the event name alone, so
- * `emitTyped("hermes:task:queued", { ... })` is type-checked at the call site.
+ * `emitTyped("synap:reply:routed", { ... })` is type-checked at the call site.
  */
 export type EventPayloadFor<E extends EventName> =
   E extends keyof DomainServerToClientEvents

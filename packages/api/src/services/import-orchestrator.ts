@@ -1,7 +1,13 @@
-import { randomUUID, createHash } from "crypto";
+import { randomUUID } from "crypto";
 import { TRPCError } from "@trpc/server";
 import { storage } from "@synap/storage";
-import { db, messages, MessageRole, MessageAuthorType } from "@synap/database";
+import {
+  db,
+  messages,
+  MessageRole,
+  MessageAuthorType,
+  computeMessageHash,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { detectJsonChatShape } from "../import/import-parsers.js";
 import {
@@ -270,18 +276,17 @@ export class ImportOrchestrator {
                       ? MessageAuthorType.AI_AGENT
                       : MessageAuthorType.HUMAN;
                   const ts = new Date();
-                  const hash = createHash("sha256")
-                    .update(
-                      JSON.stringify({
-                        channelId,
-                        content: msg.content,
-                        role,
-                        timestamp: ts.toISOString(),
-                      })
-                    )
-                    .digest("hex");
+                  const id = randomUUID();
+                  // Canonical tamper-hash: computeMessageHash(id, content,
+                  // previousHash) — the ONE formula (see message-hash.ts). This
+                  // import path chains each message to the prior one.
+                  const hash = computeMessageHash(
+                    id,
+                    msg.content,
+                    previousHash ?? ""
+                  );
                   await db.insert(messages).values({
-                    id: randomUUID(),
+                    id,
                     channelId,
                     role,
                     authorType,

@@ -24,33 +24,34 @@ describe("emitTyped — runtime behavior", () => {
     emitChatEventMock.mockClear();
   });
 
-  it("forwards a valid hermes:task:queued payload to the bridge", async () => {
+  it("forwards a valid synap:reply:routed payload to the bridge", async () => {
     await emitTyped(
-      "hermes:task:queued",
+      "synap:reply:routed",
       {
-        taskId: "tsk_1",
-        kind: "lead.enrich",
-        source: "agent:orchestrator",
-        queuedAt: "2026-05-05T10:00:00Z",
+        channelId: "ch_1",
+        messageId: "msg_1",
+        targetPlatform: "telegram",
+        excerpt: "on it",
+        routedAt: "2026-05-05T10:00:00Z",
       },
       { userId: "user_1" }
     );
 
     expect(emitChatEventMock).toHaveBeenCalledOnce();
     const call = emitChatEventMock.mock.calls[0][0];
-    expect(call.event).toBe("hermes:task:queued");
+    expect(call.event).toBe("synap:reply:routed");
     expect(call.userId).toBe("user_1");
     expect(call.workspaceId).toBeNull();
     expect(call.channelId).toBeNull();
-    expect(call.data).toMatchObject({ taskId: "tsk_1" });
+    expect(call.data).toMatchObject({ channelId: "ch_1" });
   });
 
   it("rejects a malformed payload before reaching the bridge", async () => {
     await expect(
       emitTyped(
-        "hermes:task:queued",
+        "synap:reply:routed",
         // @ts-expect-error — exercising a runtime check the compiler also catches
-        { taskId: "tsk_1" },
+        { channelId: "ch_1" },
         { userId: "user_1" }
       )
     ).rejects.toThrow(/payload validation failed/);
@@ -61,12 +62,13 @@ describe("emitTyped — runtime behavior", () => {
   it("throws when no target room is provided", async () => {
     await expect(
       emitTyped(
-        "hermes:task:queued",
+        "synap:reply:routed",
         {
-          taskId: "tsk_1",
-          kind: "lead.enrich",
-          source: "agent:orchestrator",
-          queuedAt: "2026-05-05T10:00:00Z",
+          channelId: "ch_1",
+          messageId: "msg_1",
+          targetPlatform: "telegram",
+          excerpt: "on it",
+          routedAt: "2026-05-05T10:00:00Z",
         },
         {}
       )
@@ -107,15 +109,21 @@ describe("emitTyped — compile-time type safety", () => {
       await emitTyped("not-an-event", {}, target);
 
       const wrongType: Parameters<
-        typeof emitTyped<"hermes:task:completed">
-        // @ts-expect-error — durationMs typed as number, given string
-      >[1] = { taskId: "t", durationMs: "fast", completedAt: "x" };
+        typeof emitTyped<"import:file:progress">
+        // @ts-expect-error — index typed as number, given string
+      >[1] = {
+        batchId: "b",
+        path: "p",
+        index: "fast",
+        total: 1,
+        status: "processing",
+      };
       void wrongType;
 
-      // @ts-expect-error — missing required field `queuedAt`
+      // @ts-expect-error — missing required field `total`
       const missingField: Parameters<
-        typeof emitTyped<"hermes:task:queued">
-      >[1] = { taskId: "t", kind: "k", source: "s" };
+        typeof emitTyped<"import:file:progress">
+      >[1] = { batchId: "b", path: "p", index: 0, status: "processing" };
       void missingField;
     };
 

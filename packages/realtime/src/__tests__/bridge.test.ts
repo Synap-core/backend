@@ -31,19 +31,20 @@ describe("validateEmitPayload", () => {
   });
 
   it("accepts a valid {actor}:{entity}:{action} payload", () => {
-    const result = validateEmitPayload("hermes:task:queued", {
-      taskId: "tsk_1",
-      kind: "lead.enrich",
-      source: "agent:orchestrator",
-      queuedAt: "2026-05-05T10:00:00Z",
+    const result = validateEmitPayload("synap:reply:routed", {
+      channelId: "ch_1",
+      messageId: "msg_1",
+      targetPlatform: "telegram",
+      excerpt: "on it",
+      routedAt: "2026-05-05T10:00:00Z",
     });
     expect(result.ok).toBe(true);
   });
 
   it("rejects a malformed {actor}:{entity}:{action} payload", () => {
-    const result = validateEmitPayload("hermes:task:queued", {
-      taskId: "tsk_1",
-      // missing kind, source, queuedAt
+    const result = validateEmitPayload("synap:reply:routed", {
+      channelId: "ch_1",
+      // missing messageId, targetPlatform, excerpt, routedAt
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {

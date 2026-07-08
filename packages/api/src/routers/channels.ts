@@ -94,7 +94,7 @@ import {
   MessageLinkRelationshipType,
 } from "@synap-core/types";
 import { randomUUID } from "crypto";
-import { createHash } from "crypto";
+import { computeMessageHash } from "@synap/database";
 import type { AIStep, HubResponse } from "@synap-core/types";
 import type { Channel } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -700,6 +700,7 @@ export const channelsRouter = router({
     .input(
       z.object({
         parentChannelId: z.string().uuid().optional(),
+        branchedFromMessageId: z.string().uuid().optional(),
         branchPurpose: z.string().optional(),
         /** Project lens (cross-cutting) to tag this channel with, if any. */
         projectId: z.string().uuid().optional(),
@@ -745,6 +746,7 @@ export const channelsRouter = router({
             workspaceId: workspaceId ?? null,
             projectId: input.projectId ?? null,
             parentChannelId: input.parentChannelId,
+            branchedFromMessageId: input.branchedFromMessageId ?? null,
             branchPurpose: input.branchPurpose,
             agentConfig: input.agentConfig,
             channelType: ChannelType.SUB_THREAD,
@@ -1193,9 +1195,7 @@ export const channelsRouter = router({
 
       const channelId = randomUUID();
       const userMessageId = randomUUID();
-      const userMessageHash = createHash("sha256")
-        .update(`${userMessageId}${input.content}`)
-        .digest("hex");
+      const userMessageHash = computeMessageHash(userMessageId, input.content);
 
       await db.insert(channels).values({
         id: channelId,
@@ -1261,9 +1261,7 @@ export const channelsRouter = router({
 
       const channelId = randomUUID();
       const userMessageId = randomUUID();
-      const userMessageHash = createHash("sha256")
-        .update(`${userMessageId}${input.content}`)
-        .digest("hex");
+      const userMessageHash = computeMessageHash(userMessageId, input.content);
 
       await db.insert(channels).values({
         id: channelId,
@@ -1507,9 +1505,7 @@ export const channelsRouter = router({
 
       // Save user message
       const userMessageId = randomUUID();
-      const userMessageHash = createHash("sha256")
-        .update(`${userMessageId}${content}`)
-        .digest("hex");
+      const userMessageHash = computeMessageHash(userMessageId, content);
 
       await db.insert(messages).values({
         id: userMessageId,
@@ -3968,14 +3964,18 @@ export const channelsRouter = router({
         .returning();
 
       if (input.initialMessage) {
+        // Canonical tamper-hash: computeMessageHash(id, content) — the ONE
+        // formula (see message-hash.ts). Generate the id up front so the stored
+        // hash binds to the row's actual id.
+        const messageId = randomUUID();
         await db.insert(messages).values({
-          id: randomUUID(),
+          id: messageId,
           channelId: channel.id,
           content: input.initialMessage,
           role: MessageRole.USER,
           userId: ctx.userId,
           previousHash: "",
-          hash: createHash("sha256").update(input.initialMessage).digest("hex"),
+          hash: computeMessageHash(messageId, input.initialMessage),
         });
       }
 

@@ -30,6 +30,7 @@ import { userVisibleWhere } from "../../../utils/user-visible-where.js";
 import { uploadBufferAsFileEntity, MAX_FILE_SIZE } from "../../file-upload.js";
 import { relationsRouter } from "../../relations.js";
 import { resolveEntityByName } from "../../../services/entity-resolution.js";
+import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import {
   retrieve,
@@ -1333,20 +1334,20 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
       // 2. LINK target --references--> file via the canonical relations.create
       //    procedure. GOVERNANCE (capture path = no proposals): this `references`
-      //    edge AUTO-APPLIES rather than filing a proposal. Two independent
-      //    reasons, both verified in Wave 1:
-      //      (a) relations.create does NOT thread an agentUserId into
-      //          checkPermissionOrPropose, so the gate takes the non-agent path
-      //          and grants directly once workspace-write RBAC passes (which the
-      //          membership check above already enforced); and
-      //      (b) even if an agentUserId were threaded later, `relation.create` is
-      //          in DEFAULT_AUTO_APPROVE (@synap/governance-policy), so the agent
-      //          policy ladder still resolves to "execute".
-      //    No governance change was needed to satisfy the capture-channel
-      //    decision. Agent-presence attribution is still stamped by the shared
-      //    membrane — same as createEntity.
+      //    edge AUTO-APPLIES rather than filing a proposal because `relation.create`
+      //    is in DEFAULT_AUTO_APPROVE (@synap/governance-policy) — so the agent
+      //    policy ladder resolves to "execute" whether the edge is attributed to
+      //    the caller's own agent or (on the X-Capture path, below) the seeded
+      //    Capture agent, whose explicit autoApproveFor also covers relation.create.
+      //    Workspace-write RBAC is still enforced by the membership check above.
       const scopes = c.get("scopes") as string[];
-      const relAgentUserId = c.get("agentUserId") as string | undefined;
+      // On the capture path (X-Capture: 1) attribute the `references` edge to the
+      // seeded Capture agent so the link carries "captured by Capture" provenance;
+      // a non-capture caller keeps its own agent identity.
+      const relAgentUserId = await resolveCaptureActorUserId(
+        c,
+        c.get("agentUserId") as string | undefined
+      );
       const relCtx = await createHubProtocolCallerContext(
         userId,
         scopes,
@@ -1639,10 +1640,16 @@ export function registerEntitiesRoutes(app: HubHono): void {
         return c.json({ error: "Access denied to entity's workspace" }, 403);
       }
 
-      // body.agentUserId wins; fall back to the auto-injected context value so
-      // agents using their own API key get proposal attribution without passing it.
+      // body.agentUserId wins; else on the capture path (X-Capture: 1) attribute
+      // the update to the seeded Capture agent so entity.update auto-approves (its
+      // explicit autoApproveFor covers it); otherwise fall back to the auto-injected
+      // context value so agents using their own API key get proposal attribution.
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
-      const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
+      const resolvedAgentUserId =
+        body.agentUserId ??
+        (await resolveCaptureActorUserId(c, ctxAgentUserId, {
+          workspaceId: effectiveWorkspaceId,
+        }));
 
       const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
       if ("error" in actorResolution)

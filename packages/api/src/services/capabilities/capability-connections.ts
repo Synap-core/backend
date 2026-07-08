@@ -16,7 +16,7 @@
  */
 
 import { encryptServerSide, db, and, eq, isNull, asc } from "@synap/database";
-import { secrets, secretAuditLog } from "@synap/database/schema";
+import { secrets, secretAuditLog, secretUsages } from "@synap/database/schema";
 
 import { requirePodAdmin } from "../../utils/workspace-role.js";
 import { syncNangoConnectionsToRegistry } from "./capability-nango-sync.js";
@@ -126,7 +126,9 @@ export async function listConnections(
   // Reconcile live Nango OAuth connections into the registry first (backfill +
   // refresh) so a Nango-backed capability's accounts appear here and become
   // pickable. Best-effort: a Nango outage must never break the list.
-  await syncNangoConnectionsToRegistry(capabilityId, actorUserId).catch(() => {});
+  await syncNangoConnectionsToRegistry(capabilityId, actorUserId).catch(
+    () => {}
+  );
 
   const rows = await db
     .select()
@@ -228,6 +230,35 @@ export async function addConnection(
     action: "created",
     metadata: { via: "capability-connections", capabilityId },
   });
+
+  // Record the "used by" join so the vault's Connections face can show this
+  // secret is consumed by the capability. context_id uses the '' sentinel when
+  // none so context-less rows dedupe under the unique index (NULLs are distinct
+  // in Postgres). Idempotent: refresh the label/context on conflict.
+  await db
+    .insert(secretUsages)
+    .values({
+      secretId: secret.id,
+      consumerType: "capability",
+      consumerId: capabilityId,
+      consumerLabel: label,
+      workspaceId: null,
+      contextType: secret.contextType ?? null,
+      contextId: secret.contextId ?? "",
+    })
+    .onConflictDoUpdate({
+      target: [
+        secretUsages.secretId,
+        secretUsages.consumerType,
+        secretUsages.consumerId,
+        secretUsages.contextId,
+      ],
+      set: {
+        consumerLabel: label,
+        contextType: secret.contextType ?? null,
+        workspaceId: null,
+      },
+    });
 
   return {
     id: secret.id,
@@ -350,6 +381,19 @@ export async function removeConnection(input: {
     action: "deleted",
     metadata: { via: "capability-connections", capabilityId },
   });
+
+  // Drop the "used by" join row(s) for this secret under this capability — the
+  // Connections face must stop showing a removed connection. (Soft-deleting the
+  // secret does not cascade the join; the FK cascade only fires on hard delete.)
+  await db
+    .delete(secretUsages)
+    .where(
+      and(
+        eq(secretUsages.secretId, existing.id),
+        eq(secretUsages.consumerType, "capability"),
+        eq(secretUsages.consumerId, capabilityId)
+      )
+    );
 
   let promotedDefaultId: string | null = null;
   if (existing.isDefault) {

@@ -23,8 +23,7 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { randomUUID } from "crypto";
-import { createHash } from "crypto";
-import { db, eq, and, gt, inArray } from "@synap/database";
+import { db, eq, and, gt, inArray, computeMessageHash } from "@synap/database";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import {
   agents,
@@ -314,8 +313,7 @@ export const channelsRouter = router({
       }
 
       const messageId = randomUUID();
-      const contentForHash = `${messageId}${input.content}`;
-      const hash = createHash("sha256").update(contentForHash).digest("hex");
+      const hash = computeMessageHash(messageId, input.content);
 
       await db.insert(messages).values({
         id: messageId,
@@ -522,9 +520,7 @@ export const channelsRouter = router({
 
       // Insert the message
       const messageId = randomUUID();
-      const hash = createHash("sha256")
-        .update(`${messageId}${input.content}`)
-        .digest("hex");
+      const hash = computeMessageHash(messageId, input.content);
 
       await db.insert(messages).values({
         id: messageId,
@@ -806,9 +802,7 @@ export const channelsRouter = router({
       // The IS will pick this up as the trigger message and respond.
       const messageId = randomUUID();
       const content = input.systemPromptOverride;
-      const hash = createHash("sha256")
-        .update(`${messageId}${content}`)
-        .digest("hex");
+      const hash = computeMessageHash(messageId, content);
 
       await db.insert(messages).values({
         id: messageId,

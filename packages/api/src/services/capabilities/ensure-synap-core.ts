@@ -28,10 +28,8 @@ import {
   inArray,
   capabilities,
   skills,
-  workspaces,
-  workspaceMembers,
 } from "@synap/database";
-import { sql as drizzleSql } from "drizzle-orm";
+import { resolvePodOwnerUserId } from "./pod-owner.js";
 import type { CapabilityDefinition } from "@synap/playbooks";
 
 import { createCapabilityFromDefinition } from "./create-from-definition.js";
@@ -363,28 +361,6 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
 
 /** The builtin verb NAMES this seeder registers — used by the convergence guard. */
 const SYNAP_CORE_SKILL_NAMES = SYNAP_CORE_DEFINITION.skills.map((s) => s.name);
-
-/**
- * Resolve the pod-owner user id — the owner/admin member of the pod-admin system
- * workspace. Returns null on a pre-bootstrap pod (no pod-admin workspace / owner),
- * so the caller can skip seeding without failing startup.
- */
-async function resolvePodOwnerUserId(): Promise<string | null> {
-  const podAdminWs = await db.query.workspaces.findFirst({
-    where: drizzleSql`${workspaces.settings}->>'systemSlug' = 'pod-admin'`,
-    columns: { id: true },
-  });
-  if (!podAdminWs) return null;
-
-  const owner = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, podAdminWs.id),
-      inArray(workspaceMembers.role, ["owner", "admin"])
-    ),
-    columns: { userId: true },
-  });
-  return owner?.userId ?? null;
-}
 
 /**
  * Ensure the `synap-core` built-in capability exists. Safe to call on every boot.

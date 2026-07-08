@@ -15,8 +15,8 @@
  * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.4).
  */
 
-import { createHash, randomUUID } from "node:crypto";
-import { getDb, messages } from "@synap/database";
+import { randomUUID } from "node:crypto";
+import { getDb, messages, computeMessageHash } from "@synap/database";
 import { MessageRole } from "@synap/database/schema";
 import { triggerAutoRespond } from "../../../utils/trigger-auto-respond.js";
 import type { Executor, RunContext, RunResult } from "@synap/playbooks";
@@ -82,9 +82,7 @@ export class IsAgentExecutor implements Executor {
     // Post the resolved goal as a USER message — the persisted kickoff message
     // the IS responds to. Attributed to the run's acting principal.
     const messageId = randomUUID();
-    const hash = createHash("sha256")
-      .update(`${messageId}${kickoff}`)
-      .digest("hex");
+    const hash = computeMessageHash(messageId, kickoff);
 
     await db.insert(messages).values({
       id: messageId,

@@ -8,7 +8,7 @@
  * no implementation drift.
  */
 
-import { createHash } from "crypto";
+import { randomUUID } from "crypto";
 import { and, asc, eq, isNull, or } from "@synap/database";
 import {
   db,
@@ -17,6 +17,7 @@ import {
   MessageAuthorType,
   MessageCategory,
   tools,
+  computeMessageHash,
 } from "@synap/database";
 import {
   channels,
@@ -412,13 +413,16 @@ export async function sendExternalMessage(
   // Mirror the outbound message into the messages table.
   let messageId: string | undefined;
   if (linkedChannel) {
-    const msgHash = createHash("sha256")
-      .update(`outbound:${threadId}:${Date.now()}:${body}`)
-      .digest("hex");
+    // Canonical tamper-hash: computeMessageHash(id, content) — the ONE formula
+    // (see message-hash.ts). Generate the id up front so the stored hash matches
+    // the row's id.
+    const msgId = randomUUID();
+    const msgHash = computeMessageHash(msgId, body);
 
     const [msg] = await db
       .insert(messages)
       .values({
+        id: msgId,
         channelId: linkedChannel.id,
         userId,
         role: MessageRole.USER,

@@ -853,6 +853,20 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "score",
     addedBy: "0168_entity_centrality.sql",
   },
+
+  // secret_usages — many-to-many "used by" join for the vault Connections face
+  // (Vault Next-Grade WP-B1, 0173). Absence means a pod is on a pre-0173 schema
+  // where `secretsVault.usedBy` / `getDetailBundle` would hit a missing table.
+  {
+    table: "secret_usages",
+    column: "consumer_type",
+    addedBy: "0173_secret_usages.sql",
+  },
+  {
+    table: "secret_usages",
+    column: "consumer_id",
+    addedBy: "0173_secret_usages.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

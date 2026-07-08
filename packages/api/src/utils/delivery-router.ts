@@ -31,10 +31,16 @@
  *   });
  */
 
-import { randomUUID, createHash } from "crypto";
+import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 import { EventNames } from "@synap-core/types/events";
-import { db, eq, workspaces, messages } from "@synap/database";
+import {
+  db,
+  eq,
+  workspaces,
+  messages,
+  computeMessageHash,
+} from "@synap/database";
 import {
   MessageRole,
   MessageAuthorType,
@@ -194,9 +200,7 @@ async function deliverToChat(
     if (!orchestratorId) throw new Error("Orchestrator agent not found");
     const channel = await ensureAgentThread(userId, orchestratorId);
     const messageId = randomUUID();
-    const hash = createHash("sha256")
-      .update(`${messageId}${content}`)
-      .digest("hex");
+    const hash = computeMessageHash(messageId, content);
 
     const messageMetadata = {
       ...metadata,

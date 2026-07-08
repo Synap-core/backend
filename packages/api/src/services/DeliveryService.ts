@@ -15,8 +15,8 @@
  * - Event emission and Socket.IO broadcast
  */
 
-import { randomUUID, createHash } from "crypto";
-import { db, eq, and, gte } from "@synap/database";
+import { randomUUID } from "crypto";
+import { db, eq, and, gte, computeMessageHash } from "@synap/database";
 import {
   channels,
   messages,
@@ -460,9 +460,7 @@ async function deliverToProactiveFeed(
 
     // ── 5. Insert message ──────────────────────────────────────────────────
     const messageId = randomUUID();
-    const messageHash = createHash("sha256")
-      .update(`${messageId}${content.body}`)
-      .digest("hex");
+    const messageHash = computeMessageHash(messageId, content.body);
 
     const messageMetadata = {
       ...content.metadata,

@@ -60,6 +60,7 @@ import {
   MessageAuthorType,
 } from "@synap/database/schema";
 import type { AutomationTriggerConfig } from "@synap/database/schema";
+import { computeMessageHash } from "@synap/database";
 import type {
   FlowDefinition,
   AutomationNode,
@@ -926,10 +927,11 @@ async function executeOutputStep(
         );
       }
 
-      const { createHash } = await import("crypto");
-      const hash = createHash("sha256")
-        .update(JSON.stringify({ channelId, content, role: "assistant" }))
-        .digest("hex");
+      // Canonical tamper-hash: computeMessageHash(id, content) — the ONE formula
+      // (see @synap/database message-hash.ts). Generate the id up front so the
+      // stored hash matches the row's id.
+      const messageId = randomUUID();
+      const hash = computeMessageHash(messageId, content);
 
       // Tag proactive channel messages so the feed can identify their type
       // without needing to know which channel they came from.
@@ -941,7 +943,7 @@ async function executeOutputStep(
       const [msg] = await db
         .insert(messages)
         .values({
-          id: randomUUID(),
+          id: messageId,
           channelId,
           userId: "system",
           role: "assistant",
@@ -1729,8 +1731,7 @@ async function executePlaybookRun(
 
   // 8. Insert a USER kickoff message into the channel
   const messageId = randomUUID();
-  const { createHash } = await import("crypto");
-  const hash = createHash("sha256").update(`${messageId}${goal}`).digest("hex");
+  const hash = computeMessageHash(messageId, goal);
 
   await db.insert(messages).values({
     id: messageId,

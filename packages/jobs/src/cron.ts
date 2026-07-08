@@ -114,13 +114,6 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule(EVENT_END_CRON_QUEUE, "*/5 * * * *", {});
   logger.info("Registered cron: event-end-cron (every 5min)");
 
-  // Hermes trigger (every 60s — dispatches idle devplane features to Hermes AI)
-  // Only schedule when Hermes is configured.
-  if (process.env.HERMES_TRIGGER_URL) {
-    await boss.schedule("hermes-trigger", "* * * * *", {});
-    logger.info("Registered cron: hermes-trigger (every 1min)");
-  }
-
   // Memory decay (daily at 03:30 UTC — applies Ebbinghaus decay to knowledge_facts)
   await boss.schedule("memory-decay", "30 3 * * *", {});
   logger.info("Registered cron: memory-decay (daily at 03:30 UTC)");

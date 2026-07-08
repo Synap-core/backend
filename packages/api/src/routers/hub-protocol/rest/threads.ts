@@ -31,6 +31,7 @@ import {
   asc,
   desc,
   inArray,
+  computeMessageHash,
 } from "@synap/database";
 import { ChannelType, type MessageRole } from "@synap/database/schema";
 
@@ -728,19 +729,13 @@ export function registerThreadsRoutes(app: HubHono): void {
     // Schema enforces min(1), max(100), and per-item required fields.
 
     try {
-      const { randomUUID, createHash } = await import("crypto");
+      const { randomUUID } = await import("crypto");
 
       const prepared = items.map((m) => {
         const id = randomUUID();
-        const hash = createHash("sha256")
-          .update(
-            JSON.stringify({
-              threadId,
-              content: m.content,
-              role: m.role,
-            })
-          )
-          .digest("hex");
+        // Canonical tamper-hash: computeMessageHash(id, content) — the ONE
+        // formula (see @synap/database message-hash.ts).
+        const hash = computeMessageHash(id, m.content);
         return {
           id,
           channelId: threadId,
@@ -842,13 +837,11 @@ export function registerThreadsRoutes(app: HubHono): void {
     const { threadId } = c.req.valid("param");
     const body = c.req.valid("json");
     try {
-      const { randomUUID, createHash } = await import("crypto");
+      const { randomUUID } = await import("crypto");
       const msgId = randomUUID();
-      const hash = createHash("sha256")
-        .update(
-          JSON.stringify({ threadId, content: body.content, role: body.role })
-        )
-        .digest("hex");
+      // Canonical tamper-hash: computeMessageHash(id, content) — the ONE formula
+      // (see @synap/database message-hash.ts).
+      const hash = computeMessageHash(msgId, body.content);
       await db.insert(messages).values({
         id: msgId,
         channelId: threadId,

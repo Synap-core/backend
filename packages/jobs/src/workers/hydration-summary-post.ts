@@ -20,8 +20,8 @@
  */
 
 import type PgBoss from "pg-boss";
-import { randomUUID, createHash } from "node:crypto";
-import { db, eq, and } from "@synap/database";
+import { randomUUID } from "node:crypto";
+import { db, eq, and, computeMessageHash } from "@synap/database";
 import {
   channels,
   messages,
@@ -257,9 +257,7 @@ export async function handleHydrationSummaryPost(
     const content = generateHydrationSummary(data);
     const channelId = await resolvePersonalChannelId(userId);
     const messageId = randomUUID();
-    const hash = createHash("sha256")
-      .update(`${messageId}${content}`)
-      .digest("hex");
+    const hash = computeMessageHash(messageId, content);
 
     const metadata = {
       agentType: "orchestrator",

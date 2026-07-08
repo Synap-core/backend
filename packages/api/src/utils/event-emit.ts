@@ -41,15 +41,16 @@ export interface EmitTypedTarget {
  * Emit a realtime event with compile-time and runtime safety.
  *
  * @example
- * await emitTyped("hermes:task:queued", {
- *   taskId: "tsk_123",
- *   kind: "lead.enrich",
- *   source: "agent:orchestrator",
- *   queuedAt: new Date().toISOString(),
+ * await emitTyped("synap:reply:routed", {
+ *   channelId: "ch_1",
+ *   messageId: "msg_1",
+ *   targetPlatform: "telegram",
+ *   excerpt: "on it",
+ *   routedAt: new Date().toISOString(),
  * }, { userId });
  *
  * // The following is a compile-time error — wrong payload shape:
- * // await emitTyped("hermes:task:queued", { foo: 1 }, { userId });
+ * // await emitTyped("synap:reply:routed", { foo: 1 }, { userId });
  */
 export async function emitTyped<E extends EventName>(
   event: E,

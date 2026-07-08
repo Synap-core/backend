@@ -22,27 +22,6 @@ const VALID_PAYLOADS = {
     excerpt: "ack",
     routedAt: "2026-05-05T10:00:01Z",
   },
-  "hermes:task:queued": {
-    taskId: "tsk_1",
-    kind: "lead.enrich",
-    source: "agent:orchestrator",
-    queuedAt: "2026-05-05T10:00:00Z",
-  },
-  "hermes:task:started": {
-    taskId: "tsk_1",
-    kind: "lead.enrich",
-    startedAt: "2026-05-05T10:00:01Z",
-  },
-  "hermes:task:completed": {
-    taskId: "tsk_1",
-    durationMs: 1234,
-    completedAt: "2026-05-05T10:00:05Z",
-  },
-  "hermes:task:failed": {
-    taskId: "tsk_1",
-    error: "rate limited",
-    failedAt: "2026-05-05T10:00:05Z",
-  },
 } as const;
 
 describe("EventSchemas — {actor}:{entity}:{action} payloads", () => {
@@ -80,43 +59,6 @@ describe("EventSchemas — {actor}:{entity}:{action} payloads", () => {
       messageId: "msg_1",
       excerpt: "",
       routedAt: "2026-05-05T10:00:01Z",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects hermes:task:queued with empty taskId", () => {
-    const result = EventSchemas["hermes:task:queued"]!.safeParse({
-      taskId: "",
-      kind: "lead.enrich",
-      source: "agent:orchestrator",
-      queuedAt: "2026-05-05T10:00:00Z",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects hermes:task:started with non-string startedAt", () => {
-    const result = EventSchemas["hermes:task:started"]!.safeParse({
-      taskId: "tsk_1",
-      kind: "lead.enrich",
-      startedAt: 1714900000,
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects hermes:task:completed with negative durationMs", () => {
-    const result = EventSchemas["hermes:task:completed"]!.safeParse({
-      taskId: "tsk_1",
-      durationMs: -1,
-      completedAt: "2026-05-05T10:00:05Z",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects hermes:task:failed with empty error", () => {
-    const result = EventSchemas["hermes:task:failed"]!.safeParse({
-      taskId: "tsk_1",
-      error: "",
-      failedAt: "2026-05-05T10:00:05Z",
     });
     expect(result.success).toBe(false);
   });
