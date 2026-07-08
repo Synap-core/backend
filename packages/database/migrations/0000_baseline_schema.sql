@@ -238,6 +238,9 @@ ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "default_list_renderer"   jsonb;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "default_detail_renderer" jsonb;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "default_renderers" jsonb NOT NULL DEFAULT '{}'::jsonb;
+-- Kind + Facets (0174): 'kind' = primary type, 'role' = attachable facet.
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "profile_kind" text NOT NULL DEFAULT 'kind';
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "applicable_kinds" text[];
 
 -- Self-reference FK for parent_profile_id
 DO $$ BEGIN
@@ -269,6 +272,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS "profiles_slug_workspace_uniq"
 CREATE UNIQUE INDEX IF NOT EXISTS "profiles_slug_user_uniq"
   ON "profiles" ("slug", "user_id")
   WHERE "scope" = 'user';
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'profiles_profile_kind_check'
+  ) THEN
+    ALTER TABLE "profiles"
+      ADD CONSTRAINT "profiles_profile_kind_check"
+      CHECK ("profile_kind" IN ('kind', 'role'));
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS "profile_workspace_access" (
   "profile_id"    uuid NOT NULL REFERENCES "profiles"("id") ON DELETE CASCADE,
@@ -810,6 +823,63 @@ CREATE UNIQUE INDEX IF NOT EXISTS "relations_belongs_to_project_unique"
   WHERE "type" = 'belongs_to_project'
     AND "source_entity_id" IS NOT NULL
     AND "target_entity_id" IS NOT NULL;
+
+-- ─── 16a. entity_facets (0174) ───────────────────────────────────────────────
+-- Kind + Facets — role-profiles attached to entities. See 0174_entity_facets.sql.
+
+CREATE TABLE IF NOT EXISTS "entity_facets" (
+  "id"                  uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
+  "entity_id"           uuid    NOT NULL REFERENCES "entities"("id") ON DELETE CASCADE,
+  "profile_id"          uuid    NOT NULL REFERENCES "profiles"("id") ON DELETE RESTRICT,
+  "user_id"             text    NOT NULL,
+  "workspace_id"        uuid,
+  "context_entity_id"   uuid    REFERENCES "entities"("id") ON DELETE SET NULL,
+  "status"              text,
+  "properties"          jsonb   NOT NULL DEFAULT '{}',
+  "metadata"            jsonb   NOT NULL DEFAULT '{}',
+  "created_by_kind"     text,
+  "created_by_user_id"  text REFERENCES "users"("id") ON DELETE SET NULL,
+  "agent_user_id"       text REFERENCES "users"("id") ON DELETE SET NULL,
+  "source_proposal_id"  uuid REFERENCES "proposals"("id") ON DELETE SET NULL,
+  "correlation_id"      uuid,
+  "created_at"          timestamp with time zone NOT NULL DEFAULT now(),
+  "updated_at"          timestamp with time zone NOT NULL DEFAULT now(),
+  "deleted_at"          timestamp with time zone
+);
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "entity_id" uuid REFERENCES "entities"("id") ON DELETE CASCADE;
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "profile_id" uuid REFERENCES "profiles"("id") ON DELETE RESTRICT;
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "user_id" text;
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "workspace_id" uuid;
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "context_entity_id" uuid REFERENCES "entities"("id") ON DELETE SET NULL;
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "status" text;
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "properties" jsonb DEFAULT '{}';
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "created_by_kind" text;
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "created_by_user_id" text REFERENCES "users"("id") ON DELETE SET NULL;
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "agent_user_id" text REFERENCES "users"("id") ON DELETE SET NULL;
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "source_proposal_id" uuid REFERENCES "proposals"("id") ON DELETE SET NULL;
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "correlation_id" uuid;
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "entity_facets_entity_profile_ctx_ws_uniq"
+  ON "entity_facets" (
+    "entity_id",
+    "profile_id",
+    COALESCE("context_entity_id", '00000000-0000-0000-0000-000000000000'::uuid),
+    COALESCE("workspace_id", '00000000-0000-0000-0000-000000000000'::uuid)
+  )
+  WHERE "deleted_at" IS NULL;
+
+CREATE INDEX IF NOT EXISTS "entity_facets_entity_id_idx"
+  ON "entity_facets" ("entity_id")
+  WHERE "deleted_at" IS NULL;
+
+CREATE INDEX IF NOT EXISTS "entity_facets_profile_workspace_idx"
+  ON "entity_facets" ("profile_id", "workspace_id")
+  WHERE "deleted_at" IS NULL;
 
 -- ─── 16b. cell_instances (0041) ──────────────────────────────────────────────
 

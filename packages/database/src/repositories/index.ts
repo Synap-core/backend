@@ -19,6 +19,7 @@ export * from "./knowledge-keys-repository.js";
 export * from "./suggestion-repository.js";
 export * from "./vector-repository.js";
 export * from "./entity-repository.js";
+export * from "./facet-repository.js";
 export * from "./document-repository.js";
 export * from "./workspace-repository.js";
 export * from "./view-repository.js";

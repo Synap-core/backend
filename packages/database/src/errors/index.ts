@@ -81,3 +81,28 @@ export class PropertySlugConflictError extends Error {
     this.name = "PropertySlugConflictError";
   }
 }
+
+export class FacetProfileKindError extends Error {
+  constructor(
+    public readonly profileId: string,
+    public readonly profileSlug: string
+  ) {
+    super(
+      `Profile '${profileSlug}' (${profileId}) is not a role profile — only profiles with profileKind = 'role' can be attached as facets`
+    );
+    this.name = "FacetProfileKindError";
+  }
+}
+
+export class FacetKindMismatchError extends Error {
+  constructor(
+    public readonly profileSlug: string,
+    public readonly entityKindSlug: string,
+    public readonly applicableKinds: string[]
+  ) {
+    super(
+      `Facet profile '${profileSlug}' is not applicable to entity kind '${entityKindSlug}' (applicable kinds: ${applicableKinds.join(", ")})`
+    );
+    this.name = "FacetKindMismatchError";
+  }
+}

@@ -8,6 +8,7 @@ export * from "./users.js";
 export * from "./events.js";
 export * from "./entities.js";
 export * from "./entity-vectors.js";
+export * from "./entity-facets.js";
 export * from "./documents.js";
 export * from "./relations.js";
 export * from "./messages.js";

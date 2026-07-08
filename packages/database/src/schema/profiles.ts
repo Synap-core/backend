@@ -113,6 +113,15 @@ export const profiles = pgTable(
       .notNull()
       .default({}),
 
+    // Kind + Facets (0174): a profile is either the entity's primary 'kind'
+    // (default — every pre-existing profile) or an attachable 'role' (facet)
+    // usable via entity_facets. `applicableKinds` optionally restricts a role
+    // profile to specific kind slugs (NULL = any kind).
+    profileKind: text("profile_kind", { enum: ["kind", "role"] })
+      .notNull()
+      .default("kind"),
+    applicableKinds: text("applicable_kinds").array(),
+
     // Metadata
     isActive: boolean("is_active").default(true).notNull(),
     version: integer("version").default(1).notNull(),

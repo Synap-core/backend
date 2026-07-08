@@ -27,6 +27,7 @@ import {
   entities,
   documents,
   relations,
+  entityFacets,
   proposals,
 } from "@synap/database/schema";
 import { registerVisibility } from "./visibility.js";
@@ -201,6 +202,18 @@ registerVisibility({
   table: proposals,
   query: () => db.query.proposals,
   rule: { kind: "workspace", workspaceColumn: proposals.workspaceId },
+});
+registerVisibility({
+  table: entityFacets,
+  query: () => db.query.entityFacets,
+  // `entityFacets.userId` (NOT NULL) is the OWNER floor, same reasoning as
+  // `relations`: a NULL-workspace (pod-wide) facet stays visible only to its
+  // owner instead of leaking pod-wide via the flat `workspace` rule.
+  rule: {
+    kind: "workspaceOwned",
+    workspaceColumn: entityFacets.workspaceId,
+    userColumn: entityFacets.userId,
+  },
 });
 
 // NOTE: entityTemplates (bespoke userVisibleWhere in templates.list — its

@@ -867,6 +867,26 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "consumer_id",
     addedBy: "0173_secret_usages.sql",
   },
+
+  // Kind + Facets Wave 1A (0174): profiles gain profile_kind ('kind'|'role')
+  // + applicable_kinds, and entity_facets attaches role-profiles to entities.
+  // Absence means a pod is on a pre-0174 schema; the facet repository and
+  // getEffectiveFacets() would hit a missing column/table.
+  {
+    table: "profiles",
+    column: "profile_kind",
+    addedBy: "0174_entity_facets.sql",
+  },
+  {
+    table: "profiles",
+    column: "applicable_kinds",
+    addedBy: "0174_entity_facets.sql",
+  },
+  {
+    table: "entity_facets",
+    column: "id",
+    addedBy: "0174_entity_facets.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {
