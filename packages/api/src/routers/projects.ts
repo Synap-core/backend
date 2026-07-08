@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure } from "../trpc.js";
+import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import {
   projects,
   eq,
@@ -84,9 +84,12 @@ export const projectsRouter = router({
   /**
    * Get a single project by ID
    */
-  get: workspaceProcedure
+  get: podProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
+      // Single-object read: the WHERE is already pure user-floor (pod-personal
+      // owner OR workspace-member visibility). It must not be gated by the
+      // active-workspace lens, so it runs on podProcedure, not workspaceProcedure.
       const db = await getDb();
 
       const project = await db.query.projects.findFirst({

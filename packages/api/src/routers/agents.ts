@@ -93,13 +93,26 @@ export const agentsRouter = router({
   /**
    * Get a single agent by ID (workspace-scoped).
    */
-  getById: workspaceProcedure
+  getById: podProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      // Single-object read: user-floor visibility, lens-free. system/provider
+      // agents are shared; user-owned agents are private to their owner. The
+      // previous query had NO ownership predicate — it returned any user's
+      // private agent by id once the (now-removed) workspace precondition passed.
       const [agent] = await db
         .select()
         .from(agents)
-        .where(eq(agents.id, input.id))
+        .where(
+          and(
+            eq(agents.id, input.id),
+            or(
+              eq(agents.ownerType, "system"),
+              eq(agents.ownerType, "provider"),
+              and(eq(agents.ownerType, "user"), eq(agents.userId, ctx.userId))
+            )
+          )
+        )
         .limit(1);
 
       if (!agent) {

@@ -9,7 +9,7 @@
  */
 
 import { z } from "zod";
-import { router, workspaceProcedure } from "../trpc.js";
+import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, and } from "@synap/database";
 import { agentConfigs } from "@synap/database/schema";
@@ -41,14 +41,31 @@ export const agentConfigsRouter = router({
   /**
    * Get one agent config. Returns null config if not yet customised.
    */
-  get: workspaceProcedure
-    .input(z.object({ agentType: z.string() }))
+  get: podProcedure
+    .input(
+      z.object({
+        agentType: z.string(),
+        // The config is keyed on (user, workspace, agentType). The workspace is
+        // part of the KEY, not a visibility lens — so it may be passed
+        // explicitly (single-object read) and only falls back to the active
+        // lens for convenience. No hard workspaceProcedure precondition.
+        workspaceId: z.string().uuid().optional(),
+      })
+    )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      const workspaceId = input.workspaceId ?? ctx.workspaceId;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "agentConfigs.get requires a workspace (pass workspaceId or set an active lens)",
+        });
+      }
       const config = await db.query.agentConfigs.findFirst({
         where: and(
           eq(agentConfigs.userId, userId),
-          eq(agentConfigs.workspaceId, ctx.workspaceId!),
+          eq(agentConfigs.workspaceId, workspaceId),
           eq(agentConfigs.agentType, input.agentType)
         ),
       });

@@ -6,7 +6,12 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
+import {
+  router,
+  protectedProcedure,
+  workspaceProcedure,
+  podProcedure,
+} from "../trpc.js";
 import {
   getDb,
   PropertyDefRepository,
@@ -80,7 +85,7 @@ export const propertyDefsRouter = router({
    *   • 'base'    → match only base defs (workspace_id IS NULL)
    *   • 'current' → match only overlays owned by the calling workspace
    */
-  get: workspaceProcedure
+  get: podProcedure
     .input(
       z.object({
         slug: z.string(),
@@ -91,6 +96,18 @@ export const propertyDefsRouter = router({
     .query(async ({ input, ctx }) => {
       const db = await getDb();
       const propertyDefRepo = new PropertyDefRepository(db);
+
+      // Single-object read: only the 'current' scope needs a workspace, and it
+      // needs it as an explicit part of the request — not as a hard precondition
+      // on every call. 'any'/'base' resolve lens-free. (podProcedure still
+      // validates membership when a lens IS present.)
+      if (input.workspaceScope === "current" && !ctx.workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "workspaceScope 'current' requires an active workspace lens",
+        });
+      }
 
       const workspaceFilter =
         input.workspaceScope === "base"

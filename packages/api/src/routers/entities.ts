@@ -1079,19 +1079,19 @@ export const entitiesRouter = router({
   /**
    * Get entity by document ID (reverse lookup)
    */
-  getByDocumentId: workspaceProcedure
+  getByDocumentId: podProcedure
     .input(z.object({ documentId: z.string().uuid() }))
     .output(z.object({ entity: z.any().nullable() }))
     .query(async ({ input, ctx }) => {
+      // Single-object read: visibility from the user floor alone, never the
+      // ambient lens. Uses the same predicate as entities.get so a cross-
+      // workspace lookup (entity in a workspace the user belongs to, just not
+      // the active one) resolves instead of returning null.
       const entity = await db.query.entities.findFirst({
         where: and(
           eq(entities.documentId, input.documentId),
-          or(
-            eq(entities.workspaceId, ctx.workspaceId),
-            // Pod-personal (NULL workspace) rows are per-user — gate by userId so
-            // a documentId can't reverse-look-up another user's pod-wide entity.
-            and(isNull(entities.workspaceId), eq(entities.userId, ctx.userId))
-          )
+          isNull(entities.deletedAt),
+          entityVisibleWhere(ctx.userId)
         ),
       });
 

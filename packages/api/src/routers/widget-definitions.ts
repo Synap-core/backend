@@ -133,18 +133,24 @@ export const widgetDefinitionsRouter = router({
    * Get a single widget definition by typeKey.
    * Looks up system-wide first, then workspace-specific.
    */
-  get: workspaceProcedure
+  get: podProcedure
     .input(z.object({ typeKey: z.string() }))
     .query(async ({ ctx, input }) => {
       const db = await getDb();
-      // Prefer workspace-specific over system-wide
+      // Single-object read: the active workspace lens only PROJECTS (prefer this
+      // workspace's override over the system-wide default) — it can never gate
+      // the fetch. With no active workspace (pod-wide lens) it falls back to the
+      // system-wide definition instead of blocking. Hence podProcedure.
+      const wsId = ctx.workspaceId ?? null;
       const row = await db.query.widgetDefinitions.findFirst({
         where: and(
           eq(widgetDefinitions.typeKey, input.typeKey),
-          or(
-            isNull(widgetDefinitions.workspaceId),
-            eq(widgetDefinitions.workspaceId, ctx.workspaceId!)
-          ),
+          wsId
+            ? or(
+                isNull(widgetDefinitions.workspaceId),
+                eq(widgetDefinitions.workspaceId, wsId)
+              )
+            : isNull(widgetDefinitions.workspaceId),
           eq(widgetDefinitions.isActive, true)
         ),
         orderBy: (t, { desc }) => [desc(t.workspaceId)], // workspace-specific first
