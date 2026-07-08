@@ -96,6 +96,7 @@ import {
   registerResolveRoutes,
   registerGraphRoutes,
   registerCentralityRoutes,
+  registerObservabilityRoutes,
 } from "./hub-protocol/rest/index.js";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
@@ -544,6 +545,7 @@ registerRunsRoutes(app); // /runs/:runId/capture (playbook run capture-back)
 registerResolveRoutes(app); // /resolve/:id — universal ID resolver
 registerGraphRoutes(app); // /graph/:type/:id — object + typed neighbour graph
 registerCentralityRoutes(app); // /centrality/status, /centrality/recompute — PageRank centrality window
+registerObservabilityRoutes(app); // /observability/routing-health — decision/correction routing analysis
 
 // ── OpenAPI stubs for routes not yet annotated inline ──────────────────────
 //

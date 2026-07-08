@@ -1563,7 +1563,7 @@ export const captureRouter = router({
                 })
                 .where(inArray(entitiesTable.id, materializedEntityIds))
                 .returning({ id: entitiesTable.id });
-              logger.info(
+              logger.debug(
                 {
                   correlationId,
                   requested: materializedEntityIds.length,
