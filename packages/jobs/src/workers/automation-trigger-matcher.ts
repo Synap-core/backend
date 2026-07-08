@@ -159,12 +159,12 @@ function matchTriggerSpecificFilters(
     }
   }
 
-  // ── entity_facet trigger (Kind + Facets, Wave 1B) ───────────────────────
-  // Mirrors the relation_change branch above: the materializer emits
-  // "entity_facet.create.completed" (attach) / "entity_facet.update.completed"
-  // (status/property change) / "entity_facet.delete.completed" (detach, via
-  // FacetRepository's BaseRepository-generic action names — see
-  // facet-repository.ts attach()/update()/detach()).
+  // ── entity_facet trigger (Kind + Facets, Wave 1B/1C) ────────────────────
+  // Mirrors the relation_change branch above. TWO verb vocabularies reach
+  // this branch: the facet API doors emit semantic actions
+  // ("entity_facet.attach" / ".update" / ".detach" — routers/entities.ts
+  // emitFacetSideEffects) while FacetRepository's BaseRepository events use
+  // generic verbs ("entity_facet.create.completed" etc.). Both map below.
   if (eventType.startsWith("entity_facet.")) {
     // Filter by the attached role-profile.
     if (
@@ -181,13 +181,16 @@ function matchTriggerSpecificFilters(
     }
     // Filter by change direction ("attach" | "detach" | "status_changed" | "any")
     if (config.facetChangeType && config.facetChangeType !== "any") {
-      const changeType = eventType.startsWith("entity_facet.create.")
-        ? "attach"
-        : eventType.startsWith("entity_facet.delete.")
-          ? "detach"
-          : eventType.startsWith("entity_facet.update.")
-            ? "status_changed"
-            : undefined;
+      const changeType =
+        eventType.startsWith("entity_facet.create.") ||
+        eventType.startsWith("entity_facet.attach")
+          ? "attach"
+          : eventType.startsWith("entity_facet.delete.") ||
+              eventType.startsWith("entity_facet.detach")
+            ? "detach"
+            : eventType.startsWith("entity_facet.update")
+              ? "status_changed"
+              : undefined;
       if (changeType !== config.facetChangeType) {
         return false;
       }

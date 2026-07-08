@@ -22,6 +22,7 @@ import {
   or,
   isNull,
   isNotNull,
+  getEffectiveFacets,
 } from "@synap/database";
 import { inArray } from "drizzle-orm";
 import { storage } from "@synap/storage";
@@ -1811,6 +1812,347 @@ export function registerEntitiesRoutes(app: HubHono): void {
       return c.json(result, 200);
     } catch (err) {
       logger.error({ err, entityId }, "deleteEntity failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Kind + Facets (Wave 1C) — role-profiles attached to an entity.
+  // 3-segment (`/entities/{entityId}/facets`) and top-level (`/facets/{facetId}`)
+  // paths — distinct from the 2-segment `/entities/{id}` routes, so no first-match
+  // collision (mirrors the existing `/entities/{id}/connections` sub-route).
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ── GET /entities/:entityId/facets ──────────────────────────────────────
+  // Read the entity's live facets through its own workspace lens. The REST
+  // parity of the tRPC `entities.get` `facets` envelope — kept as a dedicated
+  // sub-route rather than bloating the strict raw-entity GET schema.
+  const listFacetsRoute = createRoute({
+    method: "get",
+    path: "/entities/{entityId}/facets",
+    tags: ["Entities"],
+    summary: "List an entity's facets (role-profiles)",
+    description:
+      "Returns the entity's live facets joined with their role-profile + that " +
+      "profile's effective properties (workspace-lensed). Requires hub-protocol.read.",
+    request: {
+      params: z.object({ entityId: z.string() }),
+    },
+    responses: {
+      200: {
+        description: "Effective facets",
+        content: {
+          "application/json": {
+            schema: z.object({
+              facets: z.array(z.record(z.string(), z.unknown())),
+            }),
+          },
+        },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      404: { description: "Not found" },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(listFacetsRoute, async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const { entityId } = c.req.valid("param");
+    const authUserId = c.get("userId") as string | undefined;
+    if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
+    try {
+      const entity = await db.query.entities.findFirst({
+        where: and(
+          eq(entities.id, entityId),
+          isNull(entities.deletedAt),
+          or(
+            and(isNull(entities.workspaceId), eq(entities.userId, authUserId)),
+            isNotNull(entities.workspaceId)
+          )
+        ),
+        columns: { id: true, workspaceId: true },
+      });
+      if (!entity) return c.body(null, 404);
+      if (
+        entity.workspaceId &&
+        !(await verifyWorkspaceReadAccess(authUserId, entity.workspaceId))
+      ) {
+        return c.json({ error: "Access denied to entity's workspace" }, 403);
+      }
+      const facets = await getEffectiveFacets(
+        db,
+        entityId,
+        entity.workspaceId ?? null
+      );
+      return c.json(
+        { facets: facets as unknown as Array<Record<string, unknown>> },
+        200
+      );
+    } catch (err) {
+      logger.error({ err, entityId }, "listFacets failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Internal error" },
+        500
+      );
+    }
+  });
+
+  // ── POST /entities/:entityId/facets ─────────────────────────────────────
+  const attachFacetRoute = createRoute({
+    method: "post",
+    path: "/entities/{entityId}/facets",
+    tags: ["Entities"],
+    summary: "Attach a facet (role-profile) to an entity",
+    description:
+      "Attach a role-profile as an additive facet. Thin wrapper over the " +
+      "governed entities.attachFacet door (proposal-gated for agents). " +
+      "Requires hub-protocol.write.",
+    request: {
+      params: z.object({ entityId: z.string() }),
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              userId: z.string().optional(),
+              profileSlug: z.string().optional(),
+              profileId: z.string().uuid().optional(),
+              workspaceId: z.string().uuid().nullable().optional(),
+              contextEntityId: z.string().uuid().nullable().optional(),
+              status: z.string().optional(),
+              properties: z.record(z.string(), z.unknown()).optional(),
+              agentUserId: z.string().uuid().optional(),
+              reasoning: z.string().optional(),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Attach result (or proposal envelope)",
+        content: { "application/json": { schema: z.object({}).passthrough() } },
+      },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(attachFacetRoute, async (c): Promise<any> => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const { entityId } = c.req.valid("param");
+    const body = c.req.valid("json");
+    const authUserId = c.get("userId") as string | undefined;
+    if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
+    const isServiceKey = !!c.get("apiKeyId");
+    if (!isServiceKey && body.userId && body.userId !== authUserId) {
+      return c.json(
+        { error: "userId does not match the authenticated session" },
+        403
+      );
+    }
+    const userId = isServiceKey ? (body.userId ?? authUserId) : authUserId;
+    try {
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
+      const caller = await getCaller(c, { userId });
+      const result = await caller.entities.attachFacet({
+        userId,
+        entityId,
+        profileSlug: body.profileSlug,
+        profileId: body.profileId,
+        ...(body.workspaceId !== undefined
+          ? { workspaceId: body.workspaceId }
+          : {}),
+        ...(body.contextEntityId !== undefined
+          ? { contextEntityId: body.contextEntityId }
+          : {}),
+        status: body.status,
+        properties: body.properties,
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
+        ...(body.reasoning ? { reasoning: body.reasoning } : {}),
+      });
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err, entityId }, "attachFacet failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── PATCH /facets/:facetId ──────────────────────────────────────────────
+  const updateFacetRoute = createRoute({
+    method: "patch",
+    path: "/facets/{facetId}",
+    tags: ["Entities"],
+    summary: "Update a facet's status / properties",
+    description:
+      "Thin wrapper over the governed entities.updateFacet door. Requires " +
+      "hub-protocol.write.",
+    request: {
+      params: z.object({ facetId: z.string() }),
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              userId: z.string().optional(),
+              status: z.string().optional(),
+              properties: z.record(z.string(), z.unknown()).optional(),
+              workspaceId: z.string().uuid().nullable().optional(),
+              agentUserId: z.string().uuid().optional(),
+              reasoning: z.string().optional(),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Update result (or proposal envelope)",
+        content: { "application/json": { schema: z.object({}).passthrough() } },
+      },
+      400: {
+        description: "Bad request",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(updateFacetRoute, async (c): Promise<any> => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const { facetId } = c.req.valid("param");
+    const body = c.req.valid("json");
+    const authUserId = c.get("userId") as string | undefined;
+    if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
+    const isServiceKey = !!c.get("apiKeyId");
+    if (!isServiceKey && body.userId && body.userId !== authUserId) {
+      return c.json(
+        { error: "userId does not match the authenticated session" },
+        403
+      );
+    }
+    const userId = isServiceKey ? (body.userId ?? authUserId) : authUserId;
+    try {
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
+      const caller = await getCaller(c, { userId });
+      const result = await caller.entities.updateFacet({
+        userId,
+        facetId,
+        status: body.status,
+        properties: body.properties,
+        ...(body.workspaceId !== undefined
+          ? { workspaceId: body.workspaceId }
+          : {}),
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
+        ...(body.reasoning ? { reasoning: body.reasoning } : {}),
+      });
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err, facetId }, "updateFacet failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── DELETE /facets/:facetId ─────────────────────────────────────────────
+  const detachFacetRoute = createRoute({
+    method: "delete",
+    path: "/facets/{facetId}",
+    tags: ["Entities"],
+    summary: "Detach a facet (soft-delete)",
+    description:
+      "Thin wrapper over the governed entities.detachFacet door. Requires " +
+      "hub-protocol.write.",
+    request: {
+      params: z.object({ facetId: z.string() }),
+      query: z.object({
+        userId: z.string().optional(),
+        agentUserId: z.string().optional(),
+        reasoning: z.string().optional(),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Detach result (or proposal envelope)",
+        content: { "application/json": { schema: z.object({}).passthrough() } },
+      },
+      403: {
+        description: "Forbidden",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(detachFacetRoute, async (c): Promise<any> => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const { facetId } = c.req.valid("param");
+    const q = c.req.valid("query");
+    const authUserId = c.get("userId") as string | undefined;
+    if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
+    const isServiceKey = !!c.get("apiKeyId");
+    if (!isServiceKey && q.userId && q.userId !== authUserId) {
+      return c.json(
+        { error: "userId does not match the authenticated session" },
+        403
+      );
+    }
+    const userId = isServiceKey ? (q.userId ?? authUserId) : authUserId;
+    try {
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const resolvedAgentUserId = q.agentUserId ?? ctxAgentUserId;
+      const caller = await getCaller(c, { userId });
+      const result = await caller.entities.detachFacet({
+        userId,
+        facetId,
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
+        ...(q.reasoning ? { reasoning: q.reasoning } : {}),
+      });
+      return c.json(result, 200);
+    } catch (err) {
+      logger.error({ err, facetId }, "detachFacet failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

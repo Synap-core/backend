@@ -30,6 +30,8 @@ import {
   EventRepository,
   EntityRepository,
   DocumentRepository,
+  FacetRepository,
+  getEffectiveFacets,
   drizzleSql,
   links,
   type LinkEndpointType,
@@ -44,6 +46,7 @@ import {
   workspaces,
   entityExternalLinks,
   userEntityState,
+  profiles,
 } from "@synap/database/schema";
 import { type Entity, EntitySchema } from "@synap-core/types";
 import { entityToWire } from "./hub-protocol/rest/_codecs/entity.js";
@@ -214,6 +217,104 @@ const DEFAULT_ENTITY_BENTO_TEMPLATES: Record<
     },
   ],
 };
+
+/**
+ * Source-of-action enum shared by the facet mutations. Mirrors the entity
+ * create/update enums so Hub / CLI / connector provenance flows through the
+ * governance gate unchanged (`source` is audit-only; it never gates auth).
+ */
+const FACET_SOURCE_ENUM = z
+  .enum([
+    "user",
+    "ai",
+    "intelligence",
+    "system",
+    "agent",
+    "openwebui-pipeline",
+    "openclaw",
+    "extension",
+    "cli",
+    "n8n",
+    "raycast",
+  ])
+  .optional();
+
+/** Look up a role-profile's slug for facet emit payloads (best-effort). */
+async function resolveFacetProfileSlug(
+  profileId: string
+): Promise<string | undefined> {
+  const row = await db.query.profiles.findFirst({
+    where: eq(profiles.id, profileId),
+    columns: { slug: true },
+  });
+  return row?.slug ?? undefined;
+}
+
+/**
+ * Emit the side-effect chain for a facet write. Facet writes fire NOTHING by
+ * default — the search-index/embedding reactors key on `subjectType === "entity"`
+ * and the automation matcher requires a truthy workspaceId — so a bare facet
+ * INSERT leaves Typesense, vectors, and automations stale. Two emits close that:
+ *
+ *   1. The facet event itself (`subjectType: "entity_facet"`) — drives webhook
+ *      delivery and the automation-trigger matcher (when a workspace lens exists),
+ *      so automations can trigger on facet attach/update/detach.
+ *   2. A parent-entity `update` refresh (`subjectType: "entity"`, subjectId =
+ *      parent entityId) — REUSES the existing entity reactors (search-index +
+ *      entity-embedding + cross-thread-notify + automation-trigger-match) so the
+ *      parent's Typesense doc + vector + entity-scoped automations reflect the
+ *      facet. This is the smaller, clearer change than teaching the shared
+ *      search/embedding reactors about a new 'entity_facet' subject type — it
+ *      produces the SAME jobs an `entities.update` would (reactors #1 and #2).
+ */
+function emitFacetSideEffects(opts: {
+  action: "attach" | "update" | "detach";
+  entityId: string;
+  facetId: string;
+  profileSlug?: string;
+  status?: string | null;
+  changedKeys?: string[];
+  userId: string;
+  workspaceId: string | null;
+  sessionId?: string | null;
+}): void {
+  const commonWs = opts.workspaceId;
+  emitSideEffects({
+    subjectType: "entity_facet",
+    action: opts.action,
+    subjectId: opts.facetId,
+    userId: opts.userId,
+    workspaceId: commonWs,
+    sessionId: opts.sessionId ?? null,
+    data: {
+      entityId: opts.entityId,
+      facetId: opts.facetId,
+      ...(opts.profileSlug ? { profileSlug: opts.profileSlug } : {}),
+      ...(opts.status !== undefined && opts.status !== null
+        ? { status: opts.status }
+        : {}),
+      ...(opts.changedKeys && opts.changedKeys.length > 0
+        ? { changedKeys: opts.changedKeys }
+        : {}),
+    },
+  });
+  // Parent-entity refresh — reuse the entity reactors (search + vector +
+  // automations) so the parent reflects the facet change.
+  emitSideEffects({
+    subjectType: "entity",
+    action: "update",
+    subjectId: opts.entityId,
+    userId: opts.userId,
+    workspaceId: commonWs,
+    sessionId: opts.sessionId ?? null,
+    data: {
+      facetChange: true,
+      facetAction: opts.action,
+      facetId: opts.facetId,
+      ...(opts.profileSlug ? { profileSlug: opts.profileSlug } : {}),
+    },
+  });
+}
 
 export const entitiesRouter = router({
   /**
@@ -1123,6 +1224,12 @@ export const entitiesRouter = router({
         entity: z.any(),
         profile: z.any().optional(),
         effectiveProperties: z.array(z.any()).optional(),
+        /**
+         * Live facets (role-profiles attached to this entity) resolved through
+         * the same workspace lens as `effectiveProperties`. Additive/optional —
+         * present only on the `includeProfile` path. Kind + Facets (Wave 1C).
+         */
+        facets: z.array(z.any()).optional(),
         /** Tracks where this entity was imported from (empty for user-created entities). */
         externalLinks: z
           .array(
@@ -1243,10 +1350,20 @@ export const entitiesRouter = router({
           lensWorkspaceId
         );
 
+      // Kind + Facets: resolve the entity's live facets through the SAME
+      // workspace lens as the property overlays. Additive — never blocks the
+      // envelope.
+      const facets = await getEffectiveFacets(
+        database,
+        entity.id,
+        lensWorkspaceId
+      );
+
       return {
         entity: typedEntity,
         profile,
         effectiveProperties,
+        facets,
         externalLinks,
       };
     }),
@@ -1573,6 +1690,401 @@ export const entitiesRouter = router({
       }
 
       return { status: "updated", message: "Entity updated" };
+    }),
+
+  /**
+   * Attach a facet (role-profile) to an entity — Kind + Facets (Wave 1C).
+   *
+   * Follows the entity-mutation skeleton EXACTLY:
+   *   .requested audit → checkPermissionOrPropose(facet.attach) → FacetRepository
+   *   write on grant → .completed audit → facet emit chain (parent refresh).
+   * The write is the ONE door (`FacetRepository.attach`); never insert
+   * entity_facets directly.
+   */
+  attachFacet: podProcedure
+    .input(
+      z.object({
+        entityId: z.string().uuid(),
+        profileSlug: z.string().optional(),
+        profileId: z.string().uuid().optional(),
+        /** Facet visibility lens. null = pod-wide; omitted = inherit parent. */
+        workspaceId: z.string().uuid().nullable().optional(),
+        /** Disambiguator when the same role attaches in multiple contexts. */
+        contextEntityId: z.string().uuid().nullable().optional(),
+        status: z.string().optional(),
+        properties: z.record(z.string(), z.unknown()).optional(),
+        source: FACET_SOURCE_ENUM,
+        reasoning: z.string().optional(),
+        agentUserId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      if (!input.profileSlug && !input.profileId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Either profileSlug or profileId must be provided",
+        });
+      }
+      const correlationId = randomUUID();
+
+      // Load the parent entity through the visibility floor — confirms it exists
+      // and resolves its workspace for the governance + emit lens.
+      const parent = await db.query.entities.findFirst({
+        where: and(
+          eq(entities.id, input.entityId),
+          isNull(entities.deletedAt),
+          entityVisibleWhere(ctx.userId)
+        ),
+        columns: { id: true, workspaceId: true, type: true },
+      });
+      if (!parent) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Entity not found: ${input.entityId}`,
+        });
+      }
+
+      const facetWorkspaceId =
+        input.workspaceId !== undefined
+          ? input.workspaceId
+          : (parent.workspaceId ?? null);
+      const governanceWorkspaceId = facetWorkspaceId ?? ctx.workspaceId ?? null;
+
+      // 1. .requested
+      const requestedEvent = await auditLog({
+        subjectType: "entity_facet",
+        action: "attach",
+        phase: "requested",
+        subjectId: input.entityId,
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: governanceWorkspaceId,
+        correlationId,
+        data: {
+          entityId: input.entityId,
+          profileSlug: input.profileSlug,
+          profileId: input.profileId,
+          contextEntityId: input.contextEntityId,
+          status: input.status,
+        },
+      });
+
+      // 2. Permission → subjectType "facet", action "attach" so the proposal row
+      // gets targetType="facet"/proposalType="attach" (the executor's key).
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: governanceWorkspaceId,
+        subjectType: "facet",
+        action: "attach",
+        source: input.source,
+        reasoning: input.reasoning,
+        correlationId,
+        requestedEventId: requestedEvent?.id,
+        sessionId: ctx.sessionId ?? undefined,
+        data: {
+          entityId: input.entityId,
+          profileSlug: input.profileSlug,
+          profileId: input.profileId,
+          workspaceId: facetWorkspaceId,
+          contextEntityId: input.contextEntityId ?? null,
+          status: input.status,
+          properties: input.properties,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          message: "Facet attach proposed for review",
+          facet: null as Record<string, unknown> | null,
+          proposalId: perm.proposalId,
+          proposalType: perm.proposalType,
+          reviewUrl: perm.reviewUrl,
+        };
+      }
+
+      // 3. Write — the ONE door.
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const facetRepo = new FacetRepository(database, eventRepo);
+      const facet = await facetRepo.attach(
+        {
+          entityId: input.entityId,
+          profileId: input.profileId,
+          profileSlug: input.profileSlug,
+          userId: ctx.userId,
+          workspaceId: facetWorkspaceId,
+          contextEntityId: input.contextEntityId ?? null,
+          status: input.status,
+          properties: input.properties,
+          agentUserId: input.agentUserId,
+          correlationId,
+        },
+        ctx.userId
+      );
+
+      // 4. .completed + emit chain
+      await auditLog({
+        subjectType: "entity_facet",
+        action: "attach",
+        phase: "completed",
+        subjectId: facet.id,
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: governanceWorkspaceId,
+        correlationId,
+        data: { entityId: input.entityId, facetId: facet.id },
+      });
+
+      const profileSlug =
+        input.profileSlug ?? (await resolveFacetProfileSlug(facet.profileId));
+      emitFacetSideEffects({
+        action: "attach",
+        entityId: input.entityId,
+        facetId: facet.id,
+        profileSlug,
+        status: facet.status,
+        userId: ctx.userId,
+        workspaceId: facet.workspaceId ?? governanceWorkspaceId,
+        sessionId: ctx.sessionId ?? null,
+      });
+
+      return {
+        status: "attached" as const,
+        message: "Facet attached",
+        facetId: facet.id,
+        facet,
+      };
+    }),
+
+  /**
+   * Update a facet's status/properties — Kind + Facets (Wave 1C).
+   */
+  updateFacet: podProcedure
+    .input(
+      z.object({
+        facetId: z.string().uuid(),
+        status: z.string().optional(),
+        properties: z.record(z.string(), z.unknown()).optional(),
+        /** Overlay lens for property validation (defaults to the facet's stored ws). */
+        workspaceId: z.string().uuid().nullable().optional(),
+        source: FACET_SOURCE_ENUM,
+        reasoning: z.string().optional(),
+        agentUserId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const correlationId = randomUUID();
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const facetRepo = new FacetRepository(database, eventRepo);
+
+      // Load the facet (floor: owned by the caller) to resolve entity + lens.
+      const existing = await facetRepo.getById(input.facetId);
+      if (!existing || existing.userId !== ctx.userId) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Facet not found: ${input.facetId}`,
+        });
+      }
+      const governanceWorkspaceId =
+        existing.workspaceId ?? ctx.workspaceId ?? null;
+
+      // 1. .requested
+      const requestedEvent = await auditLog({
+        subjectType: "entity_facet",
+        action: "update",
+        phase: "requested",
+        subjectId: input.facetId,
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: governanceWorkspaceId,
+        correlationId,
+        data: { facetId: input.facetId, status: input.status },
+      });
+
+      // 2. Permission → targetType="facet"/proposalType="update".
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: governanceWorkspaceId,
+        subjectType: "facet",
+        action: "update",
+        source: input.source,
+        reasoning: input.reasoning,
+        correlationId,
+        requestedEventId: requestedEvent?.id,
+        sessionId: ctx.sessionId ?? undefined,
+        data: {
+          // entityId drives the proposal targetId (points the review card at the
+          // parent entity); facetId is what the executor re-runs against.
+          entityId: existing.entityId,
+          facetId: input.facetId,
+          status: input.status,
+          properties: input.properties,
+          workspaceId: input.workspaceId ?? null,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          message: "Facet update proposed for review",
+          facet: null as Record<string, unknown> | null,
+          proposalId: perm.proposalId,
+          proposalType: perm.proposalType,
+          reviewUrl: perm.reviewUrl,
+        };
+      }
+
+      // 3. Write
+      const facet = await facetRepo.update(
+        input.facetId,
+        {
+          status: input.status,
+          properties: input.properties,
+          workspaceId: input.workspaceId ?? undefined,
+        },
+        ctx.userId
+      );
+
+      // 4. .completed + emit
+      await auditLog({
+        subjectType: "entity_facet",
+        action: "update",
+        phase: "completed",
+        subjectId: facet.id,
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: governanceWorkspaceId,
+        correlationId,
+      });
+
+      const changedKeys = [
+        ...(input.status !== undefined ? ["status"] : []),
+        ...(input.properties ? Object.keys(input.properties) : []),
+      ];
+      emitFacetSideEffects({
+        action: "update",
+        entityId: existing.entityId,
+        facetId: facet.id,
+        profileSlug: await resolveFacetProfileSlug(facet.profileId),
+        status: facet.status,
+        changedKeys,
+        userId: ctx.userId,
+        workspaceId: facet.workspaceId ?? governanceWorkspaceId,
+        sessionId: ctx.sessionId ?? null,
+      });
+
+      return { status: "updated" as const, message: "Facet updated", facet };
+    }),
+
+  /**
+   * Detach a facet (soft-delete) — Kind + Facets (Wave 1C).
+   */
+  detachFacet: podProcedure
+    .input(
+      z.object({
+        facetId: z.string().uuid(),
+        source: FACET_SOURCE_ENUM,
+        reasoning: z.string().optional(),
+        agentUserId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const correlationId = randomUUID();
+      const database = await getDb();
+      const eventRepo = new EventRepository(sql);
+      const facetRepo = new FacetRepository(database, eventRepo);
+
+      const existing = await facetRepo.getById(input.facetId);
+      if (!existing || existing.userId !== ctx.userId) {
+        // Idempotent: nothing to detach.
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Facet not found: ${input.facetId}`,
+        });
+      }
+      const governanceWorkspaceId =
+        existing.workspaceId ?? ctx.workspaceId ?? null;
+
+      // 1. .requested
+      const requestedEvent = await auditLog({
+        subjectType: "entity_facet",
+        action: "detach",
+        phase: "requested",
+        subjectId: input.facetId,
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: governanceWorkspaceId,
+        correlationId,
+        data: { facetId: input.facetId, entityId: existing.entityId },
+      });
+
+      // 2. Permission → targetType="facet"/proposalType="detach".
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: governanceWorkspaceId,
+        subjectType: "facet",
+        action: "detach",
+        source: input.source,
+        reasoning: input.reasoning,
+        correlationId,
+        requestedEventId: requestedEvent?.id,
+        sessionId: ctx.sessionId ?? undefined,
+        data: {
+          entityId: existing.entityId,
+          facetId: input.facetId,
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          message: "Facet detach proposed for review",
+          proposalId: perm.proposalId,
+          proposalType: perm.proposalType,
+          reviewUrl: perm.reviewUrl,
+        };
+      }
+
+      // 3. Write (soft-delete)
+      await facetRepo.detach(input.facetId, ctx.userId);
+
+      // 4. .completed + emit
+      await auditLog({
+        subjectType: "entity_facet",
+        action: "detach",
+        phase: "completed",
+        subjectId: input.facetId,
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: governanceWorkspaceId,
+        correlationId,
+      });
+
+      emitFacetSideEffects({
+        action: "detach",
+        entityId: existing.entityId,
+        facetId: input.facetId,
+        profileSlug: await resolveFacetProfileSlug(existing.profileId),
+        userId: ctx.userId,
+        workspaceId: existing.workspaceId ?? governanceWorkspaceId,
+        sessionId: ctx.sessionId ?? null,
+      });
+
+      return { status: "detached" as const, message: "Facet detached" };
     }),
 
   /**

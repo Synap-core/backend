@@ -348,4 +348,183 @@ export const entitiesRouter = router({
 
       return { status: result.status, message: result.message };
     }),
+
+  /**
+   * Attach a facet (role-profile) to an entity — Kind + Facets (Wave 1C).
+   * Requires: hub-protocol.write scope. Thin wrapper over the regular
+   * entities.attachFacet procedure so governance + the emit chain are inherited.
+   */
+  attachFacet: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        entityId: z.string().uuid(),
+        profileSlug: z.string().optional(),
+        profileId: z.string().uuid().optional(),
+        workspaceId: z.string().uuid().nullable().optional(),
+        contextEntityId: z.string().uuid().nullable().optional(),
+        status: z.string().optional(),
+        properties: z.record(z.string(), z.unknown()).optional(),
+        agentUserId: z.string().uuid().optional(),
+        reasoning: z.string().optional(),
+        source: z
+          .enum([
+            "intelligence",
+            "agent",
+            "openwebui-pipeline",
+            "openclaw",
+            "extension",
+            "cli",
+            "n8n",
+            "raycast",
+          ])
+          .optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const callerContext = await createHubProtocolCallerContext(
+        input.userId,
+        ctx.scopes || [],
+        ctx.workspaceId ?? undefined,
+        ctx.sourceMessageId ?? undefined,
+        ctx.sessionId ?? undefined
+      );
+      const caller = regularEntitiesRouter.createCaller(callerContext);
+
+      const result = await caller.attachFacet({
+        entityId: input.entityId,
+        profileSlug: input.profileSlug,
+        profileId: input.profileId,
+        ...(input.workspaceId !== undefined
+          ? { workspaceId: input.workspaceId }
+          : {}),
+        ...(input.contextEntityId !== undefined
+          ? { contextEntityId: input.contextEntityId }
+          : {}),
+        status: input.status,
+        properties: input.properties,
+        reasoning: input.reasoning,
+        source: input.source ?? (input.agentUserId ? "agent" : "intelligence"),
+        agentUserId: input.agentUserId,
+      });
+
+      return {
+        status: result.status,
+        message: result.message,
+        facetId: (result as { facetId?: string }).facetId,
+        proposalId: (result as { proposalId?: string }).proposalId,
+        proposalType: (result as { proposalType?: string }).proposalType,
+        reviewUrl: (result as { reviewUrl?: string }).reviewUrl,
+      };
+    }),
+
+  /**
+   * Update a facet's status/properties — Kind + Facets (Wave 1C).
+   * Requires: hub-protocol.write scope.
+   */
+  updateFacet: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        facetId: z.string().uuid(),
+        status: z.string().optional(),
+        properties: z.record(z.string(), z.unknown()).optional(),
+        workspaceId: z.string().uuid().nullable().optional(),
+        agentUserId: z.string().uuid().optional(),
+        reasoning: z.string().optional(),
+        source: z
+          .enum([
+            "intelligence",
+            "agent",
+            "openwebui-pipeline",
+            "openclaw",
+            "extension",
+            "cli",
+            "n8n",
+            "raycast",
+          ])
+          .optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const callerContext = await createHubProtocolCallerContext(
+        input.userId,
+        ctx.scopes || [],
+        ctx.workspaceId ?? undefined,
+        ctx.sourceMessageId ?? undefined,
+        ctx.sessionId ?? undefined
+      );
+      const caller = regularEntitiesRouter.createCaller(callerContext);
+
+      const result = await caller.updateFacet({
+        facetId: input.facetId,
+        status: input.status,
+        properties: input.properties,
+        ...(input.workspaceId !== undefined
+          ? { workspaceId: input.workspaceId }
+          : {}),
+        reasoning: input.reasoning,
+        source: input.source ?? (input.agentUserId ? "agent" : "intelligence"),
+        agentUserId: input.agentUserId,
+      });
+
+      return {
+        status: result.status,
+        message: result.message,
+        proposalId: (result as { proposalId?: string }).proposalId,
+        proposalType: (result as { proposalType?: string }).proposalType,
+        reviewUrl: (result as { reviewUrl?: string }).reviewUrl,
+      };
+    }),
+
+  /**
+   * Detach a facet (soft-delete) — Kind + Facets (Wave 1C).
+   * Requires: hub-protocol.write scope.
+   */
+  detachFacet: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        facetId: z.string().uuid(),
+        agentUserId: z.string().uuid().optional(),
+        reasoning: z.string().optional(),
+        source: z
+          .enum([
+            "intelligence",
+            "agent",
+            "openwebui-pipeline",
+            "openclaw",
+            "extension",
+            "cli",
+            "n8n",
+            "raycast",
+          ])
+          .optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const callerContext = await createHubProtocolCallerContext(
+        input.userId,
+        ctx.scopes || [],
+        ctx.workspaceId ?? undefined,
+        ctx.sourceMessageId ?? undefined,
+        ctx.sessionId ?? undefined
+      );
+      const caller = regularEntitiesRouter.createCaller(callerContext);
+
+      const result = await caller.detachFacet({
+        facetId: input.facetId,
+        reasoning: input.reasoning,
+        source: input.source ?? (input.agentUserId ? "agent" : "intelligence"),
+        agentUserId: input.agentUserId,
+      });
+
+      return {
+        status: result.status,
+        message: result.message,
+        proposalId: (result as { proposalId?: string }).proposalId,
+        proposalType: (result as { proposalType?: string }).proposalType,
+        reviewUrl: (result as { reviewUrl?: string }).reviewUrl,
+      };
+    }),
 });

@@ -814,6 +814,192 @@ export function registerApproveExecutors(): void {
     },
   });
 
+  // ── facet / attach ───────────────────────────────────────────────────────
+  // Kind + Facets (Wave 1C). Approval re-runs the FULL attachFacet door (incl.
+  // the facet emit chain) as the approver, mirroring entity/update. Pod-wide
+  // facets (null workspace) run at pod scope like entity/delete.
+  registerProposalExecutor({
+    key: "facet/attach",
+    async execute({ proposal, payload, userId, input, deps }) {
+      void payload;
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const entityId = innerData.entityId as string | undefined;
+      if (!entityId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Facet attach proposal is missing entityId",
+        });
+      }
+      const wsId = proposal.workspaceId ?? undefined;
+      let workspaceRole = "owner";
+      if (wsId) {
+        const membership = await getWorkspaceMembership(db, wsId, userId);
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        workspaceRole = membership.role;
+      }
+      const entityCaller = regularEntitiesRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        ...(wsId ? { workspaceId: wsId } : {}),
+        workspaceRole,
+      } as unknown as Context);
+      await entityCaller.attachFacet({
+        entityId,
+        profileSlug: innerData.profileSlug as string | undefined,
+        profileId: innerData.profileId as string | undefined,
+        workspaceId:
+          (innerData.workspaceId as string | null | undefined) ?? undefined,
+        contextEntityId:
+          (innerData.contextEntityId as string | null | undefined) ?? undefined,
+        status: innerData.status as string | undefined,
+        properties: innerData.properties as Record<string, unknown> | undefined,
+        source: "system",
+      });
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── facet / update ─────────────────────────────────────────────────────────
+  registerProposalExecutor({
+    key: "facet/update",
+    async execute({ proposal, payload, userId, input, deps }) {
+      void payload;
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const facetId = innerData.facetId as string | undefined;
+      if (!facetId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Facet update proposal is missing facetId",
+        });
+      }
+      const wsId = proposal.workspaceId ?? undefined;
+      let workspaceRole = "owner";
+      if (wsId) {
+        const membership = await getWorkspaceMembership(db, wsId, userId);
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        workspaceRole = membership.role;
+      }
+      const entityCaller = regularEntitiesRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        ...(wsId ? { workspaceId: wsId } : {}),
+        workspaceRole,
+      } as unknown as Context);
+      await entityCaller.updateFacet({
+        facetId,
+        status: innerData.status as string | undefined,
+        properties: innerData.properties as Record<string, unknown> | undefined,
+        workspaceId:
+          (innerData.workspaceId as string | null | undefined) ?? undefined,
+        source: "system",
+      });
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── facet / detach ─────────────────────────────────────────────────────────
+  registerProposalExecutor({
+    key: "facet/detach",
+    async execute({ proposal, payload, userId, input, deps }) {
+      void payload;
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const facetId = innerData.facetId as string | undefined;
+      if (!facetId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Facet detach proposal is missing facetId",
+        });
+      }
+      const wsId = proposal.workspaceId ?? undefined;
+      let workspaceRole = "owner";
+      if (wsId) {
+        const membership = await getWorkspaceMembership(db, wsId, userId);
+        if (!membership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "No workspace access",
+          });
+        }
+        workspaceRole = membership.role;
+      }
+      const entityCaller = regularEntitiesRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        ...(wsId ? { workspaceId: wsId } : {}),
+        workspaceRole,
+      } as unknown as Context);
+      await entityCaller.detachFacet({ facetId, source: "system" });
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
   // ── workspace / join ───────────────────────────────────────────────────────
   registerProposalExecutor({
     key: "workspace/join",
