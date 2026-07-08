@@ -235,30 +235,39 @@ export async function addConnection(
   // secret is consumed by the capability. context_id uses the '' sentinel when
   // none so context-less rows dedupe under the unique index (NULLs are distinct
   // in Postgres). Idempotent: refresh the label/context on conflict.
-  await db
-    .insert(secretUsages)
-    .values({
-      secretId: secret.id,
-      consumerType: "capability",
-      consumerId: capabilityId,
-      consumerLabel: label,
-      workspaceId: null,
-      contextType: secret.contextType ?? null,
-      contextId: secret.contextId ?? "",
-    })
-    .onConflictDoUpdate({
-      target: [
-        secretUsages.secretId,
-        secretUsages.consumerType,
-        secretUsages.consumerId,
-        secretUsages.contextId,
-      ],
-      set: {
+  // BEST-EFFORT: the "used by" join is presentational — a hiccup writing it must
+  // never fail the connection creation (the secret + audit are already committed).
+  try {
+    await db
+      .insert(secretUsages)
+      .values({
+        secretId: secret.id,
+        consumerType: "capability",
+        consumerId: capabilityId,
         consumerLabel: label,
-        contextType: secret.contextType ?? null,
         workspaceId: null,
-      },
-    });
+        contextType: secret.contextType ?? null,
+        contextId: secret.contextId ?? "",
+      })
+      .onConflictDoUpdate({
+        target: [
+          secretUsages.secretId,
+          secretUsages.consumerType,
+          secretUsages.consumerId,
+          secretUsages.contextId,
+        ],
+        set: {
+          consumerLabel: label,
+          contextType: secret.contextType ?? null,
+          workspaceId: null,
+        },
+      });
+  } catch (usageErr) {
+    console.error(
+      "[capability-connections] secret_usages upsert failed (non-fatal):",
+      usageErr
+    );
+  }
 
   return {
     id: secret.id,

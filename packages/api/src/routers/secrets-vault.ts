@@ -548,6 +548,9 @@ export const secretsVaultRouter = router({
                 encryptedData: blob.encryptedData,
                 iv: blob.iv,
                 authTag: blob.authTag,
+                // Stamp server mode so a legacy 'client' row that re-enters its
+                // value here migrates and `reveal` stops refusing it.
+                encryptionMode: "server",
               };
             })()
           : {};

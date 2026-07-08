@@ -50,6 +50,9 @@ export interface UpdateSecretInput {
   encryptedData?: string;
   iv?: string;
   authTag?: string;
+  /** Set to 'server' when a value is (re)encrypted server-side — migrates a
+   *  legacy 'client' row so `reveal` stops refusing it. */
+  encryptionMode?: string;
   isFavorite?: boolean;
   sortOrder?: number;
   passwordStrength?: number;
@@ -339,6 +342,8 @@ export class SecretsVaultRepository extends BaseRepository<
       updateData.encryptedData = data.encryptedData;
     if (data.iv !== undefined) updateData.iv = data.iv;
     if (data.authTag !== undefined) updateData.authTag = data.authTag;
+    if (data.encryptionMode !== undefined)
+      updateData.encryptionMode = data.encryptionMode;
     if (data.isFavorite !== undefined) updateData.isFavorite = data.isFavorite;
     if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
     if (data.passwordStrength !== undefined)

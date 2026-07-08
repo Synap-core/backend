@@ -224,25 +224,10 @@ export const toolsRouter = router({
       // setAuthBinding / delete. Without this any user could re-point a pod-wide
       // tool's name/description/config.
       if (!existing.workspaceId) await requirePodAdmin(userId);
-      const perm = await checkPermissionOrPropose({
-        userId,
-        workspaceId: existing.workspaceId ?? undefined,
-        subjectType: "tool",
-        action: "update",
-        data: { id: input.id },
-      });
-      if ("denied" in perm && perm.denied)
-        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
-      if ("proposalId" in perm)
-        return {
-          tool: null as Tool | null,
-          status: "proposed" as const,
-          proposalId: perm.proposalId,
-        };
 
-      // Security: if any execution-defining field changes, the tool may now run
-      // something different from what was approved — reset approval so an
-      // approved tool can't be silently re-pointed to run untrusted code.
+      // Distinguish an EXECUTION-changing update (credentialRef/config/executor/
+      // kind/inputSchema — can re-point what the tool RUNS, i.e. a new egress
+      // ability) from a benign CONFIG-only update (metadata/status/name/desc).
       const RE_APPROVAL_FIELDS = [
         "credentialRef",
         "config",
@@ -253,6 +238,40 @@ export const toolsRouter = router({
       const execChanged = RE_APPROVAL_FIELDS.some(
         (k) => (input as Record<string, unknown>)[k] !== undefined
       );
+
+      // CONFIG-ONLY carve-out: a metadata/status-only update is benign — it does
+      // NOT change what the tool runs, so it is not egress-defining and must NOT
+      // be proposal-gated. Without this, an agent-driven bridge (Discord `/setup`,
+      // `/mail-feed`, `/events`) can never PERSIST its own channel config: the
+      // `tool.update` proposes for a `writesRequireProposal` agent, the write
+      // never lands, and the config silently reverts on the next refresh. A
+      // config-only update is gated by workspace-write RBAC only. An EXEC-changing
+      // update still routes through the full proposal path so an injected agent
+      // can't silently re-point a tool to run untrusted code.
+      if (execChanged) {
+        const perm = await checkPermissionOrPropose({
+          userId,
+          workspaceId: existing.workspaceId ?? undefined,
+          subjectType: "tool",
+          action: "update",
+          data: { id: input.id },
+        });
+        if ("denied" in perm && perm.denied)
+          throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+        if ("proposalId" in perm)
+          return {
+            tool: null as Tool | null,
+            status: "proposed" as const,
+            proposalId: perm.proposalId,
+          };
+      } else if (existing.workspaceId) {
+        // Benign config update on a workspace-scoped tool → RBAC-only, no proposal.
+        // (Pod-wide tools were already gated by requirePodAdmin above.)
+        await assertWorkspaceWrite(db, userId, {
+          workspaceId: existing.workspaceId,
+          ownerId: existing.createdBy,
+        });
+      }
 
       const [tool] = await db
         .update(tools)
@@ -490,31 +509,39 @@ export const toolsRouter = router({
       // consumed by the tool, bound to a principal context. context_id carries
       // the principal id (never '' here — a binding always has a principal), so
       // re-binding the same secret to the same principal dedupes and refreshes
-      // the label.
-      await db
-        .insert(secretUsages)
-        .values({
-          secretId: input.secretId,
-          consumerType: "tool",
-          consumerId: input.toolId,
-          consumerLabel: tool.name,
-          workspaceId: tool.workspaceId ?? null,
-          contextType: input.principalType,
-          contextId: input.principalId,
-        })
-        .onConflictDoUpdate({
-          target: [
-            secretUsages.secretId,
-            secretUsages.consumerType,
-            secretUsages.consumerId,
-            secretUsages.contextId,
-          ],
-          set: {
+      // the label. BEST-EFFORT: the "used by" join is presentational — never fail
+      // the bind if writing it hiccups.
+      try {
+        await db
+          .insert(secretUsages)
+          .values({
+            secretId: input.secretId,
+            consumerType: "tool",
+            consumerId: input.toolId,
             consumerLabel: tool.name,
-            contextType: input.principalType,
             workspaceId: tool.workspaceId ?? null,
-          },
-        });
+            contextType: input.principalType,
+            contextId: input.principalId,
+          })
+          .onConflictDoUpdate({
+            target: [
+              secretUsages.secretId,
+              secretUsages.consumerType,
+              secretUsages.consumerId,
+              secretUsages.contextId,
+            ],
+            set: {
+              consumerLabel: tool.name,
+              contextType: input.principalType,
+              workspaceId: tool.workspaceId ?? null,
+            },
+          });
+      } catch (usageErr) {
+        console.error(
+          "[tools.bindCredential] secret_usages upsert failed (non-fatal):",
+          usageErr
+        );
+      }
       return { linkId: input.secretId };
     }),
 

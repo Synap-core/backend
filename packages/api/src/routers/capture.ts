@@ -1534,7 +1534,12 @@ export const captureRouter = router({
             targetId: randomUUID(),
             proposalType: "capture.graph",
             action: "graph",
-            source: "capture",
+            // Event source must be a valid EventSource (api/automation/system/…);
+            // "capture" is NOT one — passing it made every capture audit event
+            // fail Zod validation (silently, via best-effort auditLog). The
+            // capture-origin discriminator already lives in data.source + the
+            // proposalType, so the transport source is "api".
+            source: "api",
             summary: buildCaptureSummary(operations),
             data: {
               operations,
@@ -1550,13 +1555,22 @@ export const captureRouter = router({
           // capture over a stamping hiccup.
           if (materializedEntityIds.length > 0) {
             try {
-              await database
+              const stamped = await database
                 .update(entitiesTable)
                 .set({
                   correlationId,
                   sourceProposalId: proposal?.id ?? null,
                 })
-                .where(inArray(entitiesTable.id, materializedEntityIds));
+                .where(inArray(entitiesTable.id, materializedEntityIds))
+                .returning({ id: entitiesTable.id });
+              logger.info(
+                {
+                  correlationId,
+                  requested: materializedEntityIds.length,
+                  stamped: stamped.length,
+                },
+                "Track 3: entity provenance stamped"
+              );
             } catch (err) {
               logger.warn(
                 { err, userId, correlationId },
@@ -1584,7 +1598,7 @@ export const captureRouter = router({
                 subjectId: randomUUID(),
                 userId,
                 workspaceId: workspaceId ?? null,
-                source: "capture",
+                source: "api",
                 correlationId,
                 data: {
                   kind: "route",
