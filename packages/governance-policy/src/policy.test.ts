@@ -34,6 +34,12 @@ describe("requiredPermissionFor", () => {
       expect(requiredPermissionFor(a)).toBe("write");
     }
   });
+  it("maps facet verbs (attach/detach) → write, not delete", () => {
+    // 'detach' is a reversible soft-delete, so it must NOT require RBAC
+    // "delete" permission — only "write".
+    expect(requiredPermissionFor("attach")).toBe("write");
+    expect(requiredPermissionFor("detach")).toBe("write");
+  });
   it("maps unknown/read → read", () => {
     expect(requiredPermissionFor("read")).toBe("read");
     expect(requiredPermissionFor("list")).toBe("read");
@@ -752,6 +758,9 @@ describe("constants are intact", () => {
       "view.create",
       "profile.create",
       "relation.create",
+      "facet.attach",
+      "facet.update",
+      "facet.detach",
     ]) {
       expect(DEFAULT_AUTO_APPROVE).toContain(k);
     }
@@ -773,6 +782,17 @@ describe("constants are intact", () => {
       expect(normal).not.toContain(`entity.${d}`);
       expect(normal).not.toContain(`document.${d}`);
     }
+    // Kind + Facets (Wave 1B): attach/update/detach are all instant in NORMAL —
+    // detach is a reversible soft-delete, not a DESTRUCTIVE_ACTIONS verb.
+    expect(normal).toContain("facet.attach");
+    expect(normal).toContain("facet.update");
+    expect(normal).toContain("facet.detach");
+  });
+  it("SAFE mode: facet actions are NOT auto-approved (require proposal, like entity.create)", () => {
+    const safe = GOVERNANCE_MODES.safe.autoApproveFor;
+    expect(safe).not.toContain("facet.attach");
+    expect(safe).not.toContain("facet.update");
+    expect(safe).not.toContain("facet.detach");
   });
   it("ADMIN_ACTIONS contains the privileged verbs", () => {
     for (const k of [

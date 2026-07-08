@@ -12,6 +12,7 @@
  *
  * Supported subject types:
  * - entity: create, update, delete
+ * - entity_facet: attach, update, detach
  * - profile: create, update, delete
  * - view: create, update, delete
  */
@@ -27,6 +28,7 @@ import {
   EventRepository,
   ViewRepository,
   ProfileRepository,
+  FacetRepository,
   type ProfileScope,
   sql,
   db as sharedDb,
@@ -113,6 +115,15 @@ export async function handleMaterialize(
     switch (subjectType) {
       case "entity":
         await materializeEntity(action, subjectId, userId, workspaceId, data);
+        break;
+      case "entity_facet":
+        await materializeEntityFacet(
+          action,
+          subjectId,
+          userId,
+          workspaceId,
+          data
+        );
         break;
       case "profile":
         await materializeProfile(action, subjectId, userId, workspaceId, data);
@@ -382,6 +393,72 @@ async function materializeEntity(
   } else if (action === "delete") {
     const entityId = (data.id as string) || subjectId;
     await entityRepo.delete(entityId, userId);
+  }
+}
+
+/**
+ * Materialize an entity_facet operation (Kind + Facets, Wave 1B) from a
+ * proposal-approved event.
+ *
+ * Unlike `materializeEntity`, no manual idempotency findFirst-then-skip guard
+ * is needed for `attach`: `FacetRepository.attach()` is already idempotent —
+ * it catches the unique-constraint violation (same entity/profile/
+ * contextEntityId/workspaceId) and returns the existing live row instead of
+ * throwing, so a pg-boss retry of the same job is a safe no-op by construction.
+ * `update`/`detach` target an EXISTING facet by id (the facet was already
+ * created at attach time, so `subjectId`/`data.id` is that real facet id —
+ * unlike entity.create, there is no id-pinning concern here).
+ */
+async function materializeEntityFacet(
+  action: string,
+  subjectId: string,
+  userId: string,
+  workspaceId: string | undefined,
+  data: Record<string, unknown>
+): Promise<void> {
+  const database = await getDb();
+  const eventRepo = new EventRepository(sql);
+  const facetRepo = new FacetRepository(database, eventRepo);
+
+  if (action === "attach") {
+    await facetRepo.attach(
+      {
+        entityId: data.entityId as string,
+        profileId: (data.profileId as string) || undefined,
+        profileSlug: (data.profileSlug as string) || undefined,
+        userId,
+        workspaceId:
+          (data.workspaceId as string | undefined) ?? workspaceId ?? null,
+        contextEntityId: (data.contextEntityId as string) || null,
+        status: (data.status as string) || undefined,
+        properties: (data.properties as Record<string, unknown>) || undefined,
+        // Provenance (mirrors materializeEntity): stamp who/what authored the
+        // write from the proposal envelope carried on the .validated event.
+        createdByKind: (data.agentUserId as string) ? "ai_agent" : "human",
+        createdByUserId: userId,
+        agentUserId: (data.agentUserId as string) || undefined,
+        sourceProposalId: (data.sourceProposalId as string) || undefined,
+        correlationId: (data.correlationId as string) || undefined,
+      },
+      userId
+    );
+  } else if (action === "update") {
+    const facetId = (data.id as string) || subjectId;
+    await facetRepo.update(
+      facetId,
+      {
+        status: (data.status as string) || undefined,
+        properties: (data.properties as Record<string, unknown>) || undefined,
+        workspaceId:
+          (data.workspaceId as string | undefined) ?? workspaceId ?? undefined,
+      },
+      userId
+    );
+  } else if (action === "detach") {
+    const facetId = (data.id as string) || subjectId;
+    await facetRepo.detach(facetId, userId);
+  } else {
+    logger.warn({ action }, "Unknown entity_facet action for materialization");
   }
 }
 

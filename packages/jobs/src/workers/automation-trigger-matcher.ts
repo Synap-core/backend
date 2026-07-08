@@ -159,6 +159,45 @@ function matchTriggerSpecificFilters(
     }
   }
 
+  // ── entity_facet trigger (Kind + Facets, Wave 1B) ───────────────────────
+  // Mirrors the relation_change branch above: the materializer emits
+  // "entity_facet.create.completed" (attach) / "entity_facet.update.completed"
+  // (status/property change) / "entity_facet.delete.completed" (detach, via
+  // FacetRepository's BaseRepository-generic action names — see
+  // facet-repository.ts attach()/update()/detach()).
+  if (eventType.startsWith("entity_facet.")) {
+    // Filter by the attached role-profile.
+    if (
+      config.facetProfileSlug &&
+      eventData?.profileSlug !== config.facetProfileSlug
+    ) {
+      return false;
+    }
+    if (
+      config.facetProfileId &&
+      eventData?.profileId !== config.facetProfileId
+    ) {
+      return false;
+    }
+    // Filter by change direction ("attach" | "detach" | "status_changed" | "any")
+    if (config.facetChangeType && config.facetChangeType !== "any") {
+      const changeType = eventType.startsWith("entity_facet.create.")
+        ? "attach"
+        : eventType.startsWith("entity_facet.delete.")
+          ? "detach"
+          : eventType.startsWith("entity_facet.update.")
+            ? "status_changed"
+            : undefined;
+      if (changeType !== config.facetChangeType) {
+        return false;
+      }
+    }
+    // Filter by the facet's status.
+    if (config.status && eventData?.status !== config.status) {
+      return false;
+    }
+  }
+
   // ── proposal_event trigger ──────────────────────────────────────────────
   if (eventType.startsWith("proposal.")) {
     // Filter by specific proposal event type ("created" | "approved" | "rejected" | "any")

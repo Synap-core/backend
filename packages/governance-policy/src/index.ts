@@ -102,6 +102,17 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
   "tool.read",
   "link.read",
   "capability.read",
+  // Kind + Facets (Wave 1B): attaching/updating a role-profile facet on an
+  // entity is additive and non-destructive — same trust tier as
+  // entity.create/update above. `facet.detach` is ALSO auto-approved here:
+  // it is a soft-delete (FacetRepository.detach() never hard-deletes), so a
+  // re-attach after an unwanted detach is a normal, idempotent-friendly
+  // recovery — no different in reversibility from the entity edits already
+  // whitelisted. (Contrast with entity/document DELETE, which stays
+  // proposal-gated via DESTRUCTIVE_ACTIONS.)
+  "facet.attach",
+  "facet.update",
+  "facet.detach",
 ];
 
 /** Actions that always require a proposal in agent-owned workspaces. */
@@ -184,6 +195,14 @@ export const GOVERNANCE_MODES = {
       "capability.read",
       "terminal.read_logs",
       "filesystem.write_workspace",
+      // Kind + Facets (Wave 1B): same "creates/edits are instant" philosophy
+      // as entity.create/update above. facet.detach is included too — it is
+      // a reversible soft-delete (see DEFAULT_AUTO_APPROVE comment), unlike
+      // the full DESTRUCTIVE_ACTIONS (delete/archive/purge) that this preset
+      // deliberately excludes.
+      "facet.attach",
+      "facet.update",
+      "facet.detach",
     ],
     writesRequireProposal: false,
   },
@@ -275,10 +294,22 @@ export function requiredPermissionFor(action: string): RequiredPermission {
     action === "place" ||
     action === "remove" ||
     action === "updateRole" ||
-    action === "renderer.set"
+    action === "renderer.set" ||
+    // Kind + Facets (Wave 1B): facet.attach / facet.update / facet.detach.
+    // "detach" is a soft-delete (reversible), so it maps to "write" here, not
+    // "delete" — the DESTRUCTIVE_ACTIONS floor in decideAgentPolicy only
+    // checks for the literal verbs "delete"/"archive"/"purge", so detach is
+    // correctly NOT hard-floored to always-propose.
+    action === "attach" ||
+    action === "detach"
   ) {
     return "write";
   }
+  // NOTE: any action verb not matched above falls through to "read" — this
+  // under-gates an unrecognized write verb (RBAC would only require read
+  // permission for it). A full action-string inventory + fail-closed default
+  // is deferred to Wave 2; flagged here rather than fixed as part of the
+  // Kind+Facets wave to keep this change surgical.
   return "read";
 }
 

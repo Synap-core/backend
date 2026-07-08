@@ -91,6 +91,16 @@ export interface AutomationTriggerConfig {
   // ── focus_session stage filters ──────────────────────────────────────────
   /** Only fire when a focus session advanced INTO this stage (PlaybookStage.key) */
   toStage?: string;
+
+  // ── entity_facet domain filters (Kind + Facets, Wave 1B) ───────────────
+  /** Only match facets of this role-profile slug */
+  facetProfileSlug?: string;
+  /** Only match facets of this role-profile id */
+  facetProfileId?: string;
+  /** Filter by facet change type ("attach" | "detach" | "status_changed" | "any") */
+  facetChangeType?: "attach" | "detach" | "status_changed" | "any";
+  /** Only match facets with this status */
+  status?: string;
 }
 
 export interface AutomationNodeBase {
