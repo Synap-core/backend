@@ -116,6 +116,11 @@ export async function handleMaterialize(
       case "entity":
         await materializeEntity(action, subjectId, userId, workspaceId, data);
         break;
+      // "facet" = the governance targetType (what the */* catch-all executor
+      // emits as `facet.<action>.validated`); "entity_facet" = the audit/event
+      // subjectType. Both spellings land here so neither path can silently
+      // no-op into the default branch.
+      case "facet":
       case "entity_facet":
         await materializeEntityFacet(
           action,

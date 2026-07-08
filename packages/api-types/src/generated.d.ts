@@ -988,7 +988,7 @@ export interface AutomationTriggerConfig {
 	/** Filter by facet change type ("attach" | "detach" | "status_changed" | "any") */
 	facetChangeType?: "attach" | "detach" | "status_changed" | "any";
 	/** Only match facets with this status */
-	status?: string;
+	facetStatus?: string;
 }
 export interface AutomationNodeBase {
 	id: string;
@@ -5519,7 +5519,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				entity: any;
 				profile?: any;
 				effectiveProperties?: any[] | undefined;
-				facets?: any[] | undefined;
+				facets?: {
+					facet: Record<string, unknown>;
+					profile: Record<string, unknown>;
+					effectiveProperties: Record<string, unknown>[];
+				}[] | undefined;
 				externalLinks?: {
 					provider: string;
 					externalId: string;

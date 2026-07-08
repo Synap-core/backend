@@ -9,16 +9,17 @@
  * so this read-only resolver doesn't need an EventRepository — it queries
  * entity_facets directly rather than going through FacetRepository (whose
  * write paths are the one door for INSERT, but reads don't need that door).
- * The workspace-lens filter here MUST stay identical to
- * `FacetRepository.getByEntity`'s.
+ * Visibility semantics are shared with FacetRepository via
+ * `facetVisibilityConditions` — the compile-time single source.
  */
 
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import { and, eq, inArray, isNull, or, type SQL } from "drizzle-orm";
+import { and, eq, inArray, isNull, type SQL } from "drizzle-orm";
 import type * as schema from "../schema/index.js";
 import type { Profile } from "../schema/profiles.js";
 import { profiles } from "../schema/profiles.js";
 import { entityFacets, type EntityFacet } from "../schema/entity-facets.js";
+import { facetVisibilityConditions } from "../utils/facet-visibility.js";
 import {
   ProfileResolutionService,
   type EffectiveProperty,
@@ -34,31 +35,24 @@ export interface EffectiveFacet {
  * Resolve every live facet attached to an entity, each joined with its
  * role-profile and that profile's effective properties (workspace-lensed).
  *
- * `workspaceId`: undefined = all workspaces; null = pod-wide facets only;
- * string = that workspace's facets plus pod-wide facets — mirrors
- * `FacetRepository.getByEntity`.
+ * `opts.workspaceId`: undefined = all workspaces; null = pod-wide facets
+ * only; string = that workspace's facets plus pod-wide facets. Pod-wide
+ * facets carry an owner floor (`opts.userId`) — mirrors
+ * `FacetRepository.getByEntity` via the shared predicate.
  */
 export async function getEffectiveFacets(
   db: PostgresJsDatabase<typeof schema>,
   entityId: string,
-  workspaceId?: string | null
+  opts: { userId: string; workspaceId?: string | null }
 ): Promise<EffectiveFacet[]> {
   const profileResolution = new ProfileResolutionService(db);
+  const { workspaceId } = opts;
 
   const conditions: SQL[] = [
     eq(entityFacets.entityId, entityId),
     isNull(entityFacets.deletedAt),
+    ...facetVisibilityConditions(opts),
   ];
-  if (workspaceId === null) {
-    conditions.push(isNull(entityFacets.workspaceId));
-  } else if (workspaceId !== undefined) {
-    conditions.push(
-      or(
-        eq(entityFacets.workspaceId, workspaceId),
-        isNull(entityFacets.workspaceId)
-      ) as SQL
-    );
-  }
 
   const facets = await db.query.entityFacets.findMany({
     where: and(...conditions),

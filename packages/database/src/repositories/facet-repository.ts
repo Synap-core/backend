@@ -6,8 +6,9 @@
  * `FacetRepository.attach()`.
  */
 
-import { eq, and, or, isNull, desc, type SQL } from "drizzle-orm";
+import { eq, and, isNull, desc } from "drizzle-orm";
 import { entityFacets } from "../schema/entity-facets.js";
+import { facetVisibilityConditions } from "../utils/facet-visibility.js";
 import { entities } from "../schema/entities.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
@@ -62,6 +63,8 @@ export interface UpdateFacetInput {
 }
 
 export interface ListFacetsOptions {
+  /** Caller's user id — the owner floor for pod-wide (null-workspace) facets. */
+  userId: string;
   /**
    * undefined = all workspaces (unfiltered); null = pod-wide facets only;
    * string = that workspace's facets plus pod-wide facets.
@@ -300,13 +303,13 @@ export class FacetRepository extends BaseRepository<
    */
   async getByEntity(
     entityId: string,
-    opts: ListFacetsOptions = {}
+    opts: ListFacetsOptions
   ): Promise<EntityFacet[]> {
     const conditions = [
       eq(entityFacets.entityId, entityId),
       isNull(entityFacets.deletedAt),
+      ...facetVisibilityConditions(opts),
     ];
-    this.applyWorkspaceLens(conditions, opts.workspaceId);
 
     return this.db.query.entityFacets.findMany({
       where: and(...conditions),
@@ -317,37 +320,18 @@ export class FacetRepository extends BaseRepository<
   /** All live facets using a given role profile. */
   async listByProfile(
     profileId: string,
-    opts: ListFacetsOptions = {}
+    opts: ListFacetsOptions
   ): Promise<EntityFacet[]> {
     const conditions = [
       eq(entityFacets.profileId, profileId),
       isNull(entityFacets.deletedAt),
+      ...facetVisibilityConditions(opts),
     ];
-    this.applyWorkspaceLens(conditions, opts.workspaceId);
 
     return this.db.query.entityFacets.findMany({
       where: and(...conditions),
       orderBy: [desc(entityFacets.createdAt)],
     });
-  }
-
-  private applyWorkspaceLens(
-    conditions: SQL[],
-    workspaceId: string | null | undefined
-  ): void {
-    if (workspaceId === undefined) return; // unfiltered
-    if (workspaceId === null) {
-      conditions.push(isNull(entityFacets.workspaceId));
-      return;
-    }
-    // That workspace's facets plus pod-wide facets (mirrors
-    // entities.listForWorkspaces' includeGlobal semantics).
-    conditions.push(
-      or(
-        eq(entityFacets.workspaceId, workspaceId),
-        isNull(entityFacets.workspaceId)
-      ) as SQL
-    );
   }
 
   private async findLiveMatch(

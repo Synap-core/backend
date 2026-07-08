@@ -23,6 +23,8 @@ import {
   InheritanceCycleError,
   ProfileSlugConflictError,
   PropertySlugConflictError,
+  FacetProfileKindError,
+  FacetKindMismatchError,
 } from "@synap/database";
 
 // ── HTTP → tRPC code table ─────────────────────────────────────────────────
@@ -121,6 +123,20 @@ export function mapDbErrorToTRPC(error: unknown): TRPCError {
       cause: error,
     });
   }
+  if (error instanceof FacetProfileKindError) {
+    return new TRPCError({
+      code: "BAD_REQUEST",
+      message: error.message,
+      cause: error,
+    });
+  }
+  if (error instanceof FacetKindMismatchError) {
+    return new TRPCError({
+      code: "BAD_REQUEST",
+      message: error.message,
+      cause: error,
+    });
+  }
 
   // Unknown database error
   return new TRPCError({
@@ -140,6 +156,8 @@ export function isDbDomainError(error: unknown): error is Error {
     error instanceof PropertyDefinitionNotFoundError ||
     error instanceof InheritanceCycleError ||
     error instanceof ProfileSlugConflictError ||
-    error instanceof PropertySlugConflictError
+    error instanceof PropertySlugConflictError ||
+    error instanceof FacetProfileKindError ||
+    error instanceof FacetKindMismatchError
   );
 }

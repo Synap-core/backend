@@ -100,7 +100,7 @@ export interface AutomationTriggerConfig {
   /** Filter by facet change type ("attach" | "detach" | "status_changed" | "any") */
   facetChangeType?: "attach" | "detach" | "status_changed" | "any";
   /** Only match facets with this status */
-  status?: string;
+  facetStatus?: string;
 }
 
 export interface AutomationNodeBase {

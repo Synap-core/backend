@@ -196,7 +196,7 @@ function matchTriggerSpecificFilters(
       }
     }
     // Filter by the facet's status.
-    if (config.status && eventData?.status !== config.status) {
+    if (config.facetStatus && eventData?.status !== config.facetStatus) {
       return false;
     }
   }

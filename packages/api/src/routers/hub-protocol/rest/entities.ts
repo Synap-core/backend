@@ -1890,11 +1890,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
       ) {
         return c.json({ error: "Access denied to entity's workspace" }, 403);
       }
-      const facets = await getEffectiveFacets(
-        db,
-        entityId,
-        entity.workspaceId ?? null
-      );
+      const facets = await getEffectiveFacets(db, entityId, {
+        userId: authUserId,
+        workspaceId: entity.workspaceId ?? null,
+      });
       return c.json(
         { facets: facets as unknown as Array<Record<string, unknown>> },
         200

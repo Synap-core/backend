@@ -1229,7 +1229,15 @@ export const entitiesRouter = router({
          * the same workspace lens as `effectiveProperties`. Additive/optional —
          * present only on the `includeProfile` path. Kind + Facets (Wave 1C).
          */
-        facets: z.array(z.any()).optional(),
+        facets: z
+          .array(
+            z.object({
+              facet: z.record(z.string(), z.unknown()),
+              profile: z.record(z.string(), z.unknown()),
+              effectiveProperties: z.array(z.record(z.string(), z.unknown())),
+            })
+          )
+          .optional(),
         /** Tracks where this entity was imported from (empty for user-created entities). */
         externalLinks: z
           .array(
@@ -1353,17 +1361,23 @@ export const entitiesRouter = router({
       // Kind + Facets: resolve the entity's live facets through the SAME
       // workspace lens as the property overlays. Additive — never blocks the
       // envelope.
-      const facets = await getEffectiveFacets(
-        database,
-        entity.id,
-        lensWorkspaceId
-      );
+      const facets = await getEffectiveFacets(database, entity.id, {
+        userId: ctx.userId,
+        workspaceId: lensWorkspaceId,
+      });
 
       return {
         entity: typedEntity,
         profile,
         effectiveProperties,
-        facets,
+        // Spread into anonymous objects: interfaces lack index signatures,
+        // so EntityFacet/Profile aren't assignable to the Record-typed
+        // output schema directly.
+        facets: facets.map((f) => ({
+          facet: { ...f.facet },
+          profile: { ...f.profile },
+          effectiveProperties: f.effectiveProperties.map((p) => ({ ...p })),
+        })),
         externalLinks,
       };
     }),
@@ -2006,7 +2020,6 @@ export const entitiesRouter = router({
 
       const existing = await facetRepo.getById(input.facetId);
       if (!existing || existing.userId !== ctx.userId) {
-        // Idempotent: nothing to detach.
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Facet not found: ${input.facetId}`,
