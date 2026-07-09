@@ -29,6 +29,8 @@ export interface CaptureGraphBinding {
   title?: string;
 }
 
+import { extractStrongSignals, normalizeIdentitySignal } from "@synap/database";
+
 /** Case-folded value → non-empty trimmed strings only. */
 function foldKeyValues(value: unknown): string[] {
   if (typeof value === "string") {
@@ -44,11 +46,15 @@ function foldKeyValues(value: unknown): string[] {
 }
 
 /**
- * Every case-folded identity value that should resolve to one subject: its
- * name PLUS `email`, `discord-handle`, and each `aliases[]` entry. Profile-slug
- * agnostic (no prefix) — callers scope by slug. Shared by the within-batch
- * collapse here and the persisted-entity dedup in capture.ts (SSOT for "what
- * counts as the same person").
+ * WEAK case-folded surface forms that should resolve to one subject: its name
+ * PLUS its `discord-handle` and each `aliases[]` entry. Profile-slug agnostic
+ * (no prefix) — callers scope by slug. These are the NON-unique atoms; they
+ * only collapse within the SAME kind.
+ *
+ * `email` is deliberately NOT here — under the frozen identity policy it is a
+ * STRONG, globally-unique signal, keyed globally by `strongDedupKeys` below (so
+ * two people sharing an email collapse regardless of kind, and the old
+ * "email is too risky to merge on" exclusion no longer applies).
  */
 export function identityValues(
   name: string | null | undefined,
@@ -56,11 +62,6 @@ export function identityValues(
 ): string[] {
   const values = [
     ...(name && name.trim() ? [name.trim().toLowerCase()] : []),
-    // NOTE: `email` is intentionally EXCLUDED as an auto-merge signal — shared/
-    // generic inboxes (support@, hello@company.com) would silently collapse two
-    // different people. `discord-handle` (near-unique) + `aliases` (same-person
-    // surface forms) are the safe signals that fix handle↔name duplicates. The
-    // agent can still resolve by email deliberately via the property index.
     ...foldKeyValues(properties?.["discord-handle"]),
     ...foldKeyValues(properties?.aliases),
   ];
@@ -68,14 +69,30 @@ export function identityValues(
 }
 
 /**
- * All dedup keys an entity answers to, scoped by profile slug: its title/ref
- * PLUS every identity value (`email`, `discord-handle`, each `aliases[]`). This
- * is what lets "0scr" (aliases: ["Oscar Piveteau"]) collapse into the "Oscar
- * Piveteau" person — they share the `person::oscar piveteau` key.
+ * STRONG global dedup keys (normalized `type::value` for email/phone/url). Not
+ * prefixed by profile slug — a strong signal is globally unique per subject, so
+ * a person and a company sharing an email are the same subject and collapse.
+ * Sources the SAME strong-atom notion + normalizer as the resolveIdentity SSOT.
+ */
+function strongDedupKeys(properties?: Record<string, unknown>): string[] {
+  return extractStrongSignals(properties).map(
+    (s) => `!strong!${s.type}::${normalizeIdentitySignal(s.type, s.value)}`
+  );
+}
+
+/**
+ * All dedup keys an entity answers to: its WEAK surface forms (title/ref,
+ * discord-handle, aliases) scoped by profile slug, PLUS its STRONG signal keys
+ * (email/phone/url) kept global. This lets "0scr" (aliases: ["Oscar Piveteau"])
+ * collapse into "Oscar Piveteau" via `person::oscar piveteau`, and two proposed
+ * people sharing an email collapse via `!strong!email::…`.
  */
 export function entityDedupKeys(e: CaptureGraphEntity): string[] {
   const prefix = `${e.profileSlug}::`;
-  return identityValues(e.title ?? e.ref, e.properties).map((v) => prefix + v);
+  const weak = identityValues(e.title ?? e.ref, e.properties).map(
+    (v) => prefix + v
+  );
+  return [...weak, ...strongDedupKeys(e.properties)];
 }
 
 /**

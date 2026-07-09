@@ -32,23 +32,21 @@
  *   // result.action = 'created' | 'updated'
  */
 
-import { eq, and, or } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import {
-  entityExternalLinks,
-  entityIdentitySignals,
-  entities,
-} from "../schema/index.js";
+import { entityExternalLinks, entities } from "../schema/index.js";
 import type * as schema from "../schema/index.js";
 import type { Entity } from "../schema/entities.js";
 import { EntityRepository } from "../repositories/entity-repository.js";
 import type { EventRepository } from "../repositories/event-repository.js";
-import type { IdentitySignalType } from "../schema/entity-identity-signals.js";
+import {
+  resolveIdentity,
+  registerIdentitySignals,
+  normalizeIdentitySignal,
+  type IdentitySignal,
+} from "./identity-resolution-service.js";
 
-export interface IdentitySignal {
-  type: IdentitySignalType;
-  value: string;
-}
+export type { IdentitySignal };
 
 export interface EntityUpsertInput {
   profileSlug: string;
@@ -95,7 +93,7 @@ export class EntityUpsertService {
   async upsert(input: EntityUpsertInput): Promise<EntityUpsertResult> {
     const normalizedSignals = input.signals.map((s) => ({
       type: s.type,
-      value: normalizeSignalValue(s.type, s.value),
+      value: normalizeIdentitySignal(s.type, s.value),
     }));
 
     // ── Step 1: Exact re-import check (entity_external_links) ─────────────────
@@ -118,23 +116,17 @@ export class EntityUpsertService {
       }
     }
 
-    // ── Step 2: Cross-source signal match ──────────────────────────────────────
+    // ── Step 2: Cross-source signal match (STRONG identity, via the SSOT) ───────
     if (normalizedSignals.length > 0) {
-      const signalMatch = await this.db.query.entityIdentitySignals.findFirst({
-        where: or(
-          ...normalizedSignals.map((s) =>
-            and(
-              eq(entityIdentitySignals.signalType, s.type),
-              eq(entityIdentitySignals.signalValue, s.value)
-            )
-          )
-        ),
-        columns: { entityId: true },
+      const resolution = await resolveIdentity(this.db, {
+        userId: input.userId,
+        signals: normalizedSignals,
       });
 
-      if (signalMatch) {
+      if (resolution.match === "strong" && resolution.entity) {
+        // Load the full row — the SSOT returns a minimal projection.
         const entity = await this.db.query.entities.findFirst({
-          where: eq(entities.id, signalMatch.entityId),
+          where: eq(entities.id, resolution.entity.id),
         });
         if (entity) {
           // Register this external link so future re-imports are exact-matched (Step 1)
@@ -197,53 +189,11 @@ export class EntityUpsertService {
     signals: { type: string; value: string }[],
     source: string
   ): Promise<void> {
-    if (signals.length === 0) return;
-
-    const rows = signals.map((s) => ({
-      entityId,
-      signalType: s.type,
-      signalValue: s.value,
-      source,
-    }));
-
-    // onConflictDoNothing: if another entity already owns this signal, skip silently.
-    // This can happen if two contacts share an email address (aliases, family accounts).
-    // A future EntityMergeService can surface these as merge proposals.
-    await this.db
-      .insert(entityIdentitySignals)
-      .values(rows)
-      .onConflictDoNothing();
-  }
-}
-
-// ── Signal normalization ────────────────────────────────────────────────────
-
-function normalizeSignalValue(type: string, value: string): string {
-  const v = value.trim();
-  switch (type) {
-    case "email":
-      return v.toLowerCase();
-
-    case "phone":
-    case "telegram_phone": {
-      // Keep the + prefix, strip everything else (spaces, dashes, parens, dots)
-      const digits = v.replace(/[^\d+]/g, "").replace(/^\+?/, "+");
-      // Remove any duplicate leading +
-      return digits.startsWith("++") ? digits.slice(1) : digits;
-    }
-
-    case "linkedin_url":
-      return v.toLowerCase().replace(/\/$/, "");
-
-    case "github_username":
-    case "twitter_handle":
-      return v.toLowerCase().replace(/^@/, "");
-
-    case "website":
-      return v.toLowerCase().replace(/\/$/, "");
-
-    default:
-      return v.toLowerCase();
+    // Delegate to the ONE signal write door (normalize + onConflictDoNothing).
+    // onConflictDoNothing: if another entity already owns this signal, skip
+    // silently (two contacts sharing an email, family accounts). A future
+    // EntityMergeService can surface these as merge proposals.
+    await registerIdentitySignals(this.db, entityId, signals, source);
   }
 }
 

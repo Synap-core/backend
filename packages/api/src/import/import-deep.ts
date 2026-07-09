@@ -16,7 +16,12 @@
 
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
+import { db, resolveIdentity, entities } from "@synap/database";
 import type { ImportItem } from "./import-items.js";
+import {
+  userVisibleWhere,
+  workspaceLensWhere,
+} from "../utils/user-visible-where.js";
 
 /** Minimal shape of the intelligence client's structure() we depend on. */
 export interface StructureCapableClient {
@@ -147,15 +152,51 @@ export interface EntitySearch {
 
 /**
  * Build a `resolveExisting` that links an extracted entity to a LIVE workspace
- * entity only on a CONFIDENT match (exact normalized title + same profileSlug).
- * Conservative by design — a wrong merge is worse than a duplicate. Returns null
- * on any search failure (no merge). Shared by submitBatch + /import/analyze.
+ * entity only on a CONFIDENT match. Conservative by design — a wrong merge is
+ * worse than a duplicate. Shared by submitBatch + /import/analyze.
+ *
+ * Two-source resolution, SSOT first:
+ *   1. `resolveIdentity` (the ONE resolver) — an exact-title / indexed
+ *      discord-handle / alias match, SAME kind (profileSlug), scoped to the
+ *      caller's visible rows (this workspace + globals, or the user floor). This
+ *      adds handle/alias precision Typesense's fuzzy index lacks. No strong
+ *      signals are available here (only a title is passed), so this is a WEAK,
+ *      kind-scoped match — the same confidence bar the old resolver used.
+ *   2. Typesense `normTitle` fallback — catches normalized-equal titles the
+ *      exact SQL ilike misses ("Acme Inc" vs "Acme Inc."), still gated on same
+ *      profileSlug. Kept as an additional weak source because it's the indexed
+ *      search already warm during import and it fuzz-normalizes punctuation.
+ *
+ * Returns null on any failure (no merge).
  */
 export function makeGraphResolver(
   search: EntitySearch,
   ctx: { userId: string; workspaceId?: string }
 ): (profileSlug: string, title: string) => Promise<string | null> {
+  // Keep import merges within the target workspace (+ globals) when one is set,
+  // else the user floor — mirrors the old Typesense workspace scoping.
+  const scope = ctx.workspaceId
+    ? workspaceLensWhere(entities.workspaceId, ctx.userId, ctx.workspaceId, {
+        includeGlobals: true,
+      })
+    : userVisibleWhere(entities.workspaceId, ctx.userId);
+
   return async (profileSlug, title) => {
+    // 1. SSOT: exact title / handle / alias, same kind, visible rows.
+    try {
+      const res = await resolveIdentity(db, {
+        userId: ctx.userId,
+        kindSlug: profileSlug,
+        name: title,
+        userScope: scope,
+        limit: 5,
+      });
+      if (res.match && res.entity) return res.entity.id;
+    } catch {
+      /* SSOT unavailable → fall through to Typesense */
+    }
+
+    // 2. Typesense normTitle fallback (fuzzy-normalized, same profileSlug).
     try {
       const sr = await search.searchCollection("entities", title, {
         userId: ctx.userId,

@@ -39,13 +39,12 @@ import {
   db,
   getDb,
   ProfileResolutionService,
+  resolveIdentity,
+  extractStrongSignals,
   eq,
-  and,
   or,
-  asc,
   isNull,
   entities,
-  profiles,
   workspaces,
   workspaceMembers,
 } from "@synap/database";
@@ -67,10 +66,7 @@ import {
   logger,
   type HubHono,
 } from "./_shared.js";
-import {
-  collapseDuplicateEntities,
-  identityValues,
-} from "./capture-graph-dedup.js";
+import { collapseDuplicateEntities } from "./capture-graph-dedup.js";
 
 export function registerCaptureRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -831,79 +827,36 @@ export function registerCaptureRoutes(app: HubHono): void {
     // against pod-wide entities.
     const toResolve = graphEntities.filter((e) => !e.existingEntityId);
     if (toResolve.length > 0) {
-      // Every identity value (name + email/discord-handle/aliases) the incoming
-      // entities answer to — an existing row is worth registering if it shares
-      // ANY of these, so a handle/alias match resolves just like a title match.
-      const wantValues = new Set(
-        toResolve.flatMap((e) => identityValues(e.title ?? e.ref, e.properties))
-      );
-      try {
-        // Fetch the workspace's live entities (capped) + their profile slug and
-        // properties, then match in JS case-insensitively on (slug, identity
-        // value). Fetch-and-filter avoids a case-insensitive SQL IN; the cap
-        // keeps it bounded.
-        const DEDUP_CAP = 5000;
-        const existing = await db
-          .select({
-            id: entities.id,
-            title: entities.title,
-            slug: profiles.slug,
-            properties: entities.properties,
-          })
-          .from(entities)
-          .innerJoin(profiles, eq(entities.profileId, profiles.id))
-          .where(
-            and(
-              // With a workspaceId: match BOTH workspace-scoped AND pod-wide
-              // entities — a pod-wide company must dedup too, else /onboard
-              // re-runs shadow it with a workspace-scoped duplicate. Without a
-              // workspaceId, there's no workspace to scope to — match pod-wide
-              // entities only (eq(..., undefined) would be invalid SQL).
-              body.workspaceId
-                ? or(
-                    eq(entities.workspaceId, body.workspaceId),
-                    isNull(entities.workspaceId)
-                  )
-                : isNull(entities.workspaceId),
-              isNull(entities.deletedAt)
-            )
+      // Resolve each unpinned entity through the ONE identity resolver:
+      //   • STRONG signals (email/phone/url) auto-resolve GLOBALLY — a strong
+      //     match links to the canonical subject regardless of workspace (the
+      //     frozen policy: a strong atom is globally unique per subject).
+      //   • WEAK name/handle/alias matches are kept to the workspace's visible
+      //     rows (this workspace + pod-wide globals), same scope the old scan
+      //     used, and must be the SAME kind (profileSlug) to link.
+      // This replaces the previous fetch-5000-rows-and-filter-in-JS scan.
+      const weakScope = body.workspaceId
+        ? or(
+            eq(entities.workspaceId, body.workspaceId),
+            isNull(entities.workspaceId)
           )
-          // Earliest-created wins, so dedup is deterministic when two rows share
-          // a (slug, title).
-          .orderBy(asc(entities.createdAt))
-          .limit(DEDUP_CAP);
-        if (existing.length >= DEDUP_CAP) {
-          logger.warn(
-            { workspaceId: body.workspaceId, cap: DEDUP_CAP },
-            "capture/graph: dedup match pool hit the cap — some duplicates may slip through"
-          );
-        }
-        // Expand each existing row into ALL its identity keys (slug::value) so
-        // an incoming title/handle/alias can match on any of them. Only register
-        // rows that share a wanted value — keeps the map bounded. Earliest-
-        // created wins (rows are ordered by createdAt), so `!byKey.has(key)`
-        // preserves the first row per key.
-        const byKey = new Map<string, string>();
-        for (const r of existing) {
-          const rowValues = identityValues(
-            r.title,
-            r.properties as Record<string, unknown> | undefined
-          );
-          if (!rowValues.some((v) => wantValues.has(v))) continue;
-          for (const v of rowValues) {
-            const key = `${r.slug}::${v}`;
-            if (!byKey.has(key)) byKey.set(key, r.id);
+        : isNull(entities.workspaceId);
+      for (const e of toResolve) {
+        try {
+          const res = await resolveIdentity(db, {
+            userId,
+            kindSlug: e.profileSlug,
+            name: e.title ?? e.ref,
+            signals: extractStrongSignals(e.properties),
+            userScope: weakScope,
+          });
+          if (res.match && res.entity) {
+            e.existingEntityId = res.entity.id; // link, don't create
           }
+        } catch (err) {
+          // Dedup is best-effort — never block the proposal on a lookup failure.
+          logger.warn({ err }, "capture/graph: entity dedup lookup failed");
         }
-        for (const e of toResolve) {
-          const hit = identityValues(e.title ?? e.ref, e.properties)
-            .map((v) => byKey.get(`${e.profileSlug}::${v}`))
-            .find((id) => id !== undefined);
-          if (hit) e.existingEntityId = hit; // link, don't create
-        }
-      } catch (err) {
-        // Dedup is best-effort — never block the proposal on a lookup failure.
-        logger.warn({ err }, "capture/graph: entity dedup lookup failed");
       }
     }
 
