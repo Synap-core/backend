@@ -887,6 +887,15 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "id",
     addedBy: "0174_entity_facets.sql",
   },
+
+  // Kind + Facets Wave 3A (0175): the `_conversions` ledger — mirrors
+  // `_migrations` for DATA ops. Absence means a pod is on a pre-0175 schema
+  // where the conversion engine's applied-set read would hit a missing table.
+  {
+    table: "_conversions",
+    column: "op_key",
+    addedBy: "0175_conversions_ledger.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

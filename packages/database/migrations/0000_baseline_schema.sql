@@ -3247,6 +3247,24 @@ CREATE TABLE IF NOT EXISTS "_migrations" (
 ALTER TABLE "_migrations" ADD COLUMN IF NOT EXISTS "filename" text;
 ALTER TABLE "_migrations" ADD COLUMN IF NOT EXISTS "applied_at" timestamp with time zone DEFAULT now();
 
+-- ─── _conversions ledger (0175) ──────────────────────────────────────────────
+-- Mirrors _migrations' role for DATA ops. One row per applied conversion op
+-- (see packages/database/src/conversions/). See 0175_conversions_ledger.sql.
+CREATE TABLE IF NOT EXISTS "_conversions" (
+  "id"         serial      PRIMARY KEY,
+  "op_key"     text        NOT NULL UNIQUE,
+  "applied_at" timestamp with time zone NOT NULL DEFAULT now(),
+  "dry_run"    boolean     NOT NULL DEFAULT false,
+  "counts"     jsonb       NOT NULL DEFAULT '{}',
+  "error"      text
+);
+-- Ensure all columns exist on pre-existing tables (idempotent guard)
+ALTER TABLE "_conversions" ADD COLUMN IF NOT EXISTS "op_key" text;
+ALTER TABLE "_conversions" ADD COLUMN IF NOT EXISTS "applied_at" timestamp with time zone DEFAULT now();
+ALTER TABLE "_conversions" ADD COLUMN IF NOT EXISTS "dry_run" boolean DEFAULT false;
+ALTER TABLE "_conversions" ADD COLUMN IF NOT EXISTS "counts" jsonb DEFAULT '{}';
+ALTER TABLE "_conversions" ADD COLUMN IF NOT EXISTS "error" text;
+
 -- ─── Mark all legacy migration files as applied ───────────────────────────────
 -- Prevents the runner from re-executing these on existing pods that already
 -- have the schema built up incrementally. On a fresh pod this baseline

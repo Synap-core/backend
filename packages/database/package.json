@@ -40,7 +40,8 @@
     "db:push:force": "tsx ./node_modules/drizzle-kit/bin.cjs push --force --verbose",
     "db:studio": "tsx ./node_modules/drizzle-kit/bin.cjs studio",
     "db:drop": "tsx ./node_modules/drizzle-kit/bin.cjs drop",
-    "migrate": "tsx src/scripts/migrate.ts"
+    "migrate": "tsx src/scripts/migrate.ts",
+    "conversions": "tsx src/scripts/run-conversions.ts"
   },
   "dependencies": {
     "@synap-core/core": "workspace:*",

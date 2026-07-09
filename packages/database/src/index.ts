@@ -277,3 +277,6 @@ export { sql as sqlDrizzle } from "drizzle-orm";
 
 // Export postgres type for repositories that need raw SQL
 export { type Sql } from "postgres";
+
+// Conversion engine (Kind + Facets — generic profile disposition ops)
+export * from "./conversions/index.js";
