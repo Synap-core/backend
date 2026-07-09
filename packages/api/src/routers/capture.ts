@@ -10,6 +10,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, workspaceProcedure, podProcedure } from "../trpc.js";
+import type { Context } from "../context.js";
+import { entitiesRouter } from "./entities.js";
 import { requireUserId, requireWorkspaceId } from "../utils/user-scoped.js";
 import { getUserWorkspaceIds } from "../utils/workspace-membership.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
@@ -49,6 +51,8 @@ import {
   type LinkType,
   type PropertyValueType,
   type IdentitySignal,
+  resolveIdentity,
+  extractIdentitySignals,
 } from "@synap/database";
 import {
   userVisibleWhere,
@@ -453,10 +457,12 @@ export const captureRouter = router({
         properties = { url: input.url, ...properties };
       }
 
-      // Step 2: Create entity
+      // Step 2: Create entity — via the main entity door (entities.create),
+      // never entityRepo.create directly, so capture gets the same
+      // project-linking, session `produced` links, property→relation sync,
+      // identity-signal registration, and emit chain every other creator gets.
       const database = await getDb();
       const eventRepo = new EventRepository(sql);
-      const entityRepo = new EntityRepository(database, eventRepo);
 
       // Long-form thought body → real versioned document (storage + v1 +
       // Typesense), linked via documentId. Short content is kept inline as
@@ -483,6 +489,56 @@ export const captureRouter = router({
         ...(inlineContent !== undefined ? { content: inlineContent } : {}),
       };
 
+      const entitiesCaller = entitiesRouter.createCaller(
+        ctx as unknown as Context
+      );
+
+      // Identity-first: a STRONG signal match (email/phone/url/…) means this
+      // subject already exists — skip create and enrich the existing entity
+      // instead (dedup by construction). A WEAK/no match proceeds to create;
+      // capture must stay zero-friction, so a weak candidate is advisory only.
+      const identity = await resolveIdentity(database, {
+        userId,
+        kindSlug: profileSlug,
+        name: title,
+        signals: extractIdentitySignals(properties),
+        userScope: userVisibleWhere(entitiesTable.workspaceId, userId),
+        limit: 5,
+      });
+
+      if (identity.match === "strong" && identity.entity) {
+        const nonEmptyProperties = Object.fromEntries(
+          Object.entries(properties).filter(
+            ([, v]) => v !== undefined && v !== null && v !== ""
+          )
+        );
+        if (Object.keys(nonEmptyProperties).length > 0) {
+          await entitiesCaller.update({
+            id: identity.entity.id,
+            properties: nonEmptyProperties,
+            source: "user",
+          });
+        }
+        logger.info(
+          {
+            userId,
+            entityId: identity.entity.id,
+            profileSlug: identity.entity.type,
+          },
+          "Thought captured — deduplicated onto existing entity (strong identity match)"
+        );
+        return {
+          success: true,
+          entityId: identity.entity.id,
+          profileSlug: identity.entity.type,
+          title: identity.entity.title ?? title,
+          mode,
+          // Additive: signals this capture merged into an existing entity
+          // instead of creating a new one.
+          deduplicated: true as const,
+        };
+      }
+
       const originalProfileSlug = profileSlug;
       // Additive provenance: degradedFrom set only when the final note fallback
       // runs; propertiesDropped set only when the same-profile retry salvaged
@@ -490,41 +546,43 @@ export const captureRouter = router({
       let degradedFrom: string | undefined;
       let propertiesDropped: true | undefined;
 
-      let entity: Awaited<ReturnType<typeof entityRepo.create>>;
+      let entityId: string;
       try {
-        entity = await entityRepo.create(
-          {
-            workspaceId: workspaceId,
-            userId,
-            title,
-            properties,
-            documentId,
-            profileSlug,
-          },
-          userId
-        );
+        const created = await entitiesCaller.create({
+          profileSlug,
+          title,
+          properties,
+          documentId,
+          source: "user",
+          // Force the entity into this workspace even for a pod-default
+          // profile (person/company) — matches capture's historical
+          // literal-workspaceId behavior, unlike the door's default of
+          // honoring the profile's pod-wide default.
+          workspaceScoped: true,
+        });
+        entityId = (created as { id: string }).id;
       } catch (err) {
         // A PropertyValidationError means the PROFILE is valid but one of the
         // typed properties failed schema validation — salvage the typed profile
         // by retrying ONCE with the same profileSlug and properties stripped to
         // the generic note-safe set, instead of throwing the profile away.
-        if (err instanceof PropertyValidationError) {
+        const cause =
+          err instanceof TRPCError ? (err.cause ?? undefined) : undefined;
+        if (cause instanceof PropertyValidationError) {
           try {
             logger.warn(
               { err, userId, profileSlug },
               "Entity creation failed validation — retrying same profile with properties dropped"
             );
-            entity = await entityRepo.create(
-              {
-                workspaceId: workspaceId,
-                userId,
-                title,
-                properties: salvageProperties,
-                documentId,
-                profileSlug,
-              },
-              userId
-            );
+            const salvaged = await entitiesCaller.create({
+              profileSlug,
+              title,
+              properties: salvageProperties,
+              documentId,
+              source: "user",
+              workspaceScoped: true,
+            });
+            entityId = (salvaged as { id: string }).id;
             propertiesDropped = true;
           } catch (retryErr) {
             // Same-profile retry still failed — last resort: fall back to note.
@@ -532,17 +590,15 @@ export const captureRouter = router({
               { err: retryErr, userId, profileSlug },
               "Same-profile retry failed, falling back to note"
             );
-            entity = await entityRepo.create(
-              {
-                workspaceId: workspaceId,
-                userId,
-                title,
-                properties: salvageProperties,
-                documentId,
-                profileSlug: "note",
-              },
-              userId
-            );
+            const fallback = await entitiesCaller.create({
+              profileSlug: "note",
+              title,
+              properties: salvageProperties,
+              documentId,
+              source: "user",
+              workspaceScoped: true,
+            });
+            entityId = (fallback as { id: string }).id;
             degradedFrom = originalProfileSlug;
             profileSlug = "note";
             mode = "fallback";
@@ -554,17 +610,15 @@ export const captureRouter = router({
             { err, userId, profileSlug },
             "Entity creation failed (non-validation), falling back to note"
           );
-          entity = await entityRepo.create(
-            {
-              workspaceId: workspaceId,
-              userId,
-              title,
-              properties: salvageProperties,
-              documentId,
-              profileSlug: "note",
-            },
-            userId
-          );
+          const fallback = await entitiesCaller.create({
+            profileSlug: "note",
+            title,
+            properties: salvageProperties,
+            documentId,
+            source: "user",
+            workspaceScoped: true,
+          });
+          entityId = (fallback as { id: string }).id;
           degradedFrom = originalProfileSlug;
           profileSlug = "note";
           mode = "fallback";
@@ -572,13 +626,13 @@ export const captureRouter = router({
       }
 
       logger.info(
-        { userId, entityId: entity.id, profileSlug, mode },
+        { userId, entityId, profileSlug, mode },
         "Thought captured and entity created"
       );
 
       return {
         success: true,
-        entityId: entity.id,
+        entityId,
         profileSlug,
         title,
         mode,
@@ -852,6 +906,9 @@ export const captureRouter = router({
       const pickedWsName = (
         structureResult as { targetWorkspaceName?: string | null }
       ).targetWorkspaceName;
+      const rawPickedWsId = (
+        structureResult as { targetWorkspaceId?: string | null }
+      ).targetWorkspaceId;
       if (pickedWsName && availableWorkspaces.length > 0) {
         const norm = (s: string) => s.toLowerCase().trim();
         const wanted = norm(pickedWsName);
@@ -865,7 +922,24 @@ export const captureRouter = router({
           (
             structureResult as { targetWorkspaceId?: string | null }
           ).targetWorkspaceId = match.id;
+          // Telemetry: reconciliation OVERRODE the LLM's raw id (a caught
+          // UUID-copy error) — the exact win this name-resolution exists for.
+          if (match.id !== rawPickedWsId) {
+            logger.info(
+              { userId, pickedWsName, rawPickedWsId, resolvedWsId: match.id },
+              "Capture routing: name→id reconciliation overrode LLM UUID (copy-error caught)"
+            );
+          }
         }
+      } else if (!pickedWsName && rawPickedWsId) {
+        // The IS emitted a raw targetWorkspaceId but NO targetWorkspaceName, so
+        // reconciliation cannot run and an LLM copy-error id passes through
+        // untouched. Signature of a deployed IS that predates the
+        // targetWorkspaceName emission — redeploy the IS to close it.
+        logger.warn(
+          { userId, rawPickedWsId },
+          "Capture routing: IS returned targetWorkspaceId without targetWorkspaceName — name reconciliation skipped (redeploy IS to enable copy-error correction)"
+        );
       }
 
       // 1b. Silent-empty guard. The IS can return a well-formed 200 with ZERO
@@ -910,6 +984,9 @@ export const captureRouter = router({
           relations: structureResult.relations,
           followUp: structureResult.followUp,
           targetWorkspaceId: structureResult.targetWorkspaceId ?? null,
+          targetWorkspaceName:
+            (structureResult as { targetWorkspaceName?: string | null })
+              .targetWorkspaceName ?? null,
           targetWorkspaceReason: structureResult.targetWorkspaceReason ?? null,
           targetWorkspaceConfidence:
             structureResult.targetWorkspaceConfidence ?? null,
@@ -1033,6 +1110,9 @@ export const captureRouter = router({
         relations: structureResult.relations,
         followUp: null as string | StructuredFollowUp | null,
         targetWorkspaceId: structureResult.targetWorkspaceId ?? null,
+        targetWorkspaceName:
+          (structureResult as { targetWorkspaceName?: string | null })
+            .targetWorkspaceName ?? null,
         targetWorkspaceReason: structureResult.targetWorkspaceReason ?? null,
         targetWorkspaceConfidence:
           structureResult.targetWorkspaceConfidence ?? null,
@@ -1242,6 +1322,9 @@ export const captureRouter = router({
       const eventRepo = new EventRepository(sql);
       const entityRepo = new EntityRepository(database, eventRepo);
       const relationRepo = new RelationRepository(database, eventRepo);
+      const entitiesCaller = entitiesRouter.createCaller(
+        ctx as unknown as Context
+      );
 
       // Capture is the post-approval DIRECT write (the user already reviewed the
       // AI's structure output), so it materializes through the SHARED composite
@@ -1264,6 +1347,49 @@ export const captureRouter = router({
         validRelationSlugs = new Set([FALLBACK_RELATION_TYPE]);
       }
 
+      // Identity-first: for each entity op that doesn't already name an
+      // explicit existingEntityId, check the identity resolver. A STRONG
+      // signal match (email/phone/url/…) means the subject already exists —
+      // merge new non-empty properties into it and link via `existingEntityId`
+      // (the SAME path a caller-supplied link takes below) instead of creating
+      // a duplicate. WEAK matches are advisory only; capture must stay
+      // zero-friction, so they proceed to create.
+      const autoLinkedTempIds = new Set<string>();
+      const resolvedExistingIds = new Map<string, string>();
+      for (const e of input.entities) {
+        if (e.existingEntityId) continue;
+        const identity = await resolveIdentity(database, {
+          userId,
+          kindSlug: e.profileSlug,
+          name: e.title,
+          signals: extractIdentitySignals(e.properties),
+          userScope: userVisibleWhere(entitiesTable.workspaceId, userId),
+          limit: 5,
+        });
+        if (identity.match !== "strong" || !identity.entity) continue;
+        const nonEmptyProperties = Object.fromEntries(
+          Object.entries(e.properties ?? {}).filter(
+            ([, v]) => v !== undefined && v !== null && v !== ""
+          )
+        );
+        if (Object.keys(nonEmptyProperties).length > 0) {
+          try {
+            await entitiesCaller.update({
+              id: identity.entity.id,
+              properties: nonEmptyProperties,
+              source: "user",
+            });
+          } catch (err) {
+            logger.warn(
+              { err, entityId: identity.entity.id },
+              "capture.execute: identity-match enrich failed (linking anyway)"
+            );
+          }
+        }
+        resolvedExistingIds.set(e.tempId, identity.entity.id);
+        autoLinkedTempIds.add(e.tempId);
+      }
+
       // Adapt capture input → composite ops (ref = tempId so the response maps
       // back). Entities first (op contract requires a create_entity first).
       const operations: CompositeProposalOperation[] = [
@@ -1274,7 +1400,8 @@ export const captureRouter = router({
           description: e.description,
           properties: e.properties,
           content: e.content,
-          existingEntityId: e.existingEntityId,
+          existingEntityId:
+            e.existingEntityId ?? resolvedExistingIds.get(e.tempId),
           ref: e.tempId,
         })),
         ...input.relations.map((r) => ({
@@ -1286,7 +1413,11 @@ export const captureRouter = router({
       ];
 
       // Direct-write entity caller: shared content routing + retry-as-note,
-      // returning the ACTUAL profile created so the response reflects fallbacks.
+      // returning the ACTUAL profile created so the response reflects
+      // fallbacks. Routes through the main entity door (entities.create),
+      // never entityRepo.create directly, so capture gets the same
+      // project-linking, session `produced` links, property→relation sync,
+      // identity-signal registration, and emit chain every other creator gets.
       const entityCaller = {
         create: async (op: {
           profileSlug: string;
@@ -1313,43 +1444,46 @@ export const captureRouter = router({
           const salvageProperties: Record<string, unknown> =
             inlineContent !== undefined ? { content: inlineContent } : {};
           try {
-            const e = await entityRepo.create(
-              {
-                workspaceId,
-                userId,
-                title: op.title,
-                preview: op.description,
-                properties,
-                documentId,
-                profileSlug: op.profileSlug,
-              },
-              userId
-            );
-            return { id: e.id, profileSlug: op.profileSlug };
+            const created = await entitiesCaller.create({
+              profileSlug: op.profileSlug,
+              title: op.title,
+              description: op.description,
+              properties,
+              documentId,
+              source: "user",
+              // Force the entity into this (routed) workspace even for a
+              // pod-default profile — matches capture's historical
+              // literal-workspaceId behavior.
+              workspaceScoped: true,
+            });
+            return {
+              id: (created as { id: string }).id,
+              profileSlug: op.profileSlug,
+            };
           } catch (err) {
             // PropertyValidationError = valid profile, invalid property. Salvage
             // the typed profile by retrying ONCE with the same slug, properties
-            // stripped, before falling back to note.
-            if (err instanceof PropertyValidationError) {
+            // stripped, before falling back to note. The door wraps the original
+            // error in a TRPCError; the original is preserved as `.cause`.
+            const cause =
+              err instanceof TRPCError ? (err.cause ?? undefined) : undefined;
+            if (cause instanceof PropertyValidationError) {
               try {
                 logger.warn(
                   { err, profileSlug: op.profileSlug },
                   "Entity creation failed validation — retrying same profile with properties dropped"
                 );
-                const s = await entityRepo.create(
-                  {
-                    workspaceId,
-                    userId,
-                    title: op.title,
-                    preview: op.description,
-                    properties: salvageProperties,
-                    documentId,
-                    profileSlug: op.profileSlug,
-                  },
-                  userId
-                );
+                const salvaged = await entitiesCaller.create({
+                  profileSlug: op.profileSlug,
+                  title: op.title,
+                  description: op.description,
+                  properties: salvageProperties,
+                  documentId,
+                  source: "user",
+                  workspaceScoped: true,
+                });
                 return {
-                  id: s.id,
+                  id: (salvaged as { id: string }).id,
                   profileSlug: op.profileSlug,
                   propertiesDropped: true as const,
                 };
@@ -1365,20 +1499,17 @@ export const captureRouter = router({
                 "Entity creation failed (non-validation), falling back to note"
               );
             }
-            const f = await entityRepo.create(
-              {
-                workspaceId,
-                userId,
-                title: op.title,
-                preview: op.description,
-                properties: salvageProperties,
-                documentId,
-                profileSlug: "note",
-              },
-              userId
-            );
+            const fallback = await entitiesCaller.create({
+              profileSlug: "note",
+              title: op.title,
+              description: op.description,
+              properties: salvageProperties,
+              documentId,
+              source: "user",
+              workspaceScoped: true,
+            });
             return {
-              id: f.id,
+              id: (fallback as { id: string }).id,
               profileSlug: "note",
               degradedFrom: op.profileSlug,
             };
@@ -1443,6 +1574,12 @@ export const captureRouter = router({
         ...(e.degradedFrom ? { degradedFrom: e.degradedFrom } : {}),
         // Additive: true when the typed profile was salvaged sans properties.
         ...(e.propertiesDropped ? { propertiesDropped: true as const } : {}),
+        // Additive: true when this op auto-linked onto an existing entity via
+        // a strong identity match (email/phone/url/…) instead of the caller's
+        // own `existingEntityId`.
+        ...(autoLinkedTempIds.has(e.ref ?? "")
+          ? { deduplicated: true as const }
+          : {}),
       }));
       const createdRelations = result.relations.map((r) => ({
         sourceEntityId: r.sourceEntityId,
@@ -1472,11 +1609,13 @@ export const captureRouter = router({
 
       // Event/session scoping (event mode): when a focus session is active
       // (X-Session-Id), link EVERY captured entity to it via
-      // `session --produced--> entity`. This mirrors the entities-router inline
-      // path — capture materializes directly via entityRepo.create (bypassing
-      // that router), so WITHOUT this the produced edge never fires for captured
-      // entities and the event's captured-set stays empty. Idempotent via the
-      // links unique-edge index; best-effort (never blocks the capture).
+      // `session --produced--> entity`. entities.create (the door capture
+      // materializes through) already emits this for freshly-created entities
+      // when ctx.sessionId is set — idempotent, so that's a no-op re-insert
+      // here — but it does NOT cover entities that were LINKED (existing or
+      // identity-deduped) rather than created, so this explicit pass is still
+      // required to cover the full `created` set. Idempotent via the links
+      // unique-edge index; best-effort (never blocks the capture).
       if (input.sessionId) {
         for (const c of created) {
           try {
