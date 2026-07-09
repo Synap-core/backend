@@ -10,6 +10,7 @@ import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import type { Relation, NewRelation } from "../schema/relations.js";
 import { sql } from "../client-pg.js";
+import { stampProvenance } from "../utils/stamp-provenance.js";
 
 export interface CreateRelationInput {
   id?: string;
@@ -77,12 +78,13 @@ export class RelationRepository extends BaseRepository<
         userId: data.userId,
         metadata: data.metadata || {},
         // Provenance (Wave B3)
-        createdByKind:
-          data.createdByKind ?? (data.agentUserId ? "ai_agent" : "human"),
-        createdByUserId: data.createdByUserId ?? data.userId,
-        agentUserId: data.agentUserId,
-        sourceProposalId: data.sourceProposalId,
-        correlationId: data.correlationId,
+        ...stampProvenance({
+          userId: data.createdByUserId ?? data.userId,
+          agentUserId: data.agentUserId,
+          sourceProposalId: data.sourceProposalId,
+          correlationId: data.correlationId,
+          createdByKind: data.createdByKind,
+        }),
       } as NewRelation)
       .returning();
 

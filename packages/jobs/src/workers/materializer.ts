@@ -41,6 +41,7 @@ import {
   type LinkEndpointType,
   type LinkType,
   linkEntityToProject,
+  stampProvenance,
 } from "@synap/database";
 import {
   entities,
@@ -322,11 +323,12 @@ async function materializeEntity(
           workspaceId: entityWorkspaceId ?? undefined,
           content: rawContent, // → writes the document_versions v1 snapshot
           // Provenance (Wave B3): proposal-materialized document.
-          createdByKind: (data.agentUserId as string) ? "ai_agent" : "human",
-          createdByUserId: userId,
-          agentUserId: (data.agentUserId as string) || undefined,
-          sourceProposalId: (data.sourceProposalId as string) || undefined,
-          correlationId: (data.correlationId as string) || undefined,
+          ...stampProvenance({
+            userId,
+            agentUserId: (data.agentUserId as string) || undefined,
+            sourceProposalId: (data.sourceProposalId as string) || undefined,
+            correlationId: (data.correlationId as string) || undefined,
+          }),
         },
         userId
       );
@@ -357,11 +359,12 @@ async function materializeEntity(
         // authored it from the proposal envelope (carried on the .validated event:
         // agentUserId/correlationId/sourceProposalId). sourceProposalId is set
         // here (materialized-from-proposal path) per the C2 decision.
-        createdByKind: (data.agentUserId as string) ? "ai_agent" : "human",
-        createdByUserId: userId,
-        agentUserId: (data.agentUserId as string) || undefined,
-        sourceProposalId: (data.sourceProposalId as string) || undefined,
-        correlationId: (data.correlationId as string) || undefined,
+        ...stampProvenance({
+          userId,
+          agentUserId: (data.agentUserId as string) || undefined,
+          sourceProposalId: (data.sourceProposalId as string) || undefined,
+          correlationId: (data.correlationId as string) || undefined,
+        }),
       },
       userId
     );
@@ -439,11 +442,12 @@ async function materializeEntityFacet(
         properties: (data.properties as Record<string, unknown>) || undefined,
         // Provenance (mirrors materializeEntity): stamp who/what authored the
         // write from the proposal envelope carried on the .validated event.
-        createdByKind: (data.agentUserId as string) ? "ai_agent" : "human",
-        createdByUserId: userId,
-        agentUserId: (data.agentUserId as string) || undefined,
-        sourceProposalId: (data.sourceProposalId as string) || undefined,
-        correlationId: (data.correlationId as string) || undefined,
+        ...stampProvenance({
+          userId,
+          agentUserId: (data.agentUserId as string) || undefined,
+          sourceProposalId: (data.sourceProposalId as string) || undefined,
+          correlationId: (data.correlationId as string) || undefined,
+        }),
       },
       userId
     );

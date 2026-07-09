@@ -30,9 +30,11 @@ import {
   entityFacets,
   proposals,
 } from "@synap/database/schema";
+import { and, eq, isNotNull, isNull, or } from "drizzle-orm";
 import { registerVisibility } from "./visibility.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
+import { workspaceLensWhere } from "../utils/user-visible-where.js";
 
 // ── Workspace-scoped: visible = pod-wide (NULL) OR a workspace the user is in ──
 registerVisibility({
@@ -206,13 +208,31 @@ registerVisibility({
 registerVisibility({
   table: entityFacets,
   query: () => db.query.entityFacets,
-  // `entityFacets.userId` (NOT NULL) is the OWNER floor, same reasoning as
-  // `relations`: a NULL-workspace (pod-wide) facet stays visible only to its
-  // owner instead of leaking pod-wide via the flat `workspace` rule.
+  // Facet visibility POLICY (access-layer twin of the single-lens predicate
+  // in @synap/database utils/facet-visibility.ts — keep the two in sync):
+  // workspace-scoped facets are shared with the workspace's members, exactly
+  // like the entities they dress; pod-wide (NULL-workspace) facets carry an
+  // OWNER floor so they never leak via the flat `workspace` rule. NOT
+  // `workspaceOwned` (owner-only on ALL rows) — that would hide a member's
+  // facets from teammates on shared entities.
   rule: {
-    kind: "workspaceOwned",
-    workspaceColumn: entityFacets.workspaceId,
-    userColumn: entityFacets.userId,
+    kind: "custom",
+    predicate: (access) =>
+      or(
+        and(
+          isNotNull(entityFacets.workspaceId),
+          workspaceLensWhere(
+            entityFacets.workspaceId,
+            access.userId,
+            access.workspaceLens,
+            { includeGlobals: false }
+          )
+        ),
+        and(
+          isNull(entityFacets.workspaceId),
+          eq(entityFacets.userId, access.userId)
+        )
+      ),
   },
 });
 

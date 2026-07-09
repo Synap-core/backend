@@ -4,14 +4,15 @@
  * FacetRepository.getByEntity/listByProfile and getEffectiveFacets so the
  * two read paths cannot drift.
  *
- * Semantics (mirrors the `workspaceOwned` VisibilityRule registered for
- * entityFacets in the API access registry):
+ * POLICY (the single-lens twin of the access-layer rule registered for
+ * entityFacets in packages/api access/registry.ts — keep the two in sync):
+ * workspace-scoped facets are shared with the workspace's members (the caller
+ * has already verified membership on the lens it passes here); pod-wide
+ * (null-workspace) facets carry an OWNER floor and are visible only to their
+ * owner.
  * - lens `undefined` → no workspace filter (all lenses)
  * - lens `null`      → base-only (facets with no workspace)
  * - lens `string`    → that workspace's facets + pod-wide (null-workspace) ones
- * - owner floor      → a pod-wide (null-workspace) facet is visible ONLY to
- *   its owner; workspace-scoped facets rely on the caller's already-verified
- *   workspace membership.
  */
 
 import { type SQL, eq, isNotNull, isNull, or } from "drizzle-orm";

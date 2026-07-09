@@ -87,11 +87,21 @@ const entityEmbeddingReactor: Reactor = {
     payload.subjectType === "entity" &&
     (payload.action === "create" || payload.action === "update"),
   async handler(payload, { boss }) {
-    await boss.send("entity-embedding", {
-      entityId: payload.subjectId,
-      userId: payload.userId,
-      workspaceId: payload.workspaceId,
-    });
+    await boss.send(
+      "entity-embedding",
+      {
+        entityId: payload.subjectId,
+        userId: payload.userId,
+        workspaceId: payload.workspaceId,
+      },
+      // Debounce per entity: mirrors the direct entities.update path's
+      // singleton throttle so burst writers (e.g. bulk facet attach) can't
+      // enqueue N embedding-model calls for the same row.
+      {
+        singletonKey: `entity-embedding:${payload.subjectId}`,
+        singletonSeconds: 30,
+      }
+    );
   },
 };
 

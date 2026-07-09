@@ -7,6 +7,7 @@
 import { eq, and } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { documents, documentVersions } from "../schema/documents.js";
+import { stampProvenance } from "../utils/stamp-provenance.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import type {
@@ -87,12 +88,13 @@ export class DocumentRepository extends BaseRepository<
           currentVersion: 1,
           lastSavedVersion: data.content !== undefined ? 1 : 0,
           // Provenance (Wave B3)
-          createdByKind:
-            data.createdByKind ?? (data.agentUserId ? "ai_agent" : "human"),
-          createdByUserId: data.createdByUserId ?? userId,
-          agentUserId: data.agentUserId,
-          sourceProposalId: data.sourceProposalId,
-          correlationId: data.correlationId,
+          ...stampProvenance({
+            userId: data.createdByUserId ?? userId,
+            agentUserId: data.agentUserId,
+            sourceProposalId: data.sourceProposalId,
+            correlationId: data.correlationId,
+            createdByKind: data.createdByKind,
+          }),
         } as NewDocument)
         .returning();
 
