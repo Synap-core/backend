@@ -12,6 +12,7 @@ import {
   isNull,
   sql,
   resolveDefaultIntelligenceEndpoint,
+  getEffectiveFacets,
 } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import { buildEntityEmbeddingText } from "@synap/ai-embeddings";
@@ -49,11 +50,22 @@ async function generateAndStoreEmbedding(
   description?: string,
   properties?: Record<string, unknown> | null
 ): Promise<void> {
+  // Unfiltered lens — all workspaces — so the reindex matches the live
+  // per-entity embedding worker's facet coverage.
+  const effectiveFacets = await getEffectiveFacets(db, entityId, {
+    userId,
+    workspaceId: undefined,
+  });
   const textToEmbed = buildEntityEmbeddingText({
     type: entityType,
     title,
     preview: description,
     properties: properties ?? null,
+    facets: effectiveFacets.map((ef) => ({
+      slug: ef.profile.slug,
+      status: ef.facet.status,
+      properties: ef.facet.properties as Record<string, unknown> | null,
+    })),
   });
 
   const embedding = await generateEmbedding(textToEmbed);

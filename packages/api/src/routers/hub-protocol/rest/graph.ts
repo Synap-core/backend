@@ -38,6 +38,9 @@ const GraphNodeSchema = z
     id: z.string(),
     name: z.string(),
     subtype: z.string().nullable(),
+    // Kind+Facets: entity→[kind slug, ...facet slugs]; other kinds→[subtype] or
+    // []. Additive alongside `subtype` (kept for compat).
+    subtypes: z.array(z.string()),
     workspaceId: z.string().nullable(),
   })
   .openapi("GraphNode");

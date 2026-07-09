@@ -18,4 +18,7 @@ export {
   getEmbeddingsClient,
   getEmbeddingDimensions,
 } from "./providers/embeddings.js";
-export { buildEntityEmbeddingText } from "./entity-embedding-text.js";
+export {
+  buildEntityEmbeddingText,
+  type EntityEmbeddingFacet,
+} from "./entity-embedding-text.js";

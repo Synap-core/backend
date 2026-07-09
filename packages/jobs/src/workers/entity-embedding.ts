@@ -8,7 +8,10 @@
 import type PgBoss from "pg-boss";
 import { sql, resolveDefaultIntelligenceEndpoint } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { buildEntityEmbeddingText } from "@synap/ai-embeddings";
+import {
+  buildEntityEmbeddingText,
+  type EntityEmbeddingFacet,
+} from "@synap/ai-embeddings";
 
 const logger = createLogger({ module: "entity-embedding-worker" });
 
@@ -47,12 +50,14 @@ export async function handleEntityEmbedding(
   let entityPreview = preview;
   let type = entityType;
   let entityProperties: Record<string, unknown> | null = null;
+  let entityFacets: EntityEmbeddingFacet[] = [];
 
   // Always load the row for `properties` (and as fallback for title/type/preview)
   // so the embedding includes typed properties — not just title+preview — which
   // is what lets semantic recall match type/role/property queries.
   {
-    const { entities, eq, db } = await import("@synap/database");
+    const { entities, eq, db, getEffectiveFacets } =
+      await import("@synap/database");
     const [entity] = await db
       .select({
         title: entities.title,
@@ -70,6 +75,18 @@ export async function handleEntityEmbedding(
       entityProperties =
         (entity.properties as Record<string, unknown> | null) ?? null;
     }
+
+    // Live facets (Kind+Facets) — unfiltered lens, all workspaces, so the
+    // embedding reflects every role attached to the entity regardless of scope.
+    const effectiveFacets = await getEffectiveFacets(db, entityId, {
+      userId,
+      workspaceId: undefined,
+    });
+    entityFacets = effectiveFacets.map((ef) => ({
+      slug: ef.profile.slug,
+      status: ef.facet.status,
+      properties: ef.facet.properties as Record<string, unknown> | null,
+    }));
   }
 
   if (!entityTitle) {
@@ -85,6 +102,7 @@ export async function handleEntityEmbedding(
     title: entityTitle,
     preview: entityPreview,
     properties: entityProperties,
+    facets: entityFacets,
   });
   const embedding = await generateEmbedding(textToEmbed);
   const embeddingStr = `[${embedding.join(",")}]`;

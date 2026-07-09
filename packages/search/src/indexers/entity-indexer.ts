@@ -26,6 +26,12 @@ interface Entity {
   properties: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * Live facet (role-profile) slugs attached to the entity (Kind+Facets).
+   * Populated by IndexingService.fetchDocuments — an unfiltered lens (the
+   * search doc is per-entity; visibility is enforced at query time elsewhere).
+   */
+  facetSlugs?: string[] | null;
 }
 
 export class EntityIndexer extends BaseIndexer<Entity> {
@@ -57,6 +63,10 @@ export class EntityIndexer extends BaseIndexer<Entity> {
       entityType: entity.type,
       tags: entity.tags || undefined,
       status: entity.status || undefined,
+      facetSlugs:
+        entity.facetSlugs && entity.facetSlugs.length > 0
+          ? entity.facetSlugs
+          : undefined,
       searchAliases: searchAliases.length > 0 ? searchAliases : undefined,
       createdAt: this.toTimestamp(entity.createdAt),
       updatedAt: this.toTimestamp(entity.updatedAt),

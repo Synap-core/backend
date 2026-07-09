@@ -19,6 +19,9 @@ export const entitiesCollectionSchema: CollectionCreateSchema = {
     { name: "content", type: "string", optional: true },
     { name: "description", type: "string", optional: true },
     { name: "entityType", type: "string", facet: true, optional: true },
+    // Kind+Facets: role-profile slugs attached to the entity (Wave 3B). Additive
+    // field — CollectionService.reconcileNewFields adds it to existing pods.
+    { name: "facetSlugs", type: "string[]", facet: true, optional: true },
     { name: "projectId", type: "string", facet: true, optional: true },
     { name: "tags", type: "string[]", facet: true, optional: true },
     { name: "status", type: "string", facet: true, optional: true },

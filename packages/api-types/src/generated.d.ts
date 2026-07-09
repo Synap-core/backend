@@ -3611,6 +3611,19 @@ export interface CompositeCreateEntityOp {
 	 * reference it (e.g. "t1"). Optional — the positional `$opN` ref always works.
 	 */
 	ref?: string;
+	/**
+	 * Role-profile facets (Kind + Facets) to attach to this entity once it
+	 * materializes. Additive — ops without `facets` behave exactly as before.
+	 * `contextRef` disambiguates repeated-role attaches and resolves through the
+	 * same ref→realId map as relation ops ($opN / op `ref` / $primary / a real
+	 * entity UUID).
+	 */
+	facets?: Array<{
+		profileSlug: string;
+		status?: string;
+		properties?: Record<string, unknown>;
+		contextRef?: string;
+	}>;
 }
 export interface CompositeCreateRelationOp {
 	op: "create_relation";
@@ -4586,6 +4599,12 @@ export interface GraphNode {
 	name: string;
 	/** In-kind discriminator: entity→profileSlug, view→viewType, tool/skill→kind… */
 	subtype: string | null;
+	/**
+	 * Same discriminator, pluralized: entity→[kind slug, ...facet slugs] (Kind+
+	 * Facets — an entity can carry multiple role-profiles), other kinds→[subtype]
+	 * or []. `subtype` is kept for compat; new consumers should prefer this.
+	 */
+	subtypes: string[];
 	workspaceId: string | null;
 }
 /** A neighbour = a node + the edge that connects it to the focused object. */
@@ -4929,6 +4948,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				context?: Record<string, unknown> | undefined;
 			};
 			output: {
+				success: boolean;
+				entityId: string;
+				profileSlug: string;
+				title: string;
+				mode: "ai" | "fallback";
+				deduplicated: true;
+			} | {
 				propertiesDropped?: true | undefined;
 				degradedFrom?: string | undefined;
 				success: boolean;
@@ -4936,6 +4962,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileSlug: string;
 				title: string;
 				mode: "ai" | "fallback";
+				deduplicated?: undefined;
 			};
 			meta: object;
 		}>;
@@ -5011,6 +5038,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				followUp: string | StructuredFollowUp;
 				targetWorkspaceId: string | null;
+				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
 				targetProjectId: string | null;
@@ -5040,6 +5068,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				followUp: string | StructuredFollowUp;
 				targetWorkspaceId: string | null;
+				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
 				targetProjectId: string | null;
@@ -5077,6 +5106,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				followUp: string | StructuredFollowUp | null;
 				targetWorkspaceId: string | null;
+				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
 				targetProjectId: string | null;
@@ -5109,6 +5139,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				followUp: string | StructuredFollowUp | null;
 				targetWorkspaceId: string | null;
+				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
 				targetProjectId: string | null;
@@ -5180,6 +5211,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				movedToWorkspace?: string | undefined;
 				created: {
+					deduplicated?: true | undefined;
 					propertiesDropped?: true | undefined;
 					degradedFrom?: string | undefined;
 					tempId: string;
@@ -5277,7 +5309,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				global?: boolean | undefined;
 				targetWorkspaceId?: string | undefined;
 				workspaceScoped?: boolean | undefined;
-				source?: "user" | "system" | "ai" | "agent" | "intelligence" | "cli" | "openwebui-pipeline" | "openclaw" | "extension" | "n8n" | "raycast" | undefined;
+				source?: "user" | "system" | "ai" | "agent" | "intelligence" | "openwebui-pipeline" | "openclaw" | "extension" | "cli" | "n8n" | "raycast" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 				viewContext?: {
@@ -5339,6 +5371,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				projectId?: string | undefined;
 				sourceProposalId?: string | undefined;
+				facetSlug?: string | undefined;
+				facetProfileId?: string | undefined;
 			};
 			output: {
 				items: {
@@ -5575,7 +5609,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				contextEntityId?: string | null | undefined;
 				status?: string | undefined;
 				properties?: Record<string, unknown> | undefined;
-				source?: "user" | "system" | "ai" | "agent" | "intelligence" | "cli" | "openwebui-pipeline" | "openclaw" | "extension" | "n8n" | "raycast" | undefined;
+				source?: "user" | "system" | "ai" | "agent" | "intelligence" | "openwebui-pipeline" | "openclaw" | "extension" | "cli" | "n8n" | "raycast" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 			};
@@ -5622,7 +5656,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status?: string | undefined;
 				properties?: Record<string, unknown> | undefined;
 				workspaceId?: string | null | undefined;
-				source?: "user" | "system" | "ai" | "agent" | "intelligence" | "cli" | "openwebui-pipeline" | "openclaw" | "extension" | "n8n" | "raycast" | undefined;
+				source?: "user" | "system" | "ai" | "agent" | "intelligence" | "openwebui-pipeline" | "openclaw" | "extension" | "cli" | "n8n" | "raycast" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 			};
@@ -5664,7 +5698,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		detachFacet: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				facetId: string;
-				source?: "user" | "system" | "ai" | "agent" | "intelligence" | "cli" | "openwebui-pipeline" | "openclaw" | "extension" | "n8n" | "raycast" | undefined;
+				source?: "user" | "system" | "ai" | "agent" | "intelligence" | "openwebui-pipeline" | "openclaw" | "extension" | "cli" | "n8n" | "raycast" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 			};
@@ -7082,7 +7116,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		submit: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				targetType: "entity" | "workspace" | "document" | "view" | "relation" | "profile";
-				changeType: "create" | "update" | "delete";
+				changeType: "update" | "delete" | "create";
 				data: Record<string, any>;
 				targetId?: string | undefined;
 				reasoning?: string | undefined;
@@ -7913,7 +7947,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		connectIntegration: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				integration: "custom" | "cli" | "openclaw" | "raycast";
+				integration: "custom" | "openclaw" | "cli" | "raycast";
 				workspaceId?: string | undefined;
 				strategy?: "create_new" | "replace_existing" | undefined;
 			};
@@ -7922,7 +7956,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				keyId: any;
 				podUrl: string;
 				workspaceId: string | null;
-				integration: "custom" | "cli" | "openclaw" | "raycast";
+				integration: "custom" | "openclaw" | "cli" | "raycast";
 				strategy: "create_new" | "replace_existing";
 				registration: {
 					flowId: string;
@@ -11934,7 +11968,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					layoutConfig?: Record<string, unknown> | undefined;
 					profileEntityBentoTemplates?: Record<string, unknown> | undefined;
 				};
-				mode?: "create" | "update" | undefined;
+				mode?: "update" | "create" | undefined;
 				workspaceId?: string | undefined;
 				proposalId?: string | undefined;
 				appId?: string | undefined;
@@ -12048,7 +12082,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceIds?: string[] | undefined;
 				workspaceId?: string | null | undefined;
 				includePodWide?: boolean | undefined;
-				type?: "calendar" | "table" | "whiteboard" | "graph" | "list" | "grid" | "all" | "timeline" | "kanban" | "gallery" | "gantt" | "mindmap" | undefined;
+				type?: "calendar" | "table" | "whiteboard" | "list" | "graph" | "grid" | "all" | "timeline" | "kanban" | "gallery" | "gantt" | "mindmap" | undefined;
 				excludeAutoCreated?: boolean | undefined;
 			};
 			output: PaginatedResponse<{
@@ -15690,7 +15724,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		analyze: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "markdown" | "obsidian" | "csv" | "bookmark";
+				source: "obsidian" | "markdown" | "csv" | "bookmark";
 				items: {
 					path: string;
 					content: string;
@@ -15720,7 +15754,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		applyImport: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "markdown" | "obsidian" | "csv" | "bookmark";
+				source: "obsidian" | "markdown" | "csv" | "bookmark";
 				operations: Record<string, unknown>[];
 				workspaceId?: string | undefined;
 				idempotencyKey?: string | undefined;
@@ -15737,7 +15771,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		analyzeLarge: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "markdown" | "obsidian" | "csv" | "bookmark";
+				source: "obsidian" | "markdown" | "csv" | "bookmark";
 				items: {
 					path: string;
 					content: string;
@@ -15778,7 +15812,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		enqueueLargeImport: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "markdown" | "obsidian" | "csv" | "bookmark";
+				source: "obsidian" | "markdown" | "csv" | "bookmark";
 				items: {
 					path: string;
 					content: string;
@@ -15799,7 +15833,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		applyLarge: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "markdown" | "obsidian" | "csv" | "bookmark";
+				source: "obsidian" | "markdown" | "csv" | "bookmark";
 				operations: Record<string, unknown>[];
 				workspaceId?: string | undefined;
 				idempotencyKey?: string | undefined;

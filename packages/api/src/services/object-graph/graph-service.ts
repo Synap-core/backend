@@ -37,6 +37,9 @@ import {
   automations,
   documents,
   intelligenceCommands,
+  entityFacets,
+  profiles,
+  isNull,
 } from "@synap/database";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { getLinksFor } from "../links/links-service.js";
@@ -86,6 +89,12 @@ export interface GraphNode {
   name: string;
   /** In-kind discriminator: entity→profileSlug, view→viewType, tool/skill→kind… */
   subtype: string | null;
+  /**
+   * Same discriminator, pluralized: entity→[kind slug, ...facet slugs] (Kind+
+   * Facets — an entity can carry multiple role-profiles), other kinds→[subtype]
+   * or []. `subtype` is kept for compat; new consumers should prefer this.
+   */
+  subtypes: string[];
   workspaceId: string | null;
 }
 
@@ -176,6 +185,7 @@ export async function hydrateNodes(
             id,
             name: id.length > 12 ? `${id.slice(0, 8)}…` : id,
             subtype: null,
+            subtypes: [],
             workspaceId: null,
           });
         }
@@ -191,20 +201,57 @@ export async function hydrateNodes(
         .where(
           and(inArray(t.id, ids), userVisibleWhere(t.workspaceId, userId))
         );
+
+      // Entity kind carries facets on top of its base subtype (kind slug) —
+      // batch-load live facet slugs for every entity in this group.
+      const facetSlugsByEntity =
+        kind === "entity" ? await loadFacetSlugs(db, ids) : null;
+
       for (const row of rows as Record<string, unknown>[]) {
         const id = row.id as string;
+        const subtype = spec.subtype
+          ? ((row[spec.subtype] as string | null) ?? null)
+          : null;
+        const subtypes = subtype ? [subtype] : [];
+        if (facetSlugsByEntity)
+          subtypes.push(...(facetSlugsByEntity.get(id) ?? []));
         out.set(`${kind}:${id}`, {
           kind,
           id,
           name: (row[spec.name] as string | null) ?? "(untitled)",
-          subtype: spec.subtype
-            ? ((row[spec.subtype] as string | null) ?? null)
-            : null,
+          subtype,
+          subtypes,
           workspaceId: (row.workspaceId as string | null) ?? null,
         });
       }
     })
   );
+  return out;
+}
+
+/** Batch-load live facet (role-profile) slugs for a set of entity ids. */
+async function loadFacetSlugs(
+  db: Awaited<ReturnType<typeof getDb>>,
+  entityIds: string[]
+): Promise<Map<string, string[]>> {
+  if (entityIds.length === 0) return new Map();
+  const rows = await db
+    .select({ entityId: entityFacets.entityId, slug: profiles.slug })
+    .from(entityFacets)
+    .innerJoin(profiles, eq(entityFacets.profileId, profiles.id))
+    .where(
+      and(
+        inArray(entityFacets.entityId, entityIds),
+        isNull(entityFacets.deletedAt)
+      )
+    );
+
+  const out = new Map<string, string[]>();
+  for (const row of rows) {
+    const list = out.get(row.entityId);
+    if (list) list.push(row.slug);
+    else out.set(row.entityId, [row.slug]);
+  }
   return out;
 }
 
@@ -243,6 +290,7 @@ export async function getLinkNeighbors(
       id: r.id,
       name: node?.name ?? r.id,
       subtype: node?.subtype ?? null,
+      subtypes: node?.subtypes ?? [],
       workspaceId: node?.workspaceId ?? null,
       edgeType: r.edgeType,
       direction: r.direction,
@@ -269,6 +317,12 @@ export function connectionsToNeighbors(
       title?: string | null;
       type?: string | null;
       workspaceId?: string | null;
+      /**
+       * Live facet slugs (Kind+Facets), when the caller's Connection row
+       * carries them. Optional — callers that don't load facets simply omit
+       * it and `subtypes` falls back to `[type]`.
+       */
+      facetSlugs?: string[] | null;
     } | null;
     label: string;
     direction: "outgoing" | "incoming" | "structural";
@@ -292,6 +346,10 @@ export function connectionsToNeighbors(
     id: c.entityId,
     name: c.entity?.title ?? c.label ?? c.entityId,
     subtype: c.entity?.type ?? null,
+    subtypes: [
+      ...(c.entity?.type ? [c.entity.type] : []),
+      ...(c.entity?.facetSlugs ?? []),
+    ],
     workspaceId: c.entity?.workspaceId ?? null,
     edgeType:
       c.relationType ?? c.propertySlug ?? c.channelRelationshipType ?? c.label,
@@ -329,6 +387,7 @@ export async function getObjectGraph(
     id,
     name: id,
     subtype: null,
+    subtypes: [],
     workspaceId: null,
   };
 
@@ -391,13 +450,17 @@ export async function resolveByName(
     .where(and(...conds))
     .limit(limit);
 
-  return (rows as Record<string, unknown>[]).map((row) => ({
-    kind,
-    id: row.id as string,
-    name: (row[spec.name] as string | null) ?? "(untitled)",
-    subtype: spec.subtype
+  return (rows as Record<string, unknown>[]).map((row) => {
+    const rowSubtype = spec.subtype
       ? ((row[spec.subtype] as string | null) ?? null)
-      : null,
-    workspaceId: (row.workspaceId as string | null) ?? null,
-  }));
+      : null;
+    return {
+      kind,
+      id: row.id as string,
+      name: (row[spec.name] as string | null) ?? "(untitled)",
+      subtype: rowSubtype,
+      subtypes: rowSubtype ? [rowSubtype] : [],
+      workspaceId: (row.workspaceId as string | null) ?? null,
+    };
+  });
 }

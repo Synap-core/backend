@@ -4,7 +4,7 @@
  */
 
 import { getTypesenseAdminClient } from "../client.js";
-import { getDb, inArray } from "@synap/database";
+import { getDb, inArray, and, eq, isNull } from "@synap/database";
 import * as schema from "@synap/database/schema";
 import type { IndexingQueueItem } from "../types/index.js";
 import {
@@ -150,10 +150,12 @@ export class IndexingService {
     const db = await getDb();
 
     switch (collection) {
-      case "entities":
-        return db.query.entities.findMany({
+      case "entities": {
+        const entityRows = await db.query.entities.findMany({
           where: inArray(schema.entities.id, ids),
         });
+        return this.attachFacetSlugs(db, entityRows);
+      }
 
       case "documents":
         return db.query.documents.findMany({
@@ -263,9 +265,12 @@ export class IndexingService {
         let dbRecords: any[] = [];
         switch (collection) {
           case "entities":
-            dbRecords = await db.query.entities.findMany({
-              where: (e, { isNull }) => isNull(e.deletedAt),
-            });
+            dbRecords = await this.attachFacetSlugs(
+              db,
+              await db.query.entities.findMany({
+                where: (e, { isNull }) => isNull(e.deletedAt),
+              })
+            );
             break;
           case "documents":
             dbRecords = await db.query.documents.findMany({
@@ -346,6 +351,48 @@ export class IndexingService {
     }
 
     return results;
+  }
+
+  /**
+   * Batch-attach live facet (role-profile) slugs to entity rows for indexing.
+   * One query for the whole batch — unfiltered lens, since the search doc is
+   * per-entity and visibility is enforced at query time elsewhere.
+   */
+  private async attachFacetSlugs(
+    db: Awaited<ReturnType<typeof getDb>>,
+    entityRows: any[]
+  ): Promise<any[]> {
+    if (entityRows.length === 0) return entityRows;
+
+    const ids = entityRows.map((e) => e.id);
+    const facetRows = await db
+      .select({
+        entityId: schema.entityFacets.entityId,
+        slug: schema.profiles.slug,
+      })
+      .from(schema.entityFacets)
+      .innerJoin(
+        schema.profiles,
+        eq(schema.entityFacets.profileId, schema.profiles.id)
+      )
+      .where(
+        and(
+          inArray(schema.entityFacets.entityId, ids),
+          isNull(schema.entityFacets.deletedAt)
+        )
+      );
+
+    const slugsByEntity = new Map<string, string[]>();
+    for (const row of facetRows) {
+      const list = slugsByEntity.get(row.entityId);
+      if (list) list.push(row.slug);
+      else slugsByEntity.set(row.entityId, [row.slug]);
+    }
+
+    return entityRows.map((e) => ({
+      ...e,
+      facetSlugs: slugsByEntity.get(e.id) ?? [],
+    }));
   }
 
   /**
