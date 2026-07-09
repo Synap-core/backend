@@ -14,7 +14,60 @@ import {
   DESTRUCTIVE_ACTIONS,
   PROPOSE_REASON,
   findUnsafeAutoApproveEntries,
+  type RequiredPermission,
 } from "./index.js";
+
+/**
+ * Wave 2F verb inventory — every `action` string actually passed into
+ * `requiredPermissionFor` (directly, or via `checkPermissionOrPropose` /
+ * `checkAutomationWriteOrPropose`) across packages/api/src and
+ * packages/jobs/src in production code, as of this wave. Excludes verbs that
+ * only ever appear as `auditLog({ action: ... })` / `emitSideEffects({
+ * action: ... })` payload fields (e.g. "recap", "received", "stage_changed",
+ * "grant_ai_access") — those never reach `requiredPermissionFor` and are not
+ * RBAC-gated by this function.
+ *
+ * To regenerate: from packages/, run
+ *   grep -rn "checkPermissionOrPropose(\|checkAutomationWriteOrPropose(" \
+ *     -A6 --include="*.ts" packages/api/src packages/jobs/src | grep -v test
+ * then follow each call site to its literal `action:` value(s) and diff
+ * against the table below.
+ */
+const INVENTORIED_VERBS: Record<string, RequiredPermission> = {
+  // reads
+  read: "read",
+  recall: "read", // memory.recall
+  entities: "read", // search.entities
+  // deletes
+  delete: "delete",
+  purge: "delete", // DESTRUCTIVE_ACTIONS member; no call site yet, fail-closed
+  // writes
+  create: "write",
+  update: "write",
+  archive: "write",
+  restore: "write",
+  add: "write",
+  place: "write",
+  remove: "write",
+  updateRole: "write",
+  "renderer.set": "write",
+  attach: "write",
+  detach: "write",
+  updateCapabilities: "write", // agent-users.ts
+  merge: "write", // hub-protocol/branches.ts branch merge
+  create_branch: "write", // hub-protocol/branches.ts
+  create_external: "write", // hub-protocol/channels.ts
+  join: "write", // hub-protocol/channels.ts channel join
+  link: "write", // hub-protocol/linking.ts
+  setState: "write", // hub-protocol/rest/artifacts.ts
+  execute: "write", // hub-protocol/rest/commands.ts, materializer.ts
+  run: "write", // playbooks.ts run
+  grant_capability: "write", // focus-sessions.ts
+  register: "write", // widget-definitions.ts
+  arrange: "write", // hub-protocol/views.ts bento.arrange
+  invite: "write", // member.invite (ADMIN_ACTIONS-gated on top)
+  write: "write", // filesystem.write
+};
 
 describe("requiredPermissionFor", () => {
   it("maps delete → delete", () => {
@@ -40,9 +93,25 @@ describe("requiredPermissionFor", () => {
     expect(requiredPermissionFor("attach")).toBe("write");
     expect(requiredPermissionFor("detach")).toBe("write");
   });
-  it("maps unknown/read → read", () => {
+  it("maps known read verbs → read", () => {
     expect(requiredPermissionFor("read")).toBe("read");
-    expect(requiredPermissionFor("list")).toBe("read");
+    expect(requiredPermissionFor("recall")).toBe("read");
+    expect(requiredPermissionFor("entities")).toBe("read");
+  });
+
+  it("maps every inventoried verb to its expected RBAC permission", () => {
+    for (const [action, expected] of Object.entries(INVENTORIED_VERBS)) {
+      expect(requiredPermissionFor(action)).toBe(expected);
+    }
+  });
+
+  it("fails closed: an unrecognized verb (e.g. 'list', a future verb) maps to write, not read", () => {
+    // Wave 2F: the fallback flipped from "read" (under-gating) to "write"
+    // (fail-closed) — "list" was the old test's example of the old behavior.
+    expect(requiredPermissionFor("list")).toBe("write");
+    expect(requiredPermissionFor("some_future_verb_nobody_has_seen")).toBe(
+      "write"
+    );
   });
 });
 

@@ -276,15 +276,38 @@ export const BLOCKED_FILESYSTEM_PATHS: readonly RegExp[] = [
 export type RequiredPermission = "read" | "write" | "delete" | "manage";
 
 /**
+ * Read-only action verbs actually passed into `requiredPermissionFor` across
+ * the codebase (search.entities, memory.recall, entity.read, and the explicit
+ * "read" verb used by filesystem.read-style checks). Kept as an exported list
+ * so the read set and the fail-closed fallback below are provably exhaustive
+ * against the same inventory the tests assert on.
+ */
+const READ_ACTIONS: readonly string[] = ["read", "recall", "entities"];
+
+/**
  * Map an action verb → the RBAC permission it requires.
  *
  * NOTE: this is the CANONICAL gate's mapping (it includes "place"). The old
  * jobs fork omitted "place" — a silent divergence this consolidation removes by
  * adopting the canonical superset. Automations only emit create/update, so the
  * fork's effective behavior is unchanged.
+ *
+ * Wave 2F hardening: this used to fall through unmatched verbs to "read" —
+ * under-gating any write verb nobody had thought to enumerate yet (RBAC would
+ * only require read permission for it). The fallback below now returns
+ * "write" instead: a full inventory of every `action` string passed to
+ * checkPermissionOrPropose / checkAutomationWriteOrPropose across
+ * packages/api and packages/jobs was taken (see policy.test.ts's
+ * `INVENTORIED_VERBS` fixture for the regenerate recipe) and every verb found
+ * is now listed explicitly below, so the fallback should be unreachable for
+ * known call sites — it exists purely as a fail-closed floor for a future verb
+ * nobody has enumerated yet. Conservative-by-design: an unrecognized verb now
+ * demands "write" (propose/deny for under-privileged agents) rather than
+ * silently passing as a read.
  */
 export function requiredPermissionFor(action: string): RequiredPermission {
-  if (action === "delete") return "delete";
+  if (action === "delete" || action === "purge") return "delete";
+  if (READ_ACTIONS.includes(action)) return "read";
   if (
     action === "create" ||
     action === "update" ||
@@ -301,16 +324,28 @@ export function requiredPermissionFor(action: string): RequiredPermission {
     // checks for the literal verbs "delete"/"archive"/"purge", so detach is
     // correctly NOT hard-floored to always-propose.
     action === "attach" ||
-    action === "detach"
+    action === "detach" ||
+    // Wave 2F additions — every other mutating verb found in the inventory.
+    action === "updateCapabilities" ||
+    action === "merge" ||
+    action === "create_branch" ||
+    action === "create_external" ||
+    action === "join" ||
+    action === "link" ||
+    action === "setState" ||
+    action === "execute" ||
+    action === "run" ||
+    action === "grant_capability" ||
+    action === "register" ||
+    action === "arrange" ||
+    action === "invite" ||
+    action === "write"
   ) {
     return "write";
   }
-  // NOTE: any action verb not matched above falls through to "read" — this
-  // under-gates an unrecognized write verb (RBAC would only require read
-  // permission for it). A full action-string inventory + fail-closed default
-  // is deferred to Wave 2; flagged here rather than fixed as part of the
-  // Kind+Facets wave to keep this change surgical.
-  return "read";
+  // Fail-closed floor: an unrecognized verb demands "write" rather than
+  // silently under-gating as "read". See the doc comment above.
+  return "write";
 }
 
 /** True if the path matches any always-blocked filesystem pattern. */
