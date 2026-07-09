@@ -368,37 +368,37 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "keep",
       opKey: "w3c.keep.question",
       slug: "question",
-      note: "Knowledge-family kind; conversion (if any) deferred to W4.",
+      note: "Knowledge-family kind; converted to an `item` role by w4.convert.question.",
     },
     {
       op: "keep",
       opKey: "w3c.keep.research",
       slug: "research",
-      note: "Knowledge-family kind; conversion (if any) deferred to W4.",
+      note: "Knowledge-family kind; converted to an `item` role by w4.convert.research.",
     },
     {
       op: "keep",
       opKey: "w3c.keep.decision",
       slug: "decision",
-      note: "Knowledge-family kind; conversion (if any) deferred to W4.",
+      note: "Knowledge-family kind; converted to an `item` role by w4.convert.decision.",
     },
     {
       op: "keep",
       opKey: "w3c.keep.knowledge",
       slug: "knowledge",
-      note: "Knowledge-family kind; conversion (if any) deferred to W4.",
+      note: "Knowledge-family kind; converted to an `item` role (carrying ek_* as facet properties) by w4.convert.knowledge.",
     },
     {
       op: "keep",
       opKey: "w3c.keep.user_observation",
       slug: "user_observation",
-      note: "Knowledge-family kind; conversion (if any) deferred to W4.",
+      note: "Knowledge-family kind; converted to an `item` role by w4.convert.user_observation.",
     },
     {
       op: "keep",
       opKey: "w3c.keep.signal_item",
       slug: "signal_item",
-      note: "Knowledge-family kind; conversion (if any) deferred to W4.",
+      note: "Child of `bookmark` with external-feed semantics (sourcePlatform/sourceRoute/topics/relevanceScore); kept as a primary kind, not converted, in W4 — see w4.keep.signal_item.",
     },
 
     // anchor: borderline (programmatically created, hideFromCreate — reads
@@ -410,6 +410,185 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       opKey: "w3c.keep.anchor",
       slug: "anchor",
       note: "Borderline (programmatic, hideFromCreate) but kept as a kind, not extracted — pinned-message entities are read/rendered as entities elsewhere.",
+    },
+
+    // ─── Wave 4: knowledge-family conversions ──────────────────────────────
+    //
+    // Turns the five rigid knowledge-family kinds into roles on `item` (the
+    // universal capture kind seeded by w3a.seed.item, settled as the capture
+    // home by w3c.merge.note-capture-into-item). Ordered AFTER that merge —
+    // `item` must already be the canonical capture kind before anything else
+    // converts onto it.
+    //
+    // Common shape: base fields already present on every capture-ish profile
+    // (title, tags, description) are NOT remapped onto the facet — they carry
+    // the same names on `item` already (item inherited them via the note
+    // merge), so remapping would just duplicate them. Only the fields
+    // distinctive to each role are mapped, mirroring the w3c CRM entries'
+    // "role/companyId only, not title/email/phone" precedent.
+    //
+    // applicableKinds is deliberately minimal (['item']) for all five — e.g.
+    // a `question` or `decision` COULD plausibly also apply to `work` (a
+    // paper/project kind) or other future kinds, but that's a real product
+    // decision (does a decision-role attach to a work-item too?) that
+    // shouldn't be smuggled into a data-conversion manifest. Extend
+    // applicableKinds in a later wave once that's decided explicitly.
+
+    // question → item: the entry point of question → research → decision.
+    // questionStatus is the lifecycle field (open/answered/abandoned per its
+    // enum-ish default "open"); projectId is the thematic container so it
+    // seeds context_entity_id; answeredByDecisionId is a real cross-reference
+    // but the engine allows only one contextFromProperty per op, and projectId
+    // is the more load-bearing link (every question view is likely scoped by
+    // project), so answeredByDecisionId stays a plain mapped property.
+    {
+      op: "convertToFacet",
+      opKey: "w4.convert.question",
+      slug: "question",
+      targetKindSlug: "item",
+      applicableKinds: ["item"],
+      propertyMapping: {
+        questionStatus: "questionStatus",
+        askedAt: "askedAt",
+        answeredByDecisionId: "answeredByDecisionId",
+      },
+      statusFrom: "questionStatus",
+      contextFromProperty: "projectId",
+    },
+
+    // research → item: sources/findings/confidence, answers a question.
+    // researchStatus (ongoing/concluded-ish) is the status-like field.
+    // questionId is a real cross-reference (research answers a question) but,
+    // as with `question` above, projectId wins the single contextFromProperty
+    // slot as the more universally-scoped container; questionId stays mapped.
+    {
+      op: "convertToFacet",
+      opKey: "w4.convert.research",
+      slug: "research",
+      targetKindSlug: "item",
+      applicableKinds: ["item"],
+      propertyMapping: {
+        researchStatus: "researchStatus",
+        questionId: "questionId",
+        conclusion: "conclusion",
+        researchConfidence: "researchConfidence",
+      },
+      statusFrom: "researchStatus",
+      contextFromProperty: "projectId",
+    },
+
+    // decision → item: rationale/alternatives/lifecycle. decisionStatus
+    // (proposed/accepted/superseded/rejected) is the status-like field;
+    // projectId is the thematic container (context); supersededBy is a real
+    // decision→decision link but, same reasoning as above, stays a plain
+    // mapped property rather than contending for the one context slot.
+    {
+      op: "convertToFacet",
+      opKey: "w4.convert.decision",
+      slug: "decision",
+      targetKindSlug: "item",
+      applicableKinds: ["item"],
+      propertyMapping: {
+        decisionStatus: "decisionStatus",
+        decidedAt: "decidedAt",
+        rationale: "rationale",
+        alternatives: "alternatives",
+        supersededBy: "supersededBy",
+      },
+      statusFrom: "decisionStatus",
+      contextFromProperty: "projectId",
+    },
+
+    // user_observation → item: AI-inferred observations about the user.
+    // No status-like field (uo_validated is a boolean confirm-flag, not a
+    // lifecycle state) and no UUID cross-reference, so no statusFrom /
+    // contextFromProperty here — all four uo_* properties map straight
+    // through.
+    {
+      op: "convertToFacet",
+      opKey: "w4.convert.user_observation",
+      slug: "user_observation",
+      targetKindSlug: "item",
+      applicableKinds: ["item"],
+      propertyMapping: {
+        uo_observation: "uo_observation",
+        uo_category: "uo_category",
+        uo_confidence: "uo_confidence",
+        uo_validated: "uo_validated",
+      },
+    },
+
+    // knowledge → item: validated knowledge (gotchas/lessons/decisions/
+    // references). `knowledge` is special: ONE profile whose entities are
+    // discriminated into gotcha/lesson/decision/reference via the ek_type
+    // enum property, not via separate profiles. The engine's convertToFacet
+    // attaches exactly one role per source profile — it has no notion of
+    // "split this source into N target roles by a property value". Two ways
+    // to model that:
+    //   (a) [IMPLEMENTED] convert knowledge → item + ONE `knowledge` facet
+    //       role that carries ek_type as an ordinary facet property. The
+    //       gotcha/lesson/decision/reference discrimination survives as data
+    //       (facet.properties.ek_type), just not as a first-class sub-role.
+    //       Ships now with the existing engine, zero new ops.
+    //   (b) [DEFERRED] a new engine op (e.g. `splitByProperty`) that reads
+    //       ek_type per-entity and attaches one of four distinct facet roles
+    //       (gotcha/lesson/decision/reference) instead of one `knowledge`
+    //       role — sharper modeling (each sub-kind could carry its own
+    //       applicableKinds/propertyMapping) but needs new engine work, so
+    //       it's the refinement path for a later wave, not W4.
+    // ek_type is NOT used as statusFrom — it's a category discriminator, not
+    // a lifecycle status (contrast decisionStatus/questionStatus above).
+    {
+      op: "convertToFacet",
+      opKey: "w4.convert.knowledge",
+      slug: "knowledge",
+      targetKindSlug: "item",
+      applicableKinds: ["item"],
+      propertyMapping: {
+        ek_type: "ek_type",
+        ek_claim: "ek_claim",
+        ek_why: "ek_why",
+        ek_evidence: "ek_evidence",
+      },
+    },
+
+    // KNOWN GAP, not fixed here: the live perso pod has TWO `knowledge`
+    // profile rows — the system one (2172aa81) and a workspace-scoped
+    // duplicate (ff8924b2). convertToFacet's resolveProfileId() picks a
+    // single winner (widest scope first: system > shared > workspace), so
+    // w4.convert.knowledge above only converts entities on the system row;
+    // any entities on the workspace-scoped ff8924b2 duplicate are silently
+    // left untouched (same limitation the w3c CRM comment documents for
+    // client/partner/sponsor/etc.).
+    //
+    // mergeInto can't fix this either: applyMergeInto joins `k.slug =
+    // op.intoSlug AND k.scope = src.scope` — it merges DIFFERENT slugs
+    // sharing the same scope into a canonical slug, not the same slug across
+    // DIFFERENT scopes. Modeling "dedupe same-slug-different-scope" would
+    // need fromSlugs === intoSlug, which validateManifest explicitly rejects
+    // ("cannot merge slug into itself") — a deliberate engine invariant, not
+    // a bug, so it is not being special-cased here. This is flagged as a
+    // pre-conversion MANUAL cleanup step for the pod operator: reassign or
+    // delete the ff8924b2 workspace-scoped `knowledge` profile's entities
+    // before running w4.convert.knowledge, or accept that they stay on the
+    // legacy row (harmless — just unconverted) until a manual follow-up.
+
+    // signal_item: audited, NOT converted in W4. It is a child of `bookmark`
+    // (parentSlug: bookmark in ensure-system-profiles.ts) with external-feed
+    // semantics — sourcePlatform/sourceRoute/authorUsername/publishedAt/
+    // topics/relevanceScore/sentiment/capturedFromFeed — that read as a
+    // capture provenance record, not a knowledge role someone attaches to an
+    // arbitrary item. It doesn't fit the knowledge-family shape (no
+    // ek_type-like discriminator, no question/research/decision lifecycle)
+    // and its bookmark parentage already gives it a capture-kind home once
+    // bookmark itself is addressed. Converting it now would be scope creep
+    // for this wave; W5 (radar/signal-feed work) is the natural place to
+    // revisit whether it becomes an `item` role or stays a bookmark child.
+    {
+      op: "keep",
+      opKey: "w4.keep.signal_item",
+      slug: "signal_item",
+      note: "Child of `bookmark`, external-feed provenance shape — not a knowledge-family role. Revisit in W5 (radar/signal-feed wave), not converted here.",
     },
   ],
 };
