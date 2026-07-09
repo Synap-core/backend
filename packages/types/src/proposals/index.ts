@@ -278,6 +278,19 @@ export interface CompositeCreateEntityOp {
    * reference it (e.g. "t1"). Optional — the positional `$opN` ref always works.
    */
   ref?: string;
+  /**
+   * Role-profile facets (Kind + Facets) to attach to this entity once it
+   * materializes. Additive — ops without `facets` behave exactly as before.
+   * `contextRef` disambiguates repeated-role attaches and resolves through the
+   * same ref→realId map as relation ops ($opN / op `ref` / $primary / a real
+   * entity UUID).
+   */
+  facets?: Array<{
+    profileSlug: string;
+    status?: string;
+    properties?: Record<string, unknown>;
+    contextRef?: string;
+  }>;
 }
 
 export interface CompositeCreateRelationOp {

@@ -1448,7 +1448,13 @@ export const proposalsRouter = router({
           // workspace on approval (overriding pod-default profile entityScope),
           // mirroring rest/capture.ts /import/apply. Only when the proposal is
           // workspace-bound; interactive pod-default approvals stay global.
-          proposal.workspaceId ? { workspaceScoped: true } : undefined
+          // `entityCaller` is the full entitiesRouter caller (same ctx), so it
+          // doubles as the facetCaller — attaching declared facets (op.facets)
+          // right after each entity materializes.
+          {
+            ...(proposal.workspaceId ? { workspaceScoped: true } : {}),
+            facetCaller: entityCaller,
+          }
         );
 
         // Record what we materialized so `revert` can compute the inverse.

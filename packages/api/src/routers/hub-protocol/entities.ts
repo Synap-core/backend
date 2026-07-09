@@ -49,6 +49,9 @@ export const entitiesRouter = router({
          * regular `list` procedure.
          */
         includePodWide: z.boolean().optional(),
+        /** Kind + Facets filter — only entities carrying a live facet of this role-profile. */
+        facetSlug: z.string().optional(),
+        facetProfileId: z.string().uuid().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -73,6 +76,10 @@ export const entitiesRouter = router({
         ...(input.projectId ? { projectId: input.projectId } : {}),
         ...(input.includePodWide !== undefined
           ? { includePodWide: input.includePodWide }
+          : {}),
+        ...(input.facetSlug ? { facetSlug: input.facetSlug } : {}),
+        ...(input.facetProfileId
+          ? { facetProfileId: input.facetProfileId }
           : {}),
       });
 

@@ -133,6 +133,15 @@ export type EntityCreateCaller = { create: (input: any) => Promise<any> };
 
 export type RelationCreateCaller = { create: (input: any) => Promise<any> };
 
+/**
+ * Structurally satisfied by the tRPC entitiesRouter caller — reuses its
+ * `attachFacet` procedure (same governance ctx as `entityCaller`, so a
+ * human-approved proposal attaches directly rather than re-proposing).
+ */
+export type FacetAttachCaller = {
+  attachFacet: (input: any) => Promise<any>;
+};
+
 export interface MaterializeOptions {
   /**
    * Pin every created entity to the caller's active workspace, OVERRIDING any
@@ -197,6 +206,13 @@ export interface MaterializeOptions {
    * span the whole proposal. Omitted for a single call (the local Set suffices).
    */
   idemSeen?: Set<string>;
+  /**
+   * Facet attacher (Kind + Facets) — when provided, each create_entity op's
+   * declared `facets` are attached right after that entity resolves (created
+   * OR linked-existing). Omitted → ops carrying `facets` are silently
+   * ignored, keeping every existing caller (which doesn't pass this) additive.
+   */
+  facetCaller?: FacetAttachCaller;
 }
 
 export async function materializeCompositeGraph(
@@ -335,6 +351,32 @@ export async function materializeCompositeGraph(
       ...(degradedFrom ? { degradedFrom } : {}),
       ...(propertiesDropped ? { propertiesDropped: true as const } : {}),
     });
+
+    // Declared facets (Kind + Facets) — additive: only ops carrying `facets`
+    // AND a caller that opted in via options.facetCaller attach anything. A
+    // failed attach is logged and skipped, never discarding the entity.
+    if (op.facets && op.facets.length > 0 && options?.facetCaller) {
+      for (const facetOp of op.facets) {
+        try {
+          const contextEntityId = facetOp.contextRef
+            ? resolveCompositeRef(refToRealId, facetOp.contextRef)
+            : undefined;
+          await options.facetCaller.attachFacet({
+            entityId: realId,
+            profileSlug: facetOp.profileSlug,
+            status: facetOp.status,
+            properties: facetOp.properties,
+            ...(contextEntityId ? { contextEntityId } : {}),
+            source: options?.source ?? "system",
+          });
+        } catch (err) {
+          logger.warn(
+            { err, entityId: realId, profileSlug: facetOp.profileSlug },
+            "Skipping composite facet attach (entity kept)"
+          );
+        }
+      }
+    }
   }
 
   // Pass 2 — relations via the shared loop (resolution + create guarded

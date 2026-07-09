@@ -358,6 +358,19 @@ export function registerEntitiesRoutes(app: HubHono): void {
               "globals' — the behavior agents and the CRM expect. " +
               "Set `false` to return only the exact workspace's rows."
           ),
+        facetSlug: z
+          .string()
+          .optional()
+          .describe(
+            "Kind + Facets filter — only return entities carrying a live " +
+              "facet of this role-profile slug (e.g. `investor`)."
+          ),
+        facetProfileId: z
+          .string()
+          .optional()
+          .describe(
+            "Same as facetSlug but by profile id. Wins if both are set."
+          ),
       }),
     },
     responses: {
@@ -408,6 +421,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
     // sees pod-wide profiles (person, company…) alongside workspace-specific data.
     // Callers that want ONLY the exact workspace's rows must explicitly pass "false".
     const includePodWide = query.includePodWide !== "false";
+    const facetSlug = query.facetSlug || undefined;
+    const facetProfileId = query.facetProfileId || undefined;
 
     try {
       const effectiveWsIds = workspaceIdParam
@@ -469,6 +484,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
               limit,
               includePodWide,
               ...(projectIdParam ? { projectId: projectIdParam } : {}),
+              ...(facetSlug ? { facetSlug } : {}),
+              ...(facetProfileId ? { facetProfileId } : {}),
             })
           )
         );
@@ -508,6 +525,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
         offset,
         includePodWide,
         ...(projectIdParam ? { projectId: projectIdParam } : {}),
+        ...(facetSlug ? { facetSlug } : {}),
+        ...(facetProfileId ? { facetProfileId } : {}),
       });
 
       let rows = (listed as unknown[]).map((e) => entityToWire(e));

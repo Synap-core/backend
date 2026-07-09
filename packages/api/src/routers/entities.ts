@@ -32,7 +32,9 @@ import {
   DocumentRepository,
   FacetRepository,
   getEffectiveFacets,
+  facetVisibilityConditions,
   drizzleSql,
+  exists,
   links,
   type LinkEndpointType,
   type LinkType,
@@ -49,6 +51,7 @@ import {
   entityExternalLinks,
   userEntityState,
   profiles,
+  entityFacets,
 } from "@synap/database/schema";
 import { type Entity, EntitySchema } from "@synap-core/types";
 import { entityToWire } from "./hub-protocol/rest/_codecs/entity.js";
@@ -279,6 +282,9 @@ function emitFacetSideEffects(opts: {
   userId: string;
   workspaceId: string | null;
   sessionId?: string | null;
+  /** Parent entity title — threaded through so proposal/notification cards read human-friendly text. */
+  entityTitle?: string | null;
+  contextEntityTitle?: string | null;
 }): void {
   const commonWs = opts.workspaceId;
   emitSideEffects({
@@ -298,6 +304,10 @@ function emitFacetSideEffects(opts: {
       ...(opts.changedKeys && opts.changedKeys.length > 0
         ? { changedKeys: opts.changedKeys }
         : {}),
+      ...(opts.entityTitle ? { entityTitle: opts.entityTitle } : {}),
+      ...(opts.contextEntityTitle
+        ? { contextEntityTitle: opts.contextEntityTitle }
+        : {}),
     },
   });
   // Parent-entity refresh — reuse the entity reactors (search + vector +
@@ -314,6 +324,7 @@ function emitFacetSideEffects(opts: {
       facetAction: opts.action,
       facetId: opts.facetId,
       ...(opts.profileSlug ? { profileSlug: opts.profileSlug } : {}),
+      ...(opts.entityTitle ? { entityTitle: opts.entityTitle } : {}),
     },
   });
 }
@@ -863,6 +874,14 @@ export const entitiesRouter = router({
         projectId: z.string().uuid().optional(),
         /** Filter to entities materialized from a specific proposal (provenance). */
         sourceProposalId: z.string().uuid().optional(),
+        /**
+         * Facet filter (Kind + Facets): only return entities carrying a live
+         * facet of this role-profile. Resolved to `facetProfileId` via slug
+         * lookup when only the slug is given; `facetProfileId` wins if both
+         * are provided.
+         */
+        facetSlug: z.string().optional(),
+        facetProfileId: z.string().uuid().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -941,6 +960,43 @@ export const entitiesRouter = router({
       // can only narrow — never widen. Omitted when no project is selected.
       if (input.projectId) {
         conditions.push(projectLensWhere(entities.id, input.projectId));
+      }
+
+      // Facet filter (Kind + Facets): narrow to entities carrying a live
+      // facet of the given role-profile, visible under the same lens as the
+      // entity list itself.
+      if (input.facetSlug || input.facetProfileId) {
+        let facetProfileId = input.facetProfileId;
+        if (!facetProfileId && input.facetSlug) {
+          const facetProfile = await db.query.profiles.findFirst({
+            where: eq(profiles.slug, input.facetSlug),
+            columns: { id: true },
+          });
+          facetProfileId = facetProfile?.id;
+        }
+        if (facetProfileId) {
+          conditions.push(
+            exists(
+              db
+                .select({ one: drizzleSql`1` })
+                .from(entityFacets)
+                .where(
+                  and(
+                    eq(entityFacets.entityId, entities.id),
+                    eq(entityFacets.profileId, facetProfileId),
+                    isNull(entityFacets.deletedAt),
+                    ...facetVisibilityConditions({
+                      userId: ctx.userId,
+                      workspaceId: lensWorkspaceId,
+                    })
+                  )
+                )
+            )!
+          );
+        } else {
+          // Unknown facetSlug — no entity can match; short-circuit to empty.
+          conditions.push(drizzleSql`false`);
+        }
       }
 
       const results = await db.query.entities.findMany({
@@ -1751,13 +1807,24 @@ export const entitiesRouter = router({
           isNull(entities.deletedAt),
           entityVisibleWhere(ctx.userId)
         ),
-        columns: { id: true, workspaceId: true, type: true },
+        columns: { id: true, workspaceId: true, type: true, title: true },
       });
       if (!parent) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Entity not found: ${input.entityId}`,
         });
+      }
+
+      // Best-effort readable label for the context entity (disambiguator) —
+      // surfaced on proposal cards alongside entityTitle.
+      let contextEntityTitle: string | undefined;
+      if (input.contextEntityId) {
+        const contextEntity = await db.query.entities.findFirst({
+          where: eq(entities.id, input.contextEntityId),
+          columns: { title: true },
+        });
+        contextEntityTitle = contextEntity?.title ?? undefined;
       }
 
       const facetWorkspaceId =
@@ -1845,10 +1912,12 @@ export const entitiesRouter = router({
         sessionId: ctx.sessionId ?? undefined,
         data: {
           entityId: input.entityId,
+          entityTitle: parent.title,
           profileSlug: input.profileSlug,
           profileId: input.profileId,
           workspaceId: facetWorkspaceId,
           contextEntityId: input.contextEntityId ?? null,
+          ...(contextEntityTitle ? { contextEntityTitle } : {}),
           status: input.status,
           properties: input.properties,
         },
@@ -1912,6 +1981,8 @@ export const entitiesRouter = router({
         userId: ctx.userId,
         workspaceId: facet.workspaceId ?? governanceWorkspaceId,
         sessionId: ctx.sessionId ?? null,
+        entityTitle: parent.title,
+        contextEntityTitle,
       });
 
       return {
@@ -1955,6 +2026,13 @@ export const entitiesRouter = router({
       const governanceWorkspaceId =
         existing.workspaceId ?? ctx.workspaceId ?? null;
 
+      // Best-effort readable label for the parent entity — surfaced on
+      // proposal/notification cards (which otherwise show raw entity ids).
+      const parentForUpdate = await db.query.entities.findFirst({
+        where: eq(entities.id, existing.entityId),
+        columns: { title: true },
+      });
+
       // 1. .requested
       const requestedEvent = await auditLog({
         subjectType: "entity_facet",
@@ -1984,6 +2062,7 @@ export const entitiesRouter = router({
           // entityId drives the proposal targetId (points the review card at the
           // parent entity); facetId is what the executor re-runs against.
           entityId: existing.entityId,
+          entityTitle: parentForUpdate?.title,
           facetId: input.facetId,
           status: input.status,
           properties: input.properties,
@@ -2042,6 +2121,7 @@ export const entitiesRouter = router({
         userId: ctx.userId,
         workspaceId: facet.workspaceId ?? governanceWorkspaceId,
         sessionId: ctx.sessionId ?? null,
+        entityTitle: parentForUpdate?.title,
       });
 
       return { status: "updated" as const, message: "Facet updated", facet };
@@ -2075,6 +2155,13 @@ export const entitiesRouter = router({
       const governanceWorkspaceId =
         existing.workspaceId ?? ctx.workspaceId ?? null;
 
+      // Best-effort readable label for the parent entity — surfaced on
+      // proposal/notification cards (which otherwise show raw entity ids).
+      const parentForDetach = await db.query.entities.findFirst({
+        where: eq(entities.id, existing.entityId),
+        columns: { title: true },
+      });
+
       // 1. .requested
       const requestedEvent = await auditLog({
         subjectType: "entity_facet",
@@ -2102,6 +2189,7 @@ export const entitiesRouter = router({
         sessionId: ctx.sessionId ?? undefined,
         data: {
           entityId: existing.entityId,
+          entityTitle: parentForDetach?.title,
           facetId: input.facetId,
         },
       });
@@ -2142,6 +2230,7 @@ export const entitiesRouter = router({
         userId: ctx.userId,
         workspaceId: existing.workspaceId ?? governanceWorkspaceId,
         sessionId: ctx.sessionId ?? null,
+        entityTitle: parentForDetach?.title,
       });
 
       return { status: "detached" as const, message: "Facet detached" };

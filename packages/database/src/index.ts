@@ -29,6 +29,7 @@ export * from "./services/property-merging-service.js";
 export * from "./services/view-default-columns-service.js";
 export * from "./services/encryption-service.js";
 export * from "./services/entity-upsert-service.js";
+export * from "./services/identity-resolution-service.js";
 export * from "./services/trusted-issuer-service.js";
 export * from "./services/user-provisioning.js";
 
@@ -46,6 +47,7 @@ export * from "./utils/message-hash.js";
 export * from "./utils/persist-assistant-reply.js";
 export * from "./utils/open-run-session.js";
 export * from "./utils/insert-pending-proposal.js";
+export * from "./utils/facet-visibility.js";
 
 // Server-side vault encryption
 export {
