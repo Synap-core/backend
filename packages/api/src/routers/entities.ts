@@ -38,6 +38,8 @@ import {
   type LinkType,
   linkEntityToProject,
   stampProvenance,
+  FacetProfileKindError,
+  FacetKindMismatchError,
 } from "@synap/database";
 import {
   entities,
@@ -1763,6 +1765,51 @@ export const entitiesRouter = router({
           ? input.workspaceId
           : (parent.workspaceId ?? null);
       const governanceWorkspaceId = facetWorkspaceId ?? ctx.workspaceId ?? null;
+
+      // Fast-fail BEFORE governance: a structurally impossible attach (target
+      // profile isn't a role, or the role doesn't apply to this kind) must be
+      // rejected here, not parked as a proposal that can never materialize.
+      // FacetRepository remains the validation SSOT — this pre-check throws
+      // the repository's own error classes so messages stay single-sourced.
+      {
+        const candidates = await db.query.profiles.findMany({
+          where: input.profileId
+            ? eq(profiles.id, input.profileId)
+            : eq(profiles.slug, input.profileSlug!),
+          columns: {
+            id: true,
+            slug: true,
+            profileKind: true,
+            applicableKinds: true,
+          },
+        });
+        if (candidates.length > 0) {
+          const roleCandidates = candidates.filter(
+            (p) => p.profileKind === "role"
+          );
+          if (roleCandidates.length === 0) {
+            throw new FacetProfileKindError(
+              candidates[0].id,
+              candidates[0].slug
+            );
+          }
+          const applies = roleCandidates.some(
+            (p) =>
+              !p.applicableKinds ||
+              p.applicableKinds.length === 0 ||
+              p.applicableKinds.includes(parent.type)
+          );
+          if (!applies) {
+            throw new FacetKindMismatchError(
+              roleCandidates[0].slug,
+              parent.type,
+              roleCandidates[0].applicableKinds ?? []
+            );
+          }
+        }
+        // No candidates → fall through; the repository reports NOT_FOUND with
+        // workspace-aware resolution on the granted path.
+      }
 
       // 1. .requested
       const requestedEvent = await auditLog({
