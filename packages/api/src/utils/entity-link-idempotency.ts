@@ -28,6 +28,7 @@ import {
   and,
   entityExternalLinks,
   relations,
+  registerIdentitySignals,
 } from "@synap/database";
 
 /** nangoConnectionId sentinel for non-OAuth imports (mirrors entity-upsert-service). */
@@ -101,6 +102,21 @@ export function makeExternalLinkIdempotency(
           status: "active",
         })
         .onConflictDoNothing();
+      // Also absorb the (provider, externalId) pair into the identity signal
+      // layer — the dedup half of entity_external_links, so a later import
+      // (or any other write door) resolving on the same external id lands on
+      // this entity via resolveIdentity's strong path, not just this
+      // idempotency lookup. signalValue has no uniqueness scoping issue: it's
+      // already namespaced by provider, mirroring the external-links key.
+      await registerIdentitySignals(
+        database,
+        entityId,
+        [{ type: "external_id", value: `${p}:${externalId}` }],
+        "import"
+      ).catch(() => {
+        // Best-effort — the external-links row above is the source of truth
+        // for import idempotency; a signal-write failure must never break it.
+      });
     },
     relationExists: async (sourceEntityId, targetEntityId, type) => {
       const existing = await database.query.relations.findFirst({

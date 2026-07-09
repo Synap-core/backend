@@ -152,6 +152,103 @@ export function extractStrongSignals(
 }
 
 /**
+ * Property keys that carry a value for each strong signal type — the write-door
+ * counterpart to `extractIdentitySignals` below. Mirrors the base property defs
+ * seeded in `ensure-system-profiles.ts` (email/phone/linkedinUrl/website/
+ * twitterHandle/githubUsername). Callers use this to check whether a changed
+ * property key is signal-relevant before re-registering.
+ */
+export const IDENTITY_SIGNAL_PROPERTY_KEYS: Record<StrongSignalType, string[]> =
+  {
+    email: ["email"],
+    phone: ["phone"],
+    telegram_phone: ["telegramPhone"],
+    linkedin_url: ["linkedinUrl", "linkedin-url"],
+    website: ["website"],
+    twitter_handle: ["twitterHandle", "twitter-handle"],
+    github_username: ["githubUsername", "github-username"],
+  };
+
+/**
+ * Extract ALL strong identity signals from an entity's property bag — the ONE
+ * mapping from property values to `entity_identity_signals` rows, used by every
+ * write door (entities.create/update, import). Supersedes the narrower
+ * `extractStrongSignals` above for new callers (kept for its existing callers).
+ *
+ * `discord-handle` is intentionally EXCLUDED: the FROZEN IDENTITY POLICY (see
+ * module doc) classifies it as a WEAK surface form — advisory-only, scoped per
+ * kind — not a globally-unique atom. Registering it here would silently
+ * promote it to auto-merge, which the policy explicitly forbids.
+ *
+ * @param opts.aliases When true, also scans `properties.aliases[]` entries and
+ *   registers any that look like an email or URL (best-effort — aliases carry
+ *   no explicit type).
+ */
+export function extractIdentitySignals(
+  properties: Record<string, unknown> | undefined,
+  opts?: { aliases?: boolean }
+): IdentitySignal[] {
+  if (!properties) return [];
+  const signals: IdentitySignal[] = [];
+
+  const email = properties.email;
+  if (typeof email === "string" && email.includes("@")) {
+    signals.push({ type: "email", value: email });
+  }
+
+  const phone = properties.phone;
+  if (typeof phone === "string" && phone.replace(/[^\d]/g, "").length >= 7) {
+    signals.push({ type: "phone", value: phone });
+  }
+
+  const linkedin = properties.linkedinUrl ?? properties["linkedin-url"];
+  if (typeof linkedin === "string" && isLinkedinUrl(linkedin)) {
+    signals.push({ type: "linkedin_url", value: linkedin });
+  }
+
+  const website = properties.website;
+  if (typeof website === "string" && /^https?:\/\//.test(website)) {
+    signals.push({ type: "website", value: website });
+  }
+
+  const twitter = properties.twitterHandle ?? properties["twitter-handle"];
+  if (typeof twitter === "string" && twitter.trim().length > 0) {
+    signals.push({ type: "twitter_handle", value: twitter });
+  }
+
+  const github = properties.githubUsername ?? properties["github-username"];
+  if (typeof github === "string" && github.trim().length > 0) {
+    signals.push({ type: "github_username", value: github });
+  }
+
+  if (opts?.aliases && Array.isArray(properties.aliases)) {
+    for (const raw of properties.aliases) {
+      if (typeof raw !== "string" || !raw.trim()) continue;
+      const v = raw.trim();
+      if (v.includes("@") && v.includes(".") && !v.includes(" ")) {
+        signals.push({ type: "email", value: v });
+      } else if (/^https?:\/\//.test(v)) {
+        signals.push({
+          type: isLinkedinUrl(v) ? "linkedin_url" : "website",
+          value: v,
+        });
+      }
+    }
+  }
+
+  return signals;
+}
+
+/**
+ * Domain-anchored LinkedIn URL check. A plain `.includes("linkedin.com")`
+ * false-positives on lookalike domains (e.g. `not-linkedin.com`) — this
+ * requires "linkedin.com" to be the actual host, not a substring anywhere.
+ */
+function isLinkedinUrl(value: string): boolean {
+  return /^https?:\/\/([a-z0-9-]+\.)*linkedin\.com(\/|$)/i.test(value);
+}
+
+/**
  * Resolve an entity by identity — strong signals first (auto-resolve), then a
  * weak name/handle/alias candidate search (advisory, kind-scoped).
  *

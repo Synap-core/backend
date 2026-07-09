@@ -42,6 +42,9 @@ import {
   stampProvenance,
   FacetProfileKindError,
   FacetKindMismatchError,
+  extractIdentitySignals,
+  registerIdentitySignals,
+  IDENTITY_SIGNAL_PROPERTY_KEYS,
 } from "@synap/database";
 import {
   entities,
@@ -710,6 +713,10 @@ export const entitiesRouter = router({
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: `Entity creation failed: ${msg}`,
+          // Preserve the original error (e.g. PropertyValidationError) so
+          // callers that reuse this door (capture's retry-as-note ladder)
+          // can branch on the real failure type instead of the wrapped message.
+          cause: createErr,
         });
       }
 
@@ -768,6 +775,28 @@ export const entitiesRouter = router({
             "[entities.create] Property→relation sync failed"
           );
         });
+      }
+
+      // 3c. Auto-register identity signals (email/phone/url/handle) — non-blocking.
+      // Feeds resolveIdentity's strong path so later writes dedup against this
+      // entity instead of creating a duplicate. Never blocks or fails the mutation.
+      if (createdEntity?.id) {
+        const signals = extractIdentitySignals(
+          propertiesWithContent as Record<string, unknown>
+        );
+        if (signals.length > 0) {
+          registerIdentitySignals(
+            database,
+            createdEntity.id,
+            signals,
+            "entities.create"
+          ).catch((err) => {
+            logger.warn(
+              { err },
+              "[entities.create] Identity signal registration failed"
+            );
+          });
+        }
       }
 
       // 4. Emit .completed event + side-effects
@@ -1657,6 +1686,30 @@ export const entitiesRouter = router({
             "[entities.update] Property→relation sync failed"
           );
         });
+
+        // 3d. Auto-register identity signals (email/phone/url/handle) — non-blocking.
+        // Only when a signal-relevant key actually changed, so an unrelated
+        // property edit doesn't re-scan + re-write signals every time.
+        const changedKeys = new Set(Object.keys(input.properties));
+        const touchedIdentityKey = Object.values(
+          IDENTITY_SIGNAL_PROPERTY_KEYS
+        ).some((keys) => keys.some((k) => changedKeys.has(k)));
+        if (touchedIdentityKey) {
+          const signals = extractIdentitySignals(newProps);
+          if (signals.length > 0) {
+            registerIdentitySignals(
+              database,
+              input.id,
+              signals,
+              "entities.update"
+            ).catch((err) => {
+              logger.warn(
+                { err },
+                "[entities.update] Identity signal registration failed"
+              );
+            });
+          }
+        }
       }
 
       // 4. Emit .completed event + side-effects
