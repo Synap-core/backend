@@ -52,6 +52,95 @@ describe("CONVERSION_MANIFEST", () => {
   });
 });
 
+describe("CONVERSION_MANIFEST — Wave 3C (CRM-family)", () => {
+  it("has globally unique op keys across the grown manifest", () => {
+    const keys = collectOpKeys(CONVERSION_MANIFEST);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("orders the item seed before the note/capture merge into item", () => {
+    const seedIdx = CONVERSION_MANIFEST.ops.findIndex(
+      (o) => o.opKey === "w3a.seed.item"
+    );
+    const mergeIdx = CONVERSION_MANIFEST.ops.findIndex(
+      (o) => o.opKey === "w3c.merge.note-capture-into-item"
+    );
+    expect(seedIdx).toBeGreaterThanOrEqual(0);
+    expect(mergeIdx).toBeGreaterThanOrEqual(0);
+    expect(seedIdx).toBeLessThan(mergeIdx);
+  });
+
+  it("every convertToFacet op has a non-empty applicableKinds", () => {
+    const converts = CONVERSION_MANIFEST.ops.filter(
+      (o) => o.op === "convertToFacet"
+    );
+    expect(converts.length).toBeGreaterThan(0);
+    for (const op of converts) {
+      expect(Array.isArray(op.applicableKinds)).toBe(true);
+      expect(op.applicableKinds.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("every mergeInto op's intoSlug differs from all fromSlugs", () => {
+    const merges = CONVERSION_MANIFEST.ops.filter((o) => o.op === "mergeInto");
+    expect(merges.length).toBeGreaterThan(0);
+    for (const op of merges) {
+      expect(op.fromSlugs).not.toContain(op.intoSlug);
+    }
+  });
+
+  it("declares the six CRM-family convertToFacet ops", () => {
+    const expected = [
+      ["w3c.convert.contact", "contact", "person"],
+      ["w3c.convert.client", "client", "company"],
+      ["w3c.convert.partner", "partner", "company"],
+      ["w3c.convert.sponsor", "sponsor", "company"],
+      ["w3c.convert.competitor", "competitor", "company"],
+      ["w3c.convert.lead", "lead", "person"],
+    ] as const;
+    for (const [opKey, slug, targetKindSlug] of expected) {
+      const op = CONVERSION_MANIFEST.ops.find((o) => o.opKey === opKey);
+      expect(op).toBeDefined();
+      expect(op?.op).toBe("convertToFacet");
+      if (op?.op === "convertToFacet") {
+        expect(op.slug).toBe(slug);
+        expect(op.targetKindSlug).toBe(targetKindSlug);
+      }
+    }
+  });
+
+  it("merges note + capture into item", () => {
+    const op = CONVERSION_MANIFEST.ops.find(
+      (o) => o.opKey === "w3c.merge.note-capture-into-item"
+    );
+    expect(op?.op).toBe("mergeInto");
+    if (op?.op === "mergeInto") {
+      expect(op.fromSlugs).toEqual(["note", "capture"]);
+      expect(op.intoSlug).toBe("item");
+    }
+  });
+
+  it("keeps deal/event/task and the knowledge-family + anchor slugs as audited no-ops", () => {
+    for (const slug of [
+      "deal",
+      "event",
+      "task",
+      "question",
+      "research",
+      "decision",
+      "knowledge",
+      "user_observation",
+      "signal_item",
+      "anchor",
+    ]) {
+      const kept = CONVERSION_MANIFEST.ops.find(
+        (o) => o.opKey === `w3c.keep.${slug}` && "slug" in o && o.slug === slug
+      );
+      expect(kept?.op).toBe("keep");
+    }
+  });
+});
+
 describe("validateManifest", () => {
   it("rejects duplicate op keys", () => {
     const m: ConversionManifest = {

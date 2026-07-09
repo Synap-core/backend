@@ -168,6 +168,249 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       slug: "note",
       note: "Note stays a primary kind; knowledge-family entries land in W4.",
     },
+
+    // ─── Wave 3C: CRM-family conversions + merges ──────────────────────────
+    //
+    // `contact` is a SYSTEM profile (ensure-system-profiles.ts, parentSlug:
+    // person) so resolveProfileId finds one canonical row pod-wide. `client`,
+    // `partner`, `sponsor`, `competitor`, `lead` are NOT system profiles —
+    // they only exist as WORKSPACE-scope profiles baked into workspace
+    // templates (synap-app/packages/workspace-templates/src/templates.ts:
+    // crm, content-os, radar, marketing). A pod with multiple workspaces
+    // built from the same template can therefore have several profile rows
+    // sharing one of these slugs. resolveProfileId() picks a single winner
+    // (oldest `created_at` among scope='workspace' rows) — so each of these
+    // six ops converts entities on ONE such profile row and silently leaves
+    // any sibling same-slug profile in other workspaces untouched. This is
+    // a real limitation flagged for the team lead, not fixed here (engine.ts
+    // is out of scope for this file) — the dry-run counts on the live pod
+    // will show whether more than one workspace actually seeded a given
+    // slug.
+
+    // contact → person: a contact IS a person wearing a business-contact
+    // hat. Real property_defs on the system `contact` profile (title, email,
+    // phone, role, companyId, tags, description) — title/email/phone/tags/
+    // description are generic person fields already; only role and
+    // companyId are contact-specific enough to carry onto the facet.
+    {
+      op: "convertToFacet",
+      opKey: "w3c.convert.contact",
+      slug: "contact",
+      targetKindSlug: "person",
+      applicableKinds: ["person"],
+      propertyMapping: { role: "role", companyId: "companyId" },
+    },
+
+    // client → company: org-level relationship (deal won → active client).
+    // applicableKinds includes 'person' for solo/freelance clients. All
+    // client-specific property_defs from the CRM workspace template carried
+    // 1:1 onto the facet; clientStatus is the only status-like field.
+    {
+      op: "convertToFacet",
+      opKey: "w3c.convert.client",
+      slug: "client",
+      targetKindSlug: "company",
+      applicableKinds: ["company", "person"],
+      propertyMapping: {
+        clientStatus: "clientStatus",
+        accountManager: "accountManager",
+        engagementStartDate: "engagementStartDate",
+        satisfactionScore: "satisfactionScore",
+        lifetimeValue: "lifetimeValue",
+        notes: "notes",
+        contractValue: "contractValue",
+        renewalDate: "renewalDate",
+        healthScore: "healthScore",
+      },
+      statusFrom: "clientStatus",
+    },
+
+    // partner → company: referral / co-delivery relationship. Same shape as
+    // `client` plus `partnerType`; applicableKinds includes 'person' for
+    // solo partners/affiliates.
+    {
+      op: "convertToFacet",
+      opKey: "w3c.convert.partner",
+      slug: "partner",
+      targetKindSlug: "company",
+      applicableKinds: ["company", "person"],
+      propertyMapping: {
+        partnerStatus: "partnerStatus",
+        partnerType: "partnerType",
+        accountManager: "accountManager",
+        engagementStartDate: "engagementStartDate",
+        satisfactionScore: "satisfactionScore",
+        lifetimeValue: "lifetimeValue",
+        notes: "notes",
+        contractValue: "contractValue",
+        renewalDate: "renewalDate",
+        healthScore: "healthScore",
+      },
+      statusFrom: "partnerStatus",
+    },
+
+    // sponsor → company (Content OS): a brand deal from first contact to
+    // paid. applicableKinds includes 'person' — sponsors can be an
+    // individual creator/affiliate, not only a brand. deal-status is the
+    // status-like field (Prospecting → Paid/Declined).
+    {
+      op: "convertToFacet",
+      opKey: "w3c.convert.sponsor",
+      slug: "sponsor",
+      targetKindSlug: "company",
+      applicableKinds: ["company", "person"],
+      propertyMapping: {
+        "deal-status": "deal-status",
+        "sponsor-type": "sponsor-type",
+        "contact-name": "contact-name",
+        "contact-email": "contact-email",
+        "deal-value": "deal-value",
+        "payment-status": "payment-status",
+        "contract-date": "contract-date",
+        "deliverable-deadline": "deliverable-deadline",
+        "exclusivity-end": "exclusivity-end",
+        deliverables: "deliverables",
+        "talking-points": "talking-points",
+        "performance-notes": "performance-notes",
+        "sponsor-tags": "sponsor-tags",
+      },
+      statusFrom: "deal-status",
+    },
+
+    // competitor → company (Radar): rivals are always orgs in this
+    // template, so applicableKinds is company-only (no 'person'). `status`
+    // (watching/active-threat/adjacent/archived) is the status-like field.
+    {
+      op: "convertToFacet",
+      opKey: "w3c.convert.competitor",
+      slug: "competitor",
+      targetKindSlug: "company",
+      applicableKinds: ["company"],
+      propertyMapping: {
+        positioning: "positioning",
+        strengths: "strengths",
+        weaknesses: "weaknesses",
+        pricing: "pricing",
+        url: "url",
+      },
+      statusFrom: "status",
+    },
+
+    // lead → person (Marketing): a lead is usually a person contact, but
+    // applicableKinds keeps 'company' too since leads can represent an
+    // account before a specific contact is identified. lead-stage is the
+    // status-like field; lead-campaign is a UUID reference to a `campaign`
+    // entity so it seeds contextFromProperty rather than being duplicated
+    // into propertyMapping.
+    {
+      op: "convertToFacet",
+      opKey: "w3c.convert.lead",
+      slug: "lead",
+      targetKindSlug: "person",
+      applicableKinds: ["person", "company"],
+      propertyMapping: {
+        "lead-stage": "lead-stage",
+        "lead-source": "lead-source",
+        "lead-email": "lead-email",
+        "lead-company": "lead-company",
+        "lead-title": "lead-title",
+        "lead-linkedin": "lead-linkedin",
+        "lead-score": "lead-score",
+        "lead-last-contacted": "lead-last-contacted",
+        "lead-notes": "lead-notes",
+        "lead-ai-summary": "lead-ai-summary",
+      },
+      statusFrom: "lead-stage",
+      contextFromProperty: "lead-campaign",
+    },
+
+    // note + capture → item, the universal capture kind (item seeded by
+    // w3a.seed.item above — op order keeps that seed first). `capture` was
+    // already removed from ensure-system-profiles.ts (see its comment there)
+    // so that fromSlug resolves to zero rows on every pod — a permanent,
+    // harmless no-op kept for audit completeness. NOTE: this contradicts
+    // w3a.keep.note ("Note stays a primary kind") above — that entry was a
+    // W3A placeholder deferring the decision, superseded here by explicit
+    // W3C direction to fold note into item. Flagged for the team lead rather
+    // than silently deleting the earlier keep (ops are append-only/immutable
+    // once shipped).
+    {
+      op: "mergeInto",
+      opKey: "w3c.merge.note-capture-into-item",
+      fromSlugs: ["note", "capture"],
+      intoSlug: "item",
+    },
+
+    // Primary kinds staying as-is (relationship-objects / time-bound /
+    // actionable — not facets of person/company).
+    {
+      op: "keep",
+      opKey: "w3c.keep.deal",
+      slug: "deal",
+      note: "Deal is a relationship-THING (buyer × seller × stage), stays a primary kind.",
+    },
+    {
+      op: "keep",
+      opKey: "w3c.keep.event",
+      slug: "event",
+      note: "Event stays a primary kind — time-bound container, not a role.",
+    },
+    {
+      op: "keep",
+      opKey: "w3c.keep.task",
+      slug: "task",
+      note: "Task stays a primary kind — actionable item, not a role.",
+    },
+
+    // Knowledge-family kinds — audited, deliberately deferred to W4 (mirrors
+    // the w3a.keep.note precedent).
+    {
+      op: "keep",
+      opKey: "w3c.keep.question",
+      slug: "question",
+      note: "Knowledge-family kind; conversion (if any) deferred to W4.",
+    },
+    {
+      op: "keep",
+      opKey: "w3c.keep.research",
+      slug: "research",
+      note: "Knowledge-family kind; conversion (if any) deferred to W4.",
+    },
+    {
+      op: "keep",
+      opKey: "w3c.keep.decision",
+      slug: "decision",
+      note: "Knowledge-family kind; conversion (if any) deferred to W4.",
+    },
+    {
+      op: "keep",
+      opKey: "w3c.keep.knowledge",
+      slug: "knowledge",
+      note: "Knowledge-family kind; conversion (if any) deferred to W4.",
+    },
+    {
+      op: "keep",
+      opKey: "w3c.keep.user_observation",
+      slug: "user_observation",
+      note: "Knowledge-family kind; conversion (if any) deferred to W4.",
+    },
+    {
+      op: "keep",
+      opKey: "w3c.keep.signal_item",
+      slug: "signal_item",
+      note: "Knowledge-family kind; conversion (if any) deferred to W4.",
+    },
+
+    // anchor: borderline (programmatically created, hideFromCreate — reads
+    // config-ish) but kept as a first-class kind rather than extracted,
+    // per explicit W3C direction — pinned-message entities are queried and
+    // rendered as entities elsewhere in the codebase, not as config.
+    {
+      op: "keep",
+      opKey: "w3c.keep.anchor",
+      slug: "anchor",
+      note: "Borderline (programmatic, hideFromCreate) but kept as a kind, not extracted — pinned-message entities are read/rendered as entities elsewhere.",
+    },
   ],
 };
 
