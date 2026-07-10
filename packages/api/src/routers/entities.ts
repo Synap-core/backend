@@ -282,10 +282,16 @@ const signalWriteQueue: Array<() => void> = [];
 function runSignalWrite(task: () => Promise<void>): void {
   const start = () => {
     inFlightSignalWrites++;
-    task().finally(() => {
-      inFlightSignalWrites--;
-      signalWriteQueue.shift()?.();
-    });
+    // Promise.resolve().then(task): a synchronous throw from task() would
+    // otherwise skip .finally() and leak the counter — 25 leaks and every
+    // future signal write queues forever.
+    Promise.resolve()
+      .then(task)
+      .catch(() => {})
+      .finally(() => {
+        inFlightSignalWrites--;
+        signalWriteQueue.shift()?.();
+      });
   };
   if (inFlightSignalWrites < MAX_INFLIGHT_SIGNAL_WRITES) {
     start();

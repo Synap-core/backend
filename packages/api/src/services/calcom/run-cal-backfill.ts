@@ -79,7 +79,10 @@ export async function runCalBackfill(): Promise<RunCalBackfillResult> {
   const bookings = Array.isArray(result?.bookings) ? result!.bookings : [];
 
   const actor = (await getCaptureAgentUserId()) ?? owner;
-  const nextSeen: Record<string, string> = { ...seen };
+  // Keys added by THIS run only — the DB write below merges them into the
+  // live column value in-statement, so a webhook firing mid-run can't be
+  // clobbered by a whole-map snapshot write.
+  const newKeys: Record<string, string> = {};
   let proposed = 0;
   let alreadySeen = 0;
 
@@ -87,7 +90,7 @@ export async function runCalBackfill(): Promise<RunCalBackfillResult> {
     const uid = booking.uid?.trim();
     if (!uid) continue;
     const key = `${uid}:BOOKING_CREATED`;
-    if (nextSeen[key]) {
+    if (seen[key] || newKeys[key]) {
       alreadySeen += 1;
       continue;
     }
@@ -100,24 +103,34 @@ export async function runCalBackfill(): Promise<RunCalBackfillResult> {
         relations,
         summary: `Cal.com booking (backfill) — ${booking.title ?? uid}`,
       });
-      nextSeen[key] = new Date().toISOString();
+      newKeys[key] = new Date().toISOString();
       proposed += 1;
     } catch (err) {
       logger.warn({ err, uid }, "cal backfill: booking → graph failed");
     }
   }
 
-  // Persist the merged seen-map (static path + parameterized value — clobber-safe).
-  await db
-    .update(tools)
-    .set({
-      metadata: drizzleSql`jsonb_set(COALESCE(${tools.metadata}, '{}'::jsonb), '{calcom,webhook,seen}', ${JSON.stringify(nextSeen)}::jsonb, true)`,
-      updatedAt: new Date(),
-    })
-    .where(eq(tools.id, calTool.id))
-    .catch((err) =>
-      logger.warn({ err }, "cal backfill: seen-map persist failed")
-    );
+  // Persist ONLY this run's new keys, merged into the live seen-map
+  // IN-STATEMENT (row lock + re-evaluation makes the read-modify-write
+  // race-safe vs concurrent webhook writes; a snapshot-based whole-map write
+  // would clobber keys written mid-run). Nested jsonb_set chain creates any
+  // missing parents; values are bound parameters, never interpolated.
+  if (Object.keys(newKeys).length > 0) {
+    await db
+      .update(tools)
+      .set({
+        metadata: drizzleSql`jsonb_set(
+          jsonb_set(
+            jsonb_set(COALESCE(${tools.metadata}, '{}'::jsonb), '{calcom}', COALESCE(${tools.metadata}#>'{calcom}', '{}'::jsonb), true),
+            '{calcom,webhook}', COALESCE(${tools.metadata}#>'{calcom,webhook}', '{}'::jsonb), true),
+          '{calcom,webhook,seen}', COALESCE(${tools.metadata}#>'{calcom,webhook,seen}', '{}'::jsonb) || ${JSON.stringify(newKeys)}::jsonb, true)`,
+        updatedAt: new Date(),
+      })
+      .where(eq(tools.id, calTool.id))
+      .catch((err) =>
+        logger.warn({ err }, "cal backfill: seen-map persist failed")
+      );
+  }
 
   logger.info(
     { processed: bookings.length, proposed, alreadySeen },

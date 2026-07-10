@@ -239,13 +239,22 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
     return c.json({ received: true, deferred: true }, 200);
   }
 
-  // Mark seen. Write the whole seen-map leaf with a STATIC jsonb path + a
-  // parameterized value — never interpolate the (payload-derived) key into SQL.
-  const nextSeen = { ...(cfg.seen ?? {}), [seenKey]: new Date().toISOString() };
+  // Mark seen. Single-LEAF jsonb_set computed entirely in-statement: writing
+  // the whole map from an earlier snapshot raced the backfill poller (and
+  // concurrent webhooks) — a clobbered key re-mints duplicate deal/event rows
+  // since those have no identity-signal dedup. The nested ensure-chain creates
+  // missing parents; the payload-derived key rides in a BOUND array element,
+  // never interpolated into SQL.
   await db
     .update(tools)
     .set({
-      metadata: drizzleSql`jsonb_set(COALESCE(${tools.metadata}, '{}'::jsonb), '{calcom,webhook,seen}', ${JSON.stringify(nextSeen)}::jsonb, true)`,
+      metadata: drizzleSql`jsonb_set(
+        jsonb_set(
+          jsonb_set(
+            jsonb_set(COALESCE(${tools.metadata}, '{}'::jsonb), '{calcom}', COALESCE(${tools.metadata}#>'{calcom}', '{}'::jsonb), true),
+            '{calcom,webhook}', COALESCE(${tools.metadata}#>'{calcom,webhook}', '{}'::jsonb), true),
+          '{calcom,webhook,seen}', COALESCE(${tools.metadata}#>'{calcom,webhook,seen}', '{}'::jsonb), true),
+        ARRAY['calcom','webhook','seen', ${seenKey}]::text[], ${JSON.stringify(new Date().toISOString())}::jsonb, true)`,
       updatedAt: new Date(),
     })
     .where(eq(tools.id, calTool.id))
