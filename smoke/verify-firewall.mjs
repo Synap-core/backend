@@ -25,27 +25,49 @@ const workspaceId = process.env.FW_WORKSPACE_ID;
 const externalSource = process.env.FW_EXTERNAL_SOURCE ?? "discord";
 const externalChannelId = process.env.FW_EXTERNAL_CHANNEL_ID;
 
-for (const [k, v] of Object.entries({ SYNAP_POD_URL: pod, SYNAP_HUB_API_KEY: key, FW_WORKSPACE_ID: workspaceId, FW_EXTERNAL_CHANNEL_ID: externalChannelId })) {
-  if (!v) { console.error(`✗ missing env ${k}`); process.exit(2); }
+for (const [k, v] of Object.entries({
+  SYNAP_POD_URL: pod,
+  SYNAP_HUB_API_KEY: key,
+  FW_WORKSPACE_ID: workspaceId,
+  FW_EXTERNAL_CHANNEL_ID: externalChannelId,
+})) {
+  if (!v) {
+    console.error(`✗ missing env ${k}`);
+    process.exit(2);
+  }
 }
 
 const res = await fetch(`${pod}/api/hub/channels`, {
   method: "POST",
-  headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-  body: JSON.stringify({ workspaceId, externalSource, externalChannelId, branchPurpose: "team", relink: true }),
+  headers: {
+    Authorization: `Bearer ${key}`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    workspaceId,
+    externalSource,
+    externalChannelId,
+    branchPurpose: "team",
+    relink: true,
+  }),
 });
 const body = await res.json().catch(() => ({}));
 
 const ok403 = res.status === 403;
-const okMsg = typeof body.error === "string" && /client-comms.*immutable/i.test(body.error);
+const okMsg =
+  typeof body.error === "string" && /client-comms.*immutable/i.test(body.error);
 
 console.log(`  status: ${res.status} (expect 403)  ${ok403 ? "✓" : "✗"}`);
 console.log(`  body:   ${JSON.stringify(body)}`);
 console.log(`  message asserts firewall immutability: ${okMsg ? "✓" : "✗"}`);
 
 if (ok403 && okMsg) {
-  console.log("✓ FIREWALL FLOOR HOLDS — client-comms is immutable via the HTTP door.");
+  console.log(
+    "✓ FIREWALL FLOOR HOLDS — client-comms is immutable via the HTTP door."
+  );
   process.exit(0);
 }
-console.error("✗ FIREWALL REGRESSED — a client-comms channel was reclassifiable, or the error was not a clean 403.");
+console.error(
+  "✗ FIREWALL REGRESSED — a client-comms channel was reclassifiable, or the error was not a clean 403."
+);
 process.exit(1);

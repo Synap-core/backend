@@ -113,12 +113,10 @@ describe("openRunSession", () => {
   it("recovers from a concurrent unique-index race by reusing the winner's run session", async () => {
     // 1st reuse-check: no session yet. After our insert loses the race (23505),
     // 2nd reuse-check finds the winner's run session.
-    findFirstMock
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce({
-        id: "winner-session",
-        metadata: { source: "automation" },
-      });
+    findFirstMock.mockResolvedValueOnce(undefined).mockResolvedValueOnce({
+      id: "winner-session",
+      metadata: { source: "automation" },
+    });
     // First insert throws a unique-violation; there is no second insert.
     returningMock.mockRejectedValueOnce(
       Object.assign(new Error("duplicate key"), { code: "23505" })

@@ -44,6 +44,15 @@ vi.mock("@synap/database", () => ({
   eq: vi.fn(),
   workspaces: {},
   workspaceMembers: {},
+  ChannelType: {
+    THREAD: "thread",
+    PERSONAL: "personal",
+    SUB_THREAD: "sub_thread",
+    FEED: "feed",
+    EXTERNAL: "external",
+    AGENT_COLLAB: "agent_collab",
+    GROUP: "group",
+  },
 }));
 
 vi.mock("@synap-core/core", () => ({

@@ -40,7 +40,7 @@ const ScopeEnum = z.enum([
 const GenerateAccessTokenInputSchema = z.object({
   requestId: z.string().uuid("Invalid request ID"),
   scope: z.array(ScopeEnum).min(1, "At least one scope is required"),
-  expiresIn: z.number().int().min(1).max(300).default(300),
+  expiresIn: z.number().int().min(60).max(300).default(300),
 });
 
 const RequestDataInputSchema = z.object({

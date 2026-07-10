@@ -22,6 +22,8 @@ describe("n8n Actions Router", () => {
   beforeEach(() => {
     mockCtx = {
       userId: "user-123",
+      authenticated: true,
+      apiKeyId: "test-key-id",
       apiKeyName: "Test Key",
       scopes: ["write:entities", "read:entities", "ai:analyze"],
     };
@@ -108,7 +110,7 @@ describe("n8n Actions Router", () => {
       const caller = n8nActionsRouter.createCaller(mockCtx);
 
       const result = await caller.analyzeContent({
-        content: "This is a great test content with #tag and - task item",
+        content: "This is a great test content with #tag\n- task item",
         analysisTypes: ["sentiment", "tags", "tasks"],
       });
 

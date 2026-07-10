@@ -811,126 +811,29 @@ export function registerCaptureRoutes(app: HubHono): void {
       }
     }
 
-    // WITHIN-BATCH DEDUP: the agent may list the same person/company under two
-    // different `ref`s (neither persisted yet, so the persisted-dedup block
-    // below can't catch it). Collapse those before resolving against the DB —
-    // see _capture-graph-dedup.ts for the exact key + rewrite semantics.
-    const collapsed = collapseDuplicateEntities(
-      body.entities,
-      relations,
-      bindings
-    );
-    const graphEntities = collapsed.entities;
-    relations = collapsed.relations;
-    bindings = collapsed.bindings;
-
-    // IDEMPOTENCY: dedup against existing entities by (profileSlug, title) so a
-    // re-run of /onboard (or accepting two proposals) LINKS to the existing
-    // company/client/contact instead of creating a duplicate. We only resolve
-    // entities the agent didn't already pin via existingEntityId. Defense-in-depth
-    // on top of the agent's own "reuse existing" instruction. Runs regardless of
-    // workspaceId — a pod-wide capture (no workspaceId) still needs to dedup
-    // against pod-wide entities.
-    const toResolve = graphEntities.filter((e) => !e.existingEntityId);
-    if (toResolve.length > 0) {
-      // Resolve each unpinned entity through the ONE identity resolver:
-      //   • STRONG signals (email/phone/url) auto-resolve GLOBALLY — a strong
-      //     match links to the canonical subject regardless of workspace (the
-      //     frozen policy: a strong atom is globally unique per subject).
-      //   • WEAK name/handle/alias matches are kept to the workspace's visible
-      //     rows (this workspace + pod-wide globals), same scope the old scan
-      //     used, and must be the SAME kind (profileSlug) to link.
-      // This replaces the previous fetch-5000-rows-and-filter-in-JS scan.
-      const weakScope = body.workspaceId
-        ? or(
-            eq(entities.workspaceId, body.workspaceId),
-            isNull(entities.workspaceId)
-          )
-        : isNull(entities.workspaceId);
-      for (const e of toResolve) {
-        try {
-          const res = await resolveIdentity(db, {
-            userId,
-            kindSlug: e.profileSlug,
-            name: e.title ?? e.ref,
-            signals: extractIdentitySignals(e.properties),
-            userScope: weakScope,
-          });
-          if (res.match && res.entity) {
-            e.existingEntityId = res.entity.id; // link, don't create
-          }
-        } catch (err) {
-          // Dedup is best-effort — never block the proposal on a lookup failure.
-          logger.warn({ err }, "capture/graph: entity dedup lookup failed");
-        }
-      }
-    }
-
     try {
-      const operations: CompositeProposalOperation[] = [
-        ...graphEntities.map((e) => ({
-          op: "create_entity" as const,
-          ref: e.ref,
-          profileSlug: e.profileSlug,
-          title: e.title ?? e.ref,
-          properties: e.properties ?? {},
-          ...(e.existingEntityId
-            ? { existingEntityId: e.existingEntityId }
-            : {}),
-          ...(e.facets ? { facets: e.facets } : {}),
-        })),
-        ...relations.map((r) => ({
-          op: "create_relation" as const,
-          sourceRef: r.sourceRef,
-          targetRef: r.targetRef,
-          type: r.type,
-        })),
-      ];
-
-      const bindingNote = bindings.length
-        ? `, ${bindings.length} channel bind${bindings.length === 1 ? "" : "s"}`
-        : "";
-      const summary =
-        body.summary ??
-        `Proposed graph: ${graphEntities.length} entit${graphEntities.length === 1 ? "y" : "ies"}, ${relations.length} link${relations.length === 1 ? "" : "s"}${bindingNote}`;
-
-      const { proposal: created } = await createEventBackedProposal({
+      // The within-batch dedup, persisted-entity dedup, operations build, and
+      // event-backed proposal all live in the shared core so in-process
+      // producers (Cal.com webhook/backfill) go through the SAME door path.
+      const result = await submitCaptureGraph({
         userId,
         workspaceId: body.workspaceId ?? null,
-        targetType: "entity",
-        targetId: randomUUID(),
-        proposalType: "import.graph",
-        action: "create",
-        source: "intelligence",
-        summary,
-        // `bindings` rides alongside operations; the approve flow applies them
-        // after materialization (resolving entityRef → real id).
-        data: { operations, source: "graph", bindings },
+        entities: body.entities,
+        relations,
+        bindings,
+        summary: body.summary,
       });
-
-      const proposalId = (created as { id?: string })?.id;
-      // Clickable review link: the pod's public /open/:id route resolves the id
-      // to its type server-side and redirects to synap://open/<type>/<id> (opens
-      // the app). https is what Discord linkifies — synap:// alone is not.
-      const reviewUrl = proposalId ? openLink(proposalId) : undefined;
       logger.info(
         {
           userId,
           workspaceId: body.workspaceId,
-          entityCount: graphEntities.length,
-          relationCount: relations.length,
-          proposalId,
+          entityCount: result.entityCount,
+          relationCount: result.relationCount,
+          proposalId: result.proposalId,
         },
         "POST /capture/graph"
       );
-      return c.json({
-        proposalId,
-        entityCount: graphEntities.length,
-        relationCount: relations.length,
-        bindingCount: bindings.length,
-        reviewUrl,
-        summary,
-      });
+      return c.json(result);
     } catch (err) {
       logger.error({ err, userId }, "POST /capture/graph failed");
       return c.json(

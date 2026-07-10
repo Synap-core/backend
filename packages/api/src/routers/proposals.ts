@@ -1228,9 +1228,36 @@ export const proposalsRouter = router({
               })
         );
       }
+      // revertable — per proposal, "would `revert` succeed for this row?"
+      // computed from the SAME planner the revert mutation uses (:1903), so the
+      // UI can stop hand-mirroring the backend's revert logic (SSOT). Purely a
+      // function of the proposal's own stored data (status/target/type/data) —
+      // no extra DB round-trip. Only applied proposals (approved/auto_approved)
+      // are candidates, mirroring the revert mutation's status gate; every other
+      // status is non-revertable, and a plan of `kind: "unsupported"` (e.g. an
+      // update/edit with no before-snapshot) → false.
+      const revertableById = new Map<string, boolean>();
+      for (const r of rows) {
+        const isApplied =
+          r.status === ProposalStatus.APPROVED ||
+          r.status === ProposalStatus.AUTO_APPROVED;
+        if (!isApplied) {
+          revertableById.set(r.id, false);
+          continue;
+        }
+        const plan = planProposalRevert({
+          status: r.status,
+          targetType: r.targetType,
+          targetId: r.targetId,
+          proposalType: r.proposalType,
+          data: r.data,
+        });
+        revertableById.set(r.id, plan.kind !== "unsupported");
+      }
       const itemsWithPermission = items.map((it) => {
         const viewerCanReview = viewerCanReviewById.get(it.id) ?? false;
-        return { ...it, viewerCanReview };
+        const revertable = revertableById.get(it.id) ?? false;
+        return { ...it, viewerCanReview, revertable };
       });
 
       const nextCursor =

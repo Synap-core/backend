@@ -13,6 +13,17 @@ vi.mock("@synap/database", () => ({
         findMany: vi.fn(),
         findFirst: vi.fn(),
       },
+      syncGeneration: {
+        findFirst: vi.fn(() =>
+          Promise.resolve({
+            role: "primary",
+            splitBrainDetected: false,
+            generation: 1,
+            lastPeerGeneration: 0,
+            lastPeerContact: null,
+          })
+        ),
+      },
     },
     update: vi.fn(() => ({
       set: vi.fn().mockReturnThis(),
@@ -28,6 +39,9 @@ vi.mock("@synap/database", () => ({
     id: "id",
     userId: "user_id",
     createdAt: "created_at",
+  },
+  syncGeneration: {
+    id: "id",
   },
   eq: vi.fn(),
   and: vi.fn(),
@@ -138,7 +152,7 @@ describe("Webhooks Router", () => {
 
       const caller = webhooksRouter.createCaller(mockCtx);
       const result = await caller.update({
-        id: "sub-1",
+        id: "00000000-0000-4000-8000-000000000001",
         name: "Updated Name",
       });
 
@@ -156,7 +170,7 @@ describe("Webhooks Router", () => {
 
       await expect(
         caller.update({
-          id: "sub-1",
+          id: "00000000-0000-4000-8000-000000000001",
           name: "Updated Name",
         })
       ).rejects.toThrow("Webhook subscription not found");
@@ -174,7 +188,9 @@ describe("Webhooks Router", () => {
       } as any);
 
       const caller = webhooksRouter.createCaller(mockCtx);
-      const result = await caller.delete({ id: "sub-1" });
+      const result = await caller.delete({
+        id: "00000000-0000-4000-8000-000000000001",
+      });
 
       expect(result.success).toBe(true);
     });
@@ -190,9 +206,9 @@ describe("Webhooks Router", () => {
 
       const caller = webhooksRouter.createCaller(mockCtx);
 
-      await expect(caller.delete({ id: "sub-1" })).rejects.toThrow(
-        "Webhook subscription not found"
-      );
+      await expect(
+        caller.delete({ id: "00000000-0000-4000-8000-000000000001" })
+      ).rejects.toThrow("Webhook subscription not found");
     });
   });
 });

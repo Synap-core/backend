@@ -211,20 +211,12 @@ describe("DeliveryService", () => {
       expect(mockDbInsert).toHaveBeenCalled();
     });
 
-    it("should emit side effects after message creation", async () => {
-      const request = createBaseRequest({
-        surfaces: [{ type: "feed", feedChannelId: "feed-123" }],
-      });
-
-      await DeliveryService.deliver(request);
-
-      expect(mockEmitSideEffectsFn).toHaveBeenCalledWith({
-        workspaceId: "workspace-456",
-        userId: "user-123",
-        event: "message.created",
-        payload: { messageId: "msg-123", channelId: "feed-123" },
-      });
-    });
+    // NOTE: side-effect emission ("message.created") was moved OUT of
+    // DeliveryService into its callers (to break a circular dependency —
+    // see the comments in DeliveryService.ts deliverToFeedInternal /
+    // deliverToChatInternal). The former "should emit side effects" tests
+    // were removed here; caller-side emission is no longer this unit's
+    // responsibility and would need coverage at the call sites instead.
 
     it("should still succeed even if side effects fail", async () => {
       mockEmitSideEffectsFn.mockRejectedValue(new Error("Side effect failed"));
@@ -278,27 +270,8 @@ describe("DeliveryService", () => {
       expect(mockDbInsert).toHaveBeenCalled();
     });
 
-    it("should emit side effects for chat delivery", async () => {
-      mockEnsureAgentThreadFn.mockResolvedValue({
-        id: "personal-123",
-        userId: "user-123",
-        channelType: "thread",
-        status: "active",
-      });
-
-      const request = createBaseRequest({
-        surfaces: [{ type: "chat" }],
-      });
-
-      await DeliveryService.deliver(request);
-
-      expect(mockEmitSideEffectsFn).toHaveBeenCalledWith({
-        workspaceId: "workspace-456",
-        userId: "user-123",
-        event: "message.created",
-        payload: { messageId: "msg-123", channelId: "personal-123" },
-      });
-    });
+    // (chat-delivery side-effect emission test removed — see note above:
+    // "message.created" emission now lives in the callers, not DeliveryService.)
   });
 
   describe("deliverToNotification", () => {
@@ -340,14 +313,16 @@ describe("DeliveryService", () => {
         type: "proposal.created",
         workspaceId: "workspace-456",
         userId: "user-123",
-        title: "Proposal Created",
-        body: "A new proposal needs your review",
         sourceType: "system",
         sourceId: "proposal-123",
-        actions: [
-          { label: "Review", action: "review-proposal", data: { id: "123" } },
-        ],
-        priority: "high",
+        data: {
+          title: "Proposal Created",
+          body: "A new proposal needs your review",
+          actions: [
+            { label: "Review", action: "review-proposal", data: { id: "123" } },
+          ],
+          priority: "high",
+        },
       });
     });
 
@@ -366,7 +341,9 @@ describe("DeliveryService", () => {
 
       expect(mockNotificationCreate).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "Notification",
+          data: expect.objectContaining({
+            title: "Notification",
+          }),
         })
       );
     });
@@ -431,7 +408,11 @@ describe("DeliveryService", () => {
       expect(result.success).toBe(false);
       expect(result.deliveries[0].surface).toBe("feed");
       expect(result.deliveries[0].success).toBe(false);
-      expect(result.deliveries[0].error).toBe("No feed channel found for user");
+      // withRetryResult wraps non-retryable failures as
+      // "Non-retryable error: <original>" — assert on the substring.
+      expect(result.deliveries[0].error).toContain(
+        "No feed channel found for user"
+      );
     });
 
     it("should handle database errors gracefully", async () => {
@@ -451,7 +432,7 @@ describe("DeliveryService", () => {
 
       expect(result.success).toBe(false);
       expect(result.deliveries[0].success).toBe(false);
-      expect(result.deliveries[0].error).toBe("DB connection failed");
+      expect(result.deliveries[0].error).toContain("DB connection failed");
     });
 
     it("should handle NotificationService failure", async () => {
@@ -469,7 +450,7 @@ describe("DeliveryService", () => {
 
       expect(result.success).toBe(false);
       expect(result.deliveries[0].success).toBe(false);
-      expect(result.deliveries[0].error).toBe("Notification service down");
+      expect(result.deliveries[0].error).toContain("Notification service down");
     });
 
     it("should allow partial failure - one surface fails, others succeed", async () => {
@@ -520,7 +501,7 @@ describe("DeliveryService", () => {
 
       expect(result.success).toBe(false);
       expect(result.deliveries[0].success).toBe(false);
-      expect(result.deliveries[0].error).toBe("Channel creation failed");
+      expect(result.deliveries[0].error).toContain("Channel creation failed");
     });
 
     it("should not break feed delivery when notification fails", async () => {
@@ -704,7 +685,6 @@ describe("DeliveryService", () => {
 
       // Verify the complete flow
       expect(mockDbInsert).toHaveBeenCalled(); // Message persisted
-      expect(mockEmitSideEffectsFn).toHaveBeenCalled(); // Side effects emitted
       expect(result.success).toBe(true);
       expect(result.deliveries[0].id).toBe("msg-123");
     });
@@ -772,11 +752,6 @@ describe("DeliveryService", () => {
       expect(mockEnsureAgentThreadFn).toHaveBeenCalledWith(
         "user-123",
         "agent-orchestrator-id"
-      );
-      expect(mockEmitSideEffectsFn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workspaceId: undefined,
-        })
       );
     });
   });

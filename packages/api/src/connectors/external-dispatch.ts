@@ -712,6 +712,63 @@ const SCHEME_ALLOWED_KINDS: Record<string, ReadonlyArray<string>> = {
   mcp: ["mcp", "provider", "external"],
 };
 
+// Build the dispatch envelope from a Nango proxy result, HONORING the HTTP status.
+// The Nango connector never throws on non-2xx (it returns {status, body}); if we
+// blindly stamped success:true here, a provider 4xx/5xx (e.g. Google's 403
+// "API not enabled") would be laundered into a fake success and then shaped to an
+// empty result by applyResponseShape — the bug that silently made calendar_list /
+// drive_* return {count:0} instead of surfacing the error. Mirror the vault://
+// handler: success = status is 2xx, and carry the provider's error message so the
+// caller's kind:"error" branch can report it.
+function nangoProxyEnvelope(result: {
+  status: number;
+  headers: Record<string, string>;
+  body: unknown;
+}) {
+  const ok = result.status >= 200 && result.status < 300;
+  if (ok) {
+    return {
+      success: true,
+      status: result.status,
+      headers: result.headers,
+      body: result.body,
+    };
+  }
+  return {
+    success: false,
+    status: result.status,
+    headers: result.headers,
+    body: result.body,
+    errorCode: statusToErrorCode(result.status),
+    error: extractProviderErrorMessage(result.status, result.body),
+  };
+}
+
+// Map an upstream HTTP status onto the dispatch envelope's constrained errorCode.
+function statusToErrorCode(
+  status: number
+): "not_found" | "bad_request" | "unavailable" {
+  if (status === 404) return "not_found";
+  if (status >= 400 && status < 500) return "bad_request";
+  return "unavailable";
+}
+
+// Pull a concise message from common provider error shapes:
+//   Google → { error: { message } }; others → { error: string } | { message }.
+function extractProviderErrorMessage(status: number, body: unknown): string {
+  if (body && typeof body === "object") {
+    const b = body as Record<string, unknown>;
+    const err = b.error;
+    if (err && typeof err === "object") {
+      const m = (err as Record<string, unknown>).message;
+      if (typeof m === "string" && m) return m;
+    }
+    if (typeof err === "string" && err) return err;
+    if (typeof b.message === "string" && b.message) return b.message;
+  }
+  return `provider call failed (status ${status})`;
+}
+
 // ── nango:// handler (Nango proxy — Connection-Id + Provider-Config-Key) ──────
 //
 // Body is VERBATIM the original nango branch: same providerConfigKey resolution,
@@ -777,12 +834,7 @@ const nangoHandler: SchemeHandler = async ({ input, tool }) => {
     headers: input.headers,
   });
 
-  return {
-    success: true,
-    status: result.status,
-    headers: result.headers,
-    body: result.body,
-  };
+  return nangoProxyEnvelope(result);
 };
 
 /**
@@ -919,12 +971,7 @@ async function vaultDelegatedHandler(ctx: {
       baseUrlOverride,
     });
 
-    return {
-      success: true,
-      status: result.status,
-      headers: result.headers,
-      body: result.body,
-    };
+    return nangoProxyEnvelope(result);
   }
 
   // ── Unknown backend type ─────────────────────────────────────────────────

@@ -4038,6 +4038,189 @@ export const channelsRouter = router({
     }),
 
   /**
+   * Edit the content of a message the caller authored.
+   *
+   * Conservative authz (mirrors the single-message ownership gate): only the
+   * user who authored a NON-deleted message may edit it — assistant / other
+   * users' messages are off-limits. The self-integrity hash is recomputed with
+   * the canonical `computeMessageHash(id, content)` formula, so the edited row's
+   * OWN hash stays self-consistent, and `edited_at` is stamped so the UI can
+   * show "(edited)".
+   *
+   * NOTE — chain caveat: this does NOT re-derive downstream links. When this
+   * message was the trigger for an assistant reply, that reply persisted its
+   * `previousHash` from the ORIGINAL trigger content (`persist-assistant-reply.ts`),
+   * so editing here breaks that one chain link for any downstream reply — the
+   * reply's stored `previousHash` no longer matches this row's recomputed hash.
+   * This is an accepted tradeoff (no consumer currently verifies the chain).
+   */
+  updateMessage: protectedProcedure
+    .input(
+      z.object({
+        messageId: z.string().uuid(),
+        content: z.string().min(1).max(50_000),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const msg = await db.query.messages.findFirst({
+        where: eq(messages.id, input.messageId),
+      });
+      if (!msg || msg.deletedAt) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Message not found",
+        });
+      }
+      if (msg.userId !== ctx.userId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You can only edit your own messages",
+        });
+      }
+
+      const [updated] = await db
+        .update(messages)
+        .set({
+          content: input.content,
+          hash: computeMessageHash(input.messageId, input.content),
+          editedAt: new Date(),
+        })
+        .where(eq(messages.id, input.messageId))
+        .returning();
+
+      return { message: updated };
+    }),
+
+  /**
+   * Soft-delete a SINGLE message the caller authored (sets `deleted_at`).
+   * Complements the range-based `deleteMessagesFrom`. Idempotent.
+   */
+  deleteMessage: protectedProcedure
+    .input(z.object({ messageId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const msg = await db.query.messages.findFirst({
+        where: eq(messages.id, input.messageId),
+      });
+      if (!msg) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Message not found",
+        });
+      }
+      if (msg.userId !== ctx.userId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You can only delete your own messages",
+        });
+      }
+
+      await db
+        .update(messages)
+        .set({ deletedAt: new Date() })
+        .where(
+          and(eq(messages.id, input.messageId), isNull(messages.deletedAt))
+        );
+
+      return { success: true as const };
+    }),
+
+  /**
+   * List pinned messages for a channel (oldest → newest).
+   *
+   * A message is pinned when its `metadata.pinned` JSONB flag is truthy. Read
+   * access is gated by the canonical `channelVisibilityWhere` predicate — the
+   * same gate `getMessages` / `getTimeline` use — so workspace members see
+   * pins in shared channels they don't own.
+   */
+  listPinnedMessages: protectedProcedure
+    .input(z.object({ channelId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const channel = await db.query.channels.findFirst({
+        where: and(
+          eq(channels.id, input.channelId),
+          channelVisibilityWhere(ctx.userId)
+        ),
+      });
+      if (!channel) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Channel not found or access denied",
+        });
+      }
+
+      const pinned = await db.query.messages.findMany({
+        where: and(
+          eq(messages.channelId, input.channelId),
+          isNull(messages.deletedAt),
+          drizzleSql`${messages.metadata}->>'pinned' = 'true'`
+        ),
+        orderBy: [asc(messages.timestamp)],
+      });
+
+      return { messages: pinned };
+    }),
+
+  /**
+   * Pin or unpin a single message.
+   *
+   * Unlike `patchMessageMetadata` (owner-only, for personal feed actions), a pin
+   * belongs to the SHARED channel surface: Rooms are multi-party `agent_collab`
+   * channels where any workspace member — not just the creator — may pin. Authz
+   * therefore MIRRORS the READ gate in `listPinnedMessages`: after loading the
+   * message we load its channel through the canonical `channelVisibilityWhere`
+   * predicate and reject (NOT_FOUND / access denied) if it isn't visible — the
+   * same gate `getMessages` / `getTimeline` use. Soft-deleted messages are
+   * rejected. The `metadata.pinned` flag is MERGED into the existing JSONB (the
+   * same technique `patchMessageMetadata` uses) so sibling keys are preserved.
+   */
+  setMessagePinned: protectedProcedure
+    .input(
+      z.object({
+        messageId: z.string().uuid(),
+        pinned: z.boolean(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const msg = await db.query.messages.findFirst({
+        where: eq(messages.id, input.messageId),
+      });
+      if (!msg || msg.deletedAt) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Message not found",
+        });
+      }
+
+      const channel = await db.query.channels.findFirst({
+        where: and(
+          eq(channels.id, msg.channelId),
+          channelVisibilityWhere(ctx.userId)
+        ),
+      });
+      if (!channel) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Channel not found or access denied",
+        });
+      }
+
+      const existing = (msg.metadata ?? {}) as Record<string, unknown>;
+      const merged: Record<string, unknown> = {};
+      for (const k of Object.keys(existing)) {
+        merged[k] = existing[k];
+      }
+      merged.pinned = input.pinned;
+
+      const [updated] = await db
+        .update(messages)
+        .set({ metadata: merged as any })
+        .where(eq(messages.id, input.messageId))
+        .returning();
+
+      return { success: true as const, message: updated };
+    }),
+
+  /**
    * Upsert a personal feed channel for the caller and attach source
    * subscriptions to it. Called by Relay onboarding (and feed settings) to
    * materialise a user's feed preferences into real backend resources.

@@ -12,13 +12,7 @@
  * All steps run inside a single transaction so a crash leaves the DB consistent.
  */
 
-import {
-  db,
-  eq,
-  and,
-  or,
-  inArray,
-} from "@synap/database";
+import { db, eq, and, or, inArray } from "@synap/database";
 import {
   capabilities as capabilitiesTable,
   tools as toolsTable,
@@ -146,6 +140,9 @@ export async function uninstallCapability(
         )
       );
 
-    return { success: true as const, deleted: { tools: deletedTools, skills: deletedSkills } };
+    return {
+      success: true as const,
+      deleted: { tools: deletedTools, skills: deletedSkills },
+    };
   });
 }

@@ -87,7 +87,10 @@ export async function persistAssistantReply(
     previousHash,
     hash,
     ...(params.metadata
-      ? { metadata: params.metadata as (typeof messages.$inferInsert)["metadata"] }
+      ? {
+          metadata:
+            params.metadata as (typeof messages.$inferInsert)["metadata"],
+        }
       : {}),
     ...(params.messageCategory
       ? { messageCategory: params.messageCategory }

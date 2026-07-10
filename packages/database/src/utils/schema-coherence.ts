@@ -221,6 +221,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "session_id",
     addedBy: "0047_session_scoped_memory.sql (custom)",
   },
+  {
+    table: "messages",
+    column: "edited_at",
+    addedBy: "0176_messages_edited_at.sql",
+  },
 
   // entities
   {

@@ -27,7 +27,7 @@ for (const f of readdirSync(REST_DIR)) {
     f.endsWith(".ts") &&
     !f.startsWith("_") &&
     f !== "index.ts" &&
-    f !== "auth.test.ts" &&
+    !f.endsWith(".test.ts") &&
     f !== "automation-schema-doc.ts"
   ) {
     routeFiles.add(f.replace(/\.ts$/, ""));
@@ -99,12 +99,13 @@ if (wiringContent) {
   }
 }
 
-
 // ---- Naming convention: file 'capabilities-execute.ts' → registerCapabilitiesExecuteRoutes ----
 function kebabToRegisterName(filename) {
   const withoutExt = filename.replace(".ts", "");
   const parts = withoutExt.split("-");
-  const camel = parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join("");
+  const camel = parts
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join("");
   return "register" + camel + "Routes";
 }
 
@@ -127,7 +128,6 @@ for (const file of routeFiles) {
   }
 }
 
-
 // ---- Report ----
 let exitCode = 0;
 
@@ -137,7 +137,9 @@ if (orphans.length > 0) {
     `✗ Found ${orphans.length} route file(s) without a register export in index.ts:\n`
   );
   for (const { file } of orphans) {
-    console.error(`  ${file}.ts — no register*Routes export imported in index.ts`);
+    console.error(
+      `  ${file}.ts — no register*Routes export imported in index.ts`
+    );
   }
   console.error();
 }
@@ -148,7 +150,9 @@ if (extraExports.length > 0) {
     `✗ Found ${extraExports.length} register export(s) with no matching function definition:\n`
   );
   for (const reg of extraExports) {
-    console.error(`  ${reg} — no 'export function ${reg}' found in any route file`);
+    console.error(
+      `  ${reg} — no 'export function ${reg}' found in any route file`
+    );
   }
   console.error();
 }
@@ -166,7 +170,6 @@ if (unwiredExports.length > 0) {
   );
 }
 
-
 if (namingIssues.length > 0) {
   exitCode = 1;
   console.error(
@@ -179,7 +182,6 @@ if (namingIssues.length > 0) {
     "\nRename the file or update the function name to match the convention.\n"
   );
 }
-
 
 if (exitCode === 0) {
   console.log(

@@ -44,7 +44,9 @@ describe("persistAssistantReply", () => {
     });
     const expectedPrev = computeMessageHash("umsg", "ping");
     expect(r.previousHash).toBe(expectedPrev);
-    expect(r.hash).toBe(computeMessageHash(r.assistantId, "pong", expectedPrev));
+    expect(r.hash).toBe(
+      computeMessageHash(r.assistantId, "pong", expectedPrev)
+    );
     expect(capturedInsert!.previousHash).toBe(expectedPrev);
     expect(capturedInsert!.hash).toBe(r.hash);
     expect(capturedInsert!.metadata).toEqual({ a: 1 });
@@ -59,7 +61,9 @@ describe("persistAssistantReply", () => {
       previousHash: "inbound-hash",
     });
     expect(r.previousHash).toBe("inbound-hash");
-    expect(r.hash).toBe(computeMessageHash(r.assistantId, "hi", "inbound-hash"));
+    expect(r.hash).toBe(
+      computeMessageHash(r.assistantId, "hi", "inbound-hash")
+    );
   });
 
   it("throws when neither previousHash nor userMessageId+triggerContent is given", async () => {

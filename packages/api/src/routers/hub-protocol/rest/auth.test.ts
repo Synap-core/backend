@@ -51,6 +51,15 @@ vi.mock("@synap/database", () => {
     apiKeys: { id: "id" },
     users: { id: "id" },
     eq: vi.fn((a, b) => ({ type: "eq", a, b })),
+    ChannelType: {
+      THREAD: "thread",
+      PERSONAL: "personal",
+      SUB_THREAD: "sub_thread",
+      FEED: "feed",
+      EXTERNAL: "external",
+      AGENT_COLLAB: "agent_collab",
+      GROUP: "group",
+    },
   };
 });
 

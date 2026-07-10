@@ -68,7 +68,9 @@ export async function syncNangoConnectionsToRegistry(
   const nangoTools = await db
     .select({ credentialRef: tools.credentialRef, config: tools.config })
     .from(tools)
-    .where(and(inArray(tools.id, toolIds), like(tools.credentialRef, "nango://%")));
+    .where(
+      and(inArray(tools.id, toolIds), like(tools.credentialRef, "nango://%"))
+    );
   if (nangoTools.length === 0) return; // pure-vault capability — nothing to sync.
 
   const providerKeys = Array.from(

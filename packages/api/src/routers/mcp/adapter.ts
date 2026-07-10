@@ -684,6 +684,9 @@ export async function executeMCPToolViaHubProtocol(
         case "updated":
           return ok({ status: "updated", session: result.session });
       }
+      // Defensive: an unhandled decision must NOT fall through into the next
+      // switch case (synap_create_cell) — break out of the outer switch.
+      break;
     }
 
     // ── Cell authoring & renderer binding (external-agent surface) ──────────

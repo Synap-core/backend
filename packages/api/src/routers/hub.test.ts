@@ -14,25 +14,61 @@ import { createContext } from "../context.js";
 import type { HubInsight } from "@synap-core/hub-protocol";
 
 // Mock dependencies
-vi.mock("@synap/database", () => ({
-  getEventRepository: vi.fn(() => ({
-    append: vi.fn(),
-  })),
-  db: {
-    select: vi.fn(() => ({
-      from: vi.fn(() => ({
-        where: vi.fn(() => ({
-          limit: vi.fn(() => Promise.resolve([])),
+vi.mock("@synap/database", async () => {
+  const drizzleOrm =
+    await vi.importActual<typeof import("drizzle-orm")>("drizzle-orm");
+
+  return {
+    // Real drizzle-orm query builders/operators — hub.ts uses these to build
+    // conditions (eq/and/desc/gte/lte); they don't touch a live DB.
+    eq: drizzleOrm.eq,
+    and: drizzleOrm.and,
+    desc: drizzleOrm.desc,
+    gte: drizzleOrm.gte,
+    lte: drizzleOrm.lte,
+    getDb: vi.fn(async () => ({})),
+    getEventRepository: vi.fn(() => ({
+      append: vi.fn(),
+    })),
+    db: {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            orderBy: vi.fn(() => ({
+              limit: vi.fn(() => ({
+                offset: vi.fn(() => Promise.resolve([])),
+              })),
+            })),
+          })),
         })),
       })),
-    })),
-  },
-  entities: {
-    userPreferences: { userId: "userId" },
-    notes: { userId: "userId" },
-    tasks: { userId: "userId" },
-  },
-}));
+      // Used by the read-only-guard middleware (split-brain-service.ts) on
+      // every protectedProcedure mutation.
+      query: {
+        syncGeneration: {
+          findFirst: vi.fn(async () => ({
+            id: "current",
+            role: "primary",
+            splitBrainDetected: false,
+            generation: 0,
+            lastPeerGeneration: 0,
+            lastPeerContact: null,
+          })),
+        },
+      },
+    },
+    entities: {
+      id: "id",
+      title: "title",
+      preview: "preview",
+      type: "type",
+      createdAt: "createdAt",
+      updatedAt: "updatedAt",
+      userId: "userId",
+    },
+    syncGeneration: { id: "id" },
+  };
+});
 
 vi.mock("./hub-utils.js", () => ({
   generateHubAccessToken: vi.fn(() => ({
@@ -41,7 +77,7 @@ vi.mock("./hub-utils.js", () => ({
   })),
   validateHubToken: vi.fn(() => ({
     userId: "test-user-123",
-    requestId: "test-request-123",
+    requestId: "11111111-1111-4111-8111-111111111111",
     scope: ["preferences", "notes"],
     expiresAt: new Date(Date.now() + 300000),
   })),
@@ -72,7 +108,7 @@ describe("Hub Router", () => {
       const caller = hubRouter.createCaller(ctx);
 
       const result = await caller.generateAccessToken({
-        requestId: "test-request-123",
+        requestId: "11111111-1111-4111-8111-111111111111",
         scope: ["preferences", "notes"],
         expiresIn: 300,
       });
@@ -88,7 +124,7 @@ describe("Hub Router", () => {
 
       await expect(
         caller.generateAccessToken({
-          requestId: "test-request-123",
+          requestId: "11111111-1111-4111-8111-111111111111",
           scope: ["invalid-scope"] as any,
           expiresIn: 300,
         })
@@ -100,7 +136,7 @@ describe("Hub Router", () => {
 
       await expect(
         caller.generateAccessToken({
-          requestId: "test-request-123",
+          requestId: "11111111-1111-4111-8111-111111111111",
           scope: ["preferences"],
           expiresIn: 50, // Too short
         })
@@ -108,7 +144,7 @@ describe("Hub Router", () => {
 
       await expect(
         caller.generateAccessToken({
-          requestId: "test-request-123",
+          requestId: "11111111-1111-4111-8111-111111111111",
           scope: ["preferences"],
           expiresIn: 400, // Too long
         })
@@ -121,7 +157,7 @@ describe("Hub Router", () => {
 
       await expect(
         caller.generateAccessToken({
-          requestId: "test-request-123",
+          requestId: "11111111-1111-4111-8111-111111111111",
           scope: ["preferences"],
           expiresIn: 300,
         })
@@ -182,7 +218,7 @@ describe("Hub Router", () => {
     const validInsight: HubInsight = {
       version: "1.0",
       type: "action_plan",
-      correlationId: "test-correlation-123",
+      correlationId: "11111111-1111-4111-8111-111111111111",
       actions: [
         {
           eventType: "task.creation.requested",

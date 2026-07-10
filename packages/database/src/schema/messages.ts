@@ -184,6 +184,9 @@ export const messages = pgTable(
 
     // Soft delete
     deletedAt: timestamp("deleted_at", { mode: "date", withTimezone: true }),
+
+    // Edit marker — set when a user edits their own message content
+    editedAt: timestamp("edited_at", { mode: "date", withTimezone: true }),
   },
   (table) => ({
     channelIdIdx: index("messages_channel_id_idx").on(table.channelId),
@@ -223,6 +226,7 @@ export interface MessageRow {
   hash: string;
   sessionId: string | null;
   deletedAt: Date | null;
+  editedAt: Date | null;
 }
 export type NewMessageRow = Partial<
   Omit<MessageRow, "id" | "timestamp" | "hash">

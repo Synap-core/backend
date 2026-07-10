@@ -125,6 +125,14 @@ const ALLOWLIST = new Set<string>([
   // Correctly scoped, hand-rolled rather than scopedDb (its conditional
   // project/profile filters don't fit a uniform rule), same as the entities path.
   "views.ts::list",
+  // agentConfigs.get: userId-pinned single-object read. The query floors on the
+  // caller's own id (`eq(agentConfigs.userId, requireUserId(ctx.userId))`), so a
+  // caller can only ever read THEIR OWN config — no cross-user exposure. The
+  // input.workspaceId is part of the (user, workspace, agentType) composite KEY,
+  // not a visibility lens (see the source comment), so it narrows the caller's
+  // own rows rather than crossing a boundary. The scan misses the floor only
+  // because the userId is bound to a local before the eq(), not written inline.
+  "agent-configs.ts::get",
 ]);
 
 function collectRouterFiles(dir: string): string[] {

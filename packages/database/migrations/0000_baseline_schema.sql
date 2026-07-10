@@ -1413,7 +1413,8 @@ CREATE TABLE IF NOT EXISTS "messages" (
   "previous_hash"    text,
   "hash"             text  NOT NULL,
   "session_id"       uuid  REFERENCES "sessions"("id") ON DELETE SET NULL,
-  "deleted_at"       timestamp with time zone
+  "deleted_at"       timestamp with time zone,
+  "edited_at"        timestamp with time zone
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "channel_id" uuid REFERENCES "channels"("id") ON DELETE CASCADE;
@@ -1431,6 +1432,7 @@ ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "previous_hash" text;
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "hash" text;
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "session_id" uuid REFERENCES "sessions"("id") ON DELETE SET NULL;
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "edited_at" timestamp with time zone;
 
 CREATE INDEX IF NOT EXISTS "messages_channel_id_idx"
   ON "messages" ("channel_id");

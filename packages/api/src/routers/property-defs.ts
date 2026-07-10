@@ -104,8 +104,7 @@ export const propertyDefsRouter = router({
       if (input.workspaceScope === "current" && !ctx.workspaceId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message:
-            "workspaceScope 'current' requires an active workspace lens",
+          message: "workspaceScope 'current' requires an active workspace lens",
         });
       }
 

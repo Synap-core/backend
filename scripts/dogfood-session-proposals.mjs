@@ -37,7 +37,9 @@ const POD_URL = process.env.SYNAP_POD_URL;
 const API_KEY = process.env.SYNAP_HUB_API_KEY;
 
 if (!POD_URL || !API_KEY) {
-  console.error("✗ Set SYNAP_POD_URL and SYNAP_HUB_API_KEY in the environment.");
+  console.error(
+    "✗ Set SYNAP_POD_URL and SYNAP_HUB_API_KEY in the environment."
+  );
   process.exit(1);
 }
 
@@ -126,7 +128,9 @@ async function main() {
   let pass = false;
   if (linked && linked.sessionId === sessionId) {
     pass = true;
-    console.log(`✓ PASS — proposal ${linked.id} is linked to session ${sessionId}`);
+    console.log(
+      `✓ PASS — proposal ${linked.id} is linked to session ${sessionId}`
+    );
     try {
       await hub("POST", `/proposals/${linked.id}/reject`, {});
       console.log(`  ↳ cleaned up dogfood proposal`);
