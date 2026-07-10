@@ -261,30 +261,48 @@ async function applySeedKindProfile(
   return inserted.count ? { profilesCreated: inserted.count } : {};
 }
 
-async function applyConvertToFacet(
+/**
+ * Convert EVERY same-slug source profile row into a role and re-home its
+ * entities onto the target kind.
+ *
+ * A single source slug can be carried by several profile rows: `contact` is a
+ * SYSTEM profile (one row pod-wide), but `client`/`partner`/`sponsor`/… only
+ * exist as WORKSPACE-scope profiles baked into workspace templates, so a pod
+ * with N workspaces built from the same template has N rows sharing the slug.
+ * Likewise a slug can have both a system row and a workspace-scope duplicate
+ * (e.g. the perso pod's two `knowledge` rows). We enumerate ALL active rows for
+ * the slug and apply the flip + facet-attach + entity-repoint to each.
+ *
+ * Per-row semantics:
+ *   (a) THIS source row flips to profile_kind='role' with `applicableKinds`
+ *       (same values on every row).
+ *   (b) each live entity on this row gets a facet whose profile_id = THIS source
+ *       row — preserving the workspace-scoped role definition the entity was on.
+ *   (c) the entity row is repointed to the target kind resolved for THIS row's
+ *       scope (see resolveTargetProfileId): a workspace-scope target in the same
+ *       workspace wins, else the system/global target.
+ *
+ * Transaction / retry: the whole op runs in ONE transaction (runConversions
+ * wraps applyOp in `sql.begin`), so all rows commit together or roll back
+ * together. A failure on any row aborts the op, the ledger row is never written,
+ * and a re-run reprocesses every row from scratch — retry-safe. Idempotency
+ * holds too: after (c) no entity remains on any source row, and re-flipping an
+ * already-role profile is a no-op, so a second run selects empty sets → noop.
+ */
+export async function applyConvertToFacet(
   tx: Sql,
   op: ConvertToFacetOp
 ): Promise<OpCounts> {
-  const sId = await resolveProfileId(tx, op.slug);
-  if (!sId) return {}; // Nothing on this pod to convert.
-  const tId = await resolveProfileId(tx, op.targetKindSlug);
-  if (!tId) {
-    throw new Error(
-      `convertToFacet '${op.opKey}': target kind profile '${op.targetKindSlug}' not found`
-    );
-  }
-
-  // (a) flip the source profile from kind → role.
-  await tx`
-    UPDATE profiles
-    SET profile_kind = 'role',
-        applicable_kinds = ${op.applicableKinds}::text[],
-        updated_at = now()
-    WHERE id = ${sId}
+  const sourceRows = await tx<
+    Array<{ id: string; workspace_id: string | null }>
+  >`
+    SELECT id, workspace_id FROM profiles
+    WHERE slug = ${op.slug} AND is_active = true
   `;
+  if (sourceRows.length === 0) return {}; // Nothing on this pod to convert.
 
-  // (b) attach a facet for every live entity still on the source profile.
   const mappingJson = buildPropertyMappingJson(op.propertyMapping);
+  // Scope-independent expressions — built once, reused for every source row.
   const statusExpr = op.statusFrom
     ? tx`e.properties->>${op.statusFrom}`
     : tx`NULL`;
@@ -294,40 +312,68 @@ async function applyConvertToFacet(
            ELSE NULL END)`
     : tx`NULL`;
 
-  const facets = await tx`
-    INSERT INTO entity_facets
-      (entity_id, profile_id, user_id, workspace_id, status, context_entity_id,
-       properties, metadata, created_by_kind)
-    SELECT
-      e.id, ${sId}, e.user_id, e.workspace_id,
-      ${statusExpr},
-      ${contextExpr},
-      COALESCE((
-        SELECT jsonb_strip_nulls(jsonb_object_agg(pair->>1, e.properties -> (pair->>0)))
-        FROM jsonb_array_elements(${mappingJson}::jsonb) AS pair
-        WHERE e.properties ? (pair->>0)
-      ), '{}'::jsonb),
-      jsonb_build_object('convertedFrom', ${op.slug}::text, 'convertedBy', ${op.opKey}::text),
-      'system'
-    FROM entities e
-    WHERE e.profile_id = ${sId} AND e.deleted_at IS NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM entity_facets f
-        WHERE f.entity_id = e.id AND f.profile_id = ${sId} AND f.deleted_at IS NULL
-      )
-  `;
+  let facetsCreated = 0;
+  let entitiesConverted = 0;
 
-  // (c) the entity row itself becomes the target kind.
-  const repoint = await tx`
-    UPDATE entities e
-    SET profile_id = ${tId}, type = ${op.targetKindSlug}, updated_at = now()
-    WHERE e.profile_id = ${sId} AND e.deleted_at IS NULL
-  `;
+  for (const src of sourceRows) {
+    // Resolve the target kind for THIS row's scope: prefer a workspace-scope
+    // target in the same workspace, fall back to the system/global one.
+    const tId = await resolveTargetProfileId(
+      tx,
+      op.targetKindSlug,
+      src.workspace_id
+    );
+    if (!tId) {
+      throw new Error(
+        `convertToFacet '${op.opKey}': target kind profile '${op.targetKindSlug}' not found for source profile ${src.id}`
+      );
+    }
 
-  return {
-    facetsCreated: facets.count ?? 0,
-    entitiesConverted: repoint.count ?? 0,
-  };
+    // (a) flip THIS source row from kind → role.
+    await tx`
+      UPDATE profiles
+      SET profile_kind = 'role',
+          applicable_kinds = ${op.applicableKinds}::text[],
+          updated_at = now()
+      WHERE id = ${src.id}
+    `;
+
+    // (b) attach a facet (profile_id = this source row) for every live entity
+    // still on it.
+    const facets = await tx`
+      INSERT INTO entity_facets
+        (entity_id, profile_id, user_id, workspace_id, status, context_entity_id,
+         properties, metadata, created_by_kind)
+      SELECT
+        e.id, ${src.id}, e.user_id, e.workspace_id,
+        ${statusExpr},
+        ${contextExpr},
+        COALESCE((
+          SELECT jsonb_strip_nulls(jsonb_object_agg(pair->>1, e.properties -> (pair->>0)))
+          FROM jsonb_array_elements(${mappingJson}::jsonb) AS pair
+          WHERE e.properties ? (pair->>0)
+        ), '{}'::jsonb),
+        jsonb_build_object('convertedFrom', ${op.slug}::text, 'convertedBy', ${op.opKey}::text),
+        'system'
+      FROM entities e
+      WHERE e.profile_id = ${src.id} AND e.deleted_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM entity_facets f
+          WHERE f.entity_id = e.id AND f.profile_id = ${src.id} AND f.deleted_at IS NULL
+        )
+    `;
+    facetsCreated += facets.count ?? 0;
+
+    // (c) the entity rows on this source row become the target kind.
+    const repoint = await tx`
+      UPDATE entities e
+      SET profile_id = ${tId}, type = ${op.targetKindSlug}, updated_at = now()
+      WHERE e.profile_id = ${src.id} AND e.deleted_at IS NULL
+    `;
+    entitiesConverted += repoint.count ?? 0;
+  }
+
+  return { facetsCreated, entitiesConverted };
 }
 
 async function applyMergeInto(
@@ -438,14 +484,17 @@ async function computeCounts(
       return (r[0]?.n ?? 0) === 0 ? { profilesCreated: 1 } : {};
     }
     case "convertToFacet": {
-      const sId = await resolveProfileId(sql, op.slug);
-      if (!sId) return {};
+      // Aggregate across EVERY same-slug source profile row (see
+      // applyConvertToFacet) — the facet guard keys off each entity's own
+      // profile_id so per-row counts sum correctly.
       const r = await sql<Array<{ n: number }>>`
         SELECT COUNT(*)::int AS n FROM entities e
-        WHERE e.profile_id = ${sId} AND e.deleted_at IS NULL
+        JOIN profiles src ON src.id = e.profile_id
+          AND src.slug = ${op.slug} AND src.is_active = true
+        WHERE e.deleted_at IS NULL
           AND NOT EXISTS (
             SELECT 1 FROM entity_facets f
-            WHERE f.entity_id = e.id AND f.profile_id = ${sId} AND f.deleted_at IS NULL
+            WHERE f.entity_id = e.id AND f.profile_id = e.profile_id AND f.deleted_at IS NULL
           )
       `;
       const n = r[0]?.n ?? 0;
@@ -531,20 +580,32 @@ async function computeMergeCounts(
 }
 
 /**
- * Resolve a profile id by slug among active profiles, preferring the widest
- * scope (system > shared > workspace > user) then the oldest row. Returns null
- * when no active profile carries the slug.
+ * Resolve the target KIND profile id for a source row of a given workspace
+ * scope. Workspace-aware, mirroring ProfileResolutionService.resolveProfile /
+ * ProfileRepository.getBySlugForWorkspace: a workspace-scope target in the
+ * SAME workspace wins, then a shared target, then the system/global one. For a
+ * system source (workspace_id NULL) no workspace-scope target matches, so it
+ * resolves to the system row. Returns null when no active profile carries the
+ * slug at all.
  */
-async function resolveProfileId(
+async function resolveTargetProfileId(
   sql: Sql,
-  slug: string
+  slug: string,
+  workspaceId: string | null
 ): Promise<string | null> {
   const rows = await sql<Array<{ id: string }>>`
     SELECT id FROM profiles
     WHERE slug = ${slug} AND is_active = true
-    ORDER BY CASE scope
-        WHEN 'system' THEN 0 WHEN 'shared' THEN 1
-        WHEN 'workspace' THEN 2 ELSE 3 END,
+      AND (
+        scope = 'system'
+        OR scope = 'shared'
+        OR (scope = 'workspace' AND workspace_id IS NOT DISTINCT FROM ${workspaceId})
+      )
+    ORDER BY CASE
+        WHEN scope = 'workspace' AND workspace_id IS NOT DISTINCT FROM ${workspaceId} THEN 0
+        WHEN scope = 'shared' THEN 1
+        WHEN scope = 'system' THEN 2
+        ELSE 3 END,
       created_at ASC
     LIMIT 1
   `;

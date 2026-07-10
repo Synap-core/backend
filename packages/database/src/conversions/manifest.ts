@@ -178,14 +178,11 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     // templates (synap-app/packages/workspace-templates/src/templates.ts:
     // crm, content-os, radar, marketing). A pod with multiple workspaces
     // built from the same template can therefore have several profile rows
-    // sharing one of these slugs. resolveProfileId() picks a single winner
-    // (oldest `created_at` among scope='workspace' rows) — so each of these
-    // six ops converts entities on ONE such profile row and silently leaves
-    // any sibling same-slug profile in other workspaces untouched. This is
-    // a real limitation flagged for the team lead, not fixed here (engine.ts
-    // is out of scope for this file) — the dry-run counts on the live pod
-    // will show whether more than one workspace actually seeded a given
-    // slug.
+    // sharing one of these slugs. convertToFacet handles this: it iterates
+    // EVERY active same-slug profile row (each flips to a role; each row's
+    // entities repoint to a target resolved for that row's scope — see
+    // applyConvertToFacet in engine.ts). Dry-run counts aggregate across
+    // all rows.
 
     // contact → person: a contact IS a person wearing a business-contact
     // hat. Real property_defs on the system `contact` profile (title, email,
@@ -552,26 +549,13 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       },
     },
 
-    // KNOWN GAP, not fixed here: the live perso pod has TWO `knowledge`
-    // profile rows — the system one (2172aa81) and a workspace-scoped
-    // duplicate (ff8924b2). convertToFacet's resolveProfileId() picks a
-    // single winner (widest scope first: system > shared > workspace), so
-    // w4.convert.knowledge above only converts entities on the system row;
-    // any entities on the workspace-scoped ff8924b2 duplicate are silently
-    // left untouched (same limitation the w3c CRM comment documents for
-    // client/partner/sponsor/etc.).
-    //
-    // mergeInto can't fix this either: applyMergeInto joins `k.slug =
-    // op.intoSlug AND k.scope = src.scope` — it merges DIFFERENT slugs
-    // sharing the same scope into a canonical slug, not the same slug across
-    // DIFFERENT scopes. Modeling "dedupe same-slug-different-scope" would
-    // need fromSlugs === intoSlug, which validateManifest explicitly rejects
-    // ("cannot merge slug into itself") — a deliberate engine invariant, not
-    // a bug, so it is not being special-cased here. This is flagged as a
-    // pre-conversion MANUAL cleanup step for the pod operator: reassign or
-    // delete the ff8924b2 workspace-scoped `knowledge` profile's entities
-    // before running w4.convert.knowledge, or accept that they stay on the
-    // legacy row (harmless — just unconverted) until a manual follow-up.
+    // Duplicate-row note: the live perso pod has TWO `knowledge` profile
+    // rows — the system one (2172aa81) and a workspace-scoped duplicate
+    // (ff8924b2). convertToFacet iterates EVERY active same-slug row (see
+    // applyConvertToFacet in engine.ts), so w4.convert.knowledge converts
+    // BOTH: each row flips to a role and its entities repoint to the `item`
+    // target resolved for that row's scope. No manual pre-cleanup needed;
+    // the dry-run counts will show both rows' entities.
 
     // signal_item: audited, NOT converted in W4. It is a child of `bookmark`
     // (parentSlug: bookmark in ensure-system-profiles.ts) with external-feed
