@@ -160,7 +160,7 @@ export const hubProfilesRouter = router({
 
   /**
    * Get the effective renderer for a profile in a workspace, by slot.
-   * External agents (Eve, Hermes, IS) use this to discover how to surface an
+   * External agents (Eve, IS) use this to discover how to surface an
    * entity profile without going through tRPC. Requires hub-protocol.read.
    *
    * Returns both slots when `slot` is omitted. Resolution mirrors the regular

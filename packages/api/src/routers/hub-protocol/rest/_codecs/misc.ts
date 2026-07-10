@@ -54,7 +54,7 @@ export const ListAgentUsersQuerySchema = z
       .string()
       .optional()
       .describe(
-        "Filter agents by agentMetadata.parentAgentId — used by orchestrators (e.g. Hermes) to discover their personalities."
+        "Filter agents by agentMetadata.parentAgentId — used by orchestrators to discover their personalities."
       ),
   })
   .openapi("ListAgentUsersQuery");

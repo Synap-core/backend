@@ -4,7 +4,7 @@
  * Per-user, per-workspace, per-agent-type config overrides
  * (promptAppend, extraToolIds, disabledToolIds, maxStepsOverride, modelOverride).
  *
- * Used by orchestrators (e.g. Hermes daemon) to look up a personality's
+ * Used by orchestrators to look up a personality's
  * configuration before spawning a subprocess. Read-only — writes flow through
  * the regular tRPC path used by the IS / CLI / browser.
  */

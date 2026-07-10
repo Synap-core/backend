@@ -639,6 +639,10 @@ type ProposalPreviousDataCarrier = { previousData?: ProposalPreviousData };
  * entity path never consults this — it only walks the explicit
  * title/description/profileSlug/documentId + `properties.*` keys.
  */
+// Cross-repo duplicate: intentionally kept in sync with `INFRA_KEYS` in
+// synap-app/packages/core/proposal-types/src/useProposalPresentation.ts. No
+// shared package exists across the backend/frontend repo boundary for this
+// constant — MUST stay byte-identical when either side changes.
 const NON_ENTITY_INFRA_KEYS = new Set([
   "source",
   "sourceId",

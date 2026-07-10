@@ -13,7 +13,7 @@
  * which beats the blind IS fallback. The capability tier prevents a novel task
  * from silently routing to the wrong default when no rule/default is set.
  *
- * This is the canonical, runtime-agnostic dispatch path: Hermes, the IS
+ * This is the canonical, runtime-agnostic dispatch path: the IS
  * orchestrator, a persona, or an external provider are all just registered
  * `agents` rows referenced by slug. Mirrors the precedence shape of
  * resolveIntelligenceService and reuses resolveIntelligenceServiceByAgentId to

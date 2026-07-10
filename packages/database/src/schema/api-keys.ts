@@ -201,7 +201,7 @@ export const API_KEY_SCOPES = [
   // Read-only Socket.IO subscription scope. A key with this scope can connect
   // to /presence with `apiKey` instead of `userId` and join workspace:${id}
   // rooms to receive event broadcasts (chat:stream, openclaw:message:received,
-  // hermes:task:status, etc). Does NOT grant the right to emit events back —
+  // agent:task:status, etc). Does NOT grant the right to emit events back —
   // the bridge HTTP endpoint stays guarded by BRIDGE_SECRET as before. See
   // synap-team-docs/content/team/platform/eve-os-vision.mdx §9 Phase 3A.
   "realtime:observe",

@@ -111,7 +111,7 @@ export function registerAgentUsersRoutes(app: HubHono): void {
     const userId = c.get("userId") as string;
 
     // Security gate: a caller can only filter by parentUserId === self.
-    // This lets an orchestrator (e.g. Hermes) discover its own personalities
+    // This lets an orchestrator discover its own personalities
     // without exposing other agents' parent-child relationships.
     if (parentUserId && parentUserId !== userId) {
       return c.json(

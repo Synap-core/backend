@@ -16,7 +16,7 @@ const logger = createLogger({ module: "proposal-reviewed-notifier" });
 
 export const PROPOSAL_REVIEWED_NOTIFY_QUEUE = "proposal-reviewed-notify";
 
-function computeMessageHash(
+function computeDedupKey(
   proposalId: string,
   channelId: string,
   status: string
@@ -74,7 +74,7 @@ export async function handleProposalReviewedNotify(
     const label = proposal.targetType ?? "Change";
     const content = `[Proposal ${status}] ${label} has been ${status}. You may continue your work.`;
     const actorUserId = proposal.createdBy ?? proposal.agentUserId ?? "system";
-    const hash = computeMessageHash(proposalId, channelId, status);
+    const hash = computeDedupKey(proposalId, channelId, status);
 
     // Dedup: pg-boss may retry; skip if already notified
     const [existing] = await db

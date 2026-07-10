@@ -486,7 +486,7 @@ export interface AgentRoutingRule {
 }
 /**
  * Workspace-level agent routing: "this kind of task/event → this registered agent".
- * The canonical replacement for runtime-specific hardwiring (e.g. Hermes-only
+ * The canonical replacement for runtime-specific hardwiring (e.g. single-agent
  * dispatch). Resolution: first matching rule → defaultAgentSlug → plain IS fallback.
  * Resolved by resolveAgentForTask() in @synap/intelligence-client. Any workspace
  * can use this for automation, not just DevPlane.
@@ -650,7 +650,7 @@ export interface WorkspaceSettings {
 	/**
 	 * Workspace-level agent routing: "this kind of task/event → this agent".
 	 * Resolved by resolveAgentForTask() in @synap/intelligence-client. Decouples
-	 * automation from any single runtime (Hermes becomes one registered target).
+	 * automation from any single runtime (each becomes one registered target).
 	 */
 	agentRouting?: AgentRoutingPolicy;
 	validationRules?: {

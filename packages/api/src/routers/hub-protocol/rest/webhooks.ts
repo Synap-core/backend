@@ -1,8 +1,8 @@
 /**
  * Hub Protocol REST — Webhook Subscriptions
  *
- * Allows Intelligence Services (e.g. Hermes) to register webhook subscriptions
- * for real-time event notifications, replacing polling.
+ * Allows Intelligence Services to register webhook subscriptions for
+ * real-time event notifications, replacing polling.
  *
  * POST /api/hub/webhooks — create a webhook subscription
  * GET  /api/hub/webhooks — list webhook subscriptions
@@ -128,7 +128,7 @@ export function registerWebhooksRoutes(app: HubHono) {
         .insert(webhookSubscriptions)
         .values({
           userId,
-          name: "hermes-webhook",
+          name: "is-webhook",
           url,
           eventTypes,
           secret: webhookSecret,

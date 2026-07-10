@@ -50,7 +50,7 @@ export const MemorySearchRequestSchema = z
   })
   .openapi("MemorySearchRequest");
 
-// ── Memory turns, sessions, writes (Hermes plugin contract) ──────────────────
+// ── Memory turns, sessions, writes (IS plugin contract) ──────────────────────
 
 /** A single chat turn (user or assistant message). */
 export const MemoryTurnSchema = z
