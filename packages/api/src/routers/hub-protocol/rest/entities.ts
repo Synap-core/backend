@@ -13,6 +13,7 @@
  */
 
 import { createRoute, z } from "@hono/zod-openapi";
+import { TRPCError } from "@trpc/server";
 import {
   db,
   entities,
@@ -1845,6 +1846,19 @@ export function registerEntitiesRoutes(app: HubHono): void {
   // collision (mirrors the existing `/entities/{id}/connections` sub-route).
   // ══════════════════════════════════════════════════════════════════════════
 
+  // Map tRPC door errors to real HTTP statuses instead of a blanket 500 —
+  // an invalid attach (kind-as-facet, wrong applicable kind) is a client
+  // mistake (400), a missing facet/entity is a 404. The central tRPC
+  // error-mapper has already wrapped db domain errors into TRPCError codes.
+  const facetErrorStatus = (err: unknown): 400 | 403 | 404 | 500 => {
+    if (err instanceof TRPCError) {
+      if (err.code === "BAD_REQUEST") return 400;
+      if (err.code === "FORBIDDEN") return 403;
+      if (err.code === "NOT_FOUND") return 404;
+    }
+    return 500;
+  };
+
   // ── GET /entities/:entityId/facets ──────────────────────────────────────
   // Read the entity's live facets through its own workspace lens. The REST
   // parity of the tRPC `entities.get` `facets` envelope — kept as a dedicated
@@ -1921,7 +1935,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       logger.error({ err, entityId }, "listFacets failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Internal error" },
-        500
+        facetErrorStatus(err)
       );
     }
   });
@@ -2017,7 +2031,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       logger.error({ err, entityId }, "attachFacet failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        facetErrorStatus(err)
       );
     }
   });
@@ -2104,7 +2118,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       logger.error({ err, facetId }, "updateFacet failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        facetErrorStatus(err)
       );
     }
   });
@@ -2173,7 +2187,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       logger.error({ err, facetId }, "detachFacet failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        facetErrorStatus(err)
       );
     }
   });
