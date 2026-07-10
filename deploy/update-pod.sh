@@ -219,6 +219,22 @@ if [ "$OK" != "true" ]; then
   exit 1
 fi
 
+# ─── Step 6b: Deploy-integrity gate ────────────────────────────────────────────
+# Production reports "healthy" as soon as /health responds — that only proves
+# the process is up, not that it's the commit/migration set we intended to
+# ship. Assert against /status/release before declaring victory. Failure here
+# means the deploy did NOT actually land as intended even though the health
+# check passed — treat it as a failed update, not a cosmetic warning.
+log "Verifying deploy integrity (migrations + build commit)..."
+set +e
+VERIFY_OUTPUT="$("$CD/verify-deploy.sh" "http://backend:4000" 2>&1)"
+VERIFY_STATUS=$?
+set -e
+echo "$VERIFY_OUTPUT" | while IFS= read -r line; do log "$line"; done
+if [ "$VERIFY_STATUS" -ne 0 ]; then
+  die "Deploy-integrity check failed (exit ${VERIFY_STATUS}) — see above. Production is running but does not match the intended commit/migrations. Investigate before trusting this deploy."
+fi
+
 # ─── Step 7: Clean up old images (keep last 3) ────────────────────────────────
 log "Cleaning up old images..."
 docker images "ghcr.io/synap-core/backend" --format "{{.ID}} {{.CreatedAt}}" \

@@ -656,6 +656,10 @@ export {
   type RunMailFeedResult,
 } from "./services/mail-feed/run-mail-feed.js";
 export {
+  runCalBackfill,
+  type RunCalBackfillResult,
+} from "./services/calcom/run-cal-backfill.js";
+export {
   runEventSync,
   type RunEventSyncResult,
 } from "./services/event-sync/run-event-sync.js";

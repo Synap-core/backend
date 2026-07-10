@@ -66,6 +66,15 @@ RUN pnpm deploy --filter=@synap/realtime --prod --legacy /app/deploy/realtime
 # ============================================================================
 FROM node:20-alpine AS runner
 
+# Git SHA the image was built from — surfaced at runtime via SYNAP_GIT_SHA so
+# /status/release can report `buildStamp` and a deploy-integrity check can
+# assert the running image actually matches the commit it claims to be.
+# Passed in via `docker compose build --build-arg GIT_SHA=$(git rev-parse HEAD)`
+# (see docker-compose.yml `build.args.GIT_SHA`). Defaults to empty when not
+# supplied (older callers, local `docker build` without the arg).
+ARG GIT_SHA=""
+ENV SYNAP_GIT_SHA=$GIT_SHA
+
 RUN apk add --no-cache postgresql-client dumb-init
 
 RUN addgroup -g 10001 -S nodejs && \

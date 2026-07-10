@@ -99,6 +99,12 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      # GIT_SHA is stamped into the image as SYNAP_GIT_SHA and surfaced by
+      # /status/release as `buildStamp`. Set by the caller (synap CLI /
+      # update-pod.sh) to `git rev-parse HEAD`; empty when unset (falls back
+      # to buildStamp: null, same as before this change).
+      args:
+        GIT_SHA: "${GIT_SHA:-}"
     restart: always
     environment:
       <<: *backend-env
@@ -168,6 +174,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      args:
+        GIT_SHA: "${GIT_SHA:-}"
     restart: always
     working_dir: /app/realtime
     command: node dist/server.js
@@ -259,6 +267,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      args:
+        GIT_SHA: "${GIT_SHA:-}"
     working_dir: /app
     environment:
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap

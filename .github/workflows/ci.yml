@@ -141,7 +141,7 @@ jobs:
       - name: Test
         # Skip @synap-core/core tests (they require @synap/database which creates circular dependency)
         # Other package tests should still run
-        run: pnpm test --filter='!@synap-core/core' || echo "⚠️  Some tests may have failed"
+        run: pnpm test --filter='!@synap-core/core'
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
           NODE_ENV: test

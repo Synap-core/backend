@@ -386,10 +386,12 @@ app.get("/status/release", async (c) => {
     };
   }
 
-  // buildStamp — no commit/build stamp is plumbed into the image today. Report
-  // null rather than fabricate; a real stamp needs a small build step (inject
-  // GIT_SHA/BUILD_TIME at image build) as a follow-up.
-  const buildStamp: string | null = null;
+  // buildStamp — the git commit the running image was built from, stamped in
+  // at image-build time via `docker build --build-arg GIT_SHA=$(git rev-parse HEAD)`
+  // (deploy/Dockerfile ARG GIT_SHA -> ENV SYNAP_GIT_SHA). null when the image
+  // was built/pulled without that arg (older images, registry pulls that
+  // predate this change) — reported as null rather than fabricated.
+  const buildStamp: string | null = process.env.SYNAP_GIT_SHA || null;
 
   return c.json({
     status: "ok",
@@ -1974,6 +1976,8 @@ try {
               await import("@synap/jobs/workers/automation-executor.js");
             const { registerMailFeedRunner } =
               await import("@synap/jobs/workers/mail-feed-cron.js");
+            const { registerCalBackfillRunner } =
+              await import("@synap/jobs/workers/cal-backfill-cron.js");
             const { registerEventSyncRunner } =
               await import("@synap/jobs/workers/event-sync-cron.js");
             const { registerEventEndRunner } =
@@ -1985,6 +1989,7 @@ try {
             const api = await import("@synap/api");
             registerCapabilityExecutor((input) => api.executeCapability(input));
             registerMailFeedRunner(() => api.runMailFeed());
+            registerCalBackfillRunner(() => api.runCalBackfill());
             registerEventSyncRunner(() => api.runEventSync());
             registerEventEndRunner(() => api.runEventEnd());
             registerSessionRecapRunner((input) => api.runSessionRecap(input));

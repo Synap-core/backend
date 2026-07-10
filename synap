@@ -89,6 +89,61 @@ get_deploy_dir() {
     fi
 }
 
+# ─── Deploy-integrity: sync the checkout before a from-source build ───────────
+# ROOT CAUSE (2026-07 stale-deploy investigation): `docker compose build` reads
+# whatever is on disk in the repo root — it never git-pulls first. An operator
+# (or an automation like eve) running `synap update`/`synap install` in a repo
+# that is behind origin (or has drifted local commits) silently bakes a stale
+# checkout into the `:local` image, with no signal anywhere that it happened.
+#
+# This brings the checkout to origin's tip BEFORE any `docker compose build`,
+# and exports GIT_SHA so the image is stamped with the commit that was
+# actually built (see deploy/Dockerfile ARG GIT_SHA / docker-compose.yml
+# build.args.GIT_SHA / apps/api/src/index.ts buildStamp). Called from the
+# repo root (get_repo_root), not the deploy dir.
+#
+# Destructive: `git reset --hard` discards uncommitted local changes. That is
+# the correct behavior for the pod's deploy checkout (it must exactly match
+# what was pushed — that's the whole point of this gate), but would be wrong
+# on a developer's working tree, so it's opt-out via SYNAP_SKIP_GIT_SYNC=1
+# for local/dev iteration where an uncommitted checkout is intentional.
+sync_git_before_build() {
+    if ! is_git_repo; then
+        return 0
+    fi
+    local repo_root
+    repo_root=$(get_repo_root)
+    if [ -z "$repo_root" ]; then
+        return 0
+    fi
+
+    if [ "${SYNAP_SKIP_GIT_SYNC:-}" = "1" ]; then
+        echo -e "${YELLOW}⚠️  SYNAP_SKIP_GIT_SYNC=1 — building from the checkout as-is (not synced to origin). Do not use this on a deploy pod.${NC}"
+    else
+        (
+            cd "$repo_root" || exit 1
+            local branch
+            branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+            [ "$branch" = "HEAD" ] && branch="main"  # detached HEAD fallback
+            echo -e "${BLUE}🔄 Syncing checkout to origin/${branch} before build (git fetch + reset --hard)...${NC}"
+            if ! git fetch origin "$branch" 2>&1; then
+                echo -e "${RED}✗ git fetch origin ${branch} failed — refusing to build against a checkout we couldn't verify is current.${NC}"
+                exit 1
+            fi
+            if ! git reset --hard "origin/${branch}" 2>&1; then
+                echo -e "${RED}✗ git reset --hard origin/${branch} failed.${NC}"
+                exit 1
+            fi
+        ) || exit 1
+    fi
+
+    # Export GIT_SHA regardless of sync/skip so the image is always stamped
+    # with whatever HEAD actually is at build time (accurate even when the
+    # sync was skipped).
+    export GIT_SHA
+    GIT_SHA=$(cd "$repo_root" && git rev-parse HEAD 2>/dev/null || echo "")
+}
+
 # Used by destructive / confirm flows when automation must not block (e.g. Eve -y)
 synap_assume_yes() {
     [ "${SYNAP_ASSUME_YES:-}" = "1" ] || [ "${SYNAP_YES:-}" = "1" ] || [ "${SYNAP_NON_INTERACTIVE:-}" = "1" ]
@@ -1414,6 +1469,7 @@ EOF
     # Build/pull images FIRST (migrations need the image to exist)
     echo -e "${BLUE}🔨 Preparing backend images...${NC}"
     if [ "$FROM_SOURCE" = true ]; then
+        sync_git_before_build
         echo -e "${BLUE}  Building backend...${NC}"
         docker compose build backend
         echo -e "${BLUE}  Building realtime...${NC}"
@@ -1440,16 +1496,19 @@ EOF
         echo -e "${BLUE}  Pulling backend...${NC}"
         docker compose pull backend --ignore-pull-failures || {
             echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
+            sync_git_before_build
             docker compose build backend
         }
         echo -e "${BLUE}  Pulling realtime...${NC}"
         docker compose pull realtime --ignore-pull-failures || {
             echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
+            sync_git_before_build
             docker compose build realtime
         }
         echo -e "${BLUE}  Pulling pod-admin...${NC}"
         docker compose pull pod-admin --ignore-pull-failures || {
             echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
+            sync_git_before_build
             docker compose build pod-admin
         }
     fi
@@ -2032,6 +2091,7 @@ cmd_update() {
     fi
     
     if [ "$force_build" = true ]; then
+        sync_git_before_build
         echo -e "${BLUE}🔨 Building from source...${NC}"
         echo -e "${BLUE}  Building backend...${NC}"
         docker compose build backend
@@ -2045,12 +2105,14 @@ cmd_update() {
         echo -e "${BLUE}  Pulling backend...${NC}"
         docker compose pull backend || {
             echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
+            sync_git_before_build
             docker compose build backend
             version="local"
         }
         echo -e "${BLUE}  Pulling realtime...${NC}"
         docker compose pull realtime || {
             echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
+            sync_git_before_build
             docker compose build realtime
         }
         # Pod-admin is a separate image (Next.js standalone). Pull failure
@@ -2058,6 +2120,7 @@ cmd_update() {
         echo -e "${BLUE}  Pulling pod-admin...${NC}"
         docker compose pull pod-admin || {
             echo -e "${YELLOW}⚠️  Pull failed, building from source...${NC}"
+            sync_git_before_build
             docker compose build pod-admin
         }
         # Refresh Kratos images so the migrate one-shot and the running

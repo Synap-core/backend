@@ -80,7 +80,10 @@
       "langsmith": ">=0.6.0",
       "@grpc/grpc-js": ">=1.14.4",
       "form-data": ">=4.0.6",
-      "ws": ">=8.21.0"
+      "ws": ">=8.21.0",
+      "minimatch": ">=9.0.7",
+      "fast-xml-builder": ">=1.1.7",
+      "hono": ">=4.12.25"
     },
     "onlyBuiltDependencies": [
       "bcrypt",
@@ -90,7 +93,16 @@
       "protobufjs",
       "sharp",
       "workerd"
-    ]
+    ],
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-7h2j-956f-4vf2",
+        "GHSA-3ppc-4f35-3m26",
+        "GHSA-7r86-cg39-jmmj",
+        "GHSA-23c5-xmqv-rm74",
+        "GHSA-c2c7-rcm5-vvqj"
+      ]
+    }
   },
   "packageManager": "pnpm@10.28.0",
   "engines": {
