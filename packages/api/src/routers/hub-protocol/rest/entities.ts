@@ -13,7 +13,6 @@
  */
 
 import { createRoute, z } from "@hono/zod-openapi";
-import { TRPCError } from "@trpc/server";
 import {
   db,
   entities,
@@ -1850,12 +1849,17 @@ export function registerEntitiesRoutes(app: HubHono): void {
   // an invalid attach (kind-as-facet, wrong applicable kind) is a client
   // mistake (400), a missing facet/entity is a 404. The central tRPC
   // error-mapper has already wrapped db domain errors into TRPCError codes.
+  // Duck-typed on `.code` rather than `instanceof TRPCError`: the bundled
+  // build carries its own TRPCError class identity, so instanceof fails
+  // across the boundary (verified live — 9fb3e7d4 shipped and still 500'd).
   const facetErrorStatus = (err: unknown): 400 | 403 | 404 | 500 => {
-    if (err instanceof TRPCError) {
-      if (err.code === "BAD_REQUEST") return 400;
-      if (err.code === "FORBIDDEN") return 403;
-      if (err.code === "NOT_FOUND") return 404;
-    }
+    const code =
+      err && typeof err === "object" && "code" in err
+        ? (err as { code?: unknown }).code
+        : undefined;
+    if (code === "BAD_REQUEST") return 400;
+    if (code === "FORBIDDEN" || code === "UNAUTHORIZED") return 403;
+    if (code === "NOT_FOUND") return 404;
     return 500;
   };
 
