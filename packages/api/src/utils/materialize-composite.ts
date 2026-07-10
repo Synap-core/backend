@@ -239,6 +239,15 @@ export async function materializeCompositeGraph(
   // in a prior call, absent here) still link correctly. `applyLarge` passes a
   // shared Set so the guard spans every chunk of one apply (see `idemSeen`).
   const idemSeenThisCall = options?.idemSeen ?? new Set<string>();
+  // Facet-attach ops deferred to pass 1.5 (see below) — collected here so a
+  // facet's `contextRef` can resolve against the FULL refToRealId map, not
+  // just the entities created before it in operations[].
+  const pendingFacetAttaches: Array<{
+    realId: string;
+    facets: NonNullable<
+      Extract<CompositeProposalOperation, { op: "create_entity" }>["facets"]
+    >;
+  }> = [];
   for (let i = 0; i < operations.length; i++) {
     const op = operations[i];
     if (op.op !== "create_entity") continue;
@@ -352,11 +361,38 @@ export async function materializeCompositeGraph(
       ...(propertiesDropped ? { propertiesDropped: true as const } : {}),
     });
 
-    // Declared facets (Kind + Facets) — additive: only ops carrying `facets`
-    // AND a caller that opted in via options.facetCaller attach anything. A
-    // failed attach is logged and skipped, never discarding the entity.
-    if (op.facets && op.facets.length > 0 && options?.facetCaller) {
-      for (const facetOp of op.facets) {
+    // Declared facets are attached in pass 1.5 below (once every create_entity
+    // op has resolved), not here — a facet's `contextRef` may point at an
+    // entity created LATER in this same batch, which pass 1 can't resolve yet.
+    if (op.facets && op.facets.length > 0) {
+      pendingFacetAttaches.push({ realId, facets: op.facets });
+    }
+  }
+
+  // Pass 1.5 — declared facets (Kind + Facets), after every create_entity op
+  // has resolved so refToRealId is fully populated: a facet's `contextRef` can
+  // now point at ANY entity in the batch, including one created after it.
+  // Additive — only ops carrying `facets` AND a caller that opted in via
+  // options.facetCaller attach anything. A failed attach is logged and
+  // skipped, never discarding the entity.
+  //
+  // Re-approval idempotency verdict: `FacetRepository.attach` (@synap/database)
+  // catches the unique-index violation on (entityId, profileId, contextEntityId,
+  // workspaceId) and returns the existing live row instead of throwing —
+  // packages/database/src/repositories/facet-repository.ts:194-205. The
+  // `entities.attachFacet` tRPC door (facetCaller here) surfaces that returned
+  // row as its normal `{ status: "attached" }` success response — it never
+  // inspects "was this a fresh insert or a conflict" —
+  // packages/api/src/routers/entities.ts:1993-2046. So a same-(entity, profile,
+  // context, workspace) facet attach replayed twice is already a no-op success,
+  // not an error. In practice a full proposal re-approval can't reach this path
+  // at all: `proposals.approve` rejects any non-PENDING proposal up front
+  // (packages/api/src/routers/proposals.ts:2231-2235, "Already ${status}"), so
+  // this idempotency only matters for a retry WITHIN one approve/import call
+  // (e.g. materialize resumed after a partial failure) — no extra guard needed.
+  if (options?.facetCaller) {
+    for (const { realId, facets } of pendingFacetAttaches) {
+      for (const facetOp of facets) {
         try {
           const contextEntityId = facetOp.contextRef
             ? resolveCompositeRef(refToRealId, facetOp.contextRef)

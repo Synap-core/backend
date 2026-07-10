@@ -52,6 +52,7 @@ import {
   SYSTEM_RELATION_TYPES,
   sql,
   inArray,
+  loadFacetSlugsBatch,
 } from "@synap/database";
 import {
   relations,
@@ -916,8 +917,14 @@ export const relationsRouter = router({
         entityIdsToFetch.add(link.sourceEntityId);
       }
 
-      // Fetch all referenced entities in one query
-      const entityMap = new Map<string, typeof entities.$inferSelect>();
+      // Fetch all referenced entities in one query, plus their live facet
+      // (Kind + Facets) slugs — one batched join, not N+1 — so graph neighbors
+      // built from this connection set carry real subtypes (see
+      // graph-service.ts connectionsToNeighbors, which reads entity.facetSlugs).
+      type ConnectedEntity = typeof entities.$inferSelect & {
+        facetSlugs?: string[];
+      };
+      const entityMap = new Map<string, ConnectedEntity>();
       if (entityIdsToFetch.size > 0) {
         const fetched = await db.query.entities.findMany({
           where: and(
@@ -925,8 +932,15 @@ export const relationsRouter = router({
             or(...[...entityIdsToFetch].map((id) => eq(entities.id, id)))
           ),
         });
+        const facetSlugsByEntity = await loadFacetSlugsBatch(
+          db,
+          fetched.map((e) => e.id)
+        );
         for (const e of fetched) {
-          entityMap.set(e.id, e);
+          entityMap.set(e.id, {
+            ...e,
+            facetSlugs: facetSlugsByEntity.get(e.id) ?? [],
+          });
         }
       }
 
@@ -934,7 +948,7 @@ export const relationsRouter = router({
 
       type Connection = {
         entityId: string;
-        entity: typeof entities.$inferSelect | null;
+        entity: ConnectedEntity | null;
         label: string;
         direction: "outgoing" | "incoming" | "structural";
         source:
