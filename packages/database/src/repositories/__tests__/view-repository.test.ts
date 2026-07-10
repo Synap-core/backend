@@ -54,12 +54,16 @@ describe("ViewRepository", () => {
 
   describe("create", () => {
     it("should create view and emit completed event", async () => {
+      // "kanban" isn't a canvas (whiteboard/mindmap) or composite (bento)
+      // type, so create() categorizes it as "structured" and requires
+      // scopeProfileIds — see ViewRepository.create's category check.
       const view = await viewRepo.create(
         {
           name: "Test View",
           type: "kanban",
           workspaceId: "ws-1",
           config: {},
+          scopeProfileIds: ["profile-1"],
           userId: "user-1",
         },
         "user-1"
@@ -67,9 +71,12 @@ describe("ViewRepository", () => {
 
       expect(view.name).toBe("Test View");
       expect(mockDb.insert).toHaveBeenCalled();
+      // Event `type` is `${subjectType}.${action}.${phase}` with subjectType
+      // = "view" (singular, as configured in ViewRepository's
+      // `super(db, eventRepo, { subjectType: "view" })`).
       expect(mockEventRepo.append).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: "views.create.completed",
+          type: "view.create.completed",
           subjectId: "view-1",
         })
       );
@@ -89,7 +96,7 @@ describe("ViewRepository", () => {
       expect(updated.name).toBe("Updated View");
       expect(mockEventRepo.append).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: "views.update.completed",
+          type: "view.update.completed",
         })
       );
     });
@@ -100,7 +107,7 @@ describe("ViewRepository", () => {
       await viewRepo.delete("view-1", "user-1");
       expect(mockEventRepo.append).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: "views.delete.completed",
+          type: "view.delete.completed",
         })
       );
     });

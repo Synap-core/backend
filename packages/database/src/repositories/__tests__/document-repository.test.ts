@@ -2,12 +2,20 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { type EventRepository } from "../event-repository.js";
 import { DocumentRepository } from "../document-repository.js";
 
+// create() wraps the row insert (and, when content is supplied, the v1
+// version snapshot insert) in `this.db.transaction(async (tx) => ...)` so the
+// two writes commit atomically. The mock db must expose both a top-level
+// insert/update/delete AND a `transaction` that hands the callback a tx whose
+// `insert` behaves the same way.
+const mockTx = {
+  insert: vi.fn(),
+} as any;
+
 const mockDb = {
-  // Document repo might assume underlying entities table or documents table logic
-  // Based on code viewing, DocumentRepository likely extends EntityRepository logic or similar structure
   insert: vi.fn(),
   update: vi.fn(),
   delete: vi.fn(),
+  transaction: vi.fn(async (fn: (tx: any) => Promise<unknown>) => fn(mockTx)),
 } as any;
 
 describe("DocumentRepository", () => {
@@ -19,6 +27,14 @@ describe("DocumentRepository", () => {
     mockEventRepo = {
       append: vi.fn(),
     } as any;
+
+    mockTx.insert.mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        returning: vi
+          .fn()
+          .mockResolvedValue([{ id: "doc-1", title: "Test Document" }]),
+      }),
+    });
 
     mockDb.insert.mockReturnValue({
       values: vi.fn().mockReturnValue({
@@ -63,10 +79,14 @@ describe("DocumentRepository", () => {
         "user-1"
       );
       expect(result.title).toBe("Test Document");
-      expect(mockDb.insert).toHaveBeenCalled();
+      expect(mockDb.transaction).toHaveBeenCalled();
+      expect(mockTx.insert).toHaveBeenCalled();
+      // Event `type` is `${subjectType}.${action}.${phase}` (see
+      // create-unified-event.ts) with subjectType = "document" (singular, as
+      // configured in DocumentRepository's `super(db, eventRepo, { subjectType: "document" })`).
       expect(mockEventRepo.append).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: "documents.create.completed",
+          type: "document.create.completed",
           subjectId: "doc-1",
         })
       );
@@ -86,7 +106,7 @@ describe("DocumentRepository", () => {
       expect(updated.title).toBe("Updated Document");
       expect(mockEventRepo.append).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: "documents.update.completed",
+          type: "document.update.completed",
         })
       );
     });
@@ -97,7 +117,7 @@ describe("DocumentRepository", () => {
       await docRepo.delete("doc-1", "user-1");
       expect(mockEventRepo.append).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: "documents.delete.completed",
+          type: "document.delete.completed",
         })
       );
     });

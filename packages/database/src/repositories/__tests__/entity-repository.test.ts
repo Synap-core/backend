@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { type EventRepository } from "../event-repository.js";
 import { EntityRepository } from "../entity-repository.js";
+import { ProfileResolutionService } from "../../services/profile-resolution-service.js";
+import { PropertyIndexService } from "../../services/property-index-service.js";
 
 const mockDb = {
   query: {
@@ -23,7 +25,30 @@ describe("EntityRepository", () => {
       append: vi.fn(),
     } as any;
 
-    // Setup chainable mocks
+    // create()/update() resolve the profile and its effective properties
+    // (ProfileResolutionService) and fire-and-forget index the properties
+    // (PropertyIndexService) — both hit tables the mock db above doesn't
+    // model (profiles, profile_workspace_access, property_defs, ...).
+    // Stub them at the service boundary so the repository's own logic
+    // (insert/update/delete + event emission) is what's under test here.
+    vi.spyOn(
+      ProfileResolutionService.prototype,
+      "resolveProfile"
+    ).mockResolvedValue({ id: "profile-1", slug: "note" } as any);
+    vi.spyOn(
+      ProfileResolutionService.prototype,
+      "getEffectiveProperties"
+    ).mockResolvedValue([]);
+    vi.spyOn(
+      PropertyIndexService.prototype,
+      "indexEntityProperties"
+    ).mockResolvedValue(undefined as any);
+    vi.spyOn(PropertyIndexService.prototype, "reindexEntity").mockResolvedValue(
+      undefined as any
+    );
+
+    mockDb.query.entities.findFirst = vi.fn();
+
     mockDb.insert.mockReturnValue({
       values: vi.fn().mockReturnValue({
         returning: vi
@@ -53,13 +78,6 @@ describe("EntityRepository", () => {
 
   describe("create", () => {
     it("should create entity and emit completed event", async () => {
-      // Mock profile resolution (returns null for legacy support)
-      mockDb.query = {
-        entities: {
-          findFirst: vi.fn().mockResolvedValue(null),
-        },
-      } as any;
-
       const result = await entityRepo.create(
         {
           title: "Test Entity",
@@ -72,9 +90,14 @@ describe("EntityRepository", () => {
 
       expect(result.title).toBe("Test Entity");
       expect(mockDb.insert).toHaveBeenCalled();
+      // Event `type` is `${subjectType}.${action}.${phase}` with subjectType
+      // = "entity" (singular, as configured in EntityRepository's
+      // `super(db, eventRepo, { subjectType: "entity", pluralName: "entities" })`
+      // — `pluralName` is metadata only; BaseRepository.emitCompleted never
+      // reads it).
       expect(mockEventRepo.append).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: "entities.create.completed",
+          type: "entity.create.completed",
           subjectId: "entity-1",
           data: expect.objectContaining({
             title: "Test Entity",
@@ -87,6 +110,13 @@ describe("EntityRepository", () => {
 
   describe("update", () => {
     it("should update entity and emit completed event", async () => {
+      mockDb.query.entities.findFirst.mockResolvedValue({
+        id: "entity-1",
+        workspaceId: "workspace-1",
+        profileId: "profile-1",
+        properties: {},
+      });
+
       const updated = await entityRepo.update(
         "entity-1",
         {
@@ -98,7 +128,7 @@ describe("EntityRepository", () => {
       expect(updated.title).toBe("Updated Entity");
       expect(mockEventRepo.append).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: "entities.update.completed",
+          type: "entity.update.completed",
           subjectId: "entity-1",
           data: expect.objectContaining({
             title: "Updated Entity",
@@ -111,12 +141,17 @@ describe("EntityRepository", () => {
 
   describe("delete", () => {
     it("should delete entity and emit completed event", async () => {
+      mockDb.query.entities.findFirst.mockResolvedValue({
+        id: "entity-1",
+        documentId: null,
+      });
+
       await entityRepo.delete("entity-1", "user-1");
 
       expect(mockDb.delete).toHaveBeenCalled();
       expect(mockEventRepo.append).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: "entities.delete.completed",
+          type: "entity.delete.completed",
           subjectId: "entity-1",
           data: expect.objectContaining({
             id: "entity-1",
