@@ -30,27 +30,21 @@ import {
   getDefaultActiveService,
 } from "../../../utils/intelligence-routing.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
-import { openLink } from "../../../utils/deep-links.js";
 import { materializeCompositeGraph } from "../../../utils/materialize-composite.js";
-import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
 import { relationsRouter } from "../../relations.js";
 import {
   db,
   getDb,
   ProfileResolutionService,
-  resolveIdentity,
-  extractIdentitySignals,
   eq,
-  or,
-  isNull,
-  entities,
   workspaces,
   workspaceMembers,
 } from "@synap/database";
 import type { Context } from "../../../types/context.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
+import { submitCaptureGraph } from "../../../services/capture-agent/submit-capture-graph.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
   CaptureExecuteRequestSchema,
@@ -66,7 +60,6 @@ import {
   logger,
   type HubHono,
 } from "./_shared.js";
-import { collapseDuplicateEntities } from "./_capture-graph-dedup.js";
 
 export function registerCaptureRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
