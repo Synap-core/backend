@@ -79,6 +79,19 @@ $COMPOSE exec -T postgres psql -U synap -c "SELECT 'CREATE DATABASE hydra' WHERE
 log "Running migrations (old backend still serving)..."
 $COMPOSE run --rm backend-migrate 2>&1 || log "WARN: migration exited non-zero"
 
+# ─── Step 2b: Conversions DRY-RUN report (read-only, non-fatal) ────────────────
+# Prints per-op counts from the Kind+Facets disposition manifest so the operator
+# sees what a conversion WOULD do. NEVER applies — the real run is deliberately
+# operator-driven: review this report, then run run-conversions.js --apply
+# (and later --apply --destructive-tail) by hand. See _conversions ledger.
+log "Conversions dry-run (read-only report — apply stays operator-run)..."
+$COMPOSE run --rm backend-migrate sh -c '
+  for p in /app/node_modules/@synap/database/dist/scripts /app/api/node_modules/@synap/database/dist/scripts node_modules/@synap/database/dist/scripts; do
+    if [ -f "$p/run-conversions.js" ]; then node "$p/run-conversions.js" --dry-run; exit $?; fi
+  done
+  echo "run-conversions.js not found (older image) — skipping dry-run report"
+' 2>&1 || log "WARN: conversions dry-run failed (non-fatal, informational only)"
+
 # Run Kratos migrations and update Kratos container.
 #
 # Previously this block ran kratos-migrate with `2>/dev/null || log WARN`,

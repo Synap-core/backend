@@ -285,6 +285,47 @@ export type RequiredPermission = "read" | "write" | "delete" | "manage";
 const READ_ACTIONS: readonly string[] = ["read", "recall", "entities"];
 
 /**
+ * The complete inventoried action-verb vocabulary (see policy.test.ts's
+ * INVENTORIED_VERBS for the regenerate recipe). The soft-union parameter type
+ * on requiredPermissionFor gives call sites autocomplete + typo detection
+ * without breaking dynamic (string-typed) callers — a new verb still compiles,
+ * still fail-closes to "write", and should then be added here + to the
+ * explicit mapping + the test fixture.
+ */
+export type KnownGovernanceAction =
+  | "read"
+  | "recall"
+  | "entities"
+  | "delete"
+  | "purge"
+  | "create"
+  | "update"
+  | "archive"
+  | "restore"
+  | "add"
+  | "place"
+  | "remove"
+  | "updateRole"
+  | "renderer.set"
+  | "attach"
+  | "detach"
+  | "updateCapabilities"
+  | "merge"
+  | "create_branch"
+  | "create_external"
+  | "join"
+  | "link"
+  | "setState"
+  | "execute"
+  | "run"
+  | "grant_capability"
+  | "register"
+  | "arrange"
+  | "invite"
+  | "recap"
+  | "write";
+
+/**
  * Map an action verb → the RBAC permission it requires.
  *
  * NOTE: this is the CANONICAL gate's mapping (it includes "place"). The old
@@ -305,7 +346,9 @@ const READ_ACTIONS: readonly string[] = ["read", "recall", "entities"];
  * demands "write" (propose/deny for under-privileged agents) rather than
  * silently passing as a read.
  */
-export function requiredPermissionFor(action: string): RequiredPermission {
+export function requiredPermissionFor(
+  action: KnownGovernanceAction | (string & {})
+): RequiredPermission {
   if (action === "delete" || action === "purge") return "delete";
   if (READ_ACTIONS.includes(action)) return "read";
   if (
