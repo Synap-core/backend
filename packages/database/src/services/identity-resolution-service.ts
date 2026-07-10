@@ -50,7 +50,11 @@ export type StrongSignalType =
   | "linkedin_url"
   | "github_username"
   | "twitter_handle"
-  | "website";
+  | "website"
+  // Opaque provider-scoped id (`${provider}:${externalId}`). Registered by the
+  // external-link idempotency door; read by EntityUpsertService's strong path.
+  // Not derived from any property key — case must be PRESERVED (see normalize).
+  | "external_id";
 
 export interface IdentitySignal {
   type: string;
@@ -111,44 +115,14 @@ export function normalizeIdentitySignal(type: string, value: string): string {
     case "twitter_handle":
       return v.toLowerCase().replace(/^@/, "");
 
+    case "external_id":
+      // Opaque provider id — case is significant (e.g. a base64/hash segment).
+      // Trim only; never lowercase, or the read wouldn't match the write.
+      return v;
+
     default:
       return v.toLowerCase();
   }
-}
-
-/**
- * Extract strong identity signals from an entity's property bag — the generic
- * counterpart to EntityUpsertService.extractSignalsFromProperties (which layers
- * on source-specific handling like telegram). Used by capture to feed the
- * strong path. Only well-formed values become signals.
- */
-export function extractStrongSignals(
-  properties: Record<string, unknown> | undefined
-): IdentitySignal[] {
-  if (!properties) return [];
-  const signals: IdentitySignal[] = [];
-
-  const email = properties.email;
-  if (typeof email === "string" && email.includes("@")) {
-    signals.push({ type: "email", value: email });
-  }
-
-  const phone = properties.phone;
-  if (typeof phone === "string" && phone.replace(/[^\d]/g, "").length >= 7) {
-    signals.push({ type: "phone", value: phone });
-  }
-
-  const linkedin = properties.linkedinUrl ?? properties["linkedin-url"];
-  if (typeof linkedin === "string" && linkedin.includes("linkedin.com")) {
-    signals.push({ type: "linkedin_url", value: linkedin });
-  }
-
-  const website = properties.website;
-  if (typeof website === "string" && /^https?:\/\//.test(website)) {
-    signals.push({ type: "website", value: website });
-  }
-
-  return signals;
 }
 
 /**
@@ -167,13 +141,17 @@ export const IDENTITY_SIGNAL_PROPERTY_KEYS: Record<StrongSignalType, string[]> =
     website: ["website"],
     twitter_handle: ["twitterHandle", "twitter-handle"],
     github_username: ["githubUsername", "github-username"],
+    // No property key maps to external_id — it's derived from (provider,
+    // externalId), so a property change never re-registers it.
+    external_id: [],
   };
 
 /**
  * Extract ALL strong identity signals from an entity's property bag — the ONE
  * mapping from property values to `entity_identity_signals` rows, used by every
- * write door (entities.create/update, import). Supersedes the narrower
- * `extractStrongSignals` above for new callers (kept for its existing callers).
+ * write door (entities.create/update, import) AND by capture's lookup-only
+ * dedup path. The single extractor: LinkedIn detection is domain-anchored
+ * (isLinkedinUrl) so lookalike hosts don't leak in.
  *
  * `discord-handle` is intentionally EXCLUDED: the FROZEN IDENTITY POLICY (see
  * module doc) classifies it as a WEAK surface form — advisory-only, scoped per
@@ -244,7 +222,7 @@ export function extractIdentitySignals(
  * false-positives on lookalike domains (e.g. `not-linkedin.com`) — this
  * requires "linkedin.com" to be the actual host, not a substring anywhere.
  */
-function isLinkedinUrl(value: string): boolean {
+export function isLinkedinUrl(value: string): boolean {
   return /^https?:\/\/([a-z0-9-]+\.)*linkedin\.com(\/|$)/i.test(value);
 }
 

@@ -4,7 +4,7 @@
  */
 
 import { getTypesenseAdminClient } from "../client.js";
-import { getDb, inArray, and, eq, isNull } from "@synap/database";
+import { getDb, inArray, loadFacetSlugsBatch } from "@synap/database";
 import * as schema from "@synap/database/schema";
 import type { IndexingQueueItem } from "../types/index.js";
 import {
@@ -355,8 +355,9 @@ export class IndexingService {
 
   /**
    * Batch-attach live facet (role-profile) slugs to entity rows for indexing.
-   * One query for the whole batch — unfiltered lens, since the search doc is
-   * per-entity and visibility is enforced at query time elsewhere.
+   * Delegates to the canonical loadFacetSlugsBatch join in @synap/database
+   * (unfiltered lens — search docs are per-entity; visibility is enforced at
+   * query time elsewhere).
    */
   private async attachFacetSlugs(
     db: Awaited<ReturnType<typeof getDb>>,
@@ -364,30 +365,10 @@ export class IndexingService {
   ): Promise<any[]> {
     if (entityRows.length === 0) return entityRows;
 
-    const ids = entityRows.map((e) => e.id);
-    const facetRows = await db
-      .select({
-        entityId: schema.entityFacets.entityId,
-        slug: schema.profiles.slug,
-      })
-      .from(schema.entityFacets)
-      .innerJoin(
-        schema.profiles,
-        eq(schema.entityFacets.profileId, schema.profiles.id)
-      )
-      .where(
-        and(
-          inArray(schema.entityFacets.entityId, ids),
-          isNull(schema.entityFacets.deletedAt)
-        )
-      );
-
-    const slugsByEntity = new Map<string, string[]>();
-    for (const row of facetRows) {
-      const list = slugsByEntity.get(row.entityId);
-      if (list) list.push(row.slug);
-      else slugsByEntity.set(row.entityId, [row.slug]);
-    }
+    const slugsByEntity = await loadFacetSlugsBatch(
+      db,
+      entityRows.map((e) => e.id)
+    );
 
     return entityRows.map((e) => ({
       ...e,

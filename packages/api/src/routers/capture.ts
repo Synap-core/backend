@@ -507,17 +507,27 @@ export const captureRouter = router({
       });
 
       if (identity.match === "strong" && identity.entity) {
-        const nonEmptyProperties = Object.fromEntries(
-          Object.entries(properties).filter(
-            ([, v]) => v !== undefined && v !== null && v !== ""
-          )
-        );
-        if (Object.keys(nonEmptyProperties).length > 0) {
-          await entitiesCaller.update({
-            id: identity.entity.id,
-            properties: nonEmptyProperties,
-            source: "user",
-          });
+        // Defensive: if the enrich fails (e.g. the matched entity isn't
+        // writable by this caller), fall through to a normal create rather
+        // than failing the capture.
+        try {
+          const nonEmptyProperties = Object.fromEntries(
+            Object.entries(properties).filter(
+              ([, v]) => v !== undefined && v !== null && v !== ""
+            )
+          );
+          if (Object.keys(nonEmptyProperties).length > 0) {
+            await entitiesCaller.update({
+              id: identity.entity.id,
+              properties: nonEmptyProperties,
+              source: "user",
+            });
+          }
+        } catch (enrichErr) {
+          logger.warn(
+            { userId, entityId: identity.entity.id, err: enrichErr },
+            "Thought dedup enrich failed — returning matched entity unenriched"
+          );
         }
         logger.info(
           {
@@ -1453,7 +1463,10 @@ export const captureRouter = router({
               source: "user",
               // Force the entity into this (routed) workspace even for a
               // pod-default profile — matches capture's historical
-              // literal-workspaceId behavior.
+              // literal-workspaceId behavior. `targetWorkspaceId` pins it to the
+              // ROUTED workspace so the entity doesn't split from its document/
+              // project/session links (which already use `workspaceId`).
+              targetWorkspaceId: workspaceId ?? undefined,
               workspaceScoped: true,
             });
             return {
@@ -1480,6 +1493,7 @@ export const captureRouter = router({
                   properties: salvageProperties,
                   documentId,
                   source: "user",
+                  targetWorkspaceId: workspaceId ?? undefined,
                   workspaceScoped: true,
                 });
                 return {
@@ -1506,6 +1520,7 @@ export const captureRouter = router({
               properties: salvageProperties,
               documentId,
               source: "user",
+              targetWorkspaceId: workspaceId ?? undefined,
               workspaceScoped: true,
             });
             return {

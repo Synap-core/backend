@@ -23,9 +23,10 @@ import {
  * `checkAutomationWriteOrPropose`) across packages/api/src and
  * packages/jobs/src in production code, as of this wave. Excludes verbs that
  * only ever appear as `auditLog({ action: ... })` / `emitSideEffects({
- * action: ... })` payload fields (e.g. "recap", "received", "stage_changed",
+ * action: ... })` payload fields (e.g. "received", "stage_changed",
  * "grant_ai_access") — those never reach `requiredPermissionFor` and are not
- * RBAC-gated by this function.
+ * RBAC-gated by this function. ("recap" DOES reach the gate — run-session-recap.ts
+ * gates its write under it — so it is inventoried below as a write verb.)
  *
  * To regenerate: from packages/, run
  *   grep -rn "checkPermissionOrPropose(\|checkAutomationWriteOrPropose(" \
@@ -66,6 +67,7 @@ const INVENTORIED_VERBS: Record<string, RequiredPermission> = {
   register: "write", // widget-definitions.ts
   arrange: "write", // hub-protocol/views.ts bento.arrange
   invite: "write", // member.invite (ADMIN_ACTIONS-gated on top)
+  recap: "write", // run-session-recap.ts recap write
   write: "write", // filesystem.write
 };
 

@@ -32,6 +32,41 @@ export interface EffectiveFacet {
 }
 
 /**
+ * Batch-load live facet (role-profile) slugs for a set of entity ids → a
+ * Map<entityId, slug[]>. One query for the whole batch. UNFILTERED lens — this
+ * is the raw entity→facet-slug join used by indexing (per-entity search docs)
+ * and the object-graph subtype hydrator; caller-side visibility is enforced
+ * elsewhere. Entities with no live facet are simply absent from the map.
+ *
+ * The ONE implementation of this join — previously hand-rolled byte-identically
+ * in @synap/search's indexing-service and @synap/api's graph-service.
+ */
+export async function loadFacetSlugsBatch(
+  db: PostgresJsDatabase<typeof schema>,
+  entityIds: string[]
+): Promise<Map<string, string[]>> {
+  if (entityIds.length === 0) return new Map();
+  const rows = await db
+    .select({ entityId: entityFacets.entityId, slug: profiles.slug })
+    .from(entityFacets)
+    .innerJoin(profiles, eq(entityFacets.profileId, profiles.id))
+    .where(
+      and(
+        inArray(entityFacets.entityId, entityIds),
+        isNull(entityFacets.deletedAt)
+      )
+    );
+
+  const out = new Map<string, string[]>();
+  for (const row of rows) {
+    const list = out.get(row.entityId);
+    if (list) list.push(row.slug);
+    else out.set(row.entityId, [row.slug]);
+  }
+  return out;
+}
+
+/**
  * Resolve every live facet attached to an entity, each joined with its
  * role-profile and that profile's effective properties (workspace-lensed).
  *

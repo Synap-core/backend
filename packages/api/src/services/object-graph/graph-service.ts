@@ -37,9 +37,7 @@ import {
   automations,
   documents,
   intelligenceCommands,
-  entityFacets,
-  profiles,
-  isNull,
+  loadFacetSlugsBatch,
 } from "@synap/database";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { getLinksFor } from "../links/links-service.js";
@@ -229,30 +227,15 @@ export async function hydrateNodes(
   return out;
 }
 
-/** Batch-load live facet (role-profile) slugs for a set of entity ids. */
+/**
+ * Batch-load live facet (role-profile) slugs for a set of entity ids —
+ * delegates to the canonical loadFacetSlugsBatch join in @synap/database.
+ */
 async function loadFacetSlugs(
   db: Awaited<ReturnType<typeof getDb>>,
   entityIds: string[]
 ): Promise<Map<string, string[]>> {
-  if (entityIds.length === 0) return new Map();
-  const rows = await db
-    .select({ entityId: entityFacets.entityId, slug: profiles.slug })
-    .from(entityFacets)
-    .innerJoin(profiles, eq(entityFacets.profileId, profiles.id))
-    .where(
-      and(
-        inArray(entityFacets.entityId, entityIds),
-        isNull(entityFacets.deletedAt)
-      )
-    );
-
-  const out = new Map<string, string[]>();
-  for (const row of rows) {
-    const list = out.get(row.entityId);
-    if (list) list.push(row.slug);
-    else out.set(row.entityId, [row.slug]);
-  }
-  return out;
+  return loadFacetSlugsBatch(db, entityIds);
 }
 
 /**

@@ -43,6 +43,7 @@ import {
   resolveIdentity,
   registerIdentitySignals,
   normalizeIdentitySignal,
+  extractIdentitySignals,
   type IdentitySignal,
 } from "./identity-resolution-service.js";
 
@@ -117,10 +118,21 @@ export class EntityUpsertService {
     }
 
     // ── Step 2: Cross-source signal match (STRONG identity, via the SSOT) ───────
-    if (normalizedSignals.length > 0) {
+    // Also look up the (source, externalId) pair as a strong `external_id`
+    // signal: the external-link idempotency door registers writes under exactly
+    // this key, so this is the read side that lets a re-import resolve to the
+    // same subject via the signal layer — belt to Step 1's external-links belt.
+    const lookupSignals: IdentitySignal[] = [...normalizedSignals];
+    if (input.externalId) {
+      lookupSignals.push({
+        type: "external_id",
+        value: `${input.source}:${input.externalId}`,
+      });
+    }
+    if (lookupSignals.length > 0) {
       const resolution = await resolveIdentity(this.db, {
         userId: input.userId,
-        signals: normalizedSignals,
+        signals: lookupSignals,
       });
 
       if (resolution.match === "strong" && resolution.entity) {
@@ -202,34 +214,16 @@ export class EntityUpsertService {
 /**
  * Extract identity signals from a property map.
  * Import workers can call this to build the signals array automatically.
+ *
+ * Delegates the generic extraction (email/phone/url/handles) to the ONE
+ * extractor `extractIdentitySignals`, then layers on the ONLY source-specific
+ * addition this door owns: telegram's `telegramPhone` property.
  */
 export function extractSignalsFromProperties(
   properties: Record<string, unknown>,
   source: string
 ): IdentitySignal[] {
-  const signals: IdentitySignal[] = [];
-
-  if (typeof properties.email === "string" && properties.email.includes("@")) {
-    signals.push({ type: "email", value: properties.email });
-  }
-
-  if (typeof properties.phone === "string" && properties.phone.length >= 7) {
-    signals.push({ type: "phone", value: properties.phone });
-  }
-
-  if (
-    typeof properties.linkedinUrl === "string" &&
-    properties.linkedinUrl.includes("linkedin.com")
-  ) {
-    signals.push({ type: "linkedin_url", value: properties.linkedinUrl });
-  }
-
-  if (
-    typeof properties.githubUsername === "string" &&
-    properties.githubUsername.length > 0
-  ) {
-    signals.push({ type: "github_username", value: properties.githubUsername });
-  }
+  const signals = extractIdentitySignals(properties);
 
   // Telegram-specific: phone stored as telegramPhone property
   if (

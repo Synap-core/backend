@@ -166,7 +166,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "keep",
       opKey: "w3a.keep.note",
       slug: "note",
-      note: "Note stays a primary kind; knowledge-family entries land in W4.",
+      note: "Superseded by w3c.merge.note-capture-into-item — note merges into the universal 'item' kind (entry retained per append-only opKey discipline).",
     },
 
     // ─── Wave 3C: CRM-family conversions + merges ──────────────────────────

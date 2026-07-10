@@ -339,6 +339,8 @@ export function requiredPermissionFor(action: string): RequiredPermission {
     action === "register" ||
     action === "arrange" ||
     action === "invite" ||
+    // run-session-recap.ts gates the recap write under this verb.
+    action === "recap" ||
     action === "write"
   ) {
     return "write";

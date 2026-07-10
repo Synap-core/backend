@@ -40,7 +40,7 @@ import {
   getDb,
   ProfileResolutionService,
   resolveIdentity,
-  extractStrongSignals,
+  extractIdentitySignals,
   eq,
   or,
   isNull,
@@ -66,7 +66,7 @@ import {
   logger,
   type HubHono,
 } from "./_shared.js";
-import { collapseDuplicateEntities } from "./capture-graph-dedup.js";
+import { collapseDuplicateEntities } from "./_capture-graph-dedup.js";
 
 export function registerCaptureRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -746,6 +746,12 @@ export function registerCaptureRoutes(app: HubHono): void {
         title?: string;
         properties?: Record<string, unknown>;
         existingEntityId?: string;
+        facets?: Array<{
+          profileSlug: string;
+          status?: string;
+          properties?: Record<string, unknown>;
+          contextRef?: string;
+        }>;
       }>;
       relations?: Array<{ sourceRef: string; targetRef: string; type: string }>;
       // Discord channel → entity bindings, applied on APPROVE (after the entities
@@ -808,7 +814,7 @@ export function registerCaptureRoutes(app: HubHono): void {
     // WITHIN-BATCH DEDUP: the agent may list the same person/company under two
     // different `ref`s (neither persisted yet, so the persisted-dedup block
     // below can't catch it). Collapse those before resolving against the DB —
-    // see capture-graph-dedup.ts for the exact key + rewrite semantics.
+    // see _capture-graph-dedup.ts for the exact key + rewrite semantics.
     const collapsed = collapseDuplicateEntities(
       body.entities,
       relations,
@@ -847,7 +853,7 @@ export function registerCaptureRoutes(app: HubHono): void {
             userId,
             kindSlug: e.profileSlug,
             name: e.title ?? e.ref,
-            signals: extractStrongSignals(e.properties),
+            signals: extractIdentitySignals(e.properties),
             userScope: weakScope,
           });
           if (res.match && res.entity) {
@@ -871,6 +877,7 @@ export function registerCaptureRoutes(app: HubHono): void {
           ...(e.existingEntityId
             ? { existingEntityId: e.existingEntityId }
             : {}),
+          ...(e.facets ? { facets: e.facets } : {}),
         })),
         ...relations.map((r) => ({
           op: "create_relation" as const,
