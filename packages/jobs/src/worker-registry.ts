@@ -44,6 +44,15 @@ export const workerRegistry: WorkerMetadata[] = [
     category: "ai",
   },
   {
+    id: "cal-backfill-cron",
+    name: "Cal.com Backfill",
+    description:
+      "Every 30min, runs the api-side Cal.com backfill runner (in-process) which lists upcoming bookings via cal_list_bookings and turns any not-yet-seen booking into a composite CRM proposal (person + company + deal(lead) + event). Safety net for the inbound Cal.com webhook (catches bookings missed during downtime). No-ops unless the cal_com tool has calcom.backfill.enabled.",
+    triggers: ["cron:*/30 * * * *"],
+    outputs: ["proposal.created"],
+    category: "ai",
+  },
+  {
     id: "event-sync-cron",
     name: "Event Sync",
     description:

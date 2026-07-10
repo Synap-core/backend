@@ -99,6 +99,12 @@ export async function registerCronSchedules(): Promise<void> {
   await boss.schedule("mail-feed-cron", "0 */2 * * *", {});
   logger.info("Registered cron: mail-feed-cron (every 2h)");
 
+  // Cal.com backfill (every 30min) — lists upcoming bookings and captures any not
+  // yet seen (safety net for the inbound webhook). No-ops unless the cal_com tool
+  // has calcom.backfill.enabled.
+  await boss.schedule("cal-backfill-cron", "*/30 * * * *", {});
+  logger.info("Registered cron: cal-backfill-cron (every 30min)");
+
   // Event sync (every 6 hours — the cron worker invokes the api-side event-sync
   // runner in-process (IoC slot) to mirror upcoming Synap events + Stellar
   // deadlines + Google Calendar into native Discord scheduled events). No-ops

@@ -5,14 +5,24 @@ import {
   db,
   eq,
   and,
+  drizzleSql,
   workspaces,
+  tools,
+  entities,
   messagingAccounts,
   webhookSubscriptions,
+  resolveVaultSecret,
 } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { getMessagingConnector } from "../connectors/index.js";
 import { MessagingAccountService } from "../services/messaging-account-service.js";
 import { recordInboundMessage } from "../services/connectors/inbound-recorder.js";
+import { submitCaptureGraph } from "../services/capture-agent/submit-capture-graph.js";
+import { getCaptureAgentUserId } from "../services/capture-agent/ensure-capture-agent.js";
+import {
+  mapBookingToGraph,
+  type CalBookingPayload,
+} from "../services/calcom/map-booking-to-graph.js";
 
 const logger = createLogger({ module: "webhooks-inbound" });
 
@@ -82,6 +92,166 @@ webhooksInboundRouter.post("/inbound/:subscriptionId", async (c) => {
       );
     });
   }
+
+  return c.json({ received: true }, 200);
+});
+
+// ── Cal.com inbound webhook — bookings → CRM graph ────────────────────────────
+//
+// Cal.com POSTs booking events here. We verify the signature (header
+// `x-cal-signature-256` = hex HMAC-SHA256 of the RAW body, NO `sha256=` prefix —
+// different from Synap's own `/inbound` scheme), dedup on booking uid + trigger,
+// and turn a BOOKING_CREATED into ONE composite `capture/graph` proposal
+// (person + company + deal(lead) + event) via the shared submitCaptureGraph door.
+// The `event` entity is event-sync-shaped, so an approved booking also mirrors to
+// a native Discord scheduled event with no Google-Calendar dependency.
+//
+// Config lives on the `cal_com` tool: metadata.calcom.webhook =
+//   { token, secretVaultRef, workspaceId?, ownerUserId?, seen: { "<uid>:<trigger>": iso } }
+// The `:token` path segment selects + authorizes the config (unknown → 404, no leak).
+// Missed webhooks (pod down) are self-healed by the Cal backfill poller.
+interface CalcomWebhookConfig {
+  token?: string;
+  secretVaultRef?: string;
+  workspaceId?: string | null;
+  ownerUserId?: string;
+  seen?: Record<string, string>;
+}
+
+// Best-effort maintenance update of the event a prior BOOKING_CREATED materialized,
+// matched by calBookingUid. Reschedule → new times/link; cancel → status flag.
+async function updateBookingEvent(
+  uid: string,
+  workspaceId: string | null,
+  patch: Record<string, unknown>
+): Promise<void> {
+  const rows = await db.query.entities.findMany({
+    where: and(
+      eq(entities.type, "event"),
+      drizzleSql`${entities.properties}->>'calBookingUid' = ${uid}`,
+      workspaceId ? eq(entities.workspaceId, workspaceId) : drizzleSql`TRUE`
+    ),
+    columns: { id: true },
+  });
+  for (const r of rows) {
+    await db
+      .update(entities)
+      .set({
+        properties: drizzleSql`COALESCE(${entities.properties}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`,
+        updatedAt: new Date(),
+      })
+      .where(eq(entities.id, r.id));
+  }
+}
+
+webhooksInboundRouter.post("/calcom/:token", async (c) => {
+  const token = c.req.param("token");
+  const rawBody = await c.req.text();
+
+  // Resolve the cal_com tool + its webhook config; `:token` must match (else 404).
+  const calTool = await db.query.tools.findFirst({
+    where: eq(tools.name, "cal_com"),
+    columns: {
+      id: true,
+      createdBy: true,
+      workspaceId: true,
+      metadata: true,
+    },
+  });
+  const metadata = (calTool?.metadata ?? {}) as {
+    calcom?: { webhook?: CalcomWebhookConfig };
+  };
+  const cfg = metadata.calcom?.webhook;
+  if (!calTool || !cfg?.token || !cfg.secretVaultRef || cfg.token !== token) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const ownerUserId = cfg.ownerUserId ?? calTool.createdBy;
+  const workspaceId = cfg.workspaceId ?? calTool.workspaceId ?? null;
+
+  // Redeem the webhook signing secret from the vault (never logged).
+  const secret = await resolveVaultSecret(cfg.secretVaultRef, ownerUserId);
+  if (!secret) {
+    logger.error({ toolId: calTool.id }, "cal.com webhook: secret unresolved");
+    return c.json({ error: "Webhook not configured" }, 500);
+  }
+
+  // Verify signature — Cal sends hex HMAC-SHA256 of the raw body, NO prefix.
+  const signature = c.req.header("x-cal-signature-256") ?? "";
+  const expected = createHmac("sha256", secret).update(rawBody).digest("hex");
+  const sigBuf = Buffer.from(signature);
+  const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
+    logger.warn({ toolId: calTool.id }, "cal.com webhook: invalid signature");
+    return c.json({ error: "Invalid signature" }, 401);
+  }
+
+  let envelope: { triggerEvent?: string; payload?: CalBookingPayload } | null;
+  try {
+    envelope = JSON.parse(rawBody);
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+  const trigger = envelope?.triggerEvent ?? "";
+  const payload = envelope?.payload ?? {};
+  const uid = payload.uid?.trim();
+  if (!uid || !trigger) {
+    // Ping/handshake or a payload we can't key — ack so Cal doesn't retry.
+    return c.json({ received: true, ignored: true }, 200);
+  }
+
+  // Idempotency: dedup on uid + trigger. Already handled → ack no-op.
+  const seenKey = `${uid}:${trigger}`;
+  if (cfg.seen && cfg.seen[seenKey]) {
+    return c.json({ received: true, deduped: true }, 200);
+  }
+
+  // Do the work best-effort. On failure we STILL 200 (Cal retries on non-2xx,
+  // which would storm) — the backfill poller is the safety net for a lost event.
+  try {
+    if (trigger === "BOOKING_CREATED") {
+      const actor = (await getCaptureAgentUserId()) ?? ownerUserId;
+      const { entities: graphEntities, relations } = mapBookingToGraph(payload);
+      await submitCaptureGraph({
+        userId: actor,
+        workspaceId,
+        entities: graphEntities,
+        relations,
+        summary: `Cal.com booking — ${payload.title ?? uid}`,
+      });
+    } else if (trigger === "BOOKING_RESCHEDULED") {
+      const startDate = (payload.startTime ?? payload.start)?.trim();
+      const endDate = (payload.endTime ?? payload.end)?.trim();
+      await updateBookingEvent(uid, workspaceId, {
+        ...(startDate ? { startDate } : {}),
+        ...(endDate ? { endDate } : {}),
+      });
+    } else if (trigger === "BOOKING_CANCELLED") {
+      await updateBookingEvent(uid, workspaceId, { status: "cancelled" });
+    } else {
+      return c.json({ received: true, ignored: true }, 200);
+    }
+  } catch (err) {
+    logger.error(
+      { err, toolId: calTool.id, trigger, uid },
+      "cal.com webhook: handler failed (backfill will retry)"
+    );
+    return c.json({ received: true, deferred: true }, 200);
+  }
+
+  // Mark seen. Write the whole seen-map leaf with a STATIC jsonb path + a
+  // parameterized value — never interpolate the (payload-derived) key into SQL.
+  const nextSeen = { ...(cfg.seen ?? {}), [seenKey]: new Date().toISOString() };
+  await db
+    .update(tools)
+    .set({
+      metadata: drizzleSql`jsonb_set(COALESCE(${tools.metadata}, '{}'::jsonb), '{calcom,webhook,seen}', ${JSON.stringify(nextSeen)}::jsonb, true)`,
+      updatedAt: new Date(),
+    })
+    .where(eq(tools.id, calTool.id))
+    .catch((err) =>
+      logger.warn({ err }, "cal.com webhook: seen-map persist failed")
+    );
 
   return c.json({ received: true }, 200);
 });

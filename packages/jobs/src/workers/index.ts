@@ -85,6 +85,10 @@ import {
 } from "./crm-daily-digest.js";
 import { handleMailFeedCron, MAIL_FEED_CRON_QUEUE } from "./mail-feed-cron.js";
 import {
+  handleCalBackfillCron,
+  CAL_BACKFILL_CRON_QUEUE,
+} from "./cal-backfill-cron.js";
+import {
   handleEventSyncCron,
   EVENT_SYNC_CRON_QUEUE,
 } from "./event-sync-cron.js";
@@ -408,6 +412,13 @@ export async function registerAllWorkers(): Promise<void> {
     handleMailFeedCron(job)
   );
   logger.info("Registered worker: mail-feed-cron");
+
+  // Cal.com backfill (cron: every 30min) — invokes the api-side backfill runner
+  // in-process (IoC slot) to capture any Cal.com booking the webhook missed.
+  await boss.work(CAL_BACKFILL_CRON_QUEUE, async ([job]: any[]) =>
+    handleCalBackfillCron(job)
+  );
+  logger.info("Registered worker: cal-backfill-cron");
 
   // Event sync (cron: every 6h) — invokes the api-side event-sync runner in-process
   // (IoC slot) to mirror upcoming events + Stellar deadlines + Google Calendar into
