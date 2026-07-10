@@ -63,7 +63,11 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { resolveViewTrust } from "../services/view-trust-service.js";
 import { auditLog } from "../utils/audit-log.js";
-import { emitSideEffects, getBoss } from "@synap/events";
+import {
+  emitSideEffects,
+  getBoss,
+  type SideEffectPayload,
+} from "@synap/events";
 import { randomUUID } from "crypto";
 import { syncPropertyToRelations } from "../utils/property-relation-sync.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
@@ -247,6 +251,49 @@ const FACET_SOURCE_ENUM = z
   ])
   .optional();
 
+/**
+ * Automation chain-tracking context, mirroring `SideEffectPayload["automationContext"]`.
+ * Accepted as an optional input field on the facet doors so an automation-triggered
+ * facet write threads its chainDepth into the cycle guard instead of restarting at 0.
+ */
+const AUTOMATION_CONTEXT_INPUT = z
+  .object({
+    automationRunId: z.string(),
+    automationId: z.string(),
+    chainDepth: z.number(),
+    rootRunId: z.string().optional(),
+    chainAutomationIds: z.array(z.string()).optional(),
+  })
+  .optional();
+
+/**
+ * Bounded-concurrency guard for the fire-and-forget `registerIdentitySignals`
+ * calls below. entities.create/update never await signal registration (it
+ * must not add latency to the normal single-capture path), but a bulk import
+ * fans out one entities.create call per row via createCaller — with nothing
+ * capping it, N rows means N concurrent inserts piling onto the pool at once.
+ * Cap in-flight signal writes; anything past the cap queues instead of firing
+ * immediately, so single-capture latency (well under the cap) is unaffected.
+ */
+const MAX_INFLIGHT_SIGNAL_WRITES = 25;
+let inFlightSignalWrites = 0;
+const signalWriteQueue: Array<() => void> = [];
+
+function runSignalWrite(task: () => Promise<void>): void {
+  const start = () => {
+    inFlightSignalWrites++;
+    task().finally(() => {
+      inFlightSignalWrites--;
+      signalWriteQueue.shift()?.();
+    });
+  };
+  if (inFlightSignalWrites < MAX_INFLIGHT_SIGNAL_WRITES) {
+    start();
+  } else {
+    signalWriteQueue.push(start);
+  }
+}
+
 /** Look up a role-profile's slug for facet emit payloads (best-effort). */
 async function resolveFacetProfileSlug(
   profileId: string
@@ -288,6 +335,8 @@ function emitFacetSideEffects(opts: {
   /** Parent entity title — threaded through so proposal/notification cards read human-friendly text. */
   entityTitle?: string | null;
   contextEntityTitle?: string | null;
+  /** Automation chain tracking — mirrors entity mutations so the cycle guard sees the true chainDepth. */
+  automationContext?: SideEffectPayload["automationContext"];
 }): void {
   const commonWs = opts.workspaceId;
   emitSideEffects({
@@ -297,6 +346,7 @@ function emitFacetSideEffects(opts: {
     userId: opts.userId,
     workspaceId: commonWs,
     sessionId: opts.sessionId ?? null,
+    automationContext: opts.automationContext,
     data: {
       entityId: opts.entityId,
       facetId: opts.facetId,
@@ -322,6 +372,7 @@ function emitFacetSideEffects(opts: {
     userId: opts.userId,
     workspaceId: commonWs,
     sessionId: opts.sessionId ?? null,
+    automationContext: opts.automationContext,
     data: {
       facetChange: true,
       facetAction: opts.action,
@@ -785,17 +836,19 @@ export const entitiesRouter = router({
           propertiesWithContent as Record<string, unknown>
         );
         if (signals.length > 0) {
-          registerIdentitySignals(
-            database,
-            createdEntity.id,
-            signals,
-            "entities.create"
-          ).catch((err) => {
-            logger.warn(
-              { err },
-              "[entities.create] Identity signal registration failed"
-            );
-          });
+          runSignalWrite(() =>
+            registerIdentitySignals(
+              database,
+              createdEntity.id,
+              signals,
+              "entities.create"
+            ).catch((err) => {
+              logger.warn(
+                { err },
+                "[entities.create] Identity signal registration failed"
+              );
+            })
+          );
         }
       }
 
@@ -1697,17 +1750,19 @@ export const entitiesRouter = router({
         if (touchedIdentityKey) {
           const signals = extractIdentitySignals(newProps);
           if (signals.length > 0) {
-            registerIdentitySignals(
-              database,
-              input.id,
-              signals,
-              "entities.update"
-            ).catch((err) => {
-              logger.warn(
-                { err },
-                "[entities.update] Identity signal registration failed"
-              );
-            });
+            runSignalWrite(() =>
+              registerIdentitySignals(
+                database,
+                input.id,
+                signals,
+                "entities.update"
+              ).catch((err) => {
+                logger.warn(
+                  { err },
+                  "[entities.update] Identity signal registration failed"
+                );
+              })
+            );
           }
         }
       }
@@ -1841,6 +1896,7 @@ export const entitiesRouter = router({
         source: FACET_SOURCE_ENUM,
         reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
+        automationContext: AUTOMATION_CONTEXT_INPUT,
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -2036,6 +2092,7 @@ export const entitiesRouter = router({
         sessionId: ctx.sessionId ?? null,
         entityTitle: parent.title,
         contextEntityTitle,
+        automationContext: input.automationContext,
       });
 
       return {
@@ -2060,6 +2117,7 @@ export const entitiesRouter = router({
         source: FACET_SOURCE_ENUM,
         reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
+        automationContext: AUTOMATION_CONTEXT_INPUT,
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -2175,6 +2233,7 @@ export const entitiesRouter = router({
         workspaceId: facet.workspaceId ?? governanceWorkspaceId,
         sessionId: ctx.sessionId ?? null,
         entityTitle: parentForUpdate?.title,
+        automationContext: input.automationContext,
       });
 
       return { status: "updated" as const, message: "Facet updated", facet };
@@ -2190,6 +2249,7 @@ export const entitiesRouter = router({
         source: FACET_SOURCE_ENUM,
         reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
+        automationContext: AUTOMATION_CONTEXT_INPUT,
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -2284,6 +2344,7 @@ export const entitiesRouter = router({
         workspaceId: existing.workspaceId ?? governanceWorkspaceId,
         sessionId: ctx.sessionId ?? null,
         entityTitle: parentForDetach?.title,
+        automationContext: input.automationContext,
       });
 
       return { status: "detached" as const, message: "Facet detached" };
