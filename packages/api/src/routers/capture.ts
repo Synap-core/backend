@@ -66,6 +66,13 @@ import {
   fetchRoutingMemory,
   fetchWorkspaceRoutingThreshold,
 } from "../services/routing-memory.js";
+import {
+  AI_KIND,
+  AUTO_ROUTE_MIN_CONFIDENCE,
+  BYOA_DEFAULT_ROUTE_CONFIDENCE,
+  EXACT_MATCH_CONFIDENCE,
+  FUZZY_MATCH_CONFIDENCE,
+} from "../lib/ai-events.js";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
@@ -136,16 +143,9 @@ function titleSimilarity(a: string, b: string): number {
 const DEDUP_SIMILARITY_FLOOR = 0.5;
 
 // ── Workspace routing (shared across ALL capture doors) ─────────────────────
-// Below this confidence, the AI's workspace guess is too weak to override where
-// the capture is — leave it in the ambient workspace rather than risk a wrong move.
-export const AUTO_ROUTE_MIN_CONFIDENCE = 0.6;
-
-// A direct/BYOA caller that names an explicit `aiWorkspaceId` but supplies NO
-// confidence gets this baseline — a deliberate pick is trustworthy enough to
-// auto-apply (still gated on membership) rather than silently dropped by the
-// gate. The interactive IS path always carries a real/derived confidence by the
-// time it reaches routing, so this only rescues explicit no-confidence callers.
-export const BYOA_DEFAULT_ROUTE_CONFIDENCE = 0.7;
+// The gate tunables (AUTO_ROUTE_MIN_CONFIDENCE, BYOA_DEFAULT_ROUTE_CONFIDENCE,
+// EXACT/FUZZY_MATCH_CONFIDENCE) live in the `lib/ai-events` SSOT — single-sourced
+// with routing-memory's auto-tune floor so the two gating paths can't drift.
 
 export type WorkspaceRoutingMode = "auto" | "ask" | "locked";
 

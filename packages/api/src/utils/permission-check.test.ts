@@ -63,6 +63,8 @@ vi.mock("@synap/database", async () => {
     users: { id: "id", userType: "userType", agentMetadata: "agentMetadata" },
     workspaces: { id: "id", settings: "settings" },
     eq: vi.fn((a, b) => ({ field: a, value: b })),
+    and: vi.fn((...conds) => ({ and: conds })),
+    inArray: vi.fn((col, arr) => ({ inArray: [col, arr] })),
     verifyPermission: mockVerifyPermission,
     ProposalStatus: { PENDING: "pending", AUTO_APPROVED: "auto_approved" },
     ProfileResolutionService: class {
@@ -112,6 +114,9 @@ import {
 // We also need checkPermissionOrPropose for the integration-style unit tests.
 // Import it separately so mocks are fully resolved first.
 import { checkPermissionOrPropose } from "./permission-check.js";
+
+// The mocked SSOT pending-proposal INSERT — asserted on to prove proposer stamping.
+import { insertPendingProposal } from "@synap/database";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -890,5 +895,104 @@ describe("checkPermissionOrPropose — entity-create profile guardrail", () => {
 
     expect("denied" in result).toBe(false);
     expect(mockResolveProfile).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: human-proposer branch — an insufficient-role MEMBER proposes rather
+// than hard-denying ("team member proposes → owner approves" loop).
+// ---------------------------------------------------------------------------
+
+describe("checkPermissionOrPropose — human-proposer (insufficient-role member)", () => {
+  /**
+   * Sequence mockDbSelect for the human-propose branch: 1st select = workspace
+   * settings (policy), 2nd select = workspace_members reviewer probe.
+   */
+  function setupHumanProposeSelects(
+    settings: Record<string, unknown>,
+    reviewerRows: Array<{ userId: string }>
+  ) {
+    let callCount = 0;
+    mockDbSelect.mockImplementation(() => {
+      callCount++;
+      const rows = callCount === 1 ? [{ settings }] : reviewerRows;
+      return {
+        from: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockResolvedValue(rows),
+      } as any;
+    });
+  }
+
+  beforeEach(() => {
+    // A member with an insufficient role (editor attempting an owner-only write).
+    mockVerifyPermission.mockResolvedValue({
+      allowed: false,
+      reason: "Insufficient workspace permissions (role: editor)",
+      role: "editor",
+    });
+  });
+
+  it("proposes (not denies) and stamps the human as proposer when a reviewer exists", async () => {
+    setupHumanProposeSelects({}, [{ userId: "owner-1" }]);
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      subjectType: "entity",
+      action: "delete",
+      data: { id: "ent-xyz" },
+    });
+
+    expect("granted" in result && result.granted === false).toBe(true);
+    expect((result as { proposalId: string }).proposalId).toBeDefined();
+    // The proposer's userId is recorded on the pending row.
+    expect(insertPendingProposal).toHaveBeenCalledWith(
+      expect.objectContaining({ proposedByUserId: BASE_OPTS.userId }),
+      expect.anything()
+    );
+  });
+
+  it("denies (does not propose) when the only reviewer candidate is the proposer themselves", async () => {
+    // reviewer probe returns only the caller → no OTHER reviewer → hard-deny.
+    setupHumanProposeSelects({}, [{ userId: BASE_OPTS.userId }]);
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      subjectType: "entity",
+      action: "delete",
+      data: { id: "ent-xyz" },
+    });
+
+    expect("denied" in result && result.denied === true).toBe(true);
+  });
+
+  it("denies a NON-member human (membership miss → no role) — no proposal rights for outsiders", async () => {
+    mockVerifyPermission.mockResolvedValue({
+      allowed: false,
+      reason: "User is not a member of this workspace",
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      subjectType: "entity",
+      action: "delete",
+      data: { id: "ent-xyz" },
+    });
+
+    expect("denied" in result && result.denied === true).toBe(true);
+  });
+
+  it("denies an insufficient-role member riding an untrusted issuer (deny precedes propose)", async () => {
+    setupHumanProposeSelects({}, [{ userId: "owner-1" }]);
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      subjectType: "entity",
+      action: "delete",
+      data: { id: "ent-xyz" },
+      issuer: { kind: "view", trusted: false },
+    });
+
+    expect("denied" in result && result.denied === true).toBe(true);
   });
 });

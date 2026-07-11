@@ -19,6 +19,9 @@
  * capture door (MCP, REST, CLI, Raycast, tRPC) learns from it for free — a
  * correction today shapes routing tomorrow. Best-effort by contract: callers
  * must treat a throw/empty as "no memory" and never fail a capture over it.
+ *
+ * The event vocabulary + join key + window clamp + gate tunables come from the
+ * `lib/ai-events` SSOT (a typo there would silently break the flywheel).
  */
 
 import {
@@ -33,6 +36,16 @@ import {
   inArray,
   drizzleSql,
 } from "@synap/database";
+import {
+  AI_DECISION,
+  AI_CORRECTION,
+  AI_KIND,
+  AUTO_ROUTE_MIN_CONFIDENCE,
+  ROUTE_TUNING_CEIL,
+  clampWindowDays,
+  decisionCorrelationKeyExpr,
+  eventKindExpr,
+} from "../lib/ai-events.js";
 
 export interface RoutingMemoryExample {
   /** A short snippet of the captured text (title/preview), for the prompt. */
@@ -48,10 +61,12 @@ export interface RoutingMemory {
   confirmations: RoutingMemoryExample[];
 }
 
-const DEFAULT_WINDOW_DAYS = 30;
 const DEFAULT_CORRECTION_LIMIT = 5;
 const DEFAULT_CONFIRMATION_LIMIT = 3;
 const SNIPPET_MAX = 120;
+/** Over-fetch factor: rows drop out when their text/workspace can't resolve or
+ *  a duplicate entity is deduped, so we fetch a multiple of the target. */
+const OVERFETCH_FACTOR = 3;
 
 /** Collapse whitespace + cap length so a snippet is cheap in the prompt. */
 function toSnippet(text: string | null | undefined): string {
@@ -73,17 +88,15 @@ export async function fetchRoutingMemory(
     confirmationLimit?: number;
   }
 ): Promise<RoutingMemory> {
-  const windowDays = Math.min(
-    365,
-    Math.max(1, opts?.windowDays ?? DEFAULT_WINDOW_DAYS)
-  );
+  const windowDays = clampWindowDays(opts?.windowDays);
   const correctionLimit = opts?.correctionLimit ?? DEFAULT_CORRECTION_LIMIT;
   const confirmationLimit =
     opts?.confirmationLimit ?? DEFAULT_CONFIRMATION_LIMIT;
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
 
-  // 1. Recent reroute corrections — over-fetch (×3): some won't resolve a text
-  //    or a non-operational workspace pair and get dropped when building.
+  // 1. Recent reroute corrections, newest first. Over-fetch: rows drop when
+  //    text/workspace can't resolve OR an entity was moved MORE THAN ONCE (only
+  //    its latest correction is kept — see the dedup in the build loop).
   const correctionRows = await db
     .select({
       entityId: drizzleSql<string | null>`${events.data}->>'entityId'`,
@@ -98,25 +111,24 @@ export async function fetchRoutingMemory(
     .where(
       and(
         eq(events.userId, userId),
-        eq(events.subjectType, "ai_correction"),
-        drizzleSql`${events.data}->>'kind' = 'route'`,
+        eq(events.subjectType, AI_CORRECTION),
+        drizzleSql`${eventKindExpr} = ${AI_KIND.ROUTE}`,
         gte(events.timestamp, since)
       )
     )
     .orderBy(desc(events.timestamp))
-    .limit(correctionLimit * 3);
+    .limit(correctionLimit * OVERFETCH_FACTOR);
 
   // 2. ALL corrected decision correlationIds in-window — so a positive example
-  //    is only an UN-corrected route (a decision that survived).
+  //    is only an UN-corrected route (a decision that survived). No kind filter:
+  //    a delete/revert also disqualifies a positive.
   const correctedIdRows = await db
-    .select({
-      cid: drizzleSql<string | null>`${events.data}->>'correlationId'`,
-    })
+    .select({ cid: decisionCorrelationKeyExpr })
     .from(events)
     .where(
       and(
         eq(events.userId, userId),
-        eq(events.subjectType, "ai_correction"),
+        eq(events.subjectType, AI_CORRECTION),
         gte(events.timestamp, since)
       )
     );
@@ -137,17 +149,17 @@ export async function fetchRoutingMemory(
     .where(
       and(
         eq(events.userId, userId),
-        eq(events.subjectType, "ai_decision"),
-        drizzleSql`${events.data}->>'kind' = 'route'`,
+        eq(events.subjectType, AI_DECISION),
+        drizzleSql`${eventKindExpr} = ${AI_KIND.ROUTE}`,
         drizzleSql`${events.data}->>'applied' = 'true'`,
         gte(events.timestamp, since)
       )
     )
     .orderBy(desc(events.timestamp))
-    .limit(confirmationLimit * 5);
+    .limit(confirmationLimit * OVERFETCH_FACTOR);
   const confirmedDecisions = decisionRows
     .filter((d) => d.correlationId && !correctedIds.has(d.correlationId))
-    .slice(0, confirmationLimit * 3);
+    .slice(0, confirmationLimit * OVERFETCH_FACTOR);
 
   // 4. Batch-resolve entity texts + workspace names.
   const entityIds = correctionRows
@@ -209,11 +221,18 @@ export async function fetchRoutingMemory(
   const wsById = new Map(wsRows.map((w) => [w.id, w]));
 
   // Build examples — skip operational workspaces (never surface Pod Admin as a
-  // routing target, mirroring the capture hint filter) and any unresolved text.
+  // routing target) and any unresolved text. DEDUP by entity: an item moved
+  // more than once (A→B→C) emits multiple corrections sharing the decision's
+  // correlationId; keeping all of them would assert contradictory labels ("B is
+  // right" AND "B is wrong"). Rows are newest-first, so the FIRST row per entity
+  // is the LATEST move — its `to` is the final home. Keep only that one.
   const corrections: RoutingMemoryExample[] = [];
+  const seenEntities = new Set<string>();
   for (const r of correctionRows) {
     if (corrections.length >= correctionLimit) break;
     if (!r.entityId || !r.fromWorkspaceId || !r.toWorkspaceId) continue;
+    if (seenEntities.has(r.entityId)) continue;
+    seenEntities.add(r.entityId);
     const from = wsById.get(r.fromWorkspaceId);
     const to = wsById.get(r.toWorkspaceId);
     const text = textByEntityId.get(r.entityId);
@@ -248,11 +267,8 @@ export async function fetchRoutingMemory(
 // correction rate is noise — don't tune (product review: byTargetWorkspace
 // rates are meaningless at low n). Tuning only ever RAISES the gate (never
 // below the flat floor): a workspace the user frequently corrects earns a
-// higher bar; a trusted one keeps today's behavior. Kept local to avoid a
-// capture.ts ↔ routing-memory import cycle (TUNING_FLOOR = AUTO_ROUTE_MIN_CONFIDENCE).
+// higher bar; a trusted one keeps today's behavior.
 const MIN_TUNING_VOLUME = 5;
-const TUNING_FLOOR = 0.6;
-const TUNING_CEIL = 0.9;
 
 /**
  * The auto-apply confidence gate for routing TO `workspaceId`, tuned from that
@@ -265,10 +281,7 @@ export async function fetchWorkspaceRoutingThreshold(
   workspaceId: string,
   opts?: { windowDays?: number }
 ): Promise<number | undefined> {
-  const windowDays = Math.min(
-    365,
-    Math.max(1, opts?.windowDays ?? DEFAULT_WINDOW_DAYS)
-  );
+  const windowDays = clampWindowDays(opts?.windowDays);
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
 
   const decisions = await db
@@ -277,8 +290,8 @@ export async function fetchWorkspaceRoutingThreshold(
     .where(
       and(
         eq(events.userId, userId),
-        eq(events.subjectType, "ai_decision"),
-        drizzleSql`${events.data}->>'kind' = 'route'`,
+        eq(events.subjectType, AI_DECISION),
+        drizzleSql`${eventKindExpr} = ${AI_KIND.ROUTE}`,
         drizzleSql`${events.data}->>'chosenWorkspaceId' = ${workspaceId}`,
         gte(events.timestamp, since)
       )
@@ -289,15 +302,13 @@ export async function fetchWorkspaceRoutingThreshold(
     decisions.map((d) => d.correlationId).filter((x): x is string => !!x)
   );
   const corrections = await db
-    .select({
-      cid: drizzleSql<string | null>`${events.data}->>'correlationId'`,
-    })
+    .select({ cid: decisionCorrelationKeyExpr })
     .from(events)
     .where(
       and(
         eq(events.userId, userId),
-        eq(events.subjectType, "ai_correction"),
-        drizzleSql`${events.data}->>'kind' IN ('route', 'extract')`,
+        eq(events.subjectType, AI_CORRECTION),
+        drizzleSql`${eventKindExpr} IN (${AI_KIND.ROUTE}, ${AI_KIND.EXTRACT})`,
         gte(events.timestamp, since)
       )
     );
@@ -308,6 +319,11 @@ export async function fetchWorkspaceRoutingThreshold(
   );
 
   const rate = correctedHere.size / decisions.length;
-  const threshold = TUNING_FLOOR + rate * (TUNING_CEIL - TUNING_FLOOR);
-  return Math.min(TUNING_CEIL, Math.max(TUNING_FLOOR, threshold));
+  const threshold =
+    AUTO_ROUTE_MIN_CONFIDENCE +
+    rate * (ROUTE_TUNING_CEIL - AUTO_ROUTE_MIN_CONFIDENCE);
+  return Math.min(
+    ROUTE_TUNING_CEIL,
+    Math.max(AUTO_ROUTE_MIN_CONFIDENCE, threshold)
+  );
 }

@@ -169,7 +169,7 @@ async function stampProjectMembership(
 function emitProposalReviewed(
   proposalId: string,
   workspaceId: string | null | undefined,
-  status: "approved" | "rejected" | "reopened",
+  status: "approved" | "rejected" | "reopened" | "withdrawn",
   userId?: string
 ): void {
   // A null-workspace (pod-wide) proposal still needs its reviewed event so the
@@ -181,11 +181,17 @@ function emitProposalReviewed(
     data: { proposalId, status, ...(workspaceId ? { workspaceId } : {}) },
     ...(workspaceId ? { workspaceId } : { userId: userId! }),
   });
-  // "reopened" = rejected → pending: the proposal is actionable again, so it must
-  // NOT fire the approve/reject automation triggers, mark its notification
-  // actioned, or notify a waiting agent of a terminal review. The realtime event
-  // above is enough to move it back into the pending queue on every client.
+  // "reopened" (rejected → pending) and "withdrawn" (proposer retracts a pending
+  // proposal) must NOT fire the approve/reject automation triggers or notify a
+  // waiting agent of a terminal review. A reopen leaves the pending notification
+  // (the proposal is actionable again); a withdrawal is terminal, so its pending
+  // notification is cleared. The realtime event above moves it out of / back
+  // into the pending queue on every client.
   if (status === "reopened") return;
+  if (status === "withdrawn") {
+    markProposalNotificationActioned(proposalId);
+    return;
+  }
   // Automation side-effects (proposal.approved/rejected.completed) are
   // workspace-scoped triggers; only emit them when a workspace is present.
   if (workspaceId) {
@@ -1934,6 +1940,83 @@ export const proposalsRouter = router({
     }),
 
   /**
+   * Withdraw a PENDING proposal — a PROPOSER action (NOT a reviewer action).
+   * The person who filed a proposal can retract it before anyone reviews it.
+   *
+   * Authority is proposer-only, NOT the approval-policy ladder: it's your own
+   * proposal, so no reviewer role is required. A caller may withdraw a pending
+   * proposal when they are:
+   *   - the recorded human proposer (`proposedByUserId === userId`), OR
+   *   - the human owner of an agent proposal (`agentUserId` set AND
+   *     `createdBy === userId` — createProposal stamps the triggering human as
+   *     `createdBy`). This lets the human who dispatched an agent retract the
+   *     agent's still-pending request.
+   * Anyone else — including a workspace owner/admin who is NOT the proposer —
+   * must use `reject`, not `withdraw`. Pending-only: an already
+   * approved/rejected/withdrawn proposal cannot be withdrawn.
+   */
+  withdraw: protectedProcedure
+    .input(z.object({ proposalId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+
+      const proposal = await db.query.proposals.findFirst({
+        where: eq(proposals.id, input.proposalId),
+        columns: {
+          status: true,
+          workspaceId: true,
+          proposedByUserId: true,
+          agentUserId: true,
+          createdBy: true,
+        },
+      });
+      if (!proposal) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
+      }
+      if (proposal.status !== ProposalStatus.PENDING) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Only a pending proposal can be withdrawn.",
+        });
+      }
+
+      const isHumanProposer =
+        !!proposal.proposedByUserId && proposal.proposedByUserId === userId;
+      const isAgentOwner =
+        !!proposal.agentUserId && proposal.createdBy === userId;
+      if (!isHumanProposer && !isAgentOwner) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the proposer can withdraw this proposal.",
+        });
+      }
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.WITHDRAWN,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // Realtime + notification clear only (no approve/reject automation side
+      // effects — see emitProposalReviewed): removes it from the pending queue.
+      emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "withdrawn",
+        userId
+      );
+
+      return { success: true };
+    }),
+
+  /**
    * Revert an APPROVED / AUTO-APPROVED proposal — the undo half of
    * "reviewable AND reversible". Reads the proposal's own stored data to compute
    * the inverse (no schema change): a create proposal's materialized entity /
@@ -2466,6 +2549,20 @@ export const proposalsRouter = router({
       const userId = requireUserId(ctx.userId);
 
       for (const proposalId of input.proposalIds) {
+        // Authority — SAME ladder `approve`/`revert`/`reject` enforce, per
+        // proposal. Without this a batch rejection was gated only by
+        // `requireUserId` (any member could reject any proposal by id).
+        const target = await db.query.proposals.findFirst({
+          where: eq(proposals.id, proposalId),
+          columns: { workspaceId: true, data: true },
+        });
+        if (!target) continue;
+        await assertCanReviewProposal({
+          proposal: { workspaceId: target.workspaceId, data: target.data },
+          userId,
+          action: "reject",
+        });
+
         const [updated] = await db
           .update(proposals)
           .set({

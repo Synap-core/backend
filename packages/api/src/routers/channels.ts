@@ -1879,10 +1879,18 @@ export const channelsRouter = router({
 
               if (aiMembers.length > 0) {
                 // Fetch recent context (last 6 messages — cheap, bounded).
+                // Exclude ephemeral recaps: a "catch me up" summary must not
+                // influence teammate routing, consistent with every other read
+                // that feeds agent context.
                 const recentMessages = await db
                   .select({ role: messages.role, content: messages.content })
                   .from(messages)
-                  .where(eq(messages.channelId, channelId))
+                  .where(
+                    and(
+                      eq(messages.channelId, channelId),
+                      eq(messages.ephemeral, false)
+                    )
+                  )
                   .orderBy(desc(messages.timestamp))
                   .limit(6)
                   .then((rows) => rows.reverse());
