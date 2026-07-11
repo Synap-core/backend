@@ -47,7 +47,7 @@ function router(opts: {
   calls: { flips: number; facetInserts: number; repoints: number };
 }): Handler {
   return (text) => {
-    if (text.includes("workspace_id FROM profiles")) return opts.sourceRows;
+    if (text.includes("entity_scope FROM profiles")) return opts.sourceRows;
     if (text.includes("entity_facets")) {
       opts.calls.facetInserts += 1;
       return { count: opts.facetCountPerRow ?? 0 };
