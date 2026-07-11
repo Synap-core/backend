@@ -1518,6 +1518,27 @@ export const captureRouter = router({
       // never entityRepo.create directly, so capture gets the same
       // project-linking, session `produced` links, property→relation sync,
       // identity-signal registration, and emit chain every other creator gets.
+      // Routing W1 (decision D3): identity is pod-wide, role hats live in
+      // lenses. A pod-scope kind (person/company/… — entityScope='pod') is
+      // created POD-WIDE (workspaceId=null) instead of force-stamped into the
+      // routed workspace; the routed workspace instead becomes the workspaceId
+      // of its ATTACHED FACETS (below). Workspace-scoped kinds (task/note/item/
+      // deal/event…) keep the routed stamp — their documents/sessions/projects
+      // link via the entity's workspaceId (load-bearing; do not break). Cache
+      // per slug so a batch of many same-kind entities resolves scope once.
+      const scopeService = new ProfileResolutionService(database);
+      const entityScopeCache = new Map<string, "pod" | "workspace">();
+      const isPodScopeProfile = async (slug: string): Promise<boolean> => {
+        const cached = entityScopeCache.get(slug);
+        if (cached) return cached === "pod";
+        const scope = await scopeService.getEntityScope(
+          slug,
+          workspaceId ?? null
+        );
+        entityScopeCache.set(slug, scope);
+        return scope === "pod";
+      };
+
       const entityCaller = {
         create: async (op: {
           profileSlug: string;
@@ -1526,6 +1547,10 @@ export const captureRouter = router({
           properties?: Record<string, unknown>;
           content?: string;
         }) => {
+          // Pod-scope kinds land pod-wide (null workspace); workspace-scope
+          // kinds keep the routed stamp. The note fallback below is always a
+          // workspace kind, so it always keeps the routed stamp.
+          const isPod = await isPodScopeProfile(op.profileSlug);
           const { documentId, inlineContent } = await resolveContentTarget({
             content: op.content,
             title: op.title,
@@ -1551,13 +1576,12 @@ export const captureRouter = router({
               properties,
               documentId,
               source: "user",
-              // Force the entity into this (routed) workspace even for a
-              // pod-default profile — matches capture's historical
-              // literal-workspaceId behavior. `targetWorkspaceId` pins it to the
-              // ROUTED workspace so the entity doesn't split from its document/
-              // project/session links (which already use `workspaceId`).
-              targetWorkspaceId: workspaceId ?? undefined,
-              workspaceScoped: true,
+              // Pod-scope kind → pod-wide (null workspace): omit the routed
+              // stamp and let the profile's pod-default win. Workspace-scope
+              // kind → pin to the ROUTED workspace so the entity doesn't split
+              // from its document/project/session links (which use workspaceId).
+              targetWorkspaceId: isPod ? undefined : (workspaceId ?? undefined),
+              workspaceScoped: !isPod,
             });
             return {
               id: (created as { id: string }).id,
@@ -1583,8 +1607,8 @@ export const captureRouter = router({
                   properties: salvageProperties,
                   documentId,
                   source: "user",
-                  targetWorkspaceId: workspaceId ?? undefined,
-                  workspaceScoped: true,
+                  targetWorkspaceId: isPod ? undefined : (workspaceId ?? undefined),
+                  workspaceScoped: !isPod,
                 });
                 return {
                   id: (salvaged as { id: string }).id,
@@ -1719,6 +1743,10 @@ export const captureRouter = router({
               properties: f.properties,
               status: f.status,
               contextEntityId,
+              // Routing W1: role hats live in the routed lens. Pin the facet to
+              // the routed workspace (the entity itself may be pod-wide). Null/
+              // undefined routed ws → inherit the parent (pod-wide facet).
+              workspaceId: workspaceId ?? undefined,
               source: "user",
             });
             facetsAttached++;
