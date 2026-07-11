@@ -53,6 +53,7 @@ import {
   entityExternalLinks,
   userEntityState,
   profiles,
+  entityFacets,
 } from "@synap/database/schema";
 import { type Entity, EntitySchema } from "@synap-core/types";
 import { entityToWire } from "./hub-protocol/rest/_codecs/entity.js";
@@ -426,6 +427,40 @@ export const entitiesRouter = router({
           counts[row.profileSlug] = row.count;
         }
       }
+
+      // Kind + Facets: a profile converted from a primary kind into an
+      // attachable role no longer matches `entities.type` — its entities now
+      // carry it as a live facet, so the count above is 0 for that slug. Count
+      // DISTINCT entities per role-profile slug (same workspace lens as the
+      // kind counts) in ONE grouped query and merge, so a role profile keeps a
+      // truthful badge instead of dropping to zero after conversion.
+      const facetRows = await db
+        .select({
+          profileSlug: profiles.slug,
+          count: drizzleSql<number>`cast(count(distinct ${entityFacets.entityId}) as integer)`,
+        })
+        .from(entityFacets)
+        .innerJoin(profiles, eq(entityFacets.profileId, profiles.id))
+        .where(
+          and(
+            isNull(entityFacets.deletedAt),
+            or(
+              eq(entityFacets.workspaceId, ctx.workspaceId),
+              and(
+                isNull(entityFacets.workspaceId),
+                eq(entityFacets.userId, ctx.userId)
+              )
+            )
+          )
+        )
+        .groupBy(profiles.slug);
+
+      for (const row of facetRows) {
+        if (row.profileSlug) {
+          counts[row.profileSlug] = (counts[row.profileSlug] ?? 0) + row.count;
+        }
+      }
+
       return { counts };
     }),
 

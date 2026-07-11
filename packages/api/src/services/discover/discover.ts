@@ -58,6 +58,18 @@ interface OnboardingSpec {
   [k: string]: unknown;
 }
 
+/**
+ * A profile in the orient sample. Carries the Kind + Facets discriminator so an
+ * agent can tell a primary type (kind) from an attachable role (facet) at
+ * orient time, before it lists profiles or creates entities.
+ */
+interface ProfileSample {
+  slug: string;
+  name: string;
+  profileKind: "kind" | "role";
+  applicableKinds?: string[] | null;
+}
+
 interface DiscoverWorkspace {
   id: string;
   name: string;
@@ -68,8 +80,8 @@ interface DiscoverWorkspace {
   onboarding?: OnboardingSpec;
   /** full only */
   description?: string | null;
-  /** full only — this workspace's profiles (slug + name). */
-  profiles?: Array<{ slug: string; name: string }>;
+  /** full only — this workspace's profiles (slug + name + kind). */
+  profiles?: ProfileSample[];
 }
 
 interface DiscoverProject {
@@ -89,19 +101,31 @@ interface DiscoverResult {
   workspaces: DiscoverWorkspace[];
   workspaceCount: number;
   /** Representative profile sample from the pinned / first workspace. */
-  profiles: Array<{ slug: string; name: string }>;
+  profiles: ProfileSample[];
   note: string;
 }
 
-/** Take listProfiles's `{ profiles }` shape → a light slug+name list. */
-function trimProfiles(res: unknown): Array<{ slug: string; name: string }> {
+/** Take listProfiles's `{ profiles }` shape → a light slug+name+kind list. */
+function trimProfiles(res: unknown): ProfileSample[] {
   const list = ((res as { profiles?: unknown }).profiles ?? []) as Array<{
     slug?: string;
     name?: string;
     displayName?: string;
+    profileKind?: "kind" | "role";
+    applicableKinds?: string[] | null;
   }>;
   return list.flatMap((p) =>
-    p.slug ? [{ slug: p.slug, name: p.displayName ?? p.name ?? p.slug }] : []
+    p.slug
+      ? [
+          {
+            slug: p.slug,
+            name: p.displayName ?? p.name ?? p.slug,
+            // Kind + Facets discriminator (defaults to "kind" for legacy rows).
+            profileKind: p.profileKind ?? "kind",
+            applicableKinds: p.applicableKinds ?? null,
+          },
+        ]
+      : []
   );
 }
 
@@ -176,11 +200,8 @@ export async function discover(
 
   // ── Profiles: representative sample (light) or per-workspace (full) ──
   const sampleWsId = workspaceId ?? wsIds[0];
-  let profileSample: Array<{ slug: string; name: string }> = [];
-  const perWsProfiles = new Map<
-    string,
-    Array<{ slug: string; name: string }>
-  >();
+  let profileSample: ProfileSample[] = [];
+  const perWsProfiles = new Map<string, ProfileSample[]>();
   if (needProfiles && sampleWsId) {
     if (detail === "full") {
       // Per-workspace profiles — the old CLI `--details` N+1 fanout, now server-
@@ -192,7 +213,7 @@ export async function discover(
             .then((res) => ({ id: w.id, profiles: trimProfiles(res) }))
             .catch(() => ({
               id: w.id,
-              profiles: [] as Array<{ slug: string; name: string }>,
+              profiles: [] as ProfileSample[],
             }))
         )
       );
