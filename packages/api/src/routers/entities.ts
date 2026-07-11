@@ -34,6 +34,7 @@ import {
   getEffectiveFacets,
   loadFacetSlugsBatch,
   facetRoleExists,
+  facetVisibilityConditions,
   profileSlugScopeCondition,
   drizzleSql,
   links,
@@ -489,6 +490,105 @@ export const entitiesRouter = router({
       }
 
       return { counts };
+    }),
+
+  /**
+   * Kanban aggregation for a role facet: group the entities wearing role
+   * `roleSlug` by their facet `status`, returning per-status `count` + the
+   * first `firstN` entity ids (newest first) — the smallest primitive a kanban
+   * adapter needs to render columns without pulling every row.
+   *
+   * A SIBLING of `list` (not a mode on it): `list` is already overloaded
+   * (polymorphic profileSlug, facet filter, project/workspace lens, pagination,
+   * descendants) and returns a paginated ITEMS shape; a grouped shape would
+   * fork its output type conditionally. This keeps `list`'s contract stable.
+   *
+   * ONE grouped query over `entity_facets ⋈ entities`, under the SAME lens as
+   * the entity list: the facet visibility predicate (`facetVisibilityConditions`)
+   * AND the entity floor (`entityVisibleWhere`, the userVisibleWhere-based
+   * access scope), plus an optional project narrow. A NULL facet status is its
+   * own group (the kanban "no status" column).
+   */
+  groupByFacetStatus: podProcedure
+    .input(
+      z.object({
+        roleSlug: z.string(),
+        /** List lens; `undefined` → active workspace, `null` → pod-wide only. */
+        workspaceId: z.string().uuid().nullable().optional(),
+        /** Optional project narrow (pure narrowing, like `list`). */
+        projectId: z.string().uuid().optional(),
+        /** Max entity ids returned per status group (0 = counts only). */
+        firstN: z.number().int().min(0).max(50).default(10),
+      })
+    )
+    .output(
+      z.object({
+        roleSlug: z.string(),
+        groups: z.array(
+          z.object({
+            status: z.string().nullable(),
+            count: z.number(),
+            ids: z.array(z.string()),
+          })
+        ),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const lensWorkspaceId =
+        input.workspaceId !== undefined ? input.workspaceId : ctx.workspaceId;
+
+      // Resolve the role slug to its profile id(s) — every same-slug row (a
+      // facet may sit on a system row OR a workspace-scope twin). Non-role or
+      // unknown slug → no groups.
+      const roleProfiles = await db.query.profiles.findMany({
+        where: eq(profiles.slug, input.roleSlug),
+        columns: { id: true, profileKind: true },
+      });
+      const roleProfileIds = roleProfiles
+        .filter((p) => p.profileKind === "role")
+        .map((p) => p.id);
+      if (roleProfileIds.length === 0) {
+        return { roleSlug: input.roleSlug, groups: [] };
+      }
+
+      const conditions = [
+        inArray(entityFacets.profileId, roleProfileIds),
+        isNull(entityFacets.deletedAt),
+        ...facetVisibilityConditions({
+          userId: ctx.userId,
+          workspaceId: lensWorkspaceId,
+        }),
+        isNull(entities.deletedAt),
+        entityVisibleWhere(ctx.userId),
+        ...(input.projectId
+          ? [projectLensWhere(entities.id, input.projectId)]
+          : []),
+      ];
+
+      // firstN is a zod-validated int (0..50) → safe to inline as an array-slice
+      // literal (avoids a parameterised slice bound). array_agg newest-first,
+      // sliced to firstN; 0 yields an empty slice (counts only).
+      const rows = await db
+        .select({
+          status: entityFacets.status,
+          count: drizzleSql<number>`cast(count(*) as integer)`,
+          ids: drizzleSql<
+            string[]
+          >`(array_agg(${entities.id} ORDER BY ${entities.createdAt} DESC))[1:${drizzleSql.raw(String(input.firstN))}]`,
+        })
+        .from(entityFacets)
+        .innerJoin(entities, eq(entities.id, entityFacets.entityId))
+        .where(and(...conditions))
+        .groupBy(entityFacets.status);
+
+      return {
+        roleSlug: input.roleSlug,
+        groups: rows.map((r) => ({
+          status: r.status ?? null,
+          count: r.count,
+          ids: r.ids ?? [],
+        })),
+      };
     }),
 
   /**
