@@ -136,6 +136,34 @@ export function profileScopeConditions(
 }
 
 /**
+ * Polymorphic single-slug scope predicate: resolve `profileSlug`'s
+ * `profileKind` and return the matching entity condition — role → the
+ * facet-EXISTS (`facetRoleExists`), kind/unknown → `entities.type` equality
+ * (byte-for-byte the pre-facets behavior, so unconverted and never-converted
+ * slugs are unaffected). This is the drop-in for every read that takes ONE
+ * caller-supplied profileSlug (search, graph filters, builtin `entity.query`,
+ * pod-personal lists); multi-id scopes go through `profileScopeConditions`.
+ *
+ * `opts.workspaceId` lens: undefined = facets across all workspaces;
+ * null = pod-wide facets only; string = that workspace + pod-wide — always
+ * with the owner floor (see `facetVisibilityConditions`).
+ */
+export async function profileSlugScopeCondition(
+  db: PostgresJsDatabase<typeof schema>,
+  profileSlug: string,
+  opts: { userId: string; workspaceId?: string | null }
+): Promise<SQL> {
+  const row = await db.query.profiles.findFirst({
+    where: eq(profiles.slug, profileSlug),
+    columns: { id: true, profileKind: true },
+  });
+  if (row?.profileKind === "role") {
+    return facetRoleExists(db, [row.id], opts);
+  }
+  return eq(entities.type, profileSlug);
+}
+
+/**
  * Resolve every live facet attached to an entity, each joined with its
  * role-profile and that profile's effective properties (workspace-lensed).
  *

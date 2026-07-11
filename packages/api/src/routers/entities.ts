@@ -33,6 +33,7 @@ import {
   FacetRepository,
   getEffectiveFacets,
   facetRoleExists,
+  profileSlugScopeCondition,
   drizzleSql,
   links,
   type LinkEndpointType,
@@ -1186,7 +1187,14 @@ export const entitiesRouter = router({
       ];
 
       if (input.profileSlug) {
-        conditions.push(eq(entities.type, input.profileSlug));
+        // Polymorphic (Kind + Facets); pod-personal list → pod-wide facet
+        // lens (workspaceId: null) + owner floor.
+        conditions.push(
+          await profileSlugScopeCondition(await getDb(), input.profileSlug, {
+            userId: ctx.userId,
+            workspaceId: null,
+          })
+        );
       }
 
       const results = await db.query.entities.findMany({
@@ -1332,11 +1340,19 @@ export const entitiesRouter = router({
       const conditions: any[] = [entityVisibleWhere(ctx.userId)];
 
       if (input.profileSlug) {
-        conditions.push(eq(entities.type, input.profileSlug));
+        // Polymorphic (Kind + Facets): a role slug matches via the facet
+        // EXISTS, a kind slug via entities.type — same routing as
+        // entities.list, through the shared one-door helper.
+        const database = await getDb();
+        conditions.push(
+          await profileSlugScopeCondition(database, input.profileSlug, {
+            userId: ctx.userId,
+            workspaceId: ctx.workspaceId,
+          })
+        );
 
         // For workspace-scoped profiles, also narrow to the active workspace
         // (plus pod-wide globals already covered by the floor above).
-        const database = await getDb();
         const profileService = new ProfileResolutionService(database);
         const entityScope = await profileService.getEntityScope(
           input.profileSlug,
@@ -2637,6 +2653,20 @@ export const entitiesRouter = router({
             continue;
           }
           const fromWorkspaceId = existing.workspaceId;
+
+          // No-op guard: the entity is already in the destination. Skip the
+          // write AND — critically — the `ai_correction` emit. Emitting a
+          // `kind:"route"` correction with fromWorkspaceId === toWorkspaceId
+          // would tag the entity's AI decision as "corrected", dropping
+          // routingAccuracy for a decision that was actually right — the exact
+          // metric this feature exists to produce. Reachable via a batch move
+          // that includes an entity already in the target. Count it as moved
+          // (the caller's desired end-state holds) and move on.
+          if (fromWorkspaceId === input.workspaceId) {
+            moved.push(entityId);
+            continue;
+          }
+
           const correlationId = randomUUID();
 
           // 1. Emit .requested event

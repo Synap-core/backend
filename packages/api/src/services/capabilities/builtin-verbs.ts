@@ -38,6 +38,7 @@ import {
   getWorkspaceMembership,
   insertChannelMessage,
   getEffectiveFacets,
+  profileSlugScopeCondition,
 } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { Context } from "../../context.js";
@@ -412,7 +413,15 @@ const entityQueryHandler: BuiltinVerbHandler = async (params, ctx) => {
     input.workspaceId ?? ctx.workspaceId ?? undefined
   );
 
-  const conditions: SQL[] = [eq(entities.type, input.profileSlug)];
+  // Polymorphic (Kind + Facets): a role slug (client/partner/…) matches via
+  // the facet EXISTS, a kind slug via entities.type — same one-door routing
+  // as entities.list, so agents querying by role get rows post-conversion.
+  const conditions: SQL[] = [
+    await profileSlugScopeCondition(db, input.profileSlug, {
+      userId: ctx.userId,
+      workspaceId: input.workspaceId ?? ctx.workspaceId ?? undefined,
+    }),
+  ];
   // JSONB property equality — mirror executeQueryStep's filter semantics.
   for (const [key, value] of Object.entries(input.filter ?? {})) {
     if (value !== undefined && value !== null) {

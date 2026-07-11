@@ -12,7 +12,16 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure, podProcedure } from "../trpc.js";
-import { db, eq, and, or, inArray, isNull, desc } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  or,
+  inArray,
+  isNull,
+  desc,
+  profileSlugScopeCondition,
+} from "@synap/database";
 import { entities, relations } from "@synap/database/schema";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import {
@@ -267,7 +276,13 @@ export const graphRouter = router({
         where: and(
           userVisibleWhere(entities.workspaceId, ctx.userId),
           isNull(entities.deletedAt),
-          input.profileSlug ? eq(entities.type, input.profileSlug) : undefined
+          // Polymorphic (Kind + Facets): role slugs match via facet EXISTS
+          // across all the user's workspaces (undefined lens + owner floor).
+          input.profileSlug
+            ? await profileSlugScopeCondition(db, input.profileSlug, {
+                userId: ctx.userId,
+              })
+            : undefined
         ),
         columns: {
           id: true,
@@ -338,7 +353,12 @@ export const graphRouter = router({
       const allEntities = await db.query.entities.findMany({
         where: and(
           eq(entities.userId, ctx.userId),
-          input.entityType ? eq(entities.type, input.entityType) : undefined
+          // Polymorphic (Kind + Facets) — same routing as getFull above.
+          input.entityType
+            ? await profileSlugScopeCondition(db, input.entityType, {
+                userId: ctx.userId,
+              })
+            : undefined
         ),
       });
 
