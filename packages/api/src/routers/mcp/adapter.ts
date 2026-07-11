@@ -643,18 +643,32 @@ export async function executeMCPToolViaHubProtocol(
           (
             entityResult as {
               facets?: Array<{
-                facet: { id: string };
+                facet: { id: string; workspaceId: string | null };
                 profile: { slug?: string };
               }>;
             }
           ).facets ?? [];
-        const match = facets.find((f) => f.profile?.slug === facetSlug);
-        if (!match) {
+        const matches = facets.filter((f) => f.profile?.slug === facetSlug);
+        if (matches.length === 0) {
           return ok({
             error: `No live '${facetSlug}' facet on entity ${entityId}`,
           });
         }
-        facetId = match.facet.id;
+        if (matches.length > 1) {
+          // Same role attached in more than one workspace lens — picking the
+          // first would detach a nondeterministic one, and the proposal card
+          // keys on the opaque facetId so a reviewer wouldn't catch it. Make
+          // the caller choose: pass workspaceId to narrow the lens, or the
+          // exact facetId.
+          return ok({
+            error: `Entity ${entityId} carries ${matches.length} live '${facetSlug}' facets — pass workspaceId or an explicit facetId`,
+            candidates: matches.map((f) => ({
+              facetId: f.facet.id,
+              workspaceId: f.facet.workspaceId,
+            })),
+          });
+        }
+        facetId = matches[0].facet.id;
       }
       const result = await caller.entities.detachFacet({
         userId,

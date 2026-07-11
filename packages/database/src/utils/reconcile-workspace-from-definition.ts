@@ -206,6 +206,10 @@ export async function reconcileWorkspaceFromDefinition(
           workspaceId,
           userId,
           semanticSlug: profile.semanticSlug,
+          // Applied on CREATE only: reconcile never flips an existing
+          // profile's kind↔role — that's a data conversion (repoint + facet
+          // the entities), owned by the conversions manifest / convertToFacet,
+          // not a template sync.
           profileKind: profile.profileKind,
           applicableKinds: profile.applicableKinds,
         });
