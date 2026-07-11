@@ -201,6 +201,18 @@ export const entitiesRouter = router({
         // Only pass agentUserId when explicitly provided — ctx.userId is the API key
         // owner ("system") which is not a valid UUID and would fail Zod validation.
         agentUserId: input.agentUserId,
+        // Kind + Facets: the door owns facet-attach now (the ONE place) — it
+        // attaches each role AFTER the entity materializes (or onto a dedup
+        // match), through the governed `attachFacet` door, and reports a per-role
+        // outcome. Map the hub's `{slug}` contract onto the door's `profileSlug`.
+        ...(input.facets?.length
+          ? {
+              facets: input.facets.map((f) => ({
+                profileSlug: f.slug,
+                properties: f.properties,
+              })),
+            }
+          : {}),
       });
       // Emit session event so whiteboards in ambient mode can mirror new entities.
       if (result.status === "created" && result.id) {
@@ -215,66 +227,32 @@ export const entitiesRouter = router({
         });
       }
 
-      // Kind + Facets: attach each requested role AFTER the entity exists,
-      // through the SAME governed door (entities.attachFacet) — no duplicated
-      // validation. Only when the create actually materialized (a proposal-gated
-      // create has no id yet). Advisory: a single facet failure is surfaced but
-      // never rolls back the created entity.
-      const attachedFacets: Array<{
-        slug: string;
-        status: string;
-        facetId?: string;
-        proposalId?: string;
-        error?: string;
-      }> = [];
-      if (input.facets?.length && !(result.status === "created" && result.id)) {
-        // Proposal-gated (or otherwise non-materialized) create: there is no
-        // entity id to attach to, and the pending create-proposal does NOT
-        // carry these facets. Say so explicitly — a silent drop reads as
-        // "roles will follow the approval" when they won't. Composite
-        // create+roles under governance should go through the entity-graph
-        // door (propose_entity_graph), which threads facets into the proposal.
-        for (const f of input.facets) {
-          attachedFacets.push({
-            slug: f.slug,
-            status: "dropped",
-            error:
-              "create was proposal-gated — re-attach after approval, or use the entity-graph door to propose entity + roles together",
-          });
-        }
-      }
-      if (result.status === "created" && result.id && input.facets?.length) {
-        for (const f of input.facets) {
-          try {
-            const facetResult = await caller.attachFacet({
-              entityId: result.id,
-              profileSlug: f.slug,
-              properties: f.properties,
-              // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
-              source: input.source ?? "intelligence",
-              agentUserId: input.agentUserId,
-            });
-            attachedFacets.push({
-              slug: f.slug,
-              status: facetResult.status,
-              facetId: (facetResult as { facetId?: string }).facetId,
-              proposalId: (facetResult as { proposalId?: string }).proposalId,
-            });
-          } catch (err) {
-            attachedFacets.push({
-              slug: f.slug,
-              status: "error",
-              error: err instanceof Error ? err.message : "attachFacet failed",
-            });
+      // Kind + Facets: the door (entities.create) attached the roles and
+      // returned a per-role outcome — forward it verbatim (it already reports
+      // the proposal-gated "dropped" case). No duplicated attach here.
+      const attachedFacets =
+        (
+          result as {
+            facets?: Array<{
+              slug: string;
+              status: string;
+              facetId?: string;
+              proposalId?: string;
+              error?: string;
+            }>;
           }
-        }
-      }
+        ).facets ?? [];
 
       return {
         status: result.status,
         message: result.message,
         id: result.id,
         proposalId: result.proposalId,
+        // Additive: signals the door merged onto an existing entity (strong
+        // identity match) instead of creating a duplicate.
+        ...((result as { deduplicated?: boolean }).deduplicated
+          ? { deduplicated: true as const }
+          : {}),
         // Forward the governance discriminator + review link from the inner
         // create so hub callers (Discord bridge, CLI, MCP) can tell a workspace
         // JOIN gate ("join") from a content proposal, and surface a clickable

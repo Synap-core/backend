@@ -44,6 +44,7 @@ import {
   FacetKindMismatchError,
   extractIdentitySignals,
   registerIdentitySignals,
+  resolveIdentity,
   IDENTITY_SIGNAL_PROPERTY_KEYS,
 } from "@synap/database";
 import {
@@ -74,7 +75,10 @@ import { randomUUID } from "crypto";
 import { syncPropertyToRelations } from "../utils/property-relation-sync.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { dispatchWebhooksForEvent } from "../utils/webhook-delivery.js";
-import { workspaceLensWhere } from "../utils/user-visible-where.js";
+import {
+  workspaceLensWhere,
+  userVisibleWhere,
+} from "../utils/user-visible-where.js";
 import { accessScopeWhere, projectLensWhere } from "../utils/project-scope.js";
 import { resolveContentTarget } from "../import/materialize-document.js";
 import { createLogger } from "@synap-core/core";
@@ -553,6 +557,26 @@ export const entitiesRouter = router({
          * on the granted inline path it is stamped directly below.
          */
         projectId: z.string().uuid().nullish(),
+        /**
+         * Kind + Facets: role-profiles to attach to this entity in the SAME
+         * call (mirrors the hub `createEntity` contract), so a caller can create
+         * an entity WITH its roles (a person who is a client + investor) in one
+         * round-trip. Each is attached AFTER the entity materializes via the
+         * governed `attachFacet` door (fast-fail kind validation, proposal-gated
+         * for agents). Dropped when the create itself is proposal-gated (no id to
+         * attach to yet) — surfaced explicitly in the response, never silently.
+         */
+        facets: z
+          .array(
+            z.object({
+              profileSlug: z.string(),
+              status: z.string().optional(),
+              properties: z.record(z.string(), z.unknown()).optional(),
+              /** Disambiguator when the same role attaches in multiple contexts. */
+              contextEntityId: z.string().uuid().nullish(),
+            })
+          )
+          .optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -612,6 +636,151 @@ export const entitiesRouter = router({
           code: "BAD_REQUEST",
           message: "Either profileSlug or profileId must be provided",
         });
+      }
+
+      // Kind + Facets: attach requested roles to a materialized entity through
+      // the governed `attachFacet` door — the ONE facet write door (validation +
+      // proposal gating inherited). Advisory: a single role failure is reported,
+      // never rolls back the created entity.
+      const attachRequestedFacets = async (
+        targetEntityId: string
+      ): Promise<
+        Array<{
+          slug: string;
+          status: string;
+          facetId?: string;
+          proposalId?: string;
+          error?: string;
+        }>
+      > => {
+        const out: Array<{
+          slug: string;
+          status: string;
+          facetId?: string;
+          proposalId?: string;
+          error?: string;
+        }> = [];
+        if (!input.facets?.length) return out;
+        const facetCaller = entitiesRouter.createCaller(
+          ctx as unknown as Parameters<typeof entitiesRouter.createCaller>[0]
+        );
+        for (const f of input.facets) {
+          try {
+            const r = await facetCaller.attachFacet({
+              entityId: targetEntityId,
+              profileSlug: f.profileSlug,
+              properties: f.properties,
+              status: f.status,
+              contextEntityId: f.contextEntityId ?? undefined,
+              source: input.source,
+              agentUserId: input.agentUserId,
+              reasoning: input.reasoning,
+            });
+            out.push({
+              slug: f.profileSlug,
+              status: r.status,
+              facetId: (r as { facetId?: string }).facetId,
+              proposalId: (r as { proposalId?: string }).proposalId,
+            });
+          } catch (err) {
+            out.push({
+              slug: f.profileSlug,
+              status: "error",
+              error: err instanceof Error ? err.message : "attachFacet failed",
+            });
+          }
+        }
+        return out;
+      };
+
+      // Resolve-then-merge (identity-first dedup — the single-entity door). A
+      // STRONG identity signal (email/phone/url/handle) means this subject
+      // already exists: enrich the matched entity + attach any requested roles
+      // instead of creating a duplicate, and return it with `deduplicated: true`.
+      // WEAK / no signal falls through to create (zero-friction by design). The
+      // enrich + facet attach ride their own governed doors (update/attachFacet),
+      // so agent writes stay proposal-gated. Skipped for a propose-time id
+      // (`proposedEntityId` must reuse its assigned id). Never blocks: a resolver
+      // hiccup falls through to a normal create.
+      if (!input.proposedEntityId) {
+        const dedupSignals = extractIdentitySignals(input.properties ?? {});
+        if (dedupSignals.length > 0) {
+          try {
+            const resolveDb = await getDb();
+            const identity = await resolveIdentity(resolveDb, {
+              userId: ctx.userId,
+              kindSlug: profileSlug,
+              name: input.title ?? null,
+              signals: dedupSignals,
+              userScope: userVisibleWhere(entities.workspaceId, ctx.userId),
+              limit: 5,
+            });
+            if (identity.match === "strong" && identity.entity) {
+              const matchedId = identity.entity.id;
+              const nonEmptyProperties = Object.fromEntries(
+                Object.entries(input.properties ?? {}).filter(
+                  ([, v]) => v !== undefined && v !== null && v !== ""
+                )
+              );
+              if (Object.keys(nonEmptyProperties).length > 0) {
+                try {
+                  const enrichCaller = entitiesRouter.createCaller(
+                    ctx as unknown as Parameters<
+                      typeof entitiesRouter.createCaller
+                    >[0]
+                  );
+                  await enrichCaller.update({
+                    id: matchedId,
+                    properties: nonEmptyProperties,
+                    // update's source enum is narrower than create's — connector
+                    // sources (openwebui/cli/n8n/raycast/openclaw) aren't in it.
+                    // Governance only branches on ai/intelligence anyway, so map
+                    // the non-AI connector sources to "user" (first-party write).
+                    source:
+                      input.source === "ai" ||
+                      input.source === "intelligence" ||
+                      input.source === "agent" ||
+                      input.source === "system" ||
+                      input.source === "extension" ||
+                      input.source === "user"
+                        ? input.source
+                        : "user",
+                    agentUserId: input.agentUserId,
+                    reasoning: input.reasoning,
+                  });
+                } catch (enrichErr) {
+                  logger.warn(
+                    { enrichErr, entityId: matchedId },
+                    "[entities.create] dedup enrich failed — returning matched entity unenriched"
+                  );
+                }
+              }
+              const dedupFacets = await attachRequestedFacets(matchedId);
+              const matched = await resolveDb.query.entities.findFirst({
+                where: eq(entities.id, matchedId),
+              });
+              logger.info(
+                { userId: ctx.userId, entityId: matchedId, profileSlug },
+                "[entities.create] deduplicated onto existing entity (strong identity match)"
+              );
+              return {
+                status: "created",
+                message:
+                  "Entity deduplicated onto existing (strong identity match)",
+                id: matchedId,
+                entity: matched ? toApiEntity(matched) : null,
+                // Additive: signals this create merged onto an existing entity.
+                deduplicated: true,
+                facets: dedupFacets,
+              };
+            }
+          } catch (resolveErr) {
+            logger.warn(
+              { resolveErr },
+              "[entities.create] identity resolve failed — proceeding to create"
+            );
+          }
+        }
       }
 
       // 1. Emit .requested event — records intent regardless of outcome
@@ -681,6 +850,18 @@ export const entitiesRouter = router({
           proposalType: perm.proposalType,
           reviewUrl: perm.reviewUrl,
           proposedEntityId: entityId,
+          // Kind + Facets: a proposal-gated create has no id yet, and the
+          // pending create-proposal does NOT carry these roles — say so
+          // explicitly rather than silently dropping them (which reads as
+          // "roles will follow the approval" when they won't). Compose entity +
+          // roles under governance via the entity-graph door instead. Direct
+          // (always-array) field so the return union stays `.id`-narrowable.
+          facets: (input.facets ?? []).map((f) => ({
+            slug: f.profileSlug,
+            status: "dropped",
+            error:
+              "create was proposal-gated — re-attach after approval, or use the entity-graph door to propose entity + roles together",
+          })),
         };
       }
 
@@ -933,11 +1114,18 @@ export const entitiesRouter = router({
         }
       }
 
+      // Kind + Facets: attach any requested roles now that the entity exists,
+      // through the governed door. Additive `facets` summary — always an array
+      // (empty when none requested); a direct field, not a conditional spread,
+      // so the union stays `.id`-narrowable for the door's many callers.
+      const createdFacets = await attachRequestedFacets(createdEntity.id);
+
       return {
         status: "created",
         message: "Entity created",
         id: createdEntity.id,
         entity: toApiEntity(createdEntity),
+        facets: createdFacets,
       };
     }),
 
