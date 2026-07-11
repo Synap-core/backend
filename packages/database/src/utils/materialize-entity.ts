@@ -31,6 +31,11 @@ import type { Entity } from "../schema/entities.js";
 import type { getDb } from "../client-pg.js";
 import { EntityRepository } from "../repositories/entity-repository.js";
 import type { EventRepository } from "../repositories/event-repository.js";
+import {
+  extractIdentitySignals,
+  registerIdentitySignals,
+  resolveIdentity,
+} from "../services/identity-resolution-service.js";
 import { DEFAULT_RELATION_DEFS } from "./default-relation-defs.js";
 import { linkEntityToProject } from "./entity-project-membership.js";
 
@@ -164,14 +169,50 @@ export async function materializeEntity(
       return { entity: existing, reused: true };
     }
   } else if (dedup === "identity-signal") {
-    // TODO(wave-1): identity-signal dedup requires source/externalId/signals
-    // that MaterializeEntityInput does not carry. Wire EntityUpsertService when
-    // a caller needs it; for now we log and fall through to a plain create (no
-    // cross-source resolution) rather than block Wave 1.
-    logger.warn(
-      { profileSlug: input.profileSlug },
-      "dedup:'identity-signal' is not yet wired in materializeEntity — falling back to a plain create (no cross-source identity resolution)"
-    );
+    // Cross-source identity resolution via the SSOT (IdentityResolutionService).
+    // STRONG path only: extract the globally-unique atoms (email/phone/url/…)
+    // from the entity's properties and look them up. No name/userScope is passed
+    // so the scoped weak (name/handle) path never runs here — the materializer
+    // input carries no visibility predicate, and auto-merging on a weak signal
+    // would be wrong anyway. On a strong hit we ENRICH (mirror
+    // EntityUpsertService): reuse the matched entity, register any new signals
+    // against it, backfill project membership, and skip the insert.
+    const signals = extractIdentitySignals(input.properties);
+    if (signals.length > 0) {
+      const resolution = await resolveIdentity(db, {
+        userId: input.userId,
+        signals,
+      });
+      if (resolution.match === "strong" && resolution.entity) {
+        // Load the full row — the resolver returns a minimal projection.
+        const existing = await db.query.entities.findFirst({
+          where: eq(entities.id, resolution.entity.id),
+        });
+        if (existing) {
+          // Enrich: register any signals this record carries that the matched
+          // entity didn't already own (onConflictDoNothing — idempotent).
+          await registerIdentitySignals(
+            db,
+            existing.id,
+            signals,
+            "materialize-entity"
+          );
+          // Idempotently backfill project membership on the reused row.
+          if (projectId) {
+            await linkEntityToProject(db, {
+              entityId: existing.id,
+              projectId,
+              userId: input.userId,
+              workspaceId: input.workspaceId ?? null,
+            });
+          }
+          return { entity: existing, reused: true };
+        }
+        // Signal owner points at a deleted/missing row — fall through to create.
+      }
+    }
+    // No strong match (or no extractable signals) → plain create below. The new
+    // row's signals are registered by EntityRepository.create (the one door).
   }
 
   // ── Invariant 4: provenance (passed into the canonical create) ───────────
