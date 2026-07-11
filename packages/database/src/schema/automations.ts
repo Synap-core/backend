@@ -93,6 +93,17 @@ export interface AutomationTriggerConfig {
   toStage?: string;
 
   // ── entity_facet domain filters (Kind + Facets, Wave 1B) ───────────────
+  //
+  // EXAMPLE — fire when a `client` role is attached to any entity (e.g. to
+  // kick off a client-onboarding playbook):
+  //   {
+  //     triggerType: "event",
+  //     config: {
+  //       eventPattern: "entity_facet.*",   // attach/update/detach doors + generic verbs
+  //       facetProfileSlug: "client",        // only the client role
+  //       facetChangeType: "attach",         // only on attach (not update/detach)
+  //     }
+  //   }
   /** Only match facets of this role-profile slug */
   facetProfileSlug?: string;
   /** Only match facets of this role-profile id */

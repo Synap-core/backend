@@ -82,6 +82,9 @@ const LoopPlaybookDefSchema = z.object({
   // authored (.loop.json) path no longer drops them (root-cause fix).
   stages: z.array(z.record(z.string(), z.unknown())).optional(),
   subjectProfile: z.record(z.string(), z.unknown()).optional(),
+  // Kind + Facets: subject-FACET selector (the facet twin of subjectProfile).
+  // Type-level / forward-compat — validated here, not yet persisted.
+  subjectFacet: z.record(z.string(), z.unknown()).optional(),
 });
 
 const LoopTriggerDefSchema = z.object({

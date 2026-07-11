@@ -570,6 +570,14 @@ export interface LoopPlaybookDef {
   stages?: Record<string, unknown>[];
   /** Subject-profile config (jsonb); stored loosely. Threaded alongside `stages`. */
   subjectProfile?: Record<string, unknown>;
+  /**
+   * Kind + Facets: subject-FACET config — which role (role-profile) this
+   * playbook operates over, the facet twin of `subjectProfile`. Shape:
+   * `{ facetSlug: string; filter?: Record<string, unknown> }`. Type-level /
+   * forward-compat only for now: validated at the definition boundary, not yet
+   * persisted (no dedicated column — a kind playbook targets `subjectProfile`).
+   */
+  subjectFacet?: Record<string, unknown>;
 }
 
 /**

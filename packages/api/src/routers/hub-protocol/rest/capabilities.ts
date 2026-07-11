@@ -120,6 +120,10 @@ export const PlaybookDefSchema = z.object({
   stages: z.array(z.record(z.string(), z.unknown())).optional(),
   // { profileSlug, filter? } — Wave 0 subject spine: which entity type the playbook operates over.
   subjectProfile: z.record(z.string(), z.unknown()).optional(),
+  // Kind + Facets: { facetSlug, filter? } — the facet twin of subjectProfile
+  // (which role the playbook operates over). Type-level / forward-compat only:
+  // validated at the definition boundary, not yet persisted (no column).
+  subjectFacet: z.record(z.string(), z.unknown()).optional(),
   schedule: z.unknown().optional(),
   executor: z.enum(["is-agent", "external-agent", "hybrid"]).optional(),
   status: z.enum(["draft", "active", "paused", "archived"]).optional(),
