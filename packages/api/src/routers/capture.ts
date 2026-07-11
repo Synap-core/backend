@@ -753,7 +753,11 @@ export const captureRouter = router({
         accessibleProfiles as unknown as AccessibleProfileLike[]
       );
 
-      // 2. Fetch user's workspaces for routing hints (max 5, most recent)
+      // 2. Fetch user's workspaces for routing hints (most-recently-updated
+      // first, up to 30). The old `.limit(5)` had NO orderBy, so Postgres
+      // returned an ARBITRARY 5 of the user's workspaces — a user with more
+      // than five could have the correct destination (e.g. CRM) silently
+      // dropped from the candidate set, making it unreachable to the router.
       const userWorkspaceRows = await database
         .select({
           id: workspaces.id,
@@ -767,7 +771,8 @@ export const captureRouter = router({
           eq(workspaceMembers.workspaceId, workspaces.id)
         )
         .where(eq(workspaceMembers.userId, userId))
-        .limit(5);
+        .orderBy(desc(workspaces.updatedAt))
+        .limit(30);
       // Never surface system/admin workspaces (e.g. pod-admin) as routing
       // candidates — user data must not be routed into an operational workspace.
       const availableWorkspaces = userWorkspaceRows
