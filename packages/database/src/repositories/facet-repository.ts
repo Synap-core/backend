@@ -365,11 +365,16 @@ export class FacetRepository extends BaseRepository<
   }
 
   private isUniqueViolation(error: unknown): boolean {
-    return (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as { code?: unknown }).code === UNIQUE_VIOLATION
-    );
+    // Walk the cause chain: drizzle wraps the postgres error (DrizzleQueryError
+    // with the pg error as `.cause`), so 23505 is often NOT on the top-level
+    // error — a top-only check let a duplicate attach surface as a raw
+    // "Failed query" 500 instead of the idempotent existing-row return
+    // (verified live).
+    let cursor: unknown = error;
+    for (let depth = 0; cursor && typeof cursor === "object" && depth < 4; depth++) {
+      if ((cursor as { code?: unknown }).code === UNIQUE_VIOLATION) return true;
+      cursor = (cursor as { cause?: unknown }).cause;
+    }
+    return false;
   }
 }
