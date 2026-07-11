@@ -51,14 +51,34 @@ const RoutingHealthSchema = z
   .object({
     totalDecisions: z.number(),
     correctedDecisions: z.number(),
+    // LEGACY headline — survivorship-biased (a decision counts as correct
+    // unless someone bothered to move it) and rewards inaction. Kept for the
+    // existing browser consumer; prefer `unattendedAcceptance` below.
     routingAccuracy: z.number().nullable(),
     appliedRate: z.number().nullable(),
+    // HONEST headline — over the CohorT of auto-applied decisions old enough to
+    // have been reversed (matured past MATURITY_DAYS), the fraction NOT reversed
+    // by a move OR delete within that maturity window. Resists survivorship bias
+    // (only falsifiable decisions count) and the "do nothing" exploit (no
+    // auto-apply → no denominator → no credit). Null until the cohort is non-empty.
+    unattendedAcceptance: z.number().nullable(),
+    cohortSize: z.number(),
+    cohortReversals: z.number(),
+    maturityDays: z.number(),
     byTargetWorkspace: z.array(ByTargetWorkspaceSchema),
     calibration: z.array(CalibrationBucketSchema),
     windowDays: z.number(),
     generatedAt: z.string(),
   })
   .openapi("RoutingHealth");
+
+/**
+ * A decision must be at least this old to enter the acceptance cohort — it has
+ * had a full window to be reversed. Corrections are counted only within this
+ * many days of the decision (decision-anchored, NOT calendar-rolling), so a
+ * fresh decision isn't unfairly compared against a matured one.
+ */
+const MATURITY_DAYS = 7;
 
 /** Confidence calibration buckets — [min, max) except the last, which is inclusive of 1.0. */
 const CALIBRATION_BUCKETS: Array<{ min: number; max: number; range: string }> =
@@ -128,6 +148,8 @@ export function registerObservabilityRoutes(app: HubHono): void {
           >`${events.data}->>'chosenWorkspaceId'`,
           confidence: drizzleSql<string | null>`${events.data}->>'confidence'`,
           applied: drizzleSql<string | null>`${events.data}->>'applied'`,
+          mode: drizzleSql<string | null>`${events.data}->>'mode'`,
+          decidedAt: events.timestamp,
         })
         .from(events)
         .where(
@@ -148,6 +170,10 @@ export function registerObservabilityRoutes(app: HubHono): void {
             correctedDecisions: 0,
             routingAccuracy: null,
             appliedRate: null,
+            unattendedAcceptance: null,
+            cohortSize: 0,
+            cohortReversals: 0,
+            maturityDays: MATURITY_DAYS,
             byTargetWorkspace: [],
             calibration: [],
             windowDays,
@@ -192,6 +218,58 @@ export function registerObservabilityRoutes(app: HubHono): void {
       const appliedDecisions = decisionRows.filter(
         (d) => d.applied === "true"
       ).length;
+
+      // Honest acceptance metric. Cohort = auto-applied decisions matured past
+      // MATURITY_DAYS (they've had the full window to be reversed). A reversal =
+      // a move (kind=route) OR delete (kind=extract) of that decision's entity
+      // WITHIN MATURITY_DAYS of the decision (decision-anchored). Deletes are
+      // included here even though the legacy `correctedDecisions` above ignores
+      // them (`kind='route'` only).
+      const maturityMs = MATURITY_DAYS * 24 * 60 * 60 * 1000;
+      const nowMs = Date.now();
+      const reversalRows = await db
+        .select({
+          decisionCorrelationId: drizzleSql<
+            string | null
+          >`${events.data}->>'correlationId'`,
+          correctedAt: events.timestamp,
+        })
+        .from(events)
+        .where(
+          and(
+            eq(events.userId, userId),
+            eq(events.subjectType, "ai_correction"),
+            drizzleSql`${events.data}->>'kind' IN ('route', 'extract')`,
+            gte(events.timestamp, since)
+          )
+        );
+      // Earliest reversal per decision correlationId.
+      const reversalTimeByCid = new Map<string, number>();
+      for (const r of reversalRows) {
+        if (!r.decisionCorrelationId) continue;
+        const t = r.correctedAt.getTime();
+        const prev = reversalTimeByCid.get(r.decisionCorrelationId);
+        if (prev === undefined || t < prev)
+          reversalTimeByCid.set(r.decisionCorrelationId, t);
+      }
+      const cohort = decisionRows.filter(
+        (d) =>
+          d.mode === "auto" &&
+          d.applied === "true" &&
+          nowMs - d.decidedAt.getTime() >= maturityMs
+      );
+      const cohortSize = cohort.length;
+      const cohortReversals = cohort.filter((d) => {
+        if (!d.correlationId) return false;
+        const revAt = reversalTimeByCid.get(d.correlationId);
+        return (
+          revAt !== undefined &&
+          revAt >= d.decidedAt.getTime() &&
+          revAt <= d.decidedAt.getTime() + maturityMs
+        );
+      }).length;
+      const unattendedAcceptance =
+        cohortSize > 0 ? 1 - cohortReversals / cohortSize : null;
 
       // 3) Group by target (chosen) workspace.
       const byWsMap = new Map<
@@ -257,6 +335,10 @@ export function registerObservabilityRoutes(app: HubHono): void {
             totalDecisions > 0 ? 1 - correctedDecisions / totalDecisions : null,
           appliedRate:
             totalDecisions > 0 ? appliedDecisions / totalDecisions : null,
+          unattendedAcceptance,
+          cohortSize,
+          cohortReversals,
+          maturityDays: MATURITY_DAYS,
           byTargetWorkspace,
           calibration,
           windowDays,

@@ -26,6 +26,7 @@ import { TRPCError } from "@trpc/server";
 import {
   db,
   eq,
+  ne,
   desc,
   asc,
   and,
@@ -531,6 +532,13 @@ async function listChannelsWithFlags(params: {
       hasAssistantMessage: boolean;
       origin: string;
       unreadCount: number;
+      /**
+       * For `personal` (DM) channels: the OTHER human member's userId (the human
+       * counterpart of this DM, excluding the caller). null for non-DM channels
+       * or a DM that has no distinct human counterpart (e.g. agent-only DM).
+       * Lets the sidebar wire a LIVE presence dot keyed by this id.
+       */
+      counterpartUserId?: string | null;
     }
   >
 > {
@@ -656,11 +664,44 @@ async function listChannelsWithFlags(params: {
     unreadRows.map((r) => [r.channelId, r.cnt ?? 0])
   );
 
+  // DM counterpart resolution: for each `personal` channel, the OTHER human
+  // member (memberKind=human, memberId != caller). One query across all personal
+  // channels (mirrors the assistant/unread aggregate pattern above — no N+1).
+  const personalChannelIds = rows
+    .filter((c) => c.channelType === ChannelType.PERSONAL)
+    .map((c) => c.id);
+  const counterpartByChannel = new Map<string, string>();
+  if (personalChannelIds.length > 0) {
+    const counterpartRows = await db
+      .select({
+        channelId: channelMembers.channelId,
+        memberId: channelMembers.memberId,
+      })
+      .from(channelMembers)
+      .where(
+        and(
+          inArray(channelMembers.channelId, personalChannelIds),
+          eq(channelMembers.memberKind, ChannelMemberKind.HUMAN),
+          ne(channelMembers.memberId, params.userId)
+        )
+      );
+    for (const r of counterpartRows) {
+      // First human counterpart wins (DMs are 1:1; defensive for group edge cases).
+      if (!counterpartByChannel.has(r.channelId)) {
+        counterpartByChannel.set(r.channelId, r.memberId);
+      }
+    }
+  }
+
   return rows.map((c) => ({
     ...c,
     hasAssistantMessage: channelIdsWithAssistant.has(c.id),
     unreadCount: unreadByChannel.get(c.id) ?? 0,
     origin: (c.metadata as { origin?: string } | null)?.origin ?? "chat",
+    counterpartUserId:
+      c.channelType === ChannelType.PERSONAL
+        ? (counterpartByChannel.get(c.id) ?? null)
+        : null,
   }));
 }
 

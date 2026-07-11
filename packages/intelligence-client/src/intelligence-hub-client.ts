@@ -749,6 +749,23 @@ export class IntelligenceHubClient {
         description?: string;
         properties?: Record<string, unknown>;
       }>;
+      /**
+       * Routing self-improvement memory: recent user corrections (negatives —
+       * the AI's pick was moved) + confirmed routes (positives). Rendered as
+       * few-shot examples in the workspace-routing prompt so the model learns
+       * from the user's own history. Absent/empty on cold start.
+       */
+      routingMemory?: {
+        corrections: Array<{
+          textSnippet: string;
+          correctWorkspaceName: string;
+          wrongWorkspaceName?: string | null;
+        }>;
+        confirmations: Array<{
+          textSnippet: string;
+          correctWorkspaceName: string;
+        }>;
+      } | null;
     };
     /** Abort timeout in ms (default 25000). Imports raise this for long notes. */
     timeoutMs?: number;

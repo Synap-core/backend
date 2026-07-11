@@ -62,6 +62,7 @@ import {
   embedQuery,
   MAX_VECTOR_DISTANCE,
 } from "../services/retrieval/hybrid-recall.js";
+import { fetchRoutingMemory } from "../services/routing-memory.js";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
@@ -817,6 +818,23 @@ export const captureRouter = router({
         existingEntityNames = [];
       }
 
+      // Routing memory — recent corrections (negatives: the user moved the AI's
+      // pick) + confirmed routes (positives) so the router learns from its own
+      // history. Threaded into structure() so EVERY capture door benefits. Best
+      // effort: a memory hiccup degrades to "no memory", never fails the capture.
+      let routingMemory:
+        | Awaited<ReturnType<typeof fetchRoutingMemory>>
+        | undefined;
+      try {
+        routingMemory = await fetchRoutingMemory(userId);
+      } catch (err) {
+        logger.debug(
+          { err, userId },
+          "routing memory fetch failed (capture proceeds without it)"
+        );
+        routingMemory = undefined;
+      }
+
       // Degraded fallback proposal — a single note carrying the raw text, so a
       // capture is never lost when the IS can't structure it. `degraded` +
       // `degradedReason` are ADDITIVE response fields (published api-types
@@ -878,6 +896,7 @@ export const captureRouter = router({
             availableProjects,
             existingEntityNames,
             previousEntities: input.previousEntities,
+            routingMemory,
           },
         });
       } catch (err) {

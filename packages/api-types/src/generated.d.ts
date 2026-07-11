@@ -1932,7 +1932,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "paused" | "cancelled" | "closed" | "forming" | "scheduled";
+			data: "active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -6305,6 +6305,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					hasAssistantMessage: boolean;
 					origin: string;
 					unreadCount: number;
+					counterpartUserId?: string | null;
 				})[];
 			};
 			meta: object;
@@ -6322,6 +6323,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					hasAssistantMessage: boolean;
 					origin: string;
 					unreadCount: number;
+					counterpartUserId?: string | null;
 				})[];
 				pagination: {
 					hasMore: boolean;
@@ -6343,6 +6345,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					hasAssistantMessage: boolean;
 					origin: string;
 					unreadCount: number;
+					counterpartUserId?: string | null;
 				})[];
 				pagination: {
 					hasMore: boolean;
@@ -6363,6 +6366,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					hasAssistantMessage: boolean;
 					origin: string;
 					unreadCount: number;
+					counterpartUserId?: string | null;
 				})[];
 				pagination: {
 					hasMore: boolean;
@@ -6383,6 +6387,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					hasAssistantMessage: boolean;
 					origin: string;
 					unreadCount: number;
+					counterpartUserId?: string | null;
 				})[];
 				pagination: {
 					hasMore: boolean;
