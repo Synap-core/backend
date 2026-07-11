@@ -835,7 +835,35 @@ export const entitiesRouter = router({
               userScope: userVisibleWhere(entities.workspaceId, ctx.userId),
               limit: 5,
             });
-            if (identity.match === "strong" && identity.entity) {
+            // SECURITY GATE — the strong identity index is deliberately GLOBAL
+            // (frozen policy: one subject per email/phone pod-wide), so the
+            // matched id may belong to an entity the CALLER cannot see
+            // (another user's private workspace). Never dedupe onto something
+            // the caller can't see: an invisible match falls through to a
+            // normal create. Without this gate the response below would leak
+            // the matched row's title/properties to an unauthorized caller
+            // (the enrich/attach doors deny the writes, but the read leaked).
+            const visibleMatch =
+              identity.match === "strong" && identity.entity
+                ? await resolveDb.query.entities.findFirst({
+                    where: and(
+                      eq(entities.id, identity.entity.id),
+                      isNull(entities.deletedAt),
+                      entityVisibleWhere(ctx.userId)
+                    ),
+                  })
+                : undefined;
+            if (
+              identity.match === "strong" &&
+              identity.entity &&
+              !visibleMatch
+            ) {
+              logger.info(
+                { userId: ctx.userId, profileSlug },
+                "[entities.create] strong identity match not visible to caller — creating instead of merging"
+              );
+            }
+            if (identity.match === "strong" && identity.entity && visibleMatch) {
               const matchedId = identity.entity.id;
               const nonEmptyProperties = Object.fromEntries(
                 Object.entries(input.properties ?? {}).filter(
@@ -876,8 +904,14 @@ export const entitiesRouter = router({
                 }
               }
               const dedupFacets = await attachRequestedFacets(matchedId);
+              // Refetch SCOPED (same visibility gate as above) so the response
+              // reflects the enrich, and an unauthorized row can never surface.
               const matched = await resolveDb.query.entities.findFirst({
-                where: eq(entities.id, matchedId),
+                where: and(
+                  eq(entities.id, matchedId),
+                  isNull(entities.deletedAt),
+                  entityVisibleWhere(ctx.userId)
+                ),
               });
               logger.info(
                 { userId: ctx.userId, entityId: matchedId, profileSlug },

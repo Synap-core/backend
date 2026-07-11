@@ -36,6 +36,7 @@ import {
 } from "@synap/database";
 import { getUserWorkspaceIds } from "../hub-protocol/rest/_shared.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { buildIdentityResolveResponse } from "../../utils/identity-resolve-response.js";
 import { openLink } from "../../utils/deep-links.js";
 import type { Context } from "../../types/context.js";
 
@@ -584,17 +585,9 @@ export async function executeMCPToolViaHubProtocol(
         limit: 10,
       });
 
-      return ok({
-        match: resolution.match ?? "none",
-        entityId: resolution.entity?.id,
-        entityTitle: resolution.entity?.title,
-        entityKind: resolution.entity?.type,
-        candidates: resolution.candidates.map((cand) => ({
-          entityId: cand.id,
-          title: cand.title,
-          kind: cand.type,
-        })),
-      });
+      // Cross-user content scoping lives in the shared response builder (the
+      // one door for both this tool and the Hub REST /identity/resolve route).
+      return ok(await buildIdentityResolveResponse(resolution, userId));
     }
 
     case "synap_get_graph": {

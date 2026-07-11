@@ -25,6 +25,7 @@ import {
 } from "@synap/database";
 
 import { userVisibleWhere } from "../../../utils/user-visible-where.js";
+import { buildIdentityResolveResponse } from "../../../utils/identity-resolve-response.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -194,17 +195,9 @@ export function registerIdentityRoutes(app: HubHono): void {
         limit: 10,
       });
 
-      return c.json({
-        match: resolution.match ?? "none",
-        entityId: resolution.entity?.id,
-        entityTitle: resolution.entity?.title,
-        entityKind: resolution.entity?.type,
-        candidates: resolution.candidates.map((cand) => ({
-          entityId: cand.id,
-          title: cand.title,
-          kind: cand.type,
-        })),
-      });
+      // Cross-user content scoping lives in the shared response builder (the
+      // one door for both this route and the MCP synap_resolve_identity tool).
+      return c.json(await buildIdentityResolveResponse(resolution, userId));
     } catch (err) {
       logger.error({ err, userId }, "POST /identity/resolve failed");
       return c.json(
