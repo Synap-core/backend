@@ -227,6 +227,44 @@ export function isLinkedinUrl(value: string): boolean {
 }
 
 /**
+ * Map an EXPLICIT signals object (the identity pre-check request shape shared
+ * by the Hub REST /identity/resolve route and the MCP synap_resolve_identity
+ * tool) to typed identity atoms — the ONE mapper, so a bare `url` is
+ * classified linkedin-vs-website by the same domain-anchored check everywhere
+ * and the pre-check always agrees with a real write.
+ */
+export function signalsFromExplicit(
+  signals:
+    | {
+        email?: string;
+        phone?: string;
+        url?: string;
+        twitter?: string;
+        github?: string;
+        externalId?: string;
+      }
+    | undefined
+): IdentitySignal[] {
+  if (!signals) return [];
+  const out: IdentitySignal[] = [];
+  if (signals.email) out.push({ type: "email", value: signals.email });
+  if (signals.phone) out.push({ type: "phone", value: signals.phone });
+  if (signals.url) {
+    out.push({
+      type: isLinkedinUrl(signals.url) ? "linkedin_url" : "website",
+      value: signals.url,
+    });
+  }
+  if (signals.twitter)
+    out.push({ type: "twitter_handle", value: signals.twitter });
+  if (signals.github)
+    out.push({ type: "github_username", value: signals.github });
+  if (signals.externalId)
+    out.push({ type: "external_id", value: signals.externalId });
+  return out;
+}
+
+/**
  * Resolve an entity by identity — strong signals first (auto-resolve), then a
  * weak name/handle/alias candidate search (advisory, kind-scoped).
  *

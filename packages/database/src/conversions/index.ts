@@ -31,4 +31,8 @@ export type {
   RunOptions,
   RunSummary,
 } from "./engine.js";
-export { runConversions, ensureConversionsLedger } from "./engine.js";
+export {
+  runConversions,
+  ensureConversionsLedger,
+  opHasDestructiveTail,
+} from "./engine.js";

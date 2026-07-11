@@ -22,6 +22,45 @@ import {
 } from "../errors/index.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { stampProvenance } from "../utils/stamp-provenance.js";
+import {
+  extractIdentitySignals,
+  registerIdentitySignals,
+} from "../services/identity-resolution-service.js";
+
+/**
+ * Bounded-concurrency guard for the fire-and-forget identity-signal writes in
+ * `create()`. Signal registration never blocks a create (it must not add
+ * latency to the single-capture path), but a bulk import fans out one create
+ * per row — with nothing capping it, N rows means N concurrent inserts piling
+ * onto the pool at once. Cap in-flight writes; anything past the cap queues.
+ * Mirrors the guard that previously lived in the entities.create tRPC proc,
+ * moved down here so it protects EVERY create door (imports, provisioning,
+ * automation/feed workers), not just the one router that had it.
+ */
+const MAX_INFLIGHT_SIGNAL_WRITES = 25;
+let inFlightSignalWrites = 0;
+const signalWriteQueue: Array<() => void> = [];
+
+function runBoundedSignalWrite(task: () => Promise<void>): void {
+  const start = () => {
+    inFlightSignalWrites++;
+    // Promise.resolve().then(task): a synchronous throw from task() would
+    // otherwise skip .finally() and leak the counter — 25 leaks and every
+    // future signal write queues forever.
+    Promise.resolve()
+      .then(task)
+      .catch(() => {})
+      .finally(() => {
+        inFlightSignalWrites--;
+        signalWriteQueue.shift()?.();
+      });
+  };
+  if (inFlightSignalWrites < MAX_INFLIGHT_SIGNAL_WRITES) {
+    start();
+  } else {
+    signalWriteQueue.push(start);
+  }
+}
 
 export interface CreateEntityInput {
   /**
@@ -316,6 +355,29 @@ export class EntityRepository extends BaseRepository<
 
     // 5. Emit completed event
     await this.emitCompleted("create", entity, userId);
+
+    // 6. Auto-register identity signals (email/phone/url/handle) — non-blocking.
+    //    THE door: every producer that reaches EntityRepository.create (tRPC
+    //    create, imports, provisioning, automation/feed workers) now feeds
+    //    resolveIdentity's strong path, so a later write dedups against this
+    //    entity instead of silently creating a duplicate. Never blocks or fails
+    //    the create — a signal-write error is logged and swallowed.
+    const signals = extractIdentitySignals(validatedProperties);
+    if (signals.length > 0) {
+      runBoundedSignalWrite(() =>
+        registerIdentitySignals(
+          this.db,
+          entity.id,
+          signals,
+          "entity-repository.create"
+        ).catch((error) => {
+          console.warn(
+            `Failed to register identity signals for entity ${entity.id}:`,
+            error
+          );
+        })
+      );
+    }
 
     return entity;
   }

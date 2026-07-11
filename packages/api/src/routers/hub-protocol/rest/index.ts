@@ -13,6 +13,7 @@ export { registerWorkspacesRoutes } from "./workspaces.js";
 export { registerThreadsRoutes } from "./threads.js";
 export { registerEventsRoutes } from "./events.js";
 export { registerEntitiesRoutes } from "./entities.js";
+export { registerIdentityRoutes } from "./identity.js";
 export { registerCaptureRoutes } from "./capture.js";
 export { registerSearchRoutes } from "./search.js";
 export { registerDocumentsRoutes } from "./documents.js";

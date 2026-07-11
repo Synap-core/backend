@@ -25,8 +25,18 @@ import { ask } from "../../services/knowledge/ask.js";
 import { synthesizeAnswer } from "../../services/knowledge/synthesize.js";
 import { type ProfileCatalogEntry } from "../../services/retrieval/index.js";
 import { getDb } from "@synap/database";
-import { db, knowledgeKeysRepository } from "@synap/database";
+import {
+  db,
+  knowledgeKeysRepository,
+  entities,
+  resolveIdentity,
+  extractIdentitySignals,
+  signalsFromExplicit,
+  type IdentitySignal,
+} from "@synap/database";
 import { getUserWorkspaceIds } from "../hub-protocol/rest/_shared.js";
+import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { buildIdentityResolveResponse } from "../../utils/identity-resolve-response.js";
 import { openLink } from "../../utils/deep-links.js";
 import type { Context } from "../../types/context.js";
 
@@ -528,6 +538,38 @@ export async function executeMCPToolViaHubProtocol(
         entityId: args.entityId as string,
       });
       return ok(result);
+    }
+
+    case "synap_resolve_identity": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      // Read-only identity pre-check via the ONE matcher. Same call the REST
+      // /identity/resolve route makes — resolved here directly (no HTTP hop),
+      // mirroring how synap_get_entity uses the entities router in-process.
+      // Explicit atoms via the ONE shared mapper (same as the REST route), plus
+      // any mined from the draft property bag (richest lookup).
+      const signals: IdentitySignal[] = [
+        ...signalsFromExplicit(
+          args.signals as Parameters<typeof signalsFromExplicit>[0]
+        ),
+        ...extractIdentitySignals(
+          args.properties as Record<string, unknown> | undefined
+        ),
+      ];
+
+      const resolution = await resolveIdentity(db, {
+        userId,
+        kindSlug: args.kindSlug as string | undefined,
+        name: args.title as string | undefined,
+        signals,
+        // Identity is global (a subject exists once pod-wide) → scope the weak
+        // path to the user's visible rows, not a single workspace.
+        userScope: userVisibleWhere(entities.workspaceId, userId),
+        limit: 10,
+      });
+
+      // Cross-user content scoping lives in the shared response builder (the
+      // one door for both this tool and the Hub REST /identity/resolve route).
+      return ok(await buildIdentityResolveResponse(resolution, userId));
     }
 
     case "synap_get_graph": {

@@ -467,6 +467,11 @@ async function createEntityFromItem(
       db: database,
       eventRepo,
       provenance: { createdByKind: "system" },
+      // Identity-signal dedup: reuse an existing entity when this item carries a
+      // strong signal (author email, canonical website, …) that already resolves
+      // to one, instead of silently creating a duplicate. The per-subscription
+      // seenUrls check above still handles same-URL repeats within a feed.
+      dedup: "identity-signal",
     }
   );
 

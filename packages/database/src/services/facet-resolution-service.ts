@@ -68,6 +68,87 @@ export async function loadFacetSlugsBatch(
 }
 
 /**
+ * Slug → kind/role classification for the RECALL layer (search/retrieval).
+ * A recall half filters on a text engine (Typesense `entityType`/`facetSlugs`)
+ * or `entity_vectors.entityType` — neither can run the SQL `facetRoleExists`
+ * EXISTS that `profileSlugScopeCondition` uses over `entities`. So the recall
+ * layer needs the SAME kind-vs-role verdict as a plain boolean pair, then it
+ * routes: kind → match `entityType`, role → match facet membership (by slug).
+ * Same source-of-truth logic as `profileSlugScopeCondition` (a slug can carry
+ * both a system kind row and a role twin), reduced to booleans.
+ */
+export interface SlugKindInfo {
+  /** Slug has ≥1 primary-kind row → an `entityType`/`entities.type` match applies. */
+  hasKindRow: boolean;
+  /** Slug has ≥1 role row → facet-membership (by slug) match applies. */
+  hasRoleRow: boolean;
+}
+
+/** TTL cache (60s) mirroring `ProfileResolutionService.getEntityScope` — the
+ * recall layer resolves the same handful of inferred slugs on every query. */
+const slugKindCache = new Map<
+  string,
+  { info: SlugKindInfo; expiresAt: number }
+>();
+const SLUG_KIND_TTL_MS = 60_000;
+
+/**
+ * Classify a profile slug as kind and/or role for the recall layer. Unknown
+ * slugs (no profile row) resolve to `{ hasKindRow: true, hasRoleRow: false }`
+ * so recall stays byte-for-byte the pre-facets `entityType` match. Cached 60s.
+ */
+export async function resolveSlugKind(
+  db: PostgresJsDatabase<typeof schema>,
+  slug: string
+): Promise<SlugKindInfo> {
+  const cached = slugKindCache.get(slug);
+  if (cached && cached.expiresAt > Date.now()) return cached.info;
+
+  const rows = await db.query.profiles.findMany({
+    where: eq(profiles.slug, slug),
+    columns: { profileKind: true },
+  });
+  const info: SlugKindInfo = {
+    hasKindRow: rows.length === 0 || rows.some((r) => r.profileKind !== "role"),
+    hasRoleRow: rows.some((r) => r.profileKind === "role"),
+  };
+  slugKindCache.set(slug, { info, expiresAt: Date.now() + SLUG_KIND_TTL_MS });
+  return info;
+}
+
+export interface RolePayloadInfo {
+  profileId: string;
+  slug: string;
+  /** Kinds this role may attach to; empty = applies to any kind. */
+  applicableKinds: string[];
+}
+
+/**
+ * Kind + Facets guard — the ONE check for "is this create-payload slug actually
+ * a ROLE?". A caller (importer/agent) that tries to CREATE an entity whose
+ * `profileSlug` is a role-profile (client/partner/investor/…) must NOT get a
+ * role-named entity: the role is a facet on a real subject. Returns the role's
+ * profileId + applicableKinds when `slug` resolves to a role profile, else null
+ * (it's a primary kind, or unknown — create it normally). Best-effort read;
+ * matches on slug (findFirst) — roles are user/system-scoped, not per-workspace.
+ */
+export async function resolveRolePayload(
+  db: PostgresJsDatabase<typeof schema>,
+  slug: string
+): Promise<RolePayloadInfo | null> {
+  const profile = await db.query.profiles.findFirst({
+    where: eq(profiles.slug, slug),
+    columns: { id: true, slug: true, profileKind: true, applicableKinds: true },
+  });
+  if (!profile || profile.profileKind !== "role") return null;
+  return {
+    profileId: profile.id,
+    slug: profile.slug,
+    applicableKinds: profile.applicableKinds ?? [],
+  };
+}
+
+/**
  * The ONE facet-EXISTS predicate over the OUTER `entities` row: true when the
  * entity carries a live facet whose role-profile is in `roleProfileIds`,
  * visible under the given lens (`facetVisibilityConditions`). Correlates on

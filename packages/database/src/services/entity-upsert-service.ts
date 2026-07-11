@@ -38,7 +38,10 @@ import { entityExternalLinks, entities } from "../schema/index.js";
 import type * as schema from "../schema/index.js";
 import type { Entity } from "../schema/entities.js";
 import { EntityRepository } from "../repositories/entity-repository.js";
+import { FacetRepository } from "../repositories/facet-repository.js";
 import type { EventRepository } from "../repositories/event-repository.js";
+import { resolveRolePayload } from "./facet-resolution-service.js";
+import { createLogger } from "@synap-core/core";
 import {
   resolveIdentity,
   registerIdentitySignals,
@@ -46,6 +49,8 @@ import {
   extractIdentitySignals,
   type IdentitySignal,
 } from "./identity-resolution-service.js";
+
+const logger = createLogger({ module: "entity-upsert-service" });
 
 export type { IdentitySignal };
 
@@ -80,11 +85,74 @@ const DIRECT_IMPORT_CONNECTION_ID = "direct-import";
 export class EntityUpsertService {
   private entityRepo: EntityRepository;
 
+  private facetRepo: FacetRepository;
+
   constructor(
     private db: PostgresJsDatabase<typeof schema>,
     eventRepo: EventRepository
   ) {
     this.entityRepo = new EntityRepository(db, eventRepo);
+    this.facetRepo = new FacetRepository(db, eventRepo);
+  }
+
+  /**
+   * Kind + Facets: attach a role onto an entity as an import-time facet.
+   * `applicableKinds` is validated by the caller (it already resolved the role);
+   * here we skipValidation to tolerate messy import property values (attach
+   * type-checks otherwise, and imports run with skipValidation on creates too).
+   * Best-effort — a facet failure never sinks the upsert result.
+   */
+  private async attachRole(
+    entityId: string,
+    roleProfileId: string,
+    properties: Record<string, unknown>,
+    workspaceId: string | null,
+    userId: string
+  ): Promise<void> {
+    try {
+      await this.facetRepo.attach(
+        {
+          entityId,
+          profileId: roleProfileId,
+          userId,
+          workspaceId,
+          properties,
+          skipValidation: true,
+        },
+        userId
+      );
+    } catch (err) {
+      logger.warn(
+        { err, entityId, roleProfileId },
+        "EntityUpsertService: role facet attach failed (entity preserved)"
+      );
+    }
+  }
+
+  /** Attach a role to a matched entity, gated on the role's applicableKinds. */
+  private async attachRoleOnMatch(
+    entity: Entity,
+    rolePayload: NonNullable<Awaited<ReturnType<typeof resolveRolePayload>>>,
+    input: EntityUpsertInput
+  ): Promise<void> {
+    const kind = entity.type ?? undefined;
+    if (
+      rolePayload.applicableKinds.length > 0 &&
+      (!kind || !rolePayload.applicableKinds.includes(kind))
+    ) {
+      logger.warn(
+        { entityId: entity.id, role: rolePayload.slug, kind },
+        "EntityUpsertService: role does not apply to matched entity's kind — skipping attach"
+      );
+      return;
+    }
+    await this.attachRole(
+      entity.id,
+      rolePayload.profileId,
+      input.properties,
+      input.workspaceId,
+      input.userId
+    );
   }
 
   /**
@@ -96,6 +164,12 @@ export class EntityUpsertService {
       type: s.type,
       value: normalizeIdentitySignal(s.type, s.value),
     }));
+
+    // Kind + Facets guard: a role-profile slug (client/partner/…) must never
+    // become a role-named entity — the role is a facet on a real subject.
+    // Resolved up front so a strong match (below) attaches the role to the
+    // matched entity instead of dropping it.
+    const rolePayload = await resolveRolePayload(this.db, input.profileSlug);
 
     // ── Step 1: Exact re-import check (entity_external_links) ─────────────────
     const existingLink = await this.db.query.entityExternalLinks.findFirst({
@@ -113,6 +187,9 @@ export class EntityUpsertService {
       if (entity) {
         // Register any new signals that weren't present before
         await this.registerSignals(entity.id, normalizedSignals, input.source);
+        // Kind + Facets: a role payload attaches onto the matched subject.
+        if (rolePayload)
+          await this.attachRoleOnMatch(entity as Entity, rolePayload, input);
         return { entity: entity as Entity, action: "updated" };
       }
     }
@@ -153,15 +230,36 @@ export class EntityUpsertService {
             normalizedSignals,
             input.source
           );
+          // Kind + Facets: a role payload attaches onto the matched subject.
+          if (rolePayload)
+            await this.attachRoleOnMatch(entity as Entity, rolePayload, input);
           return { entity: entity as Entity, action: "matched" };
         }
       }
     }
 
     // ── Step 3: Create new entity ─────────────────────────────────────────────
+    // Kind + Facets: no identity match for a role-slug payload. Create the
+    // entity of the role's applicable KIND (only when it's unambiguous — a
+    // single applicableKind) and attach the role as a facet, so we never
+    // materialize a role-named entity. When the kind is ambiguous/underivable,
+    // fall back to current behavior + log — never invent an identity/kind.
+    let createSlug = input.profileSlug;
+    if (rolePayload && rolePayload.applicableKinds.length === 1) {
+      createSlug = rolePayload.applicableKinds[0];
+    } else if (rolePayload) {
+      logger.warn(
+        {
+          role: rolePayload.slug,
+          applicableKinds: rolePayload.applicableKinds,
+        },
+        "EntityUpsertService: role-slug payload has no single applicable kind and no identity match — creating as-is (fallback)"
+      );
+    }
+
     const entity = await this.entityRepo.create(
       {
-        profileSlug: input.profileSlug,
+        profileSlug: createSlug,
         title: input.title,
         properties: input.properties,
         workspaceId: input.workspaceId,
@@ -175,6 +273,19 @@ export class EntityUpsertService {
       this.registerExternalLink(entity.id, input.source, input.externalId),
       this.registerSignals(entity.id, normalizedSignals, input.source),
     ]);
+
+    // Attach the role as a facet onto the freshly-created kind entity (only when
+    // we rewrote the slug to a derived kind — the fallback path kept the role
+    // slug as the entity's own kind, so there's no separate role to attach).
+    if (rolePayload && createSlug !== input.profileSlug) {
+      await this.attachRole(
+        entity.id,
+        rolePayload.profileId,
+        input.properties,
+        input.workspaceId,
+        input.userId
+      );
+    }
 
     return { entity, action: "created" };
   }

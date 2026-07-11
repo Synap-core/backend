@@ -777,6 +777,19 @@ export class IntelligenceHubClient {
       description?: string;
       properties?: Record<string, unknown>;
       confidence: number;
+      /**
+       * Kind + Facets: role-profiles the IS proposes attaching to this entity
+       * (a person who is a client + investor). `contextTempId` references
+       * another extracted entity's `tempId` (the disambiguating context, e.g.
+       * the deal a "client" role hangs off). Threaded through capture.structure
+       * → capture.execute, which attaches them AFTER the entity materializes.
+       */
+      facets?: Array<{
+        profileSlug: string;
+        status?: string;
+        properties?: Record<string, unknown>;
+        contextTempId?: string;
+      }>;
     }>;
     relations: Array<{
       sourceTempId: string;

@@ -236,6 +236,20 @@ export const CaptureExecuteRequestSchema = z
          */
         content: z.string().optional(),
         existingEntityId: z.string().uuid().optional(),
+        // Kind + Facets: role-profiles to attach after the entity materializes.
+        // Must match the tRPC capture.execute entity schema exactly or the tRPC
+        // zod layer strips it on passthrough. `contextTempId` references another
+        // batch entity by tempId.
+        facets: z
+          .array(
+            z.object({
+              profileSlug: z.string(),
+              status: z.string().optional(),
+              properties: z.record(z.string(), z.unknown()).optional(),
+              contextTempId: z.string().optional(),
+            })
+          )
+          .optional(),
       })
     ),
     relations: z

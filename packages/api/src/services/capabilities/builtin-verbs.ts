@@ -862,8 +862,9 @@ const feedReadHandler: BuiltinVerbHandler = async (params, ctx) => {
   // userId gate is passed here; the helper still owns isNull(deletedAt) +
   // ephemeral=false so recaps never enter agent history. Lazy-imported to keep
   // this module's load graph light, mirroring the other channel-util imports.
-  const { queryChannelMessages } =
-    await import("../../utils/query-channel-messages.js");
+  const { queryChannelMessages } = await import(
+    "../../utils/query-channel-messages.js"
+  );
   const rows = await queryChannelMessages<
     Pick<
       typeof messages.$inferSelect,

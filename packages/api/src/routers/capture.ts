@@ -53,6 +53,7 @@ import {
   type IdentitySignal,
   resolveIdentity,
   extractIdentitySignals,
+  resolveRolePayload,
 } from "@synap/database";
 import {
   userVisibleWhere,
@@ -761,7 +762,11 @@ export const captureRouter = router({
         accessibleProfiles as unknown as AccessibleProfileLike[]
       );
 
-      // 2. Fetch user's workspaces for routing hints (max 5, most recent)
+      // 2. Fetch user's workspaces for routing hints (most-recently-updated
+      // first, up to 30). The old `.limit(5)` had NO orderBy, so Postgres
+      // returned an ARBITRARY 5 of the user's workspaces — a user with more
+      // than five could have the correct destination (e.g. CRM) silently
+      // dropped from the candidate set, making it unreachable to the router.
       const userWorkspaceRows = await database
         .select({
           id: workspaces.id,
@@ -775,7 +780,8 @@ export const captureRouter = router({
           eq(workspaceMembers.workspaceId, workspaces.id)
         )
         .where(eq(workspaceMembers.userId, userId))
-        .limit(5);
+        .orderBy(desc(workspaces.updatedAt))
+        .limit(30);
       // Never surface system/admin workspaces (e.g. pod-admin) as routing
       // candidates — user data must not be routed into an operational workspace.
       const availableWorkspaces = userWorkspaceRows
@@ -1325,6 +1331,24 @@ export const captureRouter = router({
             content: z.string().optional(),
             /** Link to existing entity instead of creating */
             existingEntityId: z.string().uuid().optional(),
+            /**
+             * Kind + Facets: role-profiles to attach to this entity once it
+             * materializes (or onto its dedup match). `contextTempId` references
+             * another entity in this same batch by `tempId` (the disambiguating
+             * context) — resolved to the real created/matched id after
+             * materialization. Attached through the governed `attachFacet` door;
+             * an unknown role slug is skipped + logged, never fails the capture.
+             */
+            facets: z
+              .array(
+                z.object({
+                  profileSlug: z.string(),
+                  status: z.string().optional(),
+                  properties: z.record(z.string(), z.unknown()).optional(),
+                  contextTempId: z.string().optional(),
+                })
+              )
+              .optional(),
           })
         ),
         relations: z.array(
@@ -1461,6 +1485,45 @@ export const captureRouter = router({
         validRelationSlugs = new Set([FALLBACK_RELATION_TYPE]);
       }
 
+      // Kind + Facets guard (T2): a payload whose profileSlug is itself a ROLE
+      // (client/partner/…) must never become a role-named entity — the role is
+      // a facet on a real subject. Rewrite each such payload to (kind + facet):
+      // carry the role as a facet and set the entity's kind to the role's single
+      // applicable kind. When the kind is ambiguous/underivable, only proceed
+      // onto an existing subject (link + attach the role via strong match); else
+      // leave it unchanged + log — never invent a kind. The strong-match loop
+      // below then links/creates, and the facet-attach pass materializes roles.
+      for (const e of input.entities) {
+        if (e.existingEntityId) continue;
+        const rolePayload = await resolveRolePayload(database, e.profileSlug);
+        if (!rolePayload) continue;
+        const roleFacet = {
+          profileSlug: rolePayload.slug,
+          properties: e.properties,
+        };
+        if (rolePayload.applicableKinds.length === 1) {
+          e.facets = [roleFacet, ...(e.facets ?? [])];
+          e.profileSlug = rolePayload.applicableKinds[0];
+        } else {
+          const identity = await resolveIdentity(database, {
+            userId,
+            name: e.title,
+            signals: extractIdentitySignals(e.properties),
+            userScope: userVisibleWhere(entitiesTable.workspaceId, userId),
+            limit: 5,
+          });
+          if (identity.match === "strong" && identity.entity) {
+            e.existingEntityId = identity.entity.id;
+            e.facets = [roleFacet, ...(e.facets ?? [])];
+          } else {
+            logger.warn(
+              { roleSlug: e.profileSlug, tempId: e.tempId },
+              "capture.execute: role-slug payload has no single applicable kind and no identity match — creating as-is (fallback)"
+            );
+          }
+        }
+      }
+
       // Identity-first: for each entity op that doesn't already name an
       // explicit existingEntityId, check the identity resolver. A STRONG
       // signal match (email/phone/url/…) means the subject already exists —
@@ -1532,6 +1595,27 @@ export const captureRouter = router({
       // never entityRepo.create directly, so capture gets the same
       // project-linking, session `produced` links, property→relation sync,
       // identity-signal registration, and emit chain every other creator gets.
+      // Routing W1 (decision D3): identity is pod-wide, role hats live in
+      // lenses. A pod-scope kind (person/company/… — entityScope='pod') is
+      // created POD-WIDE (workspaceId=null) instead of force-stamped into the
+      // routed workspace; the routed workspace instead becomes the workspaceId
+      // of its ATTACHED FACETS (below). Workspace-scoped kinds (task/note/item/
+      // deal/event…) keep the routed stamp — their documents/sessions/projects
+      // link via the entity's workspaceId (load-bearing; do not break). Cache
+      // per slug so a batch of many same-kind entities resolves scope once.
+      const scopeService = new ProfileResolutionService(database);
+      const entityScopeCache = new Map<string, "pod" | "workspace">();
+      const isPodScopeProfile = async (slug: string): Promise<boolean> => {
+        const cached = entityScopeCache.get(slug);
+        if (cached) return cached === "pod";
+        const scope = await scopeService.getEntityScope(
+          slug,
+          workspaceId ?? null
+        );
+        entityScopeCache.set(slug, scope);
+        return scope === "pod";
+      };
+
       const entityCaller = {
         create: async (op: {
           profileSlug: string;
@@ -1540,6 +1624,10 @@ export const captureRouter = router({
           properties?: Record<string, unknown>;
           content?: string;
         }) => {
+          // Pod-scope kinds land pod-wide (null workspace); workspace-scope
+          // kinds keep the routed stamp. The note fallback below is always a
+          // workspace kind, so it always keeps the routed stamp.
+          const isPod = await isPodScopeProfile(op.profileSlug);
           const { documentId, inlineContent } = await resolveContentTarget({
             content: op.content,
             title: op.title,
@@ -1565,13 +1653,12 @@ export const captureRouter = router({
               properties,
               documentId,
               source: "user",
-              // Force the entity into this (routed) workspace even for a
-              // pod-default profile — matches capture's historical
-              // literal-workspaceId behavior. `targetWorkspaceId` pins it to the
-              // ROUTED workspace so the entity doesn't split from its document/
-              // project/session links (which already use `workspaceId`).
-              targetWorkspaceId: workspaceId ?? undefined,
-              workspaceScoped: true,
+              // Pod-scope kind → pod-wide (null workspace): omit the routed
+              // stamp and let the profile's pod-default win. Workspace-scope
+              // kind → pin to the ROUTED workspace so the entity doesn't split
+              // from its document/project/session links (which use workspaceId).
+              targetWorkspaceId: isPod ? undefined : (workspaceId ?? undefined),
+              workspaceScoped: !isPod,
             });
             return {
               id: (created as { id: string }).id,
@@ -1597,8 +1684,8 @@ export const captureRouter = router({
                   properties: salvageProperties,
                   documentId,
                   source: "user",
-                  targetWorkspaceId: workspaceId ?? undefined,
-                  workspaceScoped: true,
+                  targetWorkspaceId: isPod ? undefined : (workspaceId ?? undefined),
+                  workspaceScoped: !isPod,
                 });
                 return {
                   id: (salvaged as { id: string }).id,
@@ -1706,6 +1793,49 @@ export const captureRouter = router({
         relationType: r.type,
       }));
 
+      // Kind + Facets: attach each entity's proposed role-profiles now that the
+      // batch has materialized (created OR dedup-matched — both carry a real id).
+      // Goes through the SAME governed door submit-capture-graph's approve flow
+      // uses (entities.attachFacet → FacetRepository.attach): the ONE facet write
+      // door, so validation + the emit chain are inherited. `contextTempId`
+      // resolves against THIS batch's tempId→id map (the disambiguating context
+      // entity). Best-effort per role: an unknown/misapplied role slug is skipped
+      // + logged (never fails the capture); attach is idempotent (unique index).
+      const tempIdToEntityId = new Map(
+        created.map((c) => [c.tempId, c.entityId])
+      );
+      let facetsAttached = 0;
+      for (const e of input.entities) {
+        if (!e.facets?.length) continue;
+        const parentEntityId = tempIdToEntityId.get(e.tempId);
+        if (!parentEntityId) continue;
+        for (const f of e.facets) {
+          const contextEntityId = f.contextTempId
+            ? tempIdToEntityId.get(f.contextTempId)
+            : undefined;
+          try {
+            await entitiesCaller.attachFacet({
+              entityId: parentEntityId,
+              profileSlug: f.profileSlug,
+              properties: f.properties,
+              status: f.status,
+              contextEntityId,
+              // Routing W1: role hats live in the routed lens. Pin the facet to
+              // the routed workspace (the entity itself may be pod-wide). Null/
+              // undefined routed ws → inherit the parent (pod-wide facet).
+              workspaceId: workspaceId ?? undefined,
+              source: "user",
+            });
+            facetsAttached++;
+          } catch (err) {
+            logger.warn(
+              { err, entityId: parentEntityId, roleSlug: f.profileSlug },
+              "capture.execute: facet attach skipped (unknown/misapplied role or attach failure)"
+            );
+          }
+        }
+      }
+
       // Project membership (lens-context): file the captured entities into the
       // active project. Capture materializes directly (not via proposal
       // approval), so the membership write lands here — the project mirror of
@@ -1765,6 +1895,7 @@ export const captureRouter = router({
           entitiesCreated: created.filter((c) => !c.linked).length,
           entitiesLinked: created.filter((c) => c.linked).length,
           relationsCreated: createdRelations.length,
+          facetsAttached,
         },
         "Capture execute completed"
       );
