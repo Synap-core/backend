@@ -67,6 +67,38 @@ export async function loadFacetSlugsBatch(
   return out;
 }
 
+export interface RolePayloadInfo {
+  profileId: string;
+  slug: string;
+  /** Kinds this role may attach to; empty = applies to any kind. */
+  applicableKinds: string[];
+}
+
+/**
+ * Kind + Facets guard — the ONE check for "is this create-payload slug actually
+ * a ROLE?". A caller (importer/agent) that tries to CREATE an entity whose
+ * `profileSlug` is a role-profile (client/partner/investor/…) must NOT get a
+ * role-named entity: the role is a facet on a real subject. Returns the role's
+ * profileId + applicableKinds when `slug` resolves to a role profile, else null
+ * (it's a primary kind, or unknown — create it normally). Best-effort read;
+ * matches on slug (findFirst) — roles are user/system-scoped, not per-workspace.
+ */
+export async function resolveRolePayload(
+  db: PostgresJsDatabase<typeof schema>,
+  slug: string
+): Promise<RolePayloadInfo | null> {
+  const profile = await db.query.profiles.findFirst({
+    where: eq(profiles.slug, slug),
+    columns: { id: true, slug: true, profileKind: true, applicableKinds: true },
+  });
+  if (!profile || profile.profileKind !== "role") return null;
+  return {
+    profileId: profile.id,
+    slug: profile.slug,
+    applicableKinds: profile.applicableKinds ?? [],
+  };
+}
+
 /**
  * The ONE facet-EXISTS predicate over the OUTER `entities` row: true when the
  * entity carries a live facet whose role-profile is in `roleProfileIds`,
