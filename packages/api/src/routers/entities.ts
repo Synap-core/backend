@@ -1055,23 +1055,34 @@ export const entitiesRouter = router({
         // `role` (entities carry it as a live facet). `convertToFacet` flips
         // profile_kind in place — same slug — so a slug that filtered by
         // `entities.type` before conversion must resolve to the SAME entities
-        // via the facet-EXISTS after. Resolve the slug's kind to route.
-        const slugProfile = await database.query.profiles.findFirst({
+        // via the facet-EXISTS after. Resolve ALL rows for the slug (a slug
+        // can be carried by a system row AND a workspace-scope twin — the
+        // legacy text match was row-blind, so the role routing must OR every
+        // role row's id or entities faceted on the twin vanish).
+        const slugProfiles = await database.query.profiles.findMany({
           where: eq(profiles.slug, input.profileSlug),
           columns: { id: true, profileKind: true },
         });
+        const roleProfileIds = slugProfiles
+          .filter((p) => p.profileKind === "role")
+          .map((p) => p.id);
+        const hasKindRow =
+          slugProfiles.length === 0 ||
+          slugProfiles.some((p) => p.profileKind !== "role");
 
-        if (slugProfile?.profileKind === "role") {
-          // Role profile: match entities carrying it as a live facet, via the
-          // same one-door EXISTS the `facetSlug` filter uses.
-          conditions.push(
-            facetRoleExists(database, [slugProfile.id], {
+        const slugBranches: any[] = [];
+        if (roleProfileIds.length > 0) {
+          // Role rows: match entities carrying a live facet, via the same
+          // one-door EXISTS the `facetSlug` filter uses.
+          slugBranches.push(
+            facetRoleExists(database, roleProfileIds, {
               userId: ctx.userId,
               workspaceId: lensWorkspaceId,
             })
           );
-        } else {
-          // Kind profile (default / unconverted): match by primary type, with
+        }
+        if (hasKindRow) {
+          // Kind rows (default / unconverted): match by primary type, with
           // optional descendant expansion over the kind hierarchy.
           const profileService = new ProfileResolutionService(database);
           let profileSlugs = [input.profileSlug];
@@ -1085,11 +1096,14 @@ export const entitiesRouter = router({
 
           // Use inArray for multiple slugs, eq for single (simpler query plan)
           if (profileSlugs.length === 1) {
-            conditions.push(eq(entities.type, profileSlugs[0]));
+            slugBranches.push(eq(entities.type, profileSlugs[0]));
           } else {
-            conditions.push(inArray(entities.type, profileSlugs));
+            slugBranches.push(inArray(entities.type, profileSlugs));
           }
         }
+        conditions.push(
+          slugBranches.length === 1 ? slugBranches[0] : or(...slugBranches)
+        );
 
         // Pod-default and workspace-scoped profiles share the same read filter
         // (workspaceScopeCondition, computed above): workspace-only by default,

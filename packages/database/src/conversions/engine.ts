@@ -294,9 +294,9 @@ export async function applyConvertToFacet(
   op: ConvertToFacetOp
 ): Promise<OpCounts> {
   const sourceRows = await tx<
-    Array<{ id: string; workspace_id: string | null }>
+    Array<{ id: string; workspace_id: string | null; entity_scope: string }>
   >`
-    SELECT id, workspace_id FROM profiles
+    SELECT id, workspace_id, entity_scope FROM profiles
     WHERE slug = ${op.slug} AND is_active = true
   `;
   if (sourceRows.length === 0) return {}; // Nothing on this pod to convert.
@@ -347,12 +347,22 @@ export async function applyConvertToFacet(
 
     // (b) attach a facet (profile_id = this source row) for every live entity
     // still on it.
+    //
+    // Facet workspace lens must PRESERVE the entity's pre-conversion
+    // visibility: a pod-scoped source profile made its entities visible in
+    // every workspace, so the facet must be pod-wide too (workspace_id NULL +
+    // owner floor) or the entity vanishes from every other workspace's
+    // role-filtered reads (verified live: 393/400 converted facets were
+    // workspace-stamped and lost cross-workspace visibility). A
+    // workspace-scoped source profile keeps the entity's workspace lens.
+    const facetWorkspaceExpr =
+      src.entity_scope === "pod" ? tx`NULL` : tx`e.workspace_id`;
     const facets = await tx`
       INSERT INTO entity_facets
         (entity_id, profile_id, user_id, workspace_id, status, context_entity_id,
          properties, metadata, created_by_kind)
       SELECT
-        e.id, ${src.id}, e.user_id, e.workspace_id,
+        e.id, ${src.id}, e.user_id, ${facetWorkspaceExpr},
         ${statusExpr},
         ${contextExpr},
         COALESCE((

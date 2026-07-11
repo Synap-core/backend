@@ -153,14 +153,29 @@ export async function profileSlugScopeCondition(
   profileSlug: string,
   opts: { userId: string; workspaceId?: string | null }
 ): Promise<SQL> {
-  const row = await db.query.profiles.findFirst({
+  // ALL rows for the slug, not findFirst: one slug can be carried by several
+  // profile rows (e.g. a system row + a workspace-scope twin — the perso pod's
+  // two `knowledge` rows). The legacy `entities.type` match was text-based and
+  // therefore row-blind; the facet EXISTS is id-based, so it must OR every
+  // role row's id or entities faceted on the twin silently vanish
+  // (verified live post-conversion).
+  const rows = await db.query.profiles.findMany({
     where: eq(profiles.slug, profileSlug),
     columns: { id: true, profileKind: true },
   });
-  if (row?.profileKind === "role") {
-    return facetRoleExists(db, [row.id], opts);
-  }
-  return eq(entities.type, profileSlug);
+  const roleIds = rows
+    .filter((r) => r.profileKind === "role")
+    .map((r) => r.id);
+  const hasKindRow =
+    rows.length === 0 || rows.some((r) => r.profileKind !== "role");
+
+  const branches: SQL[] = [];
+  // Kind branch stays the byte-for-byte pre-facets text match (row-blind).
+  if (hasKindRow) branches.push(eq(entities.type, profileSlug) as SQL);
+  if (roleIds.length > 0) branches.push(facetRoleExists(db, roleIds, opts));
+
+  if (branches.length === 1) return branches[0];
+  return or(...branches) as SQL;
 }
 
 /**
