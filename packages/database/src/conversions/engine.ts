@@ -45,7 +45,13 @@ export interface OpCounts {
   profilePropertiesRepointed?: number;
 }
 
-export type OpStatus = "applied" | "skipped" | "dry-run" | "noop" | "error";
+export type OpStatus =
+  | "applied"
+  | "skipped"
+  | "dry-run"
+  | "noop"
+  | "deferred"
+  | "error";
 
 export interface OpResult {
   opKey: string;
@@ -64,6 +70,31 @@ export interface RunOptions {
    * (non-dry) run. Default false — the canary constraint.
    */
   destructiveTail: boolean;
+  /**
+   * When true, ops that carry a destructive tail (see `opHasDestructiveTail`)
+   * are SKIPPED entirely with status "deferred" — neither applied nor recorded
+   * in the ledger — so a deliberate operator run can still complete them with
+   * --destructive-tail. The automatic pod-startup caller sets this; the CLI
+   * does not. Applying only the non-destructive half of such an op would ledger
+   * its opKey and orphan the deactivation (a later operator run would skip it),
+   * so those ops are deferred whole. Mutually exclusive with `destructiveTail`.
+   */
+  deferDestructive?: boolean;
+}
+
+/**
+ * Does this op carry a DESTRUCTIVE tail — a step gated behind the
+ * `destructiveTail` run flag that deactivates (retires) profile rows?
+ *
+ * Exactly the two ops whose `applyOp` handler reads `destructiveTail`:
+ * `mergeInto` (deactivates the merged-away source profiles) and
+ * `dedupeProfileRows` (deactivates the drained duplicate rows). This IS the
+ * engine's existing classification — it just names the same `if
+ * (destructiveTail)` branches those two handlers already contain, so the
+ * startup caller and the CLI share one definition of "destructive".
+ */
+export function opHasDestructiveTail(op: ConversionOp): boolean {
+  return op.op === "mergeInto" || op.op === "dedupeProfileRows";
 }
 
 export interface RunSummary {
@@ -111,6 +142,14 @@ export async function runConversions(
     );
   }
 
+  if (options.deferDestructive && options.destructiveTail) {
+    // Contradictory: defer SKIPS destructive-tail ops, destructiveTail APPLIES
+    // their tail. A caller asking for both is confused — fail loudly.
+    throw new Error(
+      "runConversions: deferDestructive and destructiveTail are mutually exclusive."
+    );
+  }
+
   // Applied set = op keys that succeeded on a previous real run.
   const appliedRows = await sql<Array<{ op_key: string }>>`
     SELECT op_key FROM "_conversions" WHERE error IS NULL AND dry_run = false
@@ -129,6 +168,19 @@ export async function runConversions(
         op: op.op,
         slug,
         status: "skipped",
+        counts: {},
+      });
+      continue;
+    }
+
+    // Not-yet-applied op with a destructive tail, and the caller asked to defer:
+    // leave it for a deliberate operator run (neither apply nor ledger it).
+    if (options.deferDestructive && opHasDestructiveTail(op)) {
+      results.push({
+        opKey: op.opKey,
+        op: op.op,
+        slug,
+        status: "deferred",
         counts: {},
       });
       continue;

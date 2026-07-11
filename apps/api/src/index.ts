@@ -1845,6 +1845,78 @@ await (async () => {
   }
 })();
 
+// Ontology conversions — the ledger-idempotent DATA-migration runner (the
+// conversion manifest SSOT: packages/database/src/conversions/manifest.ts).
+//
+// Runs AFTER migrations + schema coherence, BEFORE serve() — same startup
+// discipline as the schema check above:
+//   - Non-destructive ops apply automatically, once. The `_conversions` ledger
+//     records applied opKeys, so every subsequent boot skips them (no re-work).
+//   - Destructive-tail ops (profile deactivation in mergeInto / dedupe) are
+//     DEFERRED, never auto-applied — logged loudly as pending operator action.
+//     The operator completes them deliberately with:
+//       tsx src/scripts/run-conversions.ts --apply --destructive-tail
+//   - A failing op ABORTS startup non-zero (a drifted ontology never serves).
+//   - Kill-switch: SYNAP_SKIP_CONVERSIONS=1 skips the whole pass with a warn.
+await (async () => {
+  if (process.env.SYNAP_SKIP_CONVERSIONS === "1") {
+    apiLogger.warn(
+      "Ontology conversions SKIPPED (SYNAP_SKIP_CONVERSIONS=1) — the manifest " +
+        "will not be applied this boot"
+    );
+    return;
+  }
+  try {
+    const { sql, runConversions, CONVERSION_MANIFEST } = await import(
+      "@synap/database"
+    );
+    const summary = await runConversions(sql, CONVERSION_MANIFEST, {
+      dryRun: false,
+      destructiveTail: false,
+      deferDestructive: true,
+    });
+
+    if (summary.hadError) {
+      const failed = summary.results.find((r) => r.status === "error");
+      throw new Error(
+        `Conversion op '${failed?.opKey}' failed: ${failed?.error ?? "unknown error"}`
+      );
+    }
+
+    const applied = summary.results.filter(
+      (r) => r.status === "applied" || r.status === "noop"
+    ).length;
+    const skipped = summary.results.filter(
+      (r) => r.status === "skipped"
+    ).length;
+    const deferred = summary.results.filter((r) => r.status === "deferred");
+
+    apiLogger.info(
+      { applied, skipped, deferred: deferred.length },
+      `Ontology conversions: applied ${applied}, skipped ${skipped} (ledger), ` +
+        `deferred ${deferred.length} (destructive-tail)`
+    );
+
+    if (deferred.length > 0) {
+      apiLogger.warn(
+        { ops: deferred.map((r) => r.opKey) },
+        "Ontology conversions: destructive-tail ops PENDING operator action — " +
+          "run `tsx src/scripts/run-conversions.ts --apply --destructive-tail` " +
+          "in @synap/database to retire the merged-away / duplicate profiles"
+      );
+    }
+  } catch (err) {
+    apiLogger.error(
+      { err: err instanceof Error ? err.message : String(err) },
+      "Ontology conversions failed — refusing to start"
+    );
+    if (err instanceof Error) {
+      console.error(err.message);
+    }
+    process.exit(1);
+  }
+})();
+
 // Kratos config coherence tripwire — non-fatal.
 //
 // Mirrors the schema check above but for `kratos.yml` drift. The most common
