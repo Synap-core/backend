@@ -894,7 +894,13 @@ export const skillsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const skill = await db.query.skills.findFirst({
-        where: eq(skills.id, input.skillId),
+        where: and(
+          eq(skills.id, input.skillId),
+          // Owner floor before editing the skill's `requires` edges — same gate
+          // as getRequiredTools / skills.get. Pod-scoped skills stay editable by
+          // any user (existing model); user-scoped skills are owner-only.
+          or(eq(skills.scope, "pod"), eq(skills.userId, userId))
+        ),
       });
       if (!skill)
         throw new TRPCError({ code: "NOT_FOUND", message: "Skill not found" });

@@ -65,3 +65,12 @@ export const clampWindowDays = (
   days: number | undefined,
   fallback = 30
 ): number => Math.min(365, Math.max(1, days ?? fallback));
+
+/**
+ * A decision must be at least this old before it counts as "confirmed": it has
+ * had a full window to be corrected and wasn't. Used BOTH by the acceptance
+ * metric (the matured cohort) AND by routing memory (a positive example must be
+ * a SURVIVED route, not a fresh un-looked-at one — otherwise an uncorrected
+ * mis-route poisons the few-shot positives, which dogfooding caught live).
+ */
+export const MATURITY_DAYS = 7;

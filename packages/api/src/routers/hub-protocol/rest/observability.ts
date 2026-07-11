@@ -31,6 +31,7 @@ import {
   AI_DECISION,
   AI_CORRECTION,
   AI_KIND,
+  MATURITY_DAYS,
   clampWindowDays,
   decisionCorrelationKeyExpr,
   eventKindExpr,
@@ -79,14 +80,6 @@ const RoutingHealthSchema = z
     generatedAt: z.string(),
   })
   .openapi("RoutingHealth");
-
-/**
- * A decision must be at least this old to enter the acceptance cohort — it has
- * had a full window to be reversed. Corrections are counted only within this
- * many days of the decision (decision-anchored, NOT calendar-rolling), so a
- * fresh decision isn't unfairly compared against a matured one.
- */
-const MATURITY_DAYS = 7;
 
 /** Confidence calibration buckets — [min, max) except the last, which is inclusive of 1.0. */
 const CALIBRATION_BUCKETS: Array<{ min: number; max: number; range: string }> =

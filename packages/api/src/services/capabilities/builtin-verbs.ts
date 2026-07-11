@@ -26,7 +26,6 @@ import {
   eq,
   and,
   or,
-  isNull,
   desc,
   drizzleSql,
   channels,
@@ -858,24 +857,24 @@ const feedReadHandler: BuiltinVerbHandler = async (params, ctx) => {
     return { messages: [], channelId: null };
   }
 
-  const rows = await db
-    .select({
-      role: messages.role,
-      content: messages.content,
-      metadata: messages.metadata,
-      timestamp: messages.timestamp,
-    })
-    .from(messages)
-    // Exclude ephemeral recaps from the agent-facing history read verb.
-    .where(
-      and(
-        eq(messages.channelId, channelId),
-        isNull(messages.deletedAt),
-        eq(messages.ephemeral, false)
-      )
-    )
-    .orderBy(desc(messages.timestamp))
-    .limit(limit);
+  // Reads through the ONE door (queryChannelMessages). The channel was already
+  // resolved + authorized above THROUGH the access layer (getReadScope), so no
+  // userId gate is passed here; the helper still owns isNull(deletedAt) +
+  // ephemeral=false so recaps never enter agent history. Lazy-imported to keep
+  // this module's load graph light, mirroring the other channel-util imports.
+  const { queryChannelMessages } =
+    await import("../../utils/query-channel-messages.js");
+  const rows = await queryChannelMessages<
+    Pick<
+      typeof messages.$inferSelect,
+      "role" | "content" | "metadata" | "timestamp"
+    >
+  >(db, {
+    channelId,
+    order: "desc",
+    limit,
+    columns: { role: true, content: true, metadata: true, timestamp: true },
+  });
 
   // Re-order oldest → newest for downstream sequential reading.
   const ordered = rows.reverse().map((m) => ({

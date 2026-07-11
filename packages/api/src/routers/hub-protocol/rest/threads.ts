@@ -60,6 +60,7 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
+import { queryChannelMessages } from "../../../utils/query-channel-messages.js";
 import { triggerAutoRespond } from "../../../utils/trigger-auto-respond.js";
 
 export function registerThreadsRoutes(app: HubHono): void {
@@ -638,20 +639,35 @@ export function registerThreadsRoutes(app: HubHono): void {
     }
     const { threadId } = c.req.valid("param");
     try {
-      const msgs = await db
-        .select({
-          id: messages.id,
-          role: messages.role,
-          content: messages.content,
-          userId: messages.userId,
-          timestamp: messages.timestamp,
-          sessionId: messages.sessionId,
-          authorType: messages.authorType,
-          metadata: messages.metadata,
-        })
-        .from(messages)
-        .where(eq(messages.channelId, threadId))
-        .orderBy(asc(messages.timestamp));
+      // Through the one door: excludes soft-deleted AND ephemeral rows (this read
+      // previously returned both — a real leak). Pre-authorized by the scope gate
+      // above, so no userId gate here.
+      const msgs = await queryChannelMessages<
+        Pick<
+          typeof messages.$inferSelect,
+          | "id"
+          | "role"
+          | "content"
+          | "userId"
+          | "timestamp"
+          | "sessionId"
+          | "authorType"
+          | "metadata"
+        >
+      >(db, {
+        channelId: threadId,
+        order: "asc",
+        columns: {
+          id: true,
+          role: true,
+          content: true,
+          userId: true,
+          timestamp: true,
+          sessionId: true,
+          authorType: true,
+          metadata: true,
+        },
+      });
       return c.json(msgs, 200);
     } catch (err) {
       logger.error({ err, threadId }, "getThreadMessages failed");

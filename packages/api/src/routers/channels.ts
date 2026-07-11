@@ -15,6 +15,7 @@ import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { getPodCallback } from "../utils/pod-callback.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
+import { queryChannelMessages } from "../utils/query-channel-messages.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import {
   resolveAgentHandle,
@@ -31,7 +32,6 @@ import {
   asc,
   and,
   or,
-  lt,
   gte,
   inArray,
   isNull,
@@ -1038,11 +1038,18 @@ export const channelsRouter = router({
         });
       }
 
-      // Load by id, gate on the loaded row's workspace.
+      // Load by id, then gate on the loaded row: the session must belong to the
+      // caller's workspace (member via workspaceProcedure) OR be the caller's own
+      // personal session. Without this floor, any sessionId leaked session.goal
+      // and bound an AGENT_COLLAB channel onto another user's session. NOT_FOUND
+      // (not FORBIDDEN) so the id is not an existence oracle.
       const session = await db.query.focusSessions.findFirst({
         where: eq(focusSessions.id, input.sessionId),
       });
-      if (!session) {
+      if (
+        !session ||
+        (session.workspaceId !== workspaceId && session.userId !== ctx.userId)
+      ) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Focus session ${input.sessionId} not found`,
@@ -1878,22 +1885,21 @@ export const channelsRouter = router({
                 );
 
               if (aiMembers.length > 0) {
-                // Fetch recent context (last 6 messages — cheap, bounded).
-                // Exclude ephemeral recaps: a "catch me up" summary must not
-                // influence teammate routing, consistent with every other read
-                // that feeds agent context.
-                const recentMessages = await db
-                  .select({ role: messages.role, content: messages.content })
-                  .from(messages)
-                  .where(
-                    and(
-                      eq(messages.channelId, channelId),
-                      eq(messages.ephemeral, false)
-                    )
+                // Fetch recent context (last 6 messages — cheap, bounded) through
+                // the one door: excludes ephemeral recaps AND soft-deleted messages
+                // so neither influences teammate routing (sender is pre-authorized,
+                // so no userId gate here).
+                const recentMessages = (
+                  await queryChannelMessages<{ role: string; content: string }>(
+                    db,
+                    {
+                      channelId,
+                      order: "desc",
+                      limit: 6,
+                      columns: { role: true, content: true },
+                    }
                   )
-                  .orderBy(desc(messages.timestamp))
-                  .limit(6)
-                  .then((rows) => rows.reverse());
+                ).reverse();
 
                 const routeResult = await resolvedService.client.routeTeammate({
                   channelId,
@@ -2743,32 +2749,16 @@ export const channelsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      // Canonical channel visibility — replaces the old owner-only gate so
-      // workspace members see messages in shared channels (GROUP/AGENT_COLLAB/
-      // EXTERNAL) they don't own.
-      const channel = await db.query.channels.findFirst({
-        where: and(
-          eq(channels.id, input.threadId),
-          channelVisibilityWhere(ctx.userId)
-        ),
-      });
-      if (!channel) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Channel not found or access denied",
-        });
-      }
-
-      const msgs = await db.query.messages.findMany({
-        where: and(
-          eq(messages.channelId, input.threadId),
-          isNull(messages.deletedAt),
-          // Ephemeral messages are live-only — never surface them on (re)load.
-          eq(messages.ephemeral, false),
-          input.cursor ? lt(messages.id, input.cursor) : undefined
-        ),
-        orderBy: [desc(messages.timestamp)],
+      // Reads through the ONE door (queryChannelMessages): the canonical
+      // channel-visibility gate (workspace members see shared GROUP/AGENT_COLLAB/
+      // EXTERNAL channels they don't own) + isNull(deletedAt) + ephemeral=false
+      // are all owned by the helper, so a read can never forget them.
+      const msgs = await queryChannelMessages(db, {
+        userId: ctx.userId,
+        channelId: input.threadId,
+        order: "desc",
         limit: input.limit + 1,
+        cursor: input.cursor,
       });
 
       const hasMore = msgs.length > input.limit;
@@ -2794,30 +2784,14 @@ export const channelsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      // Canonical channel visibility — replaces the old owner-only gate so
-      // workspace members see timelines in shared channels they don't own.
-      const channel = await db.query.channels.findFirst({
-        where: and(
-          eq(channels.id, input.channelId),
-          channelVisibilityWhere(ctx.userId)
-        ),
-      });
-      if (!channel) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Channel not found or access denied",
-        });
-      }
-
-      // 1. Fetch all non-deleted messages, oldest-first, up to limit*2 to cover pairs
-      const allMessages = await db.query.messages.findMany({
-        where: and(
-          eq(messages.channelId, input.channelId),
-          isNull(messages.deletedAt),
-          // Ephemeral messages are live-only — excluded from the timeline.
-          eq(messages.ephemeral, false)
-        ),
-        orderBy: [asc(messages.timestamp)],
+      // 1. Fetch the base history through the ONE door (queryChannelMessages) —
+      //    channel-visibility gate + isNull(deletedAt) + ephemeral=false owned
+      //    by the helper. Oldest-first, up to limit*2 to cover pairs. The
+      //    turn-pairing / session / compaction shaping stays below.
+      const allMessages = await queryChannelMessages(db, {
+        userId: ctx.userId,
+        channelId: input.channelId,
+        order: "asc",
         limit: input.limit * 2,
       });
 
@@ -4340,28 +4314,14 @@ export const channelsRouter = router({
   listPinnedMessages: protectedProcedure
     .input(z.object({ channelId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      const channel = await db.query.channels.findFirst({
-        where: and(
-          eq(channels.id, input.channelId),
-          channelVisibilityWhere(ctx.userId)
-        ),
-      });
-      if (!channel) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Channel not found or access denied",
-        });
-      }
-
-      const pinned = await db.query.messages.findMany({
-        where: and(
-          eq(messages.channelId, input.channelId),
-          isNull(messages.deletedAt),
-          // Ephemeral messages never persist to reload, so they can't be pinned.
-          eq(messages.ephemeral, false),
-          drizzleSql`${messages.metadata}->>'pinned' = 'true'`
-        ),
-        orderBy: [asc(messages.timestamp)],
+      // Reads through the ONE door (queryChannelMessages): channel-visibility
+      // gate + isNull(deletedAt) + ephemeral=false owned by the helper. The
+      // pinned-metadata filter rides along as an extra predicate on the triad.
+      const pinned = await queryChannelMessages(db, {
+        userId: ctx.userId,
+        channelId: input.channelId,
+        order: "asc",
+        extraWhere: drizzleSql`${messages.metadata}->>'pinned' = 'true'`,
       });
 
       return { messages: pinned };

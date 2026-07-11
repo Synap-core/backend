@@ -42,10 +42,12 @@ import {
   AI_KIND,
   AUTO_ROUTE_MIN_CONFIDENCE,
   ROUTE_TUNING_CEIL,
+  MATURITY_DAYS,
   clampWindowDays,
   decisionCorrelationKeyExpr,
   eventKindExpr,
 } from "../lib/ai-events.js";
+import { lte } from "@synap/database";
 
 export interface RoutingMemoryExample {
   /** A short snippet of the captured text (title/preview), for the prompt. */
@@ -136,8 +138,16 @@ export async function fetchRoutingMemory(
     correctedIdRows.map((r) => r.cid).filter((x): x is string => !!x)
   );
 
-  // 3. Recent auto-applied decisions — positives candidates (filter out
-  //    corrected + over-fetch for the same drop-on-resolve reason).
+  // 3. Auto-applied decisions that MATURED without correction — positives
+  //    candidates. The maturity gate is load-bearing: a fresh auto-route the
+  //    user simply hasn't looked at yet is NOT a confirmation. Without it, an
+  //    uncorrected MIS-route becomes a "confirmed" positive example and teaches
+  //    the model the wrong thing (caught by dogfooding: a fashion signal
+  //    mis-filed to CRM, uncorrected, started pulling later signals to CRM).
+  //    Only a decision old enough to have been corrected but wasn't is trusted.
+  const maturedBefore = new Date(
+    Date.now() - MATURITY_DAYS * 24 * 60 * 60 * 1000
+  );
   const decisionRows = await db
     .select({
       correlationId: events.correlationId,
@@ -152,7 +162,8 @@ export async function fetchRoutingMemory(
         eq(events.subjectType, AI_DECISION),
         drizzleSql`${eventKindExpr} = ${AI_KIND.ROUTE}`,
         drizzleSql`${events.data}->>'applied' = 'true'`,
-        gte(events.timestamp, since)
+        gte(events.timestamp, since),
+        lte(events.timestamp, maturedBefore)
       )
     )
     .orderBy(desc(events.timestamp))

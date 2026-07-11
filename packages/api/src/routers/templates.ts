@@ -19,6 +19,7 @@ import {
   and,
   desc,
   or,
+  isNotNull,
   type SQL,
   entityTemplates,
   verifyPermission,
@@ -334,8 +335,23 @@ export const templatesRouter = router({
   duplicate: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      // Floor the READ to what the caller may see — the SAME visibility model as
+      // templates.list: own (userId) OR a member workspace OR public. A public
+      // template can still be duplicated (that's the intended flow); a private
+      // template belonging to another user/workspace no longer leaks its schema
+      // + config on an id guess.
       const original = await db.query.entityTemplates.findFirst({
-        where: eq(entityTemplates.id, input.id as string),
+        where: and(
+          eq(entityTemplates.id, input.id as string),
+          or(
+            eq(entityTemplates.userId, ctx.userId),
+            and(
+              isNotNull(entityTemplates.workspaceId),
+              userVisibleWhere(entityTemplates.workspaceId, ctx.userId)
+            ),
+            eq(entityTemplates.isPublic, true)
+          )
+        ),
       });
 
       if (!original)
@@ -343,9 +359,6 @@ export const templatesRouter = router({
           code: "NOT_FOUND",
           message: "Template not found",
         });
-
-      // If user checks public template, they can duplicate it to their own list
-      // So no permission check on READ, just explicit duplicate.
 
       const [template] = await db
         .insert(entityTemplates)

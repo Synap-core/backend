@@ -1001,12 +1001,18 @@ export const captureRouter = router({
         }
       } else if (!pickedWsName && rawPickedWsId) {
         // The IS emitted a raw targetWorkspaceId but NO targetWorkspaceName, so
-        // reconciliation cannot run and an LLM copy-error id passes through
-        // untouched. Signature of a deployed IS that predates the
-        // targetWorkspaceName emission — redeploy the IS to close it.
+        // name→id reconciliation can't run — the id is UNVERIFIABLE and might be
+        // the LLM's copy-error (dogfooding caught exactly this: a null name + a
+        // wrong id + a model confidence of 0.7 auto-filed a market signal into
+        // the engineering workspace). Degrade the confidence below the gate so
+        // an unverifiable pick degrades to ask/no-move instead of auto-applying.
+        structureResult.targetWorkspaceConfidence = Math.min(
+          structureResult.targetWorkspaceConfidence ?? 0,
+          AUTO_ROUTE_MIN_CONFIDENCE - 0.1
+        );
         logger.warn(
           { userId, rawPickedWsId },
-          "Capture routing: IS returned targetWorkspaceId without targetWorkspaceName — name reconciliation skipped (redeploy IS to enable copy-error correction)"
+          "Capture routing: IS returned targetWorkspaceId without targetWorkspaceName — id unverifiable, confidence degraded below auto-apply gate"
         );
       }
 
