@@ -365,10 +365,10 @@ export async function applyConvertToFacet(
   `;
   if (sourceRows.length === 0) return {}; // Nothing on this pod to convert.
 
-  // Parse back to a VALUE and pass via tx.json(): postgres.js JSON-serializes
-  // a param it infers as jsonb, so handing it the pre-stringified mapping
-  // double-encodes into a quoted scalar and jsonb_array_elements throws
-  // "cannot extract elements from a scalar" (verified live, postgres@3.4.8).
+  // Parse back to a VALUE, then re-stringify at the call site with an
+  // explicit ::jsonb cast (see recordLedger header: sql.json() is banned in
+  // this module). The text param + server-side cast decodes exactly once —
+  // verified live by the W5 drift repair (23 conversions, clean facet props).
   // buildPropertyMappingJson stays the tested SSOT for pair building/ordering.
   const mappingPairs = JSON.parse(
     buildPropertyMappingJson(op.propertyMapping)

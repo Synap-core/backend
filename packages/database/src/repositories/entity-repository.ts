@@ -243,7 +243,8 @@ export class EntityRepository extends BaseRepository<
     // aimed at a role profile is transparently adapted to the same shape
     // ConvertToFacetOp produces: the entity is created on the role's single
     // applicable KIND, and the role attaches as a facet carrying the supplied
-    // properties (see step 6b). This keeps every legacy door — capture,
+    // properties (attached atomically with the insert in step 3). This keeps
+    // every legacy door — capture,
     // remember_fact, research persistence, raw create_entity — writing the
     // kind+facet shape without per-caller edits. A multi-kind role (client →
     // person|company) can't guess its target entity, so it is rejected toward
@@ -348,28 +349,71 @@ export class EntityRepository extends BaseRepository<
       agentUserId: data.agentUserId,
       createdByKind: data.createdByKind,
     });
-    const [entity] = await this.db
-      .insert(entities)
-      .values({
-        // Pin id only when the caller supplied one (materializer); otherwise
-        // undefined → Drizzle omits it → DB defaultRandom() mints a fresh uuid.
-        ...(data.id ? { id: data.id } : {}),
-        userId,
-        workspaceId: effectiveWorkspaceId,
-        profileId,
-        type: entityType,
-        title: data.title,
-        preview: data.preview,
-        documentId: data.documentId,
-        properties: validatedProperties,
-        // Provenance (Wave B3)
-        createdByKind: provenance.createdByKind,
-        createdByUserId: provenance.createdByUserId,
-        agentUserId: data.agentUserId,
-        sourceProposalId: data.sourceProposalId,
-        correlationId: data.correlationId,
-      } as NewEntity)
-      .returning();
+    const insertValues = {
+      // Pin id only when the caller supplied one (materializer); otherwise
+      // undefined → Drizzle omits it → DB defaultRandom() mints a fresh uuid.
+      ...(data.id ? { id: data.id } : {}),
+      userId,
+      workspaceId: effectiveWorkspaceId,
+      profileId,
+      type: entityType,
+      title: data.title,
+      preview: data.preview,
+      documentId: data.documentId,
+      properties: validatedProperties,
+      // Provenance (Wave B3)
+      createdByKind: provenance.createdByKind,
+      createdByUserId: provenance.createdByUserId,
+      agentUserId: data.agentUserId,
+      sourceProposalId: data.sourceProposalId,
+      correlationId: data.correlationId,
+    } as NewEntity;
+
+    let entity: Entity;
+    if (roleFacetProfile) {
+      // Role-adapter write is ATOMIC: the kind entity and its role facet
+      // commit together, so a facet failure (FK, connection drop, anything
+      // beyond attach's handled conflict) rolls the entity back instead of
+      // stranding an empty `item` while the role payload — already moved off
+      // entity.properties — is lost. This matters doubly on the materializer
+      // path, whose subjectId idempotency guard would otherwise skip the
+      // retry and never heal the missing facet. Facet properties were
+      // validated against the ROLE profile in 1a, hence skipValidation
+      // (attach's own door validates with enforceRequired:false anyway —
+      // the stricter 1a check is deliberate: legacy capture flows depend on
+      // required-def failures like a missing ek_type surfacing early).
+      const roleProfileId = roleFacetProfile.id;
+      entity = await this.db.transaction(async (tx: any) => {
+        const [row] = await tx
+          .insert(entities)
+          .values(insertValues)
+          .returning();
+        const facetRepo = new FacetRepository(tx, this.eventRepo);
+        await facetRepo.attach(
+          {
+            entityId: row.id,
+            profileId: roleProfileId,
+            userId,
+            workspaceId: effectiveWorkspaceId,
+            properties: roleFacetProperties,
+            skipValidation: true,
+            createdByKind: provenance.createdByKind,
+            createdByUserId: provenance.createdByUserId,
+            agentUserId: data.agentUserId,
+            sourceProposalId: data.sourceProposalId,
+            correlationId: data.correlationId,
+          },
+          userId
+        );
+        return row as Entity;
+      });
+    } else {
+      const [row] = await this.db
+        .insert(entities)
+        .values(insertValues)
+        .returning();
+      entity = row;
+    }
 
     // 4. Index properties (async, non-blocking) — index through the
     //    requesting workspace's lens so overlay props get indexed too.
@@ -412,30 +456,6 @@ export class EntityRepository extends BaseRepository<
             error
           );
         })
-      );
-    }
-
-    // 6b. Role-adapter tail (see 1a): attach the role as a facet through THE
-    // door, so the create lands as kind + hat — the exact shape
-    // ConvertToFacetOp produces. Properties were already validated against
-    // the role profile in 1a, hence skipValidation.
-    if (roleFacetProfile) {
-      const facetRepo = new FacetRepository(this.db, this.eventRepo);
-      await facetRepo.attach(
-        {
-          entityId: entity.id,
-          profileId: roleFacetProfile.id,
-          userId,
-          workspaceId: effectiveWorkspaceId,
-          properties: roleFacetProperties,
-          skipValidation: true,
-          createdByKind: provenance.createdByKind,
-          createdByUserId: provenance.createdByUserId,
-          agentUserId: data.agentUserId,
-          sourceProposalId: data.sourceProposalId,
-          correlationId: data.correlationId,
-        },
-        userId
       );
     }
 

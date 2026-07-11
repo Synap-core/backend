@@ -702,6 +702,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
         researchConfidence: "researchConfidence",
       },
       statusFrom: "researchStatus",
+      contextFromProperty: "projectId",
     },
   ],
 };
