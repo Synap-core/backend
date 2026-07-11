@@ -15,6 +15,8 @@ import {
   and,
   inArray,
   drizzleSql,
+  resolveSlugKind,
+  loadFacetSlugsBatch,
 } from "@synap/database";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
@@ -112,6 +114,20 @@ export async function hybridRecall(
   if (projectIds && projectIds.size === 0)
     return { ids: [], usedVector: false };
 
+  // Kind+Facets: an entity wearing a ROLE keeps its KIND `entityType` (a
+  // `company` faceted `client` is still entityType=company). So scoping either
+  // recall half by `entityType === roleSlug` silently misses every facet-wearer
+  // — the structural bypass. Resolve the slug once (cached): a ROLE slug matches
+  // FACET MEMBERSHIP, so we widen both halves (drop the entityType constraint)
+  // and post-filter the union to facet-wearers via ONE batched facet load. A
+  // pure KIND (or unknown) slug keeps the byte-for-byte entityType constraint.
+  // A slug is kind XOR role after conversion (convertToFacet flips the row in
+  // place, no twin), so there is no mixed set to reconcile; the unscoped recall
+  // pass in retrieve.ts covers any theoretical edge.
+  const slugKind = profileSlug ? await resolveSlugKind(db, profileSlug) : null;
+  const matchByFacet = slugKind?.hasRoleRow ?? false;
+  const scopeByEntityType = profileSlug != null && !matchByFacet;
+
   // ── pgvector (semantic) ─────────────────────────────────────────────────
   let vectorIds: string[] = [];
   let usedVector = false;
@@ -129,7 +145,8 @@ export async function hybridRecall(
         // can occupy a `widen` slot or reach fusion/slice.
         drizzleSql`${entityVectors.embedding} <=> ${vecLiteral}::vector <= ${MAX_VECTOR_DISTANCE}`,
       ];
-      if (profileSlug) conds.push(eq(entityVectors.entityType, profileSlug));
+      if (profileSlug && scopeByEntityType)
+        conds.push(eq(entityVectors.entityType, profileSlug));
       if (projectIds)
         conds.push(inArray(entityVectors.entityId, [...projectIds]));
       const where = conds.length > 1 ? and(...conds) : conds[0];
@@ -160,7 +177,7 @@ export async function hybridRecall(
       page: 1,
     });
     let hits = resp.results.filter((r) => r.collection === "entities");
-    if (profileSlug) {
+    if (profileSlug && scopeByEntityType) {
       hits = hits.filter((r) => {
         const d = r.document as Record<string, unknown>;
         return d.entityType === profileSlug || d.type === profileSlug;
@@ -170,14 +187,35 @@ export async function hybridRecall(
       .map((r) => (r.document as Record<string, unknown>).id as string)
       .filter(Boolean);
     // Project lens — Typesense has no project field, so filter the (widened)
-    // hit list to the project's id set. Truncate to `limit` after filtering.
+    // hit list to the project's id set. Non-facet path truncates to `limit` (its
+    // pre-facets behavior); when a facet post-filter still has to run, keep the
+    // widened candidates so it isn't starved before the filter applies.
     if (projectIds) {
       keywordIds = keywordIds
         .filter((id) => projectIds.has(id))
-        .slice(0, limit);
+        .slice(0, matchByFacet ? widen : limit);
     }
   } catch (err) {
     logger.debug({ err }, "Typesense recall failed");
+  }
+
+  // ── Facet post-constraint (role scope) ──────────────────────────────────
+  // The slug is a ROLE: both halves were widened (entityType constraint dropped),
+  // so keep only the candidates that actually WEAR the role facet. ONE batched
+  // facet load over the union of both halves — the canonical entity→facet-slug
+  // join (same door the search indexer uses), never a per-id lookup.
+  if (matchByFacet && profileSlug) {
+    const union = [...new Set([...vectorIds, ...keywordIds])];
+    if (union.length > 0) {
+      const slugsById = await loadFacetSlugsBatch(db, union);
+      const wears = (id: string): boolean =>
+        slugsById.get(id)?.includes(profileSlug) ?? false;
+      vectorIds = vectorIds.filter(wears);
+      keywordIds = keywordIds.filter(wears);
+    } else {
+      vectorIds = [];
+      keywordIds = [];
+    }
   }
 
   return { ids: rrf([vectorIds, keywordIds], 60, limit), usedVector };

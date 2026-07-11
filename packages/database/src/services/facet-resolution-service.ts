@@ -67,6 +67,55 @@ export async function loadFacetSlugsBatch(
   return out;
 }
 
+/**
+ * Slug → kind/role classification for the RECALL layer (search/retrieval).
+ * A recall half filters on a text engine (Typesense `entityType`/`facetSlugs`)
+ * or `entity_vectors.entityType` — neither can run the SQL `facetRoleExists`
+ * EXISTS that `profileSlugScopeCondition` uses over `entities`. So the recall
+ * layer needs the SAME kind-vs-role verdict as a plain boolean pair, then it
+ * routes: kind → match `entityType`, role → match facet membership (by slug).
+ * Same source-of-truth logic as `profileSlugScopeCondition` (a slug can carry
+ * both a system kind row and a role twin), reduced to booleans.
+ */
+export interface SlugKindInfo {
+  /** Slug has ≥1 primary-kind row → an `entityType`/`entities.type` match applies. */
+  hasKindRow: boolean;
+  /** Slug has ≥1 role row → facet-membership (by slug) match applies. */
+  hasRoleRow: boolean;
+}
+
+/** TTL cache (60s) mirroring `ProfileResolutionService.getEntityScope` — the
+ * recall layer resolves the same handful of inferred slugs on every query. */
+const slugKindCache = new Map<
+  string,
+  { info: SlugKindInfo; expiresAt: number }
+>();
+const SLUG_KIND_TTL_MS = 60_000;
+
+/**
+ * Classify a profile slug as kind and/or role for the recall layer. Unknown
+ * slugs (no profile row) resolve to `{ hasKindRow: true, hasRoleRow: false }`
+ * so recall stays byte-for-byte the pre-facets `entityType` match. Cached 60s.
+ */
+export async function resolveSlugKind(
+  db: PostgresJsDatabase<typeof schema>,
+  slug: string
+): Promise<SlugKindInfo> {
+  const cached = slugKindCache.get(slug);
+  if (cached && cached.expiresAt > Date.now()) return cached.info;
+
+  const rows = await db.query.profiles.findMany({
+    where: eq(profiles.slug, slug),
+    columns: { profileKind: true },
+  });
+  const info: SlugKindInfo = {
+    hasKindRow: rows.length === 0 || rows.some((r) => r.profileKind !== "role"),
+    hasRoleRow: rows.some((r) => r.profileKind === "role"),
+  };
+  slugKindCache.set(slug, { info, expiresAt: Date.now() + SLUG_KIND_TTL_MS });
+  return info;
+}
+
 export interface RolePayloadInfo {
   profileId: string;
   slug: string;
