@@ -25,6 +25,8 @@ export const ProposalStatus = {
   REVERTED: "reverted",
   /** An external-action proposal whose dispatch call failed — proposal NOT approved. */
   APPROVAL_FAILED: "approval_failed",
+  /** A pending proposal retracted by its own proposer (not a reviewer action). */
+  WITHDRAWN: "withdrawn",
 } as const;
 export type ProposalStatus =
   (typeof ProposalStatus)[keyof typeof ProposalStatus];
@@ -60,6 +62,7 @@ export const proposals = pgTable(
         ProposalStatus.AUTO_APPROVED,
         ProposalStatus.REVERTED,
         ProposalStatus.APPROVAL_FAILED,
+        ProposalStatus.WITHDRAWN,
       ],
     })
       .notNull()
@@ -69,6 +72,13 @@ export const proposals = pgTable(
     // All nullable — existing proposals have no provenance.
     // ON DELETE SET NULL: losing the thread/run doesn't destroy the proposal record.
     createdBy: text("created_by"), // userId or agentUserId that authored this proposal
+    // The HUMAN userId that filed this proposal, when a person (not an agent)
+    // is the proposer. Nullable — agent-authored proposals leave this NULL and
+    // carry `agentUserId` instead. Distinct from `createdBy` (which is
+    // overloaded across paths) so "who proposed this" is unambiguous for the
+    // proposer-only `withdraw` gate and the review UI's "mine to approve" vs
+    // "mine I proposed" split.
+    proposedByUserId: text("proposed_by_user_id"),
     threadId: uuid("thread_id").references(() => channels.id, {
       onDelete: "set null",
     }),
@@ -162,6 +172,7 @@ export interface Proposal {
   data: unknown;
   status: ProposalStatus;
   createdBy: string | null;
+  proposedByUserId: string | null;
   threadId: string | null;
   commandRunId: string | null;
   sourceMessageId: string | null;

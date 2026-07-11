@@ -62,7 +62,10 @@ import {
   embedQuery,
   MAX_VECTOR_DISTANCE,
 } from "../services/retrieval/hybrid-recall.js";
-import { fetchRoutingMemory } from "../services/routing-memory.js";
+import {
+  fetchRoutingMemory,
+  fetchWorkspaceRoutingThreshold,
+} from "../services/routing-memory.js";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
@@ -75,7 +78,7 @@ import {
   createRelationsFromRefs,
 } from "../utils/materialize-composite.js";
 import { makeExternalLinkIdempotency } from "../utils/entity-link-idempotency.js";
-import { auditLog } from "../utils/audit-log.js";
+import { emitAiDecision } from "../utils/ai-feedback-events.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 
 const logger = createLogger({ module: "capture-router" });
@@ -137,6 +140,13 @@ const DEDUP_SIMILARITY_FLOOR = 0.5;
 // the capture is — leave it in the ambient workspace rather than risk a wrong move.
 export const AUTO_ROUTE_MIN_CONFIDENCE = 0.6;
 
+// A direct/BYOA caller that names an explicit `aiWorkspaceId` but supplies NO
+// confidence gets this baseline — a deliberate pick is trustworthy enough to
+// auto-apply (still gated on membership) rather than silently dropped by the
+// gate. The interactive IS path always carries a real/derived confidence by the
+// time it reaches routing, so this only rescues explicit no-confidence callers.
+export const BYOA_DEFAULT_ROUTE_CONFIDENCE = 0.7;
+
 export type WorkspaceRoutingMode = "auto" | "ask" | "locked";
 
 export interface CaptureRoutingResult {
@@ -170,14 +180,23 @@ export function resolveCaptureRouting(opts: {
   aiReason?: string | null;
   currentWorkspaceId: string;
   memberWorkspaceIds: string[];
+  /** Per-target-workspace auto-apply gate (auto-tuned from correction history);
+   *  falls back to the flat AUTO_ROUTE_MIN_CONFIDENCE. */
+  minConfidence?: number;
 }): CaptureRoutingResult {
   const target = opts.aiWorkspaceId || undefined;
   if (!target || target === opts.currentWorkspaceId) {
     return { workspaceId: opts.currentWorkspaceId };
   }
+  // A null confidence on an EXPLICIT target = a direct/BYOA caller that didn't
+  // self-report — treat the deliberate pick as trustworthy (membership still
+  // gates the move below). Interactive picks carry a real/derived confidence.
+  const effectiveConfidence =
+    opts.aiConfidence ?? BYOA_DEFAULT_ROUTE_CONFIDENCE;
+  const gate = opts.minConfidence ?? AUTO_ROUTE_MIN_CONFIDENCE;
   if (
     opts.mode === "auto" &&
-    (opts.aiConfidence ?? 0) >= AUTO_ROUTE_MIN_CONFIDENCE &&
+    effectiveConfidence >= gate &&
     opts.memberWorkspaceIds.includes(target)
   ) {
     return { workspaceId: target, movedToWorkspace: target };
@@ -937,14 +956,25 @@ export const captureRouter = router({
       if (pickedWsName && availableWorkspaces.length > 0) {
         const norm = (s: string) => s.toLowerCase().trim();
         const wanted = norm(pickedWsName);
+        const exactMatch = availableWorkspaces.find(
+          (w) => norm(w.name) === wanted
+        );
         const match =
-          availableWorkspaces.find((w) => norm(w.name) === wanted) ??
+          exactMatch ??
           availableWorkspaces.find(
             (w) =>
               norm(w.name).includes(wanted) || wanted.includes(norm(w.name))
           );
         if (match) {
           structureResult.targetWorkspaceId = match.id;
+          // Derive confidence from reconciliation match STRENGTH when the model
+          // didn't self-report one — so routing calibration + the auto-apply
+          // gate work for EVERY agent (a BYOA agent that names a workspace but
+          // omits a confidence would otherwise be dropped by the 0.6 gate).
+          // Exact name match → high; fuzzy/substring → just over the gate.
+          if (structureResult.targetWorkspaceConfidence == null) {
+            structureResult.targetWorkspaceConfidence = exactMatch ? 0.9 : 0.65;
+          }
           // Telemetry: reconciliation OVERRODE the LLM's raw id (a caught
           // UUID-copy error) — the exact win this name-resolution exists for.
           if (match.id !== rawPickedWsId) {
@@ -1324,13 +1354,26 @@ export const captureRouter = router({
       if (input.targetWorkspaceId) {
         workspaceId = input.targetWorkspaceId;
       } else if (input.aiWorkspaceId && ctx.workspaceId) {
+        const mode = input.workspaceRouting ?? "auto";
+        // Auto-tune the gate per TARGET workspace from its correction history —
+        // only when a move is actually on the table (auto mode, different
+        // workspace), keeping the extra read off the common in-place case.
+        // Best-effort: a tuning-query hiccup falls back to the flat gate.
+        let minConfidence: number | undefined;
+        if (mode === "auto" && input.aiWorkspaceId !== ctx.workspaceId) {
+          minConfidence = await fetchWorkspaceRoutingThreshold(
+            userId,
+            input.aiWorkspaceId
+          ).catch(() => undefined);
+        }
         routing = resolveCaptureRouting({
-          mode: input.workspaceRouting ?? "auto",
+          mode,
           aiWorkspaceId: input.aiWorkspaceId,
           aiConfidence: input.aiWorkspaceConfidence,
           aiReason: input.aiWorkspaceReason,
           currentWorkspaceId: ctx.workspaceId,
           memberWorkspaceIds: await getUserWorkspaceIds(userId),
+          minConfidence,
         });
         workspaceId = routing.workspaceId;
       } else {
@@ -1767,32 +1810,21 @@ export const captureRouter = router({
           // so every emitted decision has ≥1 stamped entity to be corrected
           // against — keeping the decision↔correction join 1:1.
           if (routingDecisionRecorded) {
-            try {
-              await auditLog({
-                subjectType: "ai_decision",
-                action: "route",
-                phase: "completed",
-                subjectId: randomUUID(),
-                userId,
-                workspaceId: workspaceId ?? null,
-                source: "api",
-                correlationId,
-                data: {
-                  kind: "route",
-                  chosenWorkspaceId: routing?.movedToWorkspace ?? workspaceId,
-                  confidence: input.aiWorkspaceConfidence ?? null,
-                  reason: input.aiWorkspaceReason ?? null,
-                  mode: input.workspaceRouting ?? "auto",
-                  applied: Boolean(routing?.movedToWorkspace),
-                  currentWorkspaceId: ctx.workspaceId,
-                },
-              });
-            } catch (err) {
-              logger.warn(
-                { err, userId },
-                "ai.decision routing event emit failed (capture preserved)"
-              );
-            }
+            await emitAiDecision({
+              action: "route",
+              userId,
+              workspaceId: workspaceId ?? null,
+              correlationId,
+              data: {
+                kind: "route",
+                chosenWorkspaceId: routing?.movedToWorkspace ?? workspaceId,
+                confidence: input.aiWorkspaceConfidence ?? null,
+                reason: input.aiWorkspaceReason ?? null,
+                mode: input.workspaceRouting ?? "auto",
+                applied: Boolean(routing?.movedToWorkspace),
+                currentWorkspaceId: ctx.workspaceId,
+              },
+            });
           }
         } catch (err) {
           logger.warn(

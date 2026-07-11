@@ -76,6 +76,14 @@ describe("isConnectionAuthError — fires the reconnect nudge only for auth fail
     expect(isConnectionAuthError("token expired")).toBe(true);
   });
 
+  it("matches the 'enabled but never connected' state (observed live after the key swap)", () => {
+    expect(
+      isConnectionAuthError(
+        'No connection found for provider "google". Connect it via Settings → Connectors first.'
+      )
+    ).toBe(true);
+  });
+
   it("does NOT fire for transient/unrelated failures (no false reconnect nudge)", () => {
     expect(isConnectionAuthError("500 internal server error")).toBe(false);
     expect(isConnectionAuthError("rate limit exceeded")).toBe(false);

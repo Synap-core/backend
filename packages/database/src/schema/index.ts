@@ -183,6 +183,12 @@ export * from "./capabilities.js";
 export * from "./links.js";
 // Playbook run ledger (RUNTIME) — one row per playbook execution (executor spine, P3).
 export * from "./playbook-runs.js";
+// Playbook → automations composition (CONFIG) — first-class editable join that
+// promotes the read-only `automation --member_of--> playbook` link edges (0179).
+export * from "./playbook-automations.js";
+// Playbook enrollments (RUNTIME) — entity ↔ playbook, many entities per playbook,
+// promotes the single focus_sessions.subject_entity_id fake (0180).
+export * from "./playbook-enrollments.js";
 
 // Entity centrality (Horizon Phase 3) — batch-computed global PageRank score per
 // entity. Side table, recomputed by the pagerank-centrality job; read by Horizon.

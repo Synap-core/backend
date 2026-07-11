@@ -13,10 +13,50 @@
  * (team/platform/playbooks-capability-substrate.mdx).
  */
 
-import { getDb, eq, and, or, inArray, links } from "@synap/database";
+import {
+  getDb,
+  eq,
+  and,
+  or,
+  inArray,
+  links,
+  playbookAutomations,
+} from "@synap/database";
 import type { Link } from "@synap/database/schema";
 import type { LinkInput, LinkEndpointType } from "@synap/playbooks";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+
+/**
+ * Dual-write hook: `automation --member_of--> playbook` is the legacy edge
+ * shape for playbook composition. `playbook_automations` (0179) is now the
+ * first-class, editable store for that composition (see
+ * packages/api/src/routers/playbooks.ts `automations` sub-router). Every path
+ * that writes the legacy edge — this service is the ONLY place `links` rows
+ * are inserted from — ALSO upserts the join row, so new compositions land in
+ * both stores immediately. The `links` write is kept for the transition; this
+ * is additive, not a cutover.
+ */
+async function dualWritePlaybookAutomation(
+  db: Awaited<ReturnType<typeof getDb>>,
+  input: Pick<LinkInput, "fromType" | "fromId" | "toType" | "toId" | "linkType">
+): Promise<void> {
+  if (
+    input.fromType !== "automation" ||
+    input.toType !== "playbook" ||
+    input.linkType !== "member_of"
+  ) {
+    return;
+  }
+  await db
+    .insert(playbookAutomations)
+    .values({ playbookId: input.toId, automationId: input.fromId })
+    .onConflictDoNothing({
+      target: [
+        playbookAutomations.playbookId,
+        playbookAutomations.automationId,
+      ],
+    });
+}
 
 /**
  * Create a single link edge. Idempotent on the unique edge
@@ -49,6 +89,8 @@ export async function createLink(input: LinkInput): Promise<Link | undefined> {
       ],
     })
     .returning();
+
+  await dualWritePlaybookAutomation(db, input);
 
   return created as Link | undefined;
 }
@@ -83,6 +125,10 @@ export async function createLinks(inputs: LinkInput[]): Promise<Link[]> {
       ],
     })
     .returning();
+
+  for (const input of inputs) {
+    await dualWritePlaybookAutomation(db, input);
+  }
 
   return created as Link[];
 }

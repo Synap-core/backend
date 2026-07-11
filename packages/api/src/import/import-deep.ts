@@ -17,6 +17,7 @@
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 import { db, resolveIdentity, entities } from "@synap/database";
+import type { RoutingMemory } from "../services/routing-memory.js";
 import type { ImportItem } from "./import-items.js";
 import {
   userVisibleWhere,
@@ -40,6 +41,7 @@ export interface StructureCapableClient {
         name: string;
         description?: string;
       }>;
+      routingMemory?: RoutingMemory;
     };
     timeoutMs?: number;
   }): Promise<{
@@ -99,6 +101,12 @@ interface DeepStructureOptions {
     name: string;
     description?: string;
   }>;
+  /**
+   * Routing self-improvement memory (from `fetchRoutingMemory`) — the caller
+   * pre-fetches it ONCE (it's identical for the whole import) and passes it in,
+   * keeping this module DB-pure. Threaded into every item's routing prompt.
+   */
+  routingMemory?: RoutingMemory;
   /** Slugs the workspace actually has — anything else falls back to "note". */
   validSlugs: Set<string>;
   /** Max concurrent structure calls (IS is a single shared model — keep modest). */
@@ -269,6 +277,7 @@ export async function deepStructureImportItems(
               availableProfiles: opts.availableProfiles,
               existingEntityNames: waveHint,
               availableWorkspaces: opts.availableWorkspaces,
+              routingMemory: opts.routingMemory,
             },
             timeoutMs,
           });

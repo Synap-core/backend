@@ -24,6 +24,7 @@ import {
   deepStructureImportItems,
   makeGraphResolver,
 } from "../../../import/import-deep.js";
+import { fetchRoutingMemory } from "../../../services/routing-memory.js";
 import { searchService } from "@synap/search";
 import {
   resolveIntelligenceService,
@@ -458,6 +459,12 @@ export function registerCaptureRoutes(app: HubHono): void {
             workspaceId: workspaceId ?? undefined,
             capability: "default",
           });
+          // Pre-fetch routing memory ONCE for the whole import (identical for
+          // every item) so the deep structurer learns from past corrections
+          // just like interactive capture. Best-effort — never blocks import.
+          const routingMemory = await fetchRoutingMemory(userId).catch(
+            () => undefined
+          );
           const deep = await deepStructureImportItems(
             items,
             client,
@@ -465,6 +472,7 @@ export function registerCaptureRoutes(app: HubHono): void {
               availableProfiles,
               validSlugs,
               availableWorkspaces,
+              routingMemory,
               resolveExisting: makeGraphResolver(searchService, {
                 userId,
                 workspaceId: workspaceId ?? undefined,

@@ -11,7 +11,15 @@
  * 4. If no automationContext, chainDepth starts at 0 (user-originated event)
  */
 
-import { db, eq, and, automations, automationRuns } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  inArray,
+  automations,
+  automationRuns,
+  playbookAutomations,
+} from "@synap/database";
 import type { AutomationTriggerConfig } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { getBoss } from "@synap/events";
@@ -302,12 +310,20 @@ export async function handleAutomationTriggerMatch(job: {
       )
     );
 
-  // ── Playbook-scoped automations (sessionId → playbook → linked automations) ──
+  // ── Playbook-scoped automations (sessionId → playbook → composed automations) ──
   // When the event carries a sessionId, resolve its playbook and ALSO select
-  // automations linked to that playbook (e.g. `automation --member_of--> playbook`).
-  // These fire FOR the active workspace-scoped automations above — they supplement,
-  // not replace.
-  let playbookAutomations: typeof activeAutomations = [];
+  // automations composed into that playbook. These fire IN ADDITION TO the
+  // active workspace-scoped automations above — they supplement, not replace.
+  //
+  // Source of truth: `playbook_automations` (first-class, editable composition —
+  // see packages/api/src/routers/playbooks.ts `automations` sub-router). The
+  // legacy `links` (`automation --member_of--> playbook`) read is kept as a
+  // TRANSITION FALLBACK — the 0179 migration backfilled every member_of edge
+  // into playbook_automations, so this is additive/behavior-preserving; the
+  // fallback only guards a member_of link written after backfill but before all
+  // writers dual-write into the join table. Results from both sources are
+  // deduped by automationId so a playbook-scoped automation never fires twice.
+  let playbookScopedAutomations: typeof activeAutomations = [];
   if (job.data.sessionId) {
     try {
       const sessionId = job.data.sessionId;
@@ -317,6 +333,11 @@ export async function handleAutomationTriggerMatch(job: {
       });
       const playbookId = session?.playbookId;
       if (playbookId) {
+        const joinRows = await db
+          .select({ automationId: playbookAutomations.automationId })
+          .from(playbookAutomations)
+          .where(eq(playbookAutomations.playbookId, playbookId));
+
         const linkRows = await db.query.links.findMany({
           where: (fields, { and, eq }) =>
             and(
@@ -327,10 +348,16 @@ export async function handleAutomationTriggerMatch(job: {
             ),
           columns: { fromId: true },
         });
-        const playbookAutoIds = linkRows.map((l) => l.fromId);
+
+        const playbookAutoIds = Array.from(
+          new Set([
+            ...joinRows.map((r) => r.automationId),
+            ...linkRows.map((l) => l.fromId),
+          ])
+        );
+
         if (playbookAutoIds.length > 0) {
-          const { inArray } = await import("@synap/database");
-          playbookAutomations = await db
+          playbookScopedAutomations = await db
             .select({
               id: automations.id,
               triggerConfig: automations.triggerConfig,
@@ -356,7 +383,19 @@ export async function handleAutomationTriggerMatch(job: {
     }
   }
 
-  const allAutomations = [...activeAutomations, ...playbookAutomations];
+  // Dedupe the two automation sets by id — a workspace-wide automation that is
+  // ALSO playbook-scoped, or an automation present in both the join table and
+  // the legacy link fallback, must fire exactly once.
+  const seenAutomationIds = new Set<string>();
+  const allAutomations: typeof activeAutomations = [];
+  for (const automation of [
+    ...activeAutomations,
+    ...playbookScopedAutomations,
+  ]) {
+    if (seenAutomationIds.has(automation.id)) continue;
+    seenAutomationIds.add(automation.id);
+    allAutomations.push(automation);
+  }
   if (allAutomations.length === 0) return;
 
   const boss = getBoss();

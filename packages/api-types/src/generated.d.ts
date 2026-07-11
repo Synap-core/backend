@@ -4805,6 +4805,22 @@ export interface CapabilityGrantRow {
 	active: boolean;
 }
 /**
+ * Enrollment shapes exposed to the frontend (contract with the parallel
+ * enrollment-UI agent — field names are load-bearing, do not rename).
+ */
+export interface EnrollmentRow {
+	entityId: string;
+	entityName: string;
+	stepKey: string | null;
+	stepLabel: string | null;
+	status: string;
+}
+export interface FunnelStep {
+	stepKey: string;
+	label: string;
+	count: number;
+}
+/**
  * Core API Router
  */
 export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
@@ -18459,6 +18475,117 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				output: {
 					success: boolean;
+				};
+				meta: object;
+			}>;
+		}>>;
+		automations: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			meta: object;
+			errorShape: {
+				message: string;
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+				data: import("@trpc/server").TRPCDefaultErrorData;
+			};
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			listAutomations: import("@trpc/server").TRPCQueryProcedure<{
+				input: {
+					playbookId: string;
+				};
+				output: {
+					id: string;
+					name: string;
+					triggerType: "event" | "cron" | "webhook" | "manual";
+					role: string | null;
+					sortOrder: number | null;
+				}[];
+				meta: object;
+			}>;
+			addAutomation: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					playbookId: string;
+					automationId: string;
+					role?: string | undefined;
+					sortOrder?: number | undefined;
+					agentUserId?: string | undefined;
+					source?: string | undefined;
+					reasoning?: string | undefined;
+				};
+				output: {
+					status: "proposed";
+					message: string;
+					proposalId: string;
+				} | {
+					status: "added";
+					message: string;
+					proposalId: string | null;
+				};
+				meta: object;
+			}>;
+			removeAutomation: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					playbookId: string;
+					automationId: string;
+					agentUserId?: string | undefined;
+					source?: string | undefined;
+					reasoning?: string | undefined;
+				};
+				output: {
+					status: "proposed";
+					message: string;
+					proposalId: string;
+				} | {
+					status: "removed";
+					message: string;
+					proposalId: string | null;
+				};
+				meta: object;
+			}>;
+		}>>;
+		enrollments: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			meta: object;
+			errorShape: {
+				message: string;
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+				data: import("@trpc/server").TRPCDefaultErrorData;
+			};
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			list: import("@trpc/server").TRPCQueryProcedure<{
+				input: {
+					playbookId: string;
+				};
+				output: EnrollmentRow[];
+				meta: object;
+			}>;
+			funnel: import("@trpc/server").TRPCQueryProcedure<{
+				input: {
+					playbookId: string;
+				};
+				output: FunnelStep[];
+				meta: object;
+			}>;
+			enroll: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					playbookId: string;
+					entityId: string;
+				};
+				output: {
+					status: "enrolled";
+					message: string;
+				};
+				meta: object;
+			}>;
+			unenroll: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					playbookId: string;
+					entityId: string;
+				};
+				output: {
+					status: "unenrolled";
+					message: string;
 				};
 				meta: object;
 			}>;

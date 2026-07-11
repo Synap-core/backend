@@ -30,6 +30,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
+import { SERVER_CONVERSATION_EVENTS } from "../realtime/socket-events.js";
 import { emitSideEffects } from "@synap/events";
 import { getNotificationDef } from "./registry.js";
 import type {
@@ -263,7 +264,7 @@ export const NotificationService = {
         !suppressRealtime && categoryRule !== "os" && !!input.workspaceId;
       if (shouldEmitSocket) {
         emitChatEvent({
-          event: "notification:new",
+          event: SERVER_CONVERSATION_EVENTS.NOTIFICATION_NEW,
           data: { notification: payload, userId: input.userId },
           workspaceId: input.workspaceId!,
         });

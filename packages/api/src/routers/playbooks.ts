@@ -23,14 +23,18 @@ import {
   getDb,
   eq,
   and,
+  asc,
   desc,
   playbooks,
   focusSessions,
   automations,
+  playbookAutomations,
+  playbookEnrollments,
   entities,
   secrets,
   vaultGrants,
   workspaceMembers,
+  links,
   type FlowDefinition,
 } from "@synap/database";
 import type {
@@ -279,6 +283,513 @@ const capabilityGrantsRouter = router({
     }),
 });
 
+// ── Playbook automations sub-router (first-class, editable composition) ──────
+//
+// A playbook composes N automations. Historically expressed ONLY as read-only
+// `automation --member_of--> playbook` `links` edges; `playbook_automations`
+// (0179) promotes that to a first-class, editable, ordered, role-tagged set
+// (packages/database/src/schema/playbook-automations.ts). These procedures are
+// the first EDITABLE surface for that composition — until now only the
+// automation-trigger-matcher worker read it. Auth mirrors this router's other
+// write procedures: load-by-id, `assertWorkspaceWrite` on the LOADED
+// workspaceId (never caller input) — see `saveFlow` above.
+const playbookAutomationsRouter = router({
+  /** List a playbook's composed automations, joined + ordered by sortOrder. */
+  listAutomations: protectedProcedure
+    .input(z.object({ playbookId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      // Visibility gate — same pattern as `get`.
+      const playbook = await scopedDb(
+        AccessContext.from(ctx)
+      ).findFirst<Playbook>(playbooks, {
+        where: eq(playbooks.id, input.playbookId),
+      });
+      if (!playbook) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+
+      const database = await getDb();
+      const rows = await database
+        .select({
+          id: automations.id,
+          name: automations.name,
+          triggerType: automations.triggerType,
+          role: playbookAutomations.role,
+          sortOrder: playbookAutomations.sortOrder,
+        })
+        .from(playbookAutomations)
+        .innerJoin(
+          automations,
+          eq(playbookAutomations.automationId, automations.id)
+        )
+        .where(eq(playbookAutomations.playbookId, input.playbookId))
+        .orderBy(asc(playbookAutomations.sortOrder));
+
+      return rows;
+    }),
+
+  /**
+   * Compose an automation into a playbook. Write-gate on the LOADED playbook's
+   * workspaceId (mirrors `update`/`saveFlow`), plus an explicit IDOR guard that
+   * the automation itself is visible in that same workspace (or pod-wide) —
+   * mirrors `resolveVisibleSubjectId` above. Governance-gated as a playbook
+   * "update" (composition is a playbook-shape change).
+   */
+  addAutomation: protectedProcedure
+    .input(
+      z.object({
+        playbookId: z.string().uuid(),
+        automationId: z.string().uuid(),
+        role: z.string().optional(),
+        sortOrder: z.number().int().optional(),
+        agentUserId: z.string().uuid().optional(),
+        source: z.string().optional(),
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const database = await getDb();
+
+      // 1. Load the playbook by id ONLY — never trust a caller-supplied workspaceId.
+      const playbook = await database.query.playbooks.findFirst({
+        where: eq(playbooks.id, input.playbookId),
+      });
+      if (!playbook) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+
+      // 2. Write-gate on the LOADED playbook's workspaceId.
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: playbook.workspaceId,
+      });
+
+      // 3. IDOR guard: the automation being composed in must be visible in the
+      // playbook's own workspace (or pod-wide) — otherwise a caller with write
+      // access to playbook A could splice in an automation from workspace B.
+      const automation = await database.query.automations.findFirst({
+        where: eq(automations.id, input.automationId),
+      });
+      if (
+        !automation ||
+        (automation.workspaceId !== playbook.workspaceId &&
+          automation.workspaceId !== null)
+      ) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Automation ${input.automationId} not found in this workspace`,
+        });
+      }
+
+      // 4. Governance membrane — same verb/subject as update/saveFlow.
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: playbook.workspaceId,
+        subjectType: "playbook",
+        action: "update",
+        source: input.source,
+        reasoning: input.reasoning,
+        data: {
+          id: input.playbookId,
+          name: playbook.name,
+          addAutomationId: input.automationId,
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          message: "Composing automation into playbook proposed for review",
+          proposalId: perm.proposalId,
+        };
+      }
+
+      // 5. First-class join row (role/sortOrder live here — the links edge
+      // below can't carry them).
+      await database
+        .insert(playbookAutomations)
+        .values({
+          playbookId: input.playbookId,
+          automationId: input.automationId,
+          role: input.role ?? null,
+          sortOrder: input.sortOrder ?? null,
+        })
+        .onConflictDoNothing({
+          target: [
+            playbookAutomations.playbookId,
+            playbookAutomations.automationId,
+          ],
+        });
+
+      // 6. Symmetric `links` edge (transition — createLinks also dual-writes
+      // the join row above, so this is a no-op there and just keeps the
+      // read-only graph view in sync).
+      await createLinks([
+        {
+          workspaceId: playbook.workspaceId,
+          fromType: "automation",
+          fromId: input.automationId,
+          toType: "playbook",
+          toId: input.playbookId,
+          linkType: "member_of",
+        },
+      ]);
+
+      return {
+        status: "added" as const,
+        message: "Automation composed into playbook",
+        proposalId: null as string | null,
+      };
+    }),
+
+  /**
+   * Remove an automation from a playbook's composition. Same write-gate +
+   * governance contract as `addAutomation`.
+   */
+  removeAutomation: protectedProcedure
+    .input(
+      z.object({
+        playbookId: z.string().uuid(),
+        automationId: z.string().uuid(),
+        agentUserId: z.string().uuid().optional(),
+        source: z.string().optional(),
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const database = await getDb();
+
+      const playbook = await database.query.playbooks.findFirst({
+        where: eq(playbooks.id, input.playbookId),
+      });
+      if (!playbook) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: playbook.workspaceId,
+      });
+
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: playbook.workspaceId,
+        subjectType: "playbook",
+        action: "update",
+        source: input.source,
+        reasoning: input.reasoning,
+        data: {
+          id: input.playbookId,
+          name: playbook.name,
+          removeAutomationId: input.automationId,
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          message: "Removing automation from playbook proposed for review",
+          proposalId: perm.proposalId,
+        };
+      }
+
+      await database
+        .delete(playbookAutomations)
+        .where(
+          and(
+            eq(playbookAutomations.playbookId, input.playbookId),
+            eq(playbookAutomations.automationId, input.automationId)
+          )
+        );
+
+      await database
+        .delete(links)
+        .where(
+          and(
+            eq(links.fromType, "automation"),
+            eq(links.fromId, input.automationId),
+            eq(links.toType, "playbook"),
+            eq(links.toId, input.playbookId),
+            eq(links.linkType, "member_of")
+          )
+        );
+
+      return {
+        status: "removed" as const,
+        message: "Automation removed from playbook",
+        proposalId: null as string | null,
+      };
+    }),
+});
+
+/**
+ * Enrollment shapes exposed to the frontend (contract with the parallel
+ * enrollment-UI agent — field names are load-bearing, do not rename).
+ */
+export interface EnrollmentRow {
+  entityId: string;
+  entityName: string;
+  stepKey: string | null;
+  stepLabel: string | null;
+  status: string;
+}
+
+export interface FunnelStep {
+  stepKey: string;
+  label: string;
+  count: number;
+}
+
+/**
+ * `step_state` is jsonb with no fixed shape yet (0180_playbook_enrollments.sql
+ * added the column ahead of any writer — the "firing" behavior that advances
+ * an enrollment's step is a later wave). By convention with the rest of the
+ * playbook runtime (focus_sessions.currentStage is the flat analog), this
+ * reads a `{ currentStep: string }` shape when present and falls back to null
+ * — i.e. every enrollment is stepKey=null until that wave ships.
+ */
+function deriveStepKey(stepState: unknown): string | null {
+  if (
+    stepState &&
+    typeof stepState === "object" &&
+    "currentStep" in stepState &&
+    typeof (stepState as { currentStep?: unknown }).currentStep === "string"
+  ) {
+    return (stepState as { currentStep: string }).currentStep;
+  }
+  return null;
+}
+
+const playbookEnrollmentsRouter = router({
+  /** List a playbook's enrolled entities, joined for display + current step. */
+  list: protectedProcedure
+    .input(z.object({ playbookId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      // Visibility gate — same pattern as `listAutomations`.
+      const playbook = await scopedDb(
+        AccessContext.from(ctx)
+      ).findFirst<Playbook>(playbooks, {
+        where: eq(playbooks.id, input.playbookId),
+      });
+      if (!playbook) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+
+      const stages = Array.isArray(playbook.stages)
+        ? (playbook.stages as Array<{ key: string; name: string }>)
+        : [];
+      const stageLabelByKey = new Map(stages.map((s) => [s.key, s.name]));
+
+      const database = await getDb();
+      const rows = await database
+        .select({
+          entityId: playbookEnrollments.entityId,
+          entityName: entities.title,
+          status: playbookEnrollments.status,
+          stepState: playbookEnrollments.stepState,
+        })
+        .from(playbookEnrollments)
+        .innerJoin(entities, eq(playbookEnrollments.entityId, entities.id))
+        .where(eq(playbookEnrollments.playbookId, input.playbookId))
+        .orderBy(asc(playbookEnrollments.enrolledAt));
+
+      const result: EnrollmentRow[] = rows.map((row) => {
+        const stepKey = deriveStepKey(row.stepState);
+        return {
+          entityId: row.entityId,
+          entityName: row.entityName ?? "",
+          stepKey,
+          stepLabel: stepKey ? (stageLabelByKey.get(stepKey) ?? null) : null,
+          status: row.status,
+        };
+      });
+
+      return result;
+    }),
+
+  /**
+   * Braze-style funnel: one row per declared stage (template steps once),
+   * each carrying a live count of active enrollments currently at that step.
+   * Every stage is included even at count 0 so the funnel shape is stable.
+   */
+  funnel: protectedProcedure
+    .input(z.object({ playbookId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const playbook = await scopedDb(
+        AccessContext.from(ctx)
+      ).findFirst<Playbook>(playbooks, {
+        where: eq(playbooks.id, input.playbookId),
+      });
+      if (!playbook) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+
+      const stages = Array.isArray(playbook.stages)
+        ? (playbook.stages as Array<{ key: string; name: string }>)
+        : [];
+
+      const database = await getDb();
+      const activeEnrollments = await database
+        .select({ stepState: playbookEnrollments.stepState })
+        .from(playbookEnrollments)
+        .where(
+          and(
+            eq(playbookEnrollments.playbookId, input.playbookId),
+            eq(playbookEnrollments.status, "active")
+          )
+        );
+
+      const countByStepKey = new Map<string, number>();
+      for (const row of activeEnrollments) {
+        const stepKey = deriveStepKey(row.stepState);
+        if (!stepKey) continue;
+        countByStepKey.set(stepKey, (countByStepKey.get(stepKey) ?? 0) + 1);
+      }
+
+      const result: FunnelStep[] = stages.map((stage) => ({
+        stepKey: stage.key,
+        label: stage.name,
+        count: countByStepKey.get(stage.key) ?? 0,
+      }));
+
+      return result;
+    }),
+
+  /**
+   * Enroll an entity into a playbook. Write-gate on the LOADED playbook's
+   * workspaceId (mirrors `addAutomation`), plus an explicit IDOR guard —
+   * reuses `resolveVisibleSubjectId` (module-level above) to verify the
+   * entity is visible in the playbook's own workspace (or pod-wide) before
+   * binding, since `entityId` has no FK (see schema/playbook-enrollments.ts).
+   */
+  enroll: protectedProcedure
+    .input(
+      z.object({
+        playbookId: z.string().uuid(),
+        entityId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const database = await getDb();
+
+      // 1. Load the playbook by id ONLY — never trust a caller-supplied workspaceId.
+      const playbook = await database.query.playbooks.findFirst({
+        where: eq(playbooks.id, input.playbookId),
+      });
+      if (!playbook) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+
+      // 2. Write-gate on the LOADED playbook's workspaceId.
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: playbook.workspaceId,
+      });
+
+      // 3. IDOR guard: the entity being enrolled must be visible in the
+      // playbook's own workspace (or pod-wide) — mirrors `addAutomation`'s
+      // automation-visibility check above (playbooks.ts:371-386), via the
+      // shared `resolveVisibleSubjectId` helper (playbooks.ts:67-84).
+      const visibleEntityId = await resolveVisibleSubjectId(
+        database,
+        input.entityId,
+        playbook.workspaceId ?? ""
+      );
+      if (!visibleEntityId) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Entity ${input.entityId} not found in this workspace`,
+        });
+      }
+
+      await database
+        .insert(playbookEnrollments)
+        .values({
+          playbookId: input.playbookId,
+          entityId: visibleEntityId,
+          status: "active",
+          stepState: {},
+        })
+        .onConflictDoNothing({
+          target: [
+            playbookEnrollments.playbookId,
+            playbookEnrollments.entityId,
+          ],
+        });
+
+      return {
+        status: "enrolled" as const,
+        message: "Entity enrolled into playbook",
+      };
+    }),
+
+  /**
+   * Unenroll an entity from a playbook. Soft (status='cancelled') rather than
+   * a hard delete, so the funnel/history stays reconstructable — mirrors the
+   * lifecycle-status convention already used by focus_sessions.status.
+   */
+  unenroll: protectedProcedure
+    .input(
+      z.object({
+        playbookId: z.string().uuid(),
+        entityId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const database = await getDb();
+
+      const playbook = await database.query.playbooks.findFirst({
+        where: eq(playbooks.id, input.playbookId),
+      });
+      if (!playbook) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: playbook.workspaceId,
+      });
+
+      await database
+        .update(playbookEnrollments)
+        .set({ status: "cancelled", updatedAt: new Date() })
+        .where(
+          and(
+            eq(playbookEnrollments.playbookId, input.playbookId),
+            eq(playbookEnrollments.entityId, input.entityId)
+          )
+        );
+
+      return {
+        status: "unenrolled" as const,
+        message: "Entity unenrolled from playbook",
+      };
+    }),
+});
+
 // ── Playbooks router ─────────────────────────────────────────────────────────
 
 export const playbooksRouter = router({
@@ -289,6 +800,13 @@ export const playbooksRouter = router({
   // Polymorphic grant management (tool|skill|command|secret) — the listable +
   // revocable counterpart to the seeded `vault_grants` the applier issues.
   capabilityGrants: capabilityGrantsRouter,
+  // First-class, editable playbook↔automation composition (0179's
+  // playbook_automations join table): listAutomations/addAutomation/
+  // removeAutomation, nested the same way `links`/`capabilityRegistry` are.
+  automations: playbookAutomationsRouter,
+  // Entity↔playbook enrollment (0180's playbook_enrollments table):
+  // list/funnel/enroll/unenroll, nested the same way `automations` is.
+  enrollments: playbookEnrollmentsRouter,
 
   /**
    * List playbooks visible in the active workspace (pod-wide + this workspace),

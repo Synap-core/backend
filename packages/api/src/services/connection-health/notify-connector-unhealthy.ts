@@ -37,7 +37,10 @@ const NUDGE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
  */
 export function isConnectionAuthError(message: string | undefined): boolean {
   if (!message) return false;
-  return /refresh|credential|reconnect|invalid_grant|unauthor|expired|access token|backoff/i.test(
+  // Auth/refresh failures (expired token) AND the "enabled but never connected"
+  // state ("No connection found … Connect it via Settings") — both mean the
+  // operator must (re)connect for the feature to work.
+  return /refresh|credential|reconnect|invalid_grant|unauthor|expired|access token|backoff|no connection found|connect it via/i.test(
     message
   );
 }

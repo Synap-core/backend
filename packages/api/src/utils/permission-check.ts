@@ -515,6 +515,80 @@ export async function checkPermissionOrPropose(
             });
           }
         }
+
+        // HUMAN member with an insufficient ROLE — the "team member proposes →
+        // owner approves" loop. A workspace member whose role can't execute this
+        // write directly does NOT hard-deny; it files a PROPOSAL a reviewer
+        // (owner/admin, or any editor under the `any_editor` policy) can approve.
+        // Mirrors the agent branch above, but stamps the human's userId as the
+        // proposer (proposedByUserId) instead of an agentUserId.
+        //
+        // FIREWALLS: (1) genuine human only (no agentUserId — the agent path
+        // already returned); (2) confirmed MEMBER only — `result.role` is set
+        // only for a member, so a non-member (membership miss → no role) still
+        // hard-denies below; (3) never a sandboxed untrusted issuer — those must
+        // deny on RBAC failure, not gain propose rights. Reuses the SAME
+        // createProposal machinery as every other propose path (NOT the
+        // agent-specific governance ladder).
+        //
+        // POLICY (default, owner-adjustable): propose ONLY when a reviewer OTHER
+        // than the proposer exists for this workspace under its approval policy;
+        // otherwise nobody could approve it, so hard-deny as before.
+        if (
+          !agentUserId &&
+          result.role &&
+          !isMembershipMiss &&
+          (!opts.issuer || opts.issuer.trusted !== false)
+        ) {
+          const { inArray } = await import("@synap/database");
+          const { workspaceMembers } = await import("@synap/database/schema");
+          const [ws] = await db
+            .select({ settings: workspaces.settings })
+            .from(workspaces)
+            .where(eq(workspaces.id, workspaceId))
+            .limit(1);
+          const settings = ws?.settings as WorkspaceSettings | undefined;
+          const policy =
+            settings?.aiGovernance?.proposalApprovalPolicy ??
+            "owner_and_admins";
+          const reviewerRoles =
+            policy === "any_editor"
+              ? ["owner", "admin", "editor"]
+              : ["owner", "admin"];
+          const reviewerRows = await db
+            .select({ userId: workspaceMembers.userId })
+            .from(workspaceMembers)
+            .where(
+              and(
+                eq(workspaceMembers.workspaceId, workspaceId),
+                inArray(workspaceMembers.role, reviewerRoles)
+              )
+            )
+            .limit(5);
+          const reviewerExists = reviewerRows.some((r) => r.userId !== userId);
+
+          if (reviewerExists) {
+            return createProposal({
+              userId,
+              proposedByUserId: userId,
+              workspaceId,
+              subjectType,
+              action,
+              source,
+              data,
+              correlationId,
+              requestedEventId,
+              reasoning:
+                opts.reasoning ??
+                `${action} ${subjectType} exceeds your workspace role (${result.role}) — proposed for a reviewer's approval`,
+              threadId,
+              commandRunId,
+              sourceMessageId,
+              sessionId,
+              projectId,
+            });
+          }
+        }
         logger.warn(
           {
             userId: effectiveUserId,
@@ -839,6 +913,8 @@ export interface CreatePendingProposalInput {
   data: Record<string, unknown>;
   agentUserId?: string | null;
   createdBy?: string | null;
+  /** The HUMAN userId that filed this proposal (NULL for agent-authored rows). */
+  proposedByUserId?: string | null;
   threadId?: string | null;
   commandRunId?: string | null;
   sourceMessageId?: string | null;
@@ -953,6 +1029,7 @@ export async function createPendingProposal(
       proposalType: input.proposalType,
       data: input.data,
       createdBy: input.createdBy ?? input.agentUserId ?? input.userId,
+      proposedByUserId: input.proposedByUserId,
       agentUserId: input.agentUserId,
       threadId: input.threadId,
       commandRunId: input.commandRunId,
@@ -981,6 +1058,13 @@ export async function createPendingProposal(
 async function createProposal(opts: {
   userId: string;
   agentUserId?: string;
+  /**
+   * The HUMAN userId that filed this proposal. Set ONLY on the human-proposer
+   * path (an insufficient-role member proposing) so the row records who
+   * proposed it, distinct from `createdBy`. Left undefined for agent proposals
+   * (they carry `agentUserId` instead).
+   */
+  proposedByUserId?: string;
   workspaceId: string | null | undefined;
   subjectType: string;
   action: string;
@@ -1006,6 +1090,7 @@ async function createProposal(opts: {
   const {
     userId,
     agentUserId,
+    proposedByUserId,
     workspaceId,
     subjectType,
     action,
@@ -1111,6 +1196,7 @@ async function createProposal(opts: {
       },
       agentUserId: agentUserId ?? undefined,
       createdBy: userId,
+      proposedByUserId: proposedByUserId ?? null,
       threadId: threadId ?? null,
       commandRunId: commandRunId ?? null,
       sourceMessageId: sourceMessageId ?? null,

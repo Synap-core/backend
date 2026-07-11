@@ -1637,6 +1637,7 @@ CREATE TABLE IF NOT EXISTS "proposals" (
   "data"              jsonb NOT NULL,
   "status"            text  NOT NULL DEFAULT 'pending',
   "created_by"        text,
+  "proposed_by_user_id" text,
   "thread_id"         uuid  REFERENCES "channels"("id") ON DELETE SET NULL,
   "command_run_id"    uuid  REFERENCES "command_runs"("id") ON DELETE SET NULL,
   "source_message_id" uuid  REFERENCES "messages"("id") ON DELETE SET NULL,
@@ -1657,6 +1658,7 @@ ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "proposal_type" text;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "data" jsonb;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'pending';
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "created_by" text;
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "proposed_by_user_id" text;  -- 0181 (human proposer identity)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "thread_id" uuid REFERENCES "channels"("id") ON DELETE SET NULL;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "command_run_id" uuid REFERENCES "command_runs"("id") ON DELETE SET NULL;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "source_message_id" uuid REFERENCES "messages"("id") ON DELETE SET NULL;
@@ -3621,6 +3623,47 @@ CREATE INDEX IF NOT EXISTS "idx_playbook_runs_session_id"
   WHERE "session_id" IS NOT NULL;
 CREATE INDEX IF NOT EXISTS "idx_playbook_runs_workspace_status"
   ON "playbook_runs" ("workspace_id", "status");
+
+-- ── Playbook Automations (0179_playbook_automations.sql catch-up) ─────────────
+-- First-class, editable composition of a playbook's automations (promotes the
+-- read-only `automation --member_of--> playbook` link edges). Soft links: no FK
+-- to playbooks or automations (enforced at the application layer).
+CREATE TABLE IF NOT EXISTS "playbook_automations" (
+  "id"            uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "playbook_id"   uuid        NOT NULL,
+  "automation_id" uuid        NOT NULL,
+  "role"          text,
+  "sort_order"    integer,
+  "created_at"    timestamptz NOT NULL DEFAULT now(),
+  "updated_at"    timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_playbook_automations_unique"
+  ON "playbook_automations" ("playbook_id", "automation_id");
+CREATE INDEX IF NOT EXISTS "idx_playbook_automations_playbook_id"
+  ON "playbook_automations" ("playbook_id");
+
+-- ── Playbook Enrollments (0180_playbook_enrollments.sql catch-up) ─────────────
+-- Entity ↔ playbook enrollment, many entities per playbook (promotes the single
+-- focus_sessions.subject_entity_id fake). Soft links: no FK on entity_id or
+-- playbook_id. `status` is plain text (active/paused/completed/cancelled).
+-- SECURITY: the enrollment WRITE path MUST enforce workspace-visibility on
+-- entity_id at the application layer (no FK → IDOR risk); mirror the guard at
+-- packages/jobs/src/workers/automation-executor.ts:1632-1648.
+CREATE TABLE IF NOT EXISTS "playbook_enrollments" (
+  "id"          uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+  "playbook_id" uuid        NOT NULL,
+  "entity_id"   uuid        NOT NULL,
+  "status"      text        NOT NULL DEFAULT 'active',
+  "step_state"  jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  "enrolled_at" timestamptz NOT NULL DEFAULT now(),
+  "updated_at"  timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_playbook_enrollments_unique"
+  ON "playbook_enrollments" ("playbook_id", "entity_id");
+CREATE INDEX IF NOT EXISTS "idx_playbook_enrollments_playbook_id"
+  ON "playbook_enrollments" ("playbook_id");
+CREATE INDEX IF NOT EXISTS "idx_playbook_enrollments_entity_id"
+  ON "playbook_enrollments" ("entity_id");
 
 -- ── Project Members (project-centric-scope, 0134 catch-up) ────────────────────
 -- Project-level access control. `project_id` references ENTITIES (projects are

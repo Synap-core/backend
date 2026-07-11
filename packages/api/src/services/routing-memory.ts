@@ -243,3 +243,71 @@ export async function fetchRoutingMemory(
 
   return { corrections, confirmations };
 }
+
+// Auto-tuned per-workspace gate. Below this many decisions to a workspace the
+// correction rate is noise — don't tune (product review: byTargetWorkspace
+// rates are meaningless at low n). Tuning only ever RAISES the gate (never
+// below the flat floor): a workspace the user frequently corrects earns a
+// higher bar; a trusted one keeps today's behavior. Kept local to avoid a
+// capture.ts ↔ routing-memory import cycle (TUNING_FLOOR = AUTO_ROUTE_MIN_CONFIDENCE).
+const MIN_TUNING_VOLUME = 5;
+const TUNING_FLOOR = 0.6;
+const TUNING_CEIL = 0.9;
+
+/**
+ * The auto-apply confidence gate for routing TO `workspaceId`, tuned from that
+ * workspace's live correction rate. Returns `undefined` (→ caller uses the flat
+ * default) when there isn't enough volume to tune. Reads a move (kind=route) OR
+ * delete (kind=extract) of a decision that routed to this workspace as a miss.
+ */
+export async function fetchWorkspaceRoutingThreshold(
+  userId: string,
+  workspaceId: string,
+  opts?: { windowDays?: number }
+): Promise<number | undefined> {
+  const windowDays = Math.min(
+    365,
+    Math.max(1, opts?.windowDays ?? DEFAULT_WINDOW_DAYS)
+  );
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+
+  const decisions = await db
+    .select({ correlationId: events.correlationId })
+    .from(events)
+    .where(
+      and(
+        eq(events.userId, userId),
+        eq(events.subjectType, "ai_decision"),
+        drizzleSql`${events.data}->>'kind' = 'route'`,
+        drizzleSql`${events.data}->>'chosenWorkspaceId' = ${workspaceId}`,
+        gte(events.timestamp, since)
+      )
+    );
+  if (decisions.length < MIN_TUNING_VOLUME) return undefined;
+
+  const decisionIds = new Set(
+    decisions.map((d) => d.correlationId).filter((x): x is string => !!x)
+  );
+  const corrections = await db
+    .select({
+      cid: drizzleSql<string | null>`${events.data}->>'correlationId'`,
+    })
+    .from(events)
+    .where(
+      and(
+        eq(events.userId, userId),
+        eq(events.subjectType, "ai_correction"),
+        drizzleSql`${events.data}->>'kind' IN ('route', 'extract')`,
+        gte(events.timestamp, since)
+      )
+    );
+  const correctedHere = new Set(
+    corrections
+      .map((c) => c.cid)
+      .filter((x): x is string => !!x && decisionIds.has(x))
+  );
+
+  const rate = correctedHere.size / decisions.length;
+  const threshold = TUNING_FLOOR + rate * (TUNING_CEIL - TUNING_FLOOR);
+  return Math.min(TUNING_CEIL, Math.max(TUNING_FLOOR, threshold));
+}

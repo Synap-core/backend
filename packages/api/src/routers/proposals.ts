@@ -77,6 +77,7 @@ import { registerApproveExecutors } from "./proposals/approve-executors.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { auditLog } from "../utils/audit-log.js";
+import { emitAiCorrection } from "../utils/ai-feedback-events.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../utils/materialize-composite.js";
 import { createLogger } from "@synap-core/core";
@@ -86,6 +87,7 @@ import { relationsRouter } from "./relations.js";
 import { documentsRouter } from "./documents.js";
 import { messages } from "@synap/database/schema";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
+import { SERVER_CONVERSATION_EVENTS } from "../realtime/socket-events.js";
 import { emitSideEffects, getBoss } from "@synap/events";
 import { notifications } from "@synap/database/schema";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
@@ -175,7 +177,7 @@ function emitProposalReviewed(
   // Workspace is an optional lens, never a delivery requirement.
   if (!workspaceId && !userId) return;
   emitChatEvent({
-    event: "proposal:reviewed",
+    event: SERVER_CONVERSATION_EVENTS.PROPOSAL_REVIEWED,
     data: { proposalId, status, ...(workspaceId ? { workspaceId } : {}) },
     ...(workspaceId ? { workspaceId } : { userId: userId! }),
   });
@@ -325,6 +327,58 @@ function canReviewProposal(args: {
     : args.policy === "any_editor"
       ? isEditor
       : /* owner_and_admins */ args.isOwner || isAdmin;
+}
+
+/**
+ * Authority gate shared by `reject` / `reopen` / `batchReject` — the SAME
+ * `canReviewProposal` ladder (and identical DB reads) that `approve` and
+ * `revert` enforce inline. Throws FORBIDDEN when the caller may not review this
+ * workspace-scoped proposal. Pod-wide proposals (no workspaceId) skip the check
+ * entirely, mirroring approve/revert. `action` only shapes the error-message
+ * verb; the code + policy are identical to approve's.
+ *
+ * SECURITY: without this, reject/reopen/batchReject only enforced
+ * `requireUserId` — any authenticated member could reject/reopen ANY proposal
+ * by id. This closes that gap while leaving an authorized reviewer's behavior
+ * byte-identical (they already passed the same ladder).
+ */
+async function assertCanReviewProposal(args: {
+  proposal: { workspaceId: string | null; data: unknown };
+  userId: string;
+  action: "reject" | "reopen";
+}): Promise<void> {
+  const { proposal, userId, action } = args;
+  if (!proposal.workspaceId) return;
+
+  const [ws] = await db
+    .select({ settings: workspaces.settings })
+    .from(workspaces)
+    .where(eq(workspaces.id, proposal.workspaceId))
+    .limit(1);
+
+  const settings = ws?.settings as WorkspaceSettings | undefined;
+  const policy =
+    settings?.aiGovernance?.proposalApprovalPolicy ?? "owner_and_admins";
+
+  const membership = await getWorkspaceMembership(
+    db,
+    proposal.workspaceId,
+    userId
+  );
+  const proposalData = proposal.data as Record<string, unknown> | null;
+
+  const canReview = canReviewProposal({
+    policy: policy as ProposalApprovalPolicy,
+    memberRole: membership?.role,
+    isOwner: proposalData?.sourceId === userId,
+  });
+
+  if (!canReview) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `Not authorized to ${action} this proposal`,
+    });
+  }
 }
 
 async function enrichProposalsForDisplay(
@@ -1766,6 +1820,20 @@ export const proposalsRouter = router({
         },
       });
 
+      // Authority — SAME ladder `approve`/`revert` enforce. Without this a
+      // rejection was gated only by `requireUserId` (any member could reject
+      // any proposal by id). Pod-wide (no workspace) proposals skip the check.
+      if (proposal) {
+        await assertCanReviewProposal({
+          proposal: {
+            workspaceId: proposal.workspaceId,
+            data: proposal.data,
+          },
+          userId,
+          action: "reject",
+        });
+      }
+
       await db
         .update(proposals)
         .set({
@@ -1817,7 +1885,7 @@ export const proposalsRouter = router({
 
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
-        columns: { status: true, workspaceId: true },
+        columns: { status: true, workspaceId: true, data: true },
       });
       if (!proposal) {
         throw new TRPCError({
@@ -1831,6 +1899,16 @@ export const proposalsRouter = router({
           message: "Only a rejected proposal can be reopened.",
         });
       }
+
+      // Authority — SAME ladder `approve`/`revert` enforce. Reopening puts a
+      // rejected proposal back into the pending queue, so it must require the
+      // same review authority as approving/rejecting it. Pod-wide (no
+      // workspace) proposals skip the check, mirroring approve/revert.
+      await assertCanReviewProposal({
+        proposal: { workspaceId: proposal.workspaceId, data: proposal.data },
+        userId,
+        action: "reopen",
+      });
 
       await db
         .update(proposals)
@@ -2171,26 +2249,16 @@ export const proposalsRouter = router({
         proposal.proposalType === "capture.graph" &&
         proposal.correlationId
       ) {
-        try {
-          await auditLog({
-            subjectType: "ai_correction",
-            action: "revert",
-            phase: "completed",
-            subjectId: input.proposalId,
-            userId,
-            workspaceId: proposal.workspaceId ?? undefined,
-            data: {
-              kind: "capture",
-              correlationId: proposal.correlationId,
-            },
-            source: "api",
-          });
-        } catch (err) {
-          logger.warn(
-            { err, proposalId: input.proposalId },
-            "ai_correction revert emit failed (revert preserved)"
-          );
-        }
+        await emitAiCorrection({
+          action: "revert",
+          userId,
+          subjectId: input.proposalId,
+          workspaceId: proposal.workspaceId ?? undefined,
+          data: {
+            kind: "capture",
+            correlationId: proposal.correlationId,
+          },
+        });
       }
 
       return {

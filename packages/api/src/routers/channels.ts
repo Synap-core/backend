@@ -87,6 +87,7 @@ import {
   getAgentIdBySlug,
 } from "../utils/personal-channel.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
+import { SERVER_CONVERSATION_EVENTS } from "../realtime/socket-events.js";
 import { createLinks } from "../services/links/links-service.js";
 import { emitTyped } from "../utils/event-emit.js";
 import { makeExcerpt } from "../utils/excerpt.js";
@@ -1999,7 +2000,7 @@ export const channelsRouter = router({
         // Step 4 — Presence: broadcast "teammate X is answering" so the UI can
         // show the typing indicator. Fire-and-forget; never blocks the response.
         emitChatEvent({
-          event: "teammate:answering",
+          event: SERVER_CONVERSATION_EVENTS.TEAMMATE_ANSWERING,
           data: {
             channelId,
             teammateId: routingDecision.teammateId,
@@ -2163,7 +2164,7 @@ export const channelsRouter = router({
             aiSteps.push(chunk.step);
 
             emitChatEvent({
-              event: "ai:step",
+              event: SERVER_CONVERSATION_EVENTS.AI_STEP,
               data: {
                 threadId: channelId,
                 messageId: userMessageId,
@@ -2179,7 +2180,7 @@ export const channelsRouter = router({
             hubResponse.branchDecision = chunk.decision;
 
             emitChatEvent({
-              event: "branch_decision",
+              event: SERVER_CONVERSATION_EVENTS.BRANCH_DECISION,
               data: {
                 threadId: channelId,
                 messageId: userMessageId,
@@ -2194,7 +2195,7 @@ export const channelsRouter = router({
             (chunk as any).routing
           ) {
             emitChatEvent({
-              event: "route_to_channel",
+              event: SERVER_CONVERSATION_EVENTS.ROUTE_TO_CHANNEL,
               data: {
                 threadId: channelId,
                 messageId: userMessageId,
@@ -2329,7 +2330,7 @@ export const channelsRouter = router({
         }
 
         emitChatEvent({
-          event: "chat:stream:error",
+          event: SERVER_CONVERSATION_EVENTS.CHAT_STREAM_ERROR,
           data: {
             threadId: channelId,
             error:
@@ -2402,7 +2403,7 @@ export const channelsRouter = router({
           }
 
           emitChatEvent({
-            event: "chat:stream:error",
+            event: SERVER_CONVERSATION_EVENTS.CHAT_STREAM_ERROR,
             data: {
               threadId: channelId,
               error: errorDetail,

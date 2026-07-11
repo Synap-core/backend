@@ -27,12 +27,16 @@ export interface CreateEventBackedProposalInput {
   expiresAt?: Date | null;
 }
 
-export async function createEventBackedProposal(
+/**
+ * The shared prefix of both proposal recorders: resolve the `correlationId`
+ * (event-chain grouping within a proposal's lifecycle — NOT session linking,
+ * which uses the sessionId FK), infer the action, stamp the `.requested` audit
+ * event, and assemble the proposal `data` payload (folding in correlationId +
+ * requestedEventId). The two public functions diverge only AFTER this.
+ */
+async function buildRequestedEventAndData(
   input: CreateEventBackedProposalInput
 ) {
-  // correlationId serves event-chain grouping (grouping audit_log events
-  // within a single proposal's lifecycle), NOT session linking.
-  // Session linking uses the sessionId FK — set on the proposals table separately.
   const correlationId =
     typeof input.data.correlationId === "string"
       ? input.data.correlationId
@@ -61,6 +65,15 @@ export async function createEventBackedProposal(
     correlationId,
     ...(requestedEvent?.id ? { requestedEventId: requestedEvent.id } : {}),
   };
+
+  return { correlationId, action, requestedEvent, data };
+}
+
+export async function createEventBackedProposal(
+  input: CreateEventBackedProposalInput
+) {
+  const { correlationId, requestedEvent, data } =
+    await buildRequestedEventAndData(input);
 
   const proposal = await createPendingProposal({
     userId: input.userId,
@@ -109,34 +122,8 @@ export interface CreateAutoApprovedProposalInput extends CreateEventBackedPropos
 export async function createAutoApprovedProposal(
   input: CreateAutoApprovedProposalInput
 ) {
-  const correlationId =
-    typeof input.data.correlationId === "string"
-      ? input.data.correlationId
-      : randomUUID();
-  const action = input.action ?? inferProposalAction(input.proposalType);
-
-  const requestedEvent = await auditLog({
-    subjectType: input.targetType,
-    action,
-    phase: "requested",
-    subjectId: input.targetId,
-    userId: input.userId,
-    workspaceId: input.workspaceId ?? undefined,
-    correlationId,
-    source: input.source ?? "api",
-    data: {
-      ...input.data,
-      proposalType: input.proposalType,
-      summary: input.summary,
-    },
-  });
-
-  const data = {
-    ...input.data,
-    ...(input.summary ? { summary: input.summary } : {}),
-    correlationId,
-    ...(requestedEvent?.id ? { requestedEventId: requestedEvent.id } : {}),
-  };
+  const { correlationId, action, requestedEvent, data } =
+    await buildRequestedEventAndData(input);
 
   const reviewedAt = new Date();
 

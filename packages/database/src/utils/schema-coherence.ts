@@ -346,6 +346,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "correlation_id",
     addedBy: "0035_proposal_correlation.sql",
   },
+  {
+    table: "proposals",
+    column: "proposed_by_user_id",
+    addedBy: "0181_proposals_proposed_by_user_id.sql",
+  },
 
   // users
   {
@@ -919,6 +924,74 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "secrets",
     column: "password_fingerprint",
     addedBy: "0177_secrets_watchtower_cohorts.sql",
+  },
+
+  // playbook_automations — first-class playbook→automations composition (0179).
+  // Absence means a pod is on a pre-0179 schema where the editable composition
+  // read/write would hit a missing table.
+  {
+    table: "playbook_automations",
+    column: "playbook_id",
+    addedBy: "0179_playbook_automations.sql",
+  },
+  {
+    table: "playbook_automations",
+    column: "automation_id",
+    addedBy: "0179_playbook_automations.sql",
+  },
+  {
+    table: "playbook_automations",
+    column: "role",
+    addedBy: "0179_playbook_automations.sql",
+  },
+  {
+    table: "playbook_automations",
+    column: "sort_order",
+    addedBy: "0179_playbook_automations.sql",
+  },
+  {
+    table: "playbook_automations",
+    column: "created_at",
+    addedBy: "0179_playbook_automations.sql",
+  },
+  {
+    table: "playbook_automations",
+    column: "updated_at",
+    addedBy: "0179_playbook_automations.sql",
+  },
+
+  // playbook_enrollments — entity ↔ playbook enrollment, many entities per
+  // playbook (0180). Absence means a pod is on a pre-0180 schema where the
+  // enrollment read/write would hit a missing table.
+  {
+    table: "playbook_enrollments",
+    column: "playbook_id",
+    addedBy: "0180_playbook_enrollments.sql",
+  },
+  {
+    table: "playbook_enrollments",
+    column: "entity_id",
+    addedBy: "0180_playbook_enrollments.sql",
+  },
+  {
+    table: "playbook_enrollments",
+    column: "status",
+    addedBy: "0180_playbook_enrollments.sql",
+  },
+  {
+    table: "playbook_enrollments",
+    column: "step_state",
+    addedBy: "0180_playbook_enrollments.sql",
+  },
+  {
+    table: "playbook_enrollments",
+    column: "enrolled_at",
+    addedBy: "0180_playbook_enrollments.sql",
+  },
+  {
+    table: "playbook_enrollments",
+    column: "updated_at",
+    addedBy: "0180_playbook_enrollments.sql",
   },
 ];
 

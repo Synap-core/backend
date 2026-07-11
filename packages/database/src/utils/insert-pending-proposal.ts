@@ -38,6 +38,8 @@ export interface InsertPendingProposalInput {
   data: Record<string, unknown>;
   /** Author of the row. Callers resolve their own fallback before calling. */
   createdBy: string | null;
+  /** The HUMAN userId that filed this proposal (NULL for agent-authored rows). */
+  proposedByUserId?: string | null;
   agentUserId?: string | null;
   threadId?: string | null;
   commandRunId?: string | null;
@@ -74,6 +76,9 @@ export async function insertPendingProposal(
       expiresAt:
         input.expiresAt ??
         new Date(Date.now() + PROPOSAL_TTL_DAYS * 24 * 60 * 60 * 1000),
+      ...(input.proposedByUserId
+        ? { proposedByUserId: input.proposedByUserId }
+        : {}),
       ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
       ...(input.threadId ? { threadId: input.threadId } : {}),
       ...(input.commandRunId ? { commandRunId: input.commandRunId } : {}),
