@@ -47,6 +47,7 @@ import {
   registerEntityShareRoutes,
   registerEventsRoutes,
   registerHealthRoutes,
+  registerIdentityRoutes,
   registerKnowledgeRoutes,
   registerMcpServersRoutes,
   registerMemoryRoutes,
@@ -484,6 +485,7 @@ registerWorkspacesRoutes(app); // /workspaces, /workspaces/:id/*, /users/:id/con
 registerThreadsRoutes(app); // /threads* — combines GET-list, context, link, branches, messages, etc.
 registerEventsRoutes(app); // /events
 registerEntitiesRoutes(app); // /users/:id/entities + /entities*
+registerIdentityRoutes(app); // /identity/resolve — read-only identity pre-check
 registerCaptureRoutes(app); // /capture/*
 registerSearchRoutes(app); // /search*, /vector-search
 registerDocumentsRoutes(app); // /documents*

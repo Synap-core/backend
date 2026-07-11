@@ -25,8 +25,17 @@ import { ask } from "../../services/knowledge/ask.js";
 import { synthesizeAnswer } from "../../services/knowledge/synthesize.js";
 import { type ProfileCatalogEntry } from "../../services/retrieval/index.js";
 import { getDb } from "@synap/database";
-import { db, knowledgeKeysRepository } from "@synap/database";
+import {
+  db,
+  knowledgeKeysRepository,
+  entities,
+  resolveIdentity,
+  extractIdentitySignals,
+  isLinkedinUrl,
+  type IdentitySignal,
+} from "@synap/database";
 import { getUserWorkspaceIds } from "../hub-protocol/rest/_shared.js";
+import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { openLink } from "../../utils/deep-links.js";
 import type { Context } from "../../types/context.js";
 
@@ -528,6 +537,64 @@ export async function executeMCPToolViaHubProtocol(
         entityId: args.entityId as string,
       });
       return ok(result);
+    }
+
+    case "synap_resolve_identity": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      // Read-only identity pre-check via the ONE matcher. Same call the REST
+      // /identity/resolve route makes — resolved here directly (no HTTP hop),
+      // mirroring how synap_get_entity uses the entities router in-process.
+      const sig = (args.signals ?? {}) as {
+        email?: string;
+        phone?: string;
+        url?: string;
+        twitter?: string;
+        github?: string;
+        externalId?: string;
+      };
+      const signals: IdentitySignal[] = [];
+      if (sig.email) signals.push({ type: "email", value: sig.email });
+      if (sig.phone) signals.push({ type: "phone", value: sig.phone });
+      if (sig.url)
+        signals.push({
+          type: isLinkedinUrl(sig.url) ? "linkedin_url" : "website",
+          value: sig.url,
+        });
+      if (sig.twitter)
+        signals.push({ type: "twitter_handle", value: sig.twitter });
+      if (sig.github)
+        signals.push({ type: "github_username", value: sig.github });
+      if (sig.externalId)
+        signals.push({ type: "external_id", value: sig.externalId });
+      // Also mine the draft property bag for strong atoms (richest lookup).
+      signals.push(
+        ...extractIdentitySignals(
+          args.properties as Record<string, unknown> | undefined
+        )
+      );
+
+      const resolution = await resolveIdentity(db, {
+        userId,
+        kindSlug: args.kindSlug as string | undefined,
+        name: args.title as string | undefined,
+        signals,
+        // Identity is global (a subject exists once pod-wide) → scope the weak
+        // path to the user's visible rows, not a single workspace.
+        userScope: userVisibleWhere(entities.workspaceId, userId),
+        limit: 10,
+      });
+
+      return ok({
+        match: resolution.match ?? "none",
+        entityId: resolution.entity?.id,
+        entityTitle: resolution.entity?.title,
+        entityKind: resolution.entity?.type,
+        candidates: resolution.candidates.map((cand) => ({
+          entityId: cand.id,
+          title: cand.title,
+          kind: cand.type,
+        })),
+      });
     }
 
     case "synap_get_graph": {

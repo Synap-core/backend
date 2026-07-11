@@ -192,6 +192,55 @@ export const tools = {
         },
       },
       {
+        name: "synap_resolve_identity",
+        description:
+          "Read-only identity PRE-CHECK — call BEFORE creating an entity to decide create-vs-enrich-vs-attach_facet. Pass the strong signals you have (email/phone/url/twitter/github/externalId) and/or a title + kindSlug. Returns match:'strong' (a globally-unique signal already resolves to an entity → do NOT create; enrich it or synap_attach_facet a new role onto entityId instead), match:'weak' (same-name candidates — advisory, inspect `candidates` before deciding), or match:'none' (safe to create). This is the dedup door: an entity exists ONCE (a person, a company); roles are facets, never second entities. Never writes.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            kindSlug: {
+              type: "string",
+              description:
+                "The kind (profile slug) you intend to create, e.g. person, company. A same-name match must be this kind to count as a 'weak' match; cross-kind rows still appear in `candidates`.",
+            },
+            title: {
+              type: "string",
+              description:
+                "The name/title to check. Omit to do a strong-signal-only lookup.",
+            },
+            signals: {
+              type: "object",
+              description:
+                "Strong identity atoms you already know. Any one match auto-resolves.",
+              properties: {
+                email: { type: "string" },
+                phone: { type: "string" },
+                url: {
+                  type: "string",
+                  description: "A LinkedIn or website URL.",
+                },
+                twitter: { type: "string" },
+                github: { type: "string" },
+                externalId: {
+                  type: "string",
+                  description: "Provider-qualified id, e.g. 'github:12345'.",
+                },
+              },
+            },
+            properties: {
+              type: "object",
+              description:
+                "Draft property bag — strong signals are also extracted from it (merged with `signals`).",
+            },
+            workspaceId: {
+              type: "string",
+              description: "Workspace ID (optional).",
+            },
+          },
+          required: [],
+        },
+      },
+      {
         name: "synap_get_graph",
         description:
           "Fetch ANY object PLUS everything it's linked to, typed. Returns { object, neighbors[], counts }. Each neighbor is { kind, subtype, name, id, edgeType, direction, via } — so you see a person linked to a deal, a skill linked to its tools, a session to its produced entities, etc. Graph by default: call this to understand an object's place in the pod before acting. Works for entity, project, view, channel, session, playbook, tool, skill, automation, document.",
