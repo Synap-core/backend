@@ -206,6 +206,8 @@ export async function reconcileWorkspaceFromDefinition(
           workspaceId,
           userId,
           semanticSlug: profile.semanticSlug,
+          profileKind: profile.profileKind,
+          applicableKinds: profile.applicableKinds,
         });
         if (scope === "shared")
           await profileRepo

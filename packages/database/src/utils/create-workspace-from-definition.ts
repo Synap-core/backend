@@ -152,6 +152,10 @@ export interface WorkspaceDefinitionInput {
      * Set to null to mark this profile as private (no cross-workspace semantics).
      */
     semanticSlug?: string | null;
+    /** Kind vs role profile. Omit for default ('kind'). */
+    profileKind?: "kind" | "role";
+    /** For profileKind='role': which base-kind profile slugs this role can attach to. */
+    applicableKinds?: string[];
     // Proposal format: flat property list
     properties?: Array<{
       slug: string;
@@ -913,6 +917,8 @@ export async function createWorkspaceFromDefinition(
               // Pass explicit semanticSlug from template; auto-assignment for
               // standard slugs (task, project, person, etc.) happens in create().
               semanticSlug: profile.semanticSlug,
+              profileKind: profile.profileKind,
+              applicableKinds: profile.applicableKinds,
             });
           } catch (err) {
             await handleStepError(`profiles[${profile.slug}].create`, err);

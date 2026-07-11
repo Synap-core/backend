@@ -53,6 +53,10 @@ export interface CreateProfileInput {
    * list/detail/dashboard "slots". Source of truth for `getEffectiveRenderer`.
    */
   defaultRenderers?: Record<string, unknown>;
+  /** Kind vs role profile. Omit for default ('kind'). */
+  profileKind?: "kind" | "role";
+  /** For profileKind='role': which base-kind profile slugs this role can attach to. */
+  applicableKinds?: string[];
 }
 
 export class ProfileRepository {
@@ -90,6 +94,8 @@ export class ProfileRepository {
         semanticSlug: resolvedSemanticSlug,
         isActive: true,
         version: 1,
+        ...(input.profileKind ? { profileKind: input.profileKind } : {}),
+        ...(input.applicableKinds ? { applicableKinds: input.applicableKinds } : {}),
       } as NewProfile)
       .returning();
 
