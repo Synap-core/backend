@@ -1625,8 +1625,23 @@ export const entitiesRouter = router({
         /**
          * Live facets (role-profiles attached to this entity) resolved through
          * the same workspace lens as `effectiveProperties`. Additive/optional —
-         * present only on the `includeProfile` path. Kind + Facets (Wave 1C).
+         * present only on the `includeProfile` path. Kind + Facets.
+         *
+         * `effectiveFacets` is the canonical name (parallels `effectiveProperties`
+         * / the `getEffectiveFacets` resolver) — the browser detail card reads it.
+         * `facets` is the legacy alias, kept for back-compat this wave; both carry
+         * the identical array. Prefer `effectiveFacets` for new consumers.
          */
+        effectiveFacets: z
+          .array(
+            z.object({
+              facet: z.record(z.string(), z.unknown()),
+              profile: z.record(z.string(), z.unknown()),
+              effectiveProperties: z.array(z.record(z.string(), z.unknown())),
+            })
+          )
+          .optional(),
+        /** @deprecated Use `effectiveFacets` — identical shape, kept for back-compat. */
         facets: z
           .array(
             z.object({
@@ -1764,18 +1779,22 @@ export const entitiesRouter = router({
         workspaceId: lensWorkspaceId,
       });
 
+      // Spread into anonymous objects: interfaces lack index signatures, so
+      // EntityFacet/Profile aren't assignable to the Record-typed output schema
+      // directly. Built once, surfaced under both the canonical `effectiveFacets`
+      // and the legacy `facets` alias.
+      const wireFacets = facets.map((f) => ({
+        facet: { ...f.facet },
+        profile: { ...f.profile },
+        effectiveProperties: f.effectiveProperties.map((p) => ({ ...p })),
+      }));
+
       return {
         entity: typedEntity,
         profile,
         effectiveProperties,
-        // Spread into anonymous objects: interfaces lack index signatures,
-        // so EntityFacet/Profile aren't assignable to the Record-typed
-        // output schema directly.
-        facets: facets.map((f) => ({
-          facet: { ...f.facet },
-          profile: { ...f.profile },
-          effectiveProperties: f.effectiveProperties.map((p) => ({ ...p })),
-        })),
+        effectiveFacets: wireFacets,
+        facets: wireFacets,
         externalLinks,
       };
     }),
