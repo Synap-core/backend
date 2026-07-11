@@ -41,7 +41,8 @@
     "db:studio": "tsx ./node_modules/drizzle-kit/bin.cjs studio",
     "db:drop": "tsx ./node_modules/drizzle-kit/bin.cjs drop",
     "migrate": "tsx src/scripts/migrate.ts",
-    "conversions": "tsx src/scripts/run-conversions.ts"
+    "conversions": "tsx src/scripts/run-conversions.ts",
+    "rebuild-property-index": "tsx src/scripts/rebuild-property-index.ts"
   },
   "dependencies": {
     "@synap-core/core": "workspace:*",
