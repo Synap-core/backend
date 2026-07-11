@@ -870,29 +870,11 @@ export const entitiesRouter = router({
         });
       }
 
-      // 3c. Auto-register identity signals (email/phone/url/handle) — non-blocking.
-      // Feeds resolveIdentity's strong path so later writes dedup against this
-      // entity instead of creating a duplicate. Never blocks or fails the mutation.
-      if (createdEntity?.id) {
-        const signals = extractIdentitySignals(
-          propertiesWithContent as Record<string, unknown>
-        );
-        if (signals.length > 0) {
-          runSignalWrite(() =>
-            registerIdentitySignals(
-              database,
-              createdEntity.id,
-              signals,
-              "entities.create"
-            ).catch((err) => {
-              logger.warn(
-                { err },
-                "[entities.create] Identity signal registration failed"
-              );
-            })
-          );
-        }
-      }
+      // 3c. Identity signals (email/phone/url/handle) are now registered inside
+      // EntityRepository.create — the ONE create door — so every producer that
+      // reaches it (imports, provisioning, automation/feed workers) feeds
+      // resolveIdentity's strong path, not just this router. See
+      // entity-repository.ts create() step 6.
 
       // 4. Emit .completed event + side-effects
       await auditLog({
