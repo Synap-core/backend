@@ -100,6 +100,15 @@ export interface MaterializeEntityResult {
    * profile with properties dropped. Additive; absent on the happy path.
    */
   propertiesDropped?: true;
+  /**
+   * Set when this op carried long-form `content` (a note body) that was NOT
+   * applied because the create resolved to an EXISTING entity via strong-signal
+   * dedup (entities.create enriches properties on a merge, but never overwrites
+   * the matched entity's document). Surfaced (mirrors the facets 'dropped'
+   * pattern) so the caller can flag the discarded body instead of losing it
+   * silently. Additive; absent on the happy path.
+   */
+  contentDropped?: true;
 }
 
 export interface MaterializeRelationResult {
@@ -278,6 +287,7 @@ export async function materializeCompositeGraph(
     let resultProfileSlug = op.profileSlug;
     let degradedFrom: string | undefined;
     let propertiesDropped: true | undefined;
+    let contentDropped: true | undefined;
     // Operation-keyed idempotency (U1): if this op already materialized under
     // the caller's stable namespace (a retry), link the prior entity instead of
     // re-creating. Keyed by `${namespace}:${op.ref}` — distinct ops have
@@ -336,7 +346,21 @@ export async function materializeCompositeGraph(
       degradedFrom = (result as { degradedFrom?: string }).degradedFrom;
       propertiesDropped = (result as { propertiesDropped?: true })
         .propertiesDropped;
-      created++;
+      // entities.create resolve-then-merge: a strong-signal dedup returns the
+      // PRE-EXISTING entity with `deduplicated: true` (it enriched properties +
+      // attached roles, but did NOT create a row). Treat it exactly like an
+      // existingEntityId link so revert never DELETES the pre-existing entity and
+      // the created-count stays honest. If this op carried a long-form `content`
+      // body, the merge silently discards it (create only overwrites properties on
+      // a dedup) — flag it so the body isn't lost without a trace.
+      if ((result as { deduplicated?: boolean }).deduplicated === true) {
+        linkedExisting = true;
+        if (op.content && op.content.trim().length > 0) {
+          contentDropped = true;
+        }
+      } else {
+        created++;
+      }
       // Register the op's stable key so a retry under the same namespace links
       // this entity instead of re-creating it.
       if (options?.idempotency && idemExternalId) {
@@ -359,6 +383,7 @@ export async function materializeCompositeGraph(
       linked: linkedExisting,
       ...(degradedFrom ? { degradedFrom } : {}),
       ...(propertiesDropped ? { propertiesDropped: true as const } : {}),
+      ...(contentDropped ? { contentDropped: true as const } : {}),
     });
 
     // Declared facets are attached in pass 1.5 below (once every create_entity
