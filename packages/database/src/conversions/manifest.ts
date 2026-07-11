@@ -24,7 +24,9 @@ export type ConversionOp =
   | ConvertToFacetOp
   | MergeIntoOp
   | KeepOp
-  | ExtractNonEntityOp;
+  | ExtractNonEntityOp
+  | DedupeProfileRowsOp
+  | ReconcileEntityScopeOp;
 
 interface BaseOp {
   /** Stable, globally-unique key. Recorded in `_conversions`; never reused. */
@@ -118,6 +120,54 @@ export interface ExtractNonEntityOp extends BaseOp {
   op: "extractNonEntity";
   slug: string;
   note: string;
+}
+
+/**
+ * Collapse DUPLICATE profile rows for ONE slug into a single canonical row.
+ * Distinct from `mergeInto` (which merges DIFFERENT slugs, matched within the
+ * same scope+workspace): this merges SAME-slug rows ACROSS scope — the shape a
+ * pod-scope kind ends up in when it has both a `scope='system'` row and a
+ * `scope='workspace'` copy of the same slug (the live pod's two `knowledge`
+ * rows). Every OTHER active same-slug row's entities / entity_facets /
+ * property_defs / profile_properties / views are repointed to the canonical
+ * row (each collision-skipped), then — under `destructiveTail` only — the
+ * now-empty duplicates are deactivated.
+ *
+ * Targets a NAMED slug on purpose: legitimately-distinct per-workspace role
+ * profiles (a `client` row per workspace) are NOT duplicates and must never be
+ * collapsed — so this op is opt-in per slug, never a blanket same-slug sweep.
+ * Idempotent: after the merge only the canonical row is active, so a re-run
+ * finds no other rows and is a no-op.
+ */
+export interface DedupeProfileRowsOp extends BaseOp {
+  op: "dedupeProfileRows";
+  /** Slug whose duplicate rows collapse into one canonical row. */
+  slug: string;
+  /**
+   * How the surviving canonical row is chosen among active same-slug rows:
+   * `system` = prefer the `scope='system'` row (fallback: earliest created_at);
+   * `earliest` = the earliest created_at outright. Default `system`.
+   */
+  canonical?: "system" | "earliest";
+}
+
+/**
+ * Re-null the `workspace_id` of entities whose profile is now pod-scope
+ * (`profiles.entity_scope = 'pod'`) but that still carry a stamped
+ * `workspace_id` from before the scope changed — so an entity's stored scope
+ * matches its profile's current `entityScope` and the pod-wide lens sees it
+ * everywhere. Only the pod→NULL direction (the safe, unambiguous one): a
+ * workspace-scope entity with a NULL `workspace_id` is left alone, since which
+ * workspace to stamp is not derivable here.
+ *
+ * `slug` optional: omitted = every pod-scope kind; set = just that kind.
+ * Idempotent: a second run finds no pod-scope entity with a non-null
+ * `workspace_id`.
+ */
+export interface ReconcileEntityScopeOp extends BaseOp {
+  op: "reconcileEntityScope";
+  /** Restrict to one kind's entities; omit to reconcile all pod-scope kinds. */
+  slug?: string;
 }
 
 /** A versioned manifest — the ordered list the engine walks. */
@@ -574,6 +624,34 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       slug: "signal_item",
       note: "Child of `bookmark`, external-feed provenance shape — not a knowledge-family role. Revisit in W5 (radar/signal-feed wave), not converted here.",
     },
+
+    // ─── Wave 4: post-conversion data-quality cleanup ──────────────────────
+    //
+    // Ordered LAST — after every convert/merge — so it collapses whatever
+    // duplicate rows the conversions left and reconciles scope on the final
+    // entity set. Both are idempotent and dry-run-first (run-conversions.ts
+    // defaults to dry run); they run only when a W4 operator passes --apply.
+
+    // The live pod carries two `knowledge` profile rows (a system row + a
+    // workspace-scope copy) — the duplicate `profileSlugScopeCondition` ORs
+    // defensively. Collapse them into the canonical system row so entities /
+    // facets / property_defs all point at ONE `knowledge` profile. Deactivation
+    // of the drained duplicate is gated behind --destructive-tail.
+    {
+      op: "dedupeProfileRows",
+      opKey: "w4.dedupe.knowledge",
+      slug: "knowledge",
+      canonical: "system",
+    },
+
+    // Align stored entity scope with profile scope across every pod-scope kind:
+    // an entity on a pod-scope profile that still carries a stamped
+    // workspace_id (from before its kind became pod-wide) gets workspace_id
+    // re-nulled so the pod-wide lens sees it everywhere. Pod→NULL only.
+    {
+      op: "reconcileEntityScope",
+      opKey: "w4.reconcile-entity-scope",
+    },
   ],
 };
 
@@ -587,6 +665,8 @@ export const CONVERSION_OP_TYPES = [
   "mergeInto",
   "keep",
   "extractNonEntity",
+  "dedupeProfileRows",
+  "reconcileEntityScope",
 ] as const;
 
 export type ConversionOpType = (typeof CONVERSION_OP_TYPES)[number];
@@ -700,6 +780,23 @@ export function validateManifest(manifest: ConversionManifest): void {
             );
           }
         }
+        break;
+      case "dedupeProfileRows":
+        requireSlug(op.opKey, op.slug);
+        if (
+          op.canonical !== undefined &&
+          op.canonical !== "system" &&
+          op.canonical !== "earliest"
+        ) {
+          throw new Error(
+            `Conversion manifest: dedupeProfileRows '${op.opKey}' has invalid canonical '${op.canonical}'`
+          );
+        }
+        break;
+      case "reconcileEntityScope":
+        // slug is OPTIONAL (omitted = all pod-scope kinds); when present it
+        // must be non-empty.
+        if (op.slug !== undefined) requireSlug(op.opKey, op.slug);
         break;
     }
   }

@@ -25,6 +25,8 @@ import type {
   MergeIntoOp,
   SeedKindProfileOp,
   DeclareKindOp,
+  DedupeProfileRowsOp,
+  ReconcileEntityScopeOp,
 } from "./manifest.js";
 import { validateManifest, buildPropertyMappingJson } from "./manifest.js";
 
@@ -36,6 +38,8 @@ export interface OpCounts {
   entitiesConverted?: number;
   entitiesRepointed?: number;
   facetsCreated?: number;
+  facetsRepointed?: number;
+  entitiesRescoped?: number;
   viewsRewritten?: number;
   propertyDefsRepointed?: number;
   profilePropertiesRepointed?: number;
@@ -219,6 +223,10 @@ async function applyOp(
       return applyConvertToFacet(tx, op);
     case "mergeInto":
       return applyMergeInto(tx, op, options.destructiveTail);
+    case "dedupeProfileRows":
+      return applyDedupeProfileRows(tx, op, options.destructiveTail);
+    case "reconcileEntityScope":
+      return applyReconcileEntityScope(tx, op);
     case "keep":
     case "extractNonEntity":
       return {}; // Ledger-recorded no-op.
@@ -478,6 +486,166 @@ async function applyMergeInto(
   return counts;
 }
 
+/**
+ * Resolve the canonical (surviving) profile id for a same-slug dedup, and the
+ * ids of the active duplicates to drain into it. `system` prefers the
+ * `scope='system'` row (fallback earliest `created_at`); `earliest` takes the
+ * earliest outright. Returns null canonical when the slug has no active row.
+ */
+async function resolveDedupTarget(
+  tx: Sql,
+  slug: string,
+  canonical: "system" | "earliest"
+): Promise<{ canonicalId: string | null; otherCount: number }> {
+  // Two complete queries rather than an interpolated ORDER BY fragment — keeps
+  // the ordering literal and avoids any dynamic-fragment surprises.
+  const rows =
+    canonical === "system"
+      ? await tx<Array<{ id: string }>>`
+          SELECT id FROM profiles
+          WHERE slug = ${slug} AND is_active = true
+          ORDER BY (scope = 'system') DESC, created_at ASC
+        `
+      : await tx<Array<{ id: string }>>`
+          SELECT id FROM profiles
+          WHERE slug = ${slug} AND is_active = true
+          ORDER BY created_at ASC
+        `;
+  if (rows.length === 0) return { canonicalId: null, otherCount: 0 };
+  return { canonicalId: rows[0].id, otherCount: rows.length - 1 };
+}
+
+async function applyDedupeProfileRows(
+  tx: Sql,
+  op: DedupeProfileRowsOp,
+  destructiveTail: boolean
+): Promise<OpCounts> {
+  const counts: OpCounts = {
+    entitiesRepointed: 0,
+    facetsRepointed: 0,
+    propertyDefsRepointed: 0,
+    profilePropertiesRepointed: 0,
+    viewsRewritten: 0,
+    profilesDeactivated: 0,
+  };
+
+  const { canonicalId } = await resolveDedupTarget(
+    tx,
+    op.slug,
+    op.canonical ?? "system"
+  );
+  if (!canonicalId) return {}; // no active row for the slug — nothing to dedupe.
+
+  // profile_properties first (its property_def_id must still resolve), then
+  // property_defs, then entities, then facets, then views. Each collision-skips.
+  const pp = await tx`
+    UPDATE profile_properties pp
+    SET profile_id = ${canonicalId}
+    FROM profiles src
+    WHERE pp.profile_id = src.id AND src.slug = ${op.slug}
+      AND src.is_active = true AND src.id <> ${canonicalId}
+      AND NOT EXISTS (
+        SELECT 1 FROM profile_properties pp2
+        WHERE pp2.profile_id = ${canonicalId}
+          AND pp2.property_def_id = pp.property_def_id
+      )
+  `;
+  counts.profilePropertiesRepointed! += pp.count ?? 0;
+
+  const pd = await tx`
+    UPDATE property_defs pd
+    SET profile_id = ${canonicalId}
+    FROM profiles src
+    WHERE pd.profile_id = src.id AND src.slug = ${op.slug}
+      AND src.is_active = true AND src.id <> ${canonicalId}
+      AND NOT EXISTS (
+        SELECT 1 FROM property_defs pd2
+        WHERE pd2.profile_id = ${canonicalId} AND pd2.slug = pd.slug
+          AND pd2.workspace_id IS NOT DISTINCT FROM pd.workspace_id
+      )
+  `;
+  counts.propertyDefsRepointed! += pd.count ?? 0;
+
+  // entities.type already equals the (shared) slug — only the profile_id fk moves.
+  const ent = await tx`
+    UPDATE entities e
+    SET profile_id = ${canonicalId}, updated_at = now()
+    FROM profiles src
+    WHERE e.profile_id = src.id AND src.slug = ${op.slug}
+      AND src.is_active = true AND src.id <> ${canonicalId}
+  `;
+  counts.entitiesRepointed! += ent.count ?? 0;
+
+  // Facets pointing at a duplicate row (only when the slug is a role) → repoint
+  // to canonical, collision-skipping against the live-facet unique index
+  // (entity_id, profile_id, COALESCE(context), COALESCE(workspace)). Colliding
+  // leftovers stay on the drained row and vanish with its deactivation.
+  const fac = await tx`
+    UPDATE entity_facets f
+    SET profile_id = ${canonicalId}, updated_at = now()
+    FROM profiles src
+    WHERE f.profile_id = src.id AND src.slug = ${op.slug}
+      AND src.is_active = true AND src.id <> ${canonicalId}
+      AND f.deleted_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM entity_facets f2
+        WHERE f2.entity_id = f.entity_id AND f2.profile_id = ${canonicalId}
+          AND f2.deleted_at IS NULL
+          AND COALESCE(f2.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
+              = COALESCE(f.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
+          AND COALESCE(f2.workspace_id, '00000000-0000-0000-0000-000000000000'::uuid)
+              = COALESCE(f.workspace_id, '00000000-0000-0000-0000-000000000000'::uuid)
+      )
+  `;
+  counts.facetsRepointed! += fac.count ?? 0;
+
+  const vw = await tx`
+    UPDATE views v
+    SET scope_profile_ids = array_replace(v.scope_profile_ids, src.id, ${canonicalId})
+    FROM profiles src
+    WHERE src.slug = ${op.slug} AND src.is_active = true AND src.id <> ${canonicalId}
+      AND v.scope_profile_ids @> ARRAY[src.id]
+  `;
+  counts.viewsRewritten! += vw.count ?? 0;
+
+  if (destructiveTail) {
+    const deact = await tx`
+      UPDATE profiles
+      SET is_active = false, updated_at = now()
+      WHERE slug = ${op.slug} AND is_active = true AND id <> ${canonicalId}
+    `;
+    counts.profilesDeactivated! += deact.count ?? 0;
+  }
+
+  return counts;
+}
+
+async function applyReconcileEntityScope(
+  tx: Sql,
+  op: ReconcileEntityScopeOp
+): Promise<OpCounts> {
+  // Pod→NULL only: an entity on a pod-scope profile that still carries a stamped
+  // workspace_id gets it re-nulled. Optional slug narrows to one kind.
+  const res = op.slug
+    ? await tx`
+        UPDATE entities e
+        SET workspace_id = NULL, updated_at = now()
+        FROM profiles p
+        WHERE e.profile_id = p.id AND p.entity_scope = 'pod'
+          AND p.slug = ${op.slug}
+          AND e.workspace_id IS NOT NULL AND e.deleted_at IS NULL
+      `
+    : await tx`
+        UPDATE entities e
+        SET workspace_id = NULL, updated_at = now()
+        FROM profiles p
+        WHERE e.profile_id = p.id AND p.entity_scope = 'pod'
+          AND e.workspace_id IS NOT NULL AND e.deleted_at IS NULL
+      `;
+  const n = res.count ?? 0;
+  return n > 0 ? { entitiesRescoped: n } : {};
+}
+
 // ─── Dry-run counting (no writes) ────────────────────────────────────────────
 
 async function computeCounts(
@@ -519,10 +687,69 @@ async function computeCounts(
     }
     case "mergeInto":
       return computeMergeCounts(sql, op, options.destructiveTail);
+    case "dedupeProfileRows":
+      return computeDedupeCounts(sql, op, options.destructiveTail);
+    case "reconcileEntityScope": {
+      const r = op.slug
+        ? await sql<Array<{ n: number }>>`
+            SELECT COUNT(*)::int AS n FROM entities e
+            JOIN profiles p ON p.id = e.profile_id AND p.entity_scope = 'pod'
+              AND p.slug = ${op.slug}
+            WHERE e.workspace_id IS NOT NULL AND e.deleted_at IS NULL
+          `
+        : await sql<Array<{ n: number }>>`
+            SELECT COUNT(*)::int AS n FROM entities e
+            JOIN profiles p ON p.id = e.profile_id AND p.entity_scope = 'pod'
+            WHERE e.workspace_id IS NOT NULL AND e.deleted_at IS NULL
+          `;
+      const n = r[0]?.n ?? 0;
+      return n > 0 ? { entitiesRescoped: n } : {};
+    }
     case "keep":
     case "extractNonEntity":
       return {};
   }
+}
+
+async function computeDedupeCounts(
+  sql: Sql,
+  op: DedupeProfileRowsOp,
+  destructiveTail: boolean
+): Promise<OpCounts> {
+  const { canonicalId, otherCount } = await resolveDedupTarget(
+    sql,
+    op.slug,
+    op.canonical ?? "system"
+  );
+  if (!canonicalId || otherCount === 0) return {};
+
+  const counts: OpCounts = {};
+  const ent = await sql<Array<{ n: number }>>`
+    SELECT COUNT(*)::int AS n FROM entities e
+    JOIN profiles src ON src.id = e.profile_id AND src.slug = ${op.slug}
+      AND src.is_active = true AND src.id <> ${canonicalId}
+  `;
+  if (ent[0]?.n) counts.entitiesRepointed = ent[0].n;
+
+  const fac = await sql<Array<{ n: number }>>`
+    SELECT COUNT(*)::int AS n FROM entity_facets f
+    JOIN profiles src ON src.id = f.profile_id AND src.slug = ${op.slug}
+      AND src.is_active = true AND src.id <> ${canonicalId}
+    WHERE f.deleted_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM entity_facets f2
+        WHERE f2.entity_id = f.entity_id AND f2.profile_id = ${canonicalId}
+          AND f2.deleted_at IS NULL
+          AND COALESCE(f2.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
+              = COALESCE(f.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
+          AND COALESCE(f2.workspace_id, '00000000-0000-0000-0000-000000000000'::uuid)
+              = COALESCE(f.workspace_id, '00000000-0000-0000-0000-000000000000'::uuid)
+      )
+  `;
+  if (fac[0]?.n) counts.facetsRepointed = fac[0].n;
+
+  if (destructiveTail) counts.profilesDeactivated = otherCount;
+  return counts;
 }
 
 async function computeMergeCounts(
