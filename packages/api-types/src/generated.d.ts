@@ -5150,6 +5150,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description?: string;
 					properties?: Record<string, unknown>;
 					confidence: number;
+					facets?: Array<{
+						profileSlug: string;
+						status?: string;
+						properties?: Record<string, unknown>;
+						contextTempId?: string;
+					}>;
 				}[];
 				relations: {
 					sourceTempId: string;
@@ -5180,6 +5186,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description?: string;
 					properties?: Record<string, unknown>;
 					confidence: number;
+					facets?: Array<{
+						profileSlug: string;
+						status?: string;
+						properties?: Record<string, unknown>;
+						contextTempId?: string;
+					}>;
 				}[];
 				relations: {
 					sourceTempId: string;
@@ -5218,6 +5230,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description?: string;
 					properties?: Record<string, unknown>;
 					confidence: number;
+					facets?: Array<{
+						profileSlug: string;
+						status?: string;
+						properties?: Record<string, unknown>;
+						contextTempId?: string;
+					}>;
 				}[];
 				relations: {
 					sourceTempId: string;
@@ -5251,6 +5269,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description?: string;
 					properties?: Record<string, unknown>;
 					confidence: number;
+					facets?: Array<{
+						profileSlug: string;
+						status?: string;
+						properties?: Record<string, unknown>;
+						contextTempId?: string;
+					}>;
 				}[];
 				relations: {
 					sourceTempId: string;
@@ -5302,6 +5326,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					properties?: Record<string, unknown> | undefined;
 					content?: string | undefined;
 					existingEntityId?: string | undefined;
+					facets?: {
+						profileSlug: string;
+						status?: string | undefined;
+						properties?: Record<string, unknown> | undefined;
+						contextTempId?: string | undefined;
+					}[] | undefined;
 				}[];
 				relations: {
 					sourceTempId: string;
@@ -5417,6 +5447,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		groupByFacetStatus: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				roleSlug: string;
+				workspaceId?: string | null | undefined;
+				projectId?: string | undefined;
+				firstN?: number | undefined;
+			};
+			output: {
+				roleSlug: string;
+				groups: {
+					status: string | null;
+					count: number;
+					ids: string[];
+				}[];
+			};
+			meta: object;
+		}>;
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				profileSlug?: string | undefined;
@@ -5438,8 +5485,52 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				proposedEntityId?: string | undefined;
 				projectId?: string | null | undefined;
+				facets?: {
+					profileSlug: string;
+					status?: string | undefined;
+					properties?: Record<string, unknown> | undefined;
+					contextEntityId?: string | null | undefined;
+				}[] | undefined;
 			};
 			output: {
+				status: string;
+				message: string;
+				id: string;
+				entity: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					type: string;
+					profileId: string | null;
+					title: string | null;
+					preview: string | null;
+					documentId: string | null;
+					properties: Record<string, unknown>;
+					fileUrl: string | null;
+					filePath: string | null;
+					fileSize: number | null;
+					fileType: string | null;
+					checksum: string | null;
+					version: number;
+					createdAt: Date;
+					updatedAt: Date;
+					deletedAt: Date | null;
+					systemData?: Record<string, unknown> | undefined;
+					facetSlugs?: string[] | undefined;
+				} | null;
+				deduplicated: boolean;
+				facets: {
+					slug: string;
+					status: string;
+					facetId?: string;
+					proposalId?: string;
+					error?: string;
+				}[];
+				proposalId?: undefined;
+				proposalType?: undefined;
+				reviewUrl?: undefined;
+				proposedEntityId?: undefined;
+			} | {
 				status: string;
 				message: string;
 				entity: Record<string, unknown> | null;
@@ -5447,7 +5538,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalType: string;
 				reviewUrl: string;
 				proposedEntityId: string;
+				facets: {
+					slug: string;
+					status: string;
+					error: string;
+				}[];
 				id?: undefined;
+				deduplicated?: undefined;
 			} | {
 				status: string;
 				message: string;
@@ -5472,7 +5569,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					deletedAt: Date | null;
 					systemData?: Record<string, unknown> | undefined;
+					facetSlugs?: string[] | undefined;
 				};
+				facets: {
+					slug: string;
+					status: string;
+					facetId?: string;
+					proposalId?: string;
+					error?: string;
+				}[];
+				deduplicated?: undefined;
 				proposalId?: undefined;
 				proposalType?: undefined;
 				reviewUrl?: undefined;
@@ -5515,6 +5621,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					deletedAt: Date | null;
 					systemData?: Record<string, unknown> | undefined;
+					facetSlugs?: string[] | undefined;
 				}[];
 				pagination: {
 					hasMore: boolean;
@@ -5543,6 +5650,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					deletedAt: Date | null;
 					systemData?: Record<string, unknown> | undefined;
+					facetSlugs?: string[] | undefined;
 				}[];
 				hasMore: boolean;
 			};
@@ -5574,6 +5682,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					deletedAt: Date | null;
 					systemData?: Record<string, unknown> | undefined;
+					facetSlugs?: string[] | undefined;
 				}[];
 			};
 			meta: object;
@@ -5606,6 +5715,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					deletedAt: Date | null;
 					systemData?: Record<string, unknown> | undefined;
+					facetSlugs?: string[] | undefined;
 				}[];
 			};
 			meta: object;
@@ -5650,6 +5760,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					deletedAt: Date | null;
 					systemData?: Record<string, unknown> | undefined;
+					facetSlugs?: string[] | undefined;
 				}[];
 			};
 			meta: object;
