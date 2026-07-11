@@ -75,6 +75,12 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
   "entity.update",
   "document.create",
   "relation.create",
+  // Kind + Facets: attaching/updating a role on an entity is ADDITIVE data
+  // work — same approval class as entity.create/update ("creates are
+  // instant"). facet.detach is DELIBERATELY excluded: removing a role is
+  // archive-like and keeps routing to a proposal.
+  "facet.attach",
+  "facet.update",
   "channel.create",
   "terminal.read_logs",
   // Playbooks & Capability Substrate — "creates are instant" platform-wide:

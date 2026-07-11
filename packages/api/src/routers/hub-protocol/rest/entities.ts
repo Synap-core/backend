@@ -1855,29 +1855,28 @@ export function registerEntitiesRoutes(app: HubHono): void {
   // build carries its own TRPCError class identity, so instanceof fails
   // across the boundary (verified live — 9fb3e7d4 shipped and still 500'd).
   const facetErrorStatus = (err: unknown): 400 | 403 | 404 | 500 => {
-    const code =
-      err && typeof err === "object" && "code" in err
-        ? (err as { code?: unknown }).code
-        : undefined;
-    if (code === "BAD_REQUEST") return 400;
-    if (code === "FORBIDDEN" || code === "UNAUTHORIZED") return 403;
-    if (code === "NOT_FOUND") return 404;
-    // Raw @synap/database domain errors: these routes call the tRPC door via
-    // createCaller, where the central mapDbError hook never runs — so the raw
-    // error lands here with no `.code` (verified live: kind-as-facet attach
-    // returned 500 with the right message). Duck-type on `.name` (same
-    // bundle-identity rationale as `.code`), mirroring mapDbError's table.
-    const name =
-      err && typeof err === "object" && "name" in err
-        ? (err as { name?: unknown }).name
-        : undefined;
-    if (
-      name === "FacetProfileKindError" ||
-      name === "FacetKindMismatchError" ||
-      name === "PropertyValidationError"
-    )
-      return 400;
-    if (name === "ProfileNotFoundError") return 404;
+    // Walk the cause chain: createCaller wraps a thrown domain error in
+    // TRPCError{code:'INTERNAL_SERVER_ERROR', cause: <domain error>}, so the
+    // meaningful `.code`/`.name` may sit one or two levels down (verified
+    // live: kind-as-facet attach still 500'd with only a top-level check).
+    let cursor: unknown = err;
+    for (let depth = 0; cursor && typeof cursor === "object" && depth < 4; depth++) {
+      const code = (cursor as { code?: unknown }).code;
+      if (code === "BAD_REQUEST") return 400;
+      if (code === "FORBIDDEN" || code === "UNAUTHORIZED") return 403;
+      if (code === "NOT_FOUND") return 404;
+      // Raw @synap/database domain errors carry no `.code` — duck-type on
+      // `.name` (bundle-safe, same rationale as `.code`; mirrors mapDbError).
+      const name = (cursor as { name?: unknown }).name;
+      if (
+        name === "FacetProfileKindError" ||
+        name === "FacetKindMismatchError" ||
+        name === "PropertyValidationError"
+      )
+        return 400;
+      if (name === "ProfileNotFoundError") return 404;
+      cursor = (cursor as { cause?: unknown }).cause;
+    }
     return 500;
   };
 
