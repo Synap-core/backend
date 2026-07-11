@@ -37,6 +37,7 @@ import {
   documents,
   getWorkspaceMembership,
   insertChannelMessage,
+  getEffectiveFacets,
 } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { Context } from "../../context.js";
@@ -1123,6 +1124,162 @@ const documentReadHandler: BuiltinVerbHandler = async (params, ctx) => {
   return { document: doc };
 };
 
+// ── Kind + Facets (roles) ─────────────────────────────────────────────────────
+//
+// Three verbs over the ONE facet door. entity_facet.attach / .detach delegate to
+// the governed `entitiesRouter.attachFacet` / `.detachFacet` callers (which run
+// checkPermissionOrPropose internally), mirroring entity.create/update — their
+// return is surfaced VERBATIM (it may be `{ status: "proposed", proposalId }`).
+// entity_facet.list is a READ: it confirms the entity is in the caller's floor
+// through the access layer (like entity.query) then resolves the entity's live
+// facets via `getEffectiveFacets` (the canonical, floor-scoped facet resolver).
+
+/** entity_facet.attach — attach a role-profile via the governed attachFacet door. */
+const entityFacetAttachParams = z.object({
+  entityId: z.string().uuid(),
+  /** Role-profile slug to attach (profileKind='role'). */
+  facetSlug: z.string().min(1).max(200),
+  properties: z.record(z.string(), z.unknown()).optional(),
+  /** Facet visibility lens; omit to inherit the parent entity's workspace. */
+  workspaceId: z.string().uuid().optional(),
+  /** Disambiguator when the same role attaches in multiple contexts. */
+  contextEntityId: z.string().uuid().optional(),
+});
+
+const entityFacetAttachHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = entityFacetAttachParams.parse(params);
+
+  // entities.attachFacet is a podProcedure — enforce membership only when the
+  // acting run carries a workspace lens (mirror entity.create/update).
+  let workspaceRole: string | undefined;
+  if (ctx.workspaceId) {
+    const membership = await getWorkspaceMembership(
+      db,
+      ctx.workspaceId,
+      ctx.userId
+    );
+    if (!membership) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "No access to the acting workspace.",
+      });
+    }
+    workspaceRole = membership.role;
+  }
+
+  const { entitiesRouter } = await import("../../routers/entities.js");
+  const caller = entitiesRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    workspaceRole,
+  } as unknown as Context);
+
+  // attachFacet governs the write (checkPermissionOrPropose): it returns either
+  // the attached facet OR { status: "proposed", proposalId }. Surface verbatim.
+  const result = await caller.attachFacet({
+    entityId: input.entityId,
+    profileSlug: input.facetSlug,
+    properties: input.properties,
+    ...(input.workspaceId !== undefined
+      ? { workspaceId: input.workspaceId }
+      : {}),
+    ...(input.contextEntityId !== undefined
+      ? { contextEntityId: input.contextEntityId }
+      : {}),
+  });
+
+  return result;
+};
+
+/** entity_facet.detach — soft-delete a facet via the governed detachFacet door. */
+const entityFacetDetachParams = z.object({
+  /** The facet's own id (the handle entity_facet.attach returns). */
+  facetId: z.string().uuid(),
+});
+
+const entityFacetDetachHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = entityFacetDetachParams.parse(params);
+
+  // Mirror entity.update: detachFacet is a podProcedure, so only enforce
+  // membership when the acting run carries a workspace lens.
+  let workspaceRole: string | undefined;
+  if (ctx.workspaceId) {
+    const membership = await getWorkspaceMembership(
+      db,
+      ctx.workspaceId,
+      ctx.userId
+    );
+    if (!membership) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "No access to the acting workspace.",
+      });
+    }
+    workspaceRole = membership.role;
+  }
+
+  const { entitiesRouter } = await import("../../routers/entities.js");
+  const caller = entitiesRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    workspaceRole,
+  } as unknown as Context);
+
+  // detachFacet governs the write (checkPermissionOrPropose). Surface verbatim.
+  const result = await caller.detachFacet({ facetId: input.facetId });
+
+  return result;
+};
+
+/** entity_facet.list — READ an entity's live facets, scoped by the caller's floor. */
+const entityFacetListParams = z.object({
+  entityId: z.string().uuid(),
+  /** Optional workspace lens; omit for the acting/pod-wide lens. */
+  workspaceId: z.string().uuid().optional(),
+});
+
+const entityFacetListHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = entityFacetListParams.parse(params);
+  const lens = input.workspaceId ?? ctx.workspaceId ?? undefined;
+
+  // Confirm the entity is in the caller's floor THROUGH the access layer before
+  // reading its facets (mirror entity.query's scoping).
+  const scoped = await getReadScope(ctx.userId, lens);
+  const entity = await scoped.findFirst<{
+    id: string;
+    workspaceId: string | null;
+  }>(entities, {
+    where: eq(entities.id, input.entityId),
+    columns: { id: true, workspaceId: true },
+  });
+  if (!entity) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found." });
+  }
+
+  // Resolve live facets through the canonical floor-scoped resolver (the same
+  // one entities.get uses), under the entity's own lens when no lens is active.
+  const facets = await getEffectiveFacets(db, input.entityId, {
+    userId: ctx.userId,
+    workspaceId: lens ?? entity.workspaceId ?? undefined,
+  });
+
+  return {
+    facets: facets.map((f) => ({
+      facetId: f.facet.id,
+      profileSlug: f.profile.slug,
+      status: f.facet.status,
+      properties: f.facet.properties,
+      workspaceId: f.facet.workspaceId,
+      contextEntityId: f.facet.contextEntityId,
+    })),
+    count: facets.length,
+  };
+};
+
 /**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
@@ -1150,6 +1307,10 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "document.create": documentCreateHandler,
   "document.update": documentUpdateHandler,
   "document.read": documentReadHandler,
+  // Kind + Facets — role attach/detach/list over the one facet door.
+  "entity_facet.attach": entityFacetAttachHandler,
+  "entity_facet.detach": entityFacetDetachHandler,
+  "entity_facet.list": entityFacetListHandler,
 };
 
 /**
@@ -1183,6 +1344,9 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "document.create": documentCreateParams,
   "document.update": documentUpdateParams,
   "document.read": documentReadParams,
+  "entity_facet.attach": entityFacetAttachParams,
+  "entity_facet.detach": entityFacetDetachParams,
+  "entity_facet.list": entityFacetListParams,
 };
 
 /**
@@ -1207,4 +1371,6 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   "ai.generate",
   // document.read — pure access-layer read (see handler doc above).
   "document.read",
+  // entity_facet.list — floor-scoped facet read (see handler doc above).
+  "entity_facet.list",
 ]);

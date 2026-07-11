@@ -356,6 +356,54 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    // ── Kind + Facets (roles) — attach/detach/list over the one facet door ──
+    {
+      name: "entity_facet.attach",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Attach a ROLE (role-profile) to an entity via the governed entities.attachFacet door (checkPermissionOrPropose). A role — client/partner/investor/… — is a facet, never its own entity. May return a proposal. Returns the facet or { status: 'proposed', proposalId }.",
+      parameters: {
+        type: "object",
+        required: ["entityId", "facetSlug"],
+        properties: {
+          entityId: { type: "string", format: "uuid" },
+          facetSlug: { type: "string" },
+          properties: { type: "object" },
+          workspaceId: { type: "string", format: "uuid" },
+          contextEntityId: { type: "string", format: "uuid" },
+        },
+      },
+    },
+    {
+      name: "entity_facet.detach",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Detach (soft-delete) a role-facet by its id via the governed entities.detachFacet door (checkPermissionOrPropose). May return a proposal. Never deletes the entity — only the role-facet.",
+      parameters: {
+        type: "object",
+        required: ["facetId"],
+        properties: {
+          facetId: { type: "string", format: "uuid" },
+        },
+      },
+    },
+    {
+      name: "entity_facet.list",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "READ an entity's live facets (roles), scoped to the caller's floor. Returns { facets[], count }. Read-only.",
+      parameters: {
+        type: "object",
+        required: ["entityId"],
+        properties: {
+          entityId: { type: "string", format: "uuid" },
+          workspaceId: { type: "string", format: "uuid" },
+        },
+      },
+    },
   ],
 };
 
