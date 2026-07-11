@@ -14,9 +14,9 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
-import { db } from "@synap/database";
-import { events } from "@synap/database";
-import { createSynapEvent } from "@synap-core/core";
+import { db, workspaceMembers, eq } from "@synap/database";
+import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
+import { createHubProtocolCallerContext } from "../hub-protocol/utils.js";
 
 const logger = createLogger({ module: "n8n-router" });
 
@@ -73,37 +73,46 @@ export const n8nActionsRouter = router({
       );
 
       try {
-        // Create generic entity event
-        const event = createSynapEvent({
-          type: "entity.create.validated",
-          userId,
-          data: {
-            entityType: type,
-            title: title || "Untitled",
-            content,
-            tags: tags || [],
-            metadata: metadata || {},
-            source: "n8n",
-          },
-        });
+        // Route through the SAME governed door the Hub Protocol createEntity uses
+        // (regular entities.create): identity resolution, signal registration,
+        // event sourcing, and checkPermissionOrPropose all apply — a raw
+        // `entity.create.validated` event straight into the replay materializer
+        // skipped every one of them. entities.create is a podProcedure needing a
+        // workspace context for its auth gate; pod-scoped profiles (note/task)
+        // have no workspace, so resolve the user's first accessible workspace for
+        // auth only — the mutation derives the entity's real scope from the
+        // profile's entityScope. Mirrors hub-protocol/entities.ts createEntity.
+        const rows = await db
+          .select({ workspaceId: workspaceMembers.workspaceId })
+          .from(workspaceMembers)
+          .where(eq(workspaceMembers.userId, userId))
+          .limit(1);
+        const authWorkspaceId = rows[0]?.workspaceId;
 
-        // Append event to event store
-        await db.insert(events).values({
-          id: event.id,
-          userId: event.userId,
-          type: event.type,
-          subjectId: event.id, // ✅ Entity ID
-          subjectType: "entity", // ✅ Subject type
-          data: event.data,
-          timestamp: event.timestamp,
-          correlationId: event.correlationId,
-          source: event.source,
+        const callerContext = await createHubProtocolCallerContext(
+          userId,
+          ctx.scopes || [],
+          authWorkspaceId
+        );
+        const caller = regularEntitiesRouter.createCaller(callerContext);
+
+        const result = await caller.create({
+          profileSlug: type,
+          title: title || "Untitled",
+          content,
+          properties: {
+            ...(metadata || {}),
+            ...(tags && tags.length ? { tags } : {}),
+          },
+          ...(authWorkspaceId ? { targetWorkspaceId: authWorkspaceId } : {}),
+          source: "n8n",
         });
 
         logger.info(
           {
             userId,
-            eventId: event.id,
+            entityId: result.id,
+            status: result.status,
             type,
           },
           "n8n: Entity created successfully"
@@ -111,9 +120,12 @@ export const n8nActionsRouter = router({
 
         return {
           success: true,
-          entityId: event.id,
-          eventId: event.id,
-          message: `${type} created successfully`,
+          entityId: result.id,
+          // eventId retained for response-shape compatibility with existing n8n
+          // workflows; the governed create no longer surfaces a distinct event id
+          // (it always equalled the entity id), so mirror the entity id here.
+          eventId: result.id,
+          message: result.message ?? `${type} created successfully`,
         };
       } catch (error) {
         logger.error(
