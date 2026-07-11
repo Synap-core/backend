@@ -212,6 +212,18 @@ export async function hybridRecall(
         slugsById.get(id)?.includes(profileSlug) ?? false;
       vectorIds = vectorIds.filter(wears);
       keywordIds = keywordIds.filter(wears);
+      // T3b: the facet-widening path is subtle (both halves drop the entityType
+      // constraint, then post-filter to role-wearers) — log its shape so a
+      // "role recall returned nothing" report can tell an empty union from an
+      // over-aggressive post-filter.
+      logger.debug(
+        {
+          slug: profileSlug,
+          unionSize: union.length,
+          survivors: vectorIds.length + keywordIds.length,
+        },
+        "hybrid-recall facet-widening post-filter applied"
+      );
     } else {
       vectorIds = [];
       keywordIds = [];
