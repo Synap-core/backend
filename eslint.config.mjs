@@ -3,6 +3,37 @@ import tseslint from "typescript-eslint";
 import prettier from "eslint-plugin-prettier/recommended";
 import globals from "globals";
 
+// ── Registered scoped tables (access/registry.ts) ────────────────────────────
+// The set of tables that carry a VisibilityRule and are therefore readable via
+// scopedDb() / writable via scopedDb().mutate(). Keep this in sync with
+// registry.ts — a table added there should be added here so raw access to it in
+// a router is banned. (The read/write tripwires derive their set from the live
+// registry; this ESLint list is the static mirror the linter needs.)
+const SCOPED_TABLES = [
+  "automations",
+  "automationRuns",
+  "mcpServers",
+  "cellInstances",
+  "roles",
+  "channels",
+  "artifacts",
+  "tools",
+  "playbooks",
+  "links",
+  "playbookRuns",
+  "relationDefs",
+  "widgetDefinitions",
+  "intelligenceCommands",
+  "entities",
+  "documents",
+  "relations",
+  "entityFacets",
+  "proposals",
+];
+const SCOPED_TABLES_RE = `/^(${SCOPED_TABLES.join("|")})$/`;
+const SCOPED_ACCESS_MESSAGE =
+  "Route through scopedDb(AccessContext.from(ctx)) / scopedDb(access).mutate() — see access/README.";
+
 export default [
   {
     ignores: [
@@ -93,6 +124,119 @@ export default [
       "packages/api/src/routers/entities.ts",
       "packages/jobs/src/workers/materializer.ts",
       "packages/api/src/routers/capture.ts",
+    ],
+    rules: {
+      "no-restricted-syntax": "off",
+    },
+  },
+  // ── By-construction access enforcement: no raw scoped-table access in routers ──
+  // Inside routers/**, a raw `db.query.<t>` / `db.select().from(<t>)` /
+  // `db.insert|update|delete(<t>)` for any REGISTERED scoped table bypasses the
+  // access layer's structural guarantees: reads skip the visibility predicate
+  // (cross-workspace read-leak class) and writes skip `assertWorkspaceWrite`
+  // (cross-workspace write-leak class). Route reads through
+  // `scopedDb(AccessContext.from(ctx)).findMany/findFirst` and writes through
+  // `scopedDb(access).mutate(table)`. The allowlist below is the MIGRATION
+  // LEDGER — every router that still does raw access today; later batches convert
+  // them and REMOVE the entry. It may only SHRINK. (This block intentionally
+  // OVERRIDES the entities-insert rule above for router files — its writes
+  // selector already covers `insert(entities)`, so coverage is preserved.)
+  {
+    files: ["packages/api/src/routers/**/*.ts"],
+    ignores: ["packages/api/src/routers/**/*.test.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          // db.query.<scopedTable> / database.query.<scopedTable> / tx.query.<t>
+          selector: `MemberExpression[object.property.name='query'][property.name=${SCOPED_TABLES_RE}]`,
+          message: SCOPED_ACCESS_MESSAGE,
+        },
+        {
+          // db.select().from(<scopedTable>)
+          selector: `CallExpression[callee.property.name='from'][arguments.0.name=${SCOPED_TABLES_RE}]`,
+          message: SCOPED_ACCESS_MESSAGE,
+        },
+        {
+          // db.insert|update|delete(<scopedTable>)
+          selector: `CallExpression[callee.property.name=/^(insert|update|delete)$/][arguments.0.name=${SCOPED_TABLES_RE}]`,
+          message: SCOPED_ACCESS_MESSAGE,
+        },
+      ],
+    },
+  },
+  {
+    // Allowlist — routers that still perform raw scoped-table access (the
+    // migration ledger). SHRINKS as batches convert each to scopedDb /
+    // scopedDb().mutate(). A NEW router doing raw access is NOT added here — it
+    // is written through the access layer from the start.
+    files: [
+      "packages/api/src/routers/activity.ts",
+      "packages/api/src/routers/artifacts.ts",
+      "packages/api/src/routers/automations.ts",
+      "packages/api/src/routers/capabilities.ts",
+      "packages/api/src/routers/capability-containers.ts",
+      "packages/api/src/routers/capture.ts",
+      "packages/api/src/routers/cell-instances.ts",
+      "packages/api/src/routers/cells.ts",
+      "packages/api/src/routers/channels.ts",
+      "packages/api/src/routers/chat-stream.ts",
+      "packages/api/src/routers/devplane.ts",
+      "packages/api/src/routers/documents.ts",
+      "packages/api/src/routers/entities.ts",
+      "packages/api/src/routers/external/chat.ts",
+      "packages/api/src/routers/file-upload.ts",
+      "packages/api/src/routers/graph.ts",
+      "packages/api/src/routers/hub-protocol/branches.ts",
+      "packages/api/src/routers/hub-protocol/channels.ts",
+      "packages/api/src/routers/hub-protocol/commands.ts",
+      "packages/api/src/routers/hub-protocol/context.ts",
+      "packages/api/src/routers/hub-protocol/documents.ts",
+      "packages/api/src/routers/hub-protocol/linking.ts",
+      "packages/api/src/routers/hub-protocol/migration.ts",
+      "packages/api/src/routers/hub-protocol/profiles.ts",
+      "packages/api/src/routers/hub-protocol/proposals.ts",
+      "packages/api/src/routers/hub-protocol/rest/artifacts.ts",
+      "packages/api/src/routers/hub-protocol/rest/cell-instances.ts",
+      "packages/api/src/routers/hub-protocol/rest/cells.ts",
+      "packages/api/src/routers/hub-protocol/rest/channels.ts",
+      "packages/api/src/routers/hub-protocol/rest/commands.ts",
+      "packages/api/src/routers/hub-protocol/rest/entities.ts",
+      "packages/api/src/routers/hub-protocol/rest/focus-sessions.ts",
+      "packages/api/src/routers/hub-protocol/rest/knowledge.ts",
+      "packages/api/src/routers/hub-protocol/rest/mcp-servers.ts",
+      "packages/api/src/routers/hub-protocol/rest/messaging.ts",
+      "packages/api/src/routers/hub-protocol/rest/packages.ts",
+      "packages/api/src/routers/hub-protocol/rest/projects.ts",
+      "packages/api/src/routers/hub-protocol/rest/resolve.ts",
+      "packages/api/src/routers/hub-protocol/rest/runs.ts",
+      "packages/api/src/routers/hub-protocol/rest/threads.ts",
+      "packages/api/src/routers/hub-protocol/rest/vault.ts",
+      "packages/api/src/routers/hub-protocol/rest/workspaces.ts",
+      "packages/api/src/routers/hub-protocol/signals.ts",
+      "packages/api/src/routers/hub-protocol/widget-definitions.ts",
+      "packages/api/src/routers/hub.ts",
+      "packages/api/src/routers/intelligence.ts",
+      "packages/api/src/routers/mcp-servers.ts",
+      "packages/api/src/routers/playbook-runs.ts",
+      "packages/api/src/routers/playbooks.ts",
+      "packages/api/src/routers/proposals.ts",
+      "packages/api/src/routers/proposals/approve-executors.ts",
+      "packages/api/src/routers/relations.ts",
+      "packages/api/src/routers/roles.ts",
+      "packages/api/src/routers/search.ts",
+      "packages/api/src/routers/secrets-vault.ts",
+      "packages/api/src/routers/sharing.ts",
+      "packages/api/src/routers/skills.ts",
+      "packages/api/src/routers/subscriptions.ts",
+      "packages/api/src/routers/sync.ts",
+      "packages/api/src/routers/system.ts",
+      "packages/api/src/routers/tools.ts",
+      "packages/api/src/routers/views.ts",
+      "packages/api/src/routers/webhooks-inbound.ts",
+      "packages/api/src/routers/whiteboards.ts",
+      "packages/api/src/routers/widget-definitions.ts",
+      "packages/api/src/routers/workspaces.ts",
     ],
     rules: {
       "no-restricted-syntax": "off",

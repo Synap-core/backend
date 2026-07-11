@@ -44,6 +44,7 @@ import {
   focusSessions,
   playbooks,
   playbookRuns,
+  playbookEnrollments,
   drizzleSql,
   EntityRepository,
   materializeEntity,
@@ -1100,6 +1101,42 @@ async function executeOutputStep(
         });
       }
 
+      // MIRROR: when the stage-advance actually APPLIED (direct write, not a
+      // proposal) and this session drives a playbook for a subject entity, keep
+      // that entity's enrollment step truthful so the funnel reflects the new
+      // stage. Rides the already-authorized stage-advance — same actor, same
+      // run — so it introduces no new governed-write surface. `currentStep` is
+      // the string shape deriveStepKey() reads. Merge into existing step_state
+      // via the jsonb `||` operator (drizzleSql, per backend rule). Best-effort:
+      // a mirror failure must never fail the underlying stage-advance.
+      if (stageChanged && session.playbookId && session.subjectEntityId) {
+        try {
+          await db
+            .update(playbookEnrollments)
+            .set({
+              stepState: drizzleSql`${
+                playbookEnrollments.stepState
+              } || ${JSON.stringify({ currentStep: currentStage })}::jsonb`,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(playbookEnrollments.playbookId, session.playbookId),
+                eq(playbookEnrollments.entityId, session.subjectEntityId)
+              )
+            );
+        } catch (err) {
+          logger.warn(
+            {
+              err,
+              playbookId: session.playbookId,
+              entityId: session.subjectEntityId,
+            },
+            "session_update: enrollment step mirror failed (non-fatal)"
+          );
+        }
+      }
+
       return {
         status: "updated",
         sessionId: session.id,
@@ -1728,6 +1765,29 @@ async function executePlaybookRun(
       createdBy: ownerId,
     })
     .returning();
+
+  // 7b. Enroll the subject entity in the playbook so running a playbook FOR an
+  // entity also populates its funnel/cohort. Idempotent by unique(playbookId,
+  // entityId). Best-effort side-write — an enrollment failure must never fail
+  // the run (mirrors the executor's other non-fatal side-writes).
+  if (resolvedSubjectId) {
+    try {
+      await db
+        .insert(playbookEnrollments)
+        .values({
+          playbookId: playbook.id,
+          entityId: resolvedSubjectId,
+          status: "active",
+          stepState: {},
+        })
+        .onConflictDoNothing();
+    } catch (err) {
+      logger.warn(
+        { err, playbookId: playbook.id, entityId: resolvedSubjectId },
+        "playbook_run: enrollment upsert failed (non-fatal)"
+      );
+    }
+  }
 
   // 8. Insert a USER kickoff message into the channel
   const messageId = randomUUID();

@@ -25,6 +25,9 @@ import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import * as schema from "@synap/database/schema";
 import { Table, getTableColumns, is } from "drizzle-orm";
+// Importing the access barrel runs registry.ts's side effects, populating the
+// visibility registry so `isRegistered` reflects every scoped table.
+import { isRegistered } from "./index.js";
 
 const ROUTERS_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -106,6 +109,24 @@ const USER_DATA_TABLES: string[] = Object.entries(schema)
   .filter(([, v]) => is(v, Table))
   .filter(([, v]) => "userId" in getTableColumns(v as Table))
   .map(([name]) => name);
+
+// Export names of every table registered in the visibility registry
+// (access/registry.ts). A by-id read of ANY of these — not only the
+// userId-bearing ones — must apply a scope floor (owner column, a recognized
+// scoping helper, or a membership check); otherwise a caller passing another
+// workspace's row id reads it. Derived from the LIVE registry so it stays
+// correct as tables are registered.
+const REGISTERED_SCOPED_TABLES: string[] = Object.entries(schema)
+  .filter(([, v]) => is(v, Table))
+  .filter(([, v]) => isRegistered(v as object))
+  .map(([name]) => name);
+
+// The by-id read scan covers the UNION: userId-bearing tables (owner leak) AND
+// every registered scoped table (cross-workspace leak). Widening the set only
+// adds detection; the allowlist is still shrink-only.
+const BY_ID_SCOPED_TABLES: string[] = Array.from(
+  new Set([...USER_DATA_TABLES, ...REGISTERED_SCOPED_TABLES])
+);
 
 // Procedures the static scan can't see are safe (the scoping lives in a
 // repository/helper call, not an inline WHERE). Justify each; may only shrink.
@@ -222,14 +243,18 @@ describe("read-scoping tripwire — no unguarded workspace-filtered reads", () =
     ).toEqual([]);
   });
 
-  // WIDENED READ-LEAK CLASS: an unfloored by-id read of USER data. The scan
+  // WIDENED READ-LEAK CLASS: an unfloored by-id read of a scoped table. The scan
   // above only catches reads filtered by `input.workspaceId`; it misses a raw
   // point lookup `db.query.<t>.findFirst({ where: eq(t.id, input.id) })` on a
-  // table that carries a `userId` owner column but applies NO user floor — any
-  // authenticated caller passing another user's row id reads it. This flags such
-  // reads unless the procedure floors ownership (own-userId WHERE, a manual
-  // `row.userId === ctx.userId` guard, or a recognized scoping helper). The
-  // allowlist records PRE-EXISTING offenders to floor later; it may only SHRINK.
+  // table that applies NO floor — any authenticated caller passing another
+  // user's / workspace's row id reads it. Now covers EVERY registered scoped
+  // table (not just userId-bearing ones), so a bare by-id read of a
+  // workspace-scoped table (channels, automations, proposals…) is flagged too.
+  // A read is cleared if it floors ownership (own-userId WHERE, a manual
+  // `row.userId === ctx.userId` guard) or reaches for a recognized scoping
+  // helper / membership check (SCOPING_HELPERS — scopedDb, workspaceLensWhere,
+  // assertWorkspaceMember, validateWorkspaceAccess…). The allowlist records
+  // PRE-EXISTING offenders to floor later; it may only SHRINK.
   const USER_FLOOR_ALLOWLIST = new Set<string>([
     // Returns a skill row fetched by id with NO owner floor — `skills` carries a
     // `userId`, so a caller passing another user's skillId reads its row (only the
@@ -237,9 +262,25 @@ describe("read-scoping tripwire — no unguarded workspace-filtered reads", () =
     // gap: floor the skill read by owner, or confirm skills are pod-shared and
     // register the table via scopedDb. Pre-existing; surfaced by this tripwire.
     "skills.ts::getRequiredTools",
+    // TODO(access-convergence): REAL gap surfaced by widening this scan to all
+    // registered scoped tables. `db.query.mcpServers.findFirst({ where:
+    // eq(mcpServers.id, input.id) })` loads an MCP server by id with NO workspace
+    // floor — any authenticated caller can pass another workspace's serverId and
+    // read its slug/config (then proxy a tool-list to its IS). Floor it via
+    // scopedDb(mcpServers) or a membership check on the loaded server.workspaceId.
+    "mcp-servers.ts::listTools",
+    // TODO(access-convergence): FALSE POSITIVE (not a leak) — the scan can't see
+    // the floor. `proposals.get` loads by id then EXPLICITLY gates: for a
+    // workspace proposal it checks owner/admin/editor membership via an inline
+    // `db.query.workspaceMembers.findFirst(eq(...userId, userId))`; for a pod-wide
+    // proposal it checks `proposalData.sourceId === userId`. Neither the inline
+    // membership query (local-var userId) nor the `sourceId` compare matches a
+    // recognized signal, so the heuristic mis-flags it. Kept here (shrink-only)
+    // until it routes through scopedDb / getWorkspaceMembership so the scan sees it.
+    "proposals.ts::get",
   ]);
 
-  it("every by-id read of a userId-bearing table applies a user floor", () => {
+  it("every by-id read of a registered scoped table applies a scope floor", () => {
     const violations: string[] = [];
     for (const file of FILES) {
       const src = readFileSync(file, "utf8");
@@ -247,10 +288,10 @@ describe("read-scoping tripwire — no unguarded workspace-filtered reads", () =
         if (!SELF_SCOPE_BUILDERS.includes(proc.builder)) continue;
         if (!/\.query\(/.test(proc.body)) continue;
 
-        // A by-id point lookup on a userId table that does NOT filter by that
+        // A by-id point lookup on a scoped table that does NOT filter by that
         // table's own userId column (the read itself is unfloored).
         let table: string | undefined;
-        for (const t of USER_DATA_TABLES) {
+        for (const t of BY_ID_SCOPED_TABLES) {
           if (!new RegExp(`db\\.query\\.${t}\\.findFirst\\(`).test(proc.body))
             continue;
           if (!new RegExp(`\\b${t}\\.id\\b`).test(proc.body)) continue;
@@ -274,9 +315,11 @@ describe("read-scoping tripwire — no unguarded workspace-filtered reads", () =
 
     expect(
       violations,
-      `Unfloored by-id read(s) of a userId-bearing table — floor by the owner ` +
+      `Unfloored by-id read(s) of a registered scoped table — floor by the owner ` +
         `(eq(t.userId, ctx.userId) / a row.userId===ctx.userId guard) or route ` +
-        `through the access layer:\n  ${violations.join("\n  ")}`
+        `through the access layer (scopedDb / a membership check):\n  ${violations.join(
+          "\n  "
+        )}`
     ).toEqual([]);
   });
 

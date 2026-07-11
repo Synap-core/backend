@@ -42,7 +42,7 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { db, eq, and, desc, isNull } from "@synap/database";
+import { db, eq, and } from "@synap/database";
 import { getPodCallback } from "../utils/pod-callback.js";
 import {
   channels,
@@ -59,6 +59,7 @@ import {
   ensureAgentThread,
   getAgentIdBySlug,
 } from "../utils/personal-channel.js";
+import { queryChannelMessages } from "../utils/query-channel-messages.js";
 import { createLogger } from "@synap-core/core";
 import { authMiddleware } from "@synap/auth";
 
@@ -384,22 +385,17 @@ chatStreamApp.get("/history", async (c) => {
   }
 
   // ── Fetch messages (user + assistant only, newest first, then reverse) ─────
-  const rows = await db.query.messages.findMany({
-    // Exclude ephemeral recaps (catch-me-up) — they must never restore into a
-    // fresh client's history, matching the tRPC history reads in channels.ts.
-    where: and(
-      eq(messages.channelId, channelId),
-      isNull(messages.deletedAt),
-      eq(messages.ephemeral, false)
-    ),
-    orderBy: [desc(messages.timestamp)],
+  // Reads through the ONE door (queryChannelMessages). `channelId` was already
+  // authorized above (owner + workspace-membership check), so no userId gate is
+  // passed here; the helper still owns isNull(deletedAt) + ephemeral=false so
+  // catch-me-up recaps never restore into a fresh client's history.
+  const rows = await queryChannelMessages<
+    Pick<typeof messages.$inferSelect, "id" | "role" | "content" | "timestamp">
+  >(db, {
+    channelId,
+    order: "desc",
     limit,
-    columns: {
-      id: true,
-      role: true,
-      content: true,
-      timestamp: true,
-    },
+    columns: { id: true, role: true, content: true, timestamp: true },
   });
 
   // Exclude system messages and return oldest-first for rendering order

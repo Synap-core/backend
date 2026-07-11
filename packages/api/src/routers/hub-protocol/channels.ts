@@ -25,6 +25,7 @@ import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { randomUUID } from "crypto";
 import { db, eq, and, gt, inArray, computeMessageHash } from "@synap/database";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
+import { queryChannelMessages } from "../../utils/query-channel-messages.js";
 import {
   agents,
   channels,
@@ -694,20 +695,15 @@ export const channelsRouter = router({
 
       const sinceDate = input.since ? new Date(input.since) : undefined;
 
-      const rows = await db.query.messages.findMany({
-        // Exclude ephemeral recaps so they never enter an agent's history context.
-        where: sinceDate
-          ? and(
-              eq(messages.channelId, input.channelId),
-              gt(messages.timestamp, sinceDate),
-              eq(messages.ephemeral, false)
-            )
-          : and(
-              eq(messages.channelId, input.channelId),
-              eq(messages.ephemeral, false)
-            ),
-        orderBy: (t, { asc }) => asc(t.timestamp),
+      // Through the one door: excludes ephemeral recaps AND soft-deleted rows
+      // (this read previously leaked soft-deleted messages into agent context).
+      // The channel is pre-authorized above, so no userId gate here; the optional
+      // `since` cursor rides on extraWhere.
+      const rows = await queryChannelMessages(db, {
+        channelId: input.channelId,
+        order: "asc",
         limit: input.limit + 1, // fetch one extra to detect hasMore
+        extraWhere: sinceDate ? gt(messages.timestamp, sinceDate) : undefined,
       });
 
       const hasMore = rows.length > input.limit;

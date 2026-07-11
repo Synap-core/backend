@@ -22,7 +22,12 @@
 import "./registry.js";
 
 export { AccessContext, accessFor, type Actor } from "./context.js";
-export { scopedDb, ScopedDb, type ScopedFindOptions } from "./scoped-db.js";
+export {
+  scopedDb,
+  ScopedDb,
+  ScopedMutation,
+  type ScopedFindOptions,
+} from "./scoped-db.js";
 export {
   registerVisibility,
   getVisibilityEntry,
