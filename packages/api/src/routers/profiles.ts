@@ -139,7 +139,12 @@ export const profilesRouter = router({
 
       if (input?.creatableOnly) {
         profiles = profiles.filter(
-          (p) => !(p.uiHints as Record<string, unknown> | null)?.hideFromCreate
+          (p) =>
+            !(p.uiHints as Record<string, unknown> | null)?.hideFromCreate &&
+            // Kind + Facets: an entity is never created AS a role — roles are
+            // attached to an existing entity via attachFacet. Excluding them
+            // here covers every creatable-profile consumer in one place.
+            p.profileKind !== "role"
         );
       }
 
