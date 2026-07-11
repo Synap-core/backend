@@ -861,7 +861,12 @@ export const skillsRouter = router({
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const skill = await db.query.skills.findFirst({
-        where: eq(skills.id, input.skillId),
+        where: and(
+          eq(skills.id, input.skillId),
+          // Pod-scoped: any user. User/workspace-scoped: owner only. Same floor
+          // as skills.get — without it, any skillId leaks its required-tool edges.
+          or(eq(skills.scope, "pod"), eq(skills.userId, userId))
+        ),
       });
       if (!skill)
         throw new TRPCError({ code: "NOT_FOUND", message: "Skill not found" });

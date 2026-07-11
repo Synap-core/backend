@@ -78,6 +78,7 @@ import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitAiCorrection } from "../utils/ai-feedback-events.js";
+import { AI_KIND } from "../lib/ai-events.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../utils/materialize-composite.js";
 import { createLogger } from "@synap-core/core";
@@ -2338,7 +2339,7 @@ export const proposalsRouter = router({
           subjectId: input.proposalId,
           workspaceId: proposal.workspaceId ?? undefined,
           data: {
-            kind: "capture",
+            kind: AI_KIND.CAPTURE,
             correlationId: proposal.correlationId,
           },
         });

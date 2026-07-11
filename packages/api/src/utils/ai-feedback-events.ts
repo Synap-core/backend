@@ -19,6 +19,7 @@
 
 import { randomUUID } from "crypto";
 import { auditLog } from "./audit-log.js";
+import { AI_DECISION, AI_CORRECTION } from "../lib/ai-events.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "ai-feedback-events" });
@@ -37,7 +38,7 @@ export async function emitAiDecision(opts: {
 }): Promise<void> {
   try {
     await auditLog({
-      subjectType: "ai_decision",
+      subjectType: AI_DECISION,
       action: opts.action,
       phase: "completed",
       // No single subject row — the join is via `correlationId`.
@@ -71,7 +72,7 @@ export async function emitAiCorrection(opts: {
 }): Promise<void> {
   try {
     await auditLog({
-      subjectType: "ai_correction",
+      subjectType: AI_CORRECTION,
       action: opts.action,
       phase: "completed",
       subjectId: opts.subjectId,

@@ -27,6 +27,14 @@ import {
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  AI_DECISION,
+  AI_CORRECTION,
+  AI_KIND,
+  clampWindowDays,
+  decisionCorrelationKeyExpr,
+  eventKindExpr,
+} from "../../../lib/ai-events.js";
 
 const ByTargetWorkspaceSchema = z
   .object({
@@ -132,9 +140,8 @@ export function registerObservabilityRoutes(app: HubHono): void {
     // `windowDays` (e.g. 1_000_000) would widen the per-user event scan and
     // in-memory aggregation without limit, a cheap DoS multiplier a caller
     // could hammer against the pod's edge rate limit.
-    const windowDays = Math.min(
-      365,
-      Math.max(1, parseInt(c.req.query("windowDays") ?? "30", 10) || 30)
+    const windowDays = clampWindowDays(
+      parseInt(c.req.query("windowDays") ?? "30", 10) || undefined
     );
     const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
 
@@ -155,8 +162,8 @@ export function registerObservabilityRoutes(app: HubHono): void {
         .where(
           and(
             eq(events.userId, userId),
-            eq(events.subjectType, "ai_decision"),
-            drizzleSql`${events.data}->>'kind' = 'route'`,
+            eq(events.subjectType, AI_DECISION),
+            drizzleSql`${eventKindExpr} = ${AI_KIND.ROUTE}`,
             gte(events.timestamp, since)
           )
         );
@@ -188,16 +195,14 @@ export function registerObservabilityRoutes(app: HubHono): void {
       //    correction row's own correlation_id column).
       const correctionRows = await db
         .select({
-          decisionCorrelationId: drizzleSql<
-            string | null
-          >`${events.data}->>'correlationId'`,
+          decisionCorrelationId: decisionCorrelationKeyExpr,
         })
         .from(events)
         .where(
           and(
             eq(events.userId, userId),
-            eq(events.subjectType, "ai_correction"),
-            drizzleSql`${events.data}->>'kind' = 'route'`,
+            eq(events.subjectType, AI_CORRECTION),
+            drizzleSql`${eventKindExpr} = ${AI_KIND.ROUTE}`,
             gte(events.timestamp, since)
           )
         );
@@ -229,17 +234,15 @@ export function registerObservabilityRoutes(app: HubHono): void {
       const nowMs = Date.now();
       const reversalRows = await db
         .select({
-          decisionCorrelationId: drizzleSql<
-            string | null
-          >`${events.data}->>'correlationId'`,
+          decisionCorrelationId: decisionCorrelationKeyExpr,
           correctedAt: events.timestamp,
         })
         .from(events)
         .where(
           and(
             eq(events.userId, userId),
-            eq(events.subjectType, "ai_correction"),
-            drizzleSql`${events.data}->>'kind' IN ('route', 'extract')`,
+            eq(events.subjectType, AI_CORRECTION),
+            drizzleSql`${eventKindExpr} IN (${AI_KIND.ROUTE}, ${AI_KIND.EXTRACT})`,
             gte(events.timestamp, since)
           )
         );

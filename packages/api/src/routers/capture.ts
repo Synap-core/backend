@@ -959,21 +959,36 @@ export const captureRouter = router({
         const exactMatch = availableWorkspaces.find(
           (w) => norm(w.name) === wanted
         );
-        const match =
-          exactMatch ??
-          availableWorkspaces.find(
-            (w) =>
-              norm(w.name).includes(wanted) || wanted.includes(norm(w.name))
-          );
+        // ALL fuzzy matches (not just the first) — so we can tell an unambiguous
+        // single match from an arbitrary pick among several.
+        const fuzzyMatches = exactMatch
+          ? []
+          : availableWorkspaces.filter(
+              (w) =>
+                norm(w.name).includes(wanted) || wanted.includes(norm(w.name))
+            );
+        const match = exactMatch ?? fuzzyMatches[0];
         if (match) {
           structureResult.targetWorkspaceId = match.id;
           // Derive confidence from reconciliation match STRENGTH when the model
           // didn't self-report one — so routing calibration + the auto-apply
           // gate work for EVERY agent (a BYOA agent that names a workspace but
-          // omits a confidence would otherwise be dropped by the 0.6 gate).
-          // Exact name match → high; fuzzy/substring → just over the gate.
+          // omits a confidence would otherwise be dropped by the gate).
           if (structureResult.targetWorkspaceConfidence == null) {
-            structureResult.targetWorkspaceConfidence = exactMatch ? 0.9 : 0.65;
+            if (exactMatch) {
+              structureResult.targetWorkspaceConfidence =
+                EXACT_MATCH_CONFIDENCE;
+            } else if (fuzzyMatches.length === 1) {
+              structureResult.targetWorkspaceConfidence =
+                FUZZY_MATCH_CONFIDENCE;
+            } else {
+              // AMBIGUOUS — the name substring-matched MORE THAN ONE workspace,
+              // so `fuzzyMatches[0]` is an arbitrary pick. Assign a below-gate
+              // confidence so it degrades to ask/no-move instead of auto-moving
+              // to a coin-flip workspace.
+              structureResult.targetWorkspaceConfidence =
+                AUTO_ROUTE_MIN_CONFIDENCE - 0.1;
+            }
           }
           // Telemetry: reconciliation OVERRODE the LLM's raw id (a caught
           // UUID-copy error) — the exact win this name-resolution exists for.
@@ -1816,7 +1831,7 @@ export const captureRouter = router({
               workspaceId: workspaceId ?? null,
               correlationId,
               data: {
-                kind: "route",
+                kind: AI_KIND.ROUTE,
                 chosenWorkspaceId: routing?.movedToWorkspace ?? workspaceId,
                 confidence: input.aiWorkspaceConfidence ?? null,
                 reason: input.aiWorkspaceReason ?? null,

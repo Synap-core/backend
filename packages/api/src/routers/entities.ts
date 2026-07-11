@@ -64,6 +64,7 @@ import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { resolveViewTrust } from "../services/view-trust-service.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitAiCorrection } from "../utils/ai-feedback-events.js";
+import { AI_KIND } from "../lib/ai-events.js";
 import {
   emitSideEffects,
   getBoss,
@@ -2603,7 +2604,7 @@ export const entitiesRouter = router({
           agentUserId: input.agentUserId,
           workspaceId: governanceWorkspaceId,
           data: {
-            kind: "extract",
+            kind: AI_KIND.EXTRACT,
             entityId: input.id,
             correlationId: existing.correlationId,
           },
@@ -2749,7 +2750,7 @@ export const entitiesRouter = router({
               subjectId: entityId,
               workspaceId: input.workspaceId,
               data: {
-                kind: "route",
+                kind: AI_KIND.ROUTE,
                 entityId,
                 fromWorkspaceId,
                 toWorkspaceId: input.workspaceId,

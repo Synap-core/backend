@@ -7,7 +7,8 @@
  */
 
 import { z } from "zod";
-import { db, views, eq } from "@synap/database";
+import { db, views, eq, and, or, isNull, isNotNull } from "@synap/database";
+import { userVisibleWhere } from "../../../utils/user-visible-where.js";
 import { emitBoardPlace } from "../../../services/capabilities/place-artboard-deck.js";
 import {
   hasScope,
@@ -275,10 +276,24 @@ export function registerWhiteboardsRoutes(app: HubHono) {
     }
 
     const viewId = c.req.param("viewId");
+    // Floor the read to the caller's visibility — the SAME predicate views.list
+    // uses (isNull-personal-owned OR member/pod-visible workspace). Without it, a
+    // valid hub-protocol.read key could fetch ANY view's row by id, leaking its
+    // documentId (the Yjs doc handle) across tenants on an id guess.
+    const userId = c.get("userId") as string;
 
     try {
       const view = await db.query.views.findFirst({
-        where: eq(views.id, viewId),
+        where: and(
+          eq(views.id, viewId),
+          or(
+            and(isNull(views.workspaceId), eq(views.userId, userId)),
+            and(
+              isNotNull(views.workspaceId),
+              userVisibleWhere(views.workspaceId, userId)
+            )
+          )
+        ),
       });
 
       if (!view) {
