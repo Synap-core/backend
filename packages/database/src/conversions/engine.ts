@@ -301,7 +301,14 @@ export async function applyConvertToFacet(
   `;
   if (sourceRows.length === 0) return {}; // Nothing on this pod to convert.
 
-  const mappingJson = buildPropertyMappingJson(op.propertyMapping);
+  // Parse back to a VALUE and pass via tx.json(): postgres.js JSON-serializes
+  // a param it infers as jsonb, so handing it the pre-stringified mapping
+  // double-encodes into a quoted scalar and jsonb_array_elements throws
+  // "cannot extract elements from a scalar" (verified live, postgres@3.4.8).
+  // buildPropertyMappingJson stays the tested SSOT for pair building/ordering.
+  const mappingPairs = JSON.parse(
+    buildPropertyMappingJson(op.propertyMapping)
+  ) as Array<[string, string]>;
   // Scope-independent expressions — built once, reused for every source row.
   const statusExpr = op.statusFrom
     ? tx`e.properties->>${op.statusFrom}`
@@ -350,7 +357,7 @@ export async function applyConvertToFacet(
         ${contextExpr},
         COALESCE((
           SELECT jsonb_strip_nulls(jsonb_object_agg(pair->>1, e.properties -> (pair->>0)))
-          FROM jsonb_array_elements(${mappingJson}::jsonb) AS pair
+          FROM jsonb_array_elements(${tx.json(mappingPairs as never)}) AS pair
           WHERE e.properties ? (pair->>0)
         ), '{}'::jsonb),
         jsonb_build_object('convertedFrom', ${op.slug}::text, 'convertedBy', ${op.opKey}::text),
