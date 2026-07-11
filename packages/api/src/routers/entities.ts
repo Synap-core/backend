@@ -767,7 +767,15 @@ export const entitiesRouter = router({
       ): Promise<
         Array<{
           slug: string;
+          /**
+           * @deprecated Carries the OPERATION OUTCOME (attached/proposed/dropped/
+           * error), NOT the facet's domain status — a naming collision with the
+           * REQUEST's `facets[].status` (domain). Read `outcome` instead; `status`
+           * is kept only for back-compat and will be removed.
+           */
           status: string;
+          /** Operation outcome: attached | proposed | dropped | error. */
+          outcome: string;
           facetId?: string;
           proposalId?: string;
           error?: string;
@@ -776,6 +784,7 @@ export const entitiesRouter = router({
         const out: Array<{
           slug: string;
           status: string;
+          outcome: string;
           facetId?: string;
           proposalId?: string;
           error?: string;
@@ -799,6 +808,7 @@ export const entitiesRouter = router({
             out.push({
               slug: f.profileSlug,
               status: r.status,
+              outcome: r.status,
               facetId: (r as { facetId?: string }).facetId,
               proposalId: (r as { proposalId?: string }).proposalId,
             });
@@ -806,6 +816,7 @@ export const entitiesRouter = router({
             out.push({
               slug: f.profileSlug,
               status: "error",
+              outcome: "error",
               error: err instanceof Error ? err.message : "attachFacet failed",
             });
           }
@@ -859,7 +870,18 @@ export const entitiesRouter = router({
               !visibleMatch
             ) {
               logger.info(
-                { userId: ctx.userId, profileSlug },
+                {
+                  // Stable observability event (T3a) — the backend metrics
+                  // registry lives in @synap-core/core (no built dist, not a
+                  // tsconfig reference of @synap/api), so a new prom Counter there
+                  // would couple this router to a cross-package rebuild. This
+                  // structured log with a stable `event`+`outcome` is the honest
+                  // minimal surfacing of the resolve-then-merge decision.
+                  event: "identity_resolve_merge",
+                  outcome: "blocked_invisible",
+                  userId: ctx.userId,
+                  profileSlug,
+                },
                 "[entities.create] strong identity match not visible to caller — creating instead of merging"
               );
             }
@@ -914,7 +936,15 @@ export const entitiesRouter = router({
                 ),
               });
               logger.info(
-                { userId: ctx.userId, entityId: matchedId, profileSlug },
+                {
+                  // Stable observability event (T3a) — see the blocked_invisible
+                  // sibling above for why this is a structured log, not a counter.
+                  event: "identity_resolve_merge",
+                  outcome: "merged",
+                  userId: ctx.userId,
+                  entityId: matchedId,
+                  profileSlug,
+                },
                 "[entities.create] deduplicated onto existing entity (strong identity match)"
               );
               return {
@@ -1012,7 +1042,9 @@ export const entitiesRouter = router({
           // (always-array) field so the return union stays `.id`-narrowable.
           facets: (input.facets ?? []).map((f) => ({
             slug: f.profileSlug,
+            // `status` deprecated (operation-outcome overload) — read `outcome`.
             status: "dropped",
+            outcome: "dropped",
             error:
               "create was proposal-gated — re-attach after approval, or use the entity-graph door to propose entity + roles together",
           })),
