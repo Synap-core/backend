@@ -853,10 +853,16 @@ export const viewsRouter = router({
       const conditions: any[] = [];
 
       const lensWorkspaceId = view.workspaceId ?? null;
+      // includePodWide MUST be true: pod-scoped entities (person/company and any
+      // profile whose entityScope is 'pod') live with workspaceId IS NULL and are
+      // visible in EVERY workspace. A workspace-scoped view narrows to its own
+      // workspace AND those pod-wide rows (owner floor applies); the view's
+      // kind/facet scopeCondition below narrows further. Hardcoding false dropped
+      // every pod-wide person/company from every workspace view post-cutover.
       conditions.push(
         lensWorkspaceId
-          ? entityLensWhereForViews(ctx.userId, lensWorkspaceId, false)
-          : entityLensWhereForViews(ctx.userId, null, false)
+          ? entityLensWhereForViews(ctx.userId, lensWorkspaceId, true)
+          : entityLensWhereForViews(ctx.userId, null, true)
       );
 
       // Project lens — narrow to a single project when set (mirrors entities.list pattern)
