@@ -5,7 +5,7 @@
  * Handles CRUD operations with event emission.
  */
 
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, asc, desc, sql as drizzleSql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
 import {
@@ -16,8 +16,18 @@ import {
   FeedScope,
   ChannelStatus,
 } from "../schema/channels.js";
+import { agents } from "../schema/agents.js";
 import { EventRepository } from "./event-repository.js";
 import { sql } from "../client-pg.js";
+
+/** Postgres unique-violation SQLSTATE — raised by the channel dedup indexes. */
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { code?: string }).code === "23505"
+  );
+}
 
 export interface CreateChannelData {
   id?: string;
@@ -221,6 +231,10 @@ export class ChannelRepository {
     agentId: string,
     _workspaceId?: string
   ): Promise<Channel> {
+    // Resolve ONLY the template DM, never an agent-INSTANCE thread — those share
+    // assignedAgentId with the template but are marked + dedup'd on channel_members
+    // (see ensureAgentInstanceThread + channels_user_agent_personal_uniq).
+    const notInstanceThread = drizzleSql`(${channels.metadata} ->> 'agentInstanceThread') IS NULL`;
     const [existing] = await this.db
       .select()
       .from(channels)
@@ -229,20 +243,46 @@ export class ChannelRepository {
           eq(channels.userId, userId),
           eq(channels.assignedAgentId, agentId),
           eq(channels.channelType, ChannelType.PERSONAL),
-          eq(channels.status, ChannelStatus.ACTIVE)
+          eq(channels.status, ChannelStatus.ACTIVE),
+          notInstanceThread
         )
       )
+      // Deterministic oldest-wins on duplicate personal threads.
+      .orderBy(asc(channels.createdAt))
       .limit(1);
 
     if (existing) return existing;
 
-    return this.create({
-      userId,
-      workspaceId: undefined, // pod-wide
-      channelType: ChannelType.PERSONAL,
-      scope: ChannelScope.POD,
-      assignedAgentId: agentId,
-    });
+    // Race-safe against channels_user_agent_personal_uniq (migration 0182): if a
+    // concurrent create wins, the unique index raises 23505 — re-select the survivor
+    // instead of surfacing a duplicate-key error or (pre-0182) silently duping.
+    try {
+      return await this.create({
+        userId,
+        workspaceId: undefined, // pod-wide
+        channelType: ChannelType.PERSONAL,
+        scope: ChannelScope.POD,
+        assignedAgentId: agentId,
+      });
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      const [survivor] = await this.db
+        .select()
+        .from(channels)
+        .where(
+          and(
+            eq(channels.userId, userId),
+            eq(channels.assignedAgentId, agentId),
+            eq(channels.channelType, ChannelType.PERSONAL),
+            eq(channels.status, ChannelStatus.ACTIVE),
+            notInstanceThread
+          )
+        )
+        .orderBy(asc(channels.createdAt))
+        .limit(1);
+      if (!survivor) throw err;
+      return survivor;
+    }
   }
 
   /**
@@ -264,18 +304,64 @@ export class ChannelRepository {
           eq(channels.status, ChannelStatus.ACTIVE)
         )
       )
+      // Deterministic oldest-wins on duplicate feed channels.
+      .orderBy(asc(channels.createdAt))
       .limit(1);
 
     if (existing) return existing;
 
-    return this.create({
-      userId,
-      workspaceId: undefined, // pod-wide
-      channelType: ChannelType.FEED,
-      scope: ChannelScope.POD,
-      feedScope: FeedScope.USER,
-      senderAgentId: undefined,
-    });
+    // Race-safe against channels_user_feed_uniq (migration 0182).
+    try {
+      return await this.create({
+        userId,
+        workspaceId: undefined, // pod-wide
+        channelType: ChannelType.FEED,
+        scope: ChannelScope.POD,
+        feedScope: FeedScope.USER,
+        senderAgentId: undefined,
+      });
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      const [survivor] = await this.db
+        .select()
+        .from(channels)
+        .where(
+          and(
+            eq(channels.userId, userId),
+            eq(channels.channelType, ChannelType.FEED),
+            eq(channels.status, ChannelStatus.ACTIVE)
+          )
+        )
+        .orderBy(asc(channels.createdAt))
+        .limit(1);
+      if (!survivor) throw err;
+      return survivor;
+    }
+  }
+
+  /**
+   * Get or create the user's MAIN personal AI thread — the orchestrator thread.
+   *
+   * Canonical resolver for jobs/system producers that want "the user's personal
+   * channel" without knowing an agent id. It resolves the orchestrator agent and
+   * delegates to ensurePersonalChannel, so the row carries assignedAgentId (and is
+   * therefore covered by channels_user_agent_personal_uniq) and CONVERGES with the
+   * api-side ensureAgentThread(userId, orchestratorId) on the same row. Never
+   * inserts an agent-less personal channel (which the unique index would not
+   * cover — the historical duplication vector).
+   */
+  async ensureUserPersonalChannel(userId: string): Promise<Channel> {
+    const [orchestrator] = await this.db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.slug, "orchestrator"), eq(agents.active, true)))
+      .limit(1);
+    if (!orchestrator) {
+      throw new Error(
+        "ensureUserPersonalChannel: no active 'orchestrator' agent to key the personal thread on"
+      );
+    }
+    return this.ensurePersonalChannel(userId, orchestrator.id);
   }
 
   /**

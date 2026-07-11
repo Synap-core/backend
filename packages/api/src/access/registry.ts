@@ -29,6 +29,16 @@ import {
   relations,
   entityFacets,
   proposals,
+  secrets,
+  apiKeys,
+  notifications,
+  feeds,
+  inboxItems,
+  sourceConfigs,
+  sourceSubscriptions,
+  userPreferences,
+  userEntityState,
+  agentConfigs,
 } from "@synap/database/schema";
 import { and, eq, isNotNull, isNull, or } from "drizzle-orm";
 import { registerVisibility } from "./visibility.js";
@@ -128,14 +138,33 @@ registerVisibility({
   },
 });
 
-// Operational workspace config (member-shared; NOT substrate) — a focused
-// workspace shows only its own rows, pod-wide rows surface in the user-wide view.
+// Operational workspace config — but with a per-COMMAND sharing scope:
+// `sharedScope='workspace'` = shared with the workspace's members (member-shared,
+// focused-workspace-narrowed like other config); `sharedScope='user'` =
+// creator-private (visible ONLY to `createdBy`, never to teammates who share the
+// workspace). The flat `workspace` rule IGNORED `sharedScope`, so a user-private
+// command LEAKED to every member of its workspace — this custom predicate ORs the
+// two scopes so a private command is floored on its creator.
 registerVisibility({
   table: intelligenceCommands,
   query: () => db.query.intelligenceCommands,
   rule: {
-    kind: "workspace",
-    workspaceColumn: intelligenceCommands.workspaceId,
+    kind: "custom",
+    predicate: (access) =>
+      or(
+        and(
+          eq(intelligenceCommands.sharedScope, "workspace"),
+          workspaceLensWhere(
+            intelligenceCommands.workspaceId,
+            access.userId,
+            access.workspaceLens
+          )
+        ),
+        and(
+          eq(intelligenceCommands.sharedScope, "user"),
+          eq(intelligenceCommands.createdBy, access.userId)
+        )
+      ),
   },
 });
 
@@ -233,6 +262,103 @@ registerVisibility({
           eq(entityFacets.userId, access.userId)
         )
       ),
+  },
+});
+
+// ── USER-PRIVATE tables (per-user floor; a NULL workspace is NEVER pod-wide) ──
+// These carry a NOT-NULL per-user owner and are read back only by (or on behalf
+// of) that user. Their floor is `eq(userId)` — the tightest rule — matching what
+// every current read hand-rolls today (verified across the routers). This is a
+// FLOOR declaration, not a behaviour change: raw reads are unaffected until they
+// convert to scopedDb, and a converted read floors to exactly the same rows.
+//
+// CROWN JEWELS — `secrets` + `apiKeys`: `user` (= `eq(userId)`) is deliberately
+// the NARROWEST rule so registration can never widen a credential read. The
+// broader reads that legitimately exist (secrets service-credential resolution
+// by serviceId; apiKeys admin/workspace listings) run on podAdmin/workspace-gated
+// or pod-internal paths and are NOT converted here — narrowing them onto this
+// owner floor would break credential resolution, so they stay raw (ledgered).
+registerVisibility({
+  table: secrets,
+  query: () => db.query.secrets,
+  rule: { kind: "user", userColumn: secrets.userId },
+});
+registerVisibility({
+  table: apiKeys,
+  query: () => db.query.apiKeys,
+  rule: { kind: "user", userColumn: apiKeys.userId },
+});
+registerVisibility({
+  table: notifications,
+  query: () => db.query.notifications,
+  // `userId` is the RECIPIENT — a notification belongs to exactly one user.
+  rule: { kind: "user", userColumn: notifications.userId },
+});
+registerVisibility({
+  table: inboxItems,
+  query: () => db.query.inboxItems,
+  // External items (email/calendar/slack) ingested per user; every read floors
+  // by `userId` alone (the nullable workspaceId is a tag, not a read lens).
+  rule: { kind: "user", userColumn: inboxItems.userId },
+});
+registerVisibility({
+  table: userPreferences,
+  query: () => db.query.userPreferences,
+  // PK IS `userId` — one row per user, strictly private.
+  rule: { kind: "user", userColumn: userPreferences.userId },
+});
+registerVisibility({
+  table: userEntityState,
+  query: () => db.query.userEntityState,
+  // Composite key (userId, itemId, itemType); starred/pinned/view state is
+  // strictly per-user. No workspace column.
+  rule: { kind: "user", userColumn: userEntityState.userId },
+});
+
+// ── USER-OWNED, workspace-lensed tables (owner floor AND workspace lens) ──────
+// Same shape as `relations`: a NOT-NULL `userId` owner plus a nullable
+// workspaceId. `workspaceOwned` keeps a NULL-workspace row OWNER-private (never
+// pod-wide via the flat `workspace` rule's IS-NULL branch) while still letting a
+// workspace lens narrow. Every current read floors by `eq(userId)`, so this
+// declaration matches (the added membership floor only narrows, and the owner is
+// always a member of any workspace they filed a row into).
+registerVisibility({
+  table: feeds,
+  query: () => db.query.feeds,
+  rule: {
+    kind: "workspaceOwned",
+    workspaceColumn: feeds.workspaceId,
+    userColumn: feeds.userId,
+  },
+});
+registerVisibility({
+  table: sourceConfigs,
+  query: () => db.query.sourceConfigs,
+  rule: {
+    kind: "workspaceOwned",
+    workspaceColumn: sourceConfigs.workspaceId,
+    userColumn: sourceConfigs.userId,
+  },
+});
+registerVisibility({
+  table: sourceSubscriptions,
+  query: () => db.query.sourceSubscriptions,
+  rule: {
+    kind: "workspaceOwned",
+    workspaceColumn: sourceSubscriptions.workspaceId,
+    userColumn: sourceSubscriptions.userId,
+  },
+});
+registerVisibility({
+  table: agentConfigs,
+  query: () => db.query.agentConfigs,
+  // Config keyed on (userId, workspaceId, agentType). The workspace is part of
+  // the KEY; the owner floor is `userId`. Reads floor by `eq(userId)` (+ the key
+  // workspace), which `workspaceOwned` reproduces.
+  rule: {
+    kind: "workspaceOwned",
+    workspaceColumn: agentConfigs.workspaceId,
+    userColumn: agentConfigs.userId,
   },
 });
 

@@ -75,18 +75,27 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
   "entity.update",
   "document.create",
   "relation.create",
-  "channel.create",
   "terminal.read_logs",
-  // Playbooks & Capability Substrate — "creates are instant" platform-wide:
-  // automation/playbook/link creates auto-approve like data creates.
-  // UPDATE/ARCHIVE/DELETE of the substrate still route to a proposal, and
-  // ADMIN_ACTIONS (agent/apiKey/connector/intelligence) always propose.
-  // `tool.create` / `skill.create` are DELIBERATELY excluded: they define new
-  // EGRESS abilities, so an injected agent must not silently pre-stage one —
-  // creation still returns via propose (and GOVERNANCE_MODES.normal may re-grant
-  // it per-workspace when the operator opts in).
+  // NOTE — `channel.create` and `playbook.create` are DELIBERATELY NOT here.
+  // A channel and a playbook are SURFACES, not data: creating one changes what
+  // exists in the operator's world (a new room, a new process) in a way they must
+  // be able to SEE and ACCEPT — the proposal system is visibility + acceptance,
+  // not only governance. So create-NEW of these should route to a proposal even in
+  // the permissive tiers ("don't spin up a channel I don't know exists"). RESOLVE
+  // of an EXISTING channel is a different action (channel.resolve/ensure/bind) and
+  // must stay instant — agent reply / proactive flows that reuse a channel never
+  // block.
+  //   • playbook.create — ENFORCED: playbooks.ts calls checkPermissionOrPropose
+  //     ({subjectType:"playbook", action:"create"}), which reads this list.
+  //   • channel.create  — POLICY-ONLY for now: the agent channel-create door (Hub
+  //     `resolveOrCreateChannel`) has no governance gate and the builtin verb is
+  //     grant-gated (action="run"), so this key isn't consulted yet. Wiring the
+  //     create-new→proposal gate on the Hub route (create-vs-resolve + a channel
+  //     proposal executor) is a tracked follow-up — see policy.test.ts.
+  // Automation/link creates stay instant (they wire existing capabilities, no new
+  // durable surface). `tool.create` / `skill.create` were already excluded (they
+  // define new EGRESS abilities).
   "automation.create",
-  "playbook.create",
   "link.create",
   // Focus-session lifecycle = non-destructive work-orchestration (open a
   // session, advance its stage, update progress), less sensitive than the data
@@ -162,7 +171,10 @@ export const GOVERNANCE_MODES = {
       "view.create",
       "profile.create",
       "property_def.create",
-      "channel.create",
+      // channel.create is intentionally absent here too — see the note in
+      // DEFAULT_AUTO_APPROVE. A new channel is a durable SURFACE the operator must
+      // see + accept, so create-new proposes even under Normal; resolve-existing
+      // (channel.resolve/ensure/bind) is unaffected.
       // Non-destructive DATA edits are instant too — these write paths MERGE or
       // do a field-level partial (they never wipe unspecified fields), so an edit
       // is no more destructive than a create. Governance splits on the write
@@ -185,7 +197,10 @@ export const GOVERNANCE_MODES = {
       // and ADMIN_ACTIONS (agent/apiKey/connector/intelligence) always propose.
       // Updates & deletes of the substrate remain proposal-gated.
       "automation.create",
-      "playbook.create",
+      // playbook.create intentionally absent — a playbook is a durable process
+      // SURFACE (like a channel), so create-new proposes for visibility+acceptance
+      // even under Normal. Automations (short, wire existing capabilities) stay
+      // instant. See the note in DEFAULT_AUTO_APPROVE.
       "link.create",
       "tool.create",
       "skill.create",

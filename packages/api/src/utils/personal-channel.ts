@@ -8,7 +8,15 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { db, eq, and, computeMessageHash } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  asc,
+  isNotNull,
+  drizzleSql,
+  computeMessageHash,
+} from "@synap/database";
 import {
   channels,
   channelMembers,
@@ -91,17 +99,33 @@ export async function ensureAgentThread(
   userId: string,
   agentId: string
 ): Promise<Channel> {
+  // A template DM (this function) and an agent-INSTANCE thread
+  // (ensureAgentInstanceThread) both carry assignedAgentId = the same template,
+  // but the instance thread is dedup'd on channel_members, not on the template.
+  // The `agentInstanceThread` metadata marker distinguishes them: template DMs
+  // never set it, instance threads always do. Resolve/dedup ONLY template DMs
+  // here (and channels_user_agent_personal_uniq excludes marked rows) so two
+  // instances of the same template never collide with — or resolve to — the
+  // template DM.
+  const notInstanceThread = drizzleSql`(${channels.metadata} ->> 'agentInstanceThread') IS NULL`;
   const existing = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, userId),
       eq(channels.assignedAgentId, agentId),
       eq(channels.status, ChannelStatus.ACTIVE),
-      eq(channels.channelType, ChannelType.PERSONAL)
+      eq(channels.channelType, ChannelType.PERSONAL),
+      notInstanceThread
     ),
+    // Deterministic oldest-wins: if duplicate threads exist, always resolve the
+    // canonical original so proactive/agent posts don't scatter run-to-run.
+    orderBy: [asc(channels.createdAt)],
   });
 
   if (existing) return existing;
 
+  // Race-safe upsert against channels_user_agent_personal_uniq (migration 0182):
+  // the loser of a concurrent create no-ops, then we re-SELECT the survivor.
+  // Mirrors the ensureExternalChannel template so every resolver dedups identically.
   const [channel] = await db
     .insert(channels)
     .values({
@@ -112,7 +136,35 @@ export async function ensureAgentThread(
       status: ChannelStatus.ACTIVE,
       assignedAgentId: agentId,
     })
+    .onConflictDoNothing({
+      target: [channels.userId, channels.assignedAgentId],
+      where: and(
+        eq(channels.channelType, ChannelType.PERSONAL),
+        isNotNull(channels.assignedAgentId),
+        eq(channels.status, ChannelStatus.ACTIVE),
+        notInstanceThread
+      ),
+    })
     .returning();
+
+  if (!channel) {
+    const survivor = await db.query.channels.findFirst({
+      where: and(
+        eq(channels.userId, userId),
+        eq(channels.assignedAgentId, agentId),
+        eq(channels.status, ChannelStatus.ACTIVE),
+        eq(channels.channelType, ChannelType.PERSONAL),
+        notInstanceThread
+      ),
+      orderBy: [asc(channels.createdAt)],
+    });
+    if (!survivor) {
+      throw new Error(
+        `Failed to resolve-or-create PERSONAL channel for user=${userId} agent=${agentId} after conflict`
+      );
+    }
+    return survivor;
+  }
 
   // Seed welcome message only for the orchestrator agent
   const orchestratorId = await getSyncAgentId("orchestrator");
@@ -160,6 +212,8 @@ export async function ensureAgentInstanceThread(
         eq(channels.status, ChannelStatus.ACTIVE)
       )
     )
+    // Deterministic oldest-wins on duplicate instance threads.
+    .orderBy(asc(channels.createdAt))
     .limit(1);
 
   if (existing) return existing.channel;
@@ -173,6 +227,11 @@ export async function ensureAgentInstanceThread(
       scope: ChannelScope.POD,
       status: ChannelStatus.ACTIVE,
       assignedAgentId: templateAgentId, // template → IS agent class
+      // Marker: this is an INSTANCE thread, dedup'd on channel_members — NOT a
+      // template DM. It shares assignedAgentId with the template DM + sibling
+      // instances, so it MUST be excluded from channels_user_agent_personal_uniq
+      // (which is per (user, template)) or two instances of one template collide.
+      metadata: { agentInstanceThread: true },
     })
     .returning();
 
@@ -220,10 +279,13 @@ export async function ensureWorkspaceGroupChannel(
       eq(channels.contextObjectType, "workspace"),
       eq(channels.status, ChannelStatus.ACTIVE)
     ),
+    // Deterministic oldest-wins on duplicate workspace group threads.
+    orderBy: [asc(channels.createdAt)],
   });
 
   if (existing) return existing;
 
+  // Race-safe upsert against channels_user_workspace_group_uniq (migration 0182).
   const [channel] = await db
     .insert(channels)
     .values({
@@ -237,9 +299,34 @@ export async function ensureWorkspaceGroupChannel(
       assignedAgentId: null,
       title: "General",
     })
+    .onConflictDoNothing({
+      target: [channels.userId, channels.workspaceId],
+      where: and(
+        eq(channels.channelType, ChannelType.THREAD),
+        eq(channels.contextObjectType, "workspace"),
+        eq(channels.status, ChannelStatus.ACTIVE)
+      ),
+    })
     .returning();
 
-  return channel;
+  if (channel) return channel;
+
+  const survivor = await db.query.channels.findFirst({
+    where: and(
+      eq(channels.userId, userId),
+      eq(channels.workspaceId, workspaceId),
+      eq(channels.channelType, ChannelType.THREAD),
+      eq(channels.contextObjectType, "workspace"),
+      eq(channels.status, ChannelStatus.ACTIVE)
+    ),
+    orderBy: [asc(channels.createdAt)],
+  });
+  if (!survivor) {
+    throw new Error(
+      `Failed to resolve-or-create workspace group channel for user=${userId} ws=${workspaceId} after conflict`
+    );
+  }
+  return survivor;
 }
 
 /**
@@ -258,10 +345,15 @@ export async function ensureProactiveFeedChannel(
       eq(channels.channelType, ChannelType.FEED),
       eq(channels.status, ChannelStatus.ACTIVE)
     ),
+    // Deterministic oldest-wins: if duplicate feed channels exist, always resolve
+    // the canonical original so proactive posts don't scatter run-to-run.
+    orderBy: [asc(channels.createdAt)],
   });
 
   if (existing) return existing;
 
+  // Race-safe upsert against channels_user_feed_uniq (migration 0182) — one feed
+  // per user. Arbiter where matches the partial index predicate exactly.
   const [channel] = await db
     .insert(channels)
     .values({
@@ -273,7 +365,29 @@ export async function ensureProactiveFeedChannel(
       status: ChannelStatus.ACTIVE,
       assignedAgentId: await getSyncAgentId("orchestrator"),
     })
+    .onConflictDoNothing({
+      target: [channels.userId],
+      where: and(
+        eq(channels.channelType, ChannelType.FEED),
+        eq(channels.status, ChannelStatus.ACTIVE)
+      ),
+    })
     .returning();
 
-  return channel;
+  if (channel) return channel;
+
+  const survivor = await db.query.channels.findFirst({
+    where: and(
+      eq(channels.userId, userId),
+      eq(channels.channelType, ChannelType.FEED),
+      eq(channels.status, ChannelStatus.ACTIVE)
+    ),
+    orderBy: [asc(channels.createdAt)],
+  });
+  if (!survivor) {
+    throw new Error(
+      `Failed to resolve-or-create FEED channel for user=${userId} after conflict`
+    );
+  }
+  return survivor;
 }

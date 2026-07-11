@@ -1092,6 +1092,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS "channels_external_source_id_unique"
   ON "channels" ("external_source", "external_id")
   WHERE "external_id" IS NOT NULL;
 
+-- V2 channel uniqueness — keyed on the LIVE `channel_type` column (0014 keyed
+-- these on the retired `thread_kind`, so they enforced nothing; re-cut in
+-- 0182_channel_dedup_and_uniqueness.sql). One active personal thread per
+-- (user, agent), one workspace-group thread per (user, workspace), one proactive
+-- feed per (user, workspace-bucket). These are the dedup targets the canonical
+-- resolveChannel door's onConflictDoNothing upserts against.
+CREATE UNIQUE INDEX IF NOT EXISTS "channels_user_agent_personal_uniq"
+  ON "channels" ("user_id", "assigned_agent_id")
+  WHERE "channel_type" = 'personal'
+    AND "assigned_agent_id" IS NOT NULL
+    AND "status" = 'active'
+    -- Agent-INSTANCE threads (dedup'd on channel_members) are excluded — they
+    -- share assigned_agent_id with the template DM. See 0182.
+    AND ("metadata" ->> 'agentInstanceThread') IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "channels_user_workspace_group_uniq"
+  ON "channels" ("user_id", "workspace_id")
+  WHERE "channel_type" = 'thread'
+    AND "context_object_type" = 'workspace'
+    AND "status" = 'active';
+
+CREATE UNIQUE INDEX IF NOT EXISTS "channels_user_feed_uniq"
+  ON "channels" ("user_id")
+  WHERE "channel_type" = 'feed'
+    AND "status" = 'active';
+
 -- ─── 19. channel_connections + channel_link_tokens ───────────────────────────
 
 CREATE TABLE IF NOT EXISTS "channel_connections" (

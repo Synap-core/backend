@@ -197,10 +197,16 @@ export const intelligenceRouter = router({
   getCommand: workspaceProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      const cmd = await db.query.intelligenceCommands.findFirst({
+      // Floor through the sharedScope-aware visibility rule: a workspace-scoped
+      // command must be in the active workspace; a user-scoped (private) command
+      // is visible only to its creator — so a teammate can't read another user's
+      // private command by id.
+      const cmd = await scopedDb(accessFor(ctx)).findFirst<
+        typeof intelligenceCommands.$inferSelect
+      >(intelligenceCommands, {
         where: eq(intelligenceCommands.id, input.id),
       });
-      if (!cmd || cmd.workspaceId !== ctx.workspaceId) {
+      if (!cmd) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Command not found",
@@ -275,10 +281,14 @@ export const intelligenceRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const cmd = await db.query.intelligenceCommands.findFirst({
+      // Load-for-authz through the sharedScope-aware rule so a user cannot mutate
+      // another user's private (sharedScope='user') command.
+      const cmd = await scopedDb(accessFor(ctx)).findFirst<
+        typeof intelligenceCommands.$inferSelect
+      >(intelligenceCommands, {
         where: eq(intelligenceCommands.id, input.id),
       });
-      if (!cmd || cmd.workspaceId !== ctx.workspaceId) {
+      if (!cmd) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Command not found",
@@ -329,10 +339,14 @@ export const intelligenceRouter = router({
   deleteCommand: workspaceProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      const cmd = await db.query.intelligenceCommands.findFirst({
+      // Load-for-authz through the sharedScope-aware rule so a user cannot delete
+      // another user's private (sharedScope='user') command.
+      const cmd = await scopedDb(accessFor(ctx)).findFirst<
+        typeof intelligenceCommands.$inferSelect
+      >(intelligenceCommands, {
         where: eq(intelligenceCommands.id, input.id),
       });
-      if (!cmd || cmd.workspaceId !== ctx.workspaceId) {
+      if (!cmd) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Command not found",
@@ -358,10 +372,14 @@ export const intelligenceRouter = router({
       const userId = requireUserId(ctx.userId);
       const workspaceId = ctx.workspaceId!;
 
-      const cmd = await db.query.intelligenceCommands.findFirst({
+      // Load-for-authz through the sharedScope-aware rule: a teammate cannot run
+      // another user's private (sharedScope='user') command by id.
+      const cmd = await scopedDb(accessFor(ctx)).findFirst<
+        typeof intelligenceCommands.$inferSelect
+      >(intelligenceCommands, {
         where: eq(intelligenceCommands.id, input.commandId),
       });
-      if (!cmd || cmd.workspaceId !== workspaceId) {
+      if (!cmd) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Command not found",

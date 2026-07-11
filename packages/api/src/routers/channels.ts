@@ -84,6 +84,7 @@ import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import { resolveOrCreateChannel } from "../utils/resolve-or-create-channel.js";
 import {
   ensureAgentInstanceThread,
+  ensureProactiveFeedChannel,
   getAgentIdBySlug,
 } from "../utils/personal-channel.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
@@ -4549,16 +4550,12 @@ export const channelsRouter = router({
         archetypeConfig = seeded!;
       }
 
-      // 2. Upsert the user's personal feed channel
-      let feedChannel = await db.query.channels.findFirst({
-        where: and(
-          eq(channels.userId, userId),
-          eq(channels.channelType, ChannelType.FEED),
-          eq(channels.feedScope, FeedScope.USER)
-        ),
-      });
-
-      if (!feedChannel) {
+      // 2. Resolve the user's personal feed channel through the ONE race-safe
+      //    door (one feed per user, dedups against channels_user_feed_uniq) —
+      //    NOT a hand-rolled findFirst+insert (a duplication vector). If the feed
+      //    has no title yet, label it from the archetype for a nicer first run.
+      const feedChannel = await ensureProactiveFeedChannel(userId);
+      if (!feedChannel.title) {
         const archetypeLabels: Record<string, string> = {
           leads: "Leads",
           hiring: "Hiring",
@@ -4567,23 +4564,12 @@ export const channelsRouter = router({
           competitors: "Competitors",
           press: "Press",
         };
-        const [created] = await db
-          .insert(channels)
-          .values({
-            id: randomUUID(),
-            userId,
-            workspaceId: null,
-            channelType: ChannelType.FEED,
-            feedScope: FeedScope.USER,
-            title: input.name ?? archetypeLabels[input.archetype] ?? "My Feed",
-            status: ChannelStatus.ACTIVE,
-          })
-          .returning();
-        feedChannel = created;
-        logger.info(
-          { channelId: feedChannel.id, userId },
-          "Feed channel created"
-        );
+        const title =
+          input.name ?? archetypeLabels[input.archetype] ?? "My Feed";
+        await db
+          .update(channels)
+          .set({ title, updatedAt: new Date() })
+          .where(eq(channels.id, feedChannel.id));
       }
 
       const channelId = feedChannel.id;
@@ -4691,8 +4677,12 @@ export const channelsRouter = router({
         where: and(
           eq(channels.userId, userId),
           eq(channels.channelType, ChannelType.FEED),
-          eq(channels.feedScope, FeedScope.USER)
+          eq(channels.feedScope, FeedScope.USER),
+          // Active only + oldest-wins, so a post-0182 'merged' duplicate feed is
+          // never returned (which would key the subscriptions query on a dead id).
+          eq(channels.status, ChannelStatus.ACTIVE)
         ),
+        orderBy: [asc(channels.createdAt)],
       });
 
       if (!channel) return { channel: null, subscriptions: [] };

@@ -50,6 +50,9 @@ const ByTargetWorkspaceSchema = z
 const CalibrationBucketSchema = z
   .object({
     range: z.string(),
+    /** Numeric bucket midpoint (0..1) — so consumers plot the calibration curve
+     *  without parsing it back out of the `range` display string. */
+    midpoint: z.number(),
     decisions: z.number(),
     corrected: z.number(),
     correctionRate: z.number().nullable(),
@@ -316,6 +319,9 @@ export function registerObservabilityRoutes(app: HubHono): void {
         ).length;
         return {
           range: bucket.range,
+          // Numeric midpoint (clamp the last bucket's 1.01 "inclusive-of-1.0"
+          // upper bound back to 1.0 so the plotted point stays in [0,1]).
+          midpoint: (bucket.min + Math.min(bucket.max, 1)) / 2,
           decisions: decisionsCount,
           corrected: correctedCount,
           correctionRate:

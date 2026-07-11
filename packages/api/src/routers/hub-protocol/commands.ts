@@ -8,7 +8,8 @@
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import { db, intelligenceCommands, eq, and, desc } from "@synap/database";
+import { intelligenceCommands, eq, desc } from "@synap/database";
+import { AccessContext, scopedDb } from "../../access/index.js";
 
 export const hubCommandsRouter = router({
   /**
@@ -24,23 +25,41 @@ export const hubCommandsRouter = router({
       })
     )
     .query(async ({ input }) => {
-      const rows = await db
-        .select({
-          id: intelligenceCommands.id,
-          title: intelligenceCommands.title,
-          promptTemplate: intelligenceCommands.promptTemplate,
-          derivedInputs: intelligenceCommands.derivedInputs,
-          inputOverrides: intelligenceCommands.inputOverrides,
-          allowedTools: intelligenceCommands.allowedTools,
-          outputMode: intelligenceCommands.outputMode,
-          permissionsProfile: intelligenceCommands.permissionsProfile,
-          sharedScope: intelligenceCommands.sharedScope,
-          createdAt: intelligenceCommands.createdAt,
-        })
-        .from(intelligenceCommands)
-        .where(eq(intelligenceCommands.workspaceId, input.workspaceId))
-        .orderBy(desc(intelligenceCommands.updatedAt))
-        .limit(input.limit ?? 50);
+      // Floor on the ACTING user (input.userId, resolved by the IS) via the
+      // sharedScope-aware rule: workspace-shared commands for members of the
+      // lensed workspace; sharedScope='user' commands ONLY to their creator.
+      // Previously this filtered by workspaceId alone and ignored userId, so it
+      // leaked every user's private commands in a shared workspace.
+      const access = AccessContext.agent({ userId: input.userId }).withLens(
+        input.workspaceId
+      );
+      const rows = await scopedDb(access).findMany<{
+        id: string;
+        title: string;
+        promptTemplate: string;
+        derivedInputs: unknown;
+        inputOverrides: unknown;
+        allowedTools: unknown;
+        outputMode: string;
+        permissionsProfile: string;
+        sharedScope: string;
+        createdAt: Date;
+      }>(intelligenceCommands, {
+        columns: {
+          id: true,
+          title: true,
+          promptTemplate: true,
+          derivedInputs: true,
+          inputOverrides: true,
+          allowedTools: true,
+          outputMode: true,
+          permissionsProfile: true,
+          sharedScope: true,
+          createdAt: true,
+        },
+        orderBy: [desc(intelligenceCommands.updatedAt)],
+        limit: input.limit ?? 50,
+      });
 
       return { commands: rows };
     }),
@@ -58,11 +77,16 @@ export const hubCommandsRouter = router({
       })
     )
     .query(async ({ input }) => {
-      const row = await db.query.intelligenceCommands.findFirst({
-        where: and(
-          eq(intelligenceCommands.id, input.id),
-          eq(intelligenceCommands.workspaceId, input.workspaceId)
-        ),
+      // Same sharedScope floor on the acting user: a non-visible id (another
+      // user's private command, or a command outside the lensed workspace)
+      // resolves to undefined → not found.
+      const access = AccessContext.agent({ userId: input.userId }).withLens(
+        input.workspaceId
+      );
+      const row = await scopedDb(access).findFirst<
+        typeof intelligenceCommands.$inferSelect
+      >(intelligenceCommands, {
+        where: eq(intelligenceCommands.id, input.id),
       });
 
       if (!row) {

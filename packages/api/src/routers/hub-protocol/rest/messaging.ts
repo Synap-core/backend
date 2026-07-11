@@ -23,7 +23,7 @@ import {
   messagingAccounts,
   channels,
   ChannelType,
-  ChannelScope,
+  ensureExternalChannel,
 } from "@synap/database";
 import { resolveActingContext } from "./_shared.js";
 import type { MessagingAccount as DbMessagingAccount } from "@synap/database";
@@ -900,64 +900,25 @@ export function registerMessagingRoutes(app: HubHono): void {
           );
         }
 
-        // Find any existing channel for this thread (regardless of entity link).
-        // Use externalId as the stable dedup key — set by both webhook handler
-        // and manual connect calls to the same value (the Unipile chat/thread ID).
-        const [existing] = await db
-          .select({
-            id: channels.id,
-            contextObjectId: channels.contextObjectId,
-          })
-          .from(channels)
-          .where(
-            and(
-              eq(channels.channelType, ChannelType.EXTERNAL),
-              eq(channels.externalId as any, externalThreadId)
-            )
-          )
-          .limit(1);
+        // Resolve-or-create the external channel through the ONE race-safe door
+        // (dedups on (externalSource, externalId), upgrades a NULL subject binding,
+        // never repoints an already-linked channel). Replaces the hand-rolled 4th
+        // copy of external resolve — and hardens the dedup key to include provider.
+        const { channelId } = await ensureExternalChannel({
+          provider,
+          externalId: externalThreadId,
+          userId,
+          title: participantName ?? provider,
+          contextObjectType: entityId ? "entity" : null,
+          contextObjectId: entityId ?? null,
+          metadata: {
+            accountId: account.externalId,
+            participantName: participantName ?? "",
+            linkedByUserId: userId,
+          },
+        });
 
-        if (existing) {
-          // If caller is linking to an entity and the row isn't linked yet, upgrade.
-          if (entityId && !existing.contextObjectId) {
-            await db
-              .update(channels)
-              .set({
-                contextObjectType: "entity",
-                contextObjectId: entityId as any,
-                updatedAt: new Date(),
-              })
-              .where(eq(channels.id, existing.id));
-          }
-          return c.json({ channelId: existing.id }, 200);
-        }
-
-        // No existing row — insert fresh.
-        const [inserted] = await db
-          .insert(channels)
-          .values({
-            userId,
-            channelType: ChannelType.EXTERNAL,
-            scope: ChannelScope.WORKSPACE,
-            ...(entityId
-              ? {
-                  contextObjectType: "entity",
-                  contextObjectId: entityId as any,
-                }
-              : {}),
-            externalSource: provider,
-            externalChannelId: externalThreadId,
-            externalId: externalThreadId,
-            title: participantName ?? provider,
-            metadata: {
-              accountId: account.externalId,
-              participantName: participantName ?? "",
-              linkedByUserId: userId,
-            },
-          })
-          .returning({ id: channels.id });
-
-        return c.json({ channelId: inserted.id }, 200);
+        return c.json({ channelId }, 200);
       } catch (err) {
         logger.error(
           { err, userId, entityId, externalThreadId },

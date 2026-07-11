@@ -55,13 +55,12 @@ import {
 import {
   ChannelType,
   ChannelScope,
-  FeedScope,
   ChannelStatus,
   MessageRole,
   MessageAuthorType,
 } from "@synap/database/schema";
 import type { AutomationTriggerConfig } from "@synap/database/schema";
-import { computeMessageHash } from "@synap/database";
+import { computeMessageHash, ChannelRepository } from "@synap/database";
 import type {
   FlowDefinition,
   AutomationNode,
@@ -863,63 +862,19 @@ async function executeOutputStep(
         throw new Error("channel_message requires content");
       }
 
-      // Resolve personal thread (channelType=PERSONAL)
+      // Resolve personal thread / proactive feed via the canonical race-safe
+      // ChannelRepository resolvers (dedup against the 0182 unique indexes) — not
+      // hand-rolled findFirst+insert, which duped and diverged from the api side.
       if (!channelId && config.channelType === "personal_thread") {
-        const personalChannel = await db.query.channels.findFirst({
-          where: and(
-            eq(channels.userId, ownerId),
-            eq(channels.channelType, ChannelType.PERSONAL),
-            eq(channels.status, ChannelStatus.ACTIVE)
-          ),
-          columns: { id: true },
-        });
-        channelId = personalChannel?.id;
-
-        if (!channelId) {
-          const [newChannel] = await db
-            .insert(channels)
-            .values({
-              id: randomUUID(),
-              userId: ownerId,
-              workspaceId: null, // pod-wide
-              channelType: ChannelType.PERSONAL,
-              scope: ChannelScope.POD,
-              status: ChannelStatus.ACTIVE,
-              senderAgentId: null,
-            })
-            .returning({ id: channels.id });
-          channelId = newChannel.id;
-        }
+        channelId = (
+          await new ChannelRepository(db).ensureUserPersonalChannel(ownerId)
+        ).id;
       }
 
-      // Resolve proactive feed channel
       if (!channelId && config.channelType === "proactive") {
-        const proactiveChannel = await db.query.channels.findFirst({
-          where: and(
-            eq(channels.userId, ownerId),
-            eq(channels.channelType, ChannelType.FEED),
-            eq(channels.status, ChannelStatus.ACTIVE)
-          ),
-          columns: { id: true },
-        });
-        channelId = proactiveChannel?.id;
-
-        if (!channelId) {
-          const [newChannel] = await db
-            .insert(channels)
-            .values({
-              id: randomUUID(),
-              userId: ownerId,
-              workspaceId: null, // pod-wide
-              channelType: ChannelType.FEED,
-              scope: ChannelScope.POD,
-              feedScope: FeedScope.USER,
-              status: ChannelStatus.ACTIVE,
-              senderAgentId: null,
-            })
-            .returning({ id: channels.id });
-          channelId = newChannel.id;
-        }
+        channelId = (
+          await new ChannelRepository(db).ensureProactiveFeedChannel(ownerId)
+        ).id;
       }
 
       if (!channelId) {
@@ -1708,6 +1663,15 @@ async function executePlaybookRun(
     }
   }
 
+  // Seed the first stage so the session starts stage-aware (the initial IS
+  // dispatch gets the stage hint/grant), matching the tRPC/Hub creation path.
+  // Reused below (7b) so a fresh enrollment's stepState agrees with the
+  // session's currentStage — otherwise an entity at stage 1 never shows up
+  // in the funnel (the session_update mirror only writes stepState.currentStep
+  // on a stage CHANGE, not at creation).
+  const playbookStages = playbook.stages as { key?: string }[] | null;
+  const firstStageKey = playbookStages?.[0]?.key ?? null;
+
   // 4. Create a focus session for this playbook run
   const [session] = await db
     .insert(focusSessions)
@@ -1717,10 +1681,7 @@ async function executePlaybookRun(
       goal,
       playbookId: playbook.id,
       status: "active",
-      // Seed the first stage so the session starts stage-aware (the initial IS
-      // dispatch gets the stage hint/grant), matching the tRPC/Hub creation path.
-      currentStage:
-        (playbook.stages as { key?: string }[] | null)?.[0]?.key ?? null,
+      currentStage: firstStageKey,
       expectedOutputs: (playbook.expectedOutputs ?? []) as any[],
       agentIds: [],
       subjectEntityId: resolvedSubjectId,
@@ -1767,10 +1728,14 @@ async function executePlaybookRun(
     .returning();
 
   // 7b. Enroll the subject entity in the playbook so running a playbook FOR an
-  // entity also populates its funnel/cohort. Idempotent by unique(playbookId,
-  // entityId). Best-effort side-write — an enrollment failure must never fail
-  // the run (mirrors the executor's other non-fatal side-writes).
-  if (resolvedSubjectId) {
+  // entity also populates its funnel/cohort. Only when the playbook actually
+  // has a funnel (stages) — an operational playbook (scheduled sync, etc.)
+  // with no stages must not create enrollment rows. Idempotent by
+  // unique(playbookId, entityId); re-enroll after unenroll (soft-cancel)
+  // reactivates rather than silently no-op'ing. Best-effort side-write — an
+  // enrollment failure must never fail the run (mirrors the executor's other
+  // non-fatal side-writes).
+  if (resolvedSubjectId && (playbookStages?.length ?? 0) > 0) {
     try {
       await db
         .insert(playbookEnrollments)
@@ -1778,9 +1743,12 @@ async function executePlaybookRun(
           playbookId: playbook.id,
           entityId: resolvedSubjectId,
           status: "active",
-          stepState: {},
+          stepState: firstStageKey ? { currentStep: firstStageKey } : {},
         })
-        .onConflictDoNothing();
+        .onConflictDoUpdate({
+          target: [playbookEnrollments.playbookId, playbookEnrollments.entityId],
+          set: { status: "active", updatedAt: new Date() },
+        });
     } catch (err) {
       logger.warn(
         { err, playbookId: playbook.id, entityId: resolvedSubjectId },

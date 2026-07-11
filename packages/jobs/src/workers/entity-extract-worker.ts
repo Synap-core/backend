@@ -24,13 +24,13 @@ import {
   getDb,
   materializeEntity,
   EventRepository,
+  ChannelRepository,
 } from "@synap/database";
 import { OperationalEventTypes } from "@synap/events";
 import { sql as drizzleSql } from "drizzle-orm";
 import { sql as dbSql } from "@synap/database";
 import { computeMessageHash } from "@synap/database";
 import {
-  channels,
   messages,
   sourceSubscriptions,
   sourceConfigs,
@@ -488,15 +488,12 @@ async function postToProactiveFeed(
 ): Promise<string | undefined> {
   if (highlightedItems.length === 0) return undefined;
 
-  // Find user's feed channel
-  const feedChannel = await db.query.channels.findFirst({
-    where: and(eq(channels.userId, userId), eq(channels.channelType, "feed")),
-  });
-
-  if (!feedChannel) {
-    logger.debug({ userId }, "No feed channel found for proactive posting");
-    return undefined;
-  }
+  // Resolve the user's feed channel through the canonical race-safe door — active
+  // + oldest-wins, so a post-0182 'merged' duplicate is never targeted (a raw
+  // findFirst without a status filter could resolve a dead feed → posts vanish).
+  const feedChannel = await new ChannelRepository(db).ensureProactiveFeedChannel(
+    userId
+  );
 
   // Build markdown summary
   const lines = [`## New Items Discovered (${highlightedItems.length})`];

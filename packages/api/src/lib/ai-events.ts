@@ -59,6 +59,14 @@ export const EXACT_MATCH_CONFIDENCE = 0.9;
  * here beside the floor so the coupling is visible, not a buried footgun.
  */
 export const FUZZY_MATCH_CONFIDENCE = 0.65;
+/**
+ * A deliberately below-the-floor confidence, assigned when a routing pick is
+ * UNTRUSTWORTHY (an ambiguous fuzzy match on >1 workspace, or a null name that
+ * leaves the id unverifiable) so it degrades to ask/no-move instead of an
+ * arbitrary auto-move. Gate-relative + single-sourced here so it can't drift
+ * from AUTO_ROUTE_MIN_CONFIDENCE.
+ */
+export const BELOW_GATE_CONFIDENCE = AUTO_ROUTE_MIN_CONFIDENCE - 0.1;
 
 /** Clamp a caller-supplied lookback window to [1, 365] days (DoS guard + shared default). */
 export const clampWindowDays = (

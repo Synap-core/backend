@@ -21,13 +21,9 @@
 
 import type PgBoss from "pg-boss";
 import { randomUUID } from "node:crypto";
-import { db, eq, and, computeMessageHash } from "@synap/database";
+import { db, computeMessageHash, ChannelRepository } from "@synap/database";
 import {
-  channels,
   messages,
-  ChannelType,
-  ChannelScope,
-  ChannelStatus,
   MessageRole,
   MessageAuthorType,
   MessageCategory,
@@ -173,35 +169,15 @@ export function generateHydrationSummary(data: HydrationSummaryData): string {
 // ── Personal channel resolution (inline) ─────────────────────────────────────
 
 /**
- * Find (or create) the user's personal channel. Inlined here rather than
- * imported from @synap/api to avoid the jobs → api circular dependency
- * (see workers/index.ts note).
- *
- * Mirrors the shape created by ensurePersonalChannel in
- * packages/api/src/utils/personal-channel.ts. Returns the channel id.
+ * Find (or create) the user's personal channel via the canonical race-safe
+ * ChannelRepository resolver (orchestrator-keyed, dedups against the 0182 unique
+ * index) — replaces the hand-rolled agent-less insert that could dupe and diverged
+ * from the api-side ensureAgentThread.
  */
 async function resolvePersonalChannelId(userId: string): Promise<string> {
-  const existing = await db.query.channels.findFirst({
-    where: and(
-      eq(channels.userId, userId),
-      eq(channels.channelType, ChannelType.PERSONAL),
-      eq(channels.status, ChannelStatus.ACTIVE)
-    ),
-    columns: { id: true },
-  });
-  if (existing) return existing.id;
-
-  const [channel] = await db
-    .insert(channels)
-    .values({
-      userId,
-      workspaceId: null, // pod-wide
-      channelType: ChannelType.PERSONAL,
-      scope: ChannelScope.POD,
-      status: ChannelStatus.ACTIVE,
-      senderAgentId: null,
-    })
-    .returning({ id: channels.id });
+  const channel = await new ChannelRepository(db).ensureUserPersonalChannel(
+    userId
+  );
   return channel.id;
 }
 

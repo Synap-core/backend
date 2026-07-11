@@ -8,6 +8,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc.js";
+import { AccessContext, scopedDb } from "../access/index.js";
 import { db, inboxItems, eq, and, desc, or } from "@synap/database";
 
 import { createLogger } from "@synap-core/core";
@@ -148,8 +149,13 @@ export const inboxRouter = router({
         );
       }
 
-      const items = await db.query.inboxItems.findMany({
-        where: and(eq(inboxItems.userId, userId), ...conditions),
+      // Owner floor comes from the access layer: the `user` rule ANDs
+      // `eq(inboxItems.userId, ctx.userId)`, so the status/type filters only
+      // narrow within the caller's own items.
+      const items = await scopedDb(AccessContext.from(ctx)).findMany<
+        typeof inboxItems.$inferSelect
+      >(inboxItems, {
+        where: conditions.length ? and(...conditions) : undefined,
         orderBy: [desc(inboxItems.timestamp)],
         limit: input.limit || 50,
         offset: input.offset || 0,

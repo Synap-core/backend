@@ -13,7 +13,7 @@
 
 import { getDb } from "../client-pg.js";
 import { channels, ChannelType, ChannelScope } from "../schema/channels.js";
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, asc, eq, isNotNull } from "drizzle-orm";
 import { setChannelBranchPurpose } from "./set-channel-branch-purpose.js";
 
 export interface EnsureExternalChannelArgs {
@@ -24,6 +24,11 @@ export interface EnsureExternalChannelArgs {
   title?: string;
   /** Firewall role for the channel ('team' | 'client-comms' | null). */
   branchPurpose?: string | null;
+  /** Subject binding at birth — the real-world thing this channel is about. */
+  contextObjectType?: string | null;
+  contextObjectId?: string | null;
+  /** Optional metadata stored on CREATE only (provider account info, etc.). */
+  metadata?: Record<string, unknown>;
 }
 
 export async function ensureExternalChannel(
@@ -38,7 +43,10 @@ export async function ensureExternalChannel(
         eq(channels.externalSource, args.provider),
         eq(channels.externalId, args.externalId)
       ),
-      columns: { id: true, branchPurpose: true },
+      columns: { id: true, branchPurpose: true, contextObjectId: true },
+      // Deterministic oldest-wins so a duplicate external channel resolves to a
+      // stable survivor run-to-run.
+      orderBy: [asc(channels.createdAt)],
     });
 
   const existing = await findExisting();
@@ -55,6 +63,18 @@ export async function ensureExternalChannel(
         channelId: existing.id,
         branchPurpose: args.branchPurpose,
       });
+    }
+    // Subject binding: upgrade a NULL binding only — never repoint a channel that
+    // is already linked to a subject (that would silently rebind under a caller).
+    if (args.contextObjectId && existing.contextObjectId == null) {
+      await database
+        .update(channels)
+        .set({
+          contextObjectType: args.contextObjectType ?? "entity",
+          contextObjectId: args.contextObjectId,
+          updatedAt: new Date(),
+        })
+        .where(eq(channels.id, existing.id));
     }
     return { channelId: existing.id, created: false };
   }
@@ -73,6 +93,11 @@ export async function ensureExternalChannel(
       externalChannelId: args.externalId,
       externalId: args.externalId,
       branchPurpose: args.branchPurpose ?? null,
+      contextObjectType: args.contextObjectId
+        ? (args.contextObjectType ?? "entity")
+        : null,
+      contextObjectId: args.contextObjectId ?? null,
+      metadata: args.metadata ?? undefined,
     })
     .onConflictDoNothing({
       target: [channels.externalSource, channels.externalId],

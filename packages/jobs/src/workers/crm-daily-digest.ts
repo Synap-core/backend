@@ -17,15 +17,19 @@
 
 import type PgBoss from "pg-boss";
 import { randomUUID } from "node:crypto";
-import { db, eq, and, computeMessageHash } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  computeMessageHash,
+  ChannelRepository,
+} from "@synap/database";
 import {
   channels,
   messages,
   messagingAccounts,
   entities,
   ChannelType,
-  ChannelScope,
-  ChannelStatus,
   MessageRole,
   MessageAuthorType,
   MessageCategory,
@@ -49,26 +53,11 @@ interface ChannelMetadata {
 // ── Personal channel resolution (mirrors hydration-summary-post) ──────────────
 
 async function resolvePersonalChannelId(userId: string): Promise<string> {
-  const existing = await db.query.channels.findFirst({
-    where: and(
-      eq(channels.userId, userId),
-      eq(channels.channelType, ChannelType.PERSONAL)
-    ),
-    columns: { id: true },
-  });
-  if (existing) return existing.id;
-
-  const [channel] = await db
-    .insert(channels)
-    .values({
-      userId,
-      workspaceId: null,
-      channelType: ChannelType.PERSONAL,
-      scope: ChannelScope.POD,
-      status: ChannelStatus.ACTIVE,
-      senderAgentId: null,
-    })
-    .returning({ id: channels.id });
+  // Canonical race-safe resolver (orchestrator-keyed, dedups against the 0182
+  // unique index) — not a hand-rolled agent-less insert that duped.
+  const channel = await new ChannelRepository(db).ensureUserPersonalChannel(
+    userId
+  );
   return channel.id;
 }
 

@@ -183,7 +183,9 @@ export const rolesRouter = router({
       // Gate on the ROLE's real workspace — the permission check above keys off
       // the request workspaceId, which does NOT pin the role row to a workspace
       // the caller belongs to.
-      const roleRow = await database.query.roles.findFirst({
+      const roleRow = await scopedDb(AccessContext.from(ctx)).findFirst<{
+        workspaceId: string | null;
+      }>(roles, {
         where: eq(roles.id, input.id),
         columns: { workspaceId: true },
       });
@@ -264,7 +266,9 @@ export const rolesRouter = router({
 
       // Gate on the ROLE's real workspace (see update — request workspaceId
       // doesn't pin the row).
-      const roleRow = await database.query.roles.findFirst({
+      const roleRow = await scopedDb(AccessContext.from(ctx)).findFirst<{
+        workspaceId: string | null;
+      }>(roles, {
         where: eq(roles.id, input.id),
         columns: { workspaceId: true },
       });

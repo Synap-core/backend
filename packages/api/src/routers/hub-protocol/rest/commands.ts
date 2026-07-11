@@ -6,8 +6,9 @@ import { realpathSync, existsSync } from "fs";
 import { resolve as resolvePath } from "path";
 
 import { z } from "@hono/zod-openapi";
-import { db, intelligenceCommands, asc, eq, inArray } from "@synap/database";
+import { intelligenceCommands, asc, eq } from "@synap/database";
 
+import { AccessContext, scopedDb } from "../../../access/index.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
   CommandIdParamSchema,
@@ -17,12 +18,7 @@ import {
   WireCommandSchema,
 } from "./_codecs/command.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import {
-  getUserAccessibleWorkspaceIds,
-  hasScope,
-  logger,
-  type HubHono,
-} from "./_shared.js";
+import { hasScope, logger, type HubHono } from "./_shared.js";
 
 // ─── Rate limiter for terminal commands ─────────────────────────────────────
 const _commandRateLimiter = new Map<
@@ -287,17 +283,17 @@ export function registerCommandsRoutes(app: HubHono): void {
     const workspaceId = c.req.query("workspaceId");
     const userId = c.get("userId") as string;
     try {
-      // Always scope to the caller's accessible workspaces — a supplied
-      // workspaceId may only NARROW within them, never widen to a foreign one.
-      const wsIds = await getUserAccessibleWorkspaceIds(userId);
-      if (wsIds.length === 0 || (workspaceId && !wsIds.includes(workspaceId))) {
-        return c.json([]);
-      }
-      const whereClause = workspaceId
-        ? eq(intelligenceCommands.workspaceId, workspaceId)
-        : inArray(intelligenceCommands.workspaceId, wsIds);
-      const commands = await db.query.intelligenceCommands.findMany({
-        where: whereClause,
+      // Floor through the access layer's sharedScope-aware rule (same rule the
+      // tRPC surface uses): workspace-shared commands are visible to workspace
+      // members; sharedScope='user' commands ONLY to their creator. The
+      // workspace lens narrows within the membership floor — a supplied
+      // workspaceId can only NARROW, never widen to a foreign workspace.
+      const access = AccessContext.agent({ userId }).withLens(
+        workspaceId ?? undefined
+      );
+      const commands = await scopedDb(access).findMany<
+        typeof intelligenceCommands.$inferSelect
+      >(intelligenceCommands, {
         orderBy: [asc(intelligenceCommands.createdAt)],
       });
       return c.json(commands);
@@ -323,17 +319,17 @@ export function registerCommandsRoutes(app: HubHono): void {
     const id = c.req.param("id");
     const userId = c.get("userId") as string;
     try {
-      const command = await db.query.intelligenceCommands.findFirst({
+      // Floor through the sharedScope-aware rule: a workspace-shared command is
+      // visible to workspace members; a sharedScope='user' command only to its
+      // creator. A non-visible id resolves to undefined → 404, so an agent
+      // acting for user A can't read user B's private command.
+      const access = AccessContext.agent({ userId });
+      const command = await scopedDb(access).findFirst<
+        typeof intelligenceCommands.$inferSelect
+      >(intelligenceCommands, {
         where: eq(intelligenceCommands.id, id),
       });
       if (!command) return c.json({ error: "Not found" }, 404);
-      // Gate workspace-scoped commands by membership (pod-wide = null is global).
-      if (command.workspaceId) {
-        const wsIds = await getUserAccessibleWorkspaceIds(userId);
-        if (!wsIds.includes(command.workspaceId)) {
-          return c.json({ error: "Not found" }, 404);
-        }
-      }
       return c.json(command);
     } catch (err) {
       logger.error({ err, id }, "getCommand failed");

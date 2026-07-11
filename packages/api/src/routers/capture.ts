@@ -69,6 +69,7 @@ import {
 import {
   AI_KIND,
   AUTO_ROUTE_MIN_CONFIDENCE,
+  BELOW_GATE_CONFIDENCE,
   BYOA_DEFAULT_ROUTE_CONFIDENCE,
   EXACT_MATCH_CONFIDENCE,
   FUZZY_MATCH_CONFIDENCE,
@@ -141,6 +142,13 @@ function titleSimilarity(a: string, b: string): number {
 // dedup candidate — drop it rather than surface it at a misleadingly low
 // score (the frontend already treats "any candidate present" as a hint).
 const DEDUP_SIMILARITY_FLOOR = 0.5;
+
+// Interactive-capture structure timeout. The client default is 25s; a longer
+// prose input decodes more entities and its generation can cross 25s, aborting
+// the backend→IS fetch → a null result → a degraded raw note (dogfooding hit
+// exactly this). The deep-import path already uses 60s; 45s is the interactive
+// budget (capture is optimistic/async — a slightly longer wait beats a degrade).
+const STRUCTURE_TIMEOUT_MS = 45_000;
 
 // ── Workspace routing (shared across ALL capture doors) ─────────────────────
 // The gate tunables (AUTO_ROUTE_MIN_CONFIDENCE, BYOA_DEFAULT_ROUTE_CONFIDENCE,
@@ -900,24 +908,48 @@ export const captureRouter = router({
         degradedReason,
       });
 
+      const structureInput = {
+        text: input.text ?? "",
+        file: input.file,
+        url: input.url,
+        html: input.html,
+        context: input.context,
+        instructions: input.instructions,
+        hints: {
+          availableProfiles,
+          availableWorkspaces,
+          availableProjects,
+          existingEntityNames,
+          previousEntities: input.previousEntities,
+          routingMemory,
+        },
+        timeoutMs: STRUCTURE_TIMEOUT_MS,
+      };
       let structureResult: Awaited<ReturnType<typeof client.structure>>;
       try {
-        structureResult = await client.structure({
-          text: input.text ?? "",
-          file: input.file,
-          url: input.url,
-          html: input.html,
-          context: input.context,
-          instructions: input.instructions,
-          hints: {
-            availableProfiles,
-            availableWorkspaces,
-            availableProjects,
-            existingEntityNames,
-            previousEntities: input.previousEntities,
-            routingMemory,
-          },
-        });
+        const t0 = Date.now();
+        structureResult = await client.structure(structureInput);
+        // Retry once on a NULL — but ONLY a FAST null. The client returns null
+        // both on a transient error/empty completion (worth a retry) AND on a
+        // genuine timeout that burned the full budget. Retrying a timeout is the
+        // worst case: a long input that crossed the budget will just cross it
+        // again, doubling the wait to ~90s (and the LLM cost) for near-zero
+        // gain. A fast null ⇒ transient (retry); a slow null ⇒ timeout (degrade).
+        if (!structureResult) {
+          const elapsedMs = Date.now() - t0;
+          if (elapsedMs < STRUCTURE_TIMEOUT_MS * 0.7) {
+            logger.warn(
+              { userId, elapsedMs },
+              "IS structure returned a fast null — retrying once before degrading"
+            );
+            structureResult = await client.structure(structureInput);
+          } else {
+            logger.warn(
+              { userId, elapsedMs },
+              "IS structure timed out (slow null) — degrading without retry"
+            );
+          }
+        }
       } catch (err) {
         // Only an upstream auth failure reaches here as a throw — the client
         // returns null for every non-auth failure. This is the ONLY path that
@@ -986,8 +1018,7 @@ export const captureRouter = router({
               // so `fuzzyMatches[0]` is an arbitrary pick. Assign a below-gate
               // confidence so it degrades to ask/no-move instead of auto-moving
               // to a coin-flip workspace.
-              structureResult.targetWorkspaceConfidence =
-                AUTO_ROUTE_MIN_CONFIDENCE - 0.1;
+              structureResult.targetWorkspaceConfidence = BELOW_GATE_CONFIDENCE;
             }
           }
           // Telemetry: reconciliation OVERRODE the LLM's raw id (a caught
@@ -1008,7 +1039,7 @@ export const captureRouter = router({
         // an unverifiable pick degrades to ask/no-move instead of auto-applying.
         structureResult.targetWorkspaceConfidence = Math.min(
           structureResult.targetWorkspaceConfidence ?? 0,
-          AUTO_ROUTE_MIN_CONFIDENCE - 0.1
+          BELOW_GATE_CONFIDENCE
         );
         logger.warn(
           { userId, rawPickedWsId },

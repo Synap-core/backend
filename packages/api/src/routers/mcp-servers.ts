@@ -315,7 +315,12 @@ export const mcpServersRouter = router({
   listTools: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      const server = await db.query.mcpServers.findFirst({
+      // Route through scopedDb so the mcpServers VisibilityRule floors this read:
+      // listing a server's tools must not expose another workspace's server
+      // config (command/args/env/url) to a non-member. (Cross-workspace read fix.)
+      const server = await scopedDb(AccessContext.from(ctx)).findFirst<
+        typeof mcpServers.$inferSelect
+      >(mcpServers, {
         where: eq(mcpServers.id, input.id),
       });
 

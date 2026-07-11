@@ -29,6 +29,17 @@ const SCOPED_TABLES = [
   "relations",
   "entityFacets",
   "proposals",
+  // Batch 3 — user-floored tables (access/registry.ts):
+  "secrets",
+  "apiKeys",
+  "notifications",
+  "feeds",
+  "inboxItems",
+  "sourceConfigs",
+  "sourceSubscriptions",
+  "userPreferences",
+  "userEntityState",
+  "agentConfigs",
 ];
 const SCOPED_TABLES_RE = `/^(${SCOPED_TABLES.join("|")})$/`;
 const SCOPED_ACCESS_MESSAGE =
@@ -189,7 +200,6 @@ export default [
       "packages/api/src/routers/graph.ts",
       "packages/api/src/routers/hub-protocol/branches.ts",
       "packages/api/src/routers/hub-protocol/channels.ts",
-      "packages/api/src/routers/hub-protocol/commands.ts",
       "packages/api/src/routers/hub-protocol/context.ts",
       "packages/api/src/routers/hub-protocol/documents.ts",
       "packages/api/src/routers/hub-protocol/linking.ts",
@@ -200,7 +210,6 @@ export default [
       "packages/api/src/routers/hub-protocol/rest/cell-instances.ts",
       "packages/api/src/routers/hub-protocol/rest/cells.ts",
       "packages/api/src/routers/hub-protocol/rest/channels.ts",
-      "packages/api/src/routers/hub-protocol/rest/commands.ts",
       "packages/api/src/routers/hub-protocol/rest/entities.ts",
       "packages/api/src/routers/hub-protocol/rest/focus-sessions.ts",
       "packages/api/src/routers/hub-protocol/rest/knowledge.ts",
@@ -223,7 +232,6 @@ export default [
       "packages/api/src/routers/proposals.ts",
       "packages/api/src/routers/proposals/approve-executors.ts",
       "packages/api/src/routers/relations.ts",
-      "packages/api/src/routers/roles.ts",
       "packages/api/src/routers/search.ts",
       "packages/api/src/routers/secrets-vault.ts",
       "packages/api/src/routers/sharing.ts",
@@ -237,6 +245,29 @@ export default [
       "packages/api/src/routers/whiteboards.ts",
       "packages/api/src/routers/widget-definitions.ts",
       "packages/api/src/routers/workspaces.ts",
+      // Batch 3 (access-convergence migration ledger) — routers that still do
+      // raw access to the newly-registered user-floored tables. Every read in
+      // these is already `userId`-floored (or podAdmin/workspace-gated); the
+      // remaining raw sites are writes needing .returning()/onConflict/owner-
+      // column support the .mutate() door lacks, plus deliberately-broad
+      // admin/service reads. Convert per table in later batches; SHRINKS.
+      "packages/api/src/routers/admin-source-configs.ts",
+      "packages/api/src/routers/agent-configs.ts",
+      "packages/api/src/routers/agent-users.ts",
+      "packages/api/src/routers/api-keys.ts",
+      "packages/api/src/routers/feeds.ts",
+      "packages/api/src/routers/hub-protocol/rest/agent-configs.ts",
+      "packages/api/src/routers/hub-protocol/rest/auth.ts",
+      "packages/api/src/routers/hub-protocol/rest/keys.ts",
+      "packages/api/src/routers/hub-protocol/rest/setup.ts",
+      "packages/api/src/routers/inbox.ts",
+      "packages/api/src/routers/intelligence-registry.ts",
+      "packages/api/src/routers/notif-center.ts",
+      "packages/api/src/routers/preferences.ts",
+      "packages/api/src/routers/source-configs.ts",
+      "packages/api/src/routers/source-subscriptions.ts",
+      "packages/api/src/routers/trusted-issuers.ts",
+      "packages/api/src/routers/users.ts",
     ],
     rules: {
       "no-restricted-syntax": "off",

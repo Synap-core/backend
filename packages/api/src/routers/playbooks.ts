@@ -686,6 +686,9 @@ const playbookEnrollmentsRouter = router({
       z.object({
         playbookId: z.string().uuid(),
         entityId: z.string().uuid(),
+        agentUserId: z.string().uuid().optional(),
+        source: z.string().optional(),
+        reasoning: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -723,6 +726,36 @@ const playbookEnrollmentsRouter = router({
         });
       }
 
+      // 4. Governance membrane — same verb/subject as addAutomation/update.
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: playbook.workspaceId,
+        subjectType: "playbook",
+        action: "update",
+        source: input.source,
+        reasoning: input.reasoning,
+        data: {
+          id: input.playbookId,
+          name: playbook.name,
+          enrollEntityId: visibleEntityId,
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          message: "Enrolling entity into playbook proposed for review",
+          proposalId: perm.proposalId,
+        };
+      }
+
+      // Re-enroll after unenroll: unenroll soft-cancels the row (unique on
+      // playbookId+entityId), so onConflictDoNothing would silently no-op a
+      // later re-enroll. Reactivate on conflict instead — keep existing
+      // stepState (progress), don't reset it.
       await database
         .insert(playbookEnrollments)
         .values({
@@ -731,16 +764,18 @@ const playbookEnrollmentsRouter = router({
           status: "active",
           stepState: {},
         })
-        .onConflictDoNothing({
+        .onConflictDoUpdate({
           target: [
             playbookEnrollments.playbookId,
             playbookEnrollments.entityId,
           ],
+          set: { status: "active", updatedAt: new Date() },
         });
 
       return {
         status: "enrolled" as const,
         message: "Entity enrolled into playbook",
+        proposalId: null as string | null,
       };
     }),
 
@@ -754,6 +789,9 @@ const playbookEnrollmentsRouter = router({
       z.object({
         playbookId: z.string().uuid(),
         entityId: z.string().uuid(),
+        agentUserId: z.string().uuid().optional(),
+        source: z.string().optional(),
+        reasoning: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -773,6 +811,32 @@ const playbookEnrollmentsRouter = router({
         workspaceId: playbook.workspaceId,
       });
 
+      // Governance membrane — same verb/subject as addAutomation/enroll.
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: playbook.workspaceId,
+        subjectType: "playbook",
+        action: "update",
+        source: input.source,
+        reasoning: input.reasoning,
+        data: {
+          id: input.playbookId,
+          name: playbook.name,
+          unenrollEntityId: input.entityId,
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          message: "Unenrolling entity from playbook proposed for review",
+          proposalId: perm.proposalId,
+        };
+      }
+
       await database
         .update(playbookEnrollments)
         .set({ status: "cancelled", updatedAt: new Date() })
@@ -786,6 +850,7 @@ const playbookEnrollmentsRouter = router({
       return {
         status: "unenrolled" as const,
         message: "Entity unenrolled from playbook",
+        proposalId: null as string | null,
       };
     }),
 });

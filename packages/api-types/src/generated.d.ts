@@ -845,6 +845,81 @@ export interface WorkspaceSettings {
 	};
 }
 /**
+ * User Preferences Schema - UI and application settings
+ *
+ * Stores user-specific preferences that persist across sessions
+ */
+export interface CustomTheme {
+	colors?: {
+		primary?: string;
+		accent?: string;
+		background?: string;
+		border?: string;
+		text?: string;
+	};
+	spacing?: {
+		small?: string;
+		medium?: string;
+		large?: string;
+	};
+	radii?: {
+		small?: string;
+		medium?: string;
+		large?: string;
+	};
+	animations?: {
+		enabled?: boolean;
+		speed?: "slow" | "normal" | "fast";
+	};
+}
+export interface DefaultTemplates {
+	[entityType: string]: string;
+}
+export interface CustomEntityType {
+	id: string;
+	name: string;
+	icon: string;
+	color: string;
+	metadataSchema: Record<string, any>;
+}
+export interface EntityMetadataSchemas {
+	[entityType: string]: Record<string, any>;
+}
+/** How to open entity detail when user clicks an entity (workspace-wide) */
+export type EntityOpenMode = "floating" | "side" | "modal";
+export interface UIPreferences {
+	sidebarCollapsed?: boolean;
+	panelPositions?: Record<string, {
+		x: number;
+		y: number;
+	}>;
+	lastActiveView?: string;
+	compactMode?: boolean;
+	fontSize?: string;
+	animations?: boolean;
+	defaultView?: "list" | "grid" | "timeline";
+	/** Where to open entity detail: floating panel (default), side panel, or modal */
+	entityOpenMode?: EntityOpenMode;
+}
+export interface GraphPreferences {
+	forceSettings?: {
+		linkDistance?: number;
+		chargeStrength?: number;
+		alphaDecay?: number;
+		velocityDecay?: number;
+	};
+	defaultFilters?: {
+		entityTypes?: string[];
+		relationTypes?: string[];
+	};
+	zoom?: number;
+	pan?: {
+		x: number;
+		y: number;
+	};
+	showMinimap?: boolean;
+}
+/**
  * Skills Schema
  *
  * The canonical skills table — merged from the (now-dropped) agent_skills table.
@@ -12887,7 +12962,31 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
-			output: any;
+			output: {
+				userId: string;
+				theme: string;
+				customTheme: CustomTheme | null;
+				defaultTemplates: DefaultTemplates | null;
+				customEntityTypes: CustomEntityType[] | null;
+				entityMetadataSchemas: EntityMetadataSchemas | null;
+				uiPreferences: UIPreferences;
+				graphPreferences: GraphPreferences;
+				intelligenceServicePreferences: {
+					default?: string;
+					chat?: string;
+					analysis?: string;
+					defaultCompanionAgentId?: string;
+				};
+				onboardingCompleted: boolean;
+				onboardingStep: string | null;
+				updatedAt: Date;
+			} | {
+				userId: string;
+				theme: "system";
+				uiPreferences: {};
+				graphPreferences: {};
+				onboardingCompleted: boolean;
+			};
 			meta: object;
 		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{
@@ -18583,10 +18682,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				input: {
 					playbookId: string;
 					entityId: string;
+					agentUserId?: string | undefined;
+					source?: string | undefined;
+					reasoning?: string | undefined;
 				};
 				output: {
+					status: "proposed";
+					message: string;
+					proposalId: string;
+				} | {
 					status: "enrolled";
 					message: string;
+					proposalId: string | null;
 				};
 				meta: object;
 			}>;
@@ -18594,10 +18701,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				input: {
 					playbookId: string;
 					entityId: string;
+					agentUserId?: string | undefined;
+					source?: string | undefined;
+					reasoning?: string | undefined;
 				};
 				output: {
+					status: "proposed";
+					message: string;
+					proposalId: string;
+				} | {
 					status: "unenrolled";
 					message: string;
+					proposalId: string | null;
 				};
 				meta: object;
 			}>;

@@ -38,6 +38,7 @@ import {
   ensureWorkspaceGroupChannel,
   ensureProactiveFeedChannel,
 } from "./personal-channel.js";
+import { ensureExternalChannel } from "@synap/database";
 import { randomUUID } from "crypto";
 
 /**
@@ -94,8 +95,14 @@ export interface ResolveOrCreateChannelParams {
   projectId?: string;
   /** Required for SUB_THREAD. */
   parentChannelId?: string;
-  /** Optional task description for SUB_THREAD. */
+  /** Optional task description for SUB_THREAD; firewall role for EXTERNAL. */
   branchPurpose?: string;
+  /** Required for EXTERNAL — the connector provider (e.g. 'discord'). */
+  externalSource?: string;
+  /** Required for EXTERNAL — the provider's channel id. */
+  externalId?: string;
+  /** Optional title for EXTERNAL channels. */
+  title?: string;
 }
 
 /**
@@ -116,6 +123,9 @@ export async function resolveOrCreateChannel(
     projectId,
     parentChannelId,
     branchPurpose,
+    externalSource,
+    externalId,
+    title,
   } = params;
 
   // ── PERSONAL ───────────────────────────────────────────────────────────────
@@ -250,9 +260,44 @@ export async function resolveOrCreateChannel(
     return created;
   }
 
-  // ── EXTERNAL / AGENT_COLLAB — not bootstrapped via this util ───────────────
+  // ── EXTERNAL — delegate to the race-safe ensureExternalChannel door ─────────
+  if (channelType === ChannelType.EXTERNAL) {
+    if (!externalSource || !externalId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          'externalSource and externalId are required for channelType="external"',
+      });
+    }
+    // ONE external door: race-safe upsert on (externalSource, externalId), plus
+    // firewall-role + subject-binding upgrades. Bind at birth when the caller
+    // supplies the subject (contextObjectId), so a Discord/Telegram channel lands
+    // linked to its real-world entity instead of orphaned.
+    const { channelId } = await ensureExternalChannel({
+      provider: externalSource,
+      externalId,
+      userId,
+      workspaceId: workspaceId ?? null,
+      title,
+      branchPurpose,
+      contextObjectType,
+      contextObjectId,
+    });
+    const channel = await db.query.channels.findFirst({
+      where: eq(channels.id, channelId),
+    });
+    if (!channel) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "External channel vanished immediately after resolve",
+      });
+    }
+    return channel;
+  }
+
+  // ── AGENT_COLLAB — not bootstrapped via this util ──────────────────────────
   throw new TRPCError({
     code: "BAD_REQUEST",
-    message: `channelType="${channelType}" is not bootstrapped via resolveOrCreateChannel — use the dedicated create procedure.`,
+    message: `channelType="${channelType}" is not bootstrapped via resolveOrCreateChannel — use the dedicated create procedure (createAgentCollabChannel).`,
   });
 }

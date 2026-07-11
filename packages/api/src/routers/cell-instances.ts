@@ -222,13 +222,17 @@ export const cellInstancesRouter = router({
   get: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      const userId = requireUserId(ctx.userId);
+      // Read floor matches `list`: a cell instance in a shared workspace is
+      // visible to its members (not just its creator) — otherwise opening a
+      // teammate's cell from the workspace-shared list would 404. Writes stay
+      // owner-pinned (see updateConfig/duplicate), mirroring artifacts.
+      const visibility = scopedDb(AccessContext.from(ctx)).predicate(
+        cellInstances
+      );
       const [row] = await db
         .select()
         .from(cellInstances)
-        .where(
-          and(eq(cellInstances.id, input.id), eq(cellInstances.userId, userId))
-        )
+        .where(and(eq(cellInstances.id, input.id), visibility))
         .limit(1);
       if (!row) {
         throw new TRPCError({

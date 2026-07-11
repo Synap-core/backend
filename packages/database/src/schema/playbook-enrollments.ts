@@ -12,7 +12,7 @@
  * SECURITY (later wave): the enrollment WRITE path MUST enforce
  * workspace-visibility on `entity_id` in the application layer — there is no FK,
  * so a crafted `entity_id` is an IDOR risk. Mirror the write-side guard at
- * packages/jobs/src/workers/automation-executor.ts:1632-1648.
+ * packages/jobs/src/workers/automation-executor.ts:1656-1686.
  *
  * `status` is plain text with no CHECK, matching the focus_sessions.status
  * convention (values: active/paused/completed/cancelled).

@@ -23,16 +23,12 @@ import {
   gte,
   eventRepository,
   computeMessageHash,
+  ChannelRepository,
 } from "@synap/database";
 import {
   messages,
   workspaces,
-  channels,
   notifications,
-  ChannelType,
-  ChannelScope,
-  FeedScope,
-  ChannelStatus,
   MessageRole,
   MessageAuthorType,
   MessageCategory,
@@ -113,59 +109,29 @@ async function getDeliveryPreferences(
   return settings.deliveryPreferences ?? {};
 }
 
-/** Get or create the user's proactive FEED channel (type='feed', feedScope='user'). */
+/**
+ * Get or create the user's proactive FEED / personal channels via the canonical
+ * race-safe ChannelRepository resolvers (dedup against the 0182 unique indexes) —
+ * NOT a hand-rolled findFirst+insert, which duped and diverged from the api side.
+ */
+function channelRepo(): ChannelRepository {
+  return new ChannelRepository(db);
+}
+
+/** Get or create the user's proactive FEED channel (feedScope='user'). */
 async function ensureProactiveFeedChannel(
   userId: string,
   _workspaceId?: string
 ): Promise<Channel> {
-  const existing = await db.query.channels.findFirst({
-    where: and(
-      eq(channels.userId, userId),
-      eq(channels.channelType, ChannelType.FEED),
-      eq(channels.status, ChannelStatus.ACTIVE)
-    ),
-  });
-  if (existing) return existing;
-
-  const [channel] = await db
-    .insert(channels)
-    .values({
-      userId,
-      workspaceId: null, // pod-wide
-      channelType: ChannelType.FEED,
-      scope: ChannelScope.POD,
-      feedScope: FeedScope.USER,
-      status: ChannelStatus.ACTIVE,
-    })
-    .returning();
-  return channel;
+  return channelRepo().ensureProactiveFeedChannel(userId);
 }
 
-/** Get or create the user's personal thread (type='thread', threadKind='personal'). */
+/** Get or create the user's main personal AI thread (orchestrator-keyed). */
 async function ensurePersonalChatChannel(
   userId: string,
   _workspaceId?: string
 ): Promise<Channel> {
-  const existing = await db.query.channels.findFirst({
-    where: and(
-      eq(channels.userId, userId),
-      eq(channels.channelType, ChannelType.PERSONAL),
-      eq(channels.status, ChannelStatus.ACTIVE)
-    ),
-  });
-  if (existing) return existing;
-
-  const [channel] = await db
-    .insert(channels)
-    .values({
-      userId,
-      workspaceId: null, // pod-wide
-      channelType: ChannelType.PERSONAL,
-      scope: ChannelScope.POD,
-      status: ChannelStatus.ACTIVE,
-    })
-    .returning();
-  return channel;
+  return channelRepo().ensureUserPersonalChannel(userId);
 }
 
 /** Start of today (UTC midnight) — deduplication window. */

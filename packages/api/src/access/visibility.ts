@@ -45,10 +45,9 @@ export type VisibilityRule =
    * The `userId` floor means a NULL-workspace (unfiled) row stays visible only
    * to its owner, never pod-wide. Use for entities/notes/documents etc.
    *
-   * PLANNED: no table registers this kind yet — it is the landing zone for the
-   * user-private tables in the in-progress consolidation (first consumer =
-   * entities/documents). Kept ahead of its consumer deliberately, not by
-   * oversight; unit-tested in access.test.ts. Wire or remove when that wave lands.
+   * Consumers: relations, feeds, sourceConfigs, sourceSubscriptions, agentConfigs
+   * (each = userId owner floor + a nullable workspace lens). Unit-tested in
+   * access.test.ts.
    */
   | {
       kind: "workspaceOwned";
@@ -66,10 +65,9 @@ export type VisibilityRule =
    * predicate is lens- and user-aware via the passed `AccessContext`. Keep these
    * rare — one real consumer each, predicate co-located with the table's repo.
    *
-   * PLANNED: no table registers this kind yet — first consumer = `profiles`
-   * (whose reads still flow through ProfileRepository.getAccessibleProfiles, NOT
-   * scopedDb, today; see registry.ts). Ahead of its consumer deliberately;
-   * unit-tested in access.test.ts. Wire or remove when the profiles wave lands.
+   * Consumers: channels, entities, documents, entityFacets, intelligenceCommands
+   * (each co-locates its predicate near the table). `profiles` still reads via
+   * ProfileRepository.getAccessibleProfiles, NOT scopedDb (see registry.ts).
    */
   | {
       kind: "custom";

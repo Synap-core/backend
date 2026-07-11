@@ -327,17 +327,30 @@ async function deliverToExternal(
       };
     }
 
-    // Guardrail: AI/proactive output must never land on a client-comms channel.
-    // branchPurpose='team' (or null) is the only allowed target for AI signals.
-    if (boundChannel.branchPurpose === "client-comms") {
+    // FIREWALL: AI/proactive output must never land in a conversation with an
+    // external party. Two cases are blocked:
+    //   1. branchPurpose='client-comms' — the explicit firewall role.
+    //   2. an external channel BOUND to a subject entity (contextObjectId set) that
+    //      is not explicitly marked 'team'. Link-at-birth binds inbound client DMs
+    //      to their entity, which makes them entity-discoverable; a bound external
+    //      channel IS a conversation with that party, so it is a non-target for AI
+    //      unless the operator opts it in by labelling it 'team' (reversible — no
+    //      immutable mark applied here). Unbound external channels (contextObjectId
+    //      null, e.g. a team feed) keep the prior 'team-or-null is allowed' behavior.
+    const isEntityBoundExternal =
+      boundChannel.contextObjectId != null &&
+      boundChannel.branchPurpose !== "team";
+    if (boundChannel.branchPurpose === "client-comms" || isEntityBoundExternal) {
       logger.warn(
         {
           domain: input.domain,
           provider,
           channelRef,
           channelId: boundChannel.id,
+          branchPurpose: boundChannel.branchPurpose,
+          bound: boundChannel.contextObjectId != null,
         },
-        "external delivery blocked: AI proactive output must not go to a client-comms channel"
+        "external delivery blocked: AI output must not go to a client/party conversation"
       );
       return {
         surface: "external",

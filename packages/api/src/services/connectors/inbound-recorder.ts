@@ -29,6 +29,7 @@ import {
   db,
   eq,
   and,
+  asc,
   isNotNull,
   drizzleSql,
   channels,
@@ -40,6 +41,7 @@ import {
   MessageCategory,
 } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
+import { resolveIdentity } from "@synap/database";
 import { resolveExistingExternalUser } from "../external-user-mapping.js";
 
 const logger = createLogger({ module: "inbound-recorder" });
@@ -62,6 +64,9 @@ export async function resolveExternalChannel(args: {
       eq(channels.externalId, args.externalId)
     ),
     columns: { id: true, contextObjectId: true, branchPurpose: true },
+    // Deterministic oldest-wins so a duplicate external channel resolves to a
+    // stable survivor run-to-run.
+    orderBy: [asc(channels.createdAt)],
   });
   return row
     ? {
@@ -125,6 +130,33 @@ export async function resolveOrCreateExternalChannel(
     };
   }
 
+  // Link-at-birth (STRONG signal only): if the external participant is already a
+  // known subject — its `${provider}:${participantExternalId}` external-id is
+  // registered in entity_identity_signals — bind the new channel to that entity
+  // and title it after the subject, so a Discord/Telegram channel lands linked to
+  // the real client instead of orphaned. WEAK (name-only) matches never auto-link
+  // per the frozen identity policy; those are left null for the review queue / an
+  // AI-guess proposal (the fuzzy path — a follow-up that needs the proposal UX).
+  let bornContextObjectId: string | null = null;
+  let bornContextObjectType: string | null = null;
+  let titleAtBirth = args.title;
+  if (args.participantExternalId) {
+    const resolution = await resolveIdentity(db, {
+      userId: args.userId,
+      signals: [
+        {
+          type: "external_id",
+          value: `${args.provider}:${args.participantExternalId}`,
+        },
+      ],
+    });
+    if (resolution.match === "strong" && resolution.entity) {
+      bornContextObjectId = resolution.entity.id;
+      bornContextObjectType = "entity";
+      if (resolution.entity.title) titleAtBirth = resolution.entity.title;
+    }
+  }
+
   // Upsert against the PARTIAL unique index on (externalSource, externalId).
   // Under a concurrent first-message race the loser's insert no-ops, so we
   // re-SELECT the surviving row instead of throwing.
@@ -135,7 +167,9 @@ export async function resolveOrCreateExternalChannel(
       workspaceId: args.workspaceId,
       channelType: ChannelType.EXTERNAL,
       scope: ChannelScope.WORKSPACE,
-      title: args.title,
+      title: titleAtBirth,
+      contextObjectType: bornContextObjectType,
+      contextObjectId: bornContextObjectId,
       externalSource: args.provider,
       externalChannelId: args.externalId,
       externalId: args.externalId,
@@ -167,10 +201,13 @@ export async function resolveOrCreateExternalChannel(
         channelId: inserted.id,
         provider: args.provider,
         externalId: args.externalId,
+        linkedEntityId: bornContextObjectId,
       },
-      "Auto-created EXTERNAL channel for inbound message"
+      bornContextObjectId
+        ? "Auto-created EXTERNAL channel for inbound message, linked at birth (strong signal)"
+        : "Auto-created EXTERNAL channel for inbound message (unlinked — no strong match)"
     );
-    return { channelId: inserted.id, contextObjectId: null };
+    return { channelId: inserted.id, contextObjectId: bornContextObjectId };
   }
 
   // Lost the race — re-SELECT the surviving row.

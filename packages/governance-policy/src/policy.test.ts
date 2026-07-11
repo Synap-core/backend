@@ -882,4 +882,35 @@ describe("constants are intact", () => {
       "purge",
     ]);
   });
+
+  // A playbook is a durable process SURFACE the operator must see + accept, so
+  // create-NEW proposes even under Normal. This is WIRED end-to-end: playbooks.ts
+  // calls checkPermissionOrPropose({subjectType:"playbook", action:"create"}) →
+  // decideAgentPolicy reads these lists, so removing "playbook.create" here makes
+  // an agent's playbook create actually route to a proposal.
+  it("playbook.create proposes even under Normal (wired via checkPermissionOrPropose)", () => {
+    expect(isAutoApproved("playbook.create", DEFAULT_AUTO_APPROVE)).toBe(false);
+    expect(
+      isAutoApproved("playbook.create", GOVERNANCE_MODES.normal.autoApproveFor)
+    ).toBe(false);
+    // Data creates stay instant — the reversal is surgical, not a blanket gate.
+    expect(isAutoApproved("entity.create", DEFAULT_AUTO_APPROVE)).toBe(true);
+    expect(isAutoApproved("automation.create", DEFAULT_AUTO_APPROVE)).toBe(true);
+  });
+
+  // "channel.create" is ALSO absent from the lists (same surface-visibility
+  // intent), but — unlike playbook.create — NO runtime path currently gates on
+  // that action key: the agent channel-create door (Hub `resolveOrCreateChannel`)
+  // has no governance gate, and the builtin `channel.create` capability verb is
+  // grant-gated (decideAgentPolicy action="run"), not action="channel.create".
+  // So this assertion locks the POLICY only; the create-new→proposal ENFORCEMENT
+  // for channels is a deliberate follow-up (needs a create-vs-resolve gate on the
+  // Hub route + a channel-create proposal executor). Do NOT read this as "channels
+  // propose at runtime today" — they do not.
+  it("channel.create is out of the policy lists (enforcement wiring is a tracked follow-up)", () => {
+    expect(isAutoApproved("channel.create", DEFAULT_AUTO_APPROVE)).toBe(false);
+    expect(
+      isAutoApproved("channel.create", GOVERNANCE_MODES.normal.autoApproveFor)
+    ).toBe(false);
+  });
 });

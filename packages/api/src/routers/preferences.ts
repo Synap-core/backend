@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc.js";
+import { AccessContext, scopedDb } from "../access/index.js";
 import { userPreferences } from "@synap/database/schema";
 import { eq } from "@synap/database";
 import { UpdatePreferencesInputSchema } from "@synap-core/types";
@@ -14,9 +15,12 @@ export const preferencesRouter = router({
    * Get user preferences
    */
   get: protectedProcedure.query(async ({ ctx }) => {
-    const prefs = await ctx.db.query.userPreferences.findFirst({
-      where: eq(userPreferences.userId, ctx.userId),
-    });
+    // Floored through the access layer: the `user` rule ANDs
+    // `eq(userPreferences.userId, ctx.userId)` — the same owner floor this read
+    // hand-rolled — so a user can only ever read their own preferences row.
+    const prefs = await scopedDb(AccessContext.from(ctx)).findFirst<
+      typeof userPreferences.$inferSelect
+    >(userPreferences, {});
 
     // Return defaults if not exists
     if (!prefs) {

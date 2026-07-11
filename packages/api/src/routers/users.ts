@@ -7,6 +7,7 @@
 import { router, protectedProcedure } from "../trpc.js";
 import { db, eq } from "@synap/database";
 import { users, userPreferences } from "@synap/database/schema";
+import { AccessContext, scopedDb } from "../access/index.js";
 import { z } from "zod";
 
 const FeedSourceSchema = z.object({
@@ -84,10 +85,12 @@ export const usersRouter = router({
    * Stored under user_preferences.ui_preferences.feedPreferences.
    */
   getFeedPreferences: protectedProcedure.query(async ({ ctx }) => {
-    const prefs = await ctx.db.query.userPreferences.findFirst({
-      where: eq(userPreferences.userId, ctx.userId),
-      columns: { uiPreferences: true },
-    });
+    // Access-layer floored: the `user` rule ANDs the owner floor
+    // (`eq(userPreferences.userId, ctx.userId)`), so only the caller's own row
+    // is ever returned.
+    const prefs = await scopedDb(AccessContext.from(ctx)).findFirst<
+      Pick<typeof userPreferences.$inferSelect, "uiPreferences">
+    >(userPreferences, { columns: { uiPreferences: true } });
 
     const ui = (prefs?.uiPreferences as Record<string, unknown>) ?? {};
     const stored =
