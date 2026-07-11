@@ -226,6 +226,22 @@ export const entitiesRouter = router({
         proposalId?: string;
         error?: string;
       }> = [];
+      if (input.facets?.length && !(result.status === "created" && result.id)) {
+        // Proposal-gated (or otherwise non-materialized) create: there is no
+        // entity id to attach to, and the pending create-proposal does NOT
+        // carry these facets. Say so explicitly — a silent drop reads as
+        // "roles will follow the approval" when they won't. Composite
+        // create+roles under governance should go through the entity-graph
+        // door (propose_entity_graph), which threads facets into the proposal.
+        for (const f of input.facets) {
+          attachedFacets.push({
+            slug: f.slug,
+            status: "dropped",
+            error:
+              "create was proposal-gated — re-attach after approval, or use the entity-graph door to propose entity + roles together",
+          });
+        }
+      }
       if (result.status === "created" && result.id && input.facets?.length) {
         for (const f of input.facets) {
           try {
