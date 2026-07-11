@@ -375,12 +375,27 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     // w3a.seed.item above — op order keeps that seed first). `capture` was
     // already removed from ensure-system-profiles.ts (see its comment there)
     // so that fromSlug resolves to zero rows on every pod — a permanent,
-    // harmless no-op kept for audit completeness. NOTE: this contradicts
-    // w3a.keep.note ("Note stays a primary kind") above — that entry was a
-    // W3A placeholder deferring the decision, superseded here by explicit
-    // W3C direction to fold note into item. Flagged for the team lead rather
-    // than silently deleting the earlier keep (ops are append-only/immutable
-    // once shipped).
+    // harmless no-op kept for audit completeness.
+    //
+    // DECISION D2 (approved): note is retired as a kind and folded into
+    // `item` — a note IS an item with a prose doc. This op is authoritative
+    // over the earlier `w3a.keep.note` audit entry (whose note text now points
+    // here). There is NO runtime contradiction: `keep` ops are pure ledger
+    // no-ops (applyOp returns {} — see engine.ts), so they touch no data; the
+    // engine applies ops in array order and this `mergeInto` is the only op
+    // that acts on `note`. Ordering alone makes the merge win outright, so the
+    // resolution is documentation-only — no clarifying op is required. Per the
+    // append-only discipline the earlier keep was NOT deleted.
+    //
+    // Data preserved (mergeInto semantics — engine.ts applyMergeInto): each
+    // note/capture entity is repointed to the `item` profile and its
+    // entities.type set to "item"; the row's `properties` JSONB and its
+    // `documentId` (the prose doc) are untouched, so a note survives as an item
+    // carrying the same prose + props. property_defs / profile_properties move
+    // onto `item` (collision-skipped) and views are re-pointed. Deactivation of
+    // the drained `note`/`capture` source profiles is gated behind
+    // --destructive-tail (the canary), so the kind is retired only on a
+    // deliberate operator run.
     {
       op: "mergeInto",
       opKey: "w3c.merge.note-capture-into-item",
