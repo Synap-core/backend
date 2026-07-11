@@ -20,7 +20,7 @@ import {
   entities,
   resolveIdentity,
   extractIdentitySignals,
-  isLinkedinUrl,
+  signalsFromExplicit,
   type IdentitySignal,
 } from "@synap/database";
 
@@ -88,41 +88,8 @@ const ResolveIdentityResponseSchema = z
   })
   .openapi("ResolveIdentityResponse");
 
-/**
- * Map the request's explicit `signals` object to typed identity atoms. A bare
- * `url` is classified linkedin-vs-website by the same domain-anchored check the
- * extractor uses, so the pre-check and a real write agree on the atom type.
- */
-function toSignals(
-  signals:
-    | {
-        email?: string;
-        phone?: string;
-        url?: string;
-        twitter?: string;
-        github?: string;
-        externalId?: string;
-      }
-    | undefined
-): IdentitySignal[] {
-  if (!signals) return [];
-  const out: IdentitySignal[] = [];
-  if (signals.email) out.push({ type: "email", value: signals.email });
-  if (signals.phone) out.push({ type: "phone", value: signals.phone });
-  if (signals.url) {
-    out.push({
-      type: isLinkedinUrl(signals.url) ? "linkedin_url" : "website",
-      value: signals.url,
-    });
-  }
-  if (signals.twitter)
-    out.push({ type: "twitter_handle", value: signals.twitter });
-  if (signals.github)
-    out.push({ type: "github_username", value: signals.github });
-  if (signals.externalId)
-    out.push({ type: "external_id", value: signals.externalId });
-  return out;
-}
+// Explicit-signals → typed atoms mapping lives in the identity service
+// (`signalsFromExplicit`) — the ONE mapper shared with synap_resolve_identity.
 
 export function registerIdentityRoutes(app: HubHono): void {
   registerOpenApi(app, {
@@ -182,7 +149,7 @@ export function registerIdentityRoutes(app: HubHono): void {
       // the richest lookup. Identity is global (a subject exists once pod-wide),
       // so scope the weak path to the user's visible rows, not one workspace.
       const signals: IdentitySignal[] = [
-        ...toSignals(body.signals),
+        ...signalsFromExplicit(body.signals),
         ...extractIdentitySignals(body.properties),
       ];
 
