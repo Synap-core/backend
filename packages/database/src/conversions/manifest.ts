@@ -667,6 +667,42 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "reconcileEntityScope",
       opKey: "w4.reconcile-entity-scope",
     },
+
+    // ── W5: drift repair ─────────────────────────────────────────────────
+    // Between the w4 conversions (2026-07-11 03:51) and the role-adapter
+    // landing in EntityRepository.create, live doors (capture,
+    // remember_fact, research persistence) kept creating entities directly
+    // on the now-role knowledge/research profiles — 24 drifted rows on the
+    // perso pod. Same ops as w4 under fresh opKeys: convertToFacet is
+    // idempotent, so each re-run sweeps whatever drifted since the last
+    // recorded run and no-ops otherwise.
+    {
+      op: "convertToFacet",
+      opKey: "w5.reconvert.knowledge-drift",
+      slug: "knowledge",
+      targetKindSlug: "item",
+      applicableKinds: ["item"],
+      propertyMapping: {
+        ek_type: "ek_type",
+        ek_claim: "ek_claim",
+        ek_why: "ek_why",
+        ek_evidence: "ek_evidence",
+      },
+    },
+    {
+      op: "convertToFacet",
+      opKey: "w5.reconvert.research-drift",
+      slug: "research",
+      targetKindSlug: "item",
+      applicableKinds: ["item"],
+      propertyMapping: {
+        researchStatus: "researchStatus",
+        questionId: "questionId",
+        conclusion: "conclusion",
+        researchConfidence: "researchConfidence",
+      },
+      statusFrom: "researchStatus",
+    },
   ],
 };
 

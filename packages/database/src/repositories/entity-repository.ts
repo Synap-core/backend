@@ -10,6 +10,7 @@ import { entities } from "../schema/index.js";
 import type * as schema from "../schema/index.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
+import { FacetRepository } from "./facet-repository.js";
 import type { Entity, NewEntity } from "../schema/entities.js";
 import {
   ProfileResolutionService,
@@ -225,42 +226,77 @@ export class EntityRepository extends BaseRepository<
    */
   async create(data: CreateEntityInput, userId: string): Promise<Entity> {
     // 1. Resolve profile (required)
-    let profileId: string | null = null;
-    let entityType: string;
-
-    if (data.profileId) {
-      profileId = data.profileId;
-      const profile = await this.profileResolution.resolveProfile(
-        profileId,
-        userId,
-        data.workspaceId ?? ""
-      );
-      if (!profile) {
-        throw new ProfileNotFoundError(
-          profileId,
-          userId,
-          data.workspaceId ?? ""
-        );
-      }
-      entityType = profile.slug;
-    } else if (data.profileSlug) {
-      const profile = await this.profileResolution.resolveProfile(
-        data.profileSlug,
-        userId,
-        data.workspaceId ?? ""
-      );
-      if (!profile) {
-        throw new ProfileNotFoundError(
-          data.profileSlug,
-          userId,
-          data.workspaceId ?? ""
-        );
-      }
-      profileId = profile.id;
-      entityType = profile.slug;
-    } else {
+    const profileRef = data.profileId ?? data.profileSlug;
+    if (!profileRef) {
       throw new Error("Either profileId or profileSlug must be provided");
     }
+    let profile = await this.profileResolution.resolveProfile(
+      profileRef,
+      userId,
+      data.workspaceId ?? ""
+    );
+    if (!profile) {
+      throw new ProfileNotFoundError(profileRef, userId, data.workspaceId ?? "");
+    }
+
+    // 1a. Role profiles are hats, never things (Kind + Facets). A create
+    // aimed at a role profile is transparently adapted to the same shape
+    // ConvertToFacetOp produces: the entity is created on the role's single
+    // applicable KIND, and the role attaches as a facet carrying the supplied
+    // properties (see step 6b). This keeps every legacy door — capture,
+    // remember_fact, research persistence, raw create_entity — writing the
+    // kind+facet shape without per-caller edits. A multi-kind role (client →
+    // person|company) can't guess its target entity, so it is rejected toward
+    // the attach door instead.
+    let roleFacetProfile: typeof profile | null = null;
+    let roleFacetProperties: Record<string, unknown> = {};
+    if (profile.profileKind === "role" && !data.skipValidation) {
+      const applicable = profile.applicableKinds ?? [];
+      if (applicable.length !== 1) {
+        throw new Error(
+          `Profile '${profile.slug}' is a role (a hat), not a kind — it cannot ` +
+            `be created as an entity. Resolve or create the target entity ` +
+            `(applicable kinds: ${applicable.join(", ") || "none"}) first, ` +
+            `then attach the '${profile.slug}' facet to it.`
+        );
+      }
+      const target = await this.profileResolution.resolveProfile(
+        applicable[0],
+        userId,
+        data.workspaceId ?? ""
+      );
+      if (!target || target.profileKind === "role") {
+        throw new Error(
+          `Role '${profile.slug}' targets kind '${applicable[0]}', which is ` +
+            `not an active kind profile on this pod`
+        );
+      }
+      // Validate the role's properties against the ROLE profile up front, so
+      // a bad payload fails BEFORE the kind entity is inserted (no orphan).
+      const facetValidation = await this.propertyValidation.validateProperties(
+        data.properties ?? {},
+        profile.id,
+        data.workspaceId ?? null
+      );
+      if (!facetValidation.valid) {
+        throw new PropertyValidationError(
+          facetValidation.errors.map((err, idx) => ({
+            field: `property_${idx}`,
+            message: err,
+          })),
+          profile.id
+        );
+      }
+      roleFacetProfile = profile;
+      roleFacetProperties = facetValidation.normalized;
+      profile = target;
+      // The role's data lives on the facet; the kind entity carries only the
+      // identity columns (title/preview/document).
+      data = { ...data, properties: {} };
+    }
+
+    const profileId: string = profile.id;
+    const entityType: string = profile.slug;
 
     // 1b. The router is the single source of truth for the effective
     // workspaceId. It already resolves global / explicit-scope / profile
@@ -376,6 +412,30 @@ export class EntityRepository extends BaseRepository<
             error
           );
         })
+      );
+    }
+
+    // 6b. Role-adapter tail (see 1a): attach the role as a facet through THE
+    // door, so the create lands as kind + hat — the exact shape
+    // ConvertToFacetOp produces. Properties were already validated against
+    // the role profile in 1a, hence skipValidation.
+    if (roleFacetProfile) {
+      const facetRepo = new FacetRepository(this.db, this.eventRepo);
+      await facetRepo.attach(
+        {
+          entityId: entity.id,
+          profileId: roleFacetProfile.id,
+          userId,
+          workspaceId: effectiveWorkspaceId,
+          properties: roleFacetProperties,
+          skipValidation: true,
+          createdByKind: provenance.createdByKind,
+          createdByUserId: provenance.createdByUserId,
+          agentUserId: data.agentUserId,
+          sourceProposalId: data.sourceProposalId,
+          correlationId: data.correlationId,
+        },
+        userId
       );
     }
 
