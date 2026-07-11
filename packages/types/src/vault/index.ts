@@ -178,16 +178,28 @@ export interface SecretUsage {
 
 /**
  * A single grant of access to a secret (which agent/workspace can use it) —
- * surfaced in the Access face. Backed by `vault_grants`.
+ * surfaced in the Access face. Backed by `vault_grants`. This is the ONE
+ * canonical shape: `listGrants`, `listAllGrants`, and `getDetailBundle.grants`
+ * all return it. `secretName`/`secretType`/`granteeLabel`/`granteeType` are
+ * only populated by `listAllGrants` (which spans multiple secrets and resolves
+ * grantee identity); they are `null` from the per-secret endpoints.
  */
 export interface SecretGrantView {
   grantId: string;
   grantedTo: string;
   scope: string;
   expiresAt?: string | null;
+  /** Uses remaining: null = unlimited; clamped at 0 when exhausted. */
   usesRemaining?: number | null;
   workspaceId?: string | null;
   revokedAt?: string | null;
+  /** True when not revoked, not expired, and uses remain. */
+  active: boolean;
+  /** Populated by `listAllGrants` only; null elsewhere. */
+  secretName?: string | null;
+  secretType?: SecretType | null;
+  granteeLabel?: string | null;
+  granteeType?: "user" | "agent" | "workspace" | null;
 }
 
 /**

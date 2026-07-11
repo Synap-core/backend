@@ -64,6 +64,7 @@ const searchIndexReactor: Reactor = {
       view: "views",
       chatThread: "chat_threads",
       agent: "agents",
+      channel_message: "messages",
     };
 
     const collection = collectionMap[payload.subjectType];

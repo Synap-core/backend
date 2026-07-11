@@ -745,10 +745,13 @@ function nangoProxyEnvelope(result: {
 }
 
 // Map an upstream HTTP status onto the dispatch envelope's constrained errorCode.
+// 408/429 are TRANSIENT (timeout / rate-limit) → "unavailable" so retry policies
+// keying on errorCode retry them, not "bad_request" (which reads as permanent).
 function statusToErrorCode(
   status: number
 ): "not_found" | "bad_request" | "unavailable" {
   if (status === 404) return "not_found";
+  if (status === 408 || status === 429) return "unavailable";
   if (status >= 400 && status < 500) return "bad_request";
   return "unavailable";
 }

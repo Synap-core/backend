@@ -226,6 +226,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "edited_at",
     addedBy: "0176_messages_edited_at.sql",
   },
+  {
+    table: "messages",
+    column: "ephemeral",
+    addedBy: "0178_messages_ephemeral.sql",
+  },
 
   // entities
   {
@@ -900,6 +905,20 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "_conversions",
     column: "op_key",
     addedBy: "0175_conversions_ledger.sql",
+  },
+
+  // Watchtower write-time security cohorts (BF-7 / BF-8, 0177). Absence means a
+  // pod is on a pre-0177 schema where getSecurityStats' `noTotp` / `reused`
+  // counts would reference missing columns.
+  {
+    table: "secrets",
+    column: "has_totp",
+    addedBy: "0177_secrets_watchtower_cohorts.sql",
+  },
+  {
+    table: "secrets",
+    column: "password_fingerprint",
+    addedBy: "0177_secrets_watchtower_cohorts.sql",
   },
 ];
 

@@ -866,7 +866,14 @@ const feedReadHandler: BuiltinVerbHandler = async (params, ctx) => {
       timestamp: messages.timestamp,
     })
     .from(messages)
-    .where(and(eq(messages.channelId, channelId), isNull(messages.deletedAt)))
+    // Exclude ephemeral recaps from the agent-facing history read verb.
+    .where(
+      and(
+        eq(messages.channelId, channelId),
+        isNull(messages.deletedAt),
+        eq(messages.ephemeral, false)
+      )
+    )
     .orderBy(desc(messages.timestamp))
     .limit(limit);
 

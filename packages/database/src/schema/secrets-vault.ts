@@ -60,7 +60,10 @@ export type SecretType = (typeof SECRET_TYPES)[number];
  * Main secrets table
  *
  * Stores encrypted secrets with metadata for organization and search.
- * The encryptedData field contains a client-encrypted JSON blob.
+ * The `encryptedData` field holds a server-encrypted (VAULT_SERVER_KEY,
+ * AES-256-GCM) JSON blob in the default `encryptionMode='server'` path; legacy
+ * `'client'` rows are the old zero-knowledge blobs (read-only). See the
+ * `encryptionMode` column doc below for the authoritative contract.
  */
 export const secrets = pgTable(
   "secrets",
@@ -125,6 +128,18 @@ export const secrets = pgTable(
     isCompromised: boolean("is_compromised").default(false),
     compromisedAt: timestamp("compromised_at", { withTimezone: true }),
 
+    // Watchtower write-time security metadata (BF-7 / BF-8). Both are computed
+    // when the plaintext value is in hand (create/update) — NEVER by decrypting
+    // and scanning stored rows.
+    //   has_totp — true when the structured plaintext carried a non-empty `totp`.
+    //     Powers the "N logins without 2FA" cohort.
+    //   password_fingerprint — HMAC-SHA256(VAULT_SERVER_KEY, normalize(password)),
+    //     a keyed digest (NOT a bare hash — defeats an offline dictionary on the
+    //     column) that lets two secrets be compared for password reuse without
+    //     ever re-holding plaintext. Null when the value has no password.
+    hasTotp: boolean("has_totp").notNull().default(false),
+    passwordFingerprint: text("password_fingerprint"),
+
     // Sharing
     isShared: boolean("is_shared").notNull().default(false),
 
@@ -179,6 +194,12 @@ export const secrets = pgTable(
     contextIdx: index("idx_secrets_context").on(
       table.contextType,
       table.contextId
+    ),
+    // Watchtower reused-password partition (BF-8): the `count(*) OVER (PARTITION
+    // BY user_id, password_fingerprint)` scan groups on exactly this pair.
+    passwordFingerprintIdx: index("idx_secrets_password_fingerprint").on(
+      table.userId,
+      table.passwordFingerprint
     ),
   })
 );

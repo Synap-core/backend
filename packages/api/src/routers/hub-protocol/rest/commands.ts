@@ -424,7 +424,8 @@ export function registerCommandsRoutes(app: HubHono): void {
         workspaceId,
         subjectType: "command",
         action: "execute",
-        source: agentUserId ? "agent" : "intelligence",
+        // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+        source: "intelligence",
         data: { command, workingDir, reason },
         threadId: undefined,
         reasoning: reason,

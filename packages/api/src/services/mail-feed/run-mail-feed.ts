@@ -30,6 +30,11 @@ import { db, tools, eq, drizzleSql } from "@synap/database";
 import { ensureExternalChannel, insertChannelMessage } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { executeCapability } from "../capabilities/execute-capability.js";
+import {
+  notifyConnectorUnhealthy,
+  isConnectionAuthError,
+  capErrorMessage,
+} from "../connection-health/notify-connector-unhealthy.js";
 import { triageEmails } from "./triage.js";
 import type { EmailHit, TriagedEmail } from "./triage.js";
 
@@ -219,6 +224,26 @@ export async function runMailFeed(): Promise<RunMailFeedResult> {
       ? { connectionId: mailFeed.connectionId }
       : undefined,
   });
+
+  // Dead Google connection (refresh token expired) surfaces as an error envelope
+  // inside a kind:"run" result — detect it and nudge the operator to reconnect
+  // instead of silently posting nothing every 2h.
+  const capErr = capErrorMessage(cap);
+  if (capErr && isConnectionAuthError(capErr)) {
+    await notifyConnectorUnhealthy({
+      connectorKey: "google",
+      connectorName: "Google Workspace",
+      reconnectHint:
+        "Reconnect it in the app (Settings → Connectors) or run `/connect provider:google` in Discord.",
+      userId: owner,
+      workspaceId,
+      watermarkToolId: discordTool.id,
+      watermarkMetadata: metadata,
+      discordTeamChannelId: mailFeed.channelId,
+      errorMessage: capErr,
+    });
+    return { skipped: true, reason: "google_connection_unhealthy" };
+  }
 
   if (cap.kind !== "run") {
     logger.warn({ capKind: cap.kind }, "gmail_search did not run — skipping");

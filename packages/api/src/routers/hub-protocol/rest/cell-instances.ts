@@ -202,7 +202,8 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         workspaceId: body.workspaceId,
         subjectType: "cell",
         action: "create",
-        source: body.agentUserId ? "agent" : "intelligence",
+        // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+        source: "intelligence",
         data: {
           cellType: body.cellType,
           name: body.name,
@@ -294,7 +295,8 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         workspaceId: body.workspaceId,
         subjectType: "cell",
         action: "create",
-        source: body.agentUserId ? "agent" : "intelligence",
+        // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+        source: "intelligence",
         data: {
           cellType: "html-embed",
           name: body.name,
@@ -432,7 +434,8 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         workspaceId: body.workspaceId,
         subjectType: "cell",
         action: "update",
-        source: body.agentUserId ? "agent" : "intelligence",
+        // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+        source: "intelligence",
         data: { id },
         reasoning: body.reasoning,
         sourceMessageId: body.sourceMessageId,

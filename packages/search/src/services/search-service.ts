@@ -38,6 +38,7 @@ export class SearchService {
     views: "name",
     channels: "title",
     agents: "title",
+    messages: "content",
   };
 
   /**
@@ -154,6 +155,12 @@ export class SearchService {
     options: {
       userId: string;
       workspaceId?: string;
+      /**
+       * Channel-scoped message search. When set, the filter is pinned to this
+       * single channel and the generic `userId:=` visibility clause is SKIPPED —
+       * channel access must already be proven by the DB gate in the caller.
+       */
+      channelId?: string;
       limit?: number;
       page?: number;
       entityTypes?: string[];
@@ -235,6 +242,7 @@ export class SearchService {
   private buildFilter(options: {
     userId: string;
     workspaceId?: string;
+    channelId?: string;
     collection?: string;
     entityTypes?: string[];
     documentTypes?: string[];
@@ -242,6 +250,13 @@ export class SearchService {
     tags?: string[];
     status?: string[];
   }): string {
+    // Channel-scoped message search: the caller has already proven channel
+    // visibility via the DB channel-access gate, so we pin to the single channel
+    // and do NOT add the generic `userId:=` clause (messages have many authors).
+    if (options.channelId) {
+      return `channelId:=\`${options.channelId}\``;
+    }
+
     const filters: string[] = [`userId:=\`${options.userId}\``];
 
     if (options.workspaceId) {

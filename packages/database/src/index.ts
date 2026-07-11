@@ -55,6 +55,7 @@ export {
   decryptServerSide,
   encryptConfig,
   decryptConfig,
+  fingerprintPassword,
   isServerVaultAvailable,
   type ServerEncryptedBlob,
 } from "./utils/server-vault.js";

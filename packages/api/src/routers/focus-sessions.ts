@@ -46,7 +46,16 @@ const expectedOutputItemSchema = z.object({
 });
 
 const statusFilterSchema = z
-  .enum(["active", "paused", "closed", "all"])
+  .enum([
+    "active",
+    "paused",
+    "closed",
+    "forming",
+    "scheduled",
+    "failed",
+    "cancelled",
+    "all",
+  ])
   .default("all");
 
 // ── Links sub-router (read-only) ───────────────────────────────────────────
@@ -272,7 +281,17 @@ export const focusSessionsRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
-        status: z.enum(["active", "paused", "closed"]).optional(),
+        status: z
+          .enum([
+            "active",
+            "paused",
+            "closed",
+            "forming",
+            "scheduled",
+            "failed",
+            "cancelled",
+          ])
+          .optional(),
         progress: z.number().int().min(0).max(100).optional(),
         channelId: z.string().uuid().optional(),
         correlationId: z.string().optional(),

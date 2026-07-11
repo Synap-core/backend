@@ -22,6 +22,7 @@ import {
   text,
   timestamp,
   jsonb,
+  boolean,
   index,
 } from "drizzle-orm/pg-core";
 import { channels } from "./channels.js";
@@ -187,6 +188,12 @@ export const messages = pgTable(
 
     // Edit marker — set when a user edits their own message content
     editedAt: timestamp("edited_at", { mode: "date", withTimezone: true }),
+
+    // Ephemeral marker — when true, the message is delivered live over the
+    // realtime socket (so the requester sees it in-session) but is EXCLUDED from
+    // all channel history/list reads, so it disappears on reload. Powers the
+    // "catch me up" recap flow: visible live, gone on refresh.
+    ephemeral: boolean("ephemeral").notNull().default(false),
   },
   (table) => ({
     channelIdIdx: index("messages_channel_id_idx").on(table.channelId),
@@ -227,6 +234,7 @@ export interface MessageRow {
   sessionId: string | null;
   deletedAt: Date | null;
   editedAt: Date | null;
+  ephemeral: boolean;
 }
 export type NewMessageRow = Partial<
   Omit<MessageRow, "id" | "timestamp" | "hash">

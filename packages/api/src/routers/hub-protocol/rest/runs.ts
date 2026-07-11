@@ -124,7 +124,12 @@ export function registerRunsRoutes(app: HubHono): void {
         workspaceId: run.workspaceId,
         subjectType: "playbook_run",
         action: "update",
-        source: "agent",
+        // "agent" is NOT a valid EventSource — on the propose branch it reached
+        // the event append inside a TX that rolls back + re-throws, turning
+        // every agent playbook-run status update that needs approval into a
+        // hard 500. Agent identity is carried by agentUserId above; the valid,
+        // closest source is "intelligence".
+        source: "intelligence",
         data: { runId, status: body.status, summary: body.summary },
       });
       if ("denied" in perm && perm.denied) {

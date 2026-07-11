@@ -28,6 +28,10 @@ export enum FocusSessionStatus {
   ACTIVE = "active",
   PAUSED = "paused",
   CLOSED = "closed",
+  FORMING = "forming",
+  SCHEDULED = "scheduled",
+  FAILED = "failed",
+  CANCELLED = "cancelled",
 }
 
 export const focusSessions = pgTable(
@@ -68,7 +72,15 @@ export const focusSessions = pgTable(
     goal: text("goal").notNull(),
     /** Current lifecycle state. */
     status: text("status", {
-      enum: ["active", "paused", "closed"],
+      enum: [
+        "active",
+        "paused",
+        "closed",
+        "forming",
+        "scheduled",
+        "failed",
+        "cancelled",
+      ],
     })
       .notNull()
       .default("active"),

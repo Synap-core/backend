@@ -196,7 +196,8 @@ export const entitiesRouter = router({
         reasoning: input.reasoning ?? input.aiMetadata?.reasoning,
         // Provenance: explicit `source` from caller wins; otherwise infer
         // "agent" when an agentUserId is present, else "intelligence".
-        source: input.source ?? (input.agentUserId ? "agent" : "intelligence"),
+        // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+        source: input.source ?? "intelligence",
         // Only pass agentUserId when explicitly provided — ctx.userId is the API key
         // owner ("system") which is not a valid UUID and would fail Zod validation.
         agentUserId: input.agentUserId,
@@ -249,7 +250,8 @@ export const entitiesRouter = router({
               entityId: result.id,
               profileSlug: f.slug,
               properties: f.properties,
-              source: input.source ?? (input.agentUserId ? "agent" : "intelligence"),
+              // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+              source: input.source ?? "intelligence",
               agentUserId: input.agentUserId,
             });
             attachedFacets.push({
@@ -333,7 +335,8 @@ export const entitiesRouter = router({
         properties: input.metadata,
         deleteProperties: input.deleteProperties,
         reasoning: input.reasoning,
-        source: input.agentUserId ? "agent" : "intelligence",
+        // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+        source: "intelligence",
         agentUserId: input.agentUserId,
       });
 
@@ -397,7 +400,8 @@ export const entitiesRouter = router({
       const result = await caller.delete({
         id: input.entityId,
         reasoning: input.reasoning,
-        source: input.agentUserId ? "agent" : "intelligence",
+        // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+        source: "intelligence",
         agentUserId: input.agentUserId,
       });
 
@@ -484,7 +488,8 @@ export const entitiesRouter = router({
         status: input.status,
         properties: input.properties,
         reasoning: input.reasoning,
-        source: input.source ?? (input.agentUserId ? "agent" : "intelligence"),
+        // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+        source: input.source ?? "intelligence",
         agentUserId: input.agentUserId,
       });
 
@@ -544,7 +549,8 @@ export const entitiesRouter = router({
           ? { workspaceId: input.workspaceId }
           : {}),
         reasoning: input.reasoning,
-        source: input.source ?? (input.agentUserId ? "agent" : "intelligence"),
+        // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+        source: input.source ?? "intelligence",
         agentUserId: input.agentUserId,
       });
 
@@ -595,7 +601,8 @@ export const entitiesRouter = router({
       const result = await caller.detachFacet({
         facetId: input.facetId,
         reasoning: input.reasoning,
-        source: input.source ?? (input.agentUserId ? "agent" : "intelligence"),
+        // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+        source: input.source ?? "intelligence",
         agentUserId: input.agentUserId,
       });
 

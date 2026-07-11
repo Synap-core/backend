@@ -695,12 +695,17 @@ export const channelsRouter = router({
       const sinceDate = input.since ? new Date(input.since) : undefined;
 
       const rows = await db.query.messages.findMany({
+        // Exclude ephemeral recaps so they never enter an agent's history context.
         where: sinceDate
           ? and(
               eq(messages.channelId, input.channelId),
-              gt(messages.timestamp, sinceDate)
+              gt(messages.timestamp, sinceDate),
+              eq(messages.ephemeral, false)
             )
-          : eq(messages.channelId, input.channelId),
+          : and(
+              eq(messages.channelId, input.channelId),
+              eq(messages.ephemeral, false)
+            ),
         orderBy: (t, { asc }) => asc(t.timestamp),
         limit: input.limit + 1, // fetch one extra to detect hasMore
       });

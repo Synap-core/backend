@@ -513,6 +513,32 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     defaultChannels: ["in_app"],
     ttl: 0,
   },
+  {
+    // A HUMAN @mentioned another human in a channel/room. Distinct from
+    // `inbox.mention` (imported inbox items) and from agent @handles (which route
+    // to an AI, never notify a person). Clicking opens the channel in chat.
+    type: "chat.mention",
+    category: "inbox",
+    label: "Mention",
+    icon: "at-sign",
+    priority: "high",
+    titleTemplate: "{{sender}} mentioned you",
+    bodyTemplate: "{{preview}}",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    actions: [
+      {
+        id: "view",
+        label: "View",
+        variant: "primary",
+        handler: {
+          type: "navigate",
+          app: "chat",
+          params: { channelId: "{{channelId}}" },
+        },
+      },
+    ],
+  },
 ];
 
 // Fast lookup map (built once at module init)

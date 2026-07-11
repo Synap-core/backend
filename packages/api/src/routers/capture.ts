@@ -913,12 +913,8 @@ export const captureRouter = router({
       // name it chose and resolve it to the real id from `availableWorkspaces`
       // (the list WE built), overriding an unreliable LLM UUID. No name / no match
       // → leave the LLM's id untouched.
-      const pickedWsName = (
-        structureResult as { targetWorkspaceName?: string | null }
-      ).targetWorkspaceName;
-      const rawPickedWsId = (
-        structureResult as { targetWorkspaceId?: string | null }
-      ).targetWorkspaceId;
+      const pickedWsName = structureResult.targetWorkspaceName;
+      const rawPickedWsId = structureResult.targetWorkspaceId;
       if (pickedWsName && availableWorkspaces.length > 0) {
         const norm = (s: string) => s.toLowerCase().trim();
         const wanted = norm(pickedWsName);
@@ -929,9 +925,7 @@ export const captureRouter = router({
               norm(w.name).includes(wanted) || wanted.includes(norm(w.name))
           );
         if (match) {
-          (
-            structureResult as { targetWorkspaceId?: string | null }
-          ).targetWorkspaceId = match.id;
+          structureResult.targetWorkspaceId = match.id;
           // Telemetry: reconciliation OVERRODE the LLM's raw id (a caught
           // UUID-copy error) — the exact win this name-resolution exists for.
           if (match.id !== rawPickedWsId) {
@@ -994,9 +988,7 @@ export const captureRouter = router({
           relations: structureResult.relations,
           followUp: structureResult.followUp,
           targetWorkspaceId: structureResult.targetWorkspaceId ?? null,
-          targetWorkspaceName:
-            (structureResult as { targetWorkspaceName?: string | null })
-              .targetWorkspaceName ?? null,
+          targetWorkspaceName: structureResult.targetWorkspaceName ?? null,
           targetWorkspaceReason: structureResult.targetWorkspaceReason ?? null,
           targetWorkspaceConfidence:
             structureResult.targetWorkspaceConfidence ?? null,
@@ -1120,9 +1112,7 @@ export const captureRouter = router({
         relations: structureResult.relations,
         followUp: null as string | StructuredFollowUp | null,
         targetWorkspaceId: structureResult.targetWorkspaceId ?? null,
-        targetWorkspaceName:
-          (structureResult as { targetWorkspaceName?: string | null })
-            .targetWorkspaceName ?? null,
+        targetWorkspaceName: structureResult.targetWorkspaceName ?? null,
         targetWorkspaceReason: structureResult.targetWorkspaceReason ?? null,
         targetWorkspaceConfidence:
           structureResult.targetWorkspaceConfidence ?? null,
@@ -1702,17 +1692,29 @@ export const captureRouter = router({
             },
           });
 
+          // A routing decision is only MEASURABLE when it (a) actually made a
+          // pick (aiWorkspaceId) AND (b) produced at least one fresh entity to
+          // stamp — otherwise there is nothing a later correction could move,
+          // so scoring it would inflate accuracy with an unfalsifiable "win".
+          // Gate the decision emit AND the correlationId stamp on the SAME
+          // condition so decisions↔stamps stay 1:1 (no phantom decision on an
+          // all-deduped capture; no orphan correlationId on a non-AI capture
+          // whose later mutations would emit corrections matching no decision).
+          const routingDecisionRecorded =
+            Boolean(input.aiWorkspaceId) && materializedEntityIds.length > 0;
+
           // Provenance stamp — join the created entities back to the decision
-          // that produced them (shared correlationId) and the proposal that
-          // recorded the write, so a future feedback bridge can score AI
-          // decision quality by correlationId. BEST-EFFORT: never fail the
-          // capture over a stamping hiccup.
+          // that produced them (shared correlationId, only when a decision was
+          // recorded) and the proposal that recorded the write (always, for
+          // traceability), so a future feedback bridge can score AI decision
+          // quality by correlationId. BEST-EFFORT: never fail the capture over
+          // a stamping hiccup.
           if (materializedEntityIds.length > 0) {
             try {
               const stamped = await database
                 .update(entitiesTable)
                 .set({
-                  correlationId,
+                  correlationId: routingDecisionRecorded ? correlationId : null,
                   sourceProposalId: proposal?.id ?? null,
                 })
                 .where(inArray(entitiesTable.id, materializedEntityIds))
@@ -1742,8 +1744,10 @@ export const captureRouter = router({
           // unions (auditLog's own opts type is plain `string`, and the events
           // table column is untyped text — see audit-log.ts) — the discriminator
           // also lives in `data.kind` for any consumer that DOES enforce those
-          // unions downstream.
-          if (input.aiWorkspaceId) {
+          // unions downstream. Gated on `routingDecisionRecorded` (see above)
+          // so every emitted decision has ≥1 stamped entity to be corrected
+          // against — keeping the decision↔correction join 1:1.
+          if (routingDecisionRecorded) {
             try {
               await auditLog({
                 subjectType: "ai_decision",

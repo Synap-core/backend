@@ -19,6 +19,11 @@ import { executeCapability } from "../capabilities/execute-capability.js";
 import { submitCaptureGraph } from "../capture-agent/submit-capture-graph.js";
 import { getCaptureAgentUserId } from "../capture-agent/ensure-capture-agent.js";
 import {
+  notifyConnectorUnhealthy,
+  isConnectionAuthError,
+  capErrorMessage,
+} from "../connection-health/notify-connector-unhealthy.js";
+import {
   mapBookingToGraph,
   type CalBookingPayload,
 } from "./map-booking-to-graph.js";
@@ -67,6 +72,21 @@ export async function runCalBackfill(): Promise<RunCalBackfillResult> {
       ? { connectionId: backfill.connectionId }
       : undefined,
   });
+  const capErr = capErrorMessage(cap);
+  if (capErr && isConnectionAuthError(capErr)) {
+    await notifyConnectorUnhealthy({
+      connectorKey: "cal_com",
+      connectorName: "Cal.com",
+      reconnectHint:
+        "Re-enter the Cal.com API key for the `cal_com` connector (Settings → Connectors).",
+      userId: owner,
+      workspaceId,
+      watermarkToolId: calTool.id,
+      watermarkMetadata: metadata,
+      errorMessage: capErr,
+    });
+    return { skipped: true, reason: "cal_connection_unhealthy" };
+  }
   if (cap.kind !== "run") {
     logger.warn(
       { capKind: cap.kind },

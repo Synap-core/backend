@@ -175,7 +175,13 @@ export const documentsRouter = router({
         phase: "completed",
         subjectId: documentId,
         userId: agentUserId,
-        source: input.agentUserId ? "agent" : "intelligence",
+        // "agent" is NOT a valid EventSource (SynapEventSchema allows only
+        // api/automation/sync/migration/system/intelligence) — it threw a
+        // ZodError that auditLog swallowed best-effort, silently dropping the
+        // document.create.completed event for every agent-authored Hub doc.
+        // Agent authorship is already carried by `userId`/agentUserId; the
+        // valid, closest source for an IS/agent-driven write is "intelligence".
+        source: "intelligence",
       });
 
       emitSideEffects({

@@ -4,7 +4,14 @@
  */
 
 import { getTypesenseAdminClient } from "../client.js";
-import { getDb, inArray, loadFacetSlugsBatch } from "@synap/database";
+import {
+  getDb,
+  inArray,
+  loadFacetSlugsBatch,
+  and,
+  eq,
+  isNull,
+} from "@synap/database";
 import * as schema from "@synap/database/schema";
 import type { IndexingQueueItem } from "../types/index.js";
 import {
@@ -13,6 +20,7 @@ import {
   ViewIndexer,
   ChannelIndexer,
   AgentIndexer,
+  MessageIndexer,
 } from "../indexers/index.js";
 
 export class IndexingService {
@@ -24,6 +32,7 @@ export class IndexingService {
     views: new ViewIndexer(),
     channels: new ChannelIndexer(),
     agents: new AgentIndexer(),
+    messages: new MessageIndexer(),
   };
 
   /**
@@ -177,9 +186,55 @@ export class IndexingService {
           where: inArray(schema.agents.id, ids),
         });
 
+      case "messages":
+        return this.fetchMessageRows(db, ids);
+
       default:
         throw new Error(`Unknown collection: ${collection}`);
     }
+  }
+
+  /**
+   * Fetch message rows joined with their channel's workspaceId for indexing.
+   *
+   * Two hard exclusions are applied at the source so they never reach Typesense:
+   *   - soft-deleted messages (`deletedAt IS NOT NULL`)
+   *   - ephemeral recap messages (`ephemeral = true`) — live-only, must NEVER be
+   *     indexed or searchable.
+   *
+   * When `ids` is omitted, ALL live/non-ephemeral messages are returned (full
+   * reindex). The `channels` INNER JOIN supplies `workspaceId` (absent from the
+   * `messages` table).
+   */
+  private async fetchMessageRows(
+    db: Awaited<ReturnType<typeof getDb>>,
+    ids?: string[]
+  ): Promise<any[]> {
+    const conditions = [
+      isNull(schema.messages.deletedAt),
+      eq(schema.messages.ephemeral, false),
+    ];
+    if (ids) {
+      conditions.push(inArray(schema.messages.id, ids));
+    }
+
+    return db
+      .select({
+        id: schema.messages.id,
+        channelId: schema.messages.channelId,
+        userId: schema.messages.userId,
+        content: schema.messages.content,
+        role: schema.messages.role,
+        timestamp: schema.messages.timestamp,
+        editedAt: schema.messages.editedAt,
+        workspaceId: schema.channels.workspaceId,
+      })
+      .from(schema.messages)
+      .innerJoin(
+        schema.channels,
+        eq(schema.channels.id, schema.messages.channelId)
+      )
+      .where(and(...conditions));
   }
 
   /**
@@ -285,6 +340,9 @@ export class IndexingService {
             break;
           case "agents":
             dbRecords = await db.query.agents.findMany();
+            break;
+          case "messages":
+            dbRecords = await this.fetchMessageRows(db);
             break;
           default:
             continue;

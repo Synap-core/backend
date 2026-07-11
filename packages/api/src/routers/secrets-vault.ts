@@ -3,11 +3,18 @@
  *
  * Secure storage for passwords, API keys, and sensitive credentials.
  *
- * Security Model:
- * - Client-side encryption (AES-256-GCM)
- * - Server never sees plaintext secrets
- * - Zero-knowledge architecture
- * - Complete audit trail
+ * Security Model (see the `encryptionMode` column on the `secrets` table —
+ * `@synap/database/schema/secrets-vault.ts` — for the authoritative contract):
+ * - AES-256-GCM encryption.
+ * - 'server' mode (default + only write path): the server encrypts with
+ *   VAULT_SERVER_KEY and CAN read the plaintext (`reveal` decrypts server-side)
+ *   — required so AI credential grants can resolve secrets server-side on a
+ *   sovereign pod. This is NOT zero-knowledge and the server is NOT blind to
+ *   plaintext.
+ * - 'client' mode: LEGACY zero-knowledge rows from before server-only
+ *   consolidation — still readable for backward compatibility but no longer
+ *   written and not grantable to AI.
+ * - Complete audit trail.
  */
 
 import { router, protectedProcedure } from "../trpc.js";
@@ -22,13 +29,12 @@ import {
   inArray,
   drizzleSql,
   getWorkspaceMembership,
-  secretVaultKeys,
   SECRET_TYPES,
   SecretsVaultRepository,
   EventRepository,
-  encryptionService,
   encryptServerSide,
   decryptServerSide,
+  fingerprintPassword,
   isServerVaultAvailable,
   assertGrantScoped,
 } from "@synap/database";
@@ -101,6 +107,38 @@ function serializeSecretValue(value: string | Record<string, unknown>): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
+/**
+ * Derive the Watchtower write-time security metadata (BF-7 / BF-8) from the
+ * plaintext value while it is already in hand — the counterpart to encrypting
+ * the blob. NEVER a decrypt-scan.
+ *
+ *   hasTotp             — true when a structured value carries a non-empty `totp`.
+ *   passwordFingerprint — HMAC(VAULT_SERVER_KEY, normalize(password)) when the
+ *                         value has a non-empty `password`, else null.
+ *
+ * A bare-string value (api_key/note/env_variable) has neither.
+ */
+function deriveSecurityMetadata(value: string | Record<string, unknown>): {
+  hasTotp: boolean;
+  passwordFingerprint: string | null;
+} {
+  if (typeof value === "string") {
+    return { hasTotp: false, passwordFingerprint: null };
+  }
+
+  const totp = value.totp;
+  const hasTotp =
+    typeof totp === "string" ? totp.trim().length > 0 : Boolean(totp);
+
+  const password = value.password;
+  const passwordFingerprint =
+    typeof password === "string" && password.trim().length > 0
+      ? fingerprintPassword(password)
+      : null;
+
+  return { hasTotp, passwordFingerprint };
+}
+
 const shareSecretSchema = z
   .object({
     secretId: z.string().uuid(),
@@ -141,6 +179,107 @@ const setupVaultSchema = z.object({
 function getRepository(): SecretsVaultRepository {
   const eventRepo = new EventRepository(sql);
   return new SecretsVaultRepository(db, eventRepo);
+}
+
+// ============================================================================
+// Grant helpers (shared by listGrants / listAllGrants / getDetailBundle —
+// extracted to kill the 2-3x copy-paste of this exact logic)
+// ============================================================================
+
+/** A `vault_grants` row shape, as returned by drizzle's query API. */
+type VaultGrantRow = {
+  id: string;
+  grantableId: string;
+  execMode: string;
+  grantedTo: string | null;
+  proposalId: string | null;
+  scope: string;
+  expiresAt: Date | null;
+  maxUses: number | null;
+  useCount: number;
+  workspaceId: string | null;
+  revokedAt: Date | null;
+  createdAt: Date;
+};
+
+/** Drizzle where-predicate for secret-kind vault_grants rows on the given secret id(s). */
+function secretGrantsWhere(secretIds: string | string[]) {
+  return Array.isArray(secretIds)
+    ? and(
+        eq(vaultGrants.grantableType, "secret"),
+        inArray(vaultGrants.grantableId, secretIds)
+      )
+    : and(
+        eq(vaultGrants.grantableType, "secret"),
+        eq(vaultGrants.grantableId, secretIds)
+      );
+}
+
+/** True when a grant is not revoked, not expired, and has uses remaining. */
+function isGrantActive(
+  g: Pick<VaultGrantRow, "revokedAt" | "expiresAt" | "maxUses" | "useCount">,
+  now = Date.now()
+): boolean {
+  return (
+    !g.revokedAt &&
+    (!g.expiresAt || g.expiresAt.getTime() > now) &&
+    (g.maxUses == null || g.useCount < g.maxUses)
+  );
+}
+
+/** Uses remaining: null = unlimited; clamped at 0 when exhausted. */
+function usesRemaining(
+  g: Pick<VaultGrantRow, "maxUses" | "useCount">
+): number | null {
+  return g.maxUses == null ? null : Math.max(0, g.maxUses - g.useCount);
+}
+
+/**
+ * Batched `users` lookup for a set of ids → best-effort display label
+ * (name → email → raw id) + agent/user kind. One query for N grants/audit
+ * rows rather than N queries.
+ */
+async function resolveActorLabels(
+  userIds: string[]
+): Promise<Map<string, { label: string; isAgent: boolean }>> {
+  const ids = [...new Set(userIds)];
+  if (ids.length === 0) return new Map();
+  const rows = await db.query.users.findMany({
+    where: inArray(users.id, ids),
+    columns: { id: true, name: true, email: true, userType: true },
+  });
+  return new Map(
+    rows.map((u) => [
+      u.id,
+      { label: u.name ?? u.email ?? u.id, isAgent: u.userType === "agent" },
+    ])
+  );
+}
+
+/** Map a raw `vault_grants` row to the canonical `SecretGrantView` wire shape. */
+function toGrantView(
+  g: VaultGrantRow,
+  extra?: {
+    secretName?: string | null;
+    secretType?: string | null;
+    granteeLabel?: string | null;
+    granteeType?: "user" | "agent" | "workspace" | null;
+  }
+): SecretGrantView {
+  return {
+    grantId: g.id,
+    grantedTo: g.grantedTo ?? "",
+    scope: g.scope,
+    expiresAt: g.expiresAt ? g.expiresAt.toISOString() : null,
+    usesRemaining: usesRemaining(g),
+    workspaceId: g.workspaceId ?? null,
+    revokedAt: g.revokedAt ? g.revokedAt.toISOString() : null,
+    active: isGrantActive(g),
+    secretName: extra?.secretName ?? null,
+    secretType: (extra?.secretType as SecretGrantView["secretType"]) ?? null,
+    granteeLabel: extra?.granteeLabel ?? null,
+    granteeType: extra?.granteeType ?? null,
+  };
 }
 
 /**
@@ -221,28 +360,6 @@ export const secretsVaultRouter = router({
   }),
 
   /**
-   * Get vault metadata (for client-side password verification)
-   */
-  getVaultMetadata: protectedProcedure.query(async ({ ctx }) => {
-    const repo = getRepository();
-    const metadata = await repo.getVaultKeyMetadata(ctx.userId);
-
-    if (!metadata) {
-      return null;
-    }
-
-    return {
-      salt: metadata.salt,
-      keyDerivationAlgorithm: metadata.keyDerivationAlgorithm,
-      keyDerivationParams: metadata.keyDerivationParams,
-      verificationCipher: metadata.verificationCipher,
-      verificationIv: metadata.verificationIv,
-      verificationTag: metadata.verificationTag,
-      hasRecoveryKey: !!metadata.recoveryKeyHash,
-    };
-  }),
-
-  /**
    * Setup vault with master password
    * Client generates the key derivation params and verification cipher
    */
@@ -273,39 +390,6 @@ export const secretsVaultRouter = router({
 
       return { success: true };
     }),
-
-  /**
-   * Record vault unlock (for audit trail)
-   */
-  recordUnlock: protectedProcedure.mutation(async ({ ctx }) => {
-    const repo = getRepository();
-    await repo.recordVaultUnlock(ctx.userId);
-    return { success: true };
-  }),
-
-  /**
-   * Generate recovery key (server-side for security)
-   */
-  generateRecoveryKey: protectedProcedure.mutation(async ({ ctx }) => {
-    const recoveryKey = encryptionService.generateRecoveryKey();
-    const hash = await encryptionService.hashRecoveryKey(recoveryKey);
-
-    // Store hash in vault keys
-    await db
-      .update(secretVaultKeys)
-      .set({
-        recoveryKeyHash: hash,
-        recoveryKeyCreatedAt: new Date(),
-      })
-      .where(eq(secretVaultKeys.userId, ctx.userId));
-
-    // Return the recovery key ONCE (user must save it)
-    return {
-      recoveryKey,
-      message:
-        "Save this recovery key securely. It will not be displayed again.",
-    };
-  }),
 
   // ==========================================================================
   // Secret CRUD
@@ -351,58 +435,6 @@ export const secretsVaultRouter = router({
         updatedAt: secret.updatedAt,
         tags: secret.tags?.map((t: any) => t.tag) ?? [],
       }));
-    }),
-
-  /**
-   * Get a single secret (includes encrypted data for client decryption)
-   *
-   * @legacy This procedure returns raw encrypted blobs for client-side decryption,
-   * which is no longer supported post server-only consolidation. Use `reveal` to
-   * retrieve the plaintext value of a server-encrypted secret.
-   */
-  get: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ ctx, input }) => {
-      const repo = getRepository();
-      const secret = await repo.findById(input.id, ctx.userId);
-
-      if (!secret) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Secret not found",
-        });
-      }
-
-      // Record access
-      await repo.recordAccess(input.id, ctx.userId);
-
-      return {
-        id: secret.id,
-        name: secret.name,
-        type: secret.type,
-        url: secret.url,
-        category: secret.category,
-        description: secret.description,
-        iconUrl: secret.iconUrl,
-        encryptedData: secret.encryptedData,
-        iv: secret.iv,
-        authTag: secret.authTag,
-        encryptionVersion: secret.encryptionVersion,
-        isFavorite: secret.isFavorite,
-        isShared: secret.isShared,
-        isCompromised: secret.isCompromised,
-        passwordStrength: secret.passwordStrength,
-        passwordLastChanged: secret.passwordLastChanged,
-        lastAccessedAt: secret.lastAccessedAt,
-        accessCount: secret.accessCount,
-        createdAt: secret.createdAt,
-        updatedAt: secret.updatedAt,
-        tags: (secret as Record<string, unknown>).tags
-          ? (
-              (secret as Record<string, unknown>).tags as Array<{ tag: string }>
-            ).map((t) => t.tag)
-          : [],
-      };
     }),
 
   /**
@@ -504,6 +536,10 @@ export const secretsVaultRouter = router({
       // The row is persisted with encryptionMode 'server' (the schema default), so
       // it is resolvable by the vault resolver and grantable to AI.
       const blob = encryptServerSide(serializeSecretValue(input.value));
+      // Watchtower cohorts, computed while the plaintext is in hand (BF-7/BF-8).
+      const { hasTotp, passwordFingerprint } = deriveSecurityMetadata(
+        input.value
+      );
 
       const secret = await repo.create(
         {
@@ -519,6 +555,8 @@ export const secretsVaultRouter = router({
           passwordStrength: input.passwordStrength,
           tags: input.tags,
           workspaceId: input.workspaceId,
+          hasTotp,
+          passwordFingerprint,
         },
         ctx.userId
       );
@@ -545,6 +583,10 @@ export const secretsVaultRouter = router({
         value !== undefined
           ? (() => {
               const blob = encryptServerSide(serializeSecretValue(value));
+              // Recompute Watchtower cohorts from the rotated plaintext
+              // (BF-7/BF-8) — a removed password/totp clears the stamp.
+              const { hasTotp, passwordFingerprint } =
+                deriveSecurityMetadata(value);
               return {
                 encryptedData: blob.encryptedData,
                 iv: blob.iv,
@@ -552,6 +594,8 @@ export const secretsVaultRouter = router({
                 // Stamp server mode so a legacy 'client' row that re-enters its
                 // value here migrates and `reveal` stops refusing it.
                 encryptionMode: "server",
+                hasTotp,
+                passwordFingerprint,
               };
             })()
           : {};
@@ -629,6 +673,7 @@ export const secretsVaultRouter = router({
   /**
    * Permanently delete a secret
    */
+  // PARKED: no trash UI yet (see VAULT-CONSOLIDATION-PLAN §4)
   permanentDelete: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -640,6 +685,7 @@ export const secretsVaultRouter = router({
   /**
    * Restore a deleted secret
    */
+  // PARKED: no trash UI yet (see VAULT-CONSOLIDATION-PLAN §4)
   restore: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -710,6 +756,8 @@ export const secretsVaultRouter = router({
   /**
    * Share a secret
    */
+  // PARKED: sharing not yet built — deferred/re-scoped as a vault_grants
+  // extension to human principals (see VAULT-CONSOLIDATION-PLAN §4)
   share: protectedProcedure
     .input(shareSecretSchema)
     .mutation(async ({ ctx, input }) => {
@@ -735,6 +783,7 @@ export const secretsVaultRouter = router({
   /**
    * Revoke a share
    */
+  // PARKED: sharing not yet built (see VAULT-CONSOLIDATION-PLAN §4)
   revokeShare: protectedProcedure
     .input(z.object({ shareId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -746,6 +795,7 @@ export const secretsVaultRouter = router({
   /**
    * Get secrets shared with me
    */
+  // PARKED: sharing not yet built (see VAULT-CONSOLIDATION-PLAN §4)
   sharedWithMe: protectedProcedure.query(async ({ ctx }) => {
     const repo = getRepository();
     const shares = await repo.getSharedWithMe(ctx.userId);
@@ -792,28 +842,30 @@ export const secretsVaultRouter = router({
   getSecurityStats: protectedProcedure.query(async ({ ctx }) => {
     const repo = getRepository();
 
-    const [compromised, weakPasswords, oldPasswords, total] = await Promise.all(
-      [
+    const [compromised, weakPasswords, oldPasswords, noTotp, reused] =
+      await Promise.all([
         repo.getCompromisedCount(ctx.userId),
         repo.getWeakPasswordsCount(ctx.userId),
         repo.getOldPasswordsCount(ctx.userId, 90),
-        // Real owner-scoped count(*) of non-deleted secrets — the old
-        // `list({ limit: 1 }).length` was capped at 1.
-        repo.getTotalCount(ctx.userId),
-      ]
-    );
+        // BF-7 "logins without 2FA" + BF-8 reused-password — both server-side
+        // column reads, never a decrypt-scan. Owner-scoped by ctx.userId.
+        repo.getNoTotpCount(ctx.userId),
+        repo.getReusedPasswordCount(ctx.userId),
+      ]);
 
     return {
       compromised,
       weakPasswords,
       oldPasswords,
-      total,
+      noTotp,
+      reused,
     };
   }),
 
   /**
    * Mark a secret as compromised
    */
+  // PARKED: no breach scan yet (see VAULT-CONSOLIDATION-PLAN §4)
   markCompromised: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -849,11 +901,14 @@ export const secretsVaultRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // 1. Verify secret exists and belongs to this user/workspace
+      // 1. Verify secret exists, belongs to this user/workspace, and isn't
+      //    soft-deleted (a deleted secret can't be granted — resolveVaultSecret
+      //    would return null for it at redemption anyway).
       const secret = await db.query.secrets.findFirst({
         where: and(
           eq(secrets.id, input.secretId),
-          eq(secrets.userId, ctx.userId)
+          eq(secrets.userId, ctx.userId),
+          isNull(secrets.deletedAt)
         ),
       });
       if (!secret)
@@ -1020,12 +1075,15 @@ export const secretsVaultRouter = router({
    */
   listGrants: protectedProcedure
     .input(z.object({ secretId: z.string().uuid() }))
-    .query(async ({ ctx, input }) => {
-      // Ownership check — only the secret owner may view its grants.
+    .query(async ({ ctx, input }): Promise<SecretGrantView[]> => {
+      // Ownership check — only the secret owner may view its grants. Exclude
+      // soft-deleted secrets for parity with listAllGrants (a grant on a
+      // deleted secret is dead — resolveVaultSecret returns null for it).
       const secret = await db.query.secrets.findFirst({
         where: and(
           eq(secrets.id, input.secretId),
-          eq(secrets.userId, ctx.userId)
+          eq(secrets.userId, ctx.userId),
+          isNull(secrets.deletedAt)
         ),
         columns: { id: true },
       });
@@ -1035,32 +1093,11 @@ export const secretsVaultRouter = router({
       // Grants are now keyed by (grantableType, grantableId). For a secret-detail
       // view that's grantableType='secret', grantableId=<secret id>.
       const rows = await db.query.vaultGrants.findMany({
-        where: and(
-          eq(vaultGrants.grantableType, "secret"),
-          eq(vaultGrants.grantableId, input.secretId)
-        ),
+        where: secretGrantsWhere(input.secretId),
         orderBy: (t, { desc }) => [desc(t.createdAt)],
       });
 
-      const now = Date.now();
-      return rows.map((g) => ({
-        id: g.id,
-        grantableType: g.grantableType,
-        grantableId: g.grantableId,
-        execMode: g.execMode,
-        scope: g.scope,
-        grantedTo: g.grantedTo,
-        proposalId: g.proposalId,
-        expiresAt: g.expiresAt ? g.expiresAt.toISOString() : null,
-        maxUses: g.maxUses,
-        useCount: g.useCount,
-        revokedAt: g.revokedAt ? g.revokedAt.toISOString() : null,
-        createdAt: g.createdAt.toISOString(),
-        active:
-          !g.revokedAt &&
-          (!g.expiresAt || g.expiresAt.getTime() > now) &&
-          (g.maxUses == null || g.useCount < g.maxUses),
-      }));
+      return rows.map((g) => toGrantView(g));
     }),
 
   /**
@@ -1070,86 +1107,48 @@ export const secretsVaultRouter = router({
    * `grantId` (not `id`) and `secretName` are included so clients need no
    * remapping.
    */
-  listAllGrants: protectedProcedure.query(async ({ ctx }) => {
-    const owned = await db.query.secrets.findMany({
-      // Exclude soft-deleted secrets — a grant on a deleted secret is dead
-      // (resolveVaultSecret returns null), so it must not show as active access.
-      where: and(eq(secrets.userId, ctx.userId), isNull(secrets.deletedAt)),
-      columns: { id: true, name: true, type: true },
-    });
-    if (owned.length === 0) return [];
-    const secretById = new Map(owned.map((s) => [s.id, s]));
+  listAllGrants: protectedProcedure.query(
+    async ({ ctx }): Promise<SecretGrantView[]> => {
+      const owned = await db.query.secrets.findMany({
+        // Exclude soft-deleted secrets — a grant on a deleted secret is dead
+        // (resolveVaultSecret returns null), so it must not show as active access.
+        where: and(eq(secrets.userId, ctx.userId), isNull(secrets.deletedAt)),
+        columns: { id: true, name: true, type: true },
+      });
+      if (owned.length === 0) return [];
+      const secretById = new Map(owned.map((s) => [s.id, s]));
 
-    // Owner's "who has AI access to which of MY secrets" view — secret-kind
-    // grants whose grantableId is one of the caller's owned secrets.
-    const rows = await db.query.vaultGrants.findMany({
-      where: and(
-        eq(vaultGrants.grantableType, "secret"),
-        inArray(
-          vaultGrants.grantableId,
-          owned.map((s) => s.id)
-        )
-      ),
-      orderBy: (t, { desc }) => [desc(t.createdAt)],
-    });
+      // Owner's "who has AI access to which of MY secrets" view — secret-kind
+      // grants whose grantableId is one of the caller's owned secrets.
+      const rows = await db.query.vaultGrants.findMany({
+        where: secretGrantsWhere(owned.map((s) => s.id)),
+        orderBy: (t, { desc }) => [desc(t.createdAt)],
+      });
 
-    // Resolve grantee type (user vs agent) + display label with ONE batched
-    // users lookup — same pattern as getDetailBundle's actor resolution. A
-    // grant may be workspace-scoped (grantedTo null); those resolve to a null
-    // label and a "workspace" granteeType.
-    const granteeIds = [
-      ...new Set(
+      // Resolve grantee type (user vs agent) + display label with ONE batched
+      // users lookup. A grant may be workspace-scoped (grantedTo null); those
+      // resolve to a null label and a "workspace" granteeType.
+      const granteeById = await resolveActorLabels(
         rows.map((g) => g.grantedTo).filter((id): id is string => !!id)
-      ),
-    ];
-    const granteeRows = granteeIds.length
-      ? await db.query.users.findMany({
-          where: inArray(users.id, granteeIds),
-          columns: { id: true, name: true, email: true, userType: true },
-        })
-      : [];
-    const granteeById = new Map(granteeRows.map((u) => [u.id, u]));
+      );
 
-    const now = Date.now();
-    return rows.map((g) => {
-      const secret = secretById.get(g.grantableId);
-      const grantee = g.grantedTo ? granteeById.get(g.grantedTo) : undefined;
-      const granteeType: "user" | "agent" | "workspace" = g.grantedTo
-        ? grantee?.userType === "agent"
-          ? "agent"
-          : "user"
-        : "workspace";
-      return {
-        grantId: g.id,
-        secretId: g.grantableId,
-        secretName: secret?.name ?? null,
-        secretType: secret?.type ?? null,
-        execMode: g.execMode,
-        grantedTo: g.grantedTo,
-        // Resolved grantee display name (name → email → raw id). Null for a
-        // workspace-scoped grant with no specific principal.
-        granteeLabel: g.grantedTo
-          ? (grantee?.name ?? grantee?.email ?? g.grantedTo)
-          : null,
-        granteeType,
-        proposalId: g.proposalId,
-        scope: g.scope,
-        expiresAt: g.expiresAt ? g.expiresAt.toISOString() : null,
-        maxUses: g.maxUses,
-        useCount: g.useCount,
-        // Uses remaining: null = unlimited; clamped at 0 when exhausted.
-        usesRemaining:
-          g.maxUses == null ? null : Math.max(0, g.maxUses - g.useCount),
-        workspaceId: g.workspaceId ?? null,
-        revokedAt: g.revokedAt ? g.revokedAt.toISOString() : null,
-        createdAt: g.createdAt.toISOString(),
-        active:
-          !g.revokedAt &&
-          (!g.expiresAt || g.expiresAt.getTime() > now) &&
-          (g.maxUses == null || g.useCount < g.maxUses),
-      };
-    });
-  }),
+      return rows.map((g) => {
+        const secret = secretById.get(g.grantableId);
+        const grantee = g.grantedTo ? granteeById.get(g.grantedTo) : undefined;
+        const granteeType: "user" | "agent" | "workspace" = g.grantedTo
+          ? grantee?.isAgent
+            ? "agent"
+            : "user"
+          : "workspace";
+        return toGrantView(g, {
+          secretName: secret?.name ?? null,
+          secretType: secret?.type ?? null,
+          granteeLabel: g.grantedTo ? (grantee?.label ?? g.grantedTo) : null,
+          granteeType,
+        });
+      });
+    }
+  ),
 
   /**
    * Revoke an AI access grant (owner-only). Idempotent — re-revoking is a no-op.
@@ -1183,7 +1182,8 @@ export const secretsVaultRouter = router({
       const secret = await db.query.secrets.findFirst({
         where: and(
           eq(secrets.id, grant.grantableId),
-          eq(secrets.userId, ctx.userId)
+          eq(secrets.userId, ctx.userId),
+          isNull(secrets.deletedAt)
         ),
         columns: { id: true },
       });
@@ -1253,10 +1253,7 @@ export const secretsVaultRouter = router({
         loadSecretUsages(secret),
         // Grants for this secret (same predicate as listGrants).
         db.query.vaultGrants.findMany({
-          where: and(
-            eq(vaultGrants.grantableType, "secret"),
-            eq(vaultGrants.grantableId, secret.id)
-          ),
+          where: secretGrantsWhere(secret.id),
           orderBy: (t, { desc }) => [desc(t.createdAt)],
         }),
         // Newest ~20 audit rows. Ownership was already verified by findById
@@ -1268,36 +1265,21 @@ export const secretsVaultRouter = router({
         }),
       ]);
 
-      const grants: SecretGrantView[] = grantRows.map((g) => ({
-        grantId: g.id,
-        grantedTo: g.grantedTo ?? "",
-        scope: g.scope,
-        expiresAt: g.expiresAt ? g.expiresAt.toISOString() : null,
-        // Uses remaining: null = unlimited; clamped at 0 when exhausted.
-        usesRemaining:
-          g.maxUses == null ? null : Math.max(0, g.maxUses - g.useCount),
-        workspaceId: g.workspaceId ?? null,
-        revokedAt: g.revokedAt ? g.revokedAt.toISOString() : null,
-      }));
+      const grants: SecretGrantView[] = grantRows.map((g) => toGrantView(g));
 
       // Resolve actor type (user vs agent) for the audit rows — one batched
       // users lookup, best-effort label (name → email → raw id).
-      const actorIds = [...new Set(auditRows.map((r) => r.userId))];
-      const actorRows = actorIds.length
-        ? await db.query.users.findMany({
-            where: inArray(users.id, actorIds),
-            columns: { id: true, name: true, email: true, userType: true },
-          })
-        : [];
-      const actorById = new Map(actorRows.map((u) => [u.id, u]));
+      const actorById = await resolveActorLabels(
+        auditRows.map((r) => r.userId)
+      );
 
       const recentActivity: SecretActivityEvent[] = auditRows.map((r) => {
         const actor = actorById.get(r.userId);
         return {
           id: r.id,
           action: r.action,
-          actorType: actor?.userType === "agent" ? "agent" : "user",
-          actorLabel: actor?.name ?? actor?.email ?? r.userId,
+          actorType: actor?.isAgent ? "agent" : "user",
+          actorLabel: actor?.label ?? r.userId,
           createdAt: r.createdAt.toISOString(),
         };
       });

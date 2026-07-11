@@ -2,7 +2,13 @@
  * Secrets Vault Repository
  *
  * Handles CRUD operations for encrypted secrets with complete audit trail.
- * Security-critical: All secrets are stored encrypted, never in plaintext.
+ * Security-critical: All secrets are stored encrypted at rest (AES-256-GCM).
+ * The `encryptionMode` column on the `secrets` table (`@synap/database/schema/
+ * secrets-vault.ts`) is the authoritative contract: 'server' mode (default,
+ * only write path) is encrypted with VAULT_SERVER_KEY and IS readable
+ * server-side (`reveal` decrypts server-side) — this is NOT a zero-knowledge
+ * model. 'client' mode is the legacy zero-knowledge shape, still readable for
+ * backward compatibility but no longer written.
  */
 
 import { eq, and, isNull, ilike, desc, sql, inArray } from "drizzle-orm";
@@ -39,6 +45,10 @@ export interface CreateSecretInput {
   passwordStrength?: number;
   tags?: string[];
   workspaceId?: string;
+  /** Watchtower BF-7: true when the plaintext value carried a non-empty `totp`. */
+  hasTotp?: boolean;
+  /** Watchtower BF-8: HMAC(VAULT_SERVER_KEY, normalize(password)) or null. */
+  passwordFingerprint?: string | null;
 }
 
 export interface UpdateSecretInput {
@@ -58,6 +68,10 @@ export interface UpdateSecretInput {
   passwordStrength?: number;
   passwordLastChanged?: Date;
   tags?: string[];
+  /** Watchtower BF-7: recomputed from the rotated plaintext value. */
+  hasTotp?: boolean;
+  /** Watchtower BF-8: recomputed from the rotated plaintext value (null clears). */
+  passwordFingerprint?: string | null;
 }
 
 export interface ShareSecretInput {
@@ -121,15 +135,6 @@ export class SecretsVaultRepository extends BaseRepository<
   }
 
   /**
-   * Get vault key metadata for password verification
-   */
-  async getVaultKeyMetadata(userId: string) {
-    return this.db.query.secretVaultKeys.findFirst({
-      where: eq(secretVaultKeys.userId, userId),
-    });
-  }
-
-  /**
    * Setup vault for a new user
    */
   async setupVault(userId: string, data: SetupVaultInput) {
@@ -161,16 +166,6 @@ export class SecretsVaultRepository extends BaseRepository<
     return vaultKey;
   }
 
-  /**
-   * Update last unlocked timestamp
-   */
-  async recordVaultUnlock(userId: string) {
-    await this.db
-      .update(secretVaultKeys)
-      .set({ lastUnlockedAt: new Date() })
-      .where(eq(secretVaultKeys.userId, userId));
-  }
-
   // ==========================================================================
   // Secret CRUD
   // ==========================================================================
@@ -197,6 +192,8 @@ export class SecretsVaultRepository extends BaseRepository<
         passwordStrength: data.passwordStrength,
         passwordLastChanged:
           data.passwordStrength !== undefined ? new Date() : undefined,
+        hasTotp: data.hasTotp ?? false,
+        passwordFingerprint: data.passwordFingerprint ?? null,
       })
       .returning();
 
@@ -350,6 +347,12 @@ export class SecretsVaultRepository extends BaseRepository<
       updateData.passwordStrength = data.passwordStrength;
     if (data.passwordLastChanged !== undefined)
       updateData.passwordLastChanged = data.passwordLastChanged;
+    // Watchtower cohorts are recomputed from the rotated plaintext (BF-7/BF-8).
+    // `passwordFingerprint: null` is a meaningful set (clears a removed password),
+    // so both are keyed on `!== undefined`, not on truthiness.
+    if (data.hasTotp !== undefined) updateData.hasTotp = data.hasTotp;
+    if (data.passwordFingerprint !== undefined)
+      updateData.passwordFingerprint = data.passwordFingerprint;
 
     const [secret] = await this.db
       .update(secrets)
@@ -591,21 +594,6 @@ export class SecretsVaultRepository extends BaseRepository<
   // ==========================================================================
 
   /**
-   * Record secret access (for analytics and recent items)
-   */
-  async recordAccess(id: string, userId: string): Promise<void> {
-    await this.db
-      .update(secrets)
-      .set({
-        lastAccessedAt: new Date(),
-        accessCount: sql`${secrets.accessCount} + 1`,
-      })
-      .where(eq(secrets.id, id));
-
-    await this.logAudit(id, userId, "read");
-  }
-
-  /**
    * Record secret copy to clipboard
    */
   async recordCopy(id: string, userId: string): Promise<void> {
@@ -760,22 +748,6 @@ export class SecretsVaultRepository extends BaseRepository<
   }
 
   /**
-   * Get total count of a user's non-deleted secrets (owner-scoped).
-   *
-   * A real `count(*)` — unlike `list().length`, which is capped by its `limit`
-   * (default 100 / passing `{ limit: 1 }` caps it at 1). Used by the Watchtower
-   * `getSecurityStats.total`.
-   */
-  async getTotalCount(userId: string): Promise<number> {
-    const result = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(secrets)
-      .where(and(eq(secrets.userId, userId), isNull(secrets.deletedAt)));
-
-    return result[0]?.count ?? 0;
-  }
-
-  /**
    * Get compromised secrets count
    */
   async getCompromisedCount(userId: string): Promise<number> {
@@ -832,5 +804,61 @@ export class SecretsVaultRepository extends BaseRepository<
       );
 
     return result[0]?.count ?? 0;
+  }
+
+  /**
+   * Watchtower BF-7 — "logins without 2FA".
+   *
+   * Counts login-shaped secrets (`password` / `credential` / `oauth`, the types
+   * whose field set includes `totp`) that carry no TOTP (`has_totp = false`) and
+   * aren't soft-deleted. `has_totp` is stamped at write time from the plaintext,
+   * so this is a pure server-side column read — never a decrypt-scan.
+   */
+  async getNoTotpCount(userId: string): Promise<number> {
+    const result = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(secrets)
+      .where(
+        and(
+          eq(secrets.userId, userId),
+          inArray(secrets.type, ["password", "credential", "oauth"]),
+          eq(secrets.hasTotp, false),
+          isNull(secrets.deletedAt)
+        )
+      );
+
+    return Number(result[0]?.count ?? 0);
+  }
+
+  /**
+   * Watchtower BF-8 — reused-password count.
+   *
+   * Counts this user's secrets that share a `password_fingerprint` with at least
+   * one other of their secrets. The fingerprint is a keyed HMAC stamped at write
+   * time (server-vault.ts `fingerprintPassword`), so equality of fingerprints
+   * means equality of passwords — computed entirely server-side, never touching
+   * plaintext. Uses a window partition per (user, fingerprint) and keeps only the
+   * rows in a group larger than one.
+   */
+  async getReusedPasswordCount(userId: string): Promise<number> {
+    const rows = await this.db.execute(sql`
+      SELECT count(*)::int AS count
+        FROM (
+          SELECT count(*) OVER (
+                   PARTITION BY ${secrets.userId}, ${secrets.passwordFingerprint}
+                 ) AS dup
+            FROM ${secrets}
+           WHERE ${secrets.userId} = ${userId}
+             AND ${secrets.passwordFingerprint} IS NOT NULL
+             AND ${secrets.deletedAt} IS NULL
+        ) grouped
+       WHERE grouped.dup > 1
+    `);
+
+    // postgres-js returns a row array; drizzle may wrap it as { rows }.
+    const row = Array.isArray(rows)
+      ? (rows[0] as { count?: number } | undefined)
+      : (rows as { rows?: Array<{ count?: number }> }).rows?.[0];
+    return Number(row?.count ?? 0);
   }
 }

@@ -10,6 +10,7 @@ import {
   viewsCollectionSchema,
   channelsCollectionSchema,
   agentsCollectionSchema,
+  messagesCollectionSchema,
 } from "../collections/index.js";
 
 export class CollectionService {
@@ -19,6 +20,7 @@ export class CollectionService {
     viewsCollectionSchema,
     channelsCollectionSchema,
     agentsCollectionSchema,
+    messagesCollectionSchema,
   ];
 
   /**

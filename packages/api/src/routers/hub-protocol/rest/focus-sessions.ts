@@ -93,7 +93,17 @@ const CreateBodySchema = z
 // never trust a caller-supplied workspaceId for scoping a mutation).
 const UpdateBodySchema = z.object({
   workspaceId: z.string().min(1).optional(),
-  status: z.enum(["active", "paused", "closed"]).optional(),
+  status: z
+    .enum([
+      "active",
+      "paused",
+      "closed",
+      "forming",
+      "scheduled",
+      "failed",
+      "cancelled",
+    ])
+    .optional(),
   progress: z.number().int().min(0).max(100).optional(),
   channelId: z.string().uuid().optional(),
   correlationId: z.string().optional(),
@@ -127,7 +137,18 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     request: {
       query: z.object({
         workspaceId: z.string(),
-        status: z.enum(["active", "paused", "closed", "all"]).optional(),
+        status: z
+          .enum([
+            "active",
+            "paused",
+            "closed",
+            "forming",
+            "scheduled",
+            "failed",
+            "cancelled",
+            "all",
+          ])
+          .optional(),
         limit: z.coerce.number().int().min(1).max(50).optional(),
       }),
     },
@@ -224,7 +245,16 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     const limit = Number.isFinite(limitRaw)
       ? Math.min(Math.max(limitRaw, 1), 50)
       : 20;
-    const validStatuses = ["active", "paused", "closed", "all"] as const;
+    const validStatuses = [
+      "active",
+      "paused",
+      "closed",
+      "forming",
+      "scheduled",
+      "failed",
+      "cancelled",
+      "all",
+    ] as const;
     const status = validStatuses.includes(
       statusRaw as (typeof validStatuses)[number]
     )

@@ -768,6 +768,12 @@ export class IntelligenceHubClient {
     }>;
     followUp: string | StructuredFollowUp | null;
     targetWorkspaceId?: string | null;
+    /**
+     * The workspace NAME the AI chose, copied verbatim from the candidate list.
+     * The backend reconciles this NAME → the real id (the model copies UUIDs
+     * unreliably), so this is the authoritative pick signal, not the id above.
+     */
+    targetWorkspaceName?: string | null;
     /** AI's reason for routing to `targetWorkspaceId` (provenance). */
     targetWorkspaceReason?: string | null;
     /** AI's confidence (0–1) in the `targetWorkspaceId` routing. */

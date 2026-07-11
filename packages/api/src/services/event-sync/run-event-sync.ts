@@ -36,6 +36,11 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { executeCapability } from "../capabilities/execute-capability.js";
+import {
+  notifyConnectorUnhealthy,
+  isConnectionAuthError,
+  capErrorMessage,
+} from "../connection-health/notify-connector-unhealthy.js";
 
 const logger = createLogger({ module: "event-sync" });
 
@@ -284,12 +289,14 @@ async function fetchEntityEvents(
   return out;
 }
 
-/** Source C — Google Calendar via the `calendar_list` capability. */
+/** Source C — Google Calendar via the `calendar_list` capability. Returns the
+ * events plus an `authError` message when the connection is dead (so the caller
+ * can nudge the operator to reconnect instead of silently syncing nothing). */
 async function fetchCalendarEvents(
   owner: string,
   workspaceId: string | null,
   connectionId: string | null | undefined
-): Promise<UpcomingEvent[]> {
+): Promise<{ events: UpcomingEvent[]; authError?: string }> {
   // maxResults at the verb's clamp ceiling (50) to reduce the chance an in-window
   // event is missed — the synced dedup map is rebuilt from each fetch, so an
   // in-window event beyond the fetch limit could be pruned and later re-created.
@@ -301,9 +308,16 @@ async function fetchCalendarEvents(
     connectionSelector: connectionId ? { connectionId } : undefined,
   });
 
+  // A dead Google connection surfaces as an error envelope inside a kind:"run"
+  // result (execute-provider-verb returns it as-is on failure) — flag it so the
+  // caller can nudge the operator, rather than silently returning no events.
+  const capErr = capErrorMessage(cap);
+  if (capErr && isConnectionAuthError(capErr)) {
+    return { events: [], authError: capErr };
+  }
   if (cap.kind !== "run") {
     logger.warn({ capKind: cap.kind }, "calendar_list did not run — skipping");
-    return [];
+    return { events: [] };
   }
 
   const result = cap.result as { events?: GCalItem[] } | undefined;
@@ -313,7 +327,7 @@ async function fetchCalendarEvents(
     const evt = normalizeCalendarItem(item);
     if (evt) out.push(evt);
   }
-  return out;
+  return { events: out };
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────────
@@ -354,9 +368,28 @@ export async function runEventSync(): Promise<RunEventSyncResult> {
   const events: UpcomingEvent[] = [];
   events.push(...(await fetchEntityEvents(windowDays, sources)));
   if (sources.includes("calendar")) {
-    events.push(
-      ...(await fetchCalendarEvents(owner, workspaceId, eventSync.connectionId))
+    const cal = await fetchCalendarEvents(
+      owner,
+      workspaceId,
+      eventSync.connectionId
     );
+    events.push(...cal.events);
+    // Dead Google connection → nudge the operator to reconnect (deduped), instead
+    // of silently mirroring nothing every 6h.
+    if (cal.authError) {
+      await notifyConnectorUnhealthy({
+        connectorKey: "google",
+        connectorName: "Google Workspace",
+        reconnectHint:
+          "Reconnect it in the app (Settings → Connectors) or run `/connect provider:google` in Discord.",
+        userId: owner,
+        workspaceId,
+        watermarkToolId: discordTool.id,
+        watermarkMetadata: metadata,
+        discordTeamChannelId: eventSync.announceChannelId,
+        errorMessage: cal.authError,
+      });
+    }
   }
 
   const now = Date.now();

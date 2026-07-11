@@ -10,6 +10,7 @@ import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { normalizeEventSource } from "../lib/event-helpers.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
 // validateEventPattern from the main index.js and events/index.js bundles.
@@ -229,7 +230,11 @@ export const automationsRouter = router({
           workspaceId: input.workspaceId ?? null,
           subjectType: "automation",
           action: "create",
-          source: input.source,
+          // input.source accepts "user"/"ai"/"agent" (business-provenance values
+          // for the `createdVia` metadata below) but those are not valid
+          // EventSources — normalize via the canonical guard before this reaches
+          // the top-level event source.
+          source: normalizeEventSource(input.source),
           data: { name: input.name, triggerType: input.triggerType },
         });
         if ("denied" in perm && perm.denied) {

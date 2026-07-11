@@ -1414,7 +1414,8 @@ CREATE TABLE IF NOT EXISTS "messages" (
   "hash"             text  NOT NULL,
   "session_id"       uuid  REFERENCES "sessions"("id") ON DELETE SET NULL,
   "deleted_at"       timestamp with time zone,
-  "edited_at"        timestamp with time zone
+  "edited_at"        timestamp with time zone,
+  "ephemeral"        boolean NOT NULL DEFAULT false
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "channel_id" uuid REFERENCES "channels"("id") ON DELETE CASCADE;
@@ -1433,6 +1434,7 @@ ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "hash" text;
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "session_id" uuid REFERENCES "sessions"("id") ON DELETE SET NULL;
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;
 ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "edited_at" timestamp with time zone;
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "ephemeral" boolean NOT NULL DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS "messages_channel_id_idx"
   ON "messages" ("channel_id");
@@ -2223,6 +2225,8 @@ CREATE TABLE IF NOT EXISTS "secrets" (
   "password_last_changed"  timestamp with time zone,
   "is_compromised"         boolean DEFAULT false,
   "compromised_at"         timestamp with time zone,
+  "has_totp"               boolean NOT NULL DEFAULT false,
+  "password_fingerprint"   text,
   "is_shared"              boolean NOT NULL DEFAULT false,
   "capability_id"          uuid,
   "account_hint"           text,
@@ -2257,6 +2261,8 @@ ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "password_strength" integer;
 ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "password_last_changed" timestamp with time zone;
 ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "is_compromised" boolean DEFAULT false;
 ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "compromised_at" timestamp with time zone;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "has_totp" boolean NOT NULL DEFAULT false;
+ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "password_fingerprint" text;
 ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "is_shared" boolean DEFAULT false;
 ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;
 ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "deleted_by" text;
@@ -2273,6 +2279,8 @@ CREATE INDEX IF NOT EXISTS "idx_secrets_user_type"       ON "secrets" ("user_id"
 CREATE INDEX IF NOT EXISTS "idx_secrets_service_id"      ON "secrets" ("service_id");
 CREATE INDEX IF NOT EXISTS "idx_secrets_encryption_mode" ON "secrets" ("encryption_mode");
 CREATE INDEX IF NOT EXISTS "idx_secrets_user_service"    ON "secrets" ("user_id", "service_id");
+-- Watchtower reused-password partition scan (BF-8, 0177)
+CREATE INDEX IF NOT EXISTS "idx_secrets_password_fingerprint" ON "secrets" ("user_id", "password_fingerprint");
 ALTER TABLE "secrets" ADD COLUMN IF NOT EXISTS "provider_integration_id" uuid;
 CREATE INDEX IF NOT EXISTS "idx_secrets_provider_integration" ON "secrets" ("provider_integration_id");
 -- Capability-connection registry (0161)

@@ -9,3 +9,4 @@ export { ViewIndexer } from "./view-indexer.js";
 export { ProjectIndexer } from "./project-indexer.js";
 export { ChannelIndexer } from "./channel-indexer.js";
 export { AgentIndexer } from "./agent-indexer.js";
+export { MessageIndexer } from "./message-indexer.js";

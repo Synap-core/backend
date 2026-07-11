@@ -19,7 +19,9 @@ import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import {
   resolveAgentHandle,
   extractMentionAgentType,
+  extractHumanMentionHandles,
 } from "../utils/agent-handles.js";
+import { NotificationService } from "../notifications/NotificationService.js";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -99,10 +101,33 @@ import type { AIStep, HubResponse } from "@synap-core/types";
 import type { Channel } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects, getBoss } from "@synap/events";
+import { searchService } from "@synap/search";
 import { AgentRepository } from "@synap/database";
 import { resolveVaultReferences } from "../utils/vault-resolver.js";
 
 const logger = createLogger({ module: "channels" });
+
+/**
+ * Derive the set of @handle spellings a human's display name could be mentioned
+ * by. Used to match a plain `@handle` in message content to a channel member.
+ * All lower-cased to match `extractHumanMentionHandles`. E.g. "Antoine Servant"
+ * → {"antoineservant", "antoine", "antoine-servant", "antoine_servant"}.
+ */
+function handleCandidatesFor(name: string | null): Set<string> {
+  const out = new Set<string>();
+  if (!name) return out;
+  const lower = name.trim().toLowerCase();
+  if (!lower) return out;
+  const alnum = lower.replace(/[^a-z0-9]+/g, "");
+  if (alnum) out.add(alnum); // "antoineservant"
+  const firstToken = lower.split(/\s+/)[0]?.replace(/[^a-z0-9]+/g, "");
+  if (firstToken) out.add(firstToken); // "antoine"
+  const hyphen = lower.replace(/\s+/g, "-").replace(/[^a-z0-9-]+/g, "");
+  if (hyphen) out.add(hyphen); // "antoine-servant"
+  const underscore = lower.replace(/\s+/g, "_").replace(/[^a-z0-9_]+/g, "");
+  if (underscore) out.add(underscore); // "antoine_servant"
+  return out;
+}
 
 /** A concrete fetch target produced by the CP query planner. */
 export interface DerivedQuery {
@@ -587,7 +612,10 @@ async function listChannelsWithFlags(params: {
     .where(
       and(
         inArray(messages.channelId, channelIds),
-        eq(messages.role, MessageRole.ASSISTANT)
+        eq(messages.role, MessageRole.ASSISTANT),
+        // Ephemeral replies vanish on reload — they don't mark a channel as
+        // "has an assistant reply".
+        eq(messages.ephemeral, false)
       )
     );
   const channelIdsWithAssistant = new Set(
@@ -616,6 +644,9 @@ async function listChannelsWithFlags(params: {
             and(
               inArray(messages.channelId, channelIds),
               isNull(messages.deletedAt),
+              // Ephemeral messages disappear on reload — they must not drive an
+              // unread badge that would then point at nothing.
+              eq(messages.ephemeral, false),
               // Unread = no read marker OR message is newer than the marker.
               drizzleSql`(${channelMembers.lastReadAt} IS NULL OR ${messages.timestamp} > ${channelMembers.lastReadAt})`
             )
@@ -1338,6 +1369,13 @@ export const channelsRouter = router({
         contextObjectId: z.string().uuid().optional(),
         contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
         branchPurpose: z.string().max(500).optional(),
+        /**
+         * Ephemeral turn — the user message AND the assistant reply are delivered
+         * live over the realtime socket but excluded from channel history, so
+         * they disappear on reload. Powers "catch me up" recaps: visible live,
+         * gone on refresh. No @mention notifications fire for ephemeral messages.
+         */
+        ephemeral: z.boolean().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1516,7 +1554,68 @@ export const channelsRouter = router({
         previousHash: "",
         hash: userMessageHash,
         sessionId: activeSessionId ?? undefined,
+        ephemeral: input.ephemeral ?? false,
       });
+
+      // Human @mention notifications — DISTINCT from agent @handles (which route
+      // to an AI, above). Resolve the plain @handles that are NOT agent handles
+      // against this channel's HUMAN members and notify each (excluding the
+      // sender / self-mentions). Skipped for ephemeral messages: they vanish on
+      // reload, so a durable notification would point at nothing.
+      if (!input.ephemeral) {
+        const humanHandles = extractHumanMentionHandles(content);
+        if (humanHandles.length > 0) {
+          try {
+            const humanMembers = await db
+              .select({ memberId: channelMembers.memberId, name: users.name })
+              .from(channelMembers)
+              .innerJoin(users, eq(users.id, channelMembers.memberId))
+              .where(
+                and(
+                  eq(channelMembers.channelId, channelId),
+                  eq(channelMembers.memberKind, ChannelMemberKind.HUMAN)
+                )
+              );
+
+            // Resolve sender display name (for the notification title) once.
+            const senderRow = humanMembers.find((m) => m.memberId === userId);
+            const senderName = senderRow?.name ?? "Someone";
+            const preview =
+              content.length > 140 ? `${content.slice(0, 140)}…` : content;
+
+            const notified = new Set<string>();
+            for (const member of humanMembers) {
+              if (member.memberId === userId) continue; // no self-mention
+              if (notified.has(member.memberId)) continue;
+              // A member matches a handle when a normalized form of their display
+              // name equals one of the mentioned handles.
+              const candidates = handleCandidatesFor(member.name);
+              if (!humanHandles.some((h) => candidates.has(h))) continue;
+              notified.add(member.memberId);
+
+              await NotificationService.create({
+                type: "chat.mention",
+                userId: member.memberId,
+                workspaceId: workspaceId ?? channel.workspaceId ?? null,
+                sourceType: "system",
+                sourceId: channelId,
+                data: {
+                  sender: senderName,
+                  preview,
+                  channelId,
+                  messageId: userMessageId,
+                },
+              });
+            }
+          } catch (err) {
+            // Non-fatal — a failed mention notification must never fail the send.
+            logger.warn(
+              { err, channelId },
+              "human @mention notification failed"
+            );
+          }
+        }
+      }
 
       // Link attachment entities to channel context
       if (input.attachmentEntityIds?.length) {
@@ -2141,6 +2240,15 @@ export const channelsRouter = router({
                 type: "complete",
                 isComplete: true,
                 agentType: completedAgentType,
+                // Originating user message id — lets the FE pair this completion
+                // to its trigger deterministically (replaces clock-skew guessing
+                // in useCatchMeUp). Additive; existing consumers ignore it.
+                triggerMessageId: userMessageId,
+                // When the trigger was ephemeral (catch-me-up recap), flag the
+                // completion so the room's useChannelStream skips promoting this
+                // reply into the persisted message cache (it lives only in the
+                // recap panel, never as a stray room-timeline message).
+                ephemeral: input.ephemeral === true,
               },
               workspaceId: workspaceId ?? null,
               userId: userId,
@@ -2330,6 +2438,9 @@ export const channelsRouter = router({
           userId,
           metadata: messageMetadata,
           sessionId: activeSessionId ?? null,
+          // Mirror the trigger's transience: an ephemeral request gets an
+          // ephemeral reply (live over socket, excluded from history).
+          ephemeral: input.ephemeral === true,
           // Routed attribution: which teammate answered + how it was selected.
           // Null for non-routed (single-responder) messages — back-compat.
           routed: routingDecision
@@ -2602,6 +2713,8 @@ export const channelsRouter = router({
         where: and(
           eq(messages.channelId, input.threadId),
           isNull(messages.deletedAt),
+          // Ephemeral messages are live-only — never surface them on (re)load.
+          eq(messages.ephemeral, false),
           input.cursor ? lt(messages.id, input.cursor) : undefined
         ),
         orderBy: [desc(messages.timestamp)],
@@ -2650,7 +2763,9 @@ export const channelsRouter = router({
       const allMessages = await db.query.messages.findMany({
         where: and(
           eq(messages.channelId, input.channelId),
-          isNull(messages.deletedAt)
+          isNull(messages.deletedAt),
+          // Ephemeral messages are live-only — excluded from the timeline.
+          eq(messages.ephemeral, false)
         ),
         orderBy: [asc(messages.timestamp)],
         limit: input.limit * 2,
@@ -3140,11 +3255,17 @@ export const channelsRouter = router({
 
       const channelIds = allChannels.map((c) => c.id);
 
-      // Count messages per channel
+      // Count messages per channel (excluding ephemeral — they vanish on reload,
+      // so they must not inflate a persisted per-channel activity count).
       const messageCounts = await db
         .select({ channelId: messages.channelId })
         .from(messages)
-        .where(inArray(messages.channelId, channelIds));
+        .where(
+          and(
+            inArray(messages.channelId, channelIds),
+            eq(messages.ephemeral, false)
+          )
+        );
       const messageCountMap: Record<string, number> = {};
       for (const row of messageCounts) {
         if (row.channelId) {
@@ -3603,11 +3724,14 @@ export const channelsRouter = router({
       });
       if (!channel) return { pruned: false };
 
-      // Count non-deleted user/assistant messages
+      // Count non-deleted, non-ephemeral user/assistant messages. A branch that
+      // only ever held ephemeral (live-only) messages is empty on reload, so it
+      // is safe to prune.
       const msgs = await db.query.messages.findMany({
         where: and(
           eq(messages.channelId, input.channelId),
-          isNull(messages.deletedAt)
+          isNull(messages.deletedAt),
+          eq(messages.ephemeral, false)
         ),
         columns: { id: true },
         limit: 1,
@@ -3870,7 +3994,7 @@ export const channelsRouter = router({
       }
 
       // Soft-delete all messages at or after the anchor timestamp
-      await db
+      const deleted = await db
         .update(messages)
         .set({ deletedAt: new Date() })
         .where(
@@ -3879,7 +4003,20 @@ export const channelsRouter = router({
             gte(messages.timestamp, anchor.timestamp),
             isNull(messages.deletedAt)
           )
-        );
+        )
+        .returning({ id: messages.id });
+
+      // Typesense has no delete-by-filter — emit ONE delete side-effect per
+      // soft-deleted message id so each drops out of the content index.
+      for (const row of deleted) {
+        emitSideEffects({
+          subjectType: "channel_message",
+          action: "delete",
+          subjectId: row.id,
+          userId: ctx.userId,
+          data: { channelId: input.channelId },
+        });
+      }
 
       return { ok: true };
     }),
@@ -4088,6 +4225,15 @@ export const channelsRouter = router({
         .where(eq(messages.id, input.messageId))
         .returning();
 
+      // Re-index the edited content in Typesense (message-content search).
+      emitSideEffects({
+        subjectType: "channel_message",
+        action: "update",
+        subjectId: input.messageId,
+        userId: ctx.userId,
+        data: { channelId: msg.channelId },
+      });
+
       return { message: updated };
     }),
 
@@ -4121,6 +4267,15 @@ export const channelsRouter = router({
           and(eq(messages.id, input.messageId), isNull(messages.deletedAt))
         );
 
+      // Remove from the Typesense message-content index.
+      emitSideEffects({
+        subjectType: "channel_message",
+        action: "delete",
+        subjectId: input.messageId,
+        userId: ctx.userId,
+        data: { channelId: msg.channelId },
+      });
+
       return { success: true as const };
     }),
 
@@ -4152,12 +4307,53 @@ export const channelsRouter = router({
         where: and(
           eq(messages.channelId, input.channelId),
           isNull(messages.deletedAt),
+          // Ephemeral messages never persist to reload, so they can't be pinned.
+          eq(messages.ephemeral, false),
           drizzleSql`${messages.metadata}->>'pinned' = 'true'`
         ),
         orderBy: [asc(messages.timestamp)],
       });
 
       return { messages: pinned };
+    }),
+
+  /**
+   * Full-text search over message CONTENT within a single channel (Typesense).
+   *
+   * RLS crux: visibility is proven by the DB channel-access gate FIRST — the
+   * SAME canonical `channelVisibilityWhere` predicate `getMessages` /
+   * `listPinnedMessages` use. Only after that passes do we query Typesense,
+   * HARD-pinned to this one `channelId`. We never rely on Typesense's static
+   * `userId:=` field for visibility (channels are multi-author / shared): the DB
+   * check is the gate; the Typesense filter is `channelId:=<id>` only.
+   */
+  searchMessages: protectedProcedure
+    .input(
+      z.object({
+        channelId: z.string().uuid(),
+        query: z.string().min(1).max(500),
+        limit: z.number().min(1).max(50).default(20),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const channel = await db.query.channels.findFirst({
+        where: and(
+          eq(channels.id, input.channelId),
+          channelVisibilityWhere(ctx.userId)
+        ),
+      });
+      if (!channel) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Channel not found or access denied",
+        });
+      }
+
+      return searchService.searchCollection("messages", input.query, {
+        userId: ctx.userId,
+        channelId: input.channelId,
+        limit: input.limit,
+      });
     }),
 
   /**

@@ -385,7 +385,13 @@ chatStreamApp.get("/history", async (c) => {
 
   // ── Fetch messages (user + assistant only, newest first, then reverse) ─────
   const rows = await db.query.messages.findMany({
-    where: and(eq(messages.channelId, channelId), isNull(messages.deletedAt)),
+    // Exclude ephemeral recaps (catch-me-up) — they must never restore into a
+    // fresh client's history, matching the tRPC history reads in channels.ts.
+    where: and(
+      eq(messages.channelId, channelId),
+      isNull(messages.deletedAt),
+      eq(messages.ephemeral, false)
+    ),
     orderBy: [desc(messages.timestamp)],
     limit,
     columns: {

@@ -62,3 +62,23 @@ export function extractMentionAgentType(content: string): string | null {
   if (!match) return null;
   return match[1];
 }
+
+/**
+ * Extract HUMAN @mention handles from message content — the mentions that should
+ * NOTIFY people, as opposed to the agent handles (`AGENT_HANDLE_MAP`) that ROUTE
+ * to an AI. Returns every distinct `@handle` in the content that is NOT a known
+ * agent handle, lower-cased and de-duplicated. Callers resolve these against the
+ * channel's human participants to decide who to notify.
+ */
+export function extractHumanMentionHandles(content: string): string[] {
+  const matches = content.match(/@([\w-]+)/g);
+  if (!matches) return [];
+  const seen = new Set<string>();
+  for (const raw of matches) {
+    const handle = raw.replace(/^@/, "").trim().toLowerCase();
+    // Skip agent handles — those route to AI, they don't notify a person.
+    if (!handle || AGENT_HANDLE_MAP[handle]) continue;
+    seen.add(handle);
+  }
+  return [...seen];
+}

@@ -10,6 +10,43 @@ import { events } from "@synap/database/schema";
 import { randomUUID } from "crypto";
 
 /**
+ * The closed set of valid event sources — mirrors `SynapEventSchema` in
+ * `@synap-core/core`. `events.source` is a plain `text` column (no DB check
+ * constraint), and THIS raw-insert path has no Zod gate (unlike `auditLog`),
+ * so without a guard an invalid source (e.g. the legacy `"agent"`) drifts
+ * silently into the event spine — a class of data-integrity bug that consumers
+ * treating `source` as a closed union then mis-handle. `normalizeEventSource`
+ * is the ONE place that guarantees a valid value: it maps known legacy aliases
+ * to their canonical member and coerces anything else to `"api"` with a warn.
+ */
+const VALID_EVENT_SOURCES = new Set([
+  "api",
+  "automation",
+  "sync",
+  "migration",
+  "system",
+  "intelligence",
+]);
+
+/** Legacy/business values callers have historically passed as a `source`. */
+const EVENT_SOURCE_ALIASES: Record<string, string> = {
+  agent: "intelligence", // agent authorship lives on agentUserId, not source
+  ai: "intelligence",
+  user: "api",
+};
+
+export function normalizeEventSource(
+  source: string | undefined | null
+): string {
+  if (!source) return "api";
+  if (VALID_EVENT_SOURCES.has(source)) return source;
+  const aliased = EVENT_SOURCE_ALIASES[source];
+  if (aliased) return aliased;
+  console.warn(`[Event] coercing unknown event source "${source}" → "api"`);
+  return "api";
+}
+
+/**
  * Base event logging function.
  *
  * Returns the id of the inserted event so callers (e.g. the permission gate)
@@ -43,7 +80,7 @@ export async function logEvent(
     subjectId: options?.subjectId || "unknown",
     subjectType: options?.subjectType || "unknown",
     metadata: options?.metadata || {},
-    source: options?.source || "api",
+    source: normalizeEventSource(options?.source),
     timestamp: new Date(),
   });
 

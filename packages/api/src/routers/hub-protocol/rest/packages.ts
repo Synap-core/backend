@@ -305,7 +305,8 @@ export function registerPackagesRoutes(app: HubHono): void {
             flowDefinition: a.flowDefinition ?? { nodes: [], edges: [] },
             status: a.status,
             agentUserId,
-            source: agentUserId ? "agent" : "intelligence",
+            // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+            source: "intelligence",
           } as any);
           autos.push({ name: a.name, status: "created", id: (r as any).id });
         } catch (e) {
@@ -337,7 +338,8 @@ export function registerPackagesRoutes(app: HubHono): void {
             schedule: p.schedule,
             status: p.status,
             agentUserId,
-            source: agentUserId ? "agent" : "intelligence",
+            // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+            source: "intelligence",
           } as any);
           pbs.push({
             name: p.name,

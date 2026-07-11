@@ -19,7 +19,7 @@
   "scripts": {
     "build": "tsc --build",
     "dev": "tsc --watch",
-    "test": "vitest"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@langchain/core": "^1.0.3",

@@ -52,6 +52,12 @@ export interface PersistAssistantReplyParams {
   routed?: { teammateId: string; source: RoutedSource } | null;
   /** Message category override (e.g. CHAT for external-bridge replies). */
   messageCategory?: MessageCategory;
+  /**
+   * When true, the reply is delivered live over the realtime socket but excluded
+   * from channel history/list reads (gone on reload). Used to make an assistant
+   * reply to an ephemeral trigger (e.g. "catch me up") equally transient.
+   */
+  ephemeral?: boolean;
 }
 
 export interface PersistAssistantReplyResult {
@@ -95,6 +101,7 @@ export async function persistAssistantReply(
     ...(params.messageCategory
       ? { messageCategory: params.messageCategory }
       : {}),
+    ...(params.ephemeral ? { ephemeral: true } : {}),
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     ...(params.routed
       ? {

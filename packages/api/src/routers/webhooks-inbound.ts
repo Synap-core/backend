@@ -120,11 +120,19 @@ interface CalcomWebhookConfig {
 
 // Best-effort maintenance update of the event a prior BOOKING_CREATED materialized,
 // matched by calBookingUid. Reschedule → new times/link; cancel → status flag.
+// Returns the number of event rows patched — 0 means the event doesn't exist yet
+// (its capture proposal is still pending approval) or the uid changed. The caller
+// uses that to avoid falsely marking an unapplied reschedule/cancel as "seen".
+//
+// v1 LIMITATION (NEEDS-DOGFOOD against a real Cal.com reschedule): Cal may assign a
+// NEW uid on reschedule (reschedule = cancel-old + new-booking), in which case this
+// won't match the stored event. Verify the real payload before hardening; today a
+// reschedule pre-approval, or with a changed uid, is left for manual reconciliation.
 async function updateBookingEvent(
   uid: string,
   workspaceId: string | null,
   patch: Record<string, unknown>
-): Promise<void> {
+): Promise<number> {
   const rows = await db.query.entities.findMany({
     where: and(
       eq(entities.type, "event"),
@@ -142,6 +150,7 @@ async function updateBookingEvent(
       })
       .where(eq(entities.id, r.id));
   }
+  return rows.length;
 }
 
 webhooksInboundRouter.post("/calcom/:token", async (c) => {
@@ -208,6 +217,9 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
 
   // Do the work best-effort. On failure we STILL 200 (Cal retries on non-2xx,
   // which would storm) — the backfill poller is the safety net for a lost event.
+  // `markSeen` is only set once the work actually landed, so an unapplied
+  // reschedule/cancel (event not materialized yet) is NOT recorded as handled.
+  let markSeen = false;
   try {
     if (trigger === "BOOKING_CREATED") {
       const actor = (await getCaptureAgentUserId()) ?? ownerUserId;
@@ -219,15 +231,30 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
         relations,
         summary: `Cal.com booking — ${payload.title ?? uid}`,
       });
+      markSeen = true;
     } else if (trigger === "BOOKING_RESCHEDULED") {
       const startDate = (payload.startTime ?? payload.start)?.trim();
       const endDate = (payload.endTime ?? payload.end)?.trim();
-      await updateBookingEvent(uid, workspaceId, {
+      const matched = await updateBookingEvent(uid, workspaceId, {
         ...(startDate ? { startDate } : {}),
         ...(endDate ? { endDate } : {}),
       });
+      markSeen = matched > 0;
+      if (!matched)
+        logger.info(
+          { toolId: calTool.id, uid },
+          "cal.com webhook: reschedule not applied — event not yet materialized or uid changed (left unmarked, not reconciled in v1)"
+        );
     } else if (trigger === "BOOKING_CANCELLED") {
-      await updateBookingEvent(uid, workspaceId, { status: "cancelled" });
+      const matched = await updateBookingEvent(uid, workspaceId, {
+        status: "cancelled",
+      });
+      markSeen = matched > 0;
+      if (!matched)
+        logger.info(
+          { toolId: calTool.id, uid },
+          "cal.com webhook: cancel not applied — event not yet materialized or uid changed (left unmarked)"
+        );
     } else {
       return c.json({ received: true, ignored: true }, 200);
     }
@@ -237,6 +264,11 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
       "cal.com webhook: handler failed (backfill will retry)"
     );
     return c.json({ received: true, deferred: true }, 200);
+  }
+
+  // Nothing landed (e.g. a pre-approval reschedule) → don't mark seen, just ack.
+  if (!markSeen) {
+    return c.json({ received: true, unapplied: true }, 200);
   }
 
   // Mark seen. Single-LEAF jsonb_set computed entirely in-statement: writing

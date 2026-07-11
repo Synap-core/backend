@@ -26,12 +26,7 @@ import {
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import {
-  hasScope,
-  logger,
-  resolveActingContext,
-  type HubHono,
-} from "./_shared.js";
+import { hasScope, logger, type HubHono } from "./_shared.js";
 
 const ByTargetWorkspaceSchema = z
   .object({
@@ -103,15 +98,23 @@ export function registerObservabilityRoutes(app: HubHono): void {
         403
       );
     }
-    const acting = await resolveActingContext(c, {
-      userId: c.req.query("userId") ?? undefined,
-    });
-    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-    const { userId } = acting;
+    // Read scoping: derive the acting user from the auth-middleware floor
+    // (`c.get("userId")` already resolves is_internal→operator and
+    // agent→linkedUserId), NEVER a caller-supplied `?userId=` param. Honoring
+    // the query param — as the write-path `resolveActingContext` does for
+    // service keys — let ANY hub-protocol.read key read another user's routing
+    // telemetry (cross-user IDOR). This mirrors `getCaller`'s intentional
+    // read-path asymmetry: caller-supplied userId is ignored on reads.
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthorized" }, 401);
 
-    const windowDays = Math.max(
-      1,
-      parseInt(c.req.query("windowDays") ?? "30", 10) || 30
+    // Clamp the window: floor at 1 day, ceiling at 365 — an unbounded
+    // `windowDays` (e.g. 1_000_000) would widen the per-user event scan and
+    // in-memory aggregation without limit, a cheap DoS multiplier a caller
+    // could hammer against the pod's edge rate limit.
+    const windowDays = Math.min(
+      365,
+      Math.max(1, parseInt(c.req.query("windowDays") ?? "30", 10) || 30)
     );
     const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
 

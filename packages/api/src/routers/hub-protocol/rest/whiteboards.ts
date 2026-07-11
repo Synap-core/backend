@@ -162,7 +162,8 @@ export function registerWhiteboardsRoutes(app: HubHono) {
         workspaceId: body.workspaceId,
         subjectType: "whiteboard",
         action: "place",
-        source: agentUserId ? "agent" : "intelligence",
+        // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
+        source: "intelligence",
         data: {
           viewId,
           resources: body.resources,

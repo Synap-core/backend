@@ -18,7 +18,12 @@
  *   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
  */
 
-import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHmac,
+  randomBytes,
+} from "crypto";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "server-vault" });
@@ -100,6 +105,28 @@ export function decryptConfig(
     logger.warn({ err }, "Failed to decrypt server-side config blob");
     return null;
   }
+}
+
+/**
+ * Keyed fingerprint of a password for server-side reused-password detection
+ * (Watchtower BF-8). Returns HMAC-SHA256(VAULT_SERVER_KEY, normalize(password))
+ * as lowercase hex — a deterministic digest so two secrets sharing a password
+ * yield the same fingerprint, WITHOUT ever storing or re-deriving the plaintext.
+ *
+ * HMAC keyed by VAULT_SERVER_KEY (not a bare SHA-256) means the fingerprint
+ * column alone is useless to an attacker: an offline dictionary attack is
+ * impossible without the server key. Normalization (trim + lowercase) collapses
+ * trivial whitespace/casing variants so they still count as "reused".
+ *
+ * Computed at WRITE time where the plaintext is already in hand — never by
+ * decrypting stored rows. Returns null for an empty/whitespace-only password.
+ */
+export function fingerprintPassword(password: string): string | null {
+  const normalized = password.trim().toLowerCase();
+  if (!normalized) return null;
+  return createHmac("sha256", getServerKey())
+    .update(normalized, "utf8")
+    .digest("hex");
 }
 
 /** True when VAULT_SERVER_KEY is configured and valid length. */

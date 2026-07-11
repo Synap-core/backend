@@ -13,7 +13,7 @@
   "scripts": {
     "build": "tsc --build",
     "dev": "tsc --watch",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   }

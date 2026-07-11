@@ -8,6 +8,7 @@ export { viewsCollectionSchema } from "./views.js";
 export { projectsCollectionSchema } from "./projects.js";
 export { channelsCollectionSchema } from "./channels.js";
 export { agentsCollectionSchema } from "./agents.js";
+export { messagesCollectionSchema } from "./messages.js";
 
 export const ALL_COLLECTIONS = [
   "entities",
@@ -16,6 +17,7 @@ export const ALL_COLLECTIONS = [
   "projects",
   "channels",
   "agents",
+  "messages",
 ] as const;
 
 export type CollectionName = (typeof ALL_COLLECTIONS)[number];

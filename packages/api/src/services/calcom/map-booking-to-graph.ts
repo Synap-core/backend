@@ -41,7 +41,6 @@ export interface CalBookingPayload {
     email?: string;
     timeZone?: string;
   }> | null;
-  organizer?: { name?: string; email?: string } | null;
 }
 
 export interface BookingGraph {
