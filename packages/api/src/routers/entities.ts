@@ -63,6 +63,7 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { resolveViewTrust } from "../services/view-trust-service.js";
 import { auditLog } from "../utils/audit-log.js";
+import { emitAiCorrection } from "../utils/ai-feedback-events.js";
 import {
   emitSideEffects,
   getBoss,
@@ -1125,17 +1126,23 @@ export const entitiesRouter = router({
       // facet of the given role-profile, visible under the same lens as the
       // entity list itself.
       if (input.facetSlug || input.facetProfileId) {
-        let facetProfileId = input.facetProfileId;
-        if (!facetProfileId && input.facetSlug) {
-          const facetProfile = await db.query.profiles.findFirst({
+        // Same multi-row rule as the profileSlug branch above: one slug can
+        // be carried by several profile rows (system + workspace twins), and
+        // a facet may sit on ANY of them — match every row's id, never a
+        // findFirst pick.
+        let facetProfileIds = input.facetProfileId
+          ? [input.facetProfileId]
+          : [];
+        if (facetProfileIds.length === 0 && input.facetSlug) {
+          const facetProfiles = await db.query.profiles.findMany({
             where: eq(profiles.slug, input.facetSlug),
             columns: { id: true },
           });
-          facetProfileId = facetProfile?.id;
+          facetProfileIds = facetProfiles.map((p) => p.id);
         }
-        if (facetProfileId) {
+        if (facetProfileIds.length > 0) {
           conditions.push(
-            facetRoleExists(db, [facetProfileId], {
+            facetRoleExists(db, facetProfileIds, {
               userId: ctx.userId,
               workspaceId: lensWorkspaceId,
             })
@@ -2589,27 +2596,18 @@ export const entitiesRouter = router({
       // correlationId back to the decision that produced it). Best-effort:
       // never fail the delete over an audit-log hiccup.
       if (existing.correlationId) {
-        try {
-          await auditLog({
-            subjectType: "ai_correction",
-            action: "delete",
-            phase: "completed",
-            subjectId: input.id,
-            userId: ctx.userId,
-            agentUserId: input.agentUserId,
-            workspaceId: governanceWorkspaceId,
-            data: {
-              kind: "extract",
-              entityId: input.id,
-              correlationId: existing.correlationId,
-            },
-          });
-        } catch (err) {
-          logger.warn(
-            { err, entityId: input.id },
-            "ai_correction delete emit failed (delete preserved)"
-          );
-        }
+        await emitAiCorrection({
+          action: "delete",
+          userId: ctx.userId,
+          subjectId: input.id,
+          agentUserId: input.agentUserId,
+          workspaceId: governanceWorkspaceId,
+          data: {
+            kind: "extract",
+            entityId: input.id,
+            correlationId: existing.correlationId,
+          },
+        });
       }
 
       return { status: "deleted", message: "Entity deleted" };
@@ -2745,28 +2743,19 @@ export const entitiesRouter = router({
           // Feedback signal (PRIMARY) — a human rerouted an entity the AI
           // placed via a captured decision. Best-effort: never fail the move.
           if (existing.correlationId) {
-            try {
-              await auditLog({
-                subjectType: "ai_correction",
-                action: "reroute",
-                phase: "completed",
-                subjectId: entityId,
-                userId: ctx.userId,
-                workspaceId: input.workspaceId,
-                data: {
-                  kind: "route",
-                  entityId,
-                  fromWorkspaceId,
-                  toWorkspaceId: input.workspaceId,
-                  correlationId: existing.correlationId,
-                },
-              });
-            } catch (err) {
-              logger.warn(
-                { err, entityId },
-                "ai_correction reroute emit failed (move preserved)"
-              );
-            }
+            await emitAiCorrection({
+              action: "reroute",
+              userId: ctx.userId,
+              subjectId: entityId,
+              workspaceId: input.workspaceId,
+              data: {
+                kind: "route",
+                entityId,
+                fromWorkspaceId,
+                toWorkspaceId: input.workspaceId,
+                correlationId: existing.correlationId,
+              },
+            });
           }
         } catch (err) {
           errors.push({

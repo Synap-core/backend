@@ -1035,11 +1035,17 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
     if (!profileSlug) profileSlug = "note";
 
-    const profile = await db.query.profiles.findFirst({
+    // ALL rows for the slug, not findFirst: twins can carry different
+    // entityScopes and this feeds an AUTH branch (pod-wide skips the
+    // workspace-membership check) — fail closed: only skip the check when the
+    // slug is UNAMBIGUOUSLY pod-wide across every row.
+    const profileRows = await db.query.profiles.findMany({
       where: eq(profiles.slug, profileSlug),
       columns: { entityScope: true },
     });
-    const isPodWide = !profile || profile.entityScope === "pod";
+    const isPodWide =
+      profileRows.length === 0 ||
+      profileRows.every((p) => p.entityScope === "pod");
 
     // Bind the acting identity to the authenticated principal (closes the IDOR:
     // a session caller can't act as another user via body.userId). For

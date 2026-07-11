@@ -144,15 +144,33 @@ export class ProfileRepository {
         )!
       );
     }
-    return (
-      (await this.db.query.profiles.findFirst({
-        where: and(
-          eq(profiles.slug, slug),
-          eq(profiles.isActive, true),
-          or(...scopeBranches)
-        ),
-      })) ?? null
+    // Deterministic twin resolution: one slug can be carried by several rows
+    // (system row + workspace-scope twin). findFirst has no ORDER BY, so which
+    // twin won was arbitrary — and this resolver feeds entities.create's
+    // entityScope decision and FacetRepository.attach's profile pick, making
+    // entity visibility scope nondeterministic on twin slugs. Pick by
+    // specificity (most caller-specific wins), mirroring
+    // getBySlugForWorkspace's priority sort; created_at ASC as tie-break.
+    const rows = await this.db.query.profiles.findMany({
+      where: and(
+        eq(profiles.slug, slug),
+        eq(profiles.isActive, true),
+        or(...scopeBranches)
+      ),
+    });
+    if (rows.length === 0) return null;
+    const priority = (p: Profile) => {
+      if (p.scope === ProfileScope.USER) return 0;
+      if (p.scope === ProfileScope.WORKSPACE) return 1;
+      if (p.scope === ProfileScope.SHARED) return 2;
+      return 3; // system
+    };
+    rows.sort(
+      (a, b) =>
+        priority(a) - priority(b) ||
+        a.createdAt.getTime() - b.createdAt.getTime()
     );
+    return rows[0];
   }
 
   /**
