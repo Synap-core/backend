@@ -1850,8 +1850,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
   // Map tRPC door errors to real HTTP statuses instead of a blanket 500 —
   // an invalid attach (kind-as-facet, wrong applicable kind) is a client
-  // mistake (400), a missing facet/entity is a 404. The central tRPC
-  // error-mapper has already wrapped db domain errors into TRPCError codes.
+  // mistake (400), a missing facet/entity is a 404.
   // Duck-typed on `.code` rather than `instanceof TRPCError`: the bundled
   // build carries its own TRPCError class identity, so instanceof fails
   // across the boundary (verified live — 9fb3e7d4 shipped and still 500'd).
@@ -1863,6 +1862,22 @@ export function registerEntitiesRoutes(app: HubHono): void {
     if (code === "BAD_REQUEST") return 400;
     if (code === "FORBIDDEN" || code === "UNAUTHORIZED") return 403;
     if (code === "NOT_FOUND") return 404;
+    // Raw @synap/database domain errors: these routes call the tRPC door via
+    // createCaller, where the central mapDbError hook never runs — so the raw
+    // error lands here with no `.code` (verified live: kind-as-facet attach
+    // returned 500 with the right message). Duck-type on `.name` (same
+    // bundle-identity rationale as `.code`), mirroring mapDbError's table.
+    const name =
+      err && typeof err === "object" && "name" in err
+        ? (err as { name?: unknown }).name
+        : undefined;
+    if (
+      name === "FacetProfileKindError" ||
+      name === "FacetKindMismatchError" ||
+      name === "PropertyValidationError"
+    )
+      return 400;
+    if (name === "ProfileNotFoundError") return 404;
     return 500;
   };
 
