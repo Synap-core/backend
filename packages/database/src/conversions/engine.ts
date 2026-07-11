@@ -248,9 +248,13 @@ async function recordLedger(
   counts: OpCounts,
   error: string | null
 ): Promise<void> {
+  // NEVER use sql.json()/tx.json() in this module: postgres.js 3.4.8 fails to
+  // serialize the json Parameter on the pod's driver (Buffer.byteLength gets
+  // the raw object at Bind → "string argument must be of type string" → boot
+  // abort). Pass pre-stringified JSON with an explicit ::jsonb cast instead.
   await sql`
     INSERT INTO "_conversions" ("op_key", "dry_run", "counts", "error")
-    VALUES (${opKey}, false, ${sql.json(counts as any)}, ${error})
+    VALUES (${opKey}, false, ${JSON.stringify(counts)}::jsonb, ${error})
     ON CONFLICT ("op_key") DO UPDATE SET
       "applied_at" = now(),
       "dry_run"    = EXCLUDED."dry_run",
@@ -312,7 +316,7 @@ async function applySeedKindProfile(
 ): Promise<OpCounts> {
   const inserted = await tx`
     INSERT INTO profiles (slug, display_name, ui_hints, scope, entity_scope, profile_kind)
-    SELECT ${op.slug}, ${op.displayName}, ${tx.json((op.uiHints ?? {}) as any)},
+    SELECT ${op.slug}, ${op.displayName}, ${JSON.stringify(op.uiHints ?? {})}::jsonb,
            'system', ${op.entityScope}, 'kind'
     WHERE NOT EXISTS (
       SELECT 1 FROM profiles WHERE slug = ${op.slug} AND scope = 'system'
@@ -427,7 +431,7 @@ export async function applyConvertToFacet(
         ${contextExpr},
         COALESCE((
           SELECT jsonb_strip_nulls(jsonb_object_agg(pair->>1, e.properties -> (pair->>0)))
-          FROM jsonb_array_elements(${tx.json(mappingPairs as never)}) AS pair
+          FROM jsonb_array_elements(${JSON.stringify(mappingPairs)}::jsonb) AS pair
           WHERE e.properties ? (pair->>0)
         ), '{}'::jsonb),
         jsonb_build_object('convertedFrom', ${op.slug}::text, 'convertedBy', ${op.opKey}::text),
