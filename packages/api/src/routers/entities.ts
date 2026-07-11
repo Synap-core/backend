@@ -32,9 +32,8 @@ import {
   DocumentRepository,
   FacetRepository,
   getEffectiveFacets,
-  facetVisibilityConditions,
+  facetRoleExists,
   drizzleSql,
-  exists,
   links,
   type LinkEndpointType,
   type LinkType,
@@ -54,7 +53,6 @@ import {
   entityExternalLinks,
   userEntityState,
   profiles,
-  entityFacets,
 } from "@synap/database/schema";
 import { type Entity, EntitySchema } from "@synap-core/types";
 import { entityToWire } from "./hub-protocol/rest/_codecs/entity.js";
@@ -1014,24 +1012,47 @@ export const entitiesRouter = router({
       }
 
       if (input.profileSlug) {
-        // Resolve profile slugs to query (optionally including child profiles)
         const database = await getDb();
-        const profileService = new ProfileResolutionService(database);
 
-        let profileSlugs = [input.profileSlug];
-        if (input.includeDescendants) {
-          const descendants = await profileService.getDescendantSlugs(
-            input.profileSlug,
-            ctx.workspaceId ?? undefined
+        // Kind + Facets: a profileSlug can now name either a primary `kind`
+        // (entities carry it as their `type`/profileId) or an attachable
+        // `role` (entities carry it as a live facet). `convertToFacet` flips
+        // profile_kind in place — same slug — so a slug that filtered by
+        // `entities.type` before conversion must resolve to the SAME entities
+        // via the facet-EXISTS after. Resolve the slug's kind to route.
+        const slugProfile = await database.query.profiles.findFirst({
+          where: eq(profiles.slug, input.profileSlug),
+          columns: { id: true, profileKind: true },
+        });
+
+        if (slugProfile?.profileKind === "role") {
+          // Role profile: match entities carrying it as a live facet, via the
+          // same one-door EXISTS the `facetSlug` filter uses.
+          conditions.push(
+            facetRoleExists(database, [slugProfile.id], {
+              userId: ctx.userId,
+              workspaceId: lensWorkspaceId,
+            })
           );
-          profileSlugs = [input.profileSlug, ...descendants];
-        }
-
-        // Use inArray for multiple slugs, eq for single (simpler query plan)
-        if (profileSlugs.length === 1) {
-          conditions.push(eq(entities.type, profileSlugs[0]));
         } else {
-          conditions.push(inArray(entities.type, profileSlugs));
+          // Kind profile (default / unconverted): match by primary type, with
+          // optional descendant expansion over the kind hierarchy.
+          const profileService = new ProfileResolutionService(database);
+          let profileSlugs = [input.profileSlug];
+          if (input.includeDescendants) {
+            const descendants = await profileService.getDescendantSlugs(
+              input.profileSlug,
+              ctx.workspaceId ?? undefined
+            );
+            profileSlugs = [input.profileSlug, ...descendants];
+          }
+
+          // Use inArray for multiple slugs, eq for single (simpler query plan)
+          if (profileSlugs.length === 1) {
+            conditions.push(eq(entities.type, profileSlugs[0]));
+          } else {
+            conditions.push(inArray(entities.type, profileSlugs));
+          }
         }
 
         // Pod-default and workspace-scoped profiles share the same read filter
@@ -1064,22 +1085,10 @@ export const entitiesRouter = router({
         }
         if (facetProfileId) {
           conditions.push(
-            exists(
-              db
-                .select({ one: drizzleSql`1` })
-                .from(entityFacets)
-                .where(
-                  and(
-                    eq(entityFacets.entityId, entities.id),
-                    eq(entityFacets.profileId, facetProfileId),
-                    isNull(entityFacets.deletedAt),
-                    ...facetVisibilityConditions({
-                      userId: ctx.userId,
-                      workspaceId: lensWorkspaceId,
-                    })
-                  )
-                )
-            )!
+            facetRoleExists(db, [facetProfileId], {
+              userId: ctx.userId,
+              workspaceId: lensWorkspaceId,
+            })
           );
         } else {
           // Unknown facetSlug — no entity can match; short-circuit to empty.

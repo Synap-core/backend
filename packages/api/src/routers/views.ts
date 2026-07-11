@@ -36,7 +36,9 @@ import {
   documents,
   documentVersions,
   entities,
+  profiles,
   relations,
+  profileScopeConditions,
   ViewFilterCompiler,
   PropertyMergingService,
   ViewDefaultColumnsService,
@@ -862,9 +864,26 @@ export const viewsRouter = router({
         conditions.push(projectLensWhere(entities.id, input.projectId));
       }
 
-      // Filter by scope profiles (profileId FK)
+      // Filter by scope profiles — polymorphic (Kind + Facets). A scope id can
+      // name either a primary `kind` (match entities.profileId) or an
+      // attachable `role`/facet (match via facetRoleExists). `convertToFacet`
+      // flips profile_kind in place, so the same stored scopeProfileIds must
+      // resolve to the same entities before and after conversion — hence the
+      // per-id kind lookup + polymorphic helper rather than a blanket
+      // inArray(entities.profileId, …). The facet branch is lensed by the
+      // view's own owner (ctx.userId) + workspace (lensWorkspaceId).
       if (view.scopeProfileIds && view.scopeProfileIds.length > 0) {
-        conditions.push(inArray(entities.profileId, view.scopeProfileIds));
+        const scopeProfiles = await db.query.profiles.findMany({
+          where: inArray(profiles.id, view.scopeProfileIds),
+          columns: { id: true, profileKind: true },
+        });
+        const scopeCondition = profileScopeConditions(db, scopeProfiles, {
+          userId: ctx.userId,
+          workspaceId: lensWorkspaceId,
+        });
+        // All scope ids resolved to nothing (deleted profiles) → match no rows
+        // rather than leaving the scope unfiltered.
+        conditions.push(scopeCondition ?? pgSql`false`);
       }
 
       // Pre-resolve property definitions (avoid N+1), scoped to the

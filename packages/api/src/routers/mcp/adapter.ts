@@ -448,6 +448,10 @@ export async function executeMCPToolViaHubProtocol(
           entityScope: p.entityScope,
           description: p.description ?? null,
           icon: p.icon ?? null,
+          // Kind + Facets discriminator — lets an agent tell a primary type
+          // (kind) from an attachable facet (role) before creating entities.
+          profileKind: p.profileKind ?? "kind",
+          applicableKinds: p.applicableKinds ?? null,
         };
         if (workspaceId !== undefined) base.workspaceId = workspaceId;
         return base;

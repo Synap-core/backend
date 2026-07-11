@@ -34,6 +34,20 @@ const DiscoverPropertySchema = z.object({
   required: z.boolean().optional(),
 });
 
+/** Kind + Facets discriminator, surfaced on every profile-listing read. */
+const ProfileKindSchema = z
+  .enum(["kind", "role"])
+  .describe(
+    "kind = primary entity type (an entity IS one); role = attachable facet (an entity HAS one, via entity_facets)"
+  );
+const ApplicableKindsSchema = z
+  .array(z.string())
+  .nullable()
+  .optional()
+  .describe(
+    "For profileKind='role': the kind slugs this role may attach to (null/absent = any kind)."
+  );
+
 /** Summary tier — lightweight, no property schemas, no entity counts. */
 export const DiscoverProfileSummarySchema = z.object({
   slug: z.string(),
@@ -43,6 +57,8 @@ export const DiscoverProfileSummarySchema = z.object({
     .describe("pod = visible in all workspaces; workspace = scoped to one"),
   description: z.string().nullable().optional(),
   icon: z.string().nullable().optional(),
+  profileKind: ProfileKindSchema.optional(),
+  applicableKinds: ApplicableKindsSchema,
 });
 
 /** Full tier — includes property schemas + create command. */
@@ -54,6 +70,8 @@ const DiscoverProfileSchema = z.object({
     .describe("pod = visible in all workspaces; workspace = scoped to one"),
   description: z.string().nullable().optional(),
   icon: z.string().nullable().optional(),
+  profileKind: ProfileKindSchema.optional(),
+  applicableKinds: ApplicableKindsSchema,
   properties: z.array(DiscoverPropertySchema),
   createCommand: z
     .string()
@@ -142,6 +160,8 @@ export function registerDiscoverRoutes(app: HubHono): void {
         description?: string | null;
         entityScope?: string;
         icon?: string | null;
+        profileKind?: "kind" | "role";
+        applicableKinds?: string[] | null;
       }[];
 
       // ── Summary tier: slugs + displayNames + scopes only (~2KB) ──
@@ -152,6 +172,8 @@ export function registerDiscoverRoutes(app: HubHono): void {
           scope: (p.entityScope ?? "workspace") as "pod" | "workspace",
           description: p.description ?? null,
           icon: p.icon ?? null,
+          profileKind: p.profileKind ?? "kind",
+          applicableKinds: p.applicableKinds ?? null,
         }));
 
         return c.json({
@@ -204,6 +226,8 @@ export function registerDiscoverRoutes(app: HubHono): void {
           scope: (p.entityScope ?? "workspace") as "pod" | "workspace",
           description: p.description ?? null,
           icon: p.icon ?? null,
+          profileKind: p.profileKind ?? "kind",
+          applicableKinds: p.applicableKinds ?? null,
           properties,
           createCommand: `synap create entity --profile ${p.slug} --name "<title>"${propExample} --json`,
         };

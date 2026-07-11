@@ -14,10 +14,11 @@
  */
 
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import { and, eq, inArray, isNull, type SQL } from "drizzle-orm";
+import { and, eq, exists, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import type * as schema from "../schema/index.js";
 import type { Profile } from "../schema/profiles.js";
 import { profiles } from "../schema/profiles.js";
+import { entities } from "../schema/entities.js";
 import { entityFacets, type EntityFacet } from "../schema/entity-facets.js";
 import { facetVisibilityConditions } from "../utils/facet-visibility.js";
 import {
@@ -64,6 +65,74 @@ export async function loadFacetSlugsBatch(
     else out.set(row.entityId, [row.slug]);
   }
   return out;
+}
+
+/**
+ * The ONE facet-EXISTS predicate over the OUTER `entities` row: true when the
+ * entity carries a live facet whose role-profile is in `roleProfileIds`,
+ * visible under the given lens (`facetVisibilityConditions`). Correlates on
+ * `entities.id`, so it must be composed into a query that selects from the
+ * `entities` schema table.
+ *
+ * This is the single source for the entity→role-facet scope test — both
+ * `entities.list` (its `facetSlug` filter AND its polymorphic `profileSlug`
+ * routing) and `views.execute` (the role branch of `scopeProfileIds`) go
+ * through here so the EXISTS is never hand-rolled twice (see also
+ * `profileScopeConditions`).
+ */
+export function facetRoleExists(
+  db: PostgresJsDatabase<typeof schema>,
+  roleProfileIds: string[],
+  opts: { userId: string; workspaceId?: string | null }
+): SQL {
+  return exists(
+    db
+      .select({ one: sql`1` })
+      .from(entityFacets)
+      .where(
+        and(
+          eq(entityFacets.entityId, entities.id),
+          inArray(entityFacets.profileId, roleProfileIds),
+          isNull(entityFacets.deletedAt),
+          ...facetVisibilityConditions(opts)
+        )
+      )
+  );
+}
+
+/**
+ * Polymorphic profile-scope predicate for a set of profiles pre-tagged with
+ * their `profileKind`. A view/list scoped by profile id is kind-blind, but a
+ * profile can be either the entity's primary `kind` (matched via
+ * `entities.profileId`) or an attachable `role`/facet (matched via
+ * `facetRoleExists`). `convertToFacet` flips `profile_kind` in place — same
+ * profile id — and repoints + facets the entities, so the SAME scope id must
+ * resolve to the SAME entity set whether the profile is currently a kind or a
+ * role. This OR-composes the two branches per the caller's mix.
+ *
+ * Returns `undefined` for an empty input (no scope) — callers decide whether
+ * that means "match nothing" (a scoped read that resolved to zero profiles) or
+ * "no filter".
+ */
+export function profileScopeConditions(
+  db: PostgresJsDatabase<typeof schema>,
+  profileRows: Array<{ id: string; profileKind: "kind" | "role" }>,
+  opts: { userId: string; workspaceId?: string | null }
+): SQL | undefined {
+  const kindIds = profileRows
+    .filter((p) => p.profileKind !== "role")
+    .map((p) => p.id);
+  const roleIds = profileRows
+    .filter((p) => p.profileKind === "role")
+    .map((p) => p.id);
+
+  const branches: SQL[] = [];
+  if (kindIds.length > 0) branches.push(inArray(entities.profileId, kindIds));
+  if (roleIds.length > 0) branches.push(facetRoleExists(db, roleIds, opts));
+
+  if (branches.length === 0) return undefined;
+  if (branches.length === 1) return branches[0];
+  return or(...branches) as SQL;
 }
 
 /**
