@@ -1293,6 +1293,24 @@ export const captureRouter = router({
             content: z.string().optional(),
             /** Link to existing entity instead of creating */
             existingEntityId: z.string().uuid().optional(),
+            /**
+             * Kind + Facets: role-profiles to attach to this entity once it
+             * materializes (or onto its dedup match). `contextTempId` references
+             * another entity in this same batch by `tempId` (the disambiguating
+             * context) — resolved to the real created/matched id after
+             * materialization. Attached through the governed `attachFacet` door;
+             * an unknown role slug is skipped + logged, never fails the capture.
+             */
+            facets: z
+              .array(
+                z.object({
+                  profileSlug: z.string(),
+                  status: z.string().optional(),
+                  properties: z.record(z.string(), z.unknown()).optional(),
+                  contextTempId: z.string().optional(),
+                })
+              )
+              .optional(),
           })
         ),
         relations: z.array(
@@ -1674,6 +1692,45 @@ export const captureRouter = router({
         relationType: r.type,
       }));
 
+      // Kind + Facets: attach each entity's proposed role-profiles now that the
+      // batch has materialized (created OR dedup-matched — both carry a real id).
+      // Goes through the SAME governed door submit-capture-graph's approve flow
+      // uses (entities.attachFacet → FacetRepository.attach): the ONE facet write
+      // door, so validation + the emit chain are inherited. `contextTempId`
+      // resolves against THIS batch's tempId→id map (the disambiguating context
+      // entity). Best-effort per role: an unknown/misapplied role slug is skipped
+      // + logged (never fails the capture); attach is idempotent (unique index).
+      const tempIdToEntityId = new Map(
+        created.map((c) => [c.tempId, c.entityId])
+      );
+      let facetsAttached = 0;
+      for (const e of input.entities) {
+        if (!e.facets?.length) continue;
+        const parentEntityId = tempIdToEntityId.get(e.tempId);
+        if (!parentEntityId) continue;
+        for (const f of e.facets) {
+          const contextEntityId = f.contextTempId
+            ? tempIdToEntityId.get(f.contextTempId)
+            : undefined;
+          try {
+            await entitiesCaller.attachFacet({
+              entityId: parentEntityId,
+              profileSlug: f.profileSlug,
+              properties: f.properties,
+              status: f.status,
+              contextEntityId,
+              source: "user",
+            });
+            facetsAttached++;
+          } catch (err) {
+            logger.warn(
+              { err, entityId: parentEntityId, roleSlug: f.profileSlug },
+              "capture.execute: facet attach skipped (unknown/misapplied role or attach failure)"
+            );
+          }
+        }
+      }
+
       // Project membership (lens-context): file the captured entities into the
       // active project. Capture materializes directly (not via proposal
       // approval), so the membership write lands here — the project mirror of
@@ -1733,6 +1790,7 @@ export const captureRouter = router({
           entitiesCreated: created.filter((c) => !c.linked).length,
           entitiesLinked: created.filter((c) => c.linked).length,
           relationsCreated: createdRelations.length,
+          facetsAttached,
         },
         "Capture execute completed"
       );
