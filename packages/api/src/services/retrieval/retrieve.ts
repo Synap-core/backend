@@ -25,6 +25,7 @@ import {
   eq,
   inArray,
   isNull,
+  loadFacetSlugsBatch,
 } from "@synap/database";
 import {
   projectLensWhere,
@@ -120,6 +121,13 @@ type EntityRow = typeof entities.$inferSelect & {
    * don't get this field. Synthesis (`synthesize.ts`) is the consumer.
    */
   content?: string;
+  /**
+   * Kind + Facets: role-profile slugs the entity wears ("hats"). Attached
+   * ADDITIVELY in `fetchOrdered` via ONE batched facet load, so every retrieval
+   * / `ask` semantic item is annotated with its roles. Absent when the entity
+   * wears no role.
+   */
+  facetSlugs?: string[];
 };
 
 async function fetchOrdered(
@@ -170,13 +178,33 @@ async function fetchOrdered(
     }
   }
 
+  // Kind + Facets: annotate each row with the role "hats" it wears. ONE batched
+  // facet load for the whole page (the canonical entity→facet-slug join, same
+  // door the search indexer uses) — never per-row. Purely additive: rows wearing
+  // no role carry no `facetSlugs`.
+  const facetSlugsById = await loadFacetSlugsBatch(
+    db,
+    rows.map((r) => r.id)
+  );
+
   const byId = new Map<string, EntityRow>(
-    rows.map((r) => [
-      r.id,
-      r.documentId && contentByDocId.has(r.documentId)
-        ? { ...r, content: contentByDocId.get(r.documentId) }
-        : r,
-    ])
+    rows.map((r) => {
+      const facetSlugs = facetSlugsById.get(r.id);
+      const content =
+        r.documentId && contentByDocId.has(r.documentId)
+          ? contentByDocId.get(r.documentId)
+          : undefined;
+      return [
+        r.id,
+        content !== undefined || (facetSlugs && facetSlugs.length > 0)
+          ? {
+              ...r,
+              ...(content !== undefined ? { content } : {}),
+              ...(facetSlugs && facetSlugs.length > 0 ? { facetSlugs } : {}),
+            }
+          : r,
+      ];
+    })
   );
   return ids
     .map((id) => byId.get(id))

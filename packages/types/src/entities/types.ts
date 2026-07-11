@@ -36,6 +36,16 @@ export const EntitySchema = z.object({
   createdAt: z.date(),
   updatedAt: z.date(),
   deletedAt: z.date().nullable(),
+  /**
+   * Kind + Facets: the role-profile slugs this entity currently wears (its
+   * "hats"), e.g. `["client", "investor"]`. Additive/optional — populated by
+   * list/search/retrieval read paths via one batched facet load, absent when
+   * the entity wears no role. Slugs only (lightest shape); display name / color
+   * resolve from the profile catalog the consumer already holds. The full facet
+   * detail (status, workspaceId, properties) lives on `entities.get`'s
+   * `effectiveFacets`.
+   */
+  facetSlugs: z.array(z.string()).optional(),
 });
 
 /**

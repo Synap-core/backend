@@ -32,6 +32,7 @@ import {
   DocumentRepository,
   FacetRepository,
   getEffectiveFacets,
+  loadFacetSlugsBatch,
   facetRoleExists,
   profileSlugScopeCondition,
   drizzleSql,
@@ -131,7 +132,7 @@ function entityLensWhere(
  * `Entity` shape (`type` field instead of `profileSlug`) plus the explicit null
  * file fields, while routing the source-of-truth normalization through the codec.
  */
-function toApiEntity(entity: any): Entity {
+function toApiEntity(entity: any, facetSlugs?: string[]): Entity {
   // Defer to the canonical codec for shape normalization. We then spread the
   // original DB row over the result so any tRPC-only fields (profileId, version,
   // deletedAt, etc.) that don't exist on the wire shape are preserved verbatim
@@ -148,7 +149,26 @@ function toApiEntity(entity: any): Entity {
     fileSize: null,
     fileType: null,
     checksum: null,
+    // Kind + Facets: role "hats" the entity wears. Only attached when the caller
+    // batch-resolved them (via toApiEntitiesWithFacets) and the entity has ≥1.
+    ...(facetSlugs && facetSlugs.length > 0 ? { facetSlugs } : {}),
   } as Entity;
+}
+
+/**
+ * Map a page of entity rows to API entities WITH their role-facet hats
+ * (`facetSlugs`), resolved in ONE batched facet load for the whole page — never
+ * N+1. The lightest annotation: role slugs only, so a list/search card can chip
+ * the hats (display name / color come from the profile catalog it already
+ * holds). Rows wearing no role simply carry no `facetSlugs`.
+ */
+async function toApiEntitiesWithFacets(rows: any[]): Promise<Entity[]> {
+  if (rows.length === 0) return [];
+  const slugsById = await loadFacetSlugsBatch(
+    db,
+    rows.map((r) => r.id)
+  );
+  return rows.map((r) => toApiEntity(r, slugsById.get(r.id)));
 }
 
 // ── Built-in per-profile bento templates ──────────────────────────────────
@@ -1338,7 +1358,7 @@ export const entitiesRouter = router({
       const total = totalRow[0]?.count ?? 0;
 
       const { items, pagination } = buildPaginatedResponse(
-        results.map(toApiEntity),
+        await toApiEntitiesWithFacets(results),
         input,
         total
       );
@@ -1395,7 +1415,7 @@ export const entitiesRouter = router({
         limit: input.limit,
       });
 
-      return { entities: results.map(toApiEntity) };
+      return { entities: await toApiEntitiesWithFacets(results) };
     }),
 
   /**
@@ -1447,7 +1467,7 @@ export const entitiesRouter = router({
         }
       );
 
-      return { entities: results.map(toApiEntity) };
+      return { entities: await toApiEntitiesWithFacets(results) };
     }),
 
   /**
@@ -1574,7 +1594,7 @@ export const entitiesRouter = router({
         limit: input.limit,
       });
 
-      return { entities: results.map(toApiEntity) };
+      return { entities: await toApiEntitiesWithFacets(results) };
     }),
 
   /**
