@@ -139,6 +139,22 @@ export const entitiesRouter = router({
             reasoning: z.string().optional(),
           })
           .optional(),
+        /**
+         * Kind + Facets: attach role-profiles to the entity in the SAME call, so
+         * an agent can create an entity WITH its roles (e.g. a person who is a
+         * client + investor) in one round-trip. Each is attached via the governed
+         * `entities.attachFacet` door (fast-fail kind validation + proposal-gated
+         * for agents) AFTER the entity materializes — dropped when the create
+         * itself is proposal-gated (no id yet to attach to).
+         */
+        facets: z
+          .array(
+            z.object({
+              slug: z.string(),
+              properties: z.record(z.string(), z.unknown()).optional(),
+            })
+          )
+          .optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -198,6 +214,44 @@ export const entitiesRouter = router({
         });
       }
 
+      // Kind + Facets: attach each requested role AFTER the entity exists,
+      // through the SAME governed door (entities.attachFacet) — no duplicated
+      // validation. Only when the create actually materialized (a proposal-gated
+      // create has no id yet). Advisory: a single facet failure is surfaced but
+      // never rolls back the created entity.
+      const attachedFacets: Array<{
+        slug: string;
+        status: string;
+        facetId?: string;
+        proposalId?: string;
+        error?: string;
+      }> = [];
+      if (result.status === "created" && result.id && input.facets?.length) {
+        for (const f of input.facets) {
+          try {
+            const facetResult = await caller.attachFacet({
+              entityId: result.id,
+              profileSlug: f.slug,
+              properties: f.properties,
+              source: input.source ?? (input.agentUserId ? "agent" : "intelligence"),
+              agentUserId: input.agentUserId,
+            });
+            attachedFacets.push({
+              slug: f.slug,
+              status: facetResult.status,
+              facetId: (facetResult as { facetId?: string }).facetId,
+              proposalId: (facetResult as { proposalId?: string }).proposalId,
+            });
+          } catch (err) {
+            attachedFacets.push({
+              slug: f.slug,
+              status: "error",
+              error: err instanceof Error ? err.message : "attachFacet failed",
+            });
+          }
+        }
+      }
+
       return {
         status: result.status,
         message: result.message,
@@ -217,6 +271,9 @@ export const entitiesRouter = router({
         // the request omitted workspaceId and we picked the user's first
         // accessible workspace, or when entityScope='pod' (workspaceId=null).
         workspaceId: authWorkspaceId ?? null,
+        // Kind + Facets: the roles attached in this call (empty/omitted when none
+        // were requested or the create was proposal-gated).
+        ...(attachedFacets.length ? { facets: attachedFacets } : {}),
       };
     }),
 

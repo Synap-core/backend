@@ -130,6 +130,17 @@ export const CreateEntityRequestSchema = z
       .describe(
         "Optional session ID to link proposals created by this write to an active focus session."
       ),
+    facets: z
+      .array(
+        z.object({
+          slug: z.string(),
+          properties: z.record(z.string(), z.unknown()).optional(),
+        })
+      )
+      .optional()
+      .describe(
+        "Kind + Facets: role-profiles to attach to the new entity in the same call (each via the governed attachFacet door). Applied only when the entity materializes."
+      ),
   })
   .openapi("CreateEntityRequest");
 
@@ -186,6 +197,20 @@ export const CreateEntityResponseSchema = z
       .optional()
       .describe(
         'Present when status is "proposed". Absolute URL to review the proposal in the Studio.'
+      ),
+    facets: z
+      .array(
+        z.object({
+          slug: z.string(),
+          status: z.string(),
+          facetId: z.string().optional(),
+          proposalId: z.string().optional(),
+          error: z.string().optional(),
+        })
+      )
+      .optional()
+      .describe(
+        "Kind + Facets: per-role attach outcome for any `facets` passed in the request (status attached/proposed/error)."
       ),
   })
   .openapi("CreateEntityResponse");

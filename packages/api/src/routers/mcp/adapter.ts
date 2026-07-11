@@ -296,6 +296,8 @@ export async function executeMCPToolViaHubProtocol(
         // Project-pinned MCP URL (?projectId=) auto-injects args.projectId, so a
         // focused agent's entity reads narrow to its project — same lens as ask.
         ...(args.projectId ? { projectId: args.projectId as string } : {}),
+        // Kind + Facets: narrow to entities carrying a live facet of this role.
+        ...(args.facetSlug ? { facetSlug: args.facetSlug as string } : {}),
         limit: (args.limit as number) || 50,
       });
       return ok(result);
@@ -345,6 +347,16 @@ export async function executeMCPToolViaHubProtocol(
         // A project-pinned MCP URL (?projectId=) auto-injects args.projectId, so
         // entities the agent creates are filed into its project focus.
         ...(args.projectId ? { projectId: args.projectId as string } : {}),
+        // Kind + Facets: attach role-profiles in the same create call (governed
+        // via entities.attachFacet on the created entity).
+        ...(Array.isArray(args.facets)
+          ? {
+              facets: args.facets as Array<{
+                slug: string;
+                properties?: Record<string, unknown>;
+              }>,
+            }
+          : {}),
         // agent-key remap: the write is OWNED by the operator (userId) but
         // AUTHORED by the agent — pass agentUserId so governance proposes.
         ...(agentUserId ? { agentUserId } : {}),
@@ -565,6 +577,88 @@ export async function executeMCPToolViaHubProtocol(
         sourceEntityId: args.sourceEntityId as string,
         targetEntityId: args.targetEntityId as string,
         type: (args.type as string) || "related",
+        ...(agentUserId ? { agentUserId } : {}),
+      });
+      return ok(result);
+    }
+
+    // ── Kind + Facets: attach/detach a role-profile ─────────────────────────
+    // Both go through the SAME governed door as the tRPC/Hub REST facet routes
+    // (hub-protocol entities.attachFacet/detachFacet → regular entities.*Facet,
+    // which run checkPermissionOrPropose). The agent-key remap (agentUserId)
+    // makes governance propose for agent callers, exactly like create_entity.
+    case "synap_attach_facet": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      const result = await caller.entities.attachFacet({
+        userId,
+        entityId: args.entityId as string,
+        profileSlug: args.facetSlug as string,
+        ...(args.properties
+          ? { properties: args.properties as Record<string, unknown> }
+          : {}),
+        ...(args.workspaceId
+          ? { workspaceId: args.workspaceId as string }
+          : {}),
+        ...(args.contextEntityId
+          ? { contextEntityId: args.contextEntityId as string }
+          : {}),
+        ...(agentUserId ? { agentUserId } : {}),
+      });
+      return ok(result);
+    }
+
+    case "synap_detach_facet": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      // The one-door detach is keyed by facetId. Accept a facetId directly (the
+      // handle attach returns), or resolve entityId + facetSlug → facetId via the
+      // entity's live facets (the ergonomic form an agent knows), then detach
+      // through the SAME governed door — a lookup before the door, not a bypass.
+      let facetId = args.facetId as string | undefined;
+      if (!facetId) {
+        const entityId = args.entityId as string | undefined;
+        const facetSlug = args.facetSlug as string | undefined;
+        if (!entityId || !facetSlug) {
+          return ok({
+            error: "Provide facetId, or entityId + facetSlug, to detach a facet",
+          });
+        }
+        const entityCallerCtx = await createHubProtocolCallerContext(
+          userId,
+          apiKeyScopes,
+          (args.workspaceId as string) || undefined,
+          undefined,
+          undefined,
+          agentUserId
+        );
+        const entityCaller =
+          regularEntitiesRouter.createCaller(entityCallerCtx);
+        const entityResult = await entityCaller.get({
+          id: entityId,
+          includeProfile: true,
+          ...(args.workspaceId
+            ? { workspaceId: args.workspaceId as string }
+            : {}),
+        });
+        const facets =
+          (
+            entityResult as {
+              facets?: Array<{
+                facet: { id: string };
+                profile: { slug?: string };
+              }>;
+            }
+          ).facets ?? [];
+        const match = facets.find((f) => f.profile?.slug === facetSlug);
+        if (!match) {
+          return ok({
+            error: `No live '${facetSlug}' facet on entity ${entityId}`,
+          });
+        }
+        facetId = match.facet.id;
+      }
+      const result = await caller.entities.detachFacet({
+        userId,
+        facetId,
         ...(agentUserId ? { agentUserId } : {}),
       });
       return ok(result);

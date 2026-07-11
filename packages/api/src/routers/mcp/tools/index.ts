@@ -77,6 +77,11 @@ export const tools = {
               description:
                 "Optional: narrow to a project (its entity id) — only entities belonging to it. Orthogonal to workspaceId; usually pre-set by the connection URL.",
             },
+            facetSlug: {
+              type: "string",
+              description:
+                "Kind + Facets filter — only return entities carrying a live facet of this role-profile slug (e.g. 'client', 'investor'). Use synap_list_profiles to find role slugs (profileKind='role').",
+            },
             limit: { type: "number", default: 50 },
           },
           required: [],
@@ -248,6 +253,26 @@ export const tools = {
               description:
                 "Optional project id to file the created entity into — stamps belongs_to_project membership.",
             },
+            facets: {
+              type: "array",
+              description:
+                "Kind + Facets: attach one or more role-profiles to the new entity in the SAME call (e.g. a person who is a client + investor). A role is a facet, NOT a separate entity — resolve identity first, then attach roles here. Each item: { slug, properties? }. Only applied when the entity is created (not when the create is proposal-gated).",
+              items: {
+                type: "object",
+                properties: {
+                  slug: {
+                    type: "string",
+                    description:
+                      "Role-profile slug (profileKind='role' from synap_list_profiles).",
+                  },
+                  properties: {
+                    type: "object",
+                    description: "Optional facet-specific properties.",
+                  },
+                },
+                required: ["slug"],
+              },
+            },
           },
           required: ["profileSlug", "title"],
         },
@@ -334,6 +359,73 @@ export const tools = {
             },
           },
           required: ["sourceEntityId", "targetEntityId"],
+        },
+      },
+
+      // ── Kind + Facets (roles) ──────────────────────────────────────────────
+      {
+        name: "synap_attach_facet",
+        description:
+          "Attach a ROLE to an existing entity (Kind + Facets). A role — client, partner, prospect, investor, sponsor — is a FACET, never its own entity: an entity IS one kind (person, company) and HAS many roles. Resolve identity FIRST (synap_ask / synap_get_entities on strong signals like email/phone/url) so you attach the role to the REAL entity instead of creating a duplicate. Governed like any write: may return 'proposed' (a proposalId to review) — NEVER treat that as an error. Use synap_list_profiles to find role slugs (profileKind='role') and which kinds they apply to (applicableKinds).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityId: {
+              type: "string",
+              description: "UUID of the entity to attach the role to.",
+            },
+            facetSlug: {
+              type: "string",
+              description:
+                "Role-profile slug to attach (profileKind='role', e.g. 'client').",
+            },
+            properties: {
+              type: "object",
+              description: "Optional facet-specific properties.",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional facet visibility lens. Omit to inherit the parent entity's workspace.",
+            },
+            contextEntityId: {
+              type: "string",
+              description:
+                "Optional disambiguator when the same role attaches in multiple contexts (e.g. a client OF a specific company).",
+            },
+          },
+          required: ["entityId", "facetSlug"],
+        },
+      },
+      {
+        name: "synap_detach_facet",
+        description:
+          "Detach (soft-delete) a role from an entity (Kind + Facets). Provide the entityId + facetSlug of the role to remove (or a facetId directly). Governed like any write: may return 'proposed' — NEVER treat that as an error. Removing a role never deletes the entity; only the role-facet is retired.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityId: {
+              type: "string",
+              description:
+                "UUID of the entity carrying the role (with facetSlug).",
+            },
+            facetSlug: {
+              type: "string",
+              description:
+                "Role-profile slug to detach from the entity (paired with entityId).",
+            },
+            facetId: {
+              type: "string",
+              description:
+                "Alternative to entityId+facetSlug: the facet's own UUID (the handle synap_attach_facet returns).",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional workspace lens used to resolve the facet when detaching by entityId + facetSlug.",
+            },
+          },
+          required: [],
         },
       },
 

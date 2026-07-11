@@ -1111,6 +1111,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...(body.content ? { content: body.content } : {}),
         ...(body.reasoning ? { reasoning: body.reasoning } : {}),
         ...(body.source ? { source: body.source } : {}),
+        // Kind + Facets: attach roles in the same call (handled by the governed
+        // createEntity door, which attaches each after the entity materializes).
+        ...(body.facets?.length ? { facets: body.facets } : {}),
       });
 
       // ── Impact-aware writes (SHALLOW, exact-name) ─────────────────────────
