@@ -1747,21 +1747,14 @@ export const entitiesRouter = router({
          * the same workspace lens as `effectiveProperties`. Additive/optional —
          * present only on the `includeProfile` path. Kind + Facets.
          *
-         * `effectiveFacets` is the canonical name (parallels `effectiveProperties`
-         * / the `getEffectiveFacets` resolver) — the browser detail card reads it.
-         * `facets` is the legacy alias, kept for back-compat this wave; both carry
-         * the identical array. Prefer `effectiveFacets` for new consumers.
+         * SHIPPED CONTRACT — the browser host reads `entities.get.facets`
+         * (ProfileEntityDetailCell), so the field name is `facets` and must stay
+         * `facets`. Per-facet row: the resolver's `{ facet, profile,
+         * effectiveProperties }` — `facet` (entity_facets row: id, status,
+         * workspaceId, contextEntityId, properties), `profile` (role-profile:
+         * slug, displayName, …), `effectiveProperties` (role-scoped property
+         * DEFS). The browser host flattens this to its `AttachedFacet` prop.
          */
-        effectiveFacets: z
-          .array(
-            z.object({
-              facet: z.record(z.string(), z.unknown()),
-              profile: z.record(z.string(), z.unknown()),
-              effectiveProperties: z.array(z.record(z.string(), z.unknown())),
-            })
-          )
-          .optional(),
-        /** @deprecated Use `effectiveFacets` — identical shape, kept for back-compat. */
         facets: z
           .array(
             z.object({
@@ -1899,22 +1892,19 @@ export const entitiesRouter = router({
         workspaceId: lensWorkspaceId,
       });
 
-      // Spread into anonymous objects: interfaces lack index signatures, so
-      // EntityFacet/Profile aren't assignable to the Record-typed output schema
-      // directly. Built once, surfaced under both the canonical `effectiveFacets`
-      // and the legacy `facets` alias.
-      const wireFacets = facets.map((f) => ({
-        facet: { ...f.facet },
-        profile: { ...f.profile },
-        effectiveProperties: f.effectiveProperties.map((p) => ({ ...p })),
-      }));
-
       return {
         entity: typedEntity,
         profile,
         effectiveProperties,
-        effectiveFacets: wireFacets,
-        facets: wireFacets,
+        // Spread into anonymous objects: interfaces lack index signatures, so
+        // EntityFacet/Profile aren't assignable to the Record-typed output
+        // schema directly. Field name is `facets` — the shipped browser-host
+        // contract (see the output schema note).
+        facets: facets.map((f) => ({
+          facet: { ...f.facet },
+          profile: { ...f.profile },
+          effectiveProperties: f.effectiveProperties.map((p) => ({ ...p })),
+        })),
         externalLinks,
       };
     }),
