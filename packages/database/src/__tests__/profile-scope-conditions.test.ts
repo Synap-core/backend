@@ -26,6 +26,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { PgDialect } from "drizzle-orm/pg-core";
 import {
   profileScopeConditions,
+  profileSlugScopeCondition,
   facetRoleExists,
 } from "../services/facet-resolution-service.js";
 
@@ -107,9 +108,90 @@ describe("profileScopeConditions — polymorphic Kind + Facets scope", () => {
   });
 });
 
+// `profileSlugScopeCondition` resolves a slug via `db.query.profiles.findMany`
+// (async), so the mock db needs a `query.profiles.findMany` stub. The rest of
+// the SQL-building surface (facetRoleExists/eq) only needs the query-builder,
+// which `drizzle.mock()` already provides — Object.assign layers the stub on
+// top without touching the query-builder prototype.
+const dbWithRows = (rows: Array<{ id: string; profileKind: "kind" | "role" }>) =>
+  Object.assign(Object.create(Object.getPrototypeOf(db)), db, {
+    query: { profiles: { findMany: async () => rows } },
+  }) as typeof db;
+
+describe("profileSlugScopeCondition — polymorphic single-slug scope", () => {
+  test("single kind row → legacy entities.type equality, no EXISTS", async () => {
+    const sql = render(
+      await profileSlugScopeCondition(
+        dbWithRows([{ id: "k1", profileKind: "kind" }]),
+        "invoice",
+        opts
+      )
+    );
+    expect(sql).toBe('"entities"."type" = $1');
+  });
+
+  test("single role row → facet EXISTS only, no entities.type match", async () => {
+    const sql = render(
+      await profileSlugScopeCondition(
+        dbWithRows([{ id: "r1", profileKind: "role" }]),
+        "client",
+        opts
+      )
+    );
+    expect(sql).toContain("exists");
+    expect(sql).toContain('"entity_facets"."profile_id" in');
+    expect(sql).not.toContain('"entities"."type" =');
+  });
+
+  test("two role rows (system + workspace-scope twin) → ONE EXISTS covering both ids", async () => {
+    const query = profileSlugScopeCondition(
+      dbWithRows([
+        { id: "r1", profileKind: "role" },
+        { id: "r2", profileKind: "role" },
+      ]),
+      "knowledge",
+      opts
+    );
+    const compiled = await query;
+    const { sql, params } = dialect.sqlToQuery(compiled);
+    expect(sql).toContain('"entity_facets"."profile_id" in');
+    // both twin ids must be OR'd into the same EXISTS, not two separate branches.
+    expect(sql.match(/exists/g)?.length).toBe(1);
+    expect(params).toContain("r1");
+    expect(params).toContain("r2");
+  });
+
+  test("mixed kind row + role row → OR of type-equality and facet EXISTS", async () => {
+    const sql = render(
+      await profileSlugScopeCondition(
+        dbWithRows([
+          { id: "k1", profileKind: "kind" },
+          { id: "r1", profileKind: "role" },
+        ]),
+        "deal",
+        opts
+      )
+    );
+    expect(sql).toContain('"entities"."type" =');
+    expect(sql).toContain("exists");
+    expect(sql).toContain(" or ");
+  });
+
+  test("zero rows (unknown slug) → falls back to legacy type equality", async () => {
+    const sql = render(
+      await profileSlugScopeCondition(dbWithRows([]), "unmapped-slug", opts)
+    );
+    expect(sql).toBe('"entities"."type" = $1');
+  });
+});
+
 // NOTE (NEEDS-DOGFOOD): the end-to-end invariant — for a real profile run
 // through convertToFacet, views.execute and entities.list(profileSlug) return
 // the SAME entity set before and after conversion — requires a live DB with
 // seeded entities + facets and is not provable from SQL text alone. Add it to
 // the DB integration suite: seed N entities of a 'kind' profile, snapshot the
 // two read paths, run convertToFacet, and assert the snapshots are unchanged.
+//
+// The pod-scope facet-lens rule (facetWorkspaceExpr in the conversion engine —
+// converted facets keep pod-wide visibility) is likewise an integration-level
+// claim, not provable from this DB-less SQL-text suite.
