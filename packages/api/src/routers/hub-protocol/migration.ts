@@ -26,7 +26,12 @@ import { profilesRouter as regularProfilesRouter } from "../profiles.js";
 import { propertyDefsRouter as regularPropertyDefsRouter } from "../property-defs.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { viewsRouter as regularViewsRouter } from "../views.js";
-import { getDb, and, eq } from "@synap/database";
+import {
+  getDb,
+  eq,
+  resolveIdentity,
+  extractIdentitySignals,
+} from "@synap/database";
 import { entities, workspaces } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
@@ -250,28 +255,34 @@ export const migrationRouter = router({
       // ── 2. Create entities ────────────────────────────────────────────────────
       for (const entityInput of input.entities) {
         try {
-          // Idempotency check: skip if an entity with the same title already
-          // exists for this profile+workspace combination.
+          // Idempotency check: skip if this subject already exists. Routed
+          // through the ONE identity resolver (not a hand-rolled title match) so
+          // a re-run first dedups on STRONG signals (email/phone/url — global)
+          // and only falls back to a WEAK same-kind name match scoped to this
+          // workspace. The exact-title behaviour is preserved (weak match is an
+          // exact case-insensitive name match) while strong signals now collapse
+          // a re-import onto the real subject regardless of title drift.
           const profileId = profileIdBySlug.get(entityInput.profileSlug);
 
           if (profileId) {
-            const existing = await db.query.entities.findFirst({
-              where: and(
-                eq(entities.workspaceId, workspaceId),
-                eq(entities.profileId, profileId),
-                eq(entities.title, entityInput.title)
-              ),
-              columns: { id: true },
+            const identity = await resolveIdentity(db, {
+              userId,
+              kindSlug: entityInput.profileSlug,
+              name: entityInput.title,
+              signals: extractIdentitySignals(entityInput.properties ?? {}),
+              userScope: eq(entities.workspaceId, workspaceId),
             });
 
-            if (existing) {
+            if (identity.match && identity.entity) {
               logger.info(
                 {
                   title: entityInput.title,
                   profileSlug: entityInput.profileSlug,
                   workspaceId,
+                  match: identity.match,
+                  matchedEntityId: identity.entity.id,
                 },
-                "migration: entity already exists, skipping (idempotent)"
+                "migration: subject already exists (identity match), skipping (idempotent)"
               );
               continue;
             }

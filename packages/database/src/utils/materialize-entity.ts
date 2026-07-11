@@ -254,6 +254,14 @@ export async function materializeEntity(
  * Natural key = user + type + title. `entities.type` stores the profile slug,
  * so when the caller passes `profileSlug` we match on it directly. (No funnel
  * site uses profileId + natural-key; that combination skips dedup and creates.)
+ *
+ * IDEMPOTENCY, NOT IDENTITY. This is the (user, kind, title) natural-key
+ * de-dupe for repeat materializations of the SAME source item (e.g. a feed
+ * bookmark re-seen) — it is deliberately NOT the identity resolver. The
+ * strong-signal identity path (resolveIdentity) is wired alongside in the
+ * materializer (W0); this title match stays as the exact-source idempotency
+ * belt. Do not "upgrade" it into a fuzzy identity matcher — that's
+ * IdentityResolutionService's job, and the single door for it.
  */
 async function findByNaturalKey(
   db: MaterializerDb,
