@@ -149,10 +149,15 @@ export class FacetRepository extends BaseRepository<
       }
 
       // 4. Validate properties against the role-profile's effective properties.
+      // enforceRequired:false — attach is "ask MINIMUM to exist": provided
+      // values are type-checked, but a role's required defs never gate the
+      // attach (converted roles carry vestigial kind defs like `title` that
+      // live on the parent entity).
       const validationResult = await this.propertyValidation.validateProperties(
         data.properties ?? {},
         profile.id,
-        workspaceId
+        workspaceId,
+        { enforceRequired: false }
       );
       if (!validationResult.valid) {
         const errors = validationResult.errors.map((err, idx) => ({
@@ -261,7 +266,9 @@ export class FacetRepository extends BaseRepository<
       const validationResult = await this.propertyValidation.validateProperties(
         merged,
         existing.profileId,
-        lensWorkspaceId
+        lensWorkspaceId,
+        // Same progressive-enrichment rule as attach.
+        { enforceRequired: false }
       );
       if (!validationResult.valid) {
         throw new PropertyValidationError(

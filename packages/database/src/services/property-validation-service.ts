@@ -37,10 +37,22 @@ export class PropertyValidationService {
   async validateProperties(
     properties: Record<string, unknown>,
     profileId: string,
-    workspaceId?: string | null
+    workspaceId?: string | null,
+    opts?: {
+      /**
+       * When false, missing `required` properties are not errors — provided
+       * values are still type-checked/cast, and defaults still apply. Used by
+       * facet attach/update: a facet is progressive-enrichment territory
+       * ("ask MINIMUM to exist"), and a converted role-profile can carry
+       * vestigial kind-identity defs (e.g. a required `title`) that live on
+       * the parent entity, never the facet.
+       */
+      enforceRequired?: boolean;
+    }
   ): Promise<ValidationResult> {
     const errors: string[] = [];
     const normalized: Record<string, unknown> = { ...properties };
+    const enforceRequired = opts?.enforceRequired !== false;
 
     // Get effective properties (with inheritance + workspace filter)
     const effectiveProperties =
@@ -55,7 +67,7 @@ export class PropertyValidationService {
         // Use default value if available
         if (prop.defaultValue !== null && prop.defaultValue !== undefined) {
           normalized[prop.slug] = prop.defaultValue;
-        } else {
+        } else if (enforceRequired) {
           errors.push(`Property '${prop.slug}' is required`);
         }
       }
