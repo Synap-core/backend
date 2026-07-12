@@ -36,7 +36,7 @@ async function scheduleSafe(
   data: object = {}
 ): Promise<void> {
   try {
-    await scheduleSafe(boss, name, cron, data);
+    await boss.schedule(name, cron, data);
   } catch (err) {
     logger.error(
       { err, queue: name },
@@ -51,7 +51,7 @@ async function sendSafe(
   data: object = {}
 ): Promise<void> {
   try {
-    await sendSafe(boss, name, data);
+    await boss.send(name, data);
   } catch (err) {
     logger.error(
       { err, queue: name },
