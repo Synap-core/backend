@@ -14,7 +14,7 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
-import { db, workspaceMembers, eq } from "@synap/database";
+import { db, workspaceMembers, workspaces, eq, desc } from "@synap/database";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "../hub-protocol/utils.js";
 
@@ -77,22 +77,29 @@ export const n8nActionsRouter = router({
         // (regular entities.create): identity resolution, signal registration,
         // event sourcing, and checkPermissionOrPropose all apply — a raw
         // `entity.create.validated` event straight into the replay materializer
-        // skipped every one of them. entities.create is a podProcedure needing a
-        // workspace context for its auth gate; pod-scoped profiles (note/task)
-        // have no workspace, so resolve the user's first accessible workspace for
-        // auth only — the mutation derives the entity's real scope from the
-        // profile's entityScope. Mirrors hub-protocol/entities.ts createEntity.
+        // skipped every one of them. entities.create derives the entity's real
+        // scope from the profile's entityScope, so `ambientWorkspaceId` flows ONLY
+        // as the caller's governance/ambient context (ctx.workspaceId), never as a
+        // forced targetWorkspaceId. n8n creates note/task/project (pod-scope
+        // profiles) → those correctly land pod-wide (NULL) instead of pinned to an
+        // arbitrary workspace. Deterministic fallback (most-recently-updated
+        // membership); the old `.limit(1)` had no orderBy → arbitrary workspace.
         const rows = await db
           .select({ workspaceId: workspaceMembers.workspaceId })
           .from(workspaceMembers)
+          .innerJoin(
+            workspaces,
+            eq(workspaces.id, workspaceMembers.workspaceId)
+          )
           .where(eq(workspaceMembers.userId, userId))
+          .orderBy(desc(workspaces.updatedAt))
           .limit(1);
-        const authWorkspaceId = rows[0]?.workspaceId;
+        const ambientWorkspaceId = rows[0]?.workspaceId;
 
         const callerContext = await createHubProtocolCallerContext(
           userId,
           ctx.scopes || [],
-          authWorkspaceId
+          ambientWorkspaceId
         );
         const caller = regularEntitiesRouter.createCaller(callerContext);
 
@@ -104,7 +111,6 @@ export const n8nActionsRouter = router({
             ...(metadata || {}),
             ...(tags && tags.length ? { tags } : {}),
           },
-          ...(authWorkspaceId ? { targetWorkspaceId: authWorkspaceId } : {}),
           source: "n8n",
         });
 

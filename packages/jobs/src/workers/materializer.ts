@@ -287,7 +287,18 @@ async function materializeEntity(
       return;
     }
 
-    const entityWorkspaceId = data.global ? null : workspaceId;
+    // I3 (resolve-early-and-persist): prefer the placement the create door
+    // already resolved (`data.resolvedWorkspaceId`, which may be an explicit
+    // null for a pod-scope kind) so a proposal-gated create lands EXACTLY where
+    // an auto-approved one would. Fall back to the legacy derivation only for
+    // proposals created before this field existed (key absent). A present-but-
+    // null value must win over the fallback, so branch on key presence, not `??`.
+    const entityWorkspaceId =
+      "resolvedWorkspaceId" in data
+        ? ((data.resolvedWorkspaceId as string | null) ?? null)
+        : data.global
+          ? null
+          : (workspaceId ?? null);
     const profileSlug = data.profileSlug as string;
     const rawContent = (data.content as string | undefined) || undefined;
     const baseProperties =
@@ -347,7 +358,7 @@ async function materializeEntity(
         // subjectId) matches on a pg-boss retry. Without this the DB mints a
         // fresh uuid and both break — orphan-on-revert + duplicate-on-retry.
         id: subjectId,
-        workspaceId: entityWorkspaceId!,
+        workspaceId: entityWorkspaceId ?? undefined,
         userId,
         title: (data.title as string) || undefined,
         preview:
@@ -435,8 +446,16 @@ async function materializeEntityFacet(
         profileId: (data.profileId as string) || undefined,
         profileSlug: (data.profileSlug as string) || undefined,
         userId,
+        // I3: prefer the placement the attachFacet door resolved
+        // (`data.resolvedWorkspaceId`, which may be an explicit null when the
+        // parent entity is pod-wide) so a proposal-gated attach lands EXACTLY
+        // where an auto-approved one would — never re-pinned to the ambient
+        // governance workspace. Branch on key presence so a persisted null wins;
+        // fall back to the legacy derivation only for pre-change proposals.
         workspaceId:
-          (data.workspaceId as string | undefined) ?? workspaceId ?? null,
+          "resolvedWorkspaceId" in data
+            ? ((data.resolvedWorkspaceId as string | null) ?? null)
+            : ((data.workspaceId as string | undefined) ?? workspaceId ?? null),
         contextEntityId: (data.contextEntityId as string) || null,
         status: (data.status as string) || undefined,
         properties: (data.properties as Record<string, unknown>) || undefined,
@@ -458,8 +477,12 @@ async function materializeEntityFacet(
       {
         status: (data.status as string) || undefined,
         properties: (data.properties as Record<string, unknown>) || undefined,
-        workspaceId:
-          (data.workspaceId as string | undefined) ?? workspaceId ?? undefined,
+        // A facet UPDATE only re-homes when the caller passed an explicit
+        // workspaceId (the inline door does `input.workspaceId ?? undefined`);
+        // absent/null means "leave the lens as-is". Mirror that here — do NOT
+        // fall back to the ambient `workspaceId`, which would silently re-pin the
+        // facet on the proposal-gated path (the four-door bug, update flavour).
+        workspaceId: (data.workspaceId as string) || undefined,
       },
       userId
     );

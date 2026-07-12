@@ -713,13 +713,24 @@ export const captureRouter = router({
           workspaceMembers,
           eq(workspaceMembers.workspaceId, workspaces.id)
         )
-        .where(eq(workspaceMembers.userId, userId))
+        // Archived workspaces are retired — never a live routing destination.
+        .where(
+          and(
+            eq(workspaceMembers.userId, userId),
+            isNull(workspaces.archivedAt)
+          )
+        )
         .orderBy(desc(workspaces.updatedAt))
         .limit(30);
-      // Never surface system/admin workspaces (e.g. pod-admin) as routing
-      // candidates — user data must not be routed into an operational workspace.
+      // Never surface non-user-data workspaces as routing candidates:
+      //   • `operational` (e.g. pod-admin) — system/admin surfaces.
+      //   • `agent` (D2) — agent workspaces are never AUTO-routing candidates;
+      //     explicit workspaceId targeting elsewhere stays honored.
       const availableWorkspaces = userWorkspaceRows
-        .filter((w) => w.workspaceType !== "operational")
+        .filter(
+          (w) =>
+            w.workspaceType !== "operational" && w.workspaceType !== "agent"
+        )
         .map((w) => ({
           id: w.id,
           name: w.name,

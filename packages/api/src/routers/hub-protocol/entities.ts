@@ -12,7 +12,7 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { createHubProtocolCallerContext } from "./utils.js";
-import { db, workspaceMembers, eq } from "@synap/database";
+import { db, workspaceMembers, workspaces, eq, desc } from "@synap/database";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 
 export const entitiesRouter = router({
@@ -106,6 +106,15 @@ export const entitiesRouter = router({
         // so the proposal carries projectId and the materializer stamps the
         // belongs_to_project edge that project-scoped recall relies on.
         projectId: z.string().uuid().optional(),
+        /**
+         * EXPLICIT workspace target. When supplied, it pins the entity to this
+         * workspace (rung-1 placement, wins over the profile's entityScope) — the
+         * ONLY thing that should become `targetWorkspaceId`. Left unset by normal
+         * agent creates, whose placement is derived from the profile's entityScope
+         * (pod → NULL, workspace → the caller's ambient workspace). Never defaulted
+         * from the ambient workspace — that was the four-door bug.
+         */
+        workspaceId: z.string().uuid().optional(),
         agentUserId: z.string().uuid().optional(),
         /**
          * The proposing agent's own rationale for this action. Surfaced in the
@@ -160,25 +169,35 @@ export const entitiesRouter = router({
     .mutation(async ({ input, ctx }) => {
       // Use the real user (input.userId), not ctx.userId (API key owner).
       //
-      // workspaceProcedure (used by entities.create) requires a non-null workspaceId
-      // for its auth gate. Pod-scoped profiles (bookmark, note, task, …) have no
-      // workspace but still need the gate to pass — so we resolve the user's first
-      // accessible workspace for auth purposes only. The mutation itself determines
-      // the entity's actual workspaceId from the profile's entityScope (null for pod).
-      let authWorkspaceId: string | undefined = ctx.workspaceId ?? undefined;
-      if (!authWorkspaceId) {
+      // `ambientWorkspaceId` is the caller's governance/ambient workspace — it
+      // flows to entities.create as ctx.workspaceId (NOT as an explicit
+      // targetWorkspaceId), so the mutation derives placement from the profile's
+      // entityScope: pod-scope kinds land pod-wide (NULL), workspace-scope kinds
+      // land in this ambient workspace. Only an EXPLICIT `input.workspaceId` pins.
+      //
+      // When the caller has no active workspace we fall back to the user's
+      // most-recently-updated membership (deterministic — the old `.limit(1)` had
+      // no orderBy and returned an arbitrary workspace). This fallback is ONLY the
+      // ambient/governance context; it never becomes an explicit target.
+      let ambientWorkspaceId: string | undefined = ctx.workspaceId ?? undefined;
+      if (!ambientWorkspaceId) {
         const rows = await db
           .select({ workspaceId: workspaceMembers.workspaceId })
           .from(workspaceMembers)
+          .innerJoin(
+            workspaces,
+            eq(workspaces.id, workspaceMembers.workspaceId)
+          )
           .where(eq(workspaceMembers.userId, input.userId))
+          .orderBy(desc(workspaces.updatedAt))
           .limit(1);
-        authWorkspaceId = rows[0]?.workspaceId;
+        ambientWorkspaceId = rows[0]?.workspaceId;
       }
 
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
-        authWorkspaceId,
+        ambientWorkspaceId,
         ctx.sourceMessageId ?? undefined,
         ctx.sessionId ?? undefined
       );
@@ -190,7 +209,11 @@ export const entitiesRouter = router({
         description: input.description,
         properties: input.properties,
         ...(input.projectId ? { projectId: input.projectId } : {}),
-        ...(authWorkspaceId ? { targetWorkspaceId: authWorkspaceId } : {}),
+        // Only an EXPLICIT body workspaceId becomes a targetWorkspaceId (rung-1
+        // pin). The ambient workspace is NEVER forced here — it already flows via
+        // the caller ctx above, so pod-scope kinds resolve to NULL and
+        // workspace-scope kinds to the ambient workspace (invariant I3).
+        ...(input.workspaceId ? { targetWorkspaceId: input.workspaceId } : {}),
         // Agent's own rationale for the proposal inbox. Top-level `reasoning`
         // wins; fall back to the legacy `aiMetadata.reasoning` alias.
         reasoning: input.reasoning ?? input.aiMetadata?.reasoning,

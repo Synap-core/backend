@@ -67,6 +67,7 @@ import { resolveViewTrust } from "../services/view-trust-service.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitAiCorrection } from "../utils/ai-feedback-events.js";
 import { AI_KIND } from "../lib/ai-events.js";
+import { resolveEntityWorkspacePlacement } from "../lib/entity-workspace-placement.js";
 import {
   emitSideEffects,
   getBoss,
@@ -970,6 +971,41 @@ export const entitiesRouter = router({
         }
       }
 
+      // Resolve the profile's entityScope ONCE, up-front, so workspace placement
+      // is computed identically for the proposal-gated and auto-approved paths
+      // (invariant I3). Reuses earlyResolvedProfile (profileId path); resolves by
+      // slug otherwise. Carried forward to the materialize path below (no second
+      // lookup). Fail-fast on an invalid profile — a proposal for a non-existent
+      // profile can never materialize, so surfacing it here beats deferring to
+      // the worker.
+      if (!earlyResolvedProfile && profileSlug) {
+        const database = await getDb();
+        const resolutionService = new ProfileResolutionService(database);
+        earlyResolvedProfile = await resolutionService.resolveProfile(
+          profileSlug,
+          ctx.userId,
+          governanceWorkspaceId
+        );
+      }
+      if (!earlyResolvedProfile) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Profile not found: ${profileSlug}`,
+        });
+      }
+
+      // Resolve placement ONCE (I3: same input → same workspace regardless of
+      // governance). Persisted into the proposal `data` below as
+      // `resolvedWorkspaceId` so the materializer reads it back verbatim instead
+      // of re-deriving from the ambient workspace (the four-door bug).
+      const resolvedEntityWorkspaceId = resolveEntityWorkspacePlacement({
+        global: input.global,
+        targetWorkspaceId: input.targetWorkspaceId,
+        workspaceScoped: input.workspaceScoped === true,
+        profileEntityScope: earlyResolvedProfile.entityScope,
+        ambientWorkspaceId: governanceWorkspaceId,
+      });
+
       // 1. Emit .requested event — records intent regardless of outcome
       const requestedEvent = await auditLog({
         subjectType: "entity",
@@ -1015,6 +1051,11 @@ export const entitiesRouter = router({
           documentId: input.documentId,
           content: input.content,
           global: input.global,
+          // I3 (resolve-early-and-persist): the RESOLVED placement (may be an
+          // explicit null for pod-scope kinds). The materializer reads this back
+          // verbatim; a present key — including null — beats its legacy
+          // `data.global ? null : workspaceId` derivation.
+          resolvedWorkspaceId: resolvedEntityWorkspaceId,
         },
       });
 
@@ -1062,41 +1103,12 @@ export const entitiesRouter = router({
       const eventRepo = eventRepository;
       const entityRepo = new EntityRepository(database, eventRepo);
 
-      // Resolve profile for defaultValues and entityScope
-      let resolvedProfile: any = earlyResolvedProfile;
-      if (!resolvedProfile && input.profileSlug) {
-        const resolutionService = new ProfileResolutionService(database);
-        resolvedProfile = await resolutionService.resolveProfile(
-          input.profileSlug,
-          ctx.userId,
-          governanceWorkspaceId
-        );
-      }
-      if (!resolvedProfile) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Profile not found: ${profileSlug}`,
-        });
-      }
-
-      // Determine effective workspaceId. Precedence:
-      //   1. global flag           → null (visible everywhere)
-      //   2. explicit targetWorkspaceId → that workspace (wins for ALL profiles,
-      //      incl. pod-default ones)
-      //   3. workspaceScoped flag  → the active workspace (explicit isolation
-      //      request, e.g. imports — overrides a profile's pod-default)
-      //   4. otherwise             → profile pod-default (pod → null) else the
-      //      active workspace (today's interactive behavior, unchanged)
-      const profileEntityScope = resolvedProfile.entityScope ?? "workspace";
-      const explicitWorkspaceScope = input.workspaceScoped === true;
-      const entityWorkspaceId = input.global
-        ? null
-        : (input.targetWorkspaceId ??
-          (explicitWorkspaceScope
-            ? governanceWorkspaceId
-            : profileEntityScope === "pod"
-              ? null
-              : governanceWorkspaceId));
+      // Profile + placement were already resolved up-front (before the perm
+      // check) so the proposal-gated and auto-approved paths land identically
+      // (I3). Reuse both here — `resolvedEntityWorkspaceId` is the value the
+      // proposal persisted as `data.resolvedWorkspaceId`.
+      const resolvedProfile: any = earlyResolvedProfile;
+      const entityWorkspaceId = resolvedEntityWorkspaceId;
 
       // Merge profile.defaultValues into caller-supplied properties.
       const profileDefaults =
@@ -2473,6 +2485,12 @@ export const entitiesRouter = router({
           profileSlug: input.profileSlug,
           profileId: input.profileId,
           workspaceId: facetWorkspaceId,
+          // I3: the facet lens follows the parent entity (facetWorkspaceId is
+          // parent.workspaceId when the caller didn't override). Persist it as
+          // the resolved placement — may be an explicit null for a pod-wide
+          // parent — so the materializer never re-pins the facet to the ambient
+          // governance workspace (the four-door bug, facet flavour).
+          resolvedWorkspaceId: facetWorkspaceId,
           contextEntityId: input.contextEntityId ?? null,
           ...(contextEntityTitle ? { contextEntityTitle } : {}),
           status: input.status,
