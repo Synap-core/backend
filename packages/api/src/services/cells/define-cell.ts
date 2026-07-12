@@ -12,6 +12,33 @@ import { getDb, and, eq, isNull } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 
+// deps are spliced into esm.sh import-map URLs inside the sandboxed iframe
+// (cell-runtime ViewFrame) — the regexes are what stops a crafted name/version
+// from manipulating the request path/query (CSP pins the origin, not the path).
+// Enforced HERE, inside the one door, so no caller (route, MCP, marketplace
+// install, future) can reach the upsert with unvalidated deps.
+const NPM_PKG_NAME_RE =
+  /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+const NPM_VERSION_RE = /^[a-zA-Z0-9^~><= .*|-]{1,64}$/;
+
+/** Returns an error message, or null when valid. */
+export function validateDeps(
+  deps: Record<string, string> | undefined
+): string | null {
+  if (!deps) return null;
+  const entries = Object.entries(deps);
+  if (entries.length > 30) return "deps must have at most 30 entries";
+  for (const [pkg, version] of entries) {
+    if (!NPM_PKG_NAME_RE.test(pkg)) {
+      return `Invalid package name in deps: "${pkg}"`;
+    }
+    if (!NPM_VERSION_RE.test(version)) {
+      return `Invalid version string for "${pkg}": "${version}"`;
+    }
+  }
+  return null;
+}
+
 export interface DefineCellInput {
   name: string;
   rendererSource: string;
@@ -29,6 +56,10 @@ export interface DefineCellInput {
 export async function defineCell(
   input: DefineCellInput
 ): Promise<{ typeKey: string; changeType: "created" | "updated" }> {
+  const depsError = validateDeps(input.deps);
+  if (depsError) {
+    throw new Error(`defineCell: ${depsError}`);
+  }
   const db = await getDb();
   const workspaceId = input.workspaceId ?? null;
 

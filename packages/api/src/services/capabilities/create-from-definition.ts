@@ -410,7 +410,14 @@ export async function createCapabilityFromDefinition(
     // Idempotent: reuse an existing skill with the same name in scope, refreshing
     // its code + required-tool links instead of creating a duplicate.
     const [existingSkill] = await db
-      .select({ id: skillsTable.id })
+      .select({
+        id: skillsTable.id,
+        kind: skillsTable.kind,
+        code: skillsTable.code,
+        providerSpec: skillsTable.providerSpec,
+        body: skillsTable.body,
+        approved: skillsTable.approved,
+      })
       .from(skillsTable)
       .where(
         and(
@@ -427,8 +434,19 @@ export async function createCapabilityFromDefinition(
       // description/scope on re-seed actually projects into the catalog (the
       // catalog read-model derives typed params from skills.parameters; the old
       // shallow update left them stale forever — e.g. channel.resolve's new
-      // branchPurpose param). STATE fields (approved/status/errorMessage/
-      // metadata) are deliberately NOT touched — DB owns those.
+      // branchPurpose param). STATE fields (status/errorMessage/metadata) are
+      // NOT touched — DB owns those. `approved` is state too, with ONE
+      // exception (security review 2026-07-12): when the EXECUTION-DEFINING
+      // content actually changes (kind/code/providerSpec), the row is demoted
+      // to unapproved — same rule skillsRouter.update enforces. Without it a
+      // drifted CP template could swap an approved skill's code while keeping
+      // its approval (content-swap-under-approval). Unchanged content (the
+      // common reconcile no-op-heal) never demotes.
+      const execContentChanged =
+        (s.kind ?? "code") !== existingSkill.kind ||
+        (s.code ?? null) !== existingSkill.code ||
+        JSON.stringify(s.providerSpec ?? null) !==
+          JSON.stringify(existingSkill.providerSpec ?? null);
       await db
         .update(skillsTable)
         .set({
@@ -443,6 +461,9 @@ export async function createCapabilityFromDefinition(
           executionMode: s.executionMode ?? "sync",
           timeoutSeconds: s.timeoutSeconds ?? 30,
           updatedAt: new Date(),
+          ...(execContentChanged && existingSkill.approved
+            ? { approved: false }
+            : {}),
         })
         .where(eq(skillsTable.id, existingSkill.id));
       if (s.requires && s.requires.length > 0) {
@@ -483,6 +504,23 @@ export async function createCapabilityFromDefinition(
     const proposalId =
       "proposalId" in result ? (result.proposalId ?? null) : null;
     if (proposalId) proposals.push(proposalId);
+
+    // Definition-sourced INSTRUCTION skills land unapproved, unconditionally —
+    // matching the tools rows' own semantics in this applier (approved defaults
+    // false, explicit enable required). skillsRouter.create's
+    // `approved = kind === "instruction"` formula is for the UI door where the
+    // author IS the operator; here the content comes from a capability
+    // definition (CP template / marketplace / package), and an agent-initiated
+    // install is approved via a generic proposal summary the user never reads
+    // the instruction text in (security review 2026-07-12 — the same
+    // prompt-injection hole insertSkillGoverned closed for the URL/import
+    // doors). Trusted system seeds (ensure-synap-core) post-approve explicitly.
+    if (result.status === "created" && (s.kind ?? "code") === "instruction") {
+      await db
+        .update(skillsTable)
+        .set({ approved: false })
+        .where(eq(skillsTable.id, result.id));
+    }
 
     // Wire required-tool links only when the skill was actually created and the
     // referenced tools resolved to real ids (proposed tools have no id yet).

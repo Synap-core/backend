@@ -5,7 +5,10 @@
 import { z } from "zod";
 import { getDb, and, eq, isNull, or } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
-import { defineCell } from "../../../services/cells/define-cell.js";
+import {
+  defineCell,
+  validateDeps,
+} from "../../../services/cells/define-cell.js";
 import {
   hasScope,
   logger,
@@ -14,33 +17,10 @@ import {
   type HubHono,
 } from "./_shared.js";
 
-// npm package name: optional scope (@org/pkg) + lowercase-kebab name, no URLs/protocols
-const NPM_PKG_NAME_RE =
-  /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
-// Version string: semver range or "latest" — permissive but blocks blank/URL values
-const NPM_VERSION_RE = /^[a-zA-Z0-9^~><= .*|-]{1,64}$/;
-
-/**
- * Shared deps validation — the SAME rules `POST /cells/define` enforces via its
- * zod schema, applied here to marketplace-sourced deps (which never pass
- * through that schema). Returns an error message, or null when valid.
- */
-export function validateDeps(
-  deps: Record<string, string> | undefined
-): string | null {
-  if (!deps) return null;
-  const entries = Object.entries(deps);
-  if (entries.length > 30) return "deps must have at most 30 entries";
-  for (const [pkg, version] of entries) {
-    if (!NPM_PKG_NAME_RE.test(pkg)) {
-      return `Invalid package name in deps: "${pkg}"`;
-    }
-    if (!NPM_VERSION_RE.test(version)) {
-      return `Invalid version string for "${pkg}": "${version}"`;
-    }
-  }
-  return null;
-}
+// deps validation now lives INSIDE the defineCell door (security review
+// 2026-07-12: marketplace-install called defineCell without it — enforcing at
+// the door means no caller can skip it). Re-exported for the existing test.
+export { validateDeps };
 
 const InstallBodySchema = z.object({
   packageSlug: z.string().min(1),
