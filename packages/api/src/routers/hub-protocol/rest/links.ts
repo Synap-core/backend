@@ -28,7 +28,12 @@ import {
 } from "../../../services/links/links-service.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import type { LinkEndpointType, LinkType } from "@synap/playbooks";
+import { db, eq, and, isNull, getWorkspaceMembership } from "@synap/database";
+import { workspaces } from "@synap/database/schema";
 
+// Kept in sync with LinkEndpointType (packages/database/src/schema/links.ts).
+// __tripwires__/links-endpoint-type-ssot.test.ts fails the build if this
+// array ever drifts from the schema union again.
 const LINK_ENDPOINT_TYPES = [
   "playbook",
   "tool",
@@ -39,6 +44,11 @@ const LINK_ENDPOINT_TYPES = [
   "entity",
   "channel",
   "participant",
+  "automation",
+  "project",
+  "secret",
+  "capability",
+  "workspace",
 ] as const;
 
 const LINK_TYPES = [
@@ -126,6 +136,34 @@ export function registerLinksRoutes(app: HubHono): void {
     const acting = await resolveActingContext(c, body);
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId, workspaceId } = acting;
+
+    // Workspace-as-endpoint edges (feeds/requires between two lenses) name a
+    // SECOND workspace beyond the stamped one — membership-check it too, or
+    // a member of workspace A could wire an edge exposing workspace B's
+    // existence/lens without ever belonging to B.
+    for (const endpointWorkspaceId of new Set(
+      [
+        parsed.data.fromType === "workspace" ? parsed.data.fromId : null,
+        parsed.data.toType === "workspace" ? parsed.data.toId : null,
+      ].filter((id): id is string => id !== null)
+    )) {
+      const [endpointWorkspace, endpointMembership] = await Promise.all([
+        db.query.workspaces.findFirst({
+          where: and(
+            eq(workspaces.id, endpointWorkspaceId),
+            isNull(workspaces.archivedAt)
+          ),
+          columns: { id: true },
+        }),
+        getWorkspaceMembership(db, endpointWorkspaceId, userId),
+      ]);
+      if (!endpointWorkspace || !endpointMembership) {
+        return c.json(
+          { error: `Access denied to workspace ${endpointWorkspaceId}` },
+          403
+        );
+      }
+    }
 
     try {
       const actorResolution = await resolveActorId(body.agentUserId, userId);

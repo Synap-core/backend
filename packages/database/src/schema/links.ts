@@ -66,7 +66,11 @@ export type LinkEndpointType =
   | "secret"
   // A capability CONTAINER (`capabilities` table). Parts attach as members:
   // `tool|skill|command --member_of--> capability` (mirrors automation→playbook).
-  | "capability";
+  | "capability"
+  // A workspace (lens). `workspace --feeds--> workspace` = provider→consumer
+  // lens propagation; `workspace --requires--> workspace` = install dependency.
+  // Governs lens propagation only — never data movement (see links.ts header).
+  | "workspace";
 
 /** The relationship an edge expresses. */
 export type LinkType =
