@@ -3770,6 +3770,30 @@ CREATE TABLE IF NOT EXISTS "capability_template_cache" (
   "synced_at"   timestamptz NOT NULL DEFAULT now()
 );
 
+-- cp_catalog_cache — pod-local CACHE across all four marketplace kinds
+-- (capability | automation | template | cell) (0184). Generalizes
+-- capability_template_cache above (kept, unchanged) with a `kind` column and a
+-- `source` column (the catalog provider base URL) so a future federated
+-- catalog provider is a sync-list entry, never a schema change.
+CREATE TABLE IF NOT EXISTS "cp_catalog_cache" (
+  "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "source"       text        NOT NULL,
+  "kind"         text        NOT NULL,
+  "slug"         text        NOT NULL,
+  "name"         text        NOT NULL,
+  "description"  text,
+  "version"      text,
+  "tier"         text,
+  "vendor"       text,
+  "tags"         text[],
+  "content_hash" text,
+  "definition"   jsonb,
+  "synced_at"    timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "uniq_cp_catalog_cache_source_kind_slug"
+  ON "cp_catalog_cache" ("source", "kind", "slug");
+CREATE INDEX IF NOT EXISTS "idx_cp_catalog_cache_kind" ON "cp_catalog_cache" ("kind");
+
 -- channel_egress — channel-AGNOSTIC outbound action outbox (0162). An external
 -- adapter (e.g. the Discord bridge) pulls pending rows and executes them so the
 -- backend can stop calling external systems directly. No provider specifics in

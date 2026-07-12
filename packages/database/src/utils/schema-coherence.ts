@@ -723,6 +723,25 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0155_capability_template_cache.sql",
   },
 
+  // cp_catalog_cache — pod-local CACHE across all four marketplace kinds
+  // (capability | automation | template | cell) (0184). Absence means a pod is
+  // on a pre-0184 schema where market.search reads would fail to find the cache.
+  {
+    table: "cp_catalog_cache",
+    column: "kind",
+    addedBy: "0184_cp_catalog_cache.sql",
+  },
+  {
+    table: "cp_catalog_cache",
+    column: "source",
+    addedBy: "0184_cp_catalog_cache.sql",
+  },
+  {
+    table: "cp_catalog_cache",
+    column: "definition",
+    addedBy: "0184_cp_catalog_cache.sql",
+  },
+
   // playbook_runs — the run ledger / executor spine (0127)
   {
     table: "playbook_runs",

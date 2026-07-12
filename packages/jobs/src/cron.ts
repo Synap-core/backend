@@ -12,6 +12,10 @@ import {
   CAPABILITY_TEMPLATE_SYNC_CRON,
 } from "./workers/capability-template-sync.js";
 import {
+  CP_CATALOG_SYNC_QUEUE,
+  CP_CATALOG_SYNC_CRON,
+} from "./workers/cp-catalog-sync.js";
+import {
   PAGERANK_CENTRALITY_QUEUE,
   PAGERANK_CENTRALITY_CRON,
 } from "./workers/pagerank-centrality.js";
@@ -136,6 +140,14 @@ export async function registerCronSchedules(): Promise<void> {
   logger.info("Registered cron: capability-template-sync (every 10min)");
   await boss.send(CAPABILITY_TEMPLATE_SYNC_QUEUE, {});
   logger.info("Enqueued startup run: capability-template-sync");
+
+  // CP catalog sync — refresh the pod-local cp_catalog_cache (all four
+  // marketplace kinds) every 10 minutes, AND once now on startup. Additive to
+  // capability-template-sync above (P2.4-B) — both run until a later cutover.
+  await boss.schedule(CP_CATALOG_SYNC_QUEUE, CP_CATALOG_SYNC_CRON, {});
+  logger.info("Registered cron: cp-catalog-sync (every 10min)");
+  await boss.send(CP_CATALOG_SYNC_QUEUE, {});
+  logger.info("Enqueued startup run: cp-catalog-sync");
 
   // PageRank centrality (every 6h + one startup run so a cold pod populates
   // entity_centrality without waiting for the first tick — this is also the

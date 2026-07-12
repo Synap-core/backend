@@ -41,3 +41,6 @@ export {
   startLocalSyncDriver,
   stopLocalSyncDriver,
 } from "./workers/local-sync-driver.js";
+
+// CP catalog sync — kind vocabulary (imported by @synap/api's catalog-cache-query.ts)
+export { type CatalogKind } from "./workers/cp-catalog-sync.js";

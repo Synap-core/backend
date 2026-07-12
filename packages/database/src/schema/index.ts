@@ -201,6 +201,12 @@ export * from "./entity-centrality.js";
 // the CP catalog so the catalog NEVER blocks on the CP. NOT a source of truth.
 export * from "./capability-template-cache.js";
 
+// CP Catalog Cache (0184) — generalizes the above to all four marketplace
+// kinds (capability | automation | template | cell), source-dimensioned for
+// future catalog-provider federation (P2.4-B / P2.10.2). The old
+// capability_template_cache stays in place unchanged — cutover is a later wave.
+export * from "./cp-catalog-cache.js";
+
 // Provenance vocabulary (createdByKind column type — must be public so tsc
 // can name router return types without referencing internal dist paths)
 export type { ProvenanceKind } from "./provenance.js";

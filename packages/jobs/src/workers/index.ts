@@ -109,6 +109,10 @@ import {
   CAPABILITY_TEMPLATE_SYNC_QUEUE,
 } from "./capability-template-sync.js";
 import {
+  handleCpCatalogSync,
+  CP_CATALOG_SYNC_QUEUE,
+} from "./cp-catalog-sync.js";
+import {
   handlePageRankCentrality,
   PAGERANK_CENTRALITY_QUEUE,
 } from "./pagerank-centrality.js";
@@ -166,6 +170,7 @@ const ALL_QUEUES = [
   PROPOSAL_REVIEWED_NOTIFY_QUEUE,
   MEMORY_DECAY_QUEUE,
   CAPABILITY_TEMPLATE_SYNC_QUEUE,
+  CP_CATALOG_SYNC_QUEUE,
   API_KEY_ROTATION_CHECK_QUEUE,
   PAGERANK_CENTRALITY_QUEUE,
 ];
@@ -469,6 +474,12 @@ export async function registerAllWorkers(): Promise<void> {
     handleCapabilityTemplateSync()
   );
   logger.info("Registered worker: capability-template-sync");
+
+  // CP catalog sync (cron: every 10min + on startup — refreshes the pod-local
+  // cp_catalog_cache across all four marketplace kinds; capability_template_cache
+  // above keeps running unchanged, this is additive per P2.4-B).
+  await boss.work(CP_CATALOG_SYNC_QUEUE, async () => handleCpCatalogSync());
+  logger.info("Registered worker: cp-catalog-sync");
 
   // PageRank centrality (cron: every 6h + on startup — recomputes global
   // PageRank over each user's relation graph into entity_centrality, which
