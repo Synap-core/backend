@@ -909,7 +909,7 @@ export const tools = {
               type: "string",
               enum: ["auto", "ask", "locked"],
               description:
-                "How to place the capture across workspaces. 'auto' (default) = the AI files it into the workspace it infers is the right domain (returned as movedToWorkspace) — this WINS over the session/ambient workspace so the user needn't think about workspaces (only applied on sufficient confidence + membership). 'ask' = don't move; return pendingWorkspaceSwitch so you can confirm with the user first (safe mode). 'locked' = never move; keep the caller's/session workspace. Use 'locked' (not a bare workspaceId) when you need to force a specific workspace.",
+                "How much latitude the backend resolver has to place the capture. Placement is DERIVED by the backend, not free-picked by you: the resolver files pod-wide kinds pod-wide and computes a workspace lens from the ontology (a role enabled in exactly one of your workspaces) and context (bound channel / focus session). You do NOT choose a workspace and cannot invent one — you are only ever consulted as a TIE-BREAKER among the pre-approved candidates the resolver could not separate, and you may abstain. 'auto' (default) = let the resolver place it (deterministic when possible; tie-break only when >1 candidate survive; returned as movedToWorkspace). 'ask' = never move silently; return pendingWorkspaceSwitch so you can confirm with the user first. 'locked' = keep the caller's/session workspace, no resolution. To force a specific workspace, pass an explicit workspaceId (rung-1 explicit placement) rather than expecting to route there by inference.",
             },
           },
           required: ["text"],

@@ -66,13 +66,9 @@ import {
   fetchRoutingMemory,
   fetchWorkspaceRoutingThreshold,
 } from "../services/routing-memory.js";
-import {
-  AI_KIND,
-  BELOW_GATE_CONFIDENCE,
-  EXACT_MATCH_CONFIDENCE,
-  FUZZY_MATCH_CONFIDENCE,
-} from "../lib/ai-events.js";
+import { AI_KIND, BELOW_GATE_CONFIDENCE } from "../lib/ai-events.js";
 import { type CaptureRoutingResult } from "../lib/capture-routing.js";
+import { reconcileWorkspaceByName } from "../lib/workspace-name-reconcile.js";
 import { isRoutableWorkspaceType } from "../lib/routing-candidates.js";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
@@ -931,50 +927,33 @@ export const captureRouter = router({
       // → leave the LLM's id untouched.
       const pickedWsName = structureResult.targetWorkspaceName;
       const rawPickedWsId = structureResult.targetWorkspaceId;
-      if (pickedWsName && availableWorkspaces.length > 0) {
-        const norm = (s: string) => s.toLowerCase().trim();
-        const wanted = norm(pickedWsName);
-        const exactMatch = availableWorkspaces.find(
-          (w) => norm(w.name) === wanted
-        );
-        // ALL fuzzy matches (not just the first) — so we can tell an unambiguous
-        // single match from an arbitrary pick among several.
-        const fuzzyMatches = exactMatch
-          ? []
-          : availableWorkspaces.filter(
-              (w) =>
-                norm(w.name).includes(wanted) || wanted.includes(norm(w.name))
-            );
-        const match = exactMatch ?? fuzzyMatches[0];
-        if (match) {
-          structureResult.targetWorkspaceId = match.id;
-          // Derive confidence from reconciliation match STRENGTH when the model
-          // didn't self-report one — so routing calibration + the auto-apply
-          // gate work for EVERY agent (a BYOA agent that names a workspace but
-          // omits a confidence would otherwise be dropped by the gate).
-          if (structureResult.targetWorkspaceConfidence == null) {
-            if (exactMatch) {
-              structureResult.targetWorkspaceConfidence =
-                EXACT_MATCH_CONFIDENCE;
-            } else if (fuzzyMatches.length === 1) {
-              structureResult.targetWorkspaceConfidence =
-                FUZZY_MATCH_CONFIDENCE;
-            } else {
-              // AMBIGUOUS — the name substring-matched MORE THAN ONE workspace,
-              // so `fuzzyMatches[0]` is an arbitrary pick. Assign a below-gate
-              // confidence so it degrades to ask/no-move instead of auto-moving
-              // to a coin-flip workspace.
-              structureResult.targetWorkspaceConfidence = BELOW_GATE_CONFIDENCE;
-            }
-          }
-          // Telemetry: reconciliation OVERRODE the LLM's raw id (a caught
-          // UUID-copy error) — the exact win this name-resolution exists for.
-          if (match.id !== rawPickedWsId) {
-            logger.info(
-              { userId, pickedWsName, rawPickedWsId, resolvedWsId: match.id },
-              "Capture routing: name→id reconciliation overrode LLM UUID (copy-error caught)"
-            );
-          }
+      const reconciled = reconcileWorkspaceByName(
+        pickedWsName,
+        availableWorkspaces
+      );
+      if (reconciled) {
+        structureResult.targetWorkspaceId = reconciled.resolvedWorkspaceId;
+        // Derive confidence from reconciliation match STRENGTH when the model
+        // didn't self-report one — so routing calibration + the auto-apply gate
+        // work for EVERY agent (a BYOA agent that names a workspace but omits a
+        // confidence would otherwise be dropped by the gate).
+        if (structureResult.targetWorkspaceConfidence == null) {
+          structureResult.targetWorkspaceConfidence =
+            reconciled.derivedConfidence;
+        }
+        // Telemetry: reconciliation OVERRODE the LLM's raw id (a caught UUID-copy
+        // error) — the exact win this name-resolution exists for.
+        if (reconciled.resolvedWorkspaceId !== rawPickedWsId) {
+          logger.info(
+            {
+              userId,
+              pickedWsName,
+              rawPickedWsId,
+              resolvedWsId: reconciled.resolvedWorkspaceId,
+              matchKind: reconciled.matchKind,
+            },
+            "Capture routing: name→id reconciliation overrode LLM UUID (copy-error caught)"
+          );
         }
       } else if (!pickedWsName && rawPickedWsId) {
         // The IS emitted a raw targetWorkspaceId but NO targetWorkspaceName, so
@@ -1018,6 +997,84 @@ export const captureRouter = router({
         ) {
           const ek = inferEkType(entity.title || "");
           if (ek) (entity.properties as Record<string, unknown>).ek_type = ek;
+        }
+      }
+
+      // 1c. Resolver-driven routing (Wave 2). The ontology — the kinds/roles this
+      // capture actually produced — is the AUTHORITATIVE placement signal, now
+      // that the kinds are known (post-/structure). Run the one door and:
+      //   • deterministic (rung 2/3/4): OVERRIDE the IS's catalog pick — the AI is
+      //     not consulted when the role is enabled in exactly one of the caller's
+      //     workspaces (the common case, R3).
+      //   • ambiguous (rung-2 candidates >1): tie-break over ONLY those pre-approved
+      //     candidates via the IS /api/workspace-tiebreak route (D3); abstain → stay
+      //     put (never fall back to a full-catalog guess).
+      //   • no ontology signal (rung 6, e.g. a pod-wide note/knowledge): keep the
+      //     IS's name-reconciled pick from step 1a.
+      // Best-effort: a resolver/tie-break hiccup leaves the step-1a pick untouched.
+      const routingSlugs = Array.from(
+        new Set(
+          structureResult.entities
+            .flatMap((e) => [
+              e.profileSlug,
+              ...(e.facets?.map((f) => f.profileSlug) ?? []),
+            ])
+            .filter((s): s is string => typeof s === "string" && s.length > 0)
+        )
+      );
+      if (routingSlugs.length > 0) {
+        try {
+          const placement = await resolveWorkspacePlacement(database, {
+            userId,
+            kindSlug: routingSlugs[0],
+            facetSlugs: routingSlugs.slice(1),
+            ambientWorkspaceId: workspaceId,
+          });
+          const nameFor = (id: string | null | undefined) =>
+            id
+              ? (availableWorkspaces.find((w) => w.id === id)?.name ?? null)
+              : null;
+          if (placement.candidates.length > 1) {
+            const tb = await client.workspaceTiebreak({
+              content: inputText.slice(0, 4000),
+              candidates: placement.candidates.map((c) => ({
+                id: c.id,
+                name: c.name,
+              })),
+              facetSlugs: routingSlugs,
+            });
+            if (tb?.workspaceId) {
+              structureResult.targetWorkspaceId = tb.workspaceId;
+              structureResult.targetWorkspaceName =
+                placement.candidates.find((c) => c.id === tb.workspaceId)
+                  ?.name ?? nameFor(tb.workspaceId);
+              structureResult.targetWorkspaceReason =
+                tb.reason ?? placement.reason;
+              structureResult.targetWorkspaceConfidence = tb.confidence ?? null;
+            } else {
+              // Abstain (or tie-break unavailable) → don't move. Staying in the
+              // ambient workspace is the honest choice over an arbitrary guess.
+              structureResult.targetWorkspaceId = workspaceId;
+              structureResult.targetWorkspaceName = nameFor(workspaceId);
+              structureResult.targetWorkspaceConfidence = null;
+              structureResult.targetWorkspaceReason =
+                "workspace tie-break abstained — staying in the current workspace";
+            }
+          } else if (placement.rung <= 4 && placement.workspaceId) {
+            // Deterministic ontology/context/relational hit — resolver decides.
+            structureResult.targetWorkspaceId = placement.workspaceId;
+            structureResult.targetWorkspaceName = nameFor(
+              placement.workspaceId
+            );
+            structureResult.targetWorkspaceReason = placement.reason;
+            structureResult.targetWorkspaceConfidence = placement.confidence;
+          }
+          // rung 6 → keep the step-1a IS pick (no ontology signal to override it).
+        } catch (err) {
+          logger.warn(
+            { err, userId },
+            "capture.structure: workspace resolver override failed — keeping IS pick"
+          );
         }
       }
 
