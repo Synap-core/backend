@@ -164,7 +164,10 @@ function ok(data: unknown): CallToolResult {
     payload &&
     typeof payload === "object" &&
     !Array.isArray(payload) &&
-    (payload as Record<string, unknown>).status === "proposed" &&
+    // Two proposed shapes flow through here: governed writes ({status:
+    // "proposed"}) and executeCapability outcomes ({kind: "proposed"}).
+    ((payload as Record<string, unknown>).status === "proposed" ||
+      (payload as Record<string, unknown>).kind === "proposed") &&
     !("hint" in (payload as Record<string, unknown>))
   ) {
     payload = {
@@ -1331,37 +1334,95 @@ export async function executeMCPToolViaHubProtocol(
     case "synap_list_capabilities": {
       requireScope(apiKeyScopes, "mcp.read", toolName);
       const wsId = args.workspaceId as string;
+      const query =
+        typeof args.query === "string" && args.query.trim().length > 0
+          ? args.query
+          : undefined;
+      const kind = typeof args.kind === "string" ? args.kind : undefined;
+      const limit = typeof args.limit === "number" ? args.limit : undefined;
       const { listCapabilities } =
         await import("../../services/capabilities/capability-registry.js");
-      const capabilities = await listCapabilities({
-        workspaceId: wsId,
-        userId,
-      });
-      // Flatten to a verb-first list the agent can act on directly: each runnable
-      // verb + whether its owning capability is enabled (approved) or DRAFT.
-      const runnable = (
-        capabilities as Array<{
-          name?: string;
-          kind?: string;
-          approved?: boolean;
-          governance?: unknown;
-          verbs?: Array<{
-            id?: string;
-            label?: string;
-            kind?: string;
-            effectiveExecMode?: string;
-          }>;
-        }>
-      ).flatMap((cap) =>
-        (cap.verbs ?? []).map((v) => ({
-          verbId: v.id,
-          label: v.label ?? v.id,
-          tool: cap.name,
-          enabled: cap.approved === true,
-          execMode: v.effectiveExecMode,
-        }))
+      const capabilities = await listCapabilities(
+        { workspaceId: wsId, userId },
+        query || kind || limit !== undefined
+          ? {
+              query,
+              kind: kind as never,
+              limit,
+            }
+          : undefined
       );
-      return ok({ capabilities, runnable });
+
+      // Flatten to an action-first list the agent can run directly. HONEST
+      // runnable surface (not just tool verbs): standalone code skills and
+      // intelligence_commands are executable via skillId too; IS-native
+      // entries (`catalogOnly: true` — no run bridge yet, recon-verified 404)
+      // are excluded. `enabled` derives from `governance` (the row's real
+      // approved state) — NOT a nonexistent `approved` field on the read-model
+      // (the previous flattening always evaluated to false).
+      type RunnableCap = {
+        id: string;
+        name?: string;
+        kind?: string;
+        governance?: string;
+        catalogOnly?: boolean;
+        inputSchema?: Record<string, unknown>;
+        verbs?: Array<{
+          id?: string;
+          label?: string;
+          kind?: string;
+          effectiveExecMode?: string;
+          paramsSchema?: Record<string, unknown>;
+        }>;
+      };
+      const caps = capabilities as unknown as RunnableCap[];
+      const verbRunnable = caps.flatMap((cap) =>
+        cap.catalogOnly
+          ? []
+          : (cap.verbs ?? []).map((v) => ({
+              verbId: v.id,
+              label: v.label ?? v.id,
+              tool: cap.name,
+              enabled: cap.governance === "auto",
+              execMode: v.effectiveExecMode,
+              paramsSchema: v.paramsSchema,
+            }))
+      );
+      const standaloneRunnable = caps
+        .filter(
+          (cap) =>
+            (cap.kind === "skill" || cap.kind === "command") &&
+            !cap.catalogOnly &&
+            (cap.verbs?.length ?? 0) === 0
+        )
+        .map((cap) => ({
+          skillId: cap.id,
+          label: cap.name ?? cap.id,
+          tool: null,
+          enabled: cap.governance === "auto",
+          execMode: undefined,
+          paramsSchema:
+            cap.inputSchema && Object.keys(cap.inputSchema).length > 0
+              ? cap.inputSchema
+              : undefined,
+        }));
+      const runnable = [...verbRunnable, ...standaloneRunnable];
+
+      // Response size discipline: with a query, drop the full verb catalog dump
+      // (grant/govDefault noise) — the compact projection carries name/kind/
+      // description/governance + a slim verb list, `runnable` above already
+      // carries the paramsSchema for anything actually callable.
+      const responseCapabilities = query
+        ? caps.map((cap) => ({
+            kind: cap.kind,
+            id: cap.id,
+            name: cap.name,
+            governance: cap.governance,
+            verbs: cap.verbs?.map((v) => ({ id: v.id, label: v.label })),
+          }))
+        : capabilities;
+
+      return ok({ capabilities: responseCapabilities, runnable });
     }
 
     case "synap_run_capability": {
@@ -1386,7 +1447,9 @@ export async function executeMCPToolViaHubProtocol(
     }
 
     default:
-      throw new Error(`Unknown MCP tool: ${toolName}`);
+      throw new Error(
+        `Unknown MCP tool: ${toolName}. Call synap_load_skill("catalog") for skills or synap_list_capabilities({query}) to find capabilities.`
+      );
   }
 }
 

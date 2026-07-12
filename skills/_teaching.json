@@ -34,6 +34,18 @@
     "alwaysOn": false,
     "summary": "Full governance reference: whitelist, lifecycle, agent-user semantics."
   },
+  "synap/capabilities": {
+    "teachesTools": [
+      "list_capabilities",
+      "run_capability",
+      "synap_list_capabilities",
+      "synap_run_capability",
+      "manage_connections"
+    ],
+    "skillGroup": "govern",
+    "alwaysOn": false,
+    "summary": "Discover→check→run capabilities; the when-blocked reflex (search, then tell the user what's missing) instead of fabricating or giving up."
+  },
   "synap/capture": {
     "teachesTools": ["create_entity", "update_entity", "entity.create"],
     "skillGroup": "core",

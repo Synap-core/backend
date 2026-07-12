@@ -9,6 +9,7 @@ scope.md
 work-flow.md
 linking-principle.md
 governance-rules.md
+capabilities.md
 writes.md
 document-embeds.md
 creative-loop.md

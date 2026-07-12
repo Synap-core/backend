@@ -311,6 +311,12 @@ export interface Capability {
    * verb-less provider tools).
    */
   verbs?: CapabilityVerbState[];
+  /**
+   * True for a capability that is discoverable but NOT invokable through the
+   * capability-execution door (e.g. an IS-native tool with no run_capability
+   * bridge yet). Consumers building a "runnable" projection must exclude these.
+   */
+  catalogOnly?: boolean;
 }
 
 /**
@@ -327,6 +333,14 @@ export interface CapabilityVerbState extends ToolVerb {
    * granted, else the verb's `govDefault`. This is what the gate would apply.
    */
   effectiveExecMode: ExecMode;
+  /**
+   * Honest, derivable parameter requirements for this verb — builtin verbs from
+   * their Zod validator (`BUILTIN_VERB_PARAM_SCHEMAS`), provider verbs from the
+   * declarative skill's `providerSpec` template params. Undefined when nothing
+   * is derivable (e.g. a verb-less/legacy tool). Distinct from `argsSchema`
+   * (a hand-authored JSON-schema-ish doc): this is read off the real contract.
+   */
+  paramsSchema?: Record<string, { required: boolean; description?: string }>;
 }
 
 // ── CapabilityDefinition — a config descriptor that INSTANTIATES a set of ─────

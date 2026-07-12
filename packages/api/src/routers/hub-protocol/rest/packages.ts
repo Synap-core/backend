@@ -292,10 +292,36 @@ export function registerPackagesRoutes(app: HubHono): void {
     // ── Step 3: Automations ───────────────────────────────────────────────
     if (body.automations?.length) {
       const { automationsRouter } = await import("../../automations.js");
+      const {
+        db,
+        and,
+        eq,
+        isNull,
+        automations: automationsTable,
+      } = await import("@synap/database");
       const caller = automationsRouter.createCaller(ctx as never);
       const autos: unknown[] = [];
       for (const a of body.automations) {
         try {
+          // Idempotent reuse keyed on the stable natural key: name within
+          // scope — mirrors createCapabilityFromDefinition's automations step
+          // so a re-apply never double-creates.
+          const [existing] = await db
+            .select({ id: automationsTable.id })
+            .from(automationsTable)
+            .where(
+              and(
+                eq(automationsTable.name, a.name),
+                workspaceId
+                  ? eq(automationsTable.workspaceId, workspaceId)
+                  : isNull(automationsTable.workspaceId)
+              )
+            )
+            .limit(1);
+          if (existing) {
+            autos.push({ name: a.name, status: "reused", id: existing.id });
+            continue;
+          }
           const r = await caller.create({
             workspaceId,
             name: a.name,
@@ -323,10 +349,40 @@ export function registerPackagesRoutes(app: HubHono): void {
     // ── Step 4: Playbooks ─────────────────────────────────────────────────
     if (body.playbooks?.length) {
       const { playbooksRouter } = await import("../../playbooks.js");
+      const {
+        db,
+        and,
+        eq,
+        playbooks: playbooksTable,
+      } = await import("@synap/database");
       const caller = playbooksRouter.createCaller(ctx as never);
       const pbs: unknown[] = [];
       for (const p of body.playbooks) {
         try {
+          // Idempotent reuse keyed on the stable natural key: name within
+          // scope — mirrors createCapabilityFromDefinition's playbooks step.
+          // Playbooks are workspace-scoped, so this only applies when a
+          // workspaceId is present (it always is by this point in /packages/apply).
+          if (workspaceId) {
+            const [existing] = await db
+              .select({ id: playbooksTable.id })
+              .from(playbooksTable)
+              .where(
+                and(
+                  eq(playbooksTable.name, p.name),
+                  eq(playbooksTable.workspaceId, workspaceId)
+                )
+              )
+              .limit(1);
+            if (existing) {
+              pbs.push({
+                name: p.name,
+                status: "reused",
+                playbookId: existing.id,
+              });
+              continue;
+            }
+          }
           const r = await caller.create({
             name: p.name,
             description: p.description,

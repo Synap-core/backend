@@ -5,7 +5,6 @@
 import { z } from "zod";
 import { getDb, and, eq, isNull, or } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
-import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { defineCell } from "../../../services/cells/define-cell.js";
 import {
   hasScope,
@@ -14,6 +13,34 @@ import {
   verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
+
+// npm package name: optional scope (@org/pkg) + lowercase-kebab name, no URLs/protocols
+const NPM_PKG_NAME_RE =
+  /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+// Version string: semver range or "latest" — permissive but blocks blank/URL values
+const NPM_VERSION_RE = /^[a-zA-Z0-9^~><= .*|-]{1,64}$/;
+
+/**
+ * Shared deps validation — the SAME rules `POST /cells/define` enforces via its
+ * zod schema, applied here to marketplace-sourced deps (which never pass
+ * through that schema). Returns an error message, or null when valid.
+ */
+export function validateDeps(
+  deps: Record<string, string> | undefined
+): string | null {
+  if (!deps) return null;
+  const entries = Object.entries(deps);
+  if (entries.length > 30) return "deps must have at most 30 entries";
+  for (const [pkg, version] of entries) {
+    if (!NPM_PKG_NAME_RE.test(pkg)) {
+      return `Invalid package name in deps: "${pkg}"`;
+    }
+    if (!NPM_VERSION_RE.test(version)) {
+      return `Invalid version string for "${pkg}": "${version}"`;
+    }
+  }
+  return null;
+}
 
 const InstallBodySchema = z.object({
   packageSlug: z.string().min(1),
@@ -114,8 +141,11 @@ export function registerCellsRoutes(app: HubHono): void {
     const cpUrl = getCpUrl();
     if (!cpUrl) {
       return c.json(
-        { error: "Control Plane URL is not configured on this pod" },
-        500
+        {
+          error:
+            "Cell marketplace install requires CONTROL_PLANE_URL (or CP_URL) to be configured on this pod",
+        },
+        503
       );
     }
 
@@ -155,46 +185,24 @@ export function registerCellsRoutes(app: HubHono): void {
         );
       }
 
-      const typeKey = `cell:${packageSlug}:${cellKey}`;
-      const db = await getDb();
-      await db
-        .insert(widgetDefinitions)
-        .values({
-          typeKey,
-          workspaceId,
-          name: cell.name,
-          description: cell.description,
-          category: "installed",
-          rendererType: "frame",
-          rendererSource: cell.code,
-          deps: cell.deps ?? {},
-          configSchema: {},
-          defaultConfig: {},
-          defaultSize: cell.defaultSize ?? { w: 6, h: 4 },
-          isActive: true,
-        })
-        .onConflictDoUpdate({
-          target: [widgetDefinitions.typeKey, widgetDefinitions.workspaceId],
-          set: {
-            name: cell.name,
-            description: cell.description ?? null,
-            rendererSource: cell.code,
-            deps: cell.deps ?? {},
-            isActive: true,
-            updatedAt: new Date(),
-          },
-        });
+      const depsError = validateDeps(cell.deps);
+      if (depsError) {
+        return c.json({ error: depsError }, 400);
+      }
 
-      emitHubRealtimeEvent({
-        eventType: "widget_definition.create.completed",
-        subjectId: typeKey,
+      // Route through the ONE door (defineCell) — same idempotent upsert +
+      // realtime event MCP's synap_create_cell and POST /cells/define use.
+      // Pass the pre-existing marketplace typeKey scheme explicitly so
+      // already-installed cells keep resolving under it.
+      const { typeKey } = await defineCell({
+        name: cell.name,
+        rendererSource: cell.code,
+        workspaceId,
+        typeKey: `cell:${packageSlug}:${cellKey}`,
+        description: cell.description,
+        defaultSize: cell.defaultSize,
+        deps: cell.deps,
         userId: userId ?? "",
-        data: {
-          id: typeKey,
-          typeKey,
-          workspaceId: workspaceId ?? undefined,
-          changeType: "created",
-        },
       });
 
       return c.json({ success: true, typeKey });
@@ -224,12 +232,6 @@ export function registerCellsRoutes(app: HubHono): void {
     > | null;
     if (!rawBody) return c.json({ error: "Invalid JSON in request body" }, 400);
 
-    // npm package name: optional scope (@org/pkg) + lowercase-kebab name, no URLs/protocols
-    const NPM_PKG_NAME_RE =
-      /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
-    // Version string: semver range or "latest" — permissive but blocks blank/URL values
-    const NPM_VERSION_RE = /^[a-zA-Z0-9^~><= .*|-]{1,64}$/;
-
     const parsed = z
       .object({
         name: z.string().min(1).max(120),
@@ -242,28 +244,9 @@ export function registerCellsRoutes(app: HubHono): void {
           .record(z.string(), z.string())
           .optional()
           .superRefine((val, ctx) => {
-            if (!val) return;
-            const entries = Object.entries(val);
-            if (entries.length > 30) {
-              ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                message: "deps must have at most 30 entries",
-              });
-              return;
-            }
-            for (const [pkg, version] of entries) {
-              if (!NPM_PKG_NAME_RE.test(pkg)) {
-                ctx.addIssue({
-                  code: z.ZodIssueCode.custom,
-                  message: `Invalid package name in deps: "${pkg}"`,
-                });
-              }
-              if (!NPM_VERSION_RE.test(version)) {
-                ctx.addIssue({
-                  code: z.ZodIssueCode.custom,
-                  message: `Invalid version string for "${pkg}": "${version}"`,
-                });
-              }
+            const message = validateDeps(val);
+            if (message) {
+              ctx.addIssue({ code: z.ZodIssueCode.custom, message });
             }
           }),
       })

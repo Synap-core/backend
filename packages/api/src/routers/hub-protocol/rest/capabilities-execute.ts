@@ -169,7 +169,11 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
           );
         case "proposed":
           return c.json(
-            { proposed: true as const, proposalId: outcome.proposalId },
+            {
+              proposed: true as const,
+              proposalId: outcome.proposalId,
+              reviewUrl: outcome.reviewUrl,
+            },
             202
           );
         case "run":

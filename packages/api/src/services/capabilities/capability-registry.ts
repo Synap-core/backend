@@ -29,6 +29,7 @@ import {
   secrets,
   vaultGrants,
   type ToolVerbCatalogEntry,
+  type ProviderVerbSpec,
 } from "@synap/database/schema";
 import type {
   Capability,
@@ -38,6 +39,7 @@ import type {
   ExecutorRef,
 } from "@synap/playbooks";
 import { getDefaultActiveService } from "@synap/intelligence-client";
+import { BUILTIN_VERB_PARAM_SCHEMAS } from "./builtin-verbs.js";
 
 export interface CapabilityRegistryContext {
   workspaceId: string;
@@ -81,25 +83,99 @@ function deriveGovernance(
   return approved ? "auto" : "propose";
 }
 
+/** Minimal duck-typed shape a Zod field exposes — avoids importing full ZodTypeAny. */
+interface ZodFieldLike {
+  isOptional?: () => boolean;
+  description?: string;
+}
+
+/**
+ * Derive an honest params schema for a BUILTIN verb from its Zod param schema
+ * (`BUILTIN_VERB_PARAM_SCHEMAS` — the actual execution-time validator, the SSOT
+ * `execute-capability.ts` parses against). Reads the schema's `.shape` rather than
+ * re-deriving from the seeded JSON `parameters` doc, so this can never drift from
+ * what the handler actually accepts.
+ */
+export function deriveBuiltinVerbParamsSchema(
+  verbId: string
+): Record<string, { required: boolean; description?: string }> | undefined {
+  const schema = BUILTIN_VERB_PARAM_SCHEMAS[verbId];
+  if (!schema) return undefined;
+  const shape = (schema as unknown as { shape: Record<string, ZodFieldLike> })
+    .shape;
+  const out: Record<string, { required: boolean; description?: string }> = {};
+  for (const [key, field] of Object.entries(shape)) {
+    out[key] = {
+      required:
+        typeof field.isOptional === "function" ? !field.isOptional() : true,
+      description: field.description,
+    };
+  }
+  return out;
+}
+
+/** Every `{{param}}` token referenced across a provider verb's templated strings. */
+function extractTemplateParams(spec: ProviderVerbSpec): string[] {
+  const text = JSON.stringify([spec.pathTemplate, spec.query, spec.body]);
+  const found = new Set<string>();
+  for (const m of text.matchAll(/\{\{(\w+)\}\}/g)) found.add(m[1]);
+  return [...found];
+}
+
+/**
+ * Derive an honest params schema for a PROVIDER verb from its declarative spec:
+ * every `{{param}}` referenced in path/query/body, `required` from
+ * `paramMapping[param].required` (default false — a templated param with no
+ * explicit `required:true` has a default/is optional). No description — not
+ * modeled upstream, so none is fabricated.
+ */
+export function deriveProviderVerbParamsSchema(
+  spec: ProviderVerbSpec
+): Record<string, { required: boolean }> | undefined {
+  const params = extractTemplateParams(spec);
+  if (params.length === 0) return undefined;
+  const out: Record<string, { required: boolean }> = {};
+  for (const p of params) {
+    out[p] = { required: spec.paramMapping?.[p]?.required === true };
+  }
+  return out;
+}
+
 /**
  * Join a tool's structured verb catalog (`tools.capabilities`) with the tool's
  * active grant to produce the connection × verb × grant matrix rows. Each verb
  * inherits the SAME tool-level grant state today (grants are issued per tool, not
  * per verb): `granted` reflects an active grant existing, and `effectiveExecMode`
  * is the grant's exec-mode when granted, else the verb's `govDefault` — exactly
- * what the gate would apply.
+ * what the gate would apply. `paramsSchema` is attached per verb: builtin verbs
+ * from their Zod validator, provider verbs from the requiring declarative skill's
+ * `providerSpec` (looked up by verb id = skill name in `providerSpecByName`).
  */
 function buildVerbStates(
   catalog: ToolVerbCatalogEntry[] | null | undefined,
-  grant: { execMode: ExecMode } | undefined
+  grant: { execMode: ExecMode } | undefined,
+  toolKind: string,
+  providerSpecByName: Map<string, ProviderVerbSpec>
 ): CapabilityVerbState[] {
   if (!Array.isArray(catalog) || catalog.length === 0) return [];
   const granted = !!grant;
-  return catalog.map((v) => ({
-    ...v,
-    granted,
-    effectiveExecMode: grant ? grant.execMode : v.govDefault,
-  }));
+  return catalog.map((v) => {
+    const paramsSchema =
+      toolKind === "builtin"
+        ? deriveBuiltinVerbParamsSchema(v.id)
+        : toolKind === "provider"
+          ? (() => {
+              const spec = providerSpecByName.get(v.id);
+              return spec ? deriveProviderVerbParamsSchema(spec) : undefined;
+            })()
+          : undefined;
+    return {
+      ...v,
+      granted,
+      effectiveExecMode: grant ? grant.execMode : v.govDefault,
+      ...(paramsSchema ? { paramsSchema } : {}),
+    };
+  });
 }
 
 // ── IS-native tool manifest (Spine 2 / 2b) ────────────────────────────────────
@@ -141,6 +217,11 @@ async function fetchISNativeCapabilities(): Promise<Capability[]> {
       // proposal until per-tool read/write governance is modeled. Actual
       // execution is gated separately by the capability gate regardless.
       governance: deriveGovernance(undefined),
+      // IS-native tools are discoverable but NOT invokable through this door yet
+      // (no run_capability bridge to the IS's in-process tool registry — recon-
+      // verified they 404). Flagged explicitly so consumers (the MCP `runnable`
+      // projection) exclude them by a real signal, not by string-sniffing the id.
+      catalogOnly: true,
     }));
     isManifestCache = { at: Date.now(), caps };
     return caps;
@@ -151,6 +232,24 @@ async function fetchISNativeCapabilities(): Promise<Capability[]> {
 }
 
 /**
+ * Options narrowing the read-model to what an agent is actually looking for
+ * (D1 — `list_capabilities(query, kind, limit)`). All optional; omitting every
+ * option preserves the original full, unfiltered, unranked dump (back-compat for
+ * existing consumers — the playbooks router, MCP adapter).
+ */
+export interface ListCapabilitiesOptions {
+  /** Ranked tokenized substring match over name + verb labels + description. */
+  query?: string;
+  /** Exact `CapabilityKind` filter, applied before ranking. */
+  kind?: CapabilityKind;
+  /** Cap the result count. Defaults to 20 when `query` is set; unset otherwise. */
+  limit?: number;
+}
+
+/** Default result cap when a query narrows the list (keeps agent responses compact). */
+const DEFAULT_QUERY_LIMIT = 20;
+
+/**
  * List every capability visible to the caller in this workspace, normalized into
  * the `Capability` read-model. Read-only — no writes, no governance.
  *
@@ -158,7 +257,8 @@ async function fetchISNativeCapabilities(): Promise<Capability[]> {
  * (Reads are auto-approved by governance-policy "*.read" entries.)
  */
 export async function listCapabilities(
-  ctx: CapabilityRegistryContext
+  ctx: CapabilityRegistryContext,
+  opts?: ListCapabilitiesOptions
 ): Promise<Capability[]> {
   const db = await getDb();
 
@@ -204,22 +304,10 @@ export async function listCapabilities(
     }
   }
 
-  const toolCaps: Capability[] = toolRows.map((row) => ({
-    kind: toolKindToCapabilityKind(row.kind),
-    id: row.id,
-    name: row.name,
-    description: row.description ?? null,
-    inputSchema: asInputSchema(row.inputSchema),
-    executor: row.executor as ExecutorRef,
-    governance: deriveGovernance(row.approved),
-    verbs: buildVerbStates(
-      row.capabilities as ToolVerbCatalogEntry[] | null,
-      grantByGrantableId.get(row.id)
-    ),
-  }));
-
   // ── Skills (instruction | code) ─────────────────────────────────────────────
   // Visible = pod-wide (NULL) OR this workspace OR owned by the caller (user scope).
+  // Fetched BEFORE toolCaps so declarative skills' `providerSpec` (the source of
+  // truth for a provider verb's real param shape) is available to buildVerbStates.
   const skillRows = await db
     .select()
     .from(skills)
@@ -230,6 +318,32 @@ export async function listCapabilities(
         eq(skills.userId, ctx.userId)
       )
     );
+
+  // verb id (= skill name) → providerSpec, for declarative skills only. A tool's
+  // verb catalog entry id mirrors the requiring skill's name (see deriveToolVerbs
+  // in create-from-definition.ts), so this is a direct lookup, no join needed.
+  const providerSpecByName = new Map<string, ProviderVerbSpec>();
+  for (const s of skillRows) {
+    if (s.kind === "declarative" && s.providerSpec) {
+      providerSpecByName.set(s.name, s.providerSpec as ProviderVerbSpec);
+    }
+  }
+
+  const toolCaps: Capability[] = toolRows.map((row) => ({
+    kind: toolKindToCapabilityKind(row.kind),
+    id: row.id,
+    name: row.name,
+    description: row.description ?? null,
+    inputSchema: asInputSchema(row.inputSchema),
+    executor: row.executor as ExecutorRef,
+    governance: deriveGovernance(row.approved),
+    verbs: buildVerbStates(
+      row.capabilities as ToolVerbCatalogEntry[] | null,
+      grantByGrantableId.get(row.id),
+      row.kind,
+      providerSpecByName
+    ),
+  }));
 
   // `kind='instruction'` rows are teaching prose (system-prompt text), not a
   // runnable capability — map them to "teaching-doc" so flat-list consumers
@@ -286,7 +400,71 @@ export async function listCapabilities(
   // fetchISNativeCapabilities above. Graceful: [] when the IS is unreachable.
   const builtinCaps: Capability[] = await fetchISNativeCapabilities();
 
-  return [...builtinCaps, ...toolCaps, ...skillCaps, ...commandCaps];
+  const all: Capability[] = [
+    ...builtinCaps,
+    ...toolCaps,
+    ...skillCaps,
+    ...commandCaps,
+  ];
+
+  let result = all;
+  if (opts?.kind) result = result.filter((c) => c.kind === opts.kind);
+  if (opts?.query && opts.query.trim().length > 0) {
+    result = result
+      .map((cap) => ({
+        cap,
+        score: scoreTextMatch(opts.query as string, {
+          primary: cap.name,
+          secondary: (cap.verbs ?? []).map((v) => v.label ?? v.id),
+          tertiary: cap.description,
+        }),
+      }))
+      .filter((s) => s.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((s) => s.cap)
+      .slice(0, opts.limit ?? DEFAULT_QUERY_LIMIT);
+  } else if (typeof opts?.limit === "number") {
+    result = result.slice(0, opts.limit);
+  }
+  return result;
+}
+
+// ── Shared search matcher (D1) ────────────────────────────────────────────────
+// Simple v1 ranking — tokenized substring match, no embeddings. Pure + exported
+// so both callers of the search feature (the registry above and the capability
+// CONTAINERS REST route, which searches bundles rather than verbs) share the
+// SAME scoring, never a second reimplementation.
+
+/** The searchable text of one candidate, weighted by field. */
+export interface MatchableText {
+  /** Highest weight — e.g. the capability/container name. */
+  primary: string;
+  /** Medium weight — e.g. verb labels or member names. */
+  secondary?: string[];
+  /** Lowest weight — e.g. a free-text description. */
+  tertiary?: string | null;
+}
+
+/**
+ * Score a candidate against a query: tokens (lowercased, whitespace-split) are
+ * matched as substrings against each weighted field; an exact `primary` match
+ * scores highest. Returns 0 when no token matches anything (callers should
+ * exclude/rank-last on 0).
+ */
+export function scoreTextMatch(query: string, target: MatchableText): number {
+  const tokens = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return 0;
+  const primary = target.primary.toLowerCase();
+  const secondary = (target.secondary ?? []).join(" ").toLowerCase();
+  const tertiary = (target.tertiary ?? "").toLowerCase();
+  let score = 0;
+  for (const t of tokens) {
+    if (primary === t) score += 10;
+    else if (primary.includes(t)) score += 5;
+    if (secondary.includes(t)) score += 3;
+    if (tertiary.includes(t)) score += 1;
+  }
+  return score;
 }
 
 // ── Capability grant listing (polymorphic — all grantableTypes) ───────────────

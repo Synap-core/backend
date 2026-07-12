@@ -1066,11 +1066,26 @@ export const tools = {
       {
         name: "synap_list_capabilities",
         description:
-          "List the runnable capabilities in a workspace — the verbs unlocked by the user's connected services and applied templates (e.g. gmail_send, gmail_search, calendar_list, calendar_create, drive_search). Each entry has its name (the verbId you pass to synap_run_capability), a label, the backing tool, whether it is ENABLED (approved) or still DRAFT, and its governance. Call this to discover what the user can actually DO with their connections before running anything. A DRAFT capability must be enabled by the user (Settings → Capabilities) before it will run.",
+          'List the runnable capabilities in a workspace — the verbs unlocked by the user\'s connected services and applied templates (e.g. gmail_send, gmail_search, calendar_list, calendar_create, drive_search). Each entry has its name (the verbId you pass to synap_run_capability), a label, the backing tool, whether it is ENABLED (approved) or still DRAFT, and its governance. Call this to discover what the user can actually DO with their connections before running anything. A DRAFT capability must be enabled by the user (Settings → Capabilities) before it will run. Pass `query` to SEARCH instead of dumping everything (e.g. query:"send email") — ranked, compact results with parameter schemas.',
         inputSchema: {
           type: "object",
           properties: {
             workspaceId: { type: "string", description: "Workspace UUID" },
+            query: {
+              type: "string",
+              description:
+                "Search text (e.g. 'send email', 'calendar'). Ranks + narrows the result instead of returning the full unfiltered dump.",
+            },
+            kind: {
+              type: "string",
+              description:
+                "Optional exact kind filter: tool | skill | command | source-provider | builtin-tool | teaching-doc.",
+            },
+            limit: {
+              type: "number",
+              description:
+                "Max entries to return (default 20 when `query` is set; unset otherwise).",
+            },
           },
           required: ["workspaceId"],
         },

@@ -138,6 +138,11 @@ const TOOL_METADATA: Record<
     postureSlug: "workspace",
     isWrite: true,
   },
+  synap_list_capabilities: {
+    governance: null, // read-only discovery, no checkPermissionOrPropose door
+    postureSlug: "capability",
+    isWrite: false,
+  },
   synap_run_capability: {
     governance: null, // per-verb governance, not a single checkPermissionOrPropose door
     postureSlug: "capability",

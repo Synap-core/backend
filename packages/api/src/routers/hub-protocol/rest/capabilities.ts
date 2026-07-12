@@ -24,6 +24,7 @@ import {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,
 } from "../../../services/capabilities/create-from-definition.js";
+import { scoreTextMatch } from "../../../services/capabilities/capability-registry.js";
 import { reconcileCapabilitiesToTemplates } from "../../../services/capabilities/reconcile-capabilities-to-templates.js";
 import { capabilitiesRouter } from "../../capabilities.js";
 import { playbooksRouter } from "../../playbooks.js";
@@ -303,10 +304,18 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       "`tool|skill --member_of--> capability`. Each returned container includes " +
       "its `parts` (connections/builtins/skills with names + kinds) so the agent " +
       "knows what each bundle contains. Thin door over the tRPC " +
-      "`capabilities.containers.list` + `.get` callers. Requires hub-protocol.read " +
-      "scope and a `workspaceId` query param.",
+      "`capabilities.containers.list` + `.get` callers. Pass `query` to SEARCH " +
+      "(ranked match over container name/description + member names) instead of " +
+      "the full dump; `limit` caps the result count (default 20 with a query). " +
+      "No `kind` filter here — a container is a bundle, not a single-kind verb " +
+      "(use the plain `/capabilities` list's `kind` filter for that axis). " +
+      "Requires hub-protocol.read scope and a `workspaceId` query param.",
     request: {
-      query: z.object({ workspaceId: z.string().uuid() }),
+      query: z.object({
+        workspaceId: z.string().uuid(),
+        query: z.string().optional(),
+        limit: z.coerce.number().int().positive().optional(),
+      }),
     },
     responses: {
       200: {
@@ -339,6 +348,14 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
         400
       );
     }
+    const query = c.req.query("query")?.trim() || undefined;
+    const limitCheck = z.coerce
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .safeParse(c.req.query("limit"));
+    const limit = limitCheck.success ? limitCheck.data : undefined;
 
     try {
       const acting = await resolveActingContext(c, { workspaceId });
@@ -361,7 +378,35 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
         })
       );
 
-      return c.json({ capabilities: enriched }, 200);
+      // Search (D1): rank containers against `query` using the SAME matcher the
+      // registry's `list_capabilities(query)` uses — no second implementation.
+      // Matches the container name (primary), member names (secondary), and
+      // description (tertiary).
+      let result = enriched;
+      if (query) {
+        result = result
+          .map((container) => {
+            const memberNames = [
+              ...container.members.connections,
+              ...container.members.builtins,
+              ...container.members.skills,
+            ].map((p) => p.name);
+            const score = scoreTextMatch(query, {
+              primary: container.name,
+              secondary: memberNames,
+              tertiary: container.description,
+            });
+            return { container, score };
+          })
+          .filter((s) => s.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .map((s) => s.container)
+          .slice(0, limit ?? 20);
+      } else if (limit !== undefined) {
+        result = result.slice(0, limit);
+      }
+
+      return c.json({ capabilities: result }, 200);
     } catch (err) {
       logger.error({ err }, "capabilities containers list failed");
       return c.json(

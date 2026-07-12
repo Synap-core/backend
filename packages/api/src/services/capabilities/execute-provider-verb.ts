@@ -84,7 +84,15 @@ function applyParamMapping(
     if (v === undefined || v === null || v === "") v = m.default;
     if (v === "@now") v = new Date().toISOString();
     if (m.required && (v === undefined || v === null || v === "")) {
-      throw new Error(`provider verb: required parameter "${name}" is missing`);
+      // Teach-in-response: echo the verb's full required-param list (not just
+      // the one that's missing) so the caller can fix the whole call in one
+      // retry instead of discovering the next missing param one error at a time.
+      const requiredNames = Object.entries(spec.paramMapping ?? {})
+        .filter(([, rm]) => rm.required)
+        .map(([n]) => n);
+      throw new Error(
+        `provider verb: required parameter "${name}" is missing. Expected parameters: ${requiredNames.join(", ")}.`
+      );
     }
     if (
       v !== undefined &&

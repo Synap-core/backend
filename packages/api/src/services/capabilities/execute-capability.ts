@@ -23,11 +23,12 @@ import { executeProviderVerb } from "./execute-provider-verb.js";
 import { BUILTIN_VERBS, READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
 import type { ConnectionSelector } from "../../connectors/external-dispatch.js";
 import { createPendingProposal } from "../../utils/permission-check.js";
+import { openLink } from "../../utils/deep-links.js";
 
 export type ExecuteCapabilityResult =
   | { kind: "run"; skillId: string; result: unknown }
   | { kind: "dry-run"; skillId: string }
-  | { kind: "proposed"; proposalId: string }
+  | { kind: "proposed"; proposalId: string; reviewUrl: string }
   | { kind: "deny"; reason: string }
   | { kind: "not_found"; message: string };
 
@@ -108,7 +109,7 @@ export async function executeCapability(input: {
       kind: "not_found",
       message: `Capability ${
         skillId ? `skill "${skillId}"` : `verb "${verbId}"`
-      } not found in this workspace.`,
+      } not found in this workspace. Search what's available with list_capabilities({query: "…"}); if nothing matches, tell the user exactly what's missing — never fabricate a result.`,
     };
   }
 
@@ -162,7 +163,13 @@ export async function executeCapability(input: {
       },
       notificationDescription: `Run capability ${verbId ?? skillRow.id}`,
     });
-    return { kind: "proposed", proposalId: proposal.id };
+    // Every other governed write hands the caller a clickable review link —
+    // this door must too (IS/MCP tools surface it to the user).
+    return {
+      kind: "proposed",
+      proposalId: proposal.id,
+      reviewUrl: openLink(proposal.id),
+    };
   }
 
   // decision === "run" → execute through the SINGLE post-gate runner (shared with

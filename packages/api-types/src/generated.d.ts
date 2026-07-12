@@ -4592,6 +4592,12 @@ export interface Capability {
 	 * verb-less provider tools).
 	 */
 	verbs?: CapabilityVerbState[];
+	/**
+	 * True for a capability that is discoverable but NOT invokable through the
+	 * capability-execution door (e.g. an IS-native tool with no run_capability
+	 * bridge yet). Consumers building a "runnable" projection must exclude these.
+	 */
+	catalogOnly?: boolean;
 }
 /**
  * One row of the connection × verb × grant matrix: a Tool's verb annotated with
@@ -4607,6 +4613,17 @@ export interface CapabilityVerbState extends ToolVerb {
 	 * granted, else the verb's `govDefault`. This is what the gate would apply.
 	 */
 	effectiveExecMode: ExecMode;
+	/**
+	 * Honest, derivable parameter requirements for this verb — builtin verbs from
+	 * their Zod validator (`BUILTIN_VERB_PARAM_SCHEMAS`), provider verbs from the
+	 * declarative skill's `providerSpec` template params. Undefined when nothing
+	 * is derivable (e.g. a verb-less/legacy tool). Distinct from `argsSchema`
+	 * (a hand-authored JSON-schema-ish doc): this is read off the real contract.
+	 */
+	paramsSchema?: Record<string, {
+		required: boolean;
+		description?: string;
+	}>;
 }
 export interface CreateCapabilityResult {
 	capabilityKey: string;
@@ -4712,6 +4729,7 @@ export type ExecuteCapabilityResult = {
 } | {
 	kind: "proposed";
 	proposalId: string;
+	reviewUrl: string;
 } | {
 	kind: "deny";
 	reason: string;
@@ -14166,12 +14184,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string;
 			};
 			output: {
+				status: "proposed";
+				proposalId: string;
+				id?: undefined;
+				name?: undefined;
+				kind?: undefined;
+				source?: undefined;
+				version?: undefined;
+			} | {
 				id: string;
 				name: string;
 				status: "installed";
 				kind: "instruction";
 				source: "custom" | "clawhub" | "zeroclaw";
 				version: string;
+				proposalId?: undefined;
 			};
 			meta: object;
 		}>;

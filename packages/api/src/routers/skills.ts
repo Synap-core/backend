@@ -33,6 +33,94 @@ import { parseSkillMd } from "../skills/skill-md-parser.js";
 import { parseSkillToml } from "../skills/skill-toml-parser.js";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 
+/**
+ * The ONE governed persistence path for inserting a `skills` row. Shared by
+ * every skill-creation door (`create`, `installFromUrl` here, and the Hub
+ * Protocol `/agent-skills/import` door) so none of them can bypass the same
+ * `checkPermissionOrPropose` gate `create` runs — no door hardcodes
+ * `approved: true` on its own insert.
+ *
+ * Born-approved rule: an `instruction` skill (prompt-only, no side effects) is
+ * approved when installed by a trusted human (no `agentUserId`). Anything
+ * executable (`code`/`declarative`), OR an install initiated by an agent
+ * identity — including instruction content, which lands in the agent's system
+ * prompt and is therefore a prompt-injection vector — is born UNAPPROVED and
+ * needs an explicit owner approval (`setApproved`) before it runs or loads as
+ * an agent tool.
+ */
+export type InsertSkillGovernedInput = typeof skills.$inferInsert & {
+  agentUserId?: string;
+  /** Folded into the audit-log `data` for observability, e.g. "install_from_url". */
+  auditSource: string;
+};
+
+export type InsertSkillGovernedResult =
+  | { status: "installed"; skill: typeof skills.$inferSelect }
+  | { status: "proposed"; proposalId: string }
+  | { status: "denied"; reason: string };
+
+export async function insertSkillGoverned(
+  input: InsertSkillGovernedInput
+): Promise<InsertSkillGovernedResult> {
+  const {
+    agentUserId,
+    auditSource,
+    id: _ignoredId,
+    approved: _ignoredApproved,
+    status: _ignoredStatus,
+    ...values
+  } = input;
+  const skillId = randomUUID();
+
+  const perm = await checkPermissionOrPropose({
+    userId: values.userId,
+    agentUserId,
+    workspaceId: values.workspaceId ?? undefined,
+    subjectType: "skill",
+    action: "create",
+    data: { id: skillId, name: values.name },
+  });
+
+  if ("denied" in perm && perm.denied) {
+    return { status: "denied", reason: perm.reason };
+  }
+  if ("proposalId" in perm) {
+    return { status: "proposed", proposalId: perm.proposalId };
+  }
+
+  const approved = values.kind === "instruction" && !agentUserId;
+
+  const [skill] = await db
+    .insert(skills)
+    .values({
+      ...values,
+      id: skillId,
+      status: "active",
+      approved,
+    })
+    .returning();
+
+  auditLog({
+    subjectType: "skill",
+    action: "create",
+    phase: "completed",
+    subjectId: skill.id,
+    userId: values.userId,
+    workspaceId: values.workspaceId ?? undefined,
+    data: { name: values.name, kind: values.kind, source: auditSource },
+  });
+
+  emitSideEffects({
+    subjectType: "skill",
+    action: "create",
+    subjectId: skill.id,
+    userId: values.userId,
+    workspaceId: values.workspaceId ?? undefined,
+  });
+
+  return { status: "installed", skill };
+}
+
 export const skillsRouter = router({
   /**
    * List skills for the current user
@@ -798,53 +886,44 @@ export const skillsRouter = router({
         });
       }
 
-      const skillId = randomUUID();
-
       // Store skill — instruction content goes in `body` (the canonical doc column).
       // `code` is the executable JS/TS column; instruction skills have none.
-      const [skill] = await db
-        .insert(skills)
-        .values({
-          id: skillId,
-          userId,
-          workspaceId: input.workspaceId,
-          kind: "instruction",
-          scope: "pod",
-          name: parsed.name,
-          description: parsed.description,
-          body: parsed.instructions,
-          code: null,
-          category: "instruction",
-          executionMode: "sync",
-          status: "active",
-          // Instruction skills (prompt-only, no side effects) are born approved.
-          approved: true,
-          metadata: {
-            source: parsed.source,
-            version: parsed.version,
-            installedFromUrl: input.url,
-            dependencies: parsed.dependencies,
-          },
-        })
-        .returning();
-
-      auditLog({
-        subjectType: "skill",
-        action: "create",
-        phase: "completed",
-        subjectId: skill.id,
+      // Persistence + approval gating goes through the ONE governed door
+      // (insertSkillGoverned) — never a direct insert with a hardcoded
+      // `approved: true` (that was the prompt-injection hole this closes).
+      const result = await insertSkillGoverned({
         userId,
         workspaceId: input.workspaceId,
-        data: {
-          name: parsed.name,
+        kind: "instruction",
+        scope: "pod",
+        name: parsed.name,
+        description: parsed.description,
+        body: parsed.instructions,
+        code: null,
+        category: "instruction",
+        executionMode: "sync",
+        metadata: {
           source: parsed.source,
-          kind: "instruction",
+          version: parsed.version,
+          installedFromUrl: input.url,
+          dependencies: parsed.dependencies,
         },
+        auditSource: "install_from_url",
       });
 
+      if (result.status === "denied") {
+        throw new TRPCError({ code: "FORBIDDEN", message: result.reason });
+      }
+      if (result.status === "proposed") {
+        return {
+          status: "proposed" as const,
+          proposalId: result.proposalId,
+        };
+      }
+
       return {
-        id: skill.id,
-        name: skill.name,
+        id: result.skill.id,
+        name: result.skill.name,
         status: "installed" as const,
         kind: "instruction" as const,
         source: parsed.source,

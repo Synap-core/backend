@@ -32,6 +32,7 @@ import {
   WireSkillSchema,
 } from "./_codecs/skill.js";
 import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
+import { insertSkillGoverned } from "../../skills.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -127,13 +128,9 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
         topic: z.string().optional(),
         q: z.string().optional(),
         tag: z.string().optional(),
-        system: z
-          .string()
-          .optional()
-          .openapi({
-            description:
-              "'true' to list only seeded system/* instruction skills",
-          }),
+        system: z.string().optional().openapi({
+          description: "'true' to list only seeded system/* instruction skills",
+        }),
         limit: z.string().optional(),
         offset: z.string().optional(),
       }),
@@ -633,8 +630,11 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
    * POST /agent-skills/import
    *
    * Import a skill from a JSON payload containing skill metadata and optional
-   * reference documents. The skill is created as kind="instruction", scope="pod",
-   * approved=true for pod-wide availability.
+   * reference documents. The skill is created as kind="instruction", scope="pod".
+   * Persistence goes through the same governed door as every other skill
+   * creation path (`insertSkillGoverned`, shared with `skills.ts`) — an
+   * agent-initiated import is never born approved, and a caller lacking
+   * create rights lands a reviewable proposal instead of a silent write.
    *
    * TODO: Accept multipart/form-data ZIP upload (.skill file) containing
    * SKILL.md with YAML frontmatter + reference .md files.
@@ -650,6 +650,10 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     }
 
     const { userId, skill: skillMeta, documents: docs } = parsed.data;
+    // Set only when the bearer is an agent API key (auth middleware — see
+    // HubVariables.agentUserId) — the governance signal that this install is
+    // agent-initiated, not an operator's own action.
+    const agentUserId = c.get("agentUserId") as string | undefined;
 
     try {
       // Check slug uniqueness
@@ -662,24 +666,36 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
         return c.json({ error: "Skill with this slug already exists" }, 409);
       }
 
-      // Create the skill (instruction kind, pod-wide, auto-approved)
-      const [skillRow] = await db
-        .insert(skills)
-        .values({
-          userId,
-          slug: skillMeta.slug,
-          kind: "instruction",
-          name: skillMeta.name,
-          description: skillMeta.description ?? null,
-          body: skillMeta.body ?? null,
-          approved: true,
-          tags: [],
-          topics: [],
-          // autoLoad: true = always-loaded core DNA; false = on-demand (catalog
-          // + load_skill). The IS loader reads this for progressive disclosure.
-          metadata: { autoLoad: skillMeta.autoLoad ?? false },
-        })
-        .returning();
+      // Create the skill (instruction kind, pod-wide) through the ONE governed
+      // insert path — never a direct insert with a hardcoded `approved: true`.
+      const result = await insertSkillGoverned({
+        userId,
+        agentUserId,
+        workspaceId: null,
+        kind: "instruction",
+        scope: "pod",
+        slug: skillMeta.slug,
+        name: skillMeta.name,
+        description: skillMeta.description ?? null,
+        body: skillMeta.body ?? null,
+        tags: [],
+        topics: [],
+        // autoLoad: true = always-loaded core DNA; false = on-demand (catalog
+        // + load_skill). The IS loader reads this for progressive disclosure.
+        metadata: { autoLoad: skillMeta.autoLoad ?? false },
+        auditSource: "agent_skills_import",
+      });
+
+      if (result.status === "denied") {
+        return c.json({ error: result.reason }, 403);
+      }
+      if (result.status === "proposed") {
+        return c.json(
+          { status: "proposed" as const, proposalId: result.proposalId },
+          202
+        );
+      }
+      const skillRow = result.skill;
 
       // Create the CANONICAL body document (MinIO-backed, versioned) so the skill
       // body gets version history and collaborative editing. skills.body stays as

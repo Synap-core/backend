@@ -219,7 +219,7 @@ export async function gateCapabilityExecution(
     return {
       decision: "deny",
       reason:
-        "Capability is not approved. Approve it (setApproved) before running, or use dry-run to test it.",
+        "This capability is installed but not yet enabled. Ask the user to enable it (Settings → Capabilities), or run with dryRun to preview.",
     };
   }
 

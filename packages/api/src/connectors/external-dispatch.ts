@@ -42,6 +42,16 @@ import { gateCapabilityExecution } from "../services/capabilities/gate-capabilit
 import { createPendingProposal } from "../utils/permission-check.js";
 
 /**
+ * Teach-in-response affordance for the no-credential/no-connection error
+ * family below. No stable deep link to Settings → Connectors exists yet
+ * (verified: `synap-app/packages/core/deep-link-constants` has no
+ * `settings/connectors` path) — point the agent at the user instead of
+ * fabricating a URL.
+ */
+const CONNECT_AFFORDANCE =
+  " Ask the user to connect it in Settings → Connectors.";
+
+/**
  * Resolve the configured Nango connector (or undefined when unconfigured).
  * Single lookup shared by every Nango-scheme handler so the registry key is
  * not hardcoded in multiple places.
@@ -150,7 +160,7 @@ async function resolveBoundCredentialRef(
         .limit(1);
       if (!row) {
         throw new Error(
-          `Connection "${selector.connectionId}" is not a valid connection for "${tool.name}".`
+          `Connection "${selector.connectionId}" is not a valid connection for "${tool.name}".${CONNECT_AFFORDANCE}`
         );
       }
       // A nango:// tool's connection is a Nango ACCOUNT: keep the tool's own
@@ -807,7 +817,7 @@ const nangoHandler: SchemeHandler = async ({ input, tool }) => {
       success: false,
       status: 404,
       errorCode: "not_found",
-      error: `No connection found for provider "${providerConfigKey}". Connect it via Settings → Connectors first.`,
+      error: `No connection found for provider "${providerConfigKey}".${CONNECT_AFFORDANCE}`,
     };
   }
 
@@ -961,7 +971,7 @@ async function vaultDelegatedHandler(ctx: {
         success: false,
         status: 404,
         errorCode: "not_found",
-        error: `No Nango connection found for provider "${providerConfigKey}". Connect it via Settings → Connectors first.`,
+        error: `No Nango connection found for provider "${providerConfigKey}".${CONNECT_AFFORDANCE}`,
       };
     }
 
