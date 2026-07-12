@@ -993,6 +993,31 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "updated_at",
     addedBy: "0180_playbook_enrollments.sql",
   },
+
+  // AI Teaching Substrate Wave 1a (0183): skills gain the tool↔skill teaching
+  // linkage + progressive-disclosure grouping, profiles gain a per-kind AI
+  // posture base layer. Absence means a pod is on a pre-0183 schema where the
+  // skill seeder / brief composer would hit a missing column.
+  {
+    table: "skills",
+    column: "teaches_tools",
+    addedBy: "0183_ai_teaching_substrate_columns.sql",
+  },
+  {
+    table: "skills",
+    column: "skill_group",
+    addedBy: "0183_ai_teaching_substrate_columns.sql",
+  },
+  {
+    table: "skills",
+    column: "always_on",
+    addedBy: "0183_ai_teaching_substrate_columns.sql",
+  },
+  {
+    table: "profiles",
+    column: "ai_posture",
+    addedBy: "0183_ai_teaching_substrate_columns.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

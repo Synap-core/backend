@@ -21,3 +21,18 @@ When the user is interacting with Synap's AI Companion (the in-browser chat pane
 - **Prefer side panel.** Use `[[open:side|view:UUID]]` so the user keeps their current context.
 - **Only in Companion replies.** These patterns are silently ignored in non-companion channels, documents, and memory. Do not use them there.
 - **Combine with prose.** Don't lead with a chip — embed it naturally: `"Here are your open deals → [[view:xyz|Deals Pipeline]] · [[open:side|view:xyz]]"`
+
+### Proposals
+
+There is no `[[open:…|proposal:…]]` chip — `open`'s `resourceType` only accepts
+`entity`, `view`, `doc`, `cell`, `channel`. A proposal is not one of those, so
+never invent that form.
+
+When a write returns `status: "proposed"`, the response also carries a
+`reviewUrl` (a full Synap Studio URL). Surface it as a plain markdown link, and
+add one sentence explaining why the write was proposed instead of auto-applied:
+
+> Queued the task deletion for your review — destructive actions always need approval: [Review proposal](https://pod.example.com/proposals/prp_abc)
+
+`"proposed"` is normal, not an error — don't apologize for it or wait for the
+user to approve before continuing the conversation.

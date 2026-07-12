@@ -29,6 +29,18 @@ export enum ProfileScope {
   USER = "user", // Personal to user
 }
 
+/**
+ * Per-kind behavioral emphases for AI teaching briefs (base layer). Workspace
+ * overlay lives at `workspaces.settings.profileAiPosture[slug]` (jsonb,
+ * already exists) — resolved together by `getEffectiveAiPosture()`.
+ */
+export interface AiPosture {
+  explainWhy?: boolean;
+  openAfterCreate?: boolean;
+  attachOutputs?: boolean;
+  directives?: string[];
+}
+
 export const profiles = pgTable(
   "profiles",
   {
@@ -121,6 +133,10 @@ export const profiles = pgTable(
       .notNull()
       .default("kind"),
     applicableKinds: text("applicable_kinds").array(),
+
+    // AI teaching substrate: per-kind posture base layer (see AiPosture above).
+    // NULL means "fall back to code defaults" in getEffectiveAiPosture().
+    aiPosture: jsonb("ai_posture").$type<AiPosture>(),
 
     // Metadata
     isActive: boolean("is_active").default(true).notNull(),

@@ -241,6 +241,8 @@ ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "default_renderers" jsonb NOT NU
 -- Kind + Facets (0174): 'kind' = primary type, 'role' = attachable facet.
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "profile_kind" text NOT NULL DEFAULT 'kind';
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "applicable_kinds" text[];
+-- AI teaching substrate (mig 0183).
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "ai_posture" jsonb;
 
 -- Self-reference FK for parent_profile_id
 DO $$ BEGIN
@@ -1807,11 +1809,16 @@ ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "error_message" text;
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{}';
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
+-- AI teaching substrate (mig 0183).
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "teaches_tools" text[] NOT NULL DEFAULT '{}';
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "skill_group" text;
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "always_on" boolean NOT NULL DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS "skills_user_id_idx"     ON "skills" ("user_id");
 CREATE INDEX IF NOT EXISTS "skills_workspace_id_idx" ON "skills" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "skills_status_idx"       ON "skills" ("status");
 CREATE INDEX IF NOT EXISTS "idx_skills_approved"     ON "skills" ("approved");
+CREATE INDEX IF NOT EXISTS "idx_skills_teaches_tools" ON "skills" USING GIN ("teaches_tools");
 CREATE INDEX IF NOT EXISTS "skills_kind_idx"         ON "skills" ("kind");
 CREATE INDEX IF NOT EXISTS "skills_name_idx"         ON "skills" ("name");
 

@@ -1,4 +1,5 @@
 operating-mode.md
+reflexes.md
 mental-model.md
 quick-reference.md
 lenses.md
@@ -9,6 +10,7 @@ work-flow.md
 linking-principle.md
 governance-rules.md
 writes.md
+document-embeds.md
 graph-gardening.md
 next-action.md
 reading.md

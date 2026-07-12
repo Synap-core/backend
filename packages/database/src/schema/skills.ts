@@ -211,6 +211,28 @@ export const skills = pgTable(
     /** Free-form tags. */
     tags: text("tags").array().default([]),
 
+    /**
+     * Tool/verb NAMES this instruction skill teaches (e.g. 'create_document',
+     * 'entity.create', 'synap_create_document') — the tool↔skill linkage for
+     * the AI teaching substrate. Bidirectionally queryable via `= ANY()`.
+     * See idx_skills_teaches_tools (GIN).
+     */
+    teachesTools: text("teaches_tools").array().notNull().default([]),
+
+    /**
+     * Progressive-disclosure group for the teaching substrate. Free text (no
+     * enum), mirroring the IS SkillGroup: core|research|build|connect|govern|
+     * feed|inbox|show.
+     */
+    skillGroup: text("skill_group"),
+
+    /**
+     * Core-DNA skill injected into every agent turn (not gated by
+     * discover_tools/load_skill). `description` doubles as the L1 catalog
+     * summary line for this skill.
+     */
+    alwaysOn: boolean("always_on").notNull().default(false),
+
     // ── Execution (code skills only) ─────────────────────────────────────
 
     executionMode: text("execution_mode", {
@@ -270,6 +292,7 @@ export const skills = pgTable(
     kindIdx: index("skills_kind_idx").on(table.kind),
     nameIdx: index("skills_name_idx").on(table.name),
     topicsIdx: index("idx_skills_topics").on(table.topics),
+    teachesToolsIdx: index("idx_skills_teaches_tools").on(table.teachesTools),
   })
 );
 
