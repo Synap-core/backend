@@ -14,8 +14,9 @@
  * bundled catalog reads it there). This module now only loads + validates that JSON —
  * edit `_teaching.json`, not this file, to change teaching metadata.
  *
- * Fails LOUD at module init if the JSON is missing or malformed (never silently seed
- * skills with wrong/empty teaching metadata).
+ * Per-entry validation is strict, but module init is NON-fatal: a missing/malformed
+ * JSON degrades teaching metadata to empty (with a loud console.error) rather than
+ * crashing pod boot at import time — see loadTeachingDefinitionsNonFatal below.
  */
 
 import { readFileSync } from "fs";

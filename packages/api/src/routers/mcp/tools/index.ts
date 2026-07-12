@@ -297,7 +297,7 @@ export const tools = {
       {
         name: "synap_create_entity",
         description:
-          "Create a typed entity directly when you already know the exact profileSlug + fields (the precise sibling of synap_capture, which structures free text). Use synap_list_profiles to discover profileSlugs. ALWAYS call synap_ask first to avoid duplicates. Response may be 'approved' (created, id returned) or 'proposed' (awaiting human review, proposalId returned). NEVER treat 'proposed' as an error — store proposalId and tell the user to review it in Synap. PREFER THIS over synap_capture whenever you already know the profileSlug + fields (a task with status/dueDate, a decision with claim/rationale, a person with role/company). It is the structured, deterministic write. Reach for synap_capture only for unstructured blobs you haven't parsed yet.",
+          "Create a typed entity when you already know the exact profileSlug + fields — the structured, deterministic sibling of synap_capture (which parses free text). Discover slugs with synap_list_profiles; synap_ask first to avoid duplicates.",
         inputSchema: {
           type: "object",
           properties: {
@@ -365,7 +365,7 @@ export const tools = {
       {
         name: "synap_create_document",
         description:
-          "Create a long-form markdown document, optionally attached to an entity. Use for meeting notes, research, plans — content that doesn't fit entity properties. Content is full markdown. May return 'proposed'.",
+          "Create a long-form markdown document, optionally attached to an entity — for meeting notes, research, plans; content that doesn't fit entity properties.",
         inputSchema: {
           type: "object",
           properties: {
@@ -533,7 +533,7 @@ export const tools = {
       {
         name: "synap_start_session",
         description:
-          "Create a focus session — a goal-bound work session tracked in Synap. Use this to declare 'I'm starting work on X'. A session can be scoped to a project (projectId) OR a workspace (workspaceId) — provide at least one; a project-scoped session needs no workspace membership. The session appears in the browser SessionRoom.",
+          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership.",
         inputSchema: {
           type: "object",
           properties: {
@@ -605,7 +605,7 @@ export const tools = {
       {
         name: "synap_update_session",
         description:
-          "Update an in-flight focus session — change its goal, lifecycle status (active|paused), 0-100 progress, or its expected deliverables. Use this WHILE working: bump progress, pause/resume, refine the goal, or mark a deliverable done. Two convenience modes for the per-item deliverable lifecycle: `addOutput` appends a new deliverable (status 'pending'); `completeOutput` marks a deliverable 'done' by exact label match. To CLOSE a session (with a summary, closing any running playbook) use synap_complete_session — update_session intentionally cannot close.",
+          "Update an in-flight focus session WHILE working: goal, status (active|paused), progress, deliverables (`addOutput` appends, `completeOutput` marks done by label). Cannot close — use synap_complete_session for that.",
         inputSchema: {
           type: "object",
           properties: {
@@ -675,7 +675,7 @@ export const tools = {
       {
         name: "synap_complete_session",
         description:
-          "Complete a focus session — mark it closed with a summary and optional reports. Closes any running playbook_run and updates the session record. The session becomes visible as a closed session in the browser SessionRoom with deliverables.",
+          "Close a focus session with a summary and optional reports; also closes any running playbook_run.",
         inputSchema: {
           type: "object",
           properties: {
@@ -701,7 +701,7 @@ export const tools = {
       {
         name: "synap_create_cell",
         description:
-          "Define (create or update) a ViewFrame cell from raw renderer source — the way an external agent ships an AI-generated cell. Idempotent upsert keyed on the cell's typeKey (derived from `name`) + workspace: pass a workspaceId to scope the cell to one workspace, or omit it to make the cell pod-global (visible in every workspace). Returns the resolved `typeKey`. This creates the cell definition ONLY; to surface it as a profile's renderer, follow up with synap_promote_cell_to_renderer.",
+          "Define (create or update) a ViewFrame cell from raw renderer source — idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). Creates the definition ONLY; surface it with synap_promote_cell_to_renderer.",
         inputSchema: {
           type: "object",
           properties: {
@@ -769,7 +769,7 @@ export const tools = {
       {
         name: "synap_promote_session_to_playbook",
         description:
-          "Promote a validated focus session into a reusable Playbook (runtime → config): re-grants the capabilities the session used and records lineage. GOVERNED — an AI agent caller gets `status: 'proposed'` (awaiting review); an operator gets `status: 'promoted'`.",
+          "Promote a validated focus session into a reusable Playbook (runtime → config): re-grants the capabilities the session used and records lineage.",
         inputSchema: {
           type: "object",
           properties: {
@@ -806,7 +806,7 @@ export const tools = {
       {
         name: "synap_create_playbook",
         description:
-          "Create a reusable playbook (a staged process/session template) so a repeatable workflow — e.g. competitor analysis, market research, onboarding — can be discovered (synap_list_playbooks) and run (synap_start_session with templateId) later. Provide a name, a goalTemplate (the session goal, may contain {{param}} placeholders), and optional ordered stages. Created active by default. Governed — may return a proposal.",
+          "Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, run via synap_start_session with templateId. goalTemplate may contain {{param}} placeholders.",
         inputSchema: {
           type: "object",
           properties: {
@@ -870,8 +870,7 @@ export const tools = {
       {
         name: "synap_capture",
         description:
-          "THE write door. Hand it any free text — a fact you learned, a decision, a person/company/task mentioned, something worth remembering — and the AI capture pipeline structures it into the right entities and files them in the pod. " +
-          'PROACTIVE RULE: call this AFTER you learn something durable about the user, their work, or their preferences, or whenever the user says something worth keeping ("remember that…", a new contact, a decision made). Don\'t wait to be asked. Hint a profileSlug to guide extraction, or set global:true to store a pod-wide runbook (knowledge_keys) instead of entities. If you already know the exact profileSlug and field values, use synap_create_entity instead.',
+          "THE free-text write door: hand it anything worth remembering and the capture pipeline structures it into the right entities. Call it AFTER learning something durable — don't wait to be asked. Hint profileSlug to guide extraction; global:true stores a pod-wide runbook; use synap_create_entity when you already know the exact slug + fields.",
         inputSchema: {
           type: "object",
           properties: {
@@ -941,7 +940,7 @@ export const tools = {
       {
         name: "synap_create_project",
         description:
-          "Create a project — a cross-cutting lens for an initiative or venture (e.g. a company, a client, a cross-workspace effort), as opposed to a workspace, which is a domain lens (e.g. Builder, Marketing). Use this when the user describes a new initiative/venture that should organize entities across one or more workspaces. Pass workspaceId as the project's HOME workspace (omit to use the user's first workspace). Response may be 'created' (projectId returned) or 'proposed' (awaiting human review, proposalId returned) — NEVER treat 'proposed' as an error.",
+          "Create a project — a cross-cutting lens for an initiative/venture that organizes entities across workspaces (a workspace is a domain lens; a project cuts across them). workspaceId = its HOME workspace (optional).",
         inputSchema: {
           type: "object",
           properties: {
@@ -1079,7 +1078,7 @@ export const tools = {
       {
         name: "synap_run_capability",
         description:
-          "Run a registered capability verb (from synap_list_capabilities) with dynamic inputs — e.g. send an email, search Gmail, list/create a calendar event, search Drive. Pass verbId (the capability name) + parameters (its args). Responses mirror every governed write: a result on success, or { proposed, proposalId } when the action needs the user's approval (a side-effecting WRITE like sending email) — NEVER treat 'proposed' as an error; tell the user to approve it in Synap. A DRAFT (un-enabled) capability is refused — ask the user to enable it first.",
+          "Run a registered capability verb (discover via synap_list_capabilities) with dynamic inputs — e.g. send an email, search Gmail, create a calendar event. Pass verbId + parameters. A DRAFT (un-enabled) capability is refused — ask the user to enable it first.",
         inputSchema: {
           type: "object",
           properties: {
