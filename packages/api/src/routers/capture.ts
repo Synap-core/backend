@@ -75,6 +75,7 @@ import {
   resolveCaptureRouting,
   type CaptureRoutingResult,
 } from "../lib/capture-routing.js";
+import { isRoutableWorkspaceType } from "../lib/routing-candidates.js";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
@@ -722,15 +723,11 @@ export const captureRouter = router({
         )
         .orderBy(desc(workspaces.updatedAt))
         .limit(30);
-      // Never surface non-user-data workspaces as routing candidates:
-      //   • `operational` (e.g. pod-admin) — system/admin surfaces.
-      //   • `agent` (D2) — agent workspaces are never AUTO-routing candidates;
-      //     explicit workspaceId targeting elsewhere stays honored.
+      // Never surface non-user-data workspaces as routing candidates —
+      // `operational` (system/admin) or `agent` (D2). Archived workspaces are
+      // already excluded at the query level above (isNull(archivedAt)).
       const availableWorkspaces = userWorkspaceRows
-        .filter(
-          (w) =>
-            w.workspaceType !== "operational" && w.workspaceType !== "agent"
-        )
+        .filter((w) => isRoutableWorkspaceType(w.workspaceType))
         .map((w) => ({
           id: w.id,
           name: w.name,

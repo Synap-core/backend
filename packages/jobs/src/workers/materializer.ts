@@ -66,6 +66,10 @@ import type { SynapEvent } from "@synap-core/core";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
+import {
+  resolveMaterializedEntityWorkspaceId,
+  resolveMaterializedFacetWorkspaceId,
+} from "./materialize-placement.js";
 
 const logger = createLogger({ module: "materializer" });
 
@@ -287,18 +291,13 @@ async function materializeEntity(
       return;
     }
 
-    // I3 (resolve-early-and-persist): prefer the placement the create door
-    // already resolved (`data.resolvedWorkspaceId`, which may be an explicit
-    // null for a pod-scope kind) so a proposal-gated create lands EXACTLY where
-    // an auto-approved one would. Fall back to the legacy derivation only for
-    // proposals created before this field existed (key absent). A present-but-
-    // null value must win over the fallback, so branch on key presence, not `??`.
-    const entityWorkspaceId =
-      "resolvedWorkspaceId" in data
-        ? ((data.resolvedWorkspaceId as string | null) ?? null)
-        : data.global
-          ? null
-          : (workspaceId ?? null);
+    // I3 (resolve-early-and-persist): land where the create door already
+    // resolved (`data.resolvedWorkspaceId`), never re-derived from the ambient
+    // workspace. See resolveMaterializedEntityWorkspaceId for the compat rules.
+    const entityWorkspaceId = resolveMaterializedEntityWorkspaceId(
+      data,
+      workspaceId
+    );
     const profileSlug = data.profileSlug as string;
     const rawContent = (data.content as string | undefined) || undefined;
     const baseProperties =
@@ -446,16 +445,11 @@ async function materializeEntityFacet(
         profileId: (data.profileId as string) || undefined,
         profileSlug: (data.profileSlug as string) || undefined,
         userId,
-        // I3: prefer the placement the attachFacet door resolved
-        // (`data.resolvedWorkspaceId`, which may be an explicit null when the
-        // parent entity is pod-wide) so a proposal-gated attach lands EXACTLY
-        // where an auto-approved one would — never re-pinned to the ambient
-        // governance workspace. Branch on key presence so a persisted null wins;
-        // fall back to the legacy derivation only for pre-change proposals.
-        workspaceId:
-          "resolvedWorkspaceId" in data
-            ? ((data.resolvedWorkspaceId as string | null) ?? null)
-            : ((data.workspaceId as string | undefined) ?? workspaceId ?? null),
+        // I3: land where the attachFacet door resolved the facet lens (follows
+        // the parent entity — may be an explicit null for a pod-wide parent),
+        // never re-pinned to the ambient governance workspace. See
+        // resolveMaterializedFacetWorkspaceId for the compat rules.
+        workspaceId: resolveMaterializedFacetWorkspaceId(data, workspaceId),
         contextEntityId: (data.contextEntityId as string) || null,
         status: (data.status as string) || undefined,
         properties: (data.properties as Record<string, unknown>) || undefined,

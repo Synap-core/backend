@@ -1109,9 +1109,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
         description: body.description,
         properties: body.properties,
         ...(body.projectId ? { projectId: body.projectId } : {}),
-        ...(effectiveWorkspaceId
-          ? { targetWorkspaceId: effectiveWorkspaceId }
-          : {}),
+        // EXPLICIT workspace pin only (rung-1). `effectiveWorkspaceId` already
+        // flows as the ambient/governance lens via getCaller above, so a
+        // workspace-scope profile lands in its default workspace and a pod-scope
+        // profile lands pod-wide — WITHOUT a pin. Passing the resolved default as
+        // a pin here would wrongly workspace-pin pod-scope kinds (the four-door
+        // bug). Only a caller-supplied `body.workspaceId` overrides entityScope.
+        ...(body.workspaceId ? { workspaceId: body.workspaceId } : {}),
         // Long-form body → linked document (versioned). Must be forwarded here
         // or it's silently dropped before the entity-create document flow.
         ...(body.content ? { content: body.content } : {}),
@@ -1866,7 +1870,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
     // meaningful `.code`/`.name` may sit one or two levels down (verified
     // live: kind-as-facet attach still 500'd with only a top-level check).
     let cursor: unknown = err;
-    for (let depth = 0; cursor && typeof cursor === "object" && depth < 4; depth++) {
+    for (
+      let depth = 0;
+      cursor && typeof cursor === "object" && depth < 4;
+      depth++
+    ) {
       const code = (cursor as { code?: unknown }).code;
       if (code === "BAD_REQUEST") return 400;
       if (code === "FORBIDDEN" || code === "UNAUTHORIZED") return 403;

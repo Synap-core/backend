@@ -286,10 +286,11 @@ export const entitiesRouter = router({
         // Stable entity ID exposed at propose-time for cross-write proposal
         // graphs. Only populated when the action was proposal-gated.
         proposedEntityId: result.proposedEntityId as string | undefined,
-        // Echo the workspace lens we resolved for the caller — useful when
-        // the request omitted workspaceId and we picked the user's first
-        // accessible workspace, or when entityScope='pod' (workspaceId=null).
-        workspaceId: authWorkspaceId ?? null,
+        // Echo the ambient workspace lens for the caller. NOTE: this is the
+        // GOVERNANCE context, not necessarily the entity's placement — a
+        // pod-scope kind lands at workspaceId=null even though the ambient lens
+        // is non-null. The authoritative placement is on the returned entity.
+        workspaceId: ambientWorkspaceId ?? null,
         // Kind + Facets: the roles attached in this call (empty/omitted when none
         // were requested or the create was proposal-gated).
         ...(attachedFacets.length ? { facets: attachedFacets } : {}),
