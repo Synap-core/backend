@@ -277,6 +277,13 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
 
       // Reuse the tRPC create — governance, insert, audit, side-effects all run
       // inside the handler. No duplicated logic.
+      // agentUserId (HubVariables, set on an agent-key request) is threaded
+      // through so an agent-initiated create is gated by the AGENT's role —
+      // omitting it evaluates effectiveUserId as the human owner instead
+      // (checkPermissionOrPropose: effectiveUserId = agentUserId || userId),
+      // silently auto-approving what should route to propose. Mirrors the
+      // established pattern in /agent-skills/import (agent-skills.ts:656).
+      const agentUserId = c.get("agentUserId") as string | undefined;
       const result = await caller.create({
         name: body.name,
         kind: body.kind ?? "code",
@@ -289,6 +296,7 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
         executionMode: body.executionMode ?? "sync",
         timeoutSeconds: body.timeoutSeconds ?? 30,
         workspaceId: body.workspaceId,
+        agentUserId,
       });
 
       // Wire required-tool links only when the skill was actually created

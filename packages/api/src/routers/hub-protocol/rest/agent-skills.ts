@@ -328,7 +328,13 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     }>();
     try {
       const caller = await getCaller(c);
-      const result = await caller.skills.createSkill(body);
+      // agentUserId (HubVariables, set on an agent-key request) — this is the
+      // actual primary agent skill-creation door (the IS create_skill tool
+      // posts here). Without it, createSkill's downstream skills.create call
+      // evaluates the write under the human owner's role instead of the
+      // agent's — see skills-crud.ts's POST /skills for the same fix.
+      const agentUserId = c.get("agentUserId") as string | undefined;
+      const result = await caller.skills.createSkill({ ...body, agentUserId });
       return c.json(result);
     } catch (err) {
       logger.error({ err }, "agent-skills/executable create failed");

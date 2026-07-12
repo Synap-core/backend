@@ -98,6 +98,12 @@ export const skillsRouter = router({
         parameters: z.record(z.string(), z.unknown()).optional(),
         category: z.enum(["action", "context", "utility", "custom"]).optional(),
         workspaceId: z.string().uuid().optional(),
+        /** The acting AGENT identity, when this create is agent-initiated —
+         *  threaded into skills.create's checkPermissionOrPropose call below
+         *  so an agent-initiated create is gated by the agent's role, not
+         *  silently evaluated as the human owner (userId above). Mirrors the
+         *  fix applied to skillsRouter.create's other REST callers. */
+        agentUserId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -114,6 +120,7 @@ export const skillsRouter = router({
         parameters: input.parameters,
         category: input.category,
         workspaceId: input.workspaceId,
+        agentUserId: input.agentUserId,
       });
 
       return { id: result.id };
