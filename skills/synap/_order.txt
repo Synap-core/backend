@@ -11,6 +11,7 @@ linking-principle.md
 governance-rules.md
 writes.md
 document-embeds.md
+creative-loop.md
 graph-gardening.md
 next-action.md
 reading.md
