@@ -47,6 +47,14 @@ const FRESH_INSTANCE_RE = /const\s+(\w+)\s*=\s*new EventRepository\(/;
 const REALTIME_CTOR_RE = new RegExp(
   `new (?:${REALTIME_REPO_CLASSES.join("|")})\\(`
 );
+// Inline nested construction — `new EntityRepository(db, new EventRepository(...))`
+// — never binds a const, so FRESH_INSTANCE_RE can't see it. Catch it directly.
+// The [^)]* scan is line-local by construction (split("\n") feeds single lines),
+// which matches how these constructions are actually written; a multi-line
+// inline nesting would need AST analysis — out of scope for a grep tripwire.
+const INLINE_FRESH_INSTANCE_RE = new RegExp(
+  `new (?:${REALTIME_REPO_CLASSES.join("|")})\\([^)]*new EventRepository\\(`
+);
 // How many lines after a fresh-instance declaration we scan for it being fed
 // into a realtime-mapped repository constructor.
 const LOOKAHEAD_LINES = 15;
@@ -82,6 +90,10 @@ describe("tripwire: realtime-relevant repositories share the eventRepository sin
 
       const lines = readFileSync(file, "utf8").split("\n");
       for (let i = 0; i < lines.length; i++) {
+        if (INLINE_FRESH_INSTANCE_RE.test(lines[i])) {
+          offenders.push(`${rel}:${i + 1} (inline)`);
+          continue;
+        }
         const match = lines[i].match(FRESH_INSTANCE_RE);
         if (!match) continue;
         const varName = match[1];
