@@ -106,8 +106,10 @@ describe("W6 read/resolve verbs — registry", () => {
       "channel.resolve",
       "document.read",
       "entity.query",
+      "entity_facet.list",
       "feed.read",
       "graph.relations",
+      "market.search",
     ]);
     expect(READ_ONLY_BUILTIN_VERBS.has("channel.ensure")).toBe(false);
     expect(READ_ONLY_BUILTIN_VERBS.has("graph.link")).toBe(false);

@@ -47,6 +47,8 @@ import {
 } from "../../connectors/external-dispatch.js";
 import { getMessagingConnector } from "../../connectors/index.js";
 import { runResolvedSkill } from "../../services/capabilities/execute-capability.js";
+import { applyMarketInstall } from "../../services/capabilities/marketplace-install.js";
+import type { CatalogKind } from "@synap/jobs";
 import type { Context } from "../../context.js";
 import {
   registerProposalExecutor,
@@ -1220,6 +1222,135 @@ export function registerApproveExecutors(): void {
       const materializedPayload = {
         ...payload,
         runResult,
+      } as unknown as typeof payload;
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          data: materializedPayload,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── capability.install (Wave 3b) — MARKETPLACE INSTALL LAST-MILE ────────────
+  // Materializes an agent-initiated `market.install` (always proposed — see
+  // runMarketInstall's doc). Approval runs `applyMarketInstall` — the SAME
+  // kind-routed applier the operator-direct path in the builtin verb handler
+  // calls — so an approved agent install can never diverge from an operator's
+  // own install. Idempotent per kind (each door's own natural key: capability
+  // name+workspace, template packageSlug/proposalId, cell typeKey+workspaceId,
+  // automation name+workspace) — re-approving a stale proposal converges.
+  registerProposalExecutor({
+    key: "capability.install",
+    async execute({ proposal, payload, userId, input, deps }) {
+      const data = (proposal.data ?? {}) as Record<string, unknown>;
+      const slug = data.slug as string | undefined;
+      const kind = data.kind as CatalogKind | undefined;
+      if (!slug || !kind) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "capability.install requires slug and kind in proposal data",
+        });
+      }
+
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const installResult = await applyMarketInstall({
+        kind,
+        slug,
+        version: data.version as string | null | undefined,
+        params: (data.params ?? {}) as Record<string, unknown>,
+        userId,
+        workspaceId: proposal.workspaceId ?? null,
+      });
+
+      const materializedPayload = {
+        ...payload,
+        installResult,
+      } as unknown as typeof payload;
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          data: materializedPayload,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── capability.enable (Wave 3b) — DRAFT → APPROVED, via the EXISTING gate ───
+  // (P2.2-b): approver scope mirrors `skills.setApproved` exactly (workspace
+  // owner, or pod-admin for a pod-wide skill) — this executor is a thin call
+  // through that already-gated path, no new authority model. The CREATION call
+  // site (e.g. the DRAFT-deny error hint proposing "enable this capability") is
+  // a different wave's concern; this registers the proposal TYPE + its executor
+  // so that wiring has somewhere to land.
+  registerProposalExecutor({
+    key: "capability.enable",
+    async execute({ proposal, payload, userId, input, deps }) {
+      const data = (proposal.data ?? {}) as Record<string, unknown>;
+      const skillId = data.skillId as string | undefined;
+      if (!skillId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "capability.enable requires skillId in proposal data",
+        });
+      }
+
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      // Reuse setApproved AS-IS: it re-derives the approver's role from the
+      // skill's OWN workspace, so the proposal review IS the gate — the
+      // approving user must already be able to call setApproved directly.
+      const { skillsRouter } = await import("../skills.js");
+      const caller = skillsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId: proposal.workspaceId ?? null,
+      } as unknown as Context);
+      await caller.setApproved({ id: skillId, approved: true });
+
+      const materializedPayload = {
+        ...payload,
+        enabled: true,
       } as unknown as typeof payload;
 
       await db

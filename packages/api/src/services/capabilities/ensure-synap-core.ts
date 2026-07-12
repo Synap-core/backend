@@ -404,6 +404,45 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    // ── Marketplace (Wave 3b) — search/install over cp_catalog_cache ────────
+    {
+      name: "market.search",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Search the Control-Plane marketplace catalog (capabilities, automations, workspace templates, cells) — the pod-local cache, never a live CP fetch. Use this AFTER list_capabilities finds nothing installed. Returns { entries[] } with an honest `installed` flag per entry (undefined when not cheaply checkable) or, on zero hits, a message pointing to capturing the gap. Read-only.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          kind: {
+            type: "string",
+            enum: ["capability", "automation", "template", "cell"],
+          },
+          limit: { type: "number", minimum: 1, maximum: 50 },
+        },
+      },
+    },
+    {
+      name: "market.install",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Install a marketplace entry found via market.search. An agent-initiated install ALWAYS creates a reviewable capability.install proposal (never auto-provisions); an operator call installs directly. Tier-gated (fails early if the pod's plan doesn't cover it). Returns { status: 'installed', result } or { status: 'proposed', proposalId, reviewUrl }.",
+      parameters: {
+        type: "object",
+        required: ["slug", "kind"],
+        properties: {
+          slug: { type: "string" },
+          kind: {
+            type: "string",
+            enum: ["capability", "automation", "template", "cell"],
+          },
+          version: { type: "string" },
+          params: { type: "object" },
+        },
+      },
+    },
   ],
 };
 

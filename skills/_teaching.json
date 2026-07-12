@@ -40,7 +40,9 @@
       "run_capability",
       "synap_list_capabilities",
       "synap_run_capability",
-      "manage_connections"
+      "manage_connections",
+      "market.search",
+      "market.install"
     ],
     "skillGroup": "govern",
     "alwaysOn": false,

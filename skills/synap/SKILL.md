@@ -649,7 +649,11 @@ MCP: `synap_run_capability`. IS: `run_capability`. Pass `verbId` (or
 `skillId`) + `parameters` + `workspaceId`.
 
 ```json
-{ "verbId": "gmail_send", "parameters": { "to": "…", "subject": "…", "body": "…" }, "workspaceId": "{workspaceId}" }
+{
+  "verbId": "gmail_send",
+  "parameters": { "to": "…", "subject": "…", "body": "…" },
+  "workspaceId": "{workspaceId}"
+}
 ```
 
 Check `paramsSchema` from discovery before calling — a missing required
@@ -679,33 +683,41 @@ and do not silently give up. Follow this order:
    "This needs Gmail connected — enable it in Settings → Capabilities" (or
    the equivalent connect deep-link the error hands you). Don't attempt the
    run again until they've acted.
-3. **Nothing exists?** Say precisely what's missing — the action, not a vague
-   "I can't do that." ("There's no capability for posting to Slack in this
-   workspace yet.") A marketplace search verb for browsing what could be
-   *installed* lands in a later wave — when it exists, this is the next step
-   after (1) turns up nothing; this reflex is written so adding that one
-   bullet extends the loop without rewriting it.
+3. **Still nothing? Search the marketplace.** `market.search({query, kind?})`
+   over what could be _installed_ (capabilities, automations, workspace
+   templates, cells) — a cache read, not a live fetch, so it's always fast.
+4. **Found in the marketplace?** `market.install({slug, kind, version?})`. As
+   an agent this ALWAYS lands as a reviewable proposal — never auto-installs,
+   even with a grant on the verb itself. Share the `reviewUrl`; don't retry.
+5. **Truly nothing, anywhere?** Say precisely what's missing — the action,
+   not a vague "I can't do that." ("There's no capability for posting to
+   Slack in this workspace or the marketplace yet.") Offer to capture the gap
+   as a note so it's not lost.
 
 <!-- brief:start -->
+
 When blocked: (1) `list_capabilities({query})` first — never assume today's
 list is the ceiling. (2) Found but DRAFT/no connection → tell the user
 exactly what to enable/connect and where; don't retry until they've acted.
-(3) Nothing exists → say precisely what's missing. Never fabricate a result,
-never silently give up. Provider calls can be 200-with-error-body — always
-check `result.success`/`result.error` before claiming success.
+(3) Still nothing → `market.search({query, kind?})` the marketplace cache;
+`market.install` on a hit always proposes for an agent. (4) Truly nothing →
+say precisely what's missing, offer to capture the gap. Never fabricate a
+result, never silently give up. Provider calls can be 200-with-error-body —
+always check `result.success`/`result.error` before claiming success.
+
 <!-- brief:end -->
 
 ## Errors — what they mean, what to do next
 
-| You see roughly...                                  | Meaning                                                              | Next step                                                      |
-| ---------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------- |
-| verb/skill "not found" in this workspace             | No capability by that name is registered here                        | `list_capabilities({query})`; if nothing, tell the user what's missing |
-| capability "not approved" / DRAFT                    | It exists but the user hasn't enabled it yet                         | Tell the user to enable it (Settings → Capabilities); don't retry |
-| a required parameter is missing                      | Your `parameters` didn't satisfy the verb's `paramsSchema`            | Re-check `paramsSchema` from discovery, fill the gap, retry once |
-| no connection / credential for this service           | The verb needs a connected account (Gmail, Calendar, …) that isn't set up | Hand the user the connect link; don't retry until connected      |
-| `status: "proposed"`                                  | Normal governed outcome — this run needs human approval                | Share `summary` + `reviewUrl`; don't retry (see `governance.md`) |
-| `status: "denied"`                                    | Workspace policy blocked it outright                                  | Explain the reason; don't retry                                 |
-| provider result with `success: false`                 | The call reached the provider but the provider itself rejected it     | Read `result.error`; tell the user what actually happened, don't report success |
+| You see roughly...                          | Meaning                                                                   | Next step                                                                       |
+| ------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| verb/skill "not found" in this workspace    | No capability by that name is registered here                             | `list_capabilities({query})`; if nothing, tell the user what's missing          |
+| capability "not approved" / DRAFT           | It exists but the user hasn't enabled it yet                              | Tell the user to enable it (Settings → Capabilities); don't retry               |
+| a required parameter is missing             | Your `parameters` didn't satisfy the verb's `paramsSchema`                | Re-check `paramsSchema` from discovery, fill the gap, retry once                |
+| no connection / credential for this service | The verb needs a connected account (Gmail, Calendar, …) that isn't set up | Hand the user the connect link; don't retry until connected                     |
+| `status: "proposed"`                        | Normal governed outcome — this run needs human approval                   | Share `summary` + `reviewUrl`; don't retry (see `governance.md`)                |
+| `status: "denied"`                          | Workspace policy blocked it outright                                      | Explain the reason; don't retry                                                 |
+| provider result with `success: false`       | The call reached the provider but the provider itself rejected it         | Read `result.error`; tell the user what actually happened, don't report success |
 
 ## What NOT to do
 

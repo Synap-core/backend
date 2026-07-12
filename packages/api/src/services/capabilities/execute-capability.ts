@@ -179,6 +179,7 @@ export async function executeCapability(input: {
     userId,
     workspaceId,
     connectionSelector: input.connectionSelector ?? null,
+    agentUserId: input.agentUserId ?? null,
   });
 }
 
@@ -206,6 +207,13 @@ export async function runResolvedSkill(
     userId: string;
     workspaceId: string | null;
     connectionSelector?: ConnectionSelector | null;
+    /**
+     * The acting agent, when the caller is an agent (null/absent = operator).
+     * Threaded to builtin handlers so agent-aware verbs (market.install's
+     * always-propose rule) can't be laundered into operator runs by an
+     * explicit auto exec-mode grant on the verb itself.
+     */
+    agentUserId?: string | null;
   }
 ): Promise<
   | { kind: "run"; skillId: string; result: unknown }
@@ -223,6 +231,7 @@ export async function runResolvedSkill(
     const result = await handler(parameters ?? {}, {
       userId: ctx.userId,
       workspaceId: ctx.workspaceId,
+      agentUserId: ctx.agentUserId ?? null,
     });
     return { kind: "run", skillId: skill.id, result };
   }

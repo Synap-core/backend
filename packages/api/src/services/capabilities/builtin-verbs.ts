@@ -34,12 +34,15 @@ import {
   relations,
   messages,
   documents,
+  capabilities,
   getWorkspaceMembership,
   insertChannelMessage,
   getEffectiveFacets,
   profileSlugScopeCondition,
 } from "@synap/database";
+import { widgetDefinitions } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
+import type { CatalogKind } from "@synap/jobs";
 import type { Context } from "../../context.js";
 // Type-only imports (erased at runtime). The heavy access layer + the channel
 // util are LAZY-imported inside the read/write handlers (mirroring how
@@ -55,12 +58,27 @@ import {
 } from "./place-artboard-deck.js";
 import { triageEmails } from "../mail-feed/triage.js";
 import { generateViaIS } from "../mail-feed/generate.js";
+// catalog-cache-query.ts imports FROM this module (BUILTIN_VERB_PARAM_SCHEMAS,
+// via capability-registry.ts's scoreTextMatch dependency) and marketplace-
+// install.ts pulls in the full router graph (create-from-definition.ts imports
+// playbooksRouter/automationsRouter/toolsRouter/skillsRouter at top level) —
+// BOTH are lazy-imported inside the two handlers below, exactly like every
+// other router import in this file, so this module's own load graph stays
+// light AND the catalog-cache-query circular reference never resolves eagerly.
 
 export interface BuiltinVerbContext {
   /** The acting operator (bearer's user id). */
   userId: string;
   /** Acting workspace lens, or null for a pod-wide run. */
   workspaceId: string | null;
+  /**
+   * The acting AGENT (agent-user id), when this run originates from an agent.
+   * Only a couple of handlers (market.install) consume this — most builtin
+   * verbs are governed entirely by the outer capability gate and don't need
+   * to know agent-vs-operator themselves. NOT populated by every call site
+   * today (see marketplace-install.ts's runMarketInstall doc for the known gap).
+   */
+  agentUserId?: string | null;
 }
 
 export type BuiltinVerbHandler = (
@@ -862,9 +880,8 @@ const feedReadHandler: BuiltinVerbHandler = async (params, ctx) => {
   // userId gate is passed here; the helper still owns isNull(deletedAt) +
   // ephemeral=false so recaps never enter agent history. Lazy-imported to keep
   // this module's load graph light, mirroring the other channel-util imports.
-  const { queryChannelMessages } = await import(
-    "../../utils/query-channel-messages.js"
-  );
+  const { queryChannelMessages } =
+    await import("../../utils/query-channel-messages.js");
   const rows = await queryChannelMessages<
     Pick<
       typeof messages.$inferSelect,
@@ -1296,6 +1313,105 @@ const entityFacetListHandler: BuiltinVerbHandler = async (params, ctx) => {
   };
 };
 
+// ── Marketplace (Wave 3b) ─────────────────────────────────────────────────────
+//
+// market.search / market.install ride the SAME builtin-verb substrate as every
+// other Tier-0 op (D2) — no new tool, no new door, just two more catalog
+// entries. Both read/write the pod-local `cp_catalog_cache` (Wave 3a), never a
+// live Control-Plane fetch on the hot path.
+
+/** Resolve whether a catalog entry is already installed — HONEST per kind: a
+ *  cheap natural-key check for capability/cell, `undefined` (never a fabricated
+ *  guess) when the check would require scanning every workspace's provenance. */
+async function resolveInstalledFlag(
+  kind: CatalogKind,
+  slug: string
+): Promise<boolean | undefined> {
+  if (kind === "capability") {
+    const [row] = await db
+      .select({ id: capabilities.id })
+      .from(capabilities)
+      .where(drizzleSql`${capabilities.metadata}->>'templateKey' = ${slug}`)
+      .limit(1);
+    return !!row;
+  }
+  if (kind === "cell") {
+    // Cache slug scheme is `${packageSlug}/${cellKey}` (cp-catalog-sync.ts);
+    // the installed typeKey scheme is `cell:${packageSlug}:${cellKey}` (the
+    // SAME scheme POST /cells/install and defineCell use).
+    if (!slug.includes("/")) return undefined;
+    const [pkgSlug, cellKey] = slug.split("/");
+    const [row] = await db
+      .select({ id: widgetDefinitions.id })
+      .from(widgetDefinitions)
+      .where(eq(widgetDefinitions.typeKey, `cell:${pkgSlug}:${cellKey}`))
+      .limit(1);
+    return !!row;
+  }
+  // automation/template: no cheap natural-key check today (would require
+  // scanning every workspace's provenance) — honest `undefined`, never faked.
+  return undefined;
+}
+
+const marketSearchParams = z.object({
+  query: z.string().max(200).optional(),
+  kind: z.enum(["capability", "automation", "template", "cell"]).optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+});
+
+const marketSearchHandler: BuiltinVerbHandler = async (params) => {
+  const input = marketSearchParams.parse(params);
+  const { queryCatalogCache } = await import("./catalog-cache-query.js");
+  const entries = await queryCatalogCache({
+    query: input.query,
+    kind: input.kind,
+    limit: input.limit ?? 20,
+  });
+
+  if (entries.length === 0) {
+    return {
+      entries: [],
+      message:
+        "Nothing matched the marketplace either. Tell the user exactly what's missing — never fabricate a result. You can offer to capture the gap as a note/observation for later.",
+    };
+  }
+
+  const compact = await Promise.all(
+    entries.map(async (e) => ({
+      slug: e.slug,
+      kind: e.kind,
+      name: e.name,
+      description: e.description,
+      version: e.version,
+      tier: e.tier,
+      installed: await resolveInstalledFlag(e.kind, e.slug),
+    }))
+  );
+
+  return { entries: compact, count: compact.length };
+};
+
+const marketInstallParams = z.object({
+  slug: z.string().min(1).max(200),
+  kind: z.enum(["capability", "automation", "template", "cell"]),
+  version: z.string().max(100).optional(),
+  params: z.record(z.string(), z.unknown()).optional(),
+});
+
+const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = marketInstallParams.parse(params);
+  const { runMarketInstall } = await import("./marketplace-install.js");
+  return runMarketInstall({
+    slug: input.slug,
+    kind: input.kind,
+    version: input.version,
+    params: input.params,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    agentUserId: ctx.agentUserId ?? null,
+  });
+};
+
 /**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
@@ -1327,6 +1443,9 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "entity_facet.attach": entityFacetAttachHandler,
   "entity_facet.detach": entityFacetDetachHandler,
   "entity_facet.list": entityFacetListHandler,
+  // Marketplace (Wave 3b) — search/install over cp_catalog_cache.
+  "market.search": marketSearchHandler,
+  "market.install": marketInstallHandler,
 };
 
 /**
@@ -1363,6 +1482,8 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "entity_facet.attach": entityFacetAttachParams,
   "entity_facet.detach": entityFacetDetachParams,
   "entity_facet.list": entityFacetListParams,
+  "market.search": marketSearchParams,
+  "market.install": marketInstallParams,
 };
 
 /**
@@ -1389,4 +1510,8 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   "document.read",
   // entity_facet.list — floor-scoped facet read (see handler doc above).
   "entity_facet.list",
+  // market.search — cache-only read (see handler doc above). market.install is
+  // intentionally ABSENT: it always mutates (a proposal at minimum), so it
+  // flows through the full gate like every other WRITE builtin.
+  "market.search",
 ]);
