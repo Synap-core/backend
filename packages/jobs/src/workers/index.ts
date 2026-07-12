@@ -171,6 +171,10 @@ const ALL_QUEUES = [
   MEMORY_DECAY_QUEUE,
   CAPABILITY_TEMPLATE_SYNC_QUEUE,
   CP_CATALOG_SYNC_QUEUE,
+  // Was MISSING while its worker+schedule existed — pg-boss v10 schedule() FK
+  // violated → registerCronSchedules aborted → every cron after cal-backfill
+  // in cron.ts silently never scheduled (found live 2026-07-12).
+  CAL_BACKFILL_CRON_QUEUE,
   API_KEY_ROTATION_CHECK_QUEUE,
   PAGERANK_CENTRALITY_QUEUE,
 ];
