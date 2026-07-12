@@ -6,7 +6,6 @@ import { z } from "zod";
 import { z as zOpenapi } from "@hono/zod-openapi";
 import {
   db,
-  sql,
   getDb,
   users,
   entities,
@@ -18,7 +17,7 @@ import {
   isNull,
   inArray,
   desc,
-  EventRepository,
+  eventRepository,
   WorkspaceRepository,
   type AgentMetadata,
 } from "@synap/database";
@@ -923,7 +922,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
 
     try {
       const dbConn = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
 
       // Hard-purge workspace-scoped rows in a tx (returns storageKeys + ids for
@@ -1042,7 +1044,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
 
     try {
       const dbConn = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
 
       await workspaceRepo.mergeSettings(
@@ -1150,7 +1155,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       };
 
       const dbConn = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
       await workspaceRepo.mergeSettings(
         workspaceId,

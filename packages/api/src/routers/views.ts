@@ -43,7 +43,7 @@ import {
   PropertyMergingService,
   ViewDefaultColumnsService,
   getDb,
-  EventRepository,
+  eventRepository,
   ViewRepository,
   WorkspaceRepository,
   ProfileRepository,
@@ -356,7 +356,10 @@ export const viewsRouter = router({
       const yjsRoomId = docId ? `whiteboard-${docId}` : undefined;
 
       const dbInstance = await getDb();
-      const eventRepo = new EventRepository(pgSql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const viewRepo = new ViewRepository(dbInstance, eventRepo);
 
       const createdView = await viewRepo.create(
@@ -674,7 +677,10 @@ export const viewsRouter = router({
       const yjsRoomId = docId ? `whiteboard-${docId}` : undefined;
 
       const dbInstance = await getDb();
-      const eventRepo = new EventRepository(pgSql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const viewRepo = new ViewRepository(dbInstance, eventRepo);
 
       const createdView = await viewRepo.create(
@@ -1271,7 +1277,10 @@ export const viewsRouter = router({
 
       // Direct DB update via ViewRepository
       const dbInstance = await getDb();
-      const eventRepo = new EventRepository(pgSql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const viewRepo = new ViewRepository(dbInstance, eventRepo);
 
       const updatedView = await viewRepo.update(
@@ -1366,7 +1375,10 @@ export const viewsRouter = router({
 
       // Delete view via ViewRepository
       const dbInstance = await getDb();
-      const eventRepo = new EventRepository(pgSql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const viewRepo = new ViewRepository(dbInstance, eventRepo);
 
       await viewRepo.delete(input.id, ctx.userId);
@@ -1563,7 +1575,10 @@ export const viewsRouter = router({
     .input(z.object({ profileSlug: z.string() }))
     .mutation(async ({ input, ctx }) => {
       const dbConn = await getDb();
-      const eventRepo = new EventRepository(pgSql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
 
       // 1. Check workspace settings for an existing bento view ID (O(1) lookup)
       const workspace = await dbConn.query.workspaces.findFirst({

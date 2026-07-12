@@ -18,7 +18,6 @@ import {
 } from "../trpc.js";
 import {
   db,
-  sql,
   eq,
   desc,
   and,
@@ -27,7 +26,7 @@ import {
   inArray,
   getDb,
   ProfileResolutionService,
-  EventRepository,
+  eventRepository,
   EntityRepository,
   DocumentRepository,
   FacetRepository,
@@ -1057,7 +1056,10 @@ export const entitiesRouter = router({
 
       // 3. Materialize — inline DB write (auto-approved)
       const database = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Must be the shared singleton, not `new EventRepository(sql)` — a fresh
+      // instance has no registered hooks, so emitCompleted()'s append silently
+      // never reaches the realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const entityRepo = new EntityRepository(database, eventRepo);
 
       // Resolve profile for defaultValues and entityScope
@@ -1624,7 +1626,10 @@ export const entitiesRouter = router({
       );
 
       const db2 = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Must be the shared singleton, not `new EventRepository(sql)` — a fresh
+      // instance has no registered hooks, so emitCompleted()'s append silently
+      // never reaches the realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const entityRepo = new EntityRepository(db2, eventRepo);
 
       const results = await entityRepo.listForWorkspaces(
@@ -2122,7 +2127,10 @@ export const entitiesRouter = router({
 
       // 3. Materialize — inline DB write (auto-approved)
       const database = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Must be the shared singleton, not `new EventRepository(sql)` — a fresh
+      // instance has no registered hooks, so emitCompleted()'s append silently
+      // never reaches the realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const entityRepo = new EntityRepository(database, eventRepo);
 
       // Snapshot old properties for relation sync (before update)
@@ -2488,7 +2496,10 @@ export const entitiesRouter = router({
 
       // 3. Write — the ONE door.
       const database = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Must be the shared singleton, not `new EventRepository(sql)` — a fresh
+      // instance has no registered hooks, so emitCompleted()'s append silently
+      // never reaches the realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const facetRepo = new FacetRepository(database, eventRepo);
       const facet = await facetRepo.attach(
         {
@@ -2563,7 +2574,10 @@ export const entitiesRouter = router({
     .mutation(async ({ input, ctx }) => {
       const correlationId = randomUUID();
       const database = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Must be the shared singleton, not `new EventRepository(sql)` — a fresh
+      // instance has no registered hooks, so emitCompleted()'s append silently
+      // never reaches the realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const facetRepo = new FacetRepository(database, eventRepo);
 
       // Load the facet (floor: owned by the caller) to resolve entity + lens.
@@ -2695,7 +2709,10 @@ export const entitiesRouter = router({
     .mutation(async ({ input, ctx }) => {
       const correlationId = randomUUID();
       const database = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Must be the shared singleton, not `new EventRepository(sql)` — a fresh
+      // instance has no registered hooks, so emitCompleted()'s append silently
+      // never reaches the realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const facetRepo = new FacetRepository(database, eventRepo);
 
       const existing = await facetRepo.getById(input.facetId);
@@ -2868,7 +2885,10 @@ export const entitiesRouter = router({
 
       // 3. Materialize — inline DB write (auto-approved)
       const database = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Must be the shared singleton, not `new EventRepository(sql)` — a fresh
+      // instance has no registered hooks, so emitCompleted()'s append silently
+      // never reaches the realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const docRepo = new DocumentRepository(database, eventRepo);
 
       const { getUserPreference } = await import("@synap/database");
@@ -3405,7 +3425,10 @@ export const entitiesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const database = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Must be the shared singleton, not `new EventRepository(sql)` — a fresh
+      // instance has no registered hooks, so emitCompleted()'s append silently
+      // never reaches the realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const entityRepo = new EntityRepository(database, eventRepo);
       const profileRepo = new (
         await import("@synap/database")

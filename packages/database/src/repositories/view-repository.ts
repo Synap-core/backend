@@ -201,13 +201,18 @@ export class ViewRepository extends BaseRepository<
     const result = await this.db
       .delete(views)
       .where(and(eq(views.id, id), eq(views.userId, userId)))
-      .returning({ id: views.id });
+      .returning({ id: views.id, workspaceId: views.workspaceId });
 
     if (result.length === 0) {
       throw new Error("View not found");
     }
 
-    // Emit completed event
-    await this.emitCompleted("delete", { id }, userId);
+    // Emit completed event. Must carry workspaceId — the realtime bridge
+    // drops workspace-scoped event types with no workspaceId in the payload.
+    await this.emitCompleted(
+      "delete",
+      { id, workspaceId: result[0]!.workspaceId },
+      userId
+    );
   }
 }

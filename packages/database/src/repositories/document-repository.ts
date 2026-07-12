@@ -172,13 +172,18 @@ export class DocumentRepository extends BaseRepository<
     const result = await this.db
       .delete(documents)
       .where(and(eq(documents.id, id), eq(documents.userId, userId)))
-      .returning({ id: documents.id });
+      .returning({ id: documents.id, workspaceId: documents.workspaceId });
 
     if (result.length === 0) {
       throw new Error("Document not found");
     }
 
-    // Emit completed event
-    await this.emitCompleted("delete", { id }, userId);
+    // Emit completed event. Must carry workspaceId — the realtime bridge
+    // drops workspace-scoped event types with no workspaceId in the payload.
+    await this.emitCompleted(
+      "delete",
+      { id, workspaceId: result[0]!.workspaceId },
+      userId
+    );
   }
 }

@@ -236,7 +236,11 @@ export class EntityRepository extends BaseRepository<
       data.workspaceId ?? ""
     );
     if (!profile) {
-      throw new ProfileNotFoundError(profileRef, userId, data.workspaceId ?? "");
+      throw new ProfileNotFoundError(
+        profileRef,
+        userId,
+        data.workspaceId ?? ""
+      );
     }
 
     // 1a. Role profiles are hats, never things (Kind + Facets). A create
@@ -633,11 +637,16 @@ export class EntityRepository extends BaseRepository<
       return; // deleted between check and write — idempotent
     }
 
-    // Emit completed event with metadata
+    // Emit completed event with metadata. Must carry workspaceId (the
+    // realtime bridge drops workspace-scoped event types with no workspaceId
+    // in the payload) and type, sourced from the pre-delete snapshot since the
+    // row itself is now gone.
     await this.emitCompleted(
       "delete",
       {
         id,
+        workspaceId: entity.workspaceId,
+        type: entity.type,
         // Document cascade info is in event data, not entity record
       },
       userId

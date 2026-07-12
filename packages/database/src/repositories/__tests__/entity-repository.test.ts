@@ -159,5 +159,31 @@ describe("EntityRepository", () => {
         })
       );
     });
+
+    // Regression lock: the realtime bridge (`domain-event-bridge.ts`) drops
+    // workspace-scoped `.completed` events that carry no `workspaceId` in
+    // their data. The pre-delete row has it — the emit call must forward it
+    // (and `type`) rather than the bare `{ id }` it used to send.
+    it("carries workspaceId and type from the pre-delete snapshot so the realtime bridge doesn't drop it", async () => {
+      mockDb.query.entities.findFirst.mockResolvedValue({
+        id: "entity-1",
+        documentId: null,
+        workspaceId: "workspace-1",
+        type: "note",
+      });
+
+      await entityRepo.delete("entity-1", "user-1");
+
+      expect(mockEventRepo.append).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "entity.delete.completed",
+          subjectId: "entity-1",
+          data: expect.objectContaining({
+            id: "entity-1",
+            workspaceId: "workspace-1",
+          }),
+        })
+      );
+    });
   });
 });

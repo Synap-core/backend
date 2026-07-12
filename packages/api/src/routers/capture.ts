@@ -21,7 +21,6 @@ import {
 } from "../utils/intelligence-routing.js";
 import type { StructuredFollowUp } from "@synap/intelligence-client";
 import {
-  sql,
   eq,
   and,
   or,
@@ -34,7 +33,6 @@ import {
   entityVectors,
   entities as entitiesTable,
   drizzleSql,
-  EventRepository,
   EntityRepository,
   RelationRepository,
   RelationDefRepository,
@@ -424,7 +422,10 @@ export const captureRouter = router({
       // project-linking, session `produced` links, property→relation sync,
       // identity-signal registration, and emit chain every other creator gets.
       const database = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
 
       // Long-form thought body → real versioned document (storage + v1 +
       // Typesense), linked via documentId. Short content is kept inline as
@@ -1390,7 +1391,10 @@ export const captureRouter = router({
       }
 
       const database = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const entityRepo = new EntityRepository(database, eventRepo);
       const relationRepo = new RelationRepository(database, eventRepo);
       const entitiesCaller = entitiesRouter.createCaller(
@@ -2182,7 +2186,10 @@ export const captureRouter = router({
       const workspaceId = ctx.workspaceId;
 
       const database = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const profileService = new ProfileResolutionService(database);
       const propDefRepo = new PropertyDefRepository(database);
       const upsertService = new EntityUpsertService(database, eventRepo);

@@ -240,14 +240,19 @@ export class RelationRepository extends BaseRepository<
     const result = await this.db
       .delete(relations)
       .where(and(eq(relations.id, id), eq(relations.userId, userId)))
-      .returning({ id: relations.id });
+      .returning({ id: relations.id, workspaceId: relations.workspaceId });
 
     if (result.length === 0) {
       throw new Error("Relation not found");
     }
 
-    // Emit completed event
-    await this.emitCompleted("delete", { id }, userId);
+    // Emit completed event. Must carry workspaceId — the realtime bridge
+    // drops workspace-scoped event types with no workspaceId in the payload.
+    await this.emitCompleted(
+      "delete",
+      { id, workspaceId: result[0]!.workspaceId },
+      userId
+    );
   }
 }
 

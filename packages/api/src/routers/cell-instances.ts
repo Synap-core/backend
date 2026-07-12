@@ -26,11 +26,10 @@ import {
   and,
   desc,
   getDb,
-  EventRepository,
+  eventRepository,
   RelationRepository,
   RelationDefRepository,
   SYSTEM_RELATION_TYPES,
-  sql,
   normalizeDocumentType,
   storedVersionValues,
   uploadDocumentVersionSnapshot,
@@ -437,7 +436,10 @@ export const cellInstancesRouter = router({
       }
 
       const database = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const relationRepo = new RelationRepository(database, eventRepo);
 
       const relation = await relationRepo.create(

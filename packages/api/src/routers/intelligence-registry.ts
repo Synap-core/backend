@@ -20,6 +20,7 @@ import {
   and,
   getDb,
   EventRepository,
+  eventRepository,
   WorkspaceRepository,
   ApiKeyRepository,
   sql,
@@ -341,7 +342,10 @@ export const intelligenceRegistryRouter = router({
         });
       }
 
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const workspaceRepo = new WorkspaceRepository(db, eventRepo);
 
       if (input.capability) {
@@ -436,7 +440,8 @@ export const intelligenceRegistryRouter = router({
       }
 
       // Disconnect removes a key — must use full settings replacement (not mergeSettings)
-      const disconnectEventRepo = new EventRepository(sql);
+      // Shared singleton — see note above.
+      const disconnectEventRepo = eventRepository;
       const wsRepo = new WorkspaceRepository(db, disconnectEventRepo);
       await wsRepo.update(
         ctx.workspaceId,

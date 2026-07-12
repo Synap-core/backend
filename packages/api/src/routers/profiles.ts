@@ -20,10 +20,9 @@ import {
   ProfileScope,
   ViewRepository,
   WorkspaceRepository,
-  EventRepository,
+  eventRepository,
   workspaces,
   eq,
-  sql,
 } from "@synap/database";
 import type { RendererRef } from "@synap/database";
 import { TRPCError } from "@trpc/server";
@@ -364,7 +363,10 @@ export const profilesRouter = router({
       // Side effects for workspace-scoped profiles: auto-create bento view + register in settings
       if (input.scope === "workspace") {
         try {
-          const eventRepo = new EventRepository(sql);
+          // Shared singleton — a fresh EventRepository has no registered
+          // hooks, so its emitCompleted() append would silently never reach
+          // the realtime/materialization/sync hooks.
+          const eventRepo = eventRepository;
           const viewRepo = new ViewRepository(db, eventRepo);
           const workspaceRepo = new WorkspaceRepository(db, eventRepo);
 
@@ -1133,7 +1135,8 @@ export const profilesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — see note above.
+      const eventRepo = eventRepository;
       const workspaceRepo = new WorkspaceRepository(db, eventRepo);
 
       const workspace = await db.query.workspaces.findFirst({
@@ -1316,7 +1319,8 @@ export const profilesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — see note above.
+      const eventRepo = eventRepository;
       const viewRepo = new ViewRepository(db, eventRepo);
       const profileRepo = new ProfileRepository(db);
       const resolutionService = new ProfileResolutionService(db);

@@ -14,10 +14,9 @@ import {
   ProfileRepository,
   ProfileResolutionService,
   WorkspaceRepository,
-  EventRepository,
+  eventRepository,
   workspaces,
   eq,
-  sql,
 } from "@synap/database";
 import type { RendererRef } from "@synap/database";
 import { TRPCError } from "@trpc/server";
@@ -92,7 +91,10 @@ export async function setProfileRenderer(
     });
   }
   const contentKind = SLOT_TO_CONTENT_KIND[slot];
-  const eventRepo = new EventRepository(sql);
+  // Shared singleton — a fresh EventRepository has no registered hooks, so
+  // its emitCompleted() append would silently never reach the
+  // realtime/materialization/sync hooks.
+  const eventRepo = eventRepository;
   const workspaceRepo = new WorkspaceRepository(db, eventRepo);
 
   const workspace = await db.query.workspaces.findFirst({

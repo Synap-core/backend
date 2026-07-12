@@ -44,13 +44,12 @@ import {
   asc,
   desc,
   getDb,
-  EventRepository,
+  eventRepository,
   RelationRepository,
   RelationDefRepository,
   ProjectMemberRepository,
   getWorkspaceMembership,
   SYSTEM_RELATION_TYPES,
-  sql,
   inArray,
   loadFacetSlugsBatch,
 } from "@synap/database";
@@ -487,7 +486,10 @@ export const relationsRouter = router({
         return { status: "proposed" as const, proposalId: perm.proposalId };
       }
 
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const relationRepo = new RelationRepository(database, eventRepo);
       const relation = await relationRepo.create(
         {
@@ -599,7 +601,10 @@ export const relationsRouter = router({
         return { status: "proposed" as const, proposalId: perm.proposalId };
       }
 
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const memberRepo = new ProjectMemberRepository(database, eventRepo);
       const member = await memberRepo.add(
         {
@@ -708,7 +713,10 @@ export const relationsRouter = router({
 
       // 2. Direct DB operation
       const database = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const relationRepo = new RelationRepository(database, eventRepo);
 
       let relation: { id: string };
@@ -1092,7 +1100,10 @@ export const relationsRouter = router({
         input.workspaceId || ctx.workspaceId || undefined;
 
       const database = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const relationRepo = new RelationRepository(database, eventRepo);
 
       // Resolve relation ID if not provided directly
@@ -1222,7 +1233,10 @@ export const relationsRouter = router({
 
       // 2. Direct DB operation
       const database = await getDb();
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const relationRepo = new RelationRepository(database, eventRepo);
 
       // Snapshot relation data before deletion (for reverse sync)
@@ -1386,7 +1400,10 @@ export const relationsRouter = router({
       await assertWorkspaceWrite(database, ctx.userId, {
         workspaceId: effectiveWorkspaceId,
       });
-      const eventRepo = new EventRepository(sql);
+      // Shared singleton — a fresh EventRepository has no registered hooks, so
+      // its emitCompleted() append would silently never reach the
+      // realtime/materialization/sync hooks.
+      const eventRepo = eventRepository;
       const relationRepo = new RelationRepository(database, eventRepo);
       const relDefRepo = new RelationDefRepository(database);
 
