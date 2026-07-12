@@ -231,15 +231,31 @@ export async function listCapabilities(
       )
     );
 
-  const skillCaps: Capability[] = skillRows.map((row) => ({
-    kind: "skill",
-    id: row.id,
-    name: row.name,
-    description: row.description ?? null,
-    inputSchema: asInputSchema(row.parameters),
-    executor: "is-agent",
-    governance: deriveGovernance(row.approved),
-  }));
+  // `kind='instruction'` rows are teaching prose (system-prompt text), not a
+  // runnable capability — map them to "teaching-doc" so flat-list consumers
+  // (e.g. the MCP `runnable` verb projection) don't offer them as an action.
+  // Still LISTED: discoverability is the point, just honestly typed.
+  const skillCaps: Capability[] = skillRows.map((row) =>
+    row.kind === "instruction"
+      ? {
+          kind: "teaching-doc",
+          id: row.id,
+          name: row.name,
+          description: row.description ?? null,
+          inputSchema: asInputSchema(row.parameters),
+          executor: "is-agent",
+          governance: "none",
+        }
+      : {
+          kind: "skill",
+          id: row.id,
+          name: row.name,
+          description: row.description ?? null,
+          inputSchema: asInputSchema(row.parameters),
+          executor: "is-agent",
+          governance: deriveGovernance(row.approved),
+        }
+  );
 
   // ── Commands (intelligence_commands) ────────────────────────────────────────
   const commandRows = await db

@@ -7,6 +7,7 @@
  * This server runs as a standalone process or can be integrated into the API.
  */
 
+import { createLogger } from "@synap-core/core";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -17,9 +18,12 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { loadSkillPackagesFromDisk } from "../hub-protocol/rest/skills.js";
 import { resources } from "./resources/index.js";
 import { tools } from "./tools/index.js";
 import { prompts } from "./prompts/index.js";
+
+const logger: any = createLogger({ module: "mcp-server" });
 
 /**
  * Create and configure MCP server.
@@ -29,20 +33,45 @@ import { prompts } from "./prompts/index.js";
  *   but didn't receive one explicitly. This lets the CLI register a
  *   workspace-scoped MCP URL so Claude Code stays focused on one workspace.
  */
+// Minimal inline fallback — ONLY used if skills/synap/reflexes.md is missing on
+// disk at boot (e.g. a deploy image that didn't COPY skills/). Kept to one
+// sentence deliberately: the real prose lives in reflexes.md (the SSOT).
+const REFLEX_PROSE_FALLBACK =
+  "You are connected to the user's Synap pod — their sovereign personal data brain. Call `synap_ask` before non-trivial tasks and `synap_capture` after learning something durable.";
+
 /**
- * Static cueing — the ambient-presence proactivity lever. This text is part of
- * the MCP `instructions` field, so it sits in the model's context for EVERY
- * session by construction (no skill to launch, no CLAUDE.md to inject). It tells
- * the connected AI that a sovereign second brain is available and WHEN to reach
- * for it by reflex.
+ * Derive the reflex prose from `skills/synap/reflexes.md` — the canonical
+ * source (see the file's own "Canonical source" header) — instead of
+ * hand-duplicating it here. Strips the markdown title and the canonical-source
+ * blockquote, keeping the body. Runs once at module init; never per-request.
  */
-const SYNAP_INSTRUCTIONS = `You are connected to the user's Synap pod — their sovereign personal data brain (the source of truth about their life, work, projects, people, and preferences).
+function loadReflexProse(): string {
+  try {
+    const packages = loadSkillPackagesFromDisk();
+    const reflexFile = packages
+      ?.find((pkg) => pkg.slug === "synap")
+      ?.files.find((f) => f.path === "reflexes.md");
+    if (!reflexFile)
+      throw new Error("skills/synap/reflexes.md not found on disk");
+    return reflexFile.content
+      .split("\n")
+      .filter((line) => !line.startsWith("## ") && !line.startsWith("> "))
+      .join("\n")
+      .trim();
+  } catch (err) {
+    logger.warn(
+      { err },
+      "reflexes.md unavailable — falling back to inline reflex prose (deploy image likely missing skills/)"
+    );
+    return REFLEX_PROSE_FALLBACK;
+  }
+}
 
-Two reflexes, on every session:
-- BEFORE any non-trivial task, or before answering anything about the user's own world, call \`synap_ask\` to recall what the pod already knows. Prefer it over your own assumptions. Also ask before creating, to avoid duplicates.
-- AFTER you learn something durable (a fact, a decision, a new person/company/task, a stated preference), call \`synap_capture\` to write it back. Don't wait to be asked — this is how the second brain grows.
-
-Use \`synap_orient\` once to see the available workspaces, projects, and entity types. Writes are governed: a 'proposed' response is normal (awaiting the user's review), never an error.
+// Static cueing — the ambient-presence proactivity lever. This text is part of
+// the MCP `instructions` field, so it sits in the model's context for EVERY
+// session by construction. The reflex portion is derived from reflexes.md
+// (SSOT); the non-reflex remainder (main-capability brief pointer) lives here.
+const SYNAP_INSTRUCTIONS = `${loadReflexProse()}
 
 Main-capability tools (create document/entity/session/project/view/cell/playbook/workspace) carry a composed teaching brief in their description — read it before first use. Call \`synap_load_skill("catalog")\` to see every deeper reference available, and \`synap_load_skill(slug)\` to load one in full.`;
 

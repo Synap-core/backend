@@ -774,6 +774,7 @@ chat replies. Never put a `:::synap-*` directive in a chat reply, and never put 
 ### Syntax
 
 <!-- brief:start -->
+
 A container directive: three colons, the directive name, `{attrs}` on the opening
 line, three colons alone on the closing line.
 
@@ -791,6 +792,7 @@ line, three colons alone on the closing line.
 Only real IDs from prior tool results — never invent one. This is a
 DOCUMENTS-only grammar: never use it in a chat reply, and never use a
 `[[kind:id|label]]` chip inside a document's `content`.
+
 <!-- brief:end -->
 
 For `synap-cell`: an explicit `instanceId` always wins if present — it renders a

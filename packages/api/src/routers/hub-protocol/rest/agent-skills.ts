@@ -46,6 +46,10 @@ const AgentSkillWireSchema = z.object({
   author: z.string().nullable(),
   version: z.string().nullable(),
   tags: z.array(z.string()),
+  /** AI Teaching Substrate (Wave 1b/3): tool/verb names this skill teaches. */
+  teachesTools: z.array(z.string()),
+  skillGroup: z.string().nullable(),
+  alwaysOn: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -94,6 +98,9 @@ function wireSkill(
     author: row.author,
     version: row.version,
     tags: row.tags ?? [],
+    teachesTools: row.teachesTools ?? [],
+    skillGroup: row.skillGroup,
+    alwaysOn: row.alwaysOn,
     createdAt:
       row.createdAt instanceof Date
         ? row.createdAt.toISOString()
@@ -120,6 +127,13 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
         topic: z.string().optional(),
         q: z.string().optional(),
         tag: z.string().optional(),
+        system: z
+          .string()
+          .optional()
+          .openapi({
+            description:
+              "'true' to list only seeded system/* instruction skills",
+          }),
         limit: z.string().optional(),
         offset: z.string().optional(),
       }),
@@ -338,6 +352,11 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     const topic = c.req.query("topic");
     const q = c.req.query("q");
     const tag = c.req.query("tag");
+    // AI Teaching Substrate (Wave 3): isolate seeded `system/*` instruction skills
+    // (ensureSystemSkills' namespace, see ensure-system-skills.ts) — the IS
+    // skill-loader pod-overlay uses this to fetch just the teaching catalog,
+    // never the user's whole skill library.
+    const system = c.req.query("system") === "true";
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 200);
     const offset = parseInt(c.req.query("offset") ?? "0", 10);
 
@@ -353,6 +372,10 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
 
       if (tag) {
         conditions.push(drizzleSql`${skills.tags} @> ARRAY[${tag}]::text[]`);
+      }
+
+      if (system) {
+        conditions.push(drizzleSql`${skills.slug} LIKE 'system/%'`);
       }
 
       const where = conditions.length > 0 ? and(...conditions) : undefined;

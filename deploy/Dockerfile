@@ -96,6 +96,12 @@ COPY --chown=nodejs:nodejs hydra ./api/hydra
 # Migrations (used by backend-migrate service)
 COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations/*.sql ./api/migrations/
 
+# System skill packages — read at runtime by GET /skills/system AND the
+# ensureSystemSkills() boot seeder (loadSkillPackagesFromDisk resolves
+# process.cwd()/skills = /app/api/skills). Without this the teaching
+# substrate 503s and the seeder no-ops in production.
+COPY --from=builder --chown=nodejs:nodejs /app/skills ./api/skills
+
 # Provision-agent script
 COPY --from=builder --chown=nodejs:nodejs /app/packages/api/dist/scripts ./api/dist/scripts/
 

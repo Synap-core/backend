@@ -282,7 +282,14 @@ export interface Executor {
  * Playbook can grant capabilities uniformly and the AI can discover them.
  */
 /** The full read-model kind set: grantables + the discoverable source systems. */
-export type CapabilityKind = GrantableKind | "source-provider" | "builtin-tool";
+export type CapabilityKind =
+  | GrantableKind
+  | "source-provider"
+  | "builtin-tool"
+  /** A `skills` row with `kind='instruction'` — teaching prose, not an executable
+   *  capability. Kept OUT of the "skill" (runnable) bucket so flat-list consumers
+   *  don't have to special-case it to avoid offering it as an action. */
+  | "teaching-doc";
 
 export interface Capability {
   kind: CapabilityKind;
@@ -292,8 +299,9 @@ export interface Capability {
   inputSchema: Record<string, unknown>;
   credentials?: CredentialRequirement[];
   executor: ExecutorRef;
-  /** Whether AI use is auto-approved or routed through a proposal. */
-  governance: "auto" | "propose";
+  /** Whether AI use is auto-approved or routed through a proposal. "none" = not
+   *  executable (e.g. a `teaching-doc` — governance doesn't apply to reading prose). */
+  governance: "auto" | "propose" | "none";
   /**
    * The connection's structured verb catalog WITH each verb's resolved
    * grant-state — the capability-matrix axis. Present for tools that carry a
