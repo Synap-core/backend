@@ -24,6 +24,7 @@ import {
   inArray,
   and,
   eq,
+  isNull,
   ilike,
   entities,
   projects,
@@ -39,6 +40,7 @@ import {
   intelligenceCommands,
   loadFacetSlugsBatch,
   type FacetVisibilityScope,
+  workspaces,
 } from "@synap/database";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { getLinksFor } from "../links/links-service.js";
@@ -65,6 +67,7 @@ export const GRAPH_KINDS = [
   "command",
   "source",
   "participant",
+  "workspace",
 ] as const;
 
 export type GraphKind = (typeof GRAPH_KINDS)[number];
@@ -150,6 +153,7 @@ const KIND_TABLE: Record<string, KindSpec> = {
   command: { table: intelligenceCommands, name: "title" },
   automation: { table: automations, name: "name", subtype: "triggerType" },
   document: { table: documents, name: "title", subtype: "type" },
+  workspace: { table: workspaces, name: "name" },
 };
 
 /**
@@ -196,11 +200,22 @@ export async function hydrateNodes(
       // SCOPE the hydration — an edge can be visible while its far endpoint lives
       // in a workspace the user can't see; without this AND, the neighbour's NAME
       // would leak. `userVisibleWhere` is the same floor every pod read uses.
+      // `workspace` is the one KIND_TABLE entry with no `workspaceId` column —
+      // the row IS the workspace, so its own `id` is the scope dimension
+      // (userVisibleWhere accepts any scope column, including `id`).
       const rows = await db
         .select()
         .from(t)
         .where(
-          and(inArray(t.id, ids), userVisibleWhere(t.workspaceId, userId))
+          and(
+            inArray(t.id, ids),
+            kind === "workspace"
+              ? and(
+                  isNull((t as typeof workspaces).archivedAt),
+                  userVisibleWhere(t.id, userId)
+                )
+              : userVisibleWhere(t.workspaceId, userId)
+          )
         );
 
       // Entity kind carries facets on top of its base subtype (kind slug) —

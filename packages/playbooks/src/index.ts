@@ -194,7 +194,10 @@ export type LinkEndpointType =
   | "secret"
   // A capability CONTAINER (`capabilities` table). Parts attach as members:
   // `tool|skill|command --member_of--> capability`.
-  | "capability";
+  | "capability"
+  // A workspace (lens). `workspace --feeds--> workspace` = provider→consumer
+  // lens propagation; `workspace --requires--> workspace` = install dependency.
+  | "workspace";
 export type LinkType =
   | "grants"
   | "requires"
