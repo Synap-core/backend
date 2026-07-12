@@ -10,9 +10,11 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { hubProtocolRouter } from "../hub-protocol/index.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
+import { skillsRouter as regularSkillsRouter } from "../skills.js";
 import { projectsRouter } from "../projects.js";
 import { playbooksRouter } from "../playbooks.js";
 import { createHubProtocolCallerContext } from "../hub-protocol/utils.js";
+import { validateCreateVerbInput } from "./validate-create-verb.js";
 import {
   getObjectGraph,
   resolveByName,
@@ -29,10 +31,16 @@ import {
   db,
   knowledgeKeysRepository,
   entities,
+  tools as toolsTable,
+  eq,
+  and,
+  or,
+  isNull,
   resolveIdentity,
   extractIdentitySignals,
   signalsFromExplicit,
   type IdentitySignal,
+  type ProviderVerbSpec,
 } from "@synap/database";
 import { getUserWorkspaceIds } from "../hub-protocol/rest/_shared.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
@@ -1475,6 +1483,89 @@ export async function executeMCPToolViaHubProtocol(
       // Surface the same discriminated outcome the hub door returns, in a shape
       // the agent reads naturally (proposed is NOT an error).
       return ok(outcome);
+    }
+
+    case "synap_create_verb": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+
+      // Hard constraints 1 (declarative-only) + 2's field shape are enforced
+      // in a pure, unit-tested helper — see validate-create-verb.test.ts.
+      const validated = validateCreateVerbInput(args);
+      if (!validated.ok) {
+        return ok({ error: validated.error });
+      }
+      const input = validated.data;
+
+      // Hard constraint 2: toolName must ALREADY be installed/credentialed for
+      // the caller (pod-wide, or the given workspace) — this door only ADDS a
+      // verb to an existing tool. It never creates a tool/connection as a
+      // side effect.
+      const wsLens = input.workspaceId
+        ? or(
+            isNull(toolsTable.workspaceId),
+            eq(toolsTable.workspaceId, input.workspaceId)
+          )
+        : isNull(toolsTable.workspaceId);
+      const [existingTool] = await db
+        .select({ id: toolsTable.id, name: toolsTable.name })
+        .from(toolsTable)
+        .where(
+          and(
+            eq(toolsTable.name, input.toolName),
+            wsLens,
+            userVisibleWhere(toolsTable.workspaceId, userId)
+          )
+        )
+        .limit(1);
+      if (!existingTool) {
+        return ok({
+          error:
+            `Tool '${input.toolName}' is not installed` +
+            `${input.workspaceId ? ` for workspace ${input.workspaceId}` : ""}. ` +
+            `synap_create_verb only adds a verb to an ALREADY-installed, credentialed tool — ` +
+            `install/connect '${input.toolName}' first, or check the exact name via synap_list_capabilities.`,
+        });
+      }
+
+      // Hard constraint 4: reuse the canonical ProviderVerbSpec shape
+      // verbatim (@synap/database schema/skills.ts) — no invented field names.
+      const providerSpec: ProviderVerbSpec = {
+        tool: input.toolName,
+        method: input.method,
+        pathTemplate: input.pathTemplate,
+        ...(input.query ? { query: input.query } : {}),
+        ...(input.body ? { body: input.body } : {}),
+        ...(input.responseShape ? { responseShape: input.responseShape } : {}),
+      };
+
+      // Hard constraint 3: reuse the SAME governed door POST /skills uses
+      // (skillsRouter.create) — checkPermissionOrPropose runs INSIDE it. No
+      // bypass flag, no direct db.insert here.
+      const skillsCtx = await createHubProtocolCallerContext(
+        userId,
+        apiKeyScopes,
+        input.workspaceId ?? null,
+        undefined,
+        sessionId,
+        agentUserId ?? null
+      );
+      const skillsCaller = regularSkillsRouter.createCaller(skillsCtx as never);
+      const result = await skillsCaller.create({
+        workspaceId: input.workspaceId,
+        kind: "declarative",
+        scope: input.workspaceId ? "workspace" : "pod",
+        name: input.verbName,
+        description: input.description,
+        providerSpec: providerSpec as unknown as Record<string, unknown>,
+        parameters: input.parameters,
+        // Fixed alongside this tool: skills.create's own checkPermissionOrPropose
+        // call was missing agentUserId entirely (no input field for it existed),
+        // so an agent-initiated create was evaluated as if the human owner did
+        // it directly. Now threaded through, mirroring entities.ts's pattern.
+        agentUserId: agentUserId ?? undefined,
+      });
+
+      return ok(result);
     }
 
     default:

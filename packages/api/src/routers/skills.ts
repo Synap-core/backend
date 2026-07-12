@@ -256,6 +256,12 @@ export const skillsRouter = router({
         category: z.string().optional(),
         executionMode: z.enum(["sync", "async"]).default("sync"),
         timeoutSeconds: z.number().min(1).max(300).default(30),
+        /** The acting AGENT identity, when this create is agent-initiated
+         *  (e.g. via an MCP tool) — mirrors entities.ts's createEntity input.
+         *  Threaded into checkPermissionOrPropose below so an agent-created
+         *  skill is gated by the agent's grant/role, not silently evaluated
+         *  as if the human owner created it directly. */
+        agentUserId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -295,6 +301,7 @@ export const skillsRouter = router({
         subjectType: "skill",
         action: "create",
         data: { id: skillId, name: input.name },
+        agentUserId: input.agentUserId,
       });
 
       if ("denied" in perm && perm.denied) {

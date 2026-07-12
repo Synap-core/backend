@@ -1145,6 +1145,65 @@ export const tools = {
         },
       },
       {
+        name: "synap_create_verb",
+        description:
+          "Add a new DECLARATIVE verb (a deterministic provider HTTP call — no code execution) to an ALREADY-INSTALLED, already-credentialed tool — e.g. teach 'apify_api' a new 'apify_search_reddit_actors' verb without a dev-session/redeploy. Creates a kind='declarative' skill only; rejects any request implying code/instruction/builtin execution. `toolName` MUST already exist (installed + visible to the caller) or this is refused — it never creates a new tool/connection as a side effect. Governed the same as every other write: may return status='proposed' for review. Discover installed tools with synap_list_capabilities first.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            toolName: {
+              type: "string",
+              description:
+                "The NAME of the already-installed tool this verb calls (e.g. 'apify_api'). Must already exist — this tool never creates a new tool/connection.",
+            },
+            verbName: {
+              type: "string",
+              description:
+                "Stable name for the new verb/skill (e.g. 'apify_search_reddit_actors').",
+            },
+            description: {
+              type: "string",
+              description: "What the verb does and when to use it.",
+            },
+            method: {
+              type: "string",
+              enum: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+              description: "HTTP method the provider call uses.",
+            },
+            pathTemplate: {
+              type: "string",
+              description:
+                "Request path with {{param}} interpolation, e.g. '/v2/acts/{{actorId}}/runs'.",
+            },
+            query: {
+              type: "object",
+              description:
+                "Query params; values may be '{{param}}'; arrays become repeated query keys.",
+            },
+            body: {
+              type: "object",
+              description: "Request body template; values may be '{{param}}'.",
+            },
+            responseShape: {
+              type: "object",
+              description:
+                "How to shape the provider's raw response (collectionPath, item, scalar, headers dot-paths).",
+            },
+            parameters: {
+              type: "object",
+              description:
+                'The verb\'s own runtime parameter schema using the shorthand type system, e.g. { query: "string", limit: "number?" }.',
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional workspace UUID to scope the new verb to (default: pod-wide).",
+            },
+          },
+          required: ["toolName", "verbName", "method", "pathTemplate"],
+        },
+      },
+      {
         name: "synap_load_skill",
         description:
           "Load the full body of a seeded teaching skill (the L2 tier behind the one-line summaries you see on other tools' descriptions and in the catalog). Pass a `system/<package>/<stem>` slug, a bare stem (e.g. 'document-embeds'), or 'catalog' to list every available skill grouped by topic.",
