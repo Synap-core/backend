@@ -9,7 +9,7 @@
  *
  * Contract (verified against intelligence-hub `routes/skills-route.ts`):
  *   POST {IS}/api/skills/execute
- *     body: { skillId, userId, parameters }
+ *     body: { skillId, userId, parameters, workspaceId? }
  *     → SkillExecutionResult { success, result?, error?, executionTimeMs }
  *
  * NOTE: the IS execute route reads `parameters` (mapped to the skill's `args`),
@@ -31,6 +31,10 @@ export async function executeSkillViaIS(args: {
   skillId: string;
   userId: string;
   parameters?: Record<string, unknown>;
+  /** The workspace this run is scoped to — threaded into the skill's `context`
+   *  so code skills (e.g. propose.entity) default into the right workspace
+   *  instead of landing pod-personal when the skill author doesn't pass one. */
+  workspaceId?: string | null;
   timeoutMs?: number;
 }): Promise<SkillExecutionResult> {
   // Resolve the IS endpoint + key the CANONICAL way: from the registered
@@ -56,6 +60,7 @@ export async function executeSkillViaIS(args: {
         skillId: args.skillId,
         userId: args.userId,
         parameters: args.parameters ?? {},
+        workspaceId: args.workspaceId ?? undefined,
       }),
       signal: controller.signal,
     });

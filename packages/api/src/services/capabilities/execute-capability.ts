@@ -257,6 +257,7 @@ export async function runResolvedSkill(
     skillId: skill.id,
     userId: ctx.userId,
     parameters,
+    workspaceId: ctx.workspaceId,
   });
   return { kind: "run", skillId: skill.id, result };
 }

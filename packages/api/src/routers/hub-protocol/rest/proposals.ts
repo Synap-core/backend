@@ -48,6 +48,27 @@ export function registerProposalsRoutes(app: HubHono): void {
   });
 
   registerOpenApi(app, {
+    method: "get",
+    path: "/proposals/{id}",
+    tags: ["Proposals"],
+    summary: "Get a single proposal by id",
+    description:
+      "Fetches one proposal's full current state — including `data` (e.g. a " +
+      "capability.run proposal's `runResult` once approved). Callers previously " +
+      "had no single-lookup door and had to page through GET /proposals to find " +
+      "one by id.",
+    request: {
+      params: z.object({ id: z.string() }),
+    },
+    responses: {
+      200: { description: "The proposal", schema: WireProposalSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Proposal not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
     method: "patch",
     path: "/proposals/{id}",
     tags: ["Proposals"],
@@ -107,7 +128,7 @@ export function registerProposalsRoutes(app: HubHono): void {
     tags: ["Proposals"],
     summary: "Approve a pending proposal",
     description:
-      "Approves a pending proposal, executing its effect immediately. Delegates to the canonical `proposals.approve` tRPC mutation.",
+      "Approves a pending proposal, executing its effect immediately. Delegates to the canonical `proposals.approve` tRPC mutation, then re-fetches the proposal so the response carries its post-execution state (e.g. a capability.run's `data.runResult` — success + returned data, or the exact denial reason on failure) in the SAME round trip instead of requiring a separate GET.",
     request: {
       params: z.object({ id: z.string() }),
       body: z.object({ reason: z.string().optional() }),
@@ -115,7 +136,11 @@ export function registerProposalsRoutes(app: HubHono): void {
     responses: {
       200: {
         description: "Proposal approved",
-        schema: z.object({ success: z.boolean(), proposalId: z.string() }),
+        schema: z.object({
+          success: z.boolean(),
+          proposalId: z.string(),
+          proposal: WireProposalSchema.optional(),
+        }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
@@ -202,6 +227,40 @@ export function registerProposalsRoutes(app: HubHono): void {
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500
+      );
+    }
+  });
+
+  /**
+   * GET /proposals/:id
+   * Fetch one proposal by id — the single-lookup door that was missing
+   * (callers had to page through GET /proposals and filter client-side).
+   */
+  app.get("/proposals/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Insufficient scope" }, 403);
+    }
+    const proposalId = c.req.param("id");
+    try {
+      const userId = c.get("userId") as string;
+      const scopes = c.get("scopes") as string[];
+      const ctx = await createHubProtocolCallerContext(userId, scopes);
+      const caller = mainProposalsRouter.createCaller(
+        ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
+      );
+      const result = await caller.get({ proposalId });
+      return c.json(result);
+    } catch (err) {
+      logger.error({ err, proposalId }, "getProposal failed");
+      const code =
+        err instanceof TRPCError && err.code === "NOT_FOUND"
+          ? 404
+          : err instanceof TRPCError && err.code === "FORBIDDEN"
+            ? 403
+            : 500;
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        code
       );
     }
   });
@@ -327,7 +386,13 @@ export function registerProposalsRoutes(app: HubHono): void {
         ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
       );
       await caller.approve({ proposalId });
-      return c.json({ success: true, proposalId }, 200);
+      // Re-fetch so the caller sees the post-execution state in ONE round trip —
+      // e.g. a capability.run's data.runResult (success + returned data, or the
+      // exact denial reason like "Capability is not approved") — instead of the
+      // bare {success:true} the executor itself returns (execution outcome is
+      // persisted onto the proposal row, not returned from the mutation call).
+      const proposal = await caller.get({ proposalId }).catch(() => null);
+      return c.json({ success: true, proposalId, proposal }, 200);
     } catch (err) {
       logger.error({ err, proposalId }, "approveProposal failed");
       const code =
