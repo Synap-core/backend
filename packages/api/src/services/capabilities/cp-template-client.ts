@@ -70,6 +70,37 @@ export async function fetchCPCapabilityTemplatesFromCP(): Promise<
 }
 
 /**
+ * Direct CP fetch of ONE template by key or display name — the "still
+ * installable if you know it" door for a capability that's marketplace-listed
+ * (isPublic=true) but excluded from the default every-pod sync
+ * (syncByDefault=false, e.g. a paid third-party connector like Unipile).
+ * Deliberately NOT upserted into `capabilityTemplateCache` by the caller —
+ * that cache mirrors the syncByDefault=true list; writing a non-default item
+ * into it would leak it back into every pod's default catalog browse, the
+ * exact thing syncByDefault exists to prevent. Resilient like the list fetch:
+ * returns `null` on ANY failure (404, no CP configured, timeout), never throws.
+ */
+export async function fetchCPCapabilityTemplateByKey(
+  key: string
+): Promise<CPCapabilityTemplate | null> {
+  const base = cpUrl();
+  if (!base) return null;
+
+  try {
+    const res = await fetch(
+      `${base}/api/marketplace/capabilities/${encodeURIComponent(key)}`,
+      { signal: AbortSignal.timeout(8000) }
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as CPCapabilityTemplate | { error: string };
+    if ("error" in data) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * UPSERT the given templates into the pod-local cache (one row per key). Used by
  * the cold-boot inline fetch below (the background sync job in @synap/jobs owns
  * its own upsert — it cannot import @synap/api, circular dep). Never throws.
@@ -181,12 +212,18 @@ export async function fetchCPCapabilityTemplate(
     // Fall through to the CP fallback.
   }
 
-  // 2. Miss → direct CP fetch of the catalog; opportunistically populate the
-  //    cache and resolve the key. Never throws.
+  // 2. Cache miss → try the default-sync list first (covers the common case
+  //    and opportunistically warms the cache for next time).
   const items = await fetchCPCapabilityTemplatesFromCP();
-  if (items && items.length > 0) {
-    await upsertCapabilityTemplateCache(items);
-    return items.find((c) => c.key === key)?.definition ?? null;
+  const fromList = items?.find((c) => c.key === key);
+  if (fromList) {
+    if (items && items.length > 0) await upsertCapabilityTemplateCache(items);
+    return fromList.definition;
   }
-  return null;
+
+  // 3. Not in the default-sync list → it may still be a real, installable
+  //    template that's just excluded from default sync (syncByDefault=false).
+  //    Direct by-key lookup, deliberately not cached (see fn doc).
+  const byKey = await fetchCPCapabilityTemplateByKey(key);
+  return byKey?.definition ?? null;
 }
