@@ -75,8 +75,19 @@ function projectFile(
 ): SeedProjection {
   const teaching: SystemSkillTeaching | undefined =
     SYSTEM_SKILL_TEACHING[`${pkg.slug}/${fileStem}`];
-  const hash = contentHash(content);
   const name = extractTitle(content, fileStem);
+  // Hash EVERYTHING the heal-update writes (not just the body) — a
+  // _teaching.json-only edit (teachesTools/group/alwaysOn/summary) must also
+  // converge existing rows, or teaching metadata silently drifts from the SSOT.
+  const hash = contentHash(
+    JSON.stringify({
+      body: content,
+      teachesTools: teaching?.teachesTools ?? [],
+      skillGroup: teaching?.skillGroup ?? null,
+      alwaysOn: teaching?.alwaysOn ?? false,
+      description: teaching?.summary ?? name,
+    })
+  );
   return {
     slug: systemSlug(pkg.slug, fileStem),
     name,
@@ -136,68 +147,87 @@ export async function ensureSystemSkills(): Promise<void> {
     let healed = 0;
     let skipped = 0;
 
+    let failed = 0;
     for (const pkg of packages) {
       for (const file of pkg.files) {
-        const fileStem = file.path.replace(/\.md$/, "");
-        const projection = projectFile(pkg, fileStem, file.content, file.path);
-        const existing = existingBySlug.get(projection.slug);
-
-        if (!existing) {
-          await db.insert(skills).values({
-            userId: ownerUserId,
-            workspaceId: null,
-            slug: projection.slug,
-            kind: "instruction",
-            scope: "pod",
-            status: "active",
-            approved: true,
-            name: projection.name,
-            description: projection.description,
-            body: projection.body,
-            teachesTools: projection.teachesTools,
-            skillGroup: projection.skillGroup,
-            alwaysOn: projection.alwaysOn,
-            metadata: projection.metadata,
-          });
-          seeded++;
-          continue;
-        }
-
-        const existingMeta = (existing.metadata ?? {}) as Record<
-          string,
-          unknown
-        >;
-        if (existingMeta.system !== true) {
-          logger.warn(
-            { slug: projection.slug },
-            "Slug collision with a non-system skill — skipping (never overwriting user content)"
+        try {
+          const fileStem = file.path.replace(/\.md$/, "");
+          const projection = projectFile(
+            pkg,
+            fileStem,
+            file.content,
+            file.path
           );
-          skipped++;
-          continue;
-        }
-        if (existingMeta.contentHash === projection.metadata.contentHash) {
-          continue; // unchanged — no-op
-        }
+          const existing = existingBySlug.get(projection.slug);
 
-        await db
-          .update(skills)
-          .set({
-            name: projection.name,
-            description: projection.description,
-            body: projection.body,
-            teachesTools: projection.teachesTools,
-            skillGroup: projection.skillGroup,
-            alwaysOn: projection.alwaysOn,
-            metadata: projection.metadata,
-            updatedAt: new Date(),
-          })
-          .where(eq(skills.id, existing.id));
-        healed++;
+          if (!existing) {
+            await db.insert(skills).values({
+              userId: ownerUserId,
+              workspaceId: null,
+              slug: projection.slug,
+              kind: "instruction",
+              scope: "pod",
+              status: "active",
+              approved: true,
+              name: projection.name,
+              description: projection.description,
+              body: projection.body,
+              teachesTools: projection.teachesTools,
+              skillGroup: projection.skillGroup,
+              alwaysOn: projection.alwaysOn,
+              metadata: projection.metadata,
+            });
+            seeded++;
+            continue;
+          }
+
+          const existingMeta = (existing.metadata ?? {}) as Record<
+            string,
+            unknown
+          >;
+          if (existingMeta.system !== true) {
+            logger.warn(
+              { slug: projection.slug },
+              "Slug collision with a non-system skill — skipping (never overwriting user content)"
+            );
+            skipped++;
+            continue;
+          }
+          if (existingMeta.contentHash === projection.metadata.contentHash) {
+            continue; // unchanged — no-op
+          }
+
+          await db
+            .update(skills)
+            .set({
+              name: projection.name,
+              description: projection.description,
+              body: projection.body,
+              teachesTools: projection.teachesTools,
+              skillGroup: projection.skillGroup,
+              alwaysOn: projection.alwaysOn,
+              metadata: projection.metadata,
+              updatedAt: new Date(),
+            })
+            .where(eq(skills.id, existing.id));
+          healed++;
+        } catch (err) {
+          // One bad file (or a concurrent-boot unique-index race on insert)
+          // must not abort the rest of the batch; the loser converges next boot.
+          failed++;
+          logger.warn(
+            { pkg: pkg.slug, file: file.path, err },
+            "System-skill seed failed for one file — continuing"
+          );
+        }
       }
     }
 
-    if (seeded > 0 || healed > 0 || skipped > 0) {
-      logger.info({ seeded, healed, skipped }, "System skills seed converged");
+    if (seeded > 0 || healed > 0 || skipped > 0 || failed > 0) {
+      logger.info(
+        { seeded, healed, skipped, failed },
+        "System skills seed converged"
+      );
     } else {
       logger.debug("System skills already in sync — no-op");
     }

@@ -269,6 +269,15 @@ async function composeGovernanceLine(
     });
     verdict = { outcome: result.outcome, reason: result.reason };
     governanceCache.set(cacheKey, { at: Date.now(), verdict });
+    // Bounded growth: expired entries are otherwise only refreshed in place,
+    // never evicted — a long-lived multi-workspace pod would leak keys.
+    if (governanceCache.size > 512) {
+      const now = Date.now();
+      for (const [k, v] of governanceCache) {
+        if (now - v.at >= GOVERNANCE_CACHE_TTL_MS) governanceCache.delete(k);
+      }
+      if (governanceCache.size > 512) governanceCache.clear();
+    }
   }
 
   switch (verdict.outcome) {

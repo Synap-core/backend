@@ -16,6 +16,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { and, eq, getDb, workspaceMembers } from "@synap/database";
 
 import { composeCapabilityBrief } from "../../../services/capability-briefs/compose-capability-brief.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -88,6 +89,22 @@ export function registerBriefsRoutes(app: HubHono): void {
     // Identity: userId is already the operator floor (agent-key remap handled
     // by the auth middleware); agentUserId is the acting agent, when set.
     const agentUserId = c.get("agentUserId") as string | undefined;
+    const userId = c.get("userId") as string;
+
+    // A brief embeds the target workspace's governance verdict — the caller
+    // must be a member of that workspace to read it (same predicate as the
+    // GET /workspaces/:id/governance dry-run, which this route mirrors).
+    if (parsed.data.workspaceId) {
+      const db = await getDb();
+      const membership = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, parsed.data.workspaceId),
+          eq(workspaceMembers.userId, userId)
+        ),
+        columns: { role: true },
+      });
+      if (!membership) return c.json({ error: "Access denied" }, 403);
+    }
 
     const briefs: Record<string, string> = {};
     await Promise.all(

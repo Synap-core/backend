@@ -127,6 +127,28 @@ function loadTeachingDefinitions(): Record<string, SystemSkillTeaching> {
   return out;
 }
 
-/** Fail-loud at module init — a malformed teaching file must never seed silently-wrong data. */
+/**
+ * Validation stays strict per entry, but a malformed/missing file must NOT
+ * crash the whole pod at import time (this module loads with the @synap/api
+ * barrel, long before startup-hooks' try/catch can contain it). Degraded
+ * teaching (= no metadata, skills still seed with bodies) beats a pod that
+ * won't boot. The IS-side copy is separately validated by its own tests.
+ */
+function loadTeachingDefinitionsNonFatal(): Record<
+  string,
+  SystemSkillTeaching
+> {
+  try {
+    return loadTeachingDefinitions();
+  } catch (err) {
+    console.error(
+      `[system-skill-teaching] ${TEACHING_JSON_PATH} unusable — teaching metadata degraded to empty (skills still seed with bodies): ${
+        (err as Error).message
+      }`
+    );
+    return {};
+  }
+}
+
 export const SYSTEM_SKILL_TEACHING: Record<string, SystemSkillTeaching> =
-  loadTeachingDefinitions();
+  loadTeachingDefinitionsNonFatal();
