@@ -15,6 +15,9 @@ import { cpCatalogCache } from "@synap/database/schema";
 import type { CatalogKind } from "@synap/jobs";
 import { scoreTextMatch } from "./capability-registry.js";
 
+// TODO(control-plane-types): adopt MarketplaceCatalogEntry from
+// @synap-core/control-plane-types@1.1.0 once published (P2.10.3) — inline
+// duplicate of that contract, keep in sync until then.
 export interface CatalogCacheEntry {
   source: string;
   kind: CatalogKind;
