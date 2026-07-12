@@ -1,0 +1,447 @@
+/**
+ * System skill teaching definitions (AI Teaching Substrate Wave 1b).
+ *
+ * One entry per baseline skill topic file (`synap-backend/skills/<package>/<file>.md`),
+ * keyed `"<package>/<file-stem>"` (e.g. `"synap/document-embeds"`). This is the data
+ * `ensureSystemSkills()` (`ensure-system-skills.ts`) projects onto the seeded `skills`
+ * row's `teachesTools` / `skillGroup` / `alwaysOn` columns, and the `summary` field
+ * doubles as the row's `description` (its one-line catalog summary).
+ *
+ * Ports the IS `SKILL_TRIGGERS` table (synap-intelligence-service/apps/intelligence-hub/
+ * src/skills/skill-loader.ts:72-279) 1:1 where a file still matches
+ * (requiredTools→teachesTools, group→skillGroup, alwaysOn→alwaysOn, summary→summary).
+ * Two renames noted while porting: `operating-mode-rules.md` is the current LEAN
+ * always-on companion to `operating-mode.md` (which is now the full lazy reference) —
+ * the inverse of what SKILL_TRIGGERS' old `operating-mode.md` entry assumed, mirroring
+ * the already-established governance-rules/governance and linking-principle/linking
+ * split. `creative-loop.md`, `native-widget.md`, `propose-workspace.md`, `cli-execution.md`,
+ * and `is-expertise.md` are IS-only bundled files with no counterpart under
+ * `synap-backend/skills/` — not ported (nothing to seed). `cli-execution.md`'s teaching
+ * carries over onto the backend's own `cli-operations.md`, the closest equivalent.
+ *
+ * Files with no SKILL_TRIGGERS counterpart (new content, or backend-only topics) get a
+ * judgment-call entry here: `teachesTools` inferred from the file's subject, `skillGroup`
+ * matching its package's dominant group, `alwaysOn: false` unless the file is one of the
+ * "every session" reflex/core docs.
+ *
+ * `teachesTools` values are IS tool names / builtin verb ids (the canonical keyspace) —
+ * MCP `synap_*` names resolve into this keyspace via `tool-verb-aliases.ts`.
+ */
+
+export type SystemSkillGroup =
+  | "core"
+  | "research"
+  | "build"
+  | "connect"
+  | "govern"
+  | "feed"
+  | "inbox"
+  | "show";
+
+export interface SystemSkillTeaching {
+  teachesTools: string[];
+  skillGroup: SystemSkillGroup;
+  alwaysOn: boolean;
+  /** One-line catalog summary — becomes the seeded skill row's `description`. */
+  summary: string;
+}
+
+export const SYSTEM_SKILL_TEACHING: Record<string, SystemSkillTeaching> = {
+  // ── synap package ──────────────────────────────────────────────────────
+  "synap/operating-mode-rules": {
+    teachesTools: ["search_unified", "memory_search", "remember_fact"],
+    skillGroup: "core",
+    alwaysOn: true,
+    summary: "Operating mode: read→think→propose loop and the write model.",
+  },
+  "synap/operating-mode": {
+    teachesTools: ["search_unified", "memory_search", "remember_fact"],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary: "Full operating-mode reference: core data operations walkthrough.",
+  },
+  "synap/governance-rules": {
+    teachesTools: ["search_unified", "memory_search", "remember_fact"],
+    skillGroup: "core",
+    alwaysOn: true,
+    summary: "Governance essentials: status handling + reasoning field.",
+  },
+  "synap/governance": {
+    teachesTools: ["search_unified", "memory_search", "remember_fact"],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary:
+      "Full governance reference: whitelist, lifecycle, agent-user semantics.",
+  },
+  "synap/capture": {
+    teachesTools: ["create_entity", "update_entity", "entity.create"],
+    skillGroup: "core",
+    alwaysOn: true,
+    summary: "Capture free text into the right entities without duplicating.",
+  },
+  "synap/linking-principle": {
+    teachesTools: [
+      "create_entity",
+      "update_entity",
+      "create_relation",
+      "graph.link",
+    ],
+    skillGroup: "core",
+    alwaysOn: true,
+    summary: "Link discipline: connect entities to grow the graph.",
+  },
+  "synap/linking": {
+    teachesTools: [
+      "create_entity",
+      "update_entity",
+      "create_relation",
+      "graph.link",
+    ],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary: "Full linking reference (relation types, patterns).",
+  },
+  "synap/crm": {
+    teachesTools: ["propose_entity_graph", "create_entity", "update_entity"],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary:
+      "CRM model (person/company/deal/client) + resolve-before-create discipline (dedupe, alias, never placeholder).",
+  },
+  "synap/reading": {
+    teachesTools: ["search_unified", "memory_search"],
+    skillGroup: "core",
+    alwaysOn: true,
+    summary: "The read door + reading discipline (ask, retrieve, ground).",
+  },
+  "synap/inline-patterns": {
+    teachesTools: [
+      "search_unified",
+      "memory_search",
+      "remember_fact",
+      "list_entities",
+      "get_entity",
+      "generate_widget",
+      "create_view",
+      "create_entity",
+      "create_document",
+      "get_document",
+    ],
+    skillGroup: "core",
+    alwaysOn: true,
+    summary:
+      "Inline chip grammar: [[entity:ID|Name]], [[view:ID]], [[open:...]].",
+  },
+  "synap/writes": {
+    teachesTools: [
+      "create_entity",
+      "update_entity",
+      "create_document",
+      "update_document",
+      "entity.create",
+      "entity.update",
+      "document.create",
+      "document.update",
+    ],
+    skillGroup: "core",
+    alwaysOn: true,
+    summary:
+      "Entity + document writes: create/update, deep-merge, html-doc flow.",
+  },
+  "synap/document-embeds": {
+    teachesTools: [
+      "create_document",
+      "update_document",
+      "document.create",
+      "document.update",
+    ],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary:
+      "Document embed grammar: :::synap-entity/view/cell::: live references inside markdown.",
+  },
+  "synap/focus-sessions": {
+    teachesTools: ["create_proposal", "update_entity", "create_entity"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Focus sessions: when/how to propose, progress, correlationId.",
+  },
+  "synap/automations": {
+    teachesTools: ["create_automation", "list_commands"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Automations grammar (trigger/step/condition/delay/output/loop).",
+  },
+  "synap/viewframe-cells": {
+    teachesTools: ["generate_widget", "create_cell"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "ViewFrame cell generation: esm.sh imports, SynapWidget bridge.",
+  },
+  "synap/cli-operations": {
+    teachesTools: ["run_command", "get_logs"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "CLI execution via run_command/get_logs.",
+  },
+  "synap/authentication": {
+    teachesTools: [],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary: "Auth header + base URL conventions for the Hub Protocol.",
+  },
+  "synap/common-mistakes": {
+    teachesTools: [],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary: "Common mistakes to avoid across Synap tool calls.",
+  },
+  "synap/graph-gardening": {
+    teachesTools: ["create_relation", "graph.link"],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary: "Garden the graph: writes should surface their relational impact.",
+  },
+  "synap/lenses": {
+    teachesTools: ["list_profiles", "synap_orient"],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary: "Lenses: workspace vs project vs pod-wide scoping.",
+  },
+  "synap/mental-model": {
+    teachesTools: [],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary:
+      "Mental model: entities, profiles, facets, workspaces at a glance.",
+  },
+  "synap/more": {
+    teachesTools: [],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary:
+      "Pointer to deeper references when the quick-reference isn't enough.",
+  },
+  "synap/multi-entity-capture": {
+    teachesTools: ["create_entity", "propose_entity_graph"],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary: "Capturing multiple related entities from one piece of free text.",
+  },
+  "synap/next-action": {
+    teachesTools: [],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary: "Deciding the next action instead of just answering.",
+  },
+  "synap/quick-reference": {
+    teachesTools: [],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary: "Quick reference: the 90% common patterns in 30 lines.",
+  },
+  "synap/reflexes": {
+    teachesTools: [
+      "synap_ask",
+      "synap_capture",
+      "search_unified",
+      "remember_fact",
+    ],
+    skillGroup: "core",
+    alwaysOn: true,
+    summary:
+      "Reflexes: recall before work, capture after learning — the two habits every session.",
+  },
+  "synap/scope": {
+    teachesTools: [],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary:
+      "Scope defaults: pod-wide unless a workspace/project lens is passed.",
+  },
+  "synap/work-flow": {
+    teachesTools: [],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary: "The work flow: question → research → decision → action.",
+  },
+  "synap/worked-examples": {
+    teachesTools: [],
+    skillGroup: "core",
+    alwaysOn: false,
+    summary: "Worked examples across common Synap operations.",
+  },
+
+  // ── synap-schema package ───────────────────────────────────────────────
+  "synap-schema/profiles": {
+    teachesTools: ["create_profile", "create_property_def", "list_profiles"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Schema extension: profiles + property defs.",
+  },
+  "synap-schema/property-types": {
+    teachesTools: ["create_profile", "create_property_def", "list_profiles"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Schema: the property-type reference.",
+  },
+  "synap-schema/before-you-touch": {
+    teachesTools: ["list_profiles"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Before extending the schema: check what already exists.",
+  },
+  "synap-schema/common-mistakes": {
+    teachesTools: [],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Common schema-extension mistakes to avoid.",
+  },
+  "synap-schema/creating-profiles": {
+    teachesTools: ["create_profile"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Creating a new profile (entity type).",
+  },
+  "synap-schema/discover-profiles": {
+    teachesTools: ["list_profiles"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Discover existing profiles before creating a new one.",
+  },
+  "synap-schema/entity-scope": {
+    teachesTools: ["create_profile"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Entity scope: pod-wide vs workspace-scoped profiles.",
+  },
+  "synap-schema/extend-vs-create": {
+    teachesTools: ["create_property_def", "create_profile"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "When to extend an existing profile vs create a new one.",
+  },
+  "synap-schema/more": {
+    teachesTools: [],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Pointer to deeper schema references.",
+  },
+  "synap-schema/overlay-properties": {
+    teachesTools: ["create_property_def"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Workspace overlay properties (3-layer property scoping).",
+  },
+  "synap-schema/property-defs": {
+    teachesTools: ["create_property_def"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Creating property definitions.",
+  },
+  "synap-schema/relations": {
+    teachesTools: ["create_relation"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Defining custom relation types.",
+  },
+  "synap-schema/worked-example": {
+    teachesTools: [],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Worked example: adding a new tracked type end-to-end.",
+  },
+
+  // ── synap-ui package ───────────────────────────────────────────────────
+  "synap-ui/views": {
+    teachesTools: ["create_view", "update_view", "list_views"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "View build flow + the view-type chooser.",
+  },
+  "synap-ui/view-list": {
+    teachesTools: ["create_view", "update_view", "list_views"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Reference: the list of available view types.",
+  },
+  "synap-ui/creating-views": {
+    teachesTools: ["create_view", "update_view", "list_views"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Reference: creating views (config shapes, worked examples).",
+  },
+  "synap-ui/view-types": {
+    teachesTools: ["create_view", "update_view", "list_views"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Reference: per-view-type config shapes.",
+  },
+  "synap-ui/widget-catalog": {
+    teachesTools: ["generate_widget", "create_cell"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Reference: which cells/widgets exist to draw from.",
+  },
+  "synap-ui/ai-companion": {
+    teachesTools: [],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "AI companion widget integration in views.",
+  },
+  "synap-ui/arranging-bento": {
+    teachesTools: ["create_view"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Arranging a bento layout after creation.",
+  },
+  "synap-ui/before-you-build": {
+    teachesTools: ["list_views"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Before building UI: check what views/dashboards already exist.",
+  },
+  "synap-ui/bento-layouts": {
+    teachesTools: ["create_view"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Bento layout grid + block composition.",
+  },
+  "synap-ui/bento-recipes": {
+    teachesTools: ["create_view"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Reference: common bento layout recipes.",
+  },
+  "synap-ui/common-mistakes": {
+    teachesTools: [],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Common UI-build mistakes to avoid.",
+  },
+  "synap-ui/four-builds": {
+    teachesTools: [],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary:
+      "The four things you can build: view, dashboard, widget, workspace.",
+  },
+  "synap-ui/more": {
+    teachesTools: [],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Pointer to deeper UI references.",
+  },
+  "synap-ui/proposing-vs-extending": {
+    teachesTools: ["create_workspace"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Proposing a new workspace vs extending an existing one.",
+  },
+  "synap-ui/workspaces": {
+    teachesTools: ["create_workspace"],
+    skillGroup: "build",
+    alwaysOn: false,
+    summary: "Creating or proposing a workspace.",
+  },
+};

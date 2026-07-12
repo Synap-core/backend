@@ -519,6 +519,17 @@ export interface WorkspaceSettings {
     }
   >;
 
+  /**
+   * Per-profile AI-teaching-posture overlay for THIS workspace (AI Teaching
+   * Substrate D4). Shallow-merged over the profile's base `profiles.aiPosture`
+   * column, which is itself layered over the code-defaults constant
+   * (`DEFAULT_AI_POSTURES`). Resolved by
+   * `ProfileResolutionService.getEffectiveAiPosture(profileSlug, workspaceId)`.
+   *
+   * Example: { "session": { attachOutputs: false } }
+   */
+  profileAiPosture?: Record<string, import("./profiles.js").AiPosture>;
+
   /** UUID of the main whiteboard view for this workspace */
   mainWhiteboardId?: string;
 

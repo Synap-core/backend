@@ -30,6 +30,7 @@ import {
   relations,
   getDb,
   EventRepository,
+  ProfileResolutionService,
   WorkspaceRepository,
   WorkspaceMemberRepository,
   DocumentRepository,
@@ -558,6 +559,11 @@ export const workspacesRouter = router({
         },
         ctx.userId
       );
+
+      // Workspace overlay of per-kind AI posture changed → drop cached merges
+      if (input.settings && "profileAiPosture" in input.settings) {
+        ProfileResolutionService.invalidateAiPostureCache();
+      }
 
       // 3. Audit log
       auditLog({

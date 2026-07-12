@@ -10,6 +10,7 @@ import {
   profileWorkspaceAccess,
   type Profile,
   type NewProfile,
+  type AiPosture,
   ProfileScope,
 } from "../schema/profiles.js";
 import { workspaceMembers } from "../schema/workspaces.js";
@@ -57,6 +58,12 @@ export interface CreateProfileInput {
   profileKind?: "kind" | "role";
   /** For profileKind='role': which base-kind profile slugs this role can attach to. */
   applicableKinds?: string[];
+  /**
+   * Per-kind AI behavioral posture (base layer). Workspace overlay lives at
+   * workspaces.settings.profileAiPosture[slug]; resolved by getEffectiveAiPosture().
+   * Pass `null` to clear (falls back to code defaults).
+   */
+  aiPosture?: AiPosture | null;
 }
 
 export class ProfileRepository {
@@ -95,7 +102,9 @@ export class ProfileRepository {
         isActive: true,
         version: 1,
         ...(input.profileKind ? { profileKind: input.profileKind } : {}),
-        ...(input.applicableKinds ? { applicableKinds: input.applicableKinds } : {}),
+        ...(input.applicableKinds
+          ? { applicableKinds: input.applicableKinds }
+          : {}),
       } as NewProfile)
       .returning();
 
@@ -437,6 +446,7 @@ export class ProfileRepository {
       updateData.defaultDashboardRenderer = input.defaultDashboardRenderer;
     if (input.defaultRenderers !== undefined)
       updateData.defaultRenderers = input.defaultRenderers;
+    if (input.aiPosture !== undefined) updateData.aiPosture = input.aiPosture;
 
     // Increment version on update
     const current = await this.getById(id);

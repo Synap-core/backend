@@ -12,6 +12,8 @@ import { PropertyDefRepository } from "../repositories/property-def-repository.j
 import { workspaces } from "../schema/workspaces.js";
 import { profiles } from "../schema/profiles.js";
 import type { Profile, PropertyDef } from "../schema/index.js";
+import type { AiPosture } from "../schema/profiles.js";
+import { DEFAULT_AI_POSTURES } from "../utils/ai-posture-defaults.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
 
@@ -118,6 +120,12 @@ export class ProfileResolutionService {
     { scope: "pod" | "workspace"; expiresAt: number }
   >();
   private static CACHE_TTL = 60_000;
+
+  /** TTL cache for getEffectiveAiPosture lookups (60s) — same shape/TTL as entityScopeCache. */
+  private static aiPostureCache = new Map<
+    string,
+    { posture: AiPosture; expiresAt: number }
+  >();
 
   constructor(db: PostgresJsDatabase<typeof schema>) {
     this._db = db;
@@ -506,5 +514,83 @@ export class ProfileResolutionService {
     return contentKind === "collection"
       ? { kind: "cell", cellKey: "list", props: {} }
       : { kind: "cell", cellKey: "entity-detail", props: {} };
+  }
+
+  /**
+   * Get the effective AI-teaching posture for a subject kind (AI Teaching
+   * Substrate D4) — shallow-merged over 3 layers, same resolution shape as
+   * `getEffectiveRenderer`/`getEffectiveProperties`:
+   *   1. `DEFAULT_AI_POSTURES[profileSlug]` (code defaults)
+   *   2. `profiles.aiPosture` (base, per-pod) — only when a `profiles` row
+   *      for this slug actually exists. Several main-capability slugs in the
+   *      brief list (document, view, cell, project, session, playbook,
+   *      automation, workspace, capability, capture) are NOT rows in the
+   *      `profiles` table (they're first-class tables/subject-types, not
+   *      entity kinds) — for those, this layer is simply absent and the
+   *      merge falls back to layer 1 + layer 3. Reuses the SAME lookup as
+   *      `getEffectiveRenderer` (`profileRepo.getBySlugForWorkspace` /
+   *      `getBySlug`), so a real profile row's base layer is honored too.
+   *   3. `workspaces.settings.profileAiPosture[profileSlug]` (workspace overlay)
+   * Results are cached for 60 seconds (mirrors `getEntityScope`'s cache).
+   */
+  async getEffectiveAiPosture(
+    profileSlug: string,
+    workspaceId: string | null
+  ): Promise<AiPosture> {
+    const cacheKey = `${profileSlug}:${workspaceId ?? "__nows__"}`;
+    const cached = ProfileResolutionService.aiPostureCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.posture;
+
+    const base = DEFAULT_AI_POSTURES[profileSlug] ?? {};
+
+    const profile = workspaceId
+      ? await this.profileRepo.getBySlugForWorkspace(profileSlug, workspaceId)
+      : await this.profileRepo.getBySlug(profileSlug);
+    const profileLayer =
+      (profile as { aiPosture?: AiPosture | null } | null)?.aiPosture ?? {};
+
+    let overlay: AiPosture = {};
+    if (workspaceId) {
+      const workspace = await this._db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspaceId),
+        columns: { settings: true },
+      });
+      const settings = workspace?.settings as
+        | Record<string, unknown>
+        | null
+        | undefined;
+      const overlayRoot = settings?.profileAiPosture as
+        | Record<string, AiPosture | undefined>
+        | undefined;
+      overlay = overlayRoot?.[profileSlug] ?? {};
+    }
+
+    const posture: AiPosture = { ...base, ...profileLayer, ...overlay };
+
+    ProfileResolutionService.aiPostureCache.set(cacheKey, {
+      posture,
+      expiresAt: Date.now() + ProfileResolutionService.CACHE_TTL,
+    });
+
+    return posture;
+  }
+
+  /**
+   * Invalidate the getEffectiveAiPosture cache. Mirrors
+   * `invalidateEntityScopeCache` — call on `profiles.aiPosture` writes or
+   * `workspaces.settings.profileAiPosture` writes. Not yet wired to a write
+   * path (out of this wave's write scope — packages/api/src/routers/profiles.ts
+   * and the workspace-settings writer are owned elsewhere); tracked follow-up.
+   */
+  static invalidateAiPostureCache(profileSlug?: string): void {
+    if (profileSlug) {
+      for (const key of ProfileResolutionService.aiPostureCache.keys()) {
+        if (key.startsWith(`${profileSlug}:`)) {
+          ProfileResolutionService.aiPostureCache.delete(key);
+        }
+      }
+      return;
+    }
+    ProfileResolutionService.aiPostureCache.clear();
   }
 }

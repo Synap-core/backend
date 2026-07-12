@@ -13,8 +13,10 @@ export default defineConfig({
       "src/__tests__/mirror-to-external.test.ts",
       "src/utils/set-channel-branch-purpose.test.ts",
       "src/utils/open-run-session.test.ts",
+      "src/utils/resolve-agent-governance-decision.test.ts",
       "src/conversions/*.test.ts",
       "src/services/identity-resolution-service.test.ts",
+      "src/services/profile-resolution-service.test.ts",
     ],
     env: {
       NODE_ENV: "test",

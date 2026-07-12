@@ -509,8 +509,8 @@ Resource \`kind\` values: \`entity\` | \`view\` | \`cellInstance\` |
 \`cellDefinition\` | \`html\` | \`automation\` | \`url\`.
 `;
 
-type SkillFile = { path: string; content: string };
-type SkillPackage = { slug: string; files: SkillFile[] };
+export type SkillFile = { path: string; content: string };
+export type SkillPackage = { slug: string; files: SkillFile[] };
 
 const FALLBACK_SKILL_PACKAGES: SkillPackage[] = [
   {
@@ -545,7 +545,12 @@ function readManifestSlugs(skillsDir: string): string[] {
   return ["synap", "synap-schema", "synap-ui"];
 }
 
-function loadSkillPackagesFromDisk(): SkillPackage[] | null {
+/**
+ * Exported so `ensureSystemSkills()` (the DB-seeding startup hook, see
+ * `services/capabilities/ensure-system-skills.ts`) reuses this one disk loader
+ * instead of duplicating the manifest/topic-file-discovery logic.
+ */
+export function loadSkillPackagesFromDisk(): SkillPackage[] | null {
   const candidates = [
     path.join(process.cwd(), "skills"),
     path.resolve(

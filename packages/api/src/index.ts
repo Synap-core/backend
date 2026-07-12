@@ -47,6 +47,7 @@ export { chatStreamApp } from "./routers/chat-stream.js";
 export { openaiCompatApp } from "./routers/external/openai-compat.js";
 export { apiKeysRouter } from "./routers/api-keys.js";
 export { ensureSynapCoreCapability } from "./services/capabilities/ensure-synap-core.js";
+export { ensureSystemSkills } from "./services/capabilities/ensure-system-skills.js";
 export {
   ensureCaptureAgent,
   getCaptureAgentUserId,

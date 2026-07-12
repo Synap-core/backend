@@ -43,6 +43,7 @@ import {
   requiredPermissionFor,
   isBlockedFilesystemPath,
   isAutoApproved,
+  getWorkspaceGovernanceMode,
   DEFAULT_AUTO_APPROVE,
   DESTRUCTIVE_ACTIONS,
   type ChannelCapabilityGrant,
@@ -162,8 +163,7 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
   const settings = ws?.settings as WorkspaceSettings | undefined;
   const override = settings?.aiGovernance?.autoApproveFor;
   const governanceMode =
-    (settings as Record<string, unknown> | undefined)?.governanceMode ===
-    "agent-owned"
+    getWorkspaceGovernanceMode(settings) === "agent-owned"
       ? "agent-owned"
       : "default";
   const proposalApprovalPolicy =

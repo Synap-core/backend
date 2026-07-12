@@ -57,6 +57,21 @@ const eveProviderIdSchema = z.enum([
 ]);
 
 /**
+ * Optional dry-run params on `GET /workspaces/:workspaceId/governance`
+ * (AI Teaching Substrate). All fields are individually optional — the route
+ * only runs the dry-run when `agentUserId` + `subjectType` + `action` are
+ * ALL present; a partial set (e.g. `door` alone) is accepted here but ignored
+ * by the route, not rejected.
+ */
+const DryRunGovernanceQuerySchema = z.object({
+  agentUserId: z.string().min(1).optional(),
+  subjectType: z.string().min(1).optional(),
+  action: z.string().min(1).optional(),
+  profileSlug: z.string().min(1).optional(),
+  door: z.enum(["chat", "automation"]).optional(),
+});
+
+/**
  * Resolve the calling user's agentType (if any).
  *
  * The auth middleware sets `userId` on the Hono context but does NOT load
@@ -1181,10 +1196,49 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     });
     if (!membership) return c.json({ error: "Access denied" }, 403);
 
+    // Optional dry-run params (AI Teaching Substrate): when agentUserId +
+    // subjectType + action are all present, the response also includes a
+    // `verdict` — a side-effect-free preview of whether this write would
+    // auto-apply or propose. Same auth/scope as the base governance read;
+    // this is a pure query, never a write.
+    const dryRunQuery = DryRunGovernanceQuerySchema.safeParse({
+      agentUserId: c.req.query("agentUserId"),
+      subjectType: c.req.query("subjectType"),
+      action: c.req.query("action"),
+      profileSlug: c.req.query("profileSlug"),
+      door: c.req.query("door"),
+    });
+    if (!dryRunQuery.success) {
+      return c.json(
+        {
+          error: "Invalid dry-run query params",
+          issues: dryRunQuery.error.issues,
+        },
+        400
+      );
+    }
+    const dryRun = dryRunQuery.data;
+
     try {
       const { getEffectiveGovernance } =
         await import("../../../utils/permission-check.js");
       const policy = await getEffectiveGovernance(workspaceId);
+
+      if (dryRun.agentUserId && dryRun.subjectType && dryRun.action) {
+        const { dryRunAgentGovernanceDecision } =
+          await import("@synap/database/agent-governance");
+        const verdict = await dryRunAgentGovernanceDecision({
+          db,
+          agentUserId: dryRun.agentUserId,
+          workspaceId,
+          subjectType: dryRun.subjectType,
+          action: dryRun.action,
+          profileSlug: dryRun.profileSlug,
+          door: dryRun.door ?? "chat",
+        });
+        return c.json({ ...policy, verdict });
+      }
+
       return c.json(policy);
     } catch (err) {
       logger.error(

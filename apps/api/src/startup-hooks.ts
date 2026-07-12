@@ -24,6 +24,7 @@ import { sql as drizzleSql } from "drizzle-orm";
 import {
   setDynamicCorsOrigins,
   ensureSynapCoreCapability,
+  ensureSystemSkills,
   ensureCaptureAgent,
   reconcileCapabilitiesToTemplates,
   notifyCapabilityUpdatesAvailable,
@@ -498,6 +499,14 @@ export async function runStartupHooks(): Promise<void> {
   // non-fatal; runs after the pod-owner invariant so an owner exists to attribute
   // the pod-wide skills to (pre-bootstrap pods are skipped and retried next boot).
   await ensureSynapCoreCapability();
+
+  // Seed the AI-teaching-substrate baseline skills (the disk skill packages, as DB
+  // rows) — idempotent + drift-healing + non-fatal, same shape as the seeder above.
+  try {
+    await ensureSystemSkills();
+  } catch (err) {
+    logger.warn({ err }, "Failed to seed system skills on startup (non-fatal)");
+  }
 
   // Seed the pod-level CAPTURE AGENT — substrate, not surface. Fundamental
   // capture (text/photo → governed structured entity) needs a least-privilege

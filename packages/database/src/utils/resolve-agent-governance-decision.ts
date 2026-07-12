@@ -3,6 +3,8 @@ import { users, type AgentMetadata } from "../schema/users.js";
 import { workspaces, type WorkspaceSettings } from "../schema/workspaces.js";
 import {
   decideAgentPolicy,
+  getWorkspaceGovernanceMode,
+  PROPOSE_REASON,
   type ChannelCapabilityGrant,
 } from "@synap/governance-policy";
 
@@ -133,7 +135,7 @@ export async function resolveAgentGovernanceDecision(
     action,
     agentCapabilities: agentMetadata?.capabilities,
     writesRequireProposal: agentMetadata?.writesRequireProposal === true,
-    governanceMode: settings?.governanceMode,
+    governanceMode: getWorkspaceGovernanceMode(settings),
     autoApproveFor: input.preferAgentMetadataAutoApproveFor
       ? (agentMetadata?.autoApproveFor ?? explicitAutoApproveFor)
       : explicitAutoApproveFor,
@@ -152,4 +154,128 @@ export async function resolveAgentGovernanceDecision(
     return { decision: "propose", reason: decision.reason };
   }
   return { decision: "execute", explicitAutoApproveFor };
+}
+
+// ---------------------------------------------------------------------------
+// Dry-run entry point (AI Teaching Substrate — governance dry-run)
+// ---------------------------------------------------------------------------
+
+/** Which door is asking — controls the ONE input that differs between them. */
+export type GovernanceDoor = "chat" | "automation";
+
+export interface DryRunAgentGovernanceInput {
+  db: DbHandle;
+  userId?: string | null;
+  agentUserId: string;
+  workspaceId?: string | null;
+  subjectType: string;
+  action: string;
+  profileSlug?: string | null;
+  door: GovernanceDoor;
+}
+
+/**
+ * A `(subjectType, action, profileSlug?)` write "would this auto-apply or
+ * propose?" preview — the pure query behind the brief composer's governance
+ * verdict and the `GET /workspaces/:id/governance` dry-run query params.
+ *
+ * SIDE-EFFECT FREE: reuses `resolveAgentGovernanceDecision`/`decideAgentPolicy`
+ * (both pure) and MUST NEVER reach `createProposal` or insert anything — it
+ * only reads the agent + workspace rows and returns a verdict. Never call
+ * this from a real write path; it exists purely for teaching/preview UIs.
+ *
+ * `door` maps 1:1 to `preferAgentMetadataAutoApproveFor` — the ONE
+ * `decideAgentPolicy` input that differs between the two real gates:
+ *   - "chat"       → true  (permission-check.ts:708, the chat-AI write path —
+ *                    the agent's own `agentMetadata.autoApproveFor` wins,
+ *                    falling back to the workspace override)
+ *   - "automation" → false (packages/jobs/src/utils/automation-governance.ts:151,
+ *                    the automation write path — only the workspace override
+ *                    is consulted)
+ * `subjectUoValidated` / `channelCapabilities` / `forcePropose` are
+ * deliberately omitted here: the dry-run previews the BASE verdict for a
+ * subject kind, not a specific in-flight write's per-instance signals (a real
+ * `user_observation` write, a channel-scoped write, or a forced proposal
+ * still resolve through the real gates at execution time).
+ */
+export async function dryRunAgentGovernanceDecision(
+  input: DryRunAgentGovernanceInput
+): Promise<{
+  outcome: "auto" | "propose" | "deny";
+  rung: string;
+  reason: string;
+}> {
+  const resolution = await resolveAgentGovernanceDecision({
+    db: input.db,
+    agentUserId: input.agentUserId,
+    workspaceId: input.workspaceId,
+    subjectType: input.subjectType,
+    action: input.action,
+    subjectProfileSlug: input.profileSlug,
+    preferAgentMetadataAutoApproveFor: input.door === "chat",
+  });
+
+  switch (resolution.decision) {
+    case "not-agent":
+      // Not an agent user — the real gates fall through to the legacy
+      // AI-source / direct-user path, which always executes/grants. The
+      // dry-run has no agent policy to preview here, so it reports "auto"
+      // with that reasoning rather than fabricating a ladder rung.
+      return {
+        outcome: "auto",
+        rung: "not-agent",
+        reason:
+          "The acting user is not an agent — the agent governance ladder does not apply.",
+      };
+    case "deny":
+      return {
+        outcome: "deny",
+        rung: "cbac-capability-allowlist",
+        reason: resolution.reason,
+      };
+    case "propose":
+      return {
+        outcome: "propose",
+        rung: resolution.reason ? reasonToRung(resolution.reason) : "default",
+        reason: resolution.reason ?? "No auto-approve rule matched.",
+      };
+    case "execute":
+      return {
+        outcome: "auto",
+        rung: resolution.explicitAutoApproveFor
+          ? "workspace-auto-approve-for"
+          : "default-auto-approve",
+        reason: resolution.explicitAutoApproveFor
+          ? `Matched the workspace's explicit autoApproveFor list.`
+          : "Matched the default auto-approve whitelist (or agent/workspace ownership).",
+      };
+  }
+}
+
+/**
+ * Map a `decideAgentPolicy` propose-reason string back to the ladder rung
+ * name that produced it — for the dry-run verdict's `rung` field only (a
+ * human-readable "which one" companion; never consulted by real gates).
+ */
+function reasonToRung(reason: string): string {
+  switch (reason) {
+    case PROPOSE_REASON.ADMIN:
+      return "admin-actions";
+    case PROPOSE_REASON.SCOPE_IDENTITY_CHANGE:
+      return "force-propose";
+    case PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR:
+      return "destructive-actions-hard-floor";
+    case PROPOSE_REASON.USER_OBSERVATION_INFERENCE:
+      return "user-observation-inference";
+    case PROPOSE_REASON.CAPABILITY_PROPOSE:
+      return "per-capability-governance";
+    case PROPOSE_REASON.AGENT_OWNED_DESTRUCTIVE:
+      return "agent-owned-workspace-destructive";
+    case PROPOSE_REASON.WRITES_REQUIRE_PROPOSAL:
+      return "writes-require-proposal";
+    case PROPOSE_REASON.CHANNEL_PROPOSE:
+      return "per-channel-capability-gate";
+    default:
+      return "default";
+  }
 }

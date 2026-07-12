@@ -545,6 +545,19 @@ export const profilesRouter = router({
         defaultDetailRenderer: RendererRefSchema.nullable().optional(),
         /** System-default renderer for the DASHBOARD slot (per-profile bento). */
         defaultDashboardRenderer: RendererRefSchema.nullable().optional(),
+        /**
+         * Per-kind AI behavioral posture (base layer). `null` clears back to
+         * code defaults. Workspace overlay: workspaces.settings.profileAiPosture.
+         */
+        aiPosture: z
+          .object({
+            explainWhy: z.boolean().optional(),
+            openAfterCreate: z.boolean().optional(),
+            attachOutputs: z.boolean().optional(),
+            directives: z.array(z.string()).optional(),
+          })
+          .nullable()
+          .optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -621,11 +634,15 @@ export const profilesRouter = router({
         defaultListRenderer: input.defaultListRenderer,
         defaultDetailRenderer: input.defaultDetailRenderer,
         defaultDashboardRenderer: input.defaultDashboardRenderer,
+        aiPosture: input.aiPosture,
       });
 
       // Invalidate entityScope cache when changed
       if (input.entityScope !== undefined) {
         ProfileResolutionService.invalidateEntityScopeCache(existing.slug);
+      }
+      if (input.aiPosture !== undefined) {
+        ProfileResolutionService.invalidateAiPostureCache(existing.slug);
       }
 
       // When upgrading to "shared" — grant access to owning workspace + extras

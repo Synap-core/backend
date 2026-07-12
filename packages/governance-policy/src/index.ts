@@ -231,6 +231,24 @@ export const GOVERNANCE_MODES = {
 export type GovernanceMode = keyof typeof GOVERNANCE_MODES;
 
 /**
+ * The ONE canonical reader of `workspaces.settings.governanceMode`. Both
+ * `resolveAgentGovernanceDecision` (@synap/database) and
+ * `getEffectiveGovernance` (@synap/api's permission-check.ts) used to read
+ * this field with their own inline cast — this collapses them to one typed
+ * accessor. Structurally typed (not `WorkspaceSettings`) so this
+ * dependency-free package never has to import a database schema type.
+ * Unrecognized/absent values normalize to "standard" (the canonical default),
+ * matching both callers' prior behavior.
+ */
+export function getWorkspaceGovernanceMode(
+  settings: { governanceMode?: unknown } | null | undefined
+): "standard" | "agent-owned" {
+  return settings?.governanceMode === "agent-owned"
+    ? "agent-owned"
+    : "standard";
+}
+
+/**
  * Administrative actions that ALWAYS require a proposal, regardless of
  * auto-approve overrides, the writesRequireProposal flag, or the whitelist.
  * Even a twin agent (writesRequireProposal=false) must propose these.
