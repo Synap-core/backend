@@ -362,7 +362,9 @@ describe("resolveWorkspacePlacement — rung 6 (K1 parity)", () => {
 // wiring (scope fetched → threaded into the resolver) is proven; the rung logic
 // itself is covered by the resolveWorkspacePlacement suites above.
 describe("resolveImportEntityPlacement (D1 ingestion glue)", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it("pod-scope import → NULL entity, even though a source workspace was supplied", async () => {
     vi.spyOn(
