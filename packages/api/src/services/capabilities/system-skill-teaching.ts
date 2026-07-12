@@ -53,11 +53,24 @@ const SKILL_GROUPS = new Set<string>([
 ]);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// capabilities -> services -> src -> api -> packages -> synap-backend -> skills/_teaching.json
-const TEACHING_JSON_PATH = path.resolve(
-  __dirname,
-  "../../../../../skills/_teaching.json"
-);
+// Same resolution order as loadSkillPackagesFromDisk (which provably works in
+// the deployed image): cwd()/skills first (/app/api/skills in the Docker
+// runner), then the repo-relative path for monorepo dev, where __dirname is
+// src/… (in the bundled build __dirname is dist/ and the relative hop is
+// wrong — that was the prod bug that silently seeded empty teaching fields).
+const TEACHING_JSON_CANDIDATES = [
+  path.join(process.cwd(), "skills/_teaching.json"),
+  path.resolve(__dirname, "../../../../../skills/_teaching.json"),
+];
+const TEACHING_JSON_PATH =
+  TEACHING_JSON_CANDIDATES.find((p) => {
+    try {
+      readFileSync(p, "utf-8");
+      return true;
+    } catch {
+      return false;
+    }
+  }) ?? TEACHING_JSON_CANDIDATES[0];
 
 function validateEntry(key: string, value: unknown): SystemSkillTeaching {
   if (typeof value !== "object" || value === null) {
