@@ -47,6 +47,7 @@ import {
   registerIdentitySignals,
   resolveIdentity,
   IDENTITY_SIGNAL_PROPERTY_KEYS,
+  resolveWorkspacePlacement,
 } from "@synap/database";
 import {
   entities,
@@ -67,7 +68,6 @@ import { resolveViewTrust } from "../services/view-trust-service.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitAiCorrection } from "../utils/ai-feedback-events.js";
 import { AI_KIND } from "../lib/ai-events.js";
-import { resolveEntityWorkspacePlacement } from "../lib/entity-workspace-placement.js";
 import {
   emitSideEffects,
   getBoss,
@@ -994,17 +994,23 @@ export const entitiesRouter = router({
         });
       }
 
-      // Resolve placement ONCE (I3: same input → same workspace regardless of
-      // governance). Persisted into the proposal `data` below as
-      // `resolvedWorkspaceId` so the materializer reads it back verbatim instead
-      // of re-deriving from the ambient workspace (the four-door bug).
-      const resolvedEntityWorkspaceId = resolveEntityWorkspacePlacement({
-        global: input.global,
-        targetWorkspaceId: input.targetWorkspaceId,
-        workspaceScoped: input.workspaceScoped === true,
-        profileEntityScope: earlyResolvedProfile.entityScope,
+      // Resolve placement ONCE through the one door (I1/I3: same input → same
+      // workspace regardless of governance). Persisted into the proposal `data`
+      // below as `resolvedWorkspaceId` so the materializer reads it back verbatim
+      // instead of re-deriving from the ambient workspace (the four-door bug).
+      // No `kindSlug`/`context`/`aiHint` is passed here — a direct entity create
+      // exercises ONLY rungs 1 (explicit target / global) + 6 (the K1 entity-
+      // scope default), preserving the historical inline precedence exactly.
+      const placementDb = await getDb();
+      const entityPlacement = await resolveWorkspacePlacement(placementDb, {
+        userId: ctx.userId,
+        explicitWorkspaceId: input.targetWorkspaceId || undefined,
+        globalFlag: input.global,
+        workspaceScopedFlag: input.workspaceScoped === true,
+        entityScope: earlyResolvedProfile.entityScope,
         ambientWorkspaceId: governanceWorkspaceId,
       });
+      const resolvedEntityWorkspaceId = entityPlacement.workspaceId;
 
       // 1. Emit .requested event — records intent regardless of outcome
       const requestedEvent = await auditLog({

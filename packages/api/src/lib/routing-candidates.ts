@@ -1,16 +1,8 @@
 /**
- * Which workspace TYPES may be offered as AUTO-routing candidates for captured
- * user data. Excludes:
- *   • `operational` — system/admin surfaces (e.g. pod-admin); user data must
- *     never land there.
- *   • `agent` (ratified decision D2) — agent workspaces are never AUTO-routing
- *     candidates. Explicit `workspaceId` targeting elsewhere is unaffected.
+ * Routable workspace-type predicate — thin re-export.
  *
- * Archival is orthogonal and enforced at the query level (`archivedAt IS NULL`)
- * — an archived workspace of ANY type is never a candidate.
+ * The implementation MOVED to @synap/database in Wave 1 so the door and this
+ * api-side candidate-list builder share ONE definition. Existing importers keep
+ * pulling `isRoutableWorkspaceType` from here unchanged.
  */
-export function isRoutableWorkspaceType(
-  workspaceType: string | null | undefined
-): boolean {
-  return workspaceType !== "operational" && workspaceType !== "agent";
-}
+export { isRoutableWorkspaceType } from "@synap/database";
