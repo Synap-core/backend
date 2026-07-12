@@ -18177,7 +18177,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | null | undefined;
 				limit?: number | undefined;
-				kind?: "webhook" | "automation" | "ai_feed" | "ai_react" | "notify" | "message_out" | undefined;
+				kind?: "webhook" | "automation" | "notify" | "ai_feed" | "ai_react" | "message_out" | undefined;
 				eventType?: string | undefined;
 				lens?: "external" | "all" | "internal" | undefined;
 				pending?: boolean | undefined;
