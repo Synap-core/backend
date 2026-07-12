@@ -133,6 +133,8 @@ The executor goes through governance (see `governance.md`). Expect the same thre
 
 Rule of thumb: **one intent, one call.** Multi-entity content, use the pipeline.
 
+**Degrade path (MCP `synap_capture`, the single-call door):** when the structuring pipeline fails or finds nothing to extract, it degrades to a single flat note carrying the raw text verbatim — it never drops the input. Use `synap_capture` only for genuinely unstructured input where you don't yet know the entities; if you already know the exact profileSlug and field values, call `synap_create_entity` instead (deterministic, direct write, no degrade path).
+
 ## Dedup within the pipeline
 
 The pipeline does its own duplicate check per entity (by title + profileSlug within workspace). When it finds a match, `action` becomes `"update"` with `existingEntityId` set, so the real entity is updated in place, not duplicated.

@@ -773,6 +773,7 @@ chat replies. Never put a `:::synap-*` directive in a chat reply, and never put 
 
 ### Syntax
 
+<!-- brief:start -->
 A container directive: three colons, the directive name, `{attrs}` on the opening
 line, three colons alone on the closing line.
 
@@ -786,6 +787,11 @@ line, three colons alone on the closing line.
 | `synap-entity` | `id` (entity UUID)                            | —              | Compact entity card (`__entity-block` cell)       |
 | `synap-view`   | `viewId` (view UUID)                          | —              | Embedded, read-only view (`__embedded-view` cell) |
 | `synap-cell`   | `instanceId` **OR** (`cellKey` + `cellProps`) | —              | A persisted cell instance, or an inline cell ref  |
+
+Only real IDs from prior tool results — never invent one. This is a
+DOCUMENTS-only grammar: never use it in a chat reply, and never use a
+`[[kind:id|label]]` chip inside a document's `content`.
+<!-- brief:end -->
 
 For `synap-cell`: an explicit `instanceId` always wins if present — it renders a
 persisted cell instance from `/api/hub/cells`. Otherwise the pair `cellKey` +
@@ -1317,6 +1323,8 @@ synap session close <id> --workspace <id> [--recap "what was done"]    # close +
 ```
 
 Note: `synap session start` creates a session directly (the agent-facing path). All hub-protocol writes are governance-gated server-side; the in-browser AI companion surfaces session creation through the proposal flow.
+
+**MCP door**: after `synap_start_session` returns, call `synap_get_channel` to get a personal channel for the session, then `synap_post_message` with `triggerAI:true` to dispatch the IS agent for autonomous work on the goal. The agent's produced entities link back to the session via the graph.
 
 **Discoverability**: the `active-sessions` bento widget is on the default home dashboard. Sessions group their related proposals under a shared `correlationId` in the Proposal Review Board.
 

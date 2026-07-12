@@ -141,6 +141,14 @@ function primaryObjectId(data: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * AI Teaching Substrate: the one reinforcement line every 'proposed' write
+ * result carries — added HERE (the one response shaper every handler already
+ * flows through), never per-case, so it can't be forgotten on a new door.
+ */
+const PROPOSAL_REINFORCEMENT_HINT =
+  "Tell the user why you proposed this and give them this link.";
+
 function ok(data: unknown): CallToolResult {
   // Best-effort: inject the canonical clickable `link` (`${PUBLIC_URL}/open/<id>`)
   // ONLY when the result carries an id that resolves to an openable object
@@ -148,10 +156,22 @@ function ok(data: unknown): CallToolResult {
   // handler flows through this one shaper, so no per-handler edits are needed;
   // arrays, id-less objects, and non-openable ids simply get no link.
   const id = primaryObjectId(data);
-  const payload =
+  let payload =
     id && data && typeof data === "object" && !Array.isArray(data)
       ? { ...(data as Record<string, unknown>), link: openLink(id) }
       : data;
+  if (
+    payload &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    (payload as Record<string, unknown>).status === "proposed" &&
+    !("hint" in (payload as Record<string, unknown>))
+  ) {
+    payload = {
+      ...(payload as Record<string, unknown>),
+      hint: PROPOSAL_REINFORCEMENT_HINT,
+    };
+  }
   return {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
   };
@@ -661,7 +681,8 @@ export async function executeMCPToolViaHubProtocol(
         const facetSlug = args.facetSlug as string | undefined;
         if (!entityId || !facetSlug) {
           return ok({
-            error: "Provide facetId, or entityId + facetSlug, to detach a facet",
+            error:
+              "Provide facetId, or entityId + facetSlug, to detach a facet",
           });
         }
         const entityCallerCtx = await createHubProtocolCallerContext(

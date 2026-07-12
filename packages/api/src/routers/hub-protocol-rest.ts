@@ -67,6 +67,7 @@ import {
   registerSetupRoutes,
   registerSkillsRoutes,
   registerSkillsCrudRoutes,
+  registerBriefsRoutes,
   registerToolsRoutes,
   registerTerminalRoutes,
   registerThreadsRoutes,
@@ -491,6 +492,7 @@ registerSearchRoutes(app); // /search*, /vector-search
 registerDocumentsRoutes(app); // /documents*
 registerProposalsRoutes(app); // /proposals*
 registerSkillsRoutes(app); // /skills/system (static doc)
+registerBriefsRoutes(app); // GET /briefs (AI Teaching Substrate composed teaching briefs)
 registerSkillsCrudRoutes(app); // POST/GET /skills (capability-substrate CRUD seam)
 registerToolsRoutes(app); // POST/GET /tools, GET /tools/:id (capability-substrate CRUD seam)
 registerCapabilitiesRoutes(app); // POST /capabilities/apply (capability-template applier)

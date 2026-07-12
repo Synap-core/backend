@@ -42,7 +42,9 @@ Two reflexes, on every session:
 - BEFORE any non-trivial task, or before answering anything about the user's own world, call \`synap_ask\` to recall what the pod already knows. Prefer it over your own assumptions. Also ask before creating, to avoid duplicates.
 - AFTER you learn something durable (a fact, a decision, a new person/company/task, a stated preference), call \`synap_capture\` to write it back. Don't wait to be asked — this is how the second brain grows.
 
-Use \`synap_orient\` once to see the available workspaces, projects, and entity types. Writes are governed: a 'proposed' response is normal (awaiting the user's review), never an error.`;
+Use \`synap_orient\` once to see the available workspaces, projects, and entity types. Writes are governed: a 'proposed' response is normal (awaiting the user's review), never an error.
+
+Main-capability tools (create document/entity/session/project/view/cell/playbook/workspace) carry a composed teaching brief in their description — read it before first use. Call \`synap_load_skill("catalog")\` to see every deeper reference available, and \`synap_load_skill(slug)\` to load one in full.`;
 
 export function createMCPServer(
   defaultWorkspaceId?: string,
@@ -106,7 +108,11 @@ export function createMCPServer(
   // Register tool handlers
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
-      tools: await tools.list(),
+      tools: await tools.list({
+        workspaceId: defaultWorkspaceId,
+        agentUserId,
+        door: "chat",
+      }),
     };
   });
 

@@ -9,13 +9,29 @@
  */
 
 import type { Tool, CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import {
+  composeCapabilityBrief,
+  MAIN_CAPABILITY_TOOLS,
+  type CapabilityBriefDoor,
+} from "../../../services/capability-briefs/compose-capability-brief.js";
+
+/** Context available when `list()` is called from a live MCP session (createMCPServer) — absent for the legacy static capabilities manifest (http-handler.ts GET /). */
+export interface ToolsListContext {
+  workspaceId?: string;
+  agentUserId?: string;
+  door?: CapabilityBriefDoor;
+}
 
 export const tools = {
   /**
-   * List all available tools
+   * List all available tools. When `ctx` is supplied (a live MCP session), the
+   * main-capability tools (AI Teaching Substrate Wave 2b) get a composed
+   * teaching brief appended to their description — teaching core + live
+   * governance verdict + posture emphases. Never fetched for the legacy
+   * unauthenticated manifest (no ctx there).
    */
-  async list(): Promise<Tool[]> {
-    return [
+  async list(ctx?: ToolsListContext): Promise<Tool[]> {
+    const toolDefs: Tool[] = [
       // ── Recall: THE one door ──────────────────────────────────────────────────
       {
         name: "synap_ask",
@@ -517,7 +533,7 @@ export const tools = {
       {
         name: "synap_start_session",
         description:
-          "Create a focus session — a goal-bound work session tracked in Synap. Use this to declare 'I'm starting work on X'. A session can be scoped to a project (projectId) OR a workspace (workspaceId) — provide at least one; a project-scoped session needs no workspace membership. The session appears in the browser SessionRoom. After creating, use synap_get_channel to get a personal channel, then synap_post_message with triggerAI=true to dispatch the IS agent for autonomous work. The agent's produced entities are linked to the session via the graph.",
+          "Create a focus session — a goal-bound work session tracked in Synap. Use this to declare 'I'm starting work on X'. A session can be scoped to a project (projectId) OR a workspace (workspaceId) — provide at least one; a project-scoped session needs no workspace membership. The session appears in the browser SessionRoom.",
         inputSchema: {
           type: "object",
           properties: {
@@ -714,7 +730,7 @@ export const tools = {
       {
         name: "synap_promote_cell_to_renderer",
         description:
-          "Bind a cell as a profile's renderer for a slot (list | detail | dashboard). GOVERNANCE: because binding an AI-generated cell as a durable renderer is consequential, an AI agent caller gets back `status: 'proposed'` with a proposalId — the change is NOT applied until a human approves it (an operator caller auto-applies with `status: 'applied'`). scope 'workspace' (default) sets a per-workspace overlay; scope 'pod' sets the profile's system default across all workspaces.",
+          "Bind a cell as a profile's renderer for a slot (list | detail | dashboard) — durable, consequential, so it's governed like any write. scope 'workspace' (default) sets a per-workspace overlay; scope 'pod' sets the profile's system default across all workspaces.",
         inputSchema: {
           type: "object",
           properties: {
@@ -855,7 +871,7 @@ export const tools = {
         name: "synap_capture",
         description:
           "THE write door. Hand it any free text — a fact you learned, a decision, a person/company/task mentioned, something worth remembering — and the AI capture pipeline structures it into the right entities and files them in the pod. " +
-          "PROACTIVE RULE: call this AFTER you learn something durable about the user, their work, or their preferences, or whenever the user says something worth keeping (\"remember that…\", a new contact, a decision made). Don't wait to be asked — capturing is how the user's second brain grows. It writes directly (no approval wait) and records an auto-approved, revertible proposal; the created entities come back in the result. Hint a profileSlug to guide extraction, or set global:true to store a pod-wide runbook (knowledge_keys) instead of entities. WHEN NOT TO USE: if you already know the exact profileSlug and the field values, call synap_create_entity instead — it is deterministic and writes the typed entity directly. synap_capture routes free text through an AI structuring pipeline that, when it fails or finds nothing, degrades to a single flat note carrying your raw text. Use capture only for genuinely unstructured input (a pasted email, transcript, bio) where you do not yet know the entities.",
+          'PROACTIVE RULE: call this AFTER you learn something durable about the user, their work, or their preferences, or whenever the user says something worth keeping ("remember that…", a new contact, a decision made). Don\'t wait to be asked. Hint a profileSlug to guide extraction, or set global:true to store a pod-wide runbook (knowledge_keys) instead of entities. If you already know the exact profileSlug and field values, use synap_create_entity instead.',
         inputSchema: {
           type: "object",
           properties: {
@@ -1086,7 +1102,42 @@ export const tools = {
           required: ["workspaceId"],
         },
       },
+      {
+        name: "synap_load_skill",
+        description:
+          "Load the full body of a seeded teaching skill (the L2 tier behind the one-line summaries you see on other tools' descriptions and in the catalog). Pass a `system/<package>/<stem>` slug, a bare stem (e.g. 'document-embeds'), or 'catalog' to list every available skill grouped by topic.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            ref: {
+              type: "string",
+              description:
+                "A skill slug/stem (e.g. 'document-embeds', 'system/synap/document-embeds') or 'catalog'.",
+            },
+          },
+          required: ["ref"],
+        },
+      },
     ];
+
+    if (!ctx) return toolDefs;
+
+    // Live session — append a composed teaching brief to each main-capability
+    // tool's description. Failure-safe per-tool (composeCapabilityBrief never
+    // throws); a tool with no brief content is left as-is.
+    await Promise.all(
+      toolDefs.map(async (tool) => {
+        if (!MAIN_CAPABILITY_TOOLS.includes(tool.name)) return;
+        const brief = await composeCapabilityBrief(tool.name, {
+          agentUserId: ctx.agentUserId,
+          workspaceId: ctx.workspaceId ?? null,
+          door: ctx.door ?? "chat",
+        });
+        if (brief) tool.description = `${tool.description}\n\n---\n${brief}`;
+      })
+    );
+
+    return toolDefs;
   },
 
   /**
@@ -1100,6 +1151,15 @@ export const tools = {
     sessionUserId?: string,
     agentUserId?: string
   ): Promise<CallToolResult> {
+    if (name === "synap_load_skill") {
+      const { resolveSkillContent } =
+        await import("../../../services/capability-briefs/load-skill.js");
+      const ref = args.ref as string;
+      const content = await resolveSkillContent(ref, sessionUserId ?? userId);
+      return {
+        content: [{ type: "text", text: content }],
+      };
+    }
     const { executeMCPToolViaHubProtocol } = await import("../adapter.js");
     return await executeMCPToolViaHubProtocol(
       name,

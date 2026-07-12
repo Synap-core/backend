@@ -12,6 +12,8 @@ chat replies. Never put a `:::synap-*` directive in a chat reply, and never put 
 
 ### Syntax
 
+<!-- brief:start -->
+
 A container directive: three colons, the directive name, `{attrs}` on the opening
 line, three colons alone on the closing line.
 
@@ -25,6 +27,12 @@ line, three colons alone on the closing line.
 | `synap-entity` | `id` (entity UUID)                            | —              | Compact entity card (`__entity-block` cell)       |
 | `synap-view`   | `viewId` (view UUID)                          | —              | Embedded, read-only view (`__embedded-view` cell) |
 | `synap-cell`   | `instanceId` **OR** (`cellKey` + `cellProps`) | —              | A persisted cell instance, or an inline cell ref  |
+
+Only real IDs from prior tool results — never invent one. This is a
+DOCUMENTS-only grammar: never use it in a chat reply, and never use a
+`[[kind:id|label]]` chip inside a document's `content`.
+
+<!-- brief:end -->
 
 For `synap-cell`: an explicit `instanceId` always wins if present — it renders a
 persisted cell instance from `/api/hub/cells`. Otherwise the pair `cellKey` +
