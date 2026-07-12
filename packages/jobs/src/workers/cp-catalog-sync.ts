@@ -38,6 +38,9 @@ export const CP_CATALOG_SYNC_QUEUE = "cp-catalog-sync";
 /** Cron schedule for this worker (every 10 minutes) — mirrors capability-template-sync. */
 export const CP_CATALOG_SYNC_CRON = "*/10 * * * *";
 
+// TODO(control-plane-types): adopt MarketplaceCatalogKind/MarketplaceCatalogEntry
+// from @synap-core/control-plane-types@1.1.0 once published — this inline shape
+// duplicates that contract (P2.10.3) and must not drift from it.
 export type CatalogKind = "capability" | "automation" | "template" | "cell";
 const CATALOG_KINDS: CatalogKind[] = [
   "capability",

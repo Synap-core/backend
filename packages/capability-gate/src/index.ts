@@ -218,6 +218,10 @@ export async function gateCapabilityExecution(
   if (approved === false) {
     return {
       decision: "deny",
+      // NOTE: a `capability.enable` proposal type + approve-executor exist
+      // (routers/proposals/approve-executors.ts) so an agent can PROPOSE
+      // enabling instead of only relaying this text — its creation call site
+      // (from this deny path) is deliberately deferred; wire it there.
       reason:
         "This capability is installed but not yet enabled. Ask the user to enable it (Settings → Capabilities), or run with dryRun to preview.",
     };
