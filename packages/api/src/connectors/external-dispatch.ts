@@ -1178,11 +1178,27 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
     respHeaders[k] = v;
   });
 
+  if (res.ok) {
+    return {
+      success: true,
+      status: res.status,
+      headers: respHeaders,
+      body: parsed,
+    };
+  }
+  // Mirror nangoProxyEnvelope: a non-2xx must carry `errorCode` + a human
+  // `error` message, not just `success: false` — otherwise the message the
+  // provider actually sent back (e.g. Apify's "Invalid API token") is stuck
+  // in `.body` and every caller up the chain (executeSingleCall's `message`
+  // fallback, the CLI's `runResult.error ?? "Unknown error"`) has nothing to
+  // show but "Unknown error".
   return {
-    success: res.ok,
+    success: false,
     status: res.status,
     headers: respHeaders,
     body: parsed,
+    errorCode: statusToErrorCode(res.status),
+    error: extractProviderErrorMessage(res.status, parsed),
   };
 };
 
