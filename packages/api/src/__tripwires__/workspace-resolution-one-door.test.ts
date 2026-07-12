@@ -48,9 +48,13 @@ describe("tripwire: workspace placement has one door", () => {
       "api/src/routers/n8n/actions.ts",
     ];
     // The ambient/auth workspace being forced into a targetWorkspaceId is the
-    // R1 bug. Only an explicit `input.workspaceId` may become one.
+    // R1 bug. Only an explicit `input.workspaceId` may become one. Matched
+    // structurally (any *WorkspaceId-shaped identifier, or ctx.workspaceId)
+    // rather than by an enumerated name list — a name-list missed this
+    // wave's own `authWorkspaceId` → `ambientWorkspaceId` rename, letting
+    // the exact convention it just established sail through un-caught.
     const AMBIENT_FALLBACK =
-      /targetWorkspaceId:\s*(authWorkspaceId|ctx\.workspaceId|governanceWorkspaceId|workspaceId)\b/;
+      /targetWorkspaceId:\s*(\w*[Ww]orkspaceId|ctx\.workspaceId)\b/;
     const offenders = files.filter((f) =>
       AMBIENT_FALLBACK.test(stripComments(read(f)))
     );
