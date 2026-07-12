@@ -878,6 +878,74 @@ export class IntelligenceHubClient {
   }
 
   /**
+   * Workspace tie-break (Wave 2, decision D3). Consulted ONLY when the backend
+   * resolver reduced placement to >1 pre-approved candidates it couldn't
+   * separate deterministically. The model picks one of `candidates` or abstains
+   * — it may NOT invent a workspace. `null` workspaceId = abstain (→ the caller
+   * keeps the ambient lens / asks). Graceful null on any transport failure, so a
+   * tie-break outage degrades to "no move", never fails the capture.
+   */
+  async workspaceTiebreak(input: {
+    content: string;
+    candidates: Array<{
+      id: string;
+      name: string;
+      description?: string;
+      hint?: string;
+    }>;
+    facetSlugs?: string[];
+    timeoutMs?: number;
+  }): Promise<{
+    workspaceId: string | null;
+    confidence: number;
+    reason: string;
+  } | null> {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(
+        () => controller.abort(),
+        input.timeoutMs ?? 15_000
+      );
+      try {
+        const response = await fetch(`${this.baseUrl}/api/workspace-tiebreak`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": this.apiKey,
+          },
+          body: JSON.stringify(input),
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          if (isAuthStatus(response.status)) {
+            throw new IntelligenceAuthError(
+              response.status,
+              `Intelligence Service rejected credentials: ${response.status} ${response.statusText}`
+            );
+          }
+          console.warn(
+            `[IntelligenceHubClient] workspaceTiebreak failed: ${response.status} ${response.statusText} (baseUrl=${this.baseUrl})`
+          );
+          return null;
+        }
+        return (await response.json()) as {
+          workspaceId: string | null;
+          confidence: number;
+          reason: string;
+        };
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (err) {
+      if (err instanceof IntelligenceAuthError) throw err;
+      console.warn(
+        `[IntelligenceHubClient] workspaceTiebreak error: ${err instanceof Error ? err.message : String(err)} (baseUrl=${this.baseUrl})`
+      );
+      return null;
+    }
+  }
+
+  /**
    * Multi-entity structure extraction with SSE streaming.
    * Yields partial results as the LLM generates them, enabling progressive UI rendering.
    * Falls back gracefully — yields nothing on connection failure (no throw).

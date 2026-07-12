@@ -1,17 +1,25 @@
 /**
  * Capture-routing tunables — the SINGLE SOURCE for the numbers the routing gate
- * and the observability metric share. A ZERO-dependency leaf (no `@synap/database`,
- * no config) so the pure routing decision + these constants stay unit-testable
- * in isolation. `lib/ai-events` re-exports everything here, so importers can keep
- * pulling tunables from `ai-events` alongside the event vocabulary.
+ * and the observability metric share. `lib/ai-events` re-exports everything
+ * here, so importers can keep pulling tunables from `ai-events` alongside the
+ * event vocabulary.
+ *
+ * Wave 1 note: the two GATE constants (`AUTO_ROUTE_MIN_CONFIDENCE`,
+ * `BYOA_DEFAULT_ROUTE_CONFIDENCE`) now live in @synap/database (the pure
+ * capture-routing gate moved there beside the `WorkspaceResolutionService` door)
+ * and are re-exported here so this stays their public surface — the derived
+ * constants below reference them.
  */
 
-/** Flat auto-apply floor: below this the AI's workspace guess can't override the ambient workspace. */
-export const AUTO_ROUTE_MIN_CONFIDENCE = 0.6;
+// Gate SSOT moved to @synap/database; re-exported so this remains the tunables surface.
+export {
+  AUTO_ROUTE_MIN_CONFIDENCE,
+  BYOA_DEFAULT_ROUTE_CONFIDENCE,
+} from "@synap/database";
+import { AUTO_ROUTE_MIN_CONFIDENCE } from "@synap/database";
+
 /** Ceiling for the per-workspace auto-tuned gate (a mis-route-prone workspace earns up to this bar). */
 export const ROUTE_TUNING_CEIL = 0.9;
-/** Baseline for an explicit direct/BYOA pick that carries no self-reported confidence. */
-export const BYOA_DEFAULT_ROUTE_CONFIDENCE = 0.7;
 /** Derived confidence when name→id reconciliation matched a workspace name EXACTLY. */
 export const EXACT_MATCH_CONFIDENCE = 0.9;
 /**

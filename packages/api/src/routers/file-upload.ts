@@ -20,6 +20,7 @@ import {
   documentVersions,
   workspaceMembers,
   materializeEntity,
+  resolveImportEntityPlacement,
   eventRepository,
   storedVersionValues,
   uploadDocumentVersionSnapshot,
@@ -210,13 +211,24 @@ export async function uploadBufferAsFileEntity(params: {
             brandAssetKindForMimeType(mimeType),
         }
       : {};
+  // D1: the upload's workspace is a CONTEXT signal — route placement through the
+  // one door so a pod-scope kind (e.g. a generic `file`) lands pod-wide (NULL)
+  // while a workspace-scoped one (e.g. `brand-asset`) stays in its lens. The 400
+  // requiring a workspace above is kept deliberately: the storage path and the
+  // brand-asset branch make the workspace context genuinely load-bearing here,
+  // so we demote pod-scope kinds via the resolver rather than by relaxing intake.
+  const resolvedWorkspaceId = await resolveImportEntityPlacement(db, {
+    userId,
+    profileSlug,
+    sourceWorkspaceId: workspaceId,
+  });
   let createdEntity;
   try {
     const materialized = await materializeEntity(
       {
         profileSlug,
         title: filename,
-        workspaceId,
+        workspaceId: resolvedWorkspaceId,
         userId,
         documentId: document.id,
         properties: {

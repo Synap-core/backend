@@ -27,7 +27,6 @@ import {
   invites,
   intelligenceServices,
   entities,
-  relations,
   getDb,
   eventRepository,
   ProfileResolutionService,
@@ -52,6 +51,7 @@ import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
 // import { WorkspaceMemberEvents } from "../lib/event-helpers.js"; // unused — reserved for future member event hooks
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import { inheritRelationWorkspaceId } from "../lib/relation-workspace-inherit.js";
 import { findUnsafeAutoApproveEntries } from "@synap/governance-policy";
 import { auditLog } from "../utils/audit-log.js";
 import { assertPackageTierAccess } from "../utils/tier-check.js";
@@ -4108,8 +4108,21 @@ export const workspacesRouter = router({
 
         // 3. Batch create relations
         const relationRepo = new RelationRepository(database, eventRepo);
+        // D4: placement is a function of the endpoints, not the ambient
+        // workspace — an idempotency check filtered to this workspace can't
+        // see a pod-wide (NULL) duplicate of the same (source,target,type)
+        // triple, so it would re-create it. Same fix as relations.batchCreate.
+        const seededEntityIds = Object.values(entityIds);
+        const endpointRows = seededEntityIds.length
+          ? await database.query.entities.findMany({
+              where: inArray(entities.id, seededEntityIds),
+              columns: { id: true, workspaceId: true },
+            })
+          : [];
+        const endpointWorkspaceById = new Map(
+          endpointRows.map((e) => [e.id, e.workspaceId])
+        );
         const existingRelations = await database.query.relations.findMany({
-          where: eq(relations.workspaceId, input.workspaceId),
           columns: { sourceEntityId: true, targetEntityId: true, type: true },
         });
         const existingRelKeys = new Set<string>();
@@ -4141,12 +4154,19 @@ export const workspacesRouter = router({
           }
 
           try {
+            const relationWorkspaceId = inheritRelationWorkspaceId(
+              [
+                endpointWorkspaceById.get(sourceId) ?? null,
+                endpointWorkspaceById.get(targetId) ?? null,
+              ],
+              input.workspaceId
+            );
             await relationRepo.create(
               {
                 sourceEntityId: sourceId,
                 targetEntityId: targetId,
                 type: rel.type,
-                workspaceId: input.workspaceId,
+                workspaceId: relationWorkspaceId,
                 userId: ctx.userId,
                 metadata: rel.metadata,
               },

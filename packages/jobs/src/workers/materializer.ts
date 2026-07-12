@@ -66,6 +66,11 @@ import type { SynapEvent } from "@synap-core/core";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
+import {
+  resolveMaterializedEntityWorkspaceId,
+  resolveMaterializedFacetWorkspaceId,
+  resolveMaterializedRelationWorkspaceId,
+} from "./materialize-placement.js";
 
 const logger = createLogger({ module: "materializer" });
 
@@ -287,7 +292,13 @@ async function materializeEntity(
       return;
     }
 
-    const entityWorkspaceId = data.global ? null : workspaceId;
+    // I3 (resolve-early-and-persist): land where the create door already
+    // resolved (`data.resolvedWorkspaceId`), never re-derived from the ambient
+    // workspace. See resolveMaterializedEntityWorkspaceId for the compat rules.
+    const entityWorkspaceId = resolveMaterializedEntityWorkspaceId(
+      data,
+      workspaceId
+    );
     const profileSlug = data.profileSlug as string;
     const rawContent = (data.content as string | undefined) || undefined;
     const baseProperties =
@@ -347,7 +358,7 @@ async function materializeEntity(
         // subjectId) matches on a pg-boss retry. Without this the DB mints a
         // fresh uuid and both break — orphan-on-revert + duplicate-on-retry.
         id: subjectId,
-        workspaceId: entityWorkspaceId!,
+        workspaceId: entityWorkspaceId ?? undefined,
         userId,
         title: (data.title as string) || undefined,
         preview:
@@ -435,8 +446,11 @@ async function materializeEntityFacet(
         profileId: (data.profileId as string) || undefined,
         profileSlug: (data.profileSlug as string) || undefined,
         userId,
-        workspaceId:
-          (data.workspaceId as string | undefined) ?? workspaceId ?? null,
+        // I3: land where the attachFacet door resolved the facet lens (follows
+        // the parent entity — may be an explicit null for a pod-wide parent),
+        // never re-pinned to the ambient governance workspace. See
+        // resolveMaterializedFacetWorkspaceId for the compat rules.
+        workspaceId: resolveMaterializedFacetWorkspaceId(data, workspaceId),
         contextEntityId: (data.contextEntityId as string) || null,
         status: (data.status as string) || undefined,
         properties: (data.properties as Record<string, unknown>) || undefined,
@@ -458,8 +472,12 @@ async function materializeEntityFacet(
       {
         status: (data.status as string) || undefined,
         properties: (data.properties as Record<string, unknown>) || undefined,
-        workspaceId:
-          (data.workspaceId as string | undefined) ?? workspaceId ?? undefined,
+        // A facet UPDATE only re-homes when the caller passed an explicit
+        // workspaceId (the inline door does `input.workspaceId ?? undefined`);
+        // absent/null means "leave the lens as-is". Mirror that here — do NOT
+        // fall back to the ambient `workspaceId`, which would silently re-pin the
+        // facet on the proposal-gated path (the four-door bug, update flavour).
+        workspaceId: (data.workspaceId as string) || undefined,
       },
       userId
     );
@@ -971,6 +989,14 @@ async function materializeRelation(
     );
     return;
   }
+  // D4/I3: read back the persisted inherited placement — a present-null
+  // `resolvedWorkspaceId` (pod-wide edge, both endpoints pod-wide) beats the
+  // job's ambient workspace, which `??` alone would swallow (re-pinning a
+  // pod-wide edge — the four-door bug, relation flavour).
+  const resolvedRelationWorkspaceId = resolveMaterializedRelationWorkspaceId(
+    data,
+    workspaceId
+  );
   const db = await getDb();
   await db
     .insert(relations)
@@ -979,7 +1005,7 @@ async function materializeRelation(
       sourceEntityId,
       targetEntityId,
       type,
-      workspaceId: (data.workspaceId as string) ?? workspaceId ?? null,
+      workspaceId: resolvedRelationWorkspaceId,
       userId: author,
       metadata: (data.metadata as Record<string, unknown>) ?? {},
     })

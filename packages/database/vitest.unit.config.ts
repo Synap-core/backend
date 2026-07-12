@@ -19,6 +19,7 @@ export default defineConfig({
       "src/services/profile-resolution-service.test.ts",
       "src/__tests__/facet-slug-visibility.test.ts",
       "src/__tests__/profile-scope-conditions.test.ts",
+      "src/services/workspace-resolution-service.test.ts",
     ],
     env: {
       NODE_ENV: "test",
