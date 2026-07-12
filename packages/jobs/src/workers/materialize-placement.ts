@@ -37,3 +37,20 @@ export function resolveMaterializedFacetWorkspaceId(
   }
   return (data.workspaceId as string | undefined) ?? ambientWorkspaceId ?? null;
 }
+
+/**
+ * Relation-create read-back (D4). The door resolves the edge's INHERITED lens
+ * (both endpoints pod-wide → NULL; else the workspace-scoped endpoint's lens)
+ * and persists it as `resolvedWorkspaceId`. Legacy fallback: `data.workspaceId
+ * ?? ambient` — a present-null there is NOT meaningful for old proposals (the
+ * pre-D4 path stamped the ambient), so `??` is correct for the fallback branch.
+ */
+export function resolveMaterializedRelationWorkspaceId(
+  data: Record<string, unknown>,
+  ambientWorkspaceId: string | null | undefined
+): string | null {
+  if ("resolvedWorkspaceId" in data) {
+    return (data.resolvedWorkspaceId as string | null) ?? null;
+  }
+  return (data.workspaceId as string | undefined) ?? ambientWorkspaceId ?? null;
+}

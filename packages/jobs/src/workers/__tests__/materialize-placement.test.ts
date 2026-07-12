@@ -10,6 +10,7 @@ import { describe, it, expect } from "vitest";
 import {
   resolveMaterializedEntityWorkspaceId,
   resolveMaterializedFacetWorkspaceId,
+  resolveMaterializedRelationWorkspaceId,
 } from "../materialize-placement.js";
 
 const AMBIENT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
@@ -84,5 +85,31 @@ describe("resolveMaterializedFacetWorkspaceId", () => {
       resolveMaterializedFacetWorkspaceId({ workspaceId: EXPLICIT }, AMBIENT)
     ).toBe(EXPLICIT);
     expect(resolveMaterializedFacetWorkspaceId({}, AMBIENT)).toBe(AMBIENT);
+  });
+});
+
+describe("resolveMaterializedRelationWorkspaceId (D4)", () => {
+  it("reads the persisted inherited placement verbatim, including a pod-wide NULL", () => {
+    // Two pod-wide endpoints → the door persisted NULL → the edge lands pod-wide,
+    // NOT the job's ambient (the four-door bug, relation flavour).
+    expect(
+      resolveMaterializedRelationWorkspaceId(
+        { resolvedWorkspaceId: null },
+        AMBIENT
+      )
+    ).toBeNull();
+    expect(
+      resolveMaterializedRelationWorkspaceId(
+        { resolvedWorkspaceId: EXPLICIT },
+        AMBIENT
+      )
+    ).toBe(EXPLICIT);
+  });
+
+  it("legacy relation proposal falls back to data.workspaceId, else ambient", () => {
+    expect(
+      resolveMaterializedRelationWorkspaceId({ workspaceId: EXPLICIT }, AMBIENT)
+    ).toBe(EXPLICIT);
+    expect(resolveMaterializedRelationWorkspaceId({}, AMBIENT)).toBe(AMBIENT);
   });
 });

@@ -69,6 +69,7 @@ import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 import {
   resolveMaterializedEntityWorkspaceId,
   resolveMaterializedFacetWorkspaceId,
+  resolveMaterializedRelationWorkspaceId,
 } from "./materialize-placement.js";
 
 const logger = createLogger({ module: "materializer" });
@@ -988,6 +989,14 @@ async function materializeRelation(
     );
     return;
   }
+  // D4/I3: read back the persisted inherited placement — a present-null
+  // `resolvedWorkspaceId` (pod-wide edge, both endpoints pod-wide) beats the
+  // job's ambient workspace, which `??` alone would swallow (re-pinning a
+  // pod-wide edge — the four-door bug, relation flavour).
+  const resolvedRelationWorkspaceId = resolveMaterializedRelationWorkspaceId(
+    data,
+    workspaceId
+  );
   const db = await getDb();
   await db
     .insert(relations)
@@ -996,7 +1005,7 @@ async function materializeRelation(
       sourceEntityId,
       targetEntityId,
       type,
-      workspaceId: (data.workspaceId as string) ?? workspaceId ?? null,
+      workspaceId: resolvedRelationWorkspaceId,
       userId: author,
       metadata: (data.metadata as Record<string, unknown>) ?? {},
     })

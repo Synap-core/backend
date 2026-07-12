@@ -720,9 +720,11 @@ export const relationsRouter = router({
           sourceEntityId: input.sourceEntityId,
           targetEntityId: input.targetEntityId,
           type: input.type,
-          // I3: persist the resolved D4 placement so materializeRelation reads it
-          // back (its `data.workspaceId ?? workspaceId ?? null` inherit path).
-          workspaceId: relationWorkspaceId,
+          // I3: persist the resolved D4 placement (may be an explicit null for a
+          // pod-wide edge) so materializeRelation reads it back verbatim via
+          // resolveMaterializedRelationWorkspaceId — auto-approved + proposal-
+          // gated relations place identically.
+          resolvedWorkspaceId: relationWorkspaceId,
         },
       });
 
