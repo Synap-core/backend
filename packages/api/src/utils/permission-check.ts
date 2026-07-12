@@ -1129,7 +1129,40 @@ async function createProposal(opts: {
   //     and correlationId — DO NOT emit a second event (dedupe).
   //   - Otherwise (agent / Feature-C / View-SDK paths), emit one here.
   const resolvedCorrelationId = correlationId ?? randomUUID();
-  const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
+
+  // ATTRIBUTION (B1): a self-hosted IS write arrives WITHOUT an explicit
+  // agentUserId (its "system"-owned key can't stamp one) but WITH source
+  // "ai"/"intelligence" — so it reached this legacy-AI propose path with a null
+  // agent, and the review UI would attribute the proposal to the human operator
+  // (agentUserId ?? createdBy ?? sourceId → the human). Resolve the operator's
+  // own pod-wide personal agent (the self-hosted orchestrator's identity) and
+  // stamp it PURELY for attribution. This runs AFTER the governance ladder has
+  // already decided (on the operator, via the legacy path) — so the write's
+  // auto-approve/propose/deny OUTCOME is unchanged; only the proposal's
+  // attributed agentUserId + audit differ. Explicit-agent writes (agentUserId
+  // set) and human-member proposals (proposedByUserId set) are untouched; an
+  // operator with no personal agent yet → null attribution, exactly as before.
+  let attributionAgentUserId = agentUserId;
+  if (
+    !attributionAgentUserId &&
+    !proposedByUserId &&
+    (source === "ai" || source === "intelligence")
+  ) {
+    const [personalAgent] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(
+        and(
+          eq(users.userType, "agent"),
+          eq(users.createdByUserId, userId),
+          eq(users.isPersonalAgent, true)
+        )
+      )
+      .orderBy(users.createdAt)
+      .limit(1);
+    attributionAgentUserId = personalAgent?.id;
+  }
+  const authorshipMode = deriveAuthorshipMode(userId, attributionAgentUserId);
 
   // Capture a BEFORE-snapshot for entity UPDATE proposals so the review layer can
   // render a durable before→after field diff. Without this the diff relies on the
@@ -1194,7 +1227,7 @@ async function createProposal(opts: {
         ...(proposalData as unknown as Record<string, unknown>),
         ...(authorshipMode ? { authorshipMode } : {}),
       },
-      agentUserId: agentUserId ?? undefined,
+      agentUserId: attributionAgentUserId ?? undefined,
       createdBy: userId,
       proposedByUserId: proposedByUserId ?? null,
       threadId: threadId ?? null,

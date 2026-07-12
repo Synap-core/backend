@@ -54,8 +54,22 @@ describe("facet visibility call doors", () => {
       "await resolveFacetVisibilityScope(authUserId)"
     );
     expect(graph).toContain("workspaceId: input.workspaceId");
+    expect(
+      read("packages/api/src/services/object-graph/entity-data-graph.ts")
+    ).toContain("workspaceId,");
     expect(relations).toContain(
       "resolveFacetVisibilityScope(\n        ctx.userId,\n        input.workspaceId"
+    );
+  });
+
+  it("validates role context entities through the same user visibility floor", () => {
+    const entitiesRouter = read("packages/api/src/routers/entities.ts");
+
+    expect(entitiesRouter).toContain(
+      "eq(entities.id, input.contextEntityId),\n            isNull(entities.deletedAt),\n            entityVisibleWhere(ctx.userId)"
+    );
+    expect(entitiesRouter).toContain(
+      "message: `Context entity not found: ${input.contextEntityId}`"
     );
   });
 });

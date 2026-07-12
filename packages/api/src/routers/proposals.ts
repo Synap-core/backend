@@ -43,6 +43,7 @@ import {
   ProposalStatus,
   workspaces,
   focusSessions,
+  entityFacets,
 } from "@synap/database/schema";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import type {
@@ -393,12 +394,48 @@ async function enrichProposalsForDisplay(
   userId: string
 ): Promise<DisplayEnrichedProposal[]> {
   const requests = rows.map((row) => buildRequestFromProposal(row));
-  const entityIds = uniqueStrings(
-    requests
+
+  // B2: entity ids referenced as RELATION ENDPOINTS — for standalone relation
+  // proposals (`data.sourceEntityId`/`targetEntityId`) and for composite
+  // `create_relation` ops whose source/target ref is a real (pre-existing) entity
+  // UUID. Joined below so the graph / link preview can render real titles instead
+  // of `entity <8hex>` shortIds.
+  // B4: facet ids for facet-UPDATE proposals — so the live-current before-state
+  // of the role's properties can be diffed against the proposed values.
+  const relationEndpointIds: string[] = [];
+  const facetIds: string[] = [];
+  rows.forEach((row, idx) => {
+    const request = requests[idx]!;
+    const payload =
+      request.data && typeof request.data === "object"
+        ? (request.data as Record<string, unknown>)
+        : undefined;
+    const src = stringProp(payload, "sourceEntityId");
+    const tgt = stringProp(payload, "targetEntityId");
+    if (src && isLikelyUUID(src)) relationEndpointIds.push(src);
+    if (tgt && isLikelyUUID(tgt)) relationEndpointIds.push(tgt);
+    const raw = row.data as StoredProposalData | null | undefined;
+    if (isCompositeProposalData(raw)) {
+      for (const op of raw.operations) {
+        if (op.op !== "create_relation") continue;
+        if (isLikelyUUID(op.sourceRef)) relationEndpointIds.push(op.sourceRef);
+        if (isLikelyUUID(op.targetRef)) relationEndpointIds.push(op.targetRef);
+      }
+    }
+    if (row.targetType === "facet" && row.proposalType === "update") {
+      const fid = stringProp(payload, "facetId");
+      if (fid && isLikelyUUID(fid)) facetIds.push(fid);
+    }
+  });
+
+  const entityIds = uniqueStrings([
+    ...requests
       .filter((request) => request.targetType === "entity")
       .map((request) => request.targetId)
-      .filter(isLikelyUUID)
-  );
+      .filter(isLikelyUUID),
+    ...relationEndpointIds,
+  ]);
+  const uniqueFacetIds = uniqueStrings(facetIds);
   const userIds = uniqueStrings(
     rows.flatMap((row, idx) => [
       row.agentUserId ?? undefined,
@@ -413,7 +450,7 @@ async function enrichProposalsForDisplay(
   ).filter(isLikelyUUID);
 
   const eventRepo = new EventRepository(sql);
-  const [entityRows, userRows, traceEntries] = await Promise.all([
+  const [entityRows, userRows, traceEntries, facetRows] = await Promise.all([
     entityIds.length > 0
       ? db
           .select({
@@ -422,6 +459,7 @@ async function enrichProposalsForDisplay(
             preview: entities.preview,
             type: entities.type,
             properties: entities.properties,
+            workspaceId: entities.workspaceId,
           })
           .from(entities)
           .where(inArray(entities.id, entityIds))
@@ -457,11 +495,51 @@ async function enrichProposalsForDisplay(
             >;
           })
       : Promise.resolve([] as Array<readonly [string, EventRecord[]]>),
+    // B4: current role-facet state for facet-UPDATE proposals (live-current
+    // before→after). One batched query for every facetId on the page.
+    uniqueFacetIds.length > 0
+      ? db
+          .select({
+            id: entityFacets.id,
+            status: entityFacets.status,
+            properties: entityFacets.properties,
+            workspaceId: entityFacets.workspaceId,
+          })
+          .from(entityFacets)
+          .where(inArray(entityFacets.id, uniqueFacetIds))
+      : Promise.resolve(
+          [] as Array<{
+            id: string;
+            status: string | null;
+            properties: unknown;
+            workspaceId: string | null;
+          }>
+        ),
   ]);
 
   const entityById = new Map(entityRows.map((row) => [row.id, row]));
   const userById = new Map(userRows.map((row) => [row.id, row]));
   const traceByCorrelationId = new Map<string, EventRecord[]>(traceEntries);
+  const facetById = new Map(facetRows.map((row) => [row.id, row]));
+  // B2 + MF2 (workspace scoping): resolve a batch-joined entity title by id, but
+  // ONLY when the endpoint entity is visible under the proposal's own workspace
+  // lens — same workspace as the proposal, or pod-wide (workspaceId null, visible
+  // everywhere). A composite `create_relation` can name a pre-existing entity in a
+  // DIFFERENT workspace the viewer cannot see; resolving its title here would leak
+  // it. Cross-workspace endpoints return undefined → caller falls back to the
+  // `entity <8hex>` shortId. The viewer is already authorized for the proposal's
+  // workspace (list/get access-check it), so same-workspace + pod-wide is safe.
+  const resolveEntityTitle = (
+    entityId: string,
+    allowedWorkspaceId: string | null
+  ): string | undefined => {
+    const meta = entityById.get(entityId);
+    if (!meta) return undefined;
+    if (meta.workspaceId !== null && meta.workspaceId !== allowedWorkspaceId) {
+      return undefined;
+    }
+    return meta.title ?? meta.preview ?? undefined;
+  };
 
   return rows.map((row, idx) => {
     const request = requests[idx]!;
@@ -495,12 +573,63 @@ async function enrichProposalsForDisplay(
         targetName,
       });
 
+    // MF2: bind the workspace-scoped resolver to THIS proposal's workspace lens
+    // so an endpoint/facet in another workspace can never leak its title/props.
+    const resolveEntityTitleScoped = (entityId: string): string | undefined =>
+      resolveEntityTitle(entityId, row.workspaceId);
+
+    // B2: for a standalone relation proposal, resolve the endpoint titles onto
+    // the enriched payload. The frontend link preview prefers data.sourceLabel /
+    // data.targetLabel over the raw UUID, so populating them here kills the
+    // `entity <8hex>` shortId without any contract change.
+    let enrichedData = request.data;
+    const srcId = stringProp(payload, "sourceEntityId");
+    const tgtId = stringProp(payload, "targetEntityId");
+    if (payload && (srcId || tgtId)) {
+      const srcLabel = srcId ? resolveEntityTitleScoped(srcId) : undefined;
+      const tgtLabel = tgtId ? resolveEntityTitleScoped(tgtId) : undefined;
+      if (srcLabel || tgtLabel) {
+        enrichedData = {
+          ...payload,
+          ...(srcLabel ? { sourceLabel: srcLabel } : {}),
+          ...(tgtLabel ? { targetLabel: tgtLabel } : {}),
+        };
+      }
+    }
+
+    // B4: for a facet-UPDATE proposal, the live-current before-state is the
+    // role-facet's CURRENT properties (fetched batched above), not the parent
+    // entity's columns. Feed it through the same `current` slot the entity-update
+    // diff uses so property changes render before→after. MF2: only when the facet
+    // sits under the proposal's own workspace lens (or pod-wide) — a facet in
+    // another workspace must not leak its properties into this review.
+    let reviewCurrent:
+      | {
+          title?: string | null;
+          preview?: string | null;
+          type?: string | null;
+          properties?: unknown;
+        }
+      | undefined = entityMeta;
+    if (row.targetType === "facet" && row.proposalType === "update") {
+      const fid = stringProp(payload, "facetId");
+      const facetRow = fid ? facetById.get(fid) : undefined;
+      if (
+        facetRow &&
+        (facetRow.workspaceId === null ||
+          facetRow.workspaceId === row.workspaceId)
+      ) {
+        reviewCurrent = { properties: facetRow.properties };
+      }
+    }
+
     return {
       ...row,
       authorName,
       targetName,
       request: {
         ...request,
+        data: enrichedData,
         targetName,
         summary,
       },
@@ -508,12 +637,14 @@ async function enrichProposalsForDisplay(
         row,
         request: {
           ...request,
+          data: enrichedData,
           targetName,
           summary,
         },
         authorName,
         targetName,
-        current: entityMeta,
+        current: reviewCurrent,
+        resolveEntityTitle: resolveEntityTitleScoped,
         events: request.correlationId
           ? (traceByCorrelationId.get(request.correlationId) ?? [])
           : [],
@@ -534,16 +665,26 @@ function buildProposalReviewModel(params: {
     type?: string | null;
     properties?: unknown;
   };
+  /** B2: resolve a real entity title by id for composite relation endpoints. */
+  resolveEntityTitle?: (entityId: string) => string | undefined;
   events: Awaited<ReturnType<EventRepository["getCorrelatedEvents"]>>;
 }): ProposalReviewModel {
-  const { row, request, authorName, targetName, current, events } = params;
+  const {
+    row,
+    request,
+    authorName,
+    targetName,
+    current,
+    resolveEntityTitle,
+    events,
+  } = params;
   const requestData =
     request.data && typeof request.data === "object" ? request.data : {};
   // Composite (graph) proposals store `{ operations: [...] }` in row.data, which
   // the flat `changes` model can't express. Detect and build a `graph` instead.
   const rawData = row.data as StoredProposalData | null | undefined;
   const graph = isCompositeProposalData(rawData)
-    ? buildProposalGraph(rawData)
+    ? buildProposalGraph(rawData, resolveEntityTitle)
     : undefined;
   // Durable before-snapshot captured at proposal-creation time (entity updates).
   // Preferred over the live `current` entity so the diff survives approval and
@@ -601,15 +742,24 @@ function buildProposalReviewModel(params: {
  *
  * Pass 1: walk the create_entity ops, assigning each a stable ref (its own `ref`
  * or the positional `$opN`) and recording ref→title so relations can show human
- * labels. Pass 2: map each create_relation's source/target refs to those titles;
- * a ref that is a real UUID (a pre-existing entity, not created here) gets a
- * short `entity <8hex>` label.
+ * labels; also collect inline role-profile facets (`op.facets`) into the graph.
+ * Pass 2: map each create_relation's source/target refs to those titles; a ref
+ * that is a real, pre-existing entity UUID resolves to that entity's real title
+ * via `resolveEntityTitle` (B2 — was a bare `entity <8hex>` shortId).
+ *
+ * `resolveEntityTitle` looks up a batch-joined entity title by id (populated in
+ * `enrichProposalsForDisplay` for every UUID referenced as a relation endpoint).
+ * Absent → falls back to the short `entity <8hex>` label as before.
  *
  * Emits the PINNED ProposalReviewGraph contract — keep in sync with the frontend.
  */
-function buildProposalGraph(data: CompositeProposalData): ProposalReviewGraph {
+function buildProposalGraph(
+  data: CompositeProposalData,
+  resolveEntityTitle?: (entityId: string) => string | undefined
+): ProposalReviewGraph {
   const refToTitle = new Map<string, string>();
   const entities: ProposalReviewGraph["entities"] = [];
+  const facets: ProposalReviewGraph["facets"] = [];
 
   data.operations.forEach((op, index) => {
     if (op.op !== "create_entity") return;
@@ -627,12 +777,29 @@ function buildProposalGraph(data: CompositeProposalData): ProposalReviewGraph {
       propertyCount: Object.keys(entityOp.properties ?? {}).length,
       hasContent: !!entityOp.content,
     });
+    // B3: surface inline role-profile facets so a composite that attaches roles
+    // (e.g. a person materialized as a "client" + "investor") shows a role count
+    // in the review summary instead of hiding them entirely.
+    for (const facet of entityOp.facets ?? []) {
+      facets.push({
+        entityRef: ref,
+        entityLabel: title,
+        profileSlug: facet.profileSlug,
+        ...(facet.status ? { status: facet.status } : {}),
+      });
+    }
   });
 
   const labelForRef = (ref: string): string => {
     const known = refToTitle.get(ref);
     if (known) return known;
-    if (isLikelyUUID(ref)) return `entity ${ref.slice(0, 8)}`;
+    // A ref that is a real UUID is a pre-existing entity linked into the graph.
+    // Resolve its real title from the batch join (B2); fall back to the shortId.
+    if (isLikelyUUID(ref)) {
+      const resolved = resolveEntityTitle?.(ref);
+      if (resolved) return resolved;
+      return `entity ${ref.slice(0, 8)}`;
+    }
     return ref;
   };
 
@@ -650,8 +817,10 @@ function buildProposalGraph(data: CompositeProposalData): ProposalReviewGraph {
   return {
     entities,
     relations,
+    facets,
     entityCount: entities.length,
     relationCount: relations.length,
+    facetCount: facets.length,
   };
 }
 

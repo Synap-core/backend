@@ -1731,12 +1731,12 @@ A capture's `id` **is** its correlationId — the same id stamped on the entitie
 
 Each `capture_trace` activity item names a pipeline stage (`component`), why it stopped (`reason`), and what to do (`fixHint`). The common ones:
 
-| reason | what happened | what to do |
-|---|---|---|
+| reason                     | what happened                                                                                                           | what to do                                                                                        |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `not_in_creatable_catalog` | a role/kind you asked to create isn't a creatable entity kind — it's a **facet** (client, partner, prospect, investor…) | resolve the real entity first, then `attach_facet` for the role — never a second entity for a hat |
-| `kind_mismatch` | the facet's `applicableKinds` didn't include the target entity's kind | attach the role to an entity of a kind the role applies to |
-| `slug_coerce` | a profileSlug was normalized/renamed to the canonical one | use the canonical slug next time (see `list_profiles`) |
-| `materialize_skip` | an operation was skipped (dedup or a missing dependency) | check the dedup match; re-capture only what's genuinely new |
+| `kind_mismatch`            | the facet's `applicableKinds` didn't include the target entity's kind                                                   | attach the role to an entity of a kind the role applies to                                        |
+| `slug_coerce`              | a profileSlug was normalized/renamed to the canonical one                                                               | use the canonical slug next time (see `list_profiles`)                                            |
+| `materialize_skip`         | an operation was skipped (dedup or a missing dependency)                                                                | check the dedup match; re-capture only what's genuinely new                                       |
 
 If a run carries a `channelId` (playbook / session / automation), its message-level story lives in that channel — the timeline points you there rather than duplicating it.
 

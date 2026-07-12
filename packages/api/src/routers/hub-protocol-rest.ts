@@ -395,6 +395,17 @@ app.use("/*", async (c, next) => {
         // Skip it for the sentinel: governed IS writes pass a real agentUserId
         // in the body (the acting agent); a write that omits it then falls back
         // to an operator-direct write, not the rejected "system".
+        //
+        // ATTRIBUTION (B1): we deliberately do NOT resolve the operator's
+        // personal agent here to stamp agentUserId — doing so would flip
+        // `checkPermissionOrPropose` from the operator's RBAC + legacy
+        // `source:"intelligence"` path onto the AGENT governance ladder, and a
+        // personal agent that isn't a member of the target workspace would then
+        // file a `workspace.join` proposal instead of the intended write
+        // (outcome change). Attribution is instead resolved inside
+        // `createProposal` (permission-check.ts) AFTER the ladder has already
+        // decided on the operator — so the OUTCOME is unchanged and only the
+        // proposal's attributed agentUserId differs.
         if (keyRecord.userId && keyRecord.userId !== "system") {
           c.set("agentUserId", keyRecord.userId); // IS performed the action → proposals
         }

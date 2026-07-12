@@ -70,6 +70,28 @@ export function capErrorMessage(cap: {
   return undefined;
 }
 
+/**
+ * Resolve WHERE a SYSTEM notice (connector-health alert, error nudge) should post.
+ *
+ * System notices belong in ONE operator-chosen channel — the `feedbackChannel`
+ * (`/setup` labels it "digests & notices land here") — not scattered into whichever
+ * feature happened to fail. Previously each caller passed its own feature channel
+ * (event-sync → `announceChannelId` = the user's `#important`, mail-feed →
+ * `mailFeed.channelId`), so a Google reconnect nudge surfaced in the events channel.
+ * This routes it to the configured feedback channel, falling back to the feature's
+ * channel only when the operator hasn't picked one yet.
+ */
+export function resolveNoticeChannelId(
+  toolMetadata: Record<string, unknown> | null | undefined,
+  fallbackChannelId: string | undefined
+): string | undefined {
+  const discord = (toolMetadata?.discord ?? null) as {
+    feedbackChannel?: unknown;
+  } | null;
+  const fb = discord?.feedbackChannel;
+  return typeof fb === "string" && fb.trim() ? fb : fallbackChannelId;
+}
+
 interface NotifyConnectorOpts {
   /** Stable key for dedup + the metadata watermark, e.g. "google" | "cal_com". */
   connectorKey: string;

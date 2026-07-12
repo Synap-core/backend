@@ -34,6 +34,7 @@ import {
   notifyConnectorUnhealthy,
   isConnectionAuthError,
   capErrorMessage,
+  resolveNoticeChannelId,
 } from "../connection-health/notify-connector-unhealthy.js";
 import { triageEmails } from "./triage.js";
 import type { EmailHit, TriagedEmail } from "./triage.js";
@@ -239,7 +240,11 @@ export async function runMailFeed(): Promise<RunMailFeedResult> {
       workspaceId,
       watermarkToolId: discordTool.id,
       watermarkMetadata: metadata,
-      discordTeamChannelId: mailFeed.channelId,
+      // System notice → the configured feedback/notices channel, not the mail feed.
+      discordTeamChannelId: resolveNoticeChannelId(
+        metadata,
+        mailFeed.channelId
+      ),
       errorMessage: capErr,
     });
     return { skipped: true, reason: "google_connection_unhealthy" };

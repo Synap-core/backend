@@ -56,7 +56,11 @@ export async function entityDataNeighbors(
     const caller = relationsRouter.createCaller(
       ctx as Parameters<typeof relationsRouter.createCaller>[0]
     );
-    const result = await caller.getConnections({ entityId, limit: 100 });
+    const result = await caller.getConnections({
+      entityId,
+      limit: 100,
+      workspaceId,
+    });
     return connectionsToNeighbors(result.connections);
   } catch (err) {
     // The entity-data half is additive — a failure degrades to [] rather than

@@ -7,14 +7,20 @@ import {
   db,
   agents,
   channels as channelsTable,
+  entities as entitiesTable,
+  focusSessions,
+  automations as automationsTable,
+  playbooks as playbooksTable,
   eq,
   and,
   desc,
   isNull,
+  drizzleSql,
   enqueueChannelEgress,
   setChannelBranchPurpose,
   ChannelFirewallImmutableError,
 } from "@synap/database";
+import { openLink } from "../../../utils/deep-links.js";
 // Note: channelsTable.externalId is the canonical dedup field — same as externalChannelId at insert time.
 
 import { resolveOrCreateExternalChannel } from "../../../services/connectors/inbound-recorder.js";
@@ -786,6 +792,178 @@ export function registerChannelsRoutes(app: HubHono): void {
           externalChannelId: body.externalChannelId,
         },
         "POST /channels create-or-link failed"
+      );
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  // ── GET /channels/:channelId/context-card ─────────────────────────────────
+  // The discoverability projection: everything WIRED to a channel — its linked
+  // entity, the automations targeting it, the sessions running in it, and the
+  // playbooks you can start — in ONE payload the Discord bridge renders as a pinned
+  // "what's on this channel" card. Read-only (no writes); each item carries an
+  // `openUrl` deep-link (the pod /open bounce → the app). Client-comms channels get
+  // a card too (they still have context), but the bridge never PINS one there.
+  app.get("/channels/:channelId/context-card", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    // Pin to the authenticated bearer + enforce the caller's channel-visibility
+    // floor (same as GET /channels) — an agent key must NOT read another user's
+    // channel context (entity title, automations, sessions). Closes the IDOR.
+    const userId = c.get("userId") as string;
+    if (!userId) return c.json({ error: "userId is required" }, 400);
+    const channelParam = c.req.param("channelId");
+    // Accept EITHER the Synap channel UUID OR the provider (Discord) external id —
+    // the bridge calls this with a Discord snowflake (matching /rename + /pins),
+    // browser clients pass the UUID. A snowflake is all-digits, never a UUID, and
+    // comparing it to the uuid `id` column would raise a Postgres cast error, so
+    // dispatch on shape.
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        channelParam
+      );
+    const channelId = channelParam;
+    try {
+      const [channel] = await db
+        .select({
+          id: channelsTable.id,
+          title: channelsTable.title,
+          channelType: channelsTable.channelType,
+          branchPurpose: channelsTable.branchPurpose,
+          contextObjectType: channelsTable.contextObjectType,
+          contextObjectId: channelsTable.contextObjectId,
+          workspaceId: channelsTable.workspaceId,
+        })
+        .from(channelsTable)
+        .where(
+          and(
+            isUuid
+              ? eq(channelsTable.id, channelParam)
+              : eq(channelsTable.externalId, channelParam),
+            channelVisibilityWhere(userId)
+          )
+        )
+        .limit(1);
+      if (!channel) return c.json({ error: "Channel not found" }, 404);
+
+      // 1. Linked subject entity.
+      let linkedEntity: {
+        id: string;
+        type: string;
+        title: string | null;
+        openUrl: string;
+      } | null = null;
+      if (channel.contextObjectId && channel.contextObjectType === "entity") {
+        const e = await db.query.entities.findFirst({
+          where: and(
+            eq(entitiesTable.id, channel.contextObjectId),
+            isNull(entitiesTable.deletedAt)
+          ),
+          columns: { id: true, type: true, title: true },
+        });
+        if (e)
+          linkedEntity = {
+            id: e.id,
+            type: e.type,
+            title: e.title,
+            openUrl: openLink(e.id),
+          };
+      }
+
+      // 2. Automations wired to this channel (trigger config's channelId).
+      const autoRows = await db
+        .select({
+          id: automationsTable.id,
+          name: automationsTable.name,
+          trigger: automationsTable.triggerType,
+          status: automationsTable.status,
+        })
+        .from(automationsTable)
+        .where(
+          drizzleSql`${automationsTable.triggerConfig} ->> 'channelId' = ${channel.id}`
+        );
+      const automations = autoRows.map((a) => ({
+        id: a.id,
+        name: a.name,
+        trigger: a.trigger,
+        enabled: a.status === "active",
+      }));
+
+      // 3. Active sessions running in this channel (+ playbook name + stage).
+      const sessRows = await db
+        .select({
+          id: focusSessions.id,
+          status: focusSessions.status,
+          expectedOutputs: focusSessions.expectedOutputs,
+          playbook: playbooksTable.name,
+        })
+        .from(focusSessions)
+        .leftJoin(
+          playbooksTable,
+          eq(focusSessions.playbookId, playbooksTable.id)
+        )
+        .where(
+          and(
+            eq(focusSessions.channelId, channel.id),
+            eq(focusSessions.status, "active")
+          )
+        );
+      const sessions = sessRows.map((s) => {
+        const items = Array.isArray(s.expectedOutputs)
+          ? (s.expectedOutputs as Array<{ label?: string; status?: string }>)
+          : [];
+        const cur =
+          items.find((it) => it && it.status !== "done") ??
+          items[items.length - 1];
+        return {
+          id: s.id,
+          playbook: s.playbook ?? null,
+          stage: cur?.label ?? null,
+          status: s.status,
+          openUrl: openLink(s.id),
+        };
+      });
+
+      // 4. Startable playbooks — active, in this channel's workspace or pod-wide.
+      const pbRows = await db
+        .select({ id: playbooksTable.id, name: playbooksTable.name })
+        .from(playbooksTable)
+        .where(
+          channel.workspaceId
+            ? and(
+                eq(playbooksTable.status, "active"),
+                drizzleSql`(${playbooksTable.workspaceId} = ${channel.workspaceId} OR ${playbooksTable.workspaceId} IS NULL)`
+              )
+            : eq(playbooksTable.status, "active")
+        )
+        .limit(25);
+
+      return c.json({
+        channel: {
+          id: channel.id,
+          title: channel.title,
+          channelType: channel.channelType,
+          branchPurpose: channel.branchPurpose,
+          contextObjectType: channel.contextObjectType,
+          contextObjectId: channel.contextObjectId,
+        },
+        linkedEntity,
+        automations,
+        sessions,
+        playbooks: pbRows.map((p) => ({ id: p.id, name: p.name })),
+        openBase: openLink("").replace(/\/+$/, ""),
+      });
+    } catch (err) {
+      logger.error(
+        { err, channelId },
+        "GET /channels/:channelId/context-card failed"
       );
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },

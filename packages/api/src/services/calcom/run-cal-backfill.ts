@@ -22,6 +22,7 @@ import {
   notifyConnectorUnhealthy,
   isConnectionAuthError,
   capErrorMessage,
+  resolveNoticeChannelId,
 } from "../connection-health/notify-connector-unhealthy.js";
 import {
   mapBookingToGraph,
@@ -83,6 +84,9 @@ export async function runCalBackfill(): Promise<RunCalBackfillResult> {
       workspaceId,
       watermarkToolId: calTool.id,
       watermarkMetadata: metadata,
+      // System notice → the configured feedback/notices channel (if the operator
+      // set one); no feature channel fallback here.
+      discordTeamChannelId: resolveNoticeChannelId(metadata, undefined),
       errorMessage: capErr,
     });
     return { skipped: true, reason: "cal_connection_unhealthy" };

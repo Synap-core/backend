@@ -151,8 +151,27 @@ export interface ProposalReviewGraph {
     sourceLabel: string;
     targetLabel: string;
   }>;
+  /**
+   * Role-profile facets attached inline by the graph's create_entity ops
+   * (`CompositeCreateEntityOp.facets`). Previously uncounted, so a composite
+   * that attached roles rendered them nowhere in the review summary. Each entry
+   * points at the entity it decorates via `entityRef` (the same ref key the
+   * `entities[]` list uses) and carries the resolved parent title (`entityLabel`).
+   */
+  facets: Array<{
+    /** Ref of the create_entity op this facet attaches to (matches entities[].ref). */
+    entityRef: string;
+    /** Resolved title of the parent entity (for display without a second lookup). */
+    entityLabel: string;
+    /** Role-profile slug being attached (e.g. "client", "investor"). */
+    profileSlug: string;
+    /** Optional domain status the role is attached with. */
+    status?: string;
+  }>;
   entityCount: number;
   relationCount: number;
+  /** Number of inline facet attaches across all create_entity ops. */
+  facetCount: number;
 }
 
 export interface ProposalReviewModel {

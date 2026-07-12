@@ -2447,10 +2447,20 @@ export const entitiesRouter = router({
       let contextEntityTitle: string | undefined;
       if (input.contextEntityId) {
         const contextEntity = await db.query.entities.findFirst({
-          where: eq(entities.id, input.contextEntityId),
+          where: and(
+            eq(entities.id, input.contextEntityId),
+            isNull(entities.deletedAt),
+            entityVisibleWhere(ctx.userId)
+          ),
           columns: { title: true },
         });
-        contextEntityTitle = contextEntity?.title ?? undefined;
+        if (!contextEntity) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Context entity not found: ${input.contextEntityId}`,
+          });
+        }
+        contextEntityTitle = contextEntity.title ?? undefined;
       }
 
       // Facet lens follows the parent by default. But when the parent is

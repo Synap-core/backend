@@ -40,6 +40,7 @@ import {
   notifyConnectorUnhealthy,
   isConnectionAuthError,
   capErrorMessage,
+  resolveNoticeChannelId,
 } from "../connection-health/notify-connector-unhealthy.js";
 
 const logger = createLogger({ module: "event-sync" });
@@ -386,7 +387,12 @@ export async function runEventSync(): Promise<RunEventSyncResult> {
         workspaceId,
         watermarkToolId: discordTool.id,
         watermarkMetadata: metadata,
-        discordTeamChannelId: eventSync.announceChannelId,
+        // System notice → the configured feedback/notices channel, not the
+        // event-announce channel (which is where the reconnect nudge wrongly landed).
+        discordTeamChannelId: resolveNoticeChannelId(
+          metadata,
+          eventSync.announceChannelId
+        ),
         errorMessage: cal.authError,
       });
     }
