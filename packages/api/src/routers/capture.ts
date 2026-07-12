@@ -69,12 +69,14 @@ import {
 } from "../services/routing-memory.js";
 import {
   AI_KIND,
-  AUTO_ROUTE_MIN_CONFIDENCE,
   BELOW_GATE_CONFIDENCE,
-  BYOA_DEFAULT_ROUTE_CONFIDENCE,
   EXACT_MATCH_CONFIDENCE,
   FUZZY_MATCH_CONFIDENCE,
 } from "../lib/ai-events.js";
+import {
+  resolveCaptureRouting,
+  type CaptureRoutingResult,
+} from "../lib/capture-routing.js";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
@@ -152,77 +154,8 @@ const DEDUP_SIMILARITY_FLOOR = 0.5;
 const STRUCTURE_TIMEOUT_MS = 45_000;
 
 // ── Workspace routing (shared across ALL capture doors) ─────────────────────
-// The gate tunables (AUTO_ROUTE_MIN_CONFIDENCE, BYOA_DEFAULT_ROUTE_CONFIDENCE,
-// EXACT/FUZZY_MATCH_CONFIDENCE) live in the `lib/ai-events` SSOT — single-sourced
-// with routing-memory's auto-tune floor so the two gating paths can't drift.
-
-export type WorkspaceRoutingMode = "auto" | "ask" | "locked";
-
-export interface CaptureRoutingResult {
-  /** The workspace the entities will actually be created in. */
-  workspaceId: string;
-  /** Set when AUTO moved the capture off the ambient workspace. */
-  movedToWorkspace?: string;
-  /** Set in ASK mode — a suggestion the surface confirms before moving. */
-  pendingWorkspaceSwitch?: {
-    suggestedWorkspaceId: string;
-    reason: string | null;
-    confidence: number | null;
-  };
-}
-
-/**
- * THE ONE place that decides which workspace a capture lands in — shared by every
- * door (MCP, REST, CLI, Raycast, import) so routing behaves identically everywhere.
- *
- * - AUTO (default): the AI's confidently-resolved target WINS over the ambient/
- *   session workspace, so a capture lands in the right domain without the user
- *   pinning it. Guarded: only moves on confidence ≥ AUTO_ROUTE_MIN_CONFIDENCE AND
- *   into a workspace the user is a member of.
- * - ASK (safe mode): never moves; surfaces `pendingWorkspaceSwitch` to confirm.
- * - LOCKED: never moves; the ambient/pinned workspace stands.
- */
-export function resolveCaptureRouting(opts: {
-  mode: WorkspaceRoutingMode;
-  aiWorkspaceId?: string | null;
-  aiConfidence?: number | null;
-  aiReason?: string | null;
-  currentWorkspaceId: string;
-  memberWorkspaceIds: string[];
-  /** Per-target-workspace auto-apply gate (auto-tuned from correction history);
-   *  falls back to the flat AUTO_ROUTE_MIN_CONFIDENCE. */
-  minConfidence?: number;
-}): CaptureRoutingResult {
-  const target = opts.aiWorkspaceId || undefined;
-  if (!target || target === opts.currentWorkspaceId) {
-    return { workspaceId: opts.currentWorkspaceId };
-  }
-  // A null confidence on an EXPLICIT target = a direct/BYOA caller that didn't
-  // self-report — treat the deliberate pick as trustworthy (membership still
-  // gates the move below). Interactive picks carry a real/derived confidence.
-  const effectiveConfidence =
-    opts.aiConfidence ?? BYOA_DEFAULT_ROUTE_CONFIDENCE;
-  const gate = opts.minConfidence ?? AUTO_ROUTE_MIN_CONFIDENCE;
-  if (
-    opts.mode === "auto" &&
-    effectiveConfidence >= gate &&
-    opts.memberWorkspaceIds.includes(target)
-  ) {
-    return { workspaceId: target, movedToWorkspace: target };
-  }
-  if (opts.mode === "ask") {
-    return {
-      workspaceId: opts.currentWorkspaceId,
-      pendingWorkspaceSwitch: {
-        suggestedWorkspaceId: target,
-        reason: opts.aiReason ?? null,
-        confidence: opts.aiConfidence ?? null,
-      },
-    };
-  }
-  // LOCKED, or AUTO below-threshold / non-member → stay put.
-  return { workspaceId: opts.currentWorkspaceId };
-}
+// The pure routing decision + its types live in `lib/capture-routing` (a
+// testable leaf); the gate tunables live in the `lib/ai-events` SSOT.
 
 type DedupCandidate = {
   entityId: string;
@@ -1684,7 +1617,9 @@ export const captureRouter = router({
                   properties: salvageProperties,
                   documentId,
                   source: "user",
-                  targetWorkspaceId: isPod ? undefined : (workspaceId ?? undefined),
+                  targetWorkspaceId: isPod
+                    ? undefined
+                    : (workspaceId ?? undefined),
                   workspaceScoped: !isPod,
                 });
                 return {

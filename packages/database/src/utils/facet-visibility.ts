@@ -10,21 +10,32 @@
  * has already verified membership on the lens it passes here); pod-wide
  * (null-workspace) facets carry an OWNER floor and are visible only to their
  * owner.
- * - lens `undefined` → no workspace filter (all lenses)
+ * - lens `undefined` → all lenses, optionally bounded by allowedWorkspaceIds
  * - lens `null`      → base-only (facets with no workspace)
  * - lens `string`    → that workspace's facets + pod-wide (null-workspace) ones
  */
 
-import { type SQL, eq, isNotNull, isNull, or } from "drizzle-orm";
+import { type SQL, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import { entityFacets } from "../schema/entity-facets.js";
 
 export function facetVisibilityConditions(opts: {
   userId: string;
   workspaceId?: string | null;
+  /** Access floor for an identity-wide read when workspaceId is undefined. */
+  allowedWorkspaceIds?: string[];
 }): SQL[] {
   const conditions: SQL[] = [];
 
-  if (opts.workspaceId === null) {
+  if (opts.workspaceId === undefined && opts.allowedWorkspaceIds) {
+    conditions.push(
+      opts.allowedWorkspaceIds.length > 0
+        ? (or(
+            inArray(entityFacets.workspaceId, opts.allowedWorkspaceIds),
+            isNull(entityFacets.workspaceId)
+          ) as SQL)
+        : isNull(entityFacets.workspaceId)
+    );
+  } else if (opts.workspaceId === null) {
     conditions.push(isNull(entityFacets.workspaceId));
   } else if (opts.workspaceId !== undefined) {
     conditions.push(

@@ -14,7 +14,16 @@
  */
 
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import { and, eq, exists, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
+import {
+  and,
+  eq,
+  exists,
+  inArray,
+  isNull,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import type * as schema from "../schema/index.js";
 import type { Profile } from "../schema/profiles.js";
 import { profiles } from "../schema/profiles.js";
@@ -244,9 +253,7 @@ export async function profileSlugScopeCondition(
     where: eq(profiles.slug, profileSlug),
     columns: { id: true, profileKind: true },
   });
-  const roleIds = rows
-    .filter((r) => r.profileKind === "role")
-    .map((r) => r.id);
+  const roleIds = rows.filter((r) => r.profileKind === "role").map((r) => r.id);
   const hasKindRow =
     rows.length === 0 || rows.some((r) => r.profileKind !== "role");
 
@@ -261,17 +268,23 @@ export async function profileSlugScopeCondition(
 
 /**
  * Resolve every live facet attached to an entity, each joined with its
- * role-profile and that profile's effective properties (workspace-lensed).
+ * role-profile and that profile's effective properties.
  *
  * `opts.workspaceId`: undefined = all workspaces; null = pod-wide facets
  * only; string = that workspace's facets plus pod-wide facets. Pod-wide
  * facets carry an owner floor (`opts.userId`) — mirrors
- * `FacetRepository.getByEntity` via the shared predicate.
+ * `FacetRepository.getByEntity` via the shared predicate. On the unfiltered
+ * identity path, each role resolves properties through its own attachment
+ * workspace so one role never borrows another workspace's overlays.
  */
 export async function getEffectiveFacets(
   db: PostgresJsDatabase<typeof schema>,
   entityId: string,
-  opts: { userId: string; workspaceId?: string | null }
+  opts: {
+    userId: string;
+    workspaceId?: string | null;
+    allowedWorkspaceIds?: string[];
+  }
 ): Promise<EffectiveFacet[]> {
   const profileResolution = new ProfileResolutionService(db);
   const { workspaceId } = opts;
@@ -297,9 +310,11 @@ export async function getEffectiveFacets(
   for (const facet of facets) {
     const profile = profileById.get(facet.profileId);
     if (!profile) continue; // orphaned facet (profile deleted) — skip
+    const propertyWorkspaceId =
+      workspaceId === undefined ? (facet.workspaceId ?? null) : workspaceId;
     const effectiveProperties = await profileResolution.getEffectiveProperties(
       profile.id,
-      workspaceId
+      propertyWorkspaceId
     );
     results.push({ facet, profile, effectiveProperties });
   }

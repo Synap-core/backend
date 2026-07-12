@@ -5522,6 +5522,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				facets: {
 					slug: string;
 					status: string;
+					outcome: string;
 					facetId?: string;
 					proposalId?: string;
 					error?: string;
@@ -5541,6 +5542,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				facets: {
 					slug: string;
 					status: string;
+					outcome: string;
 					error: string;
 				}[];
 				id?: undefined;
@@ -5574,6 +5576,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				facets: {
 					slug: string;
 					status: string;
+					outcome: string;
 					facetId?: string;
 					proposalId?: string;
 					error?: string;

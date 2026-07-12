@@ -885,7 +885,11 @@ export const entitiesRouter = router({
                 "[entities.create] strong identity match not visible to caller — creating instead of merging"
               );
             }
-            if (identity.match === "strong" && identity.entity && visibleMatch) {
+            if (
+              identity.match === "strong" &&
+              identity.entity &&
+              visibleMatch
+            ) {
               const matchedId = identity.entity.id;
               const nonEmptyProperties = Object.fromEntries(
                 Object.entries(input.properties ?? {}).filter(
@@ -1796,9 +1800,8 @@ export const entitiesRouter = router({
         id: z.string().uuid(),
         includeProfile: z.boolean().optional().default(false),
         /**
-         * Rendering/property lens. Object access is still by entity id, but
-         * profile overlays are workspace-sensitive and must be cache-keyed by
-         * callers that request `includeProfile`.
+         * @deprecated Kept for wire compatibility only. Single-object reads
+         * are identity-wide and never vary by a workspace lens.
          */
         workspaceId: z.string().uuid().nullable().optional(),
       })
@@ -1809,9 +1812,9 @@ export const entitiesRouter = router({
         profile: z.any().optional(),
         effectiveProperties: z.array(z.any()).optional(),
         /**
-         * Live facets (role-profiles attached to this entity) resolved through
-         * the same workspace lens as `effectiveProperties`. Additive/optional —
-         * present only on the `includeProfile` path. Kind + Facets.
+         * Every live role the user may see, independent of the active
+         * workspace lens. Additive/optional — present only on the
+         * `includeProfile` path. Kind + Roles.
          *
          * SHIPPED CONTRACT — the browser host reads `entities.get.facets`
          * (ProfileEntityDetailCell), so the field name is `facets` and must stay
@@ -1915,53 +1918,37 @@ export const entitiesRouter = router({
         return { entity: typedEntity, externalLinks };
       }
 
-      const lensWorkspaceId =
-        input.workspaceId !== undefined
-          ? input.workspaceId
-          : (entity.workspaceId ?? ctx.workspaceId ?? null);
-
-      if (lensWorkspaceId) {
-        const { validateWorkspaceAccess } =
-          await import("../utils/workspace-membership.js");
-        const allowedWorkspaceIds = await validateWorkspaceAccess(ctx.userId, [
-          lensWorkspaceId,
-        ]);
-        if (!allowedWorkspaceIds.includes(lensWorkspaceId)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Access denied to workspace lens",
-          });
-        }
-      }
-
       const database = await getDb();
       const resolutionService = new ProfileResolutionService(database);
+      const { validateWorkspaceAccess } =
+        await import("../utils/workspace-membership.js");
+      const allowedWorkspaceIds = await validateWorkspaceAccess(ctx.userId);
+      // A single-object query has one stable cache identity. Its kind schema is
+      // resolved from the object's own scope, never from request/header state.
+      const entityWorkspaceId = entity.workspaceId ?? null;
       const profile = await resolutionService.resolveProfile(
         entity.type,
         ctx.userId,
-        lensWorkspaceId
+        entityWorkspaceId
       );
 
-      if (!profile) return { entity: typedEntity, externalLinks };
+      const effectiveProperties = profile
+        ? await resolutionService.getEffectiveProperties(
+            profile.id,
+            entityWorkspaceId
+          )
+        : undefined;
 
-      const effectiveProperties =
-        await resolutionService.getEffectiveProperties(
-          profile.id,
-          lensWorkspaceId
-        );
-
-      // Kind + Facets: resolve the entity's live facets through the SAME
-      // workspace lens as the property overlays. Additive — never blocks the
-      // envelope.
+      // Fetch the complete user-visible role envelope once. The Browser uses
+      // explicit surface.workspaceId only to foreground a role client-side.
       const facets = await getEffectiveFacets(database, entity.id, {
         userId: ctx.userId,
-        workspaceId: lensWorkspaceId,
+        allowedWorkspaceIds,
       });
 
       return {
         entity: typedEntity,
-        profile,
-        effectiveProperties,
+        ...(profile ? { profile, effectiveProperties } : {}),
         // Spread into anonymous objects: interfaces lack index signatures, so
         // EntityFacet/Profile aren't assignable to the Record-typed output
         // schema directly. Field name is `facets` — the shipped browser-host

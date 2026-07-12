@@ -1,6 +1,6 @@
 {
   "name": "@synap/api",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Synap API Router - tRPC types and router for Data Pod",
   "type": "module",
   "main": "./dist/index.js",
