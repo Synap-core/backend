@@ -143,6 +143,12 @@
     "alwaysOn": false,
     "summary": "Automations grammar (trigger/step/condition/delay/output/loop)."
   },
+  "synap/diagnostics": {
+    "teachesTools": ["synap_diagnose"],
+    "skillGroup": "core",
+    "alwaysOn": false,
+    "summary": "Diagnose what an AI did (runs door): read a capture's trace + fixHints instead of guessing when it didn't do what you expected."
+  },
   "synap/viewframe-cells": {
     "teachesTools": ["generate_widget", "create_cell"],
     "skillGroup": "build",

@@ -62,6 +62,41 @@ import { interpolateDeep, interpolateString } from "../_shared/interpolate.js";
 
 // Param interpolation (`{{var}}` scheme) is shared via services/_shared/interpolate.
 
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    !Array.isArray(v) &&
+    Object.getPrototypeOf(v) === Object.prototype
+  );
+}
+
+/**
+ * Deep-merge a template's default `metadata`/`config` UNDER the tool's existing
+ * runtime values — existing wins at every leaf, the template only supplies keys the
+ * tool does not already have. Preserves operator runtime state (e.g. the Discord
+ * bot's `metadata.discord` channel links) across a boot-time template reconcile that
+ * would otherwise reset it to the template's empty defaults. Arrays are treated as
+ * leaves (existing replaces, never concatenated).
+ */
+export function mergePreservingExisting(
+  template: Record<string, unknown>,
+  existing: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...template };
+  for (const key of Object.keys(existing)) {
+    const ev = existing[key];
+    out[key] =
+      key in template && isPlainObject(template[key]) && isPlainObject(ev)
+        ? mergePreservingExisting(
+            template[key] as Record<string, unknown>,
+            ev as Record<string, unknown>
+          )
+        : ev; // existing leaf (incl. arrays / empty-string) wins
+  }
+  return out;
+}
+
 // ── templateKey → definition loader ───────────────────────────────────────────
 
 /**
@@ -309,7 +344,11 @@ export async function createCapabilityFromDefinition(
     // on the unique index. Tools without a credentialRef (builtin/script) fall
     // back to name-matching. Re-apply refreshes the name + verb catalog.
     const [existingTool] = await db
-      .select({ id: toolsTable.id })
+      .select({
+        id: toolsTable.id,
+        metadata: toolsTable.metadata,
+        config: toolsTable.config,
+      })
       .from(toolsTable)
       .where(
         and(
@@ -337,8 +376,21 @@ export async function createCapabilityFromDefinition(
           name: t.name,
           description: t.description,
           credentialRef: credentialRef ?? null,
-          config: t.config ?? {},
-          metadata: t.metadata ?? {},
+          // Read-modify-write: the template provides STRUCTURE + defaults, but the
+          // tool's config/metadata also hold RUNTIME state written by the operator
+          // at runtime (e.g. the Discord bot's `metadata.discord` channel links set
+          // via /setup). A blind overwrite here reset that config on every boot-time
+          // reconcile after a template drifted — so merge template UNDER existing
+          // (existing runtime values win; template only fills NEW keys). Mirrors the
+          // container-metadata read-modify-write below.
+          config: mergePreservingExisting(
+            t.config ?? {},
+            (existingTool.config ?? {}) as Record<string, unknown>
+          ),
+          metadata: mergePreservingExisting(
+            t.metadata ?? {},
+            (existingTool.metadata ?? {}) as Record<string, unknown>
+          ),
           ...(verbs.length > 0 ? { capabilities: verbs } : {}),
           updatedAt: new Date(),
         })

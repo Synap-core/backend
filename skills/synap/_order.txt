@@ -23,6 +23,7 @@ common-mistakes.md
 inline-patterns.md
 focus-sessions.md
 automations.md
+diagnostics.md
 more.md
 viewframe-cells.md
 authentication.md
