@@ -366,6 +366,37 @@ export async function executeMCPToolViaHubProtocol(
       return ok(result);
     }
 
+    case "synap_diagnose": {
+      requireScope(apiKeyScopes, "mcp.read", toolName);
+      const { listRuns, getRun } = await import("../../services/runs/index.js");
+      const flowType = args.flowType as
+        | "automation"
+        | "playbook"
+        | "capture"
+        | "session"
+        | undefined;
+      // With a runId → that run's activity timeline (a capture's decision + trace
+      // events: what happened and WHY, each with a fixHint). Without → the feed.
+      if (args.runId) {
+        if (!flowType) {
+          return ok({ error: "flowType is required when runId is given" });
+        }
+        const detail = await getRun({
+          userId,
+          flowType,
+          id: args.runId as string,
+        });
+        return ok(detail ?? { error: "Run not found" });
+      }
+      const runs = await listRuns({
+        userId,
+        flowType,
+        flowId: args.flowId as string | undefined,
+        limit: (args.limit as number) || undefined,
+      });
+      return ok({ runs });
+    }
+
     // ── Write tools ─────────────────────────────────────────────────────────
     case "synap_create_entity": {
       requireScope(apiKeyScopes, "mcp.write", toolName);

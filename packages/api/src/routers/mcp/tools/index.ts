@@ -151,6 +151,34 @@ export const tools = {
         },
       },
       {
+        name: "synap_diagnose",
+        description:
+          "See what an AI did across flows — the unified run feed + per-run activity. Without args: recent runs across automation, playbook, capture, and session (newest first). With runId + flowType: that run's activity timeline. For a CAPTURE run this is its decision + trace events — WHY a facet/entity was dropped or a route chosen, each with a machine-readable reason + an actionable fixHint. Use this instead of guessing when a capture or automation didn't do what was expected. USER-scoped automatically.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            flowType: {
+              type: "string",
+              enum: ["automation", "playbook", "capture", "session"],
+              description:
+                "Restrict to one ledger. REQUIRED when runId is given (the id space differs per flow).",
+            },
+            flowId: {
+              type: "string",
+              description:
+                "Restrict the feed to one flow's runs (automationId / playbookId).",
+            },
+            runId: {
+              type: "string",
+              description:
+                "A specific run id (or a capture's correlationId) → returns its activity timeline instead of the feed.",
+            },
+            limit: { type: "number", default: 25 },
+          },
+          required: [],
+        },
+      },
+      {
         name: "synap_get_entity",
         description:
           "Get a single entity by ID with full details: all properties and metadata. Use after synap_ask to get complete data on a result. The id comes from synap_ask results or synap_create_entity responses.",

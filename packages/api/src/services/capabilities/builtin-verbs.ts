@@ -51,6 +51,7 @@ import type { Context } from "../../context.js";
 // touch the pilot verbs.
 import type { ScopedDb } from "../../access/scoped-db.js";
 import type { ContextObjectType } from "../../utils/resolve-or-create-channel.js";
+import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import {
   placeArtboardDeck,
   ArtboardDeckSlideSchema,
@@ -423,21 +424,24 @@ const entityQueryParams = z.object({
 const entityQueryHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = entityQueryParams.parse(params);
   const limit = input.limit ?? 20;
+  const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
+  const facetVisibilityScope = await resolveFacetVisibilityScope(
+    ctx.userId,
+    workspaceId
+  );
 
   // The lens is the query's explicit workspaceId, else the acting lens.
-  const scoped = await getReadScope(
-    ctx.userId,
-    input.workspaceId ?? ctx.workspaceId ?? undefined
-  );
+  const scoped = await getReadScope(ctx.userId, workspaceId);
 
   // Polymorphic (Kind + Facets): a role slug (client/partner/…) matches via
   // the facet EXISTS, a kind slug via entities.type — same one-door routing
   // as entities.list, so agents querying by role get rows post-conversion.
   const conditions: SQL[] = [
-    await profileSlugScopeCondition(db, input.profileSlug, {
-      userId: ctx.userId,
-      workspaceId: input.workspaceId ?? ctx.workspaceId ?? undefined,
-    }),
+    await profileSlugScopeCondition(
+      db,
+      input.profileSlug,
+      facetVisibilityScope
+    ),
   ];
   // JSONB property equality — mirror executeQueryStep's filter semantics.
   for (const [key, value] of Object.entries(input.filter ?? {})) {

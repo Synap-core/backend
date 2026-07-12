@@ -17,6 +17,8 @@ export default defineConfig({
       "src/conversions/*.test.ts",
       "src/services/identity-resolution-service.test.ts",
       "src/services/profile-resolution-service.test.ts",
+      "src/__tests__/facet-slug-visibility.test.ts",
+      "src/__tests__/profile-scope-conditions.test.ts",
     ],
     env: {
       NODE_ENV: "test",

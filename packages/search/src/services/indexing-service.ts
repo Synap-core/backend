@@ -7,7 +7,7 @@ import { getTypesenseAdminClient } from "../client.js";
 import {
   getDb,
   inArray,
-  loadFacetSlugsBatch,
+  loadAllFacetSlugsBatchForTrustedIndexing,
   and,
   eq,
   isNull,
@@ -413,9 +413,8 @@ export class IndexingService {
 
   /**
    * Batch-attach live facet (role-profile) slugs to entity rows for indexing.
-   * Delegates to the canonical loadFacetSlugsBatch join in @synap/database
-   * (unfiltered lens — search docs are per-entity; visibility is enforced at
-   * query time elsewhere).
+   * Uses the explicitly trusted unfiltered wrapper. Search documents are
+   * per-entity; user visibility is enforced by the query path.
    */
   private async attachFacetSlugs(
     db: Awaited<ReturnType<typeof getDb>>,
@@ -423,7 +422,7 @@ export class IndexingService {
   ): Promise<any[]> {
     if (entityRows.length === 0) return entityRows;
 
-    const slugsByEntity = await loadFacetSlugsBatch(
+    const slugsByEntity = await loadAllFacetSlugsBatchForTrustedIndexing(
       db,
       entityRows.map((e) => e.id)
     );

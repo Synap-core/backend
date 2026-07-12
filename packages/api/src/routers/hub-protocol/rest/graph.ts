@@ -122,7 +122,8 @@ export function registerGraphRoutes(app: HubHono): void {
         userId,
         type as LinkEndpointType,
         id,
-        extra
+        extra,
+        workspaceId ?? undefined
       );
       return c.json(envelope, 200);
     } catch (err) {

@@ -38,10 +38,12 @@ import {
   documents,
   intelligenceCommands,
   loadFacetSlugsBatch,
+  type FacetVisibilityScope,
 } from "@synap/database";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { getLinksFor } from "../links/links-service.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 
 /**
  * Kinds the graph envelope can focus on. Superset of `LinkEndpointType` so
@@ -157,7 +159,8 @@ const KIND_TABLE: Record<string, KindSpec> = {
  */
 export async function hydrateNodes(
   userId: string,
-  refs: { kind: string; id: string }[]
+  refs: { kind: string; id: string }[],
+  facetVisibilityScope: FacetVisibilityScope
 ): Promise<Map<string, GraphNode>> {
   const out = new Map<string, GraphNode>();
   if (refs.length === 0) return out;
@@ -203,7 +206,9 @@ export async function hydrateNodes(
       // Entity kind carries facets on top of its base subtype (kind slug) —
       // batch-load live facet slugs for every entity in this group.
       const facetSlugsByEntity =
-        kind === "entity" ? await loadFacetSlugs(db, ids) : null;
+        kind === "entity"
+          ? await loadFacetSlugs(db, ids, facetVisibilityScope)
+          : null;
 
       for (const row of rows as Record<string, unknown>[]) {
         const id = row.id as string;
@@ -233,9 +238,10 @@ export async function hydrateNodes(
  */
 async function loadFacetSlugs(
   db: Awaited<ReturnType<typeof getDb>>,
-  entityIds: string[]
+  entityIds: string[],
+  facetVisibilityScope: FacetVisibilityScope
 ): Promise<Map<string, string[]>> {
-  return loadFacetSlugsBatch(db, entityIds);
+  return loadFacetSlugsBatch(db, entityIds, facetVisibilityScope);
 }
 
 /**
@@ -246,7 +252,8 @@ async function loadFacetSlugs(
 export async function getLinkNeighbors(
   userId: string,
   kind: LinkEndpointType,
-  id: string
+  id: string,
+  facetVisibilityScope: FacetVisibilityScope
 ): Promise<GraphNeighbor[]> {
   const edges = await getLinksFor(userId, kind, id);
   if (edges.length === 0) return [];
@@ -264,7 +271,8 @@ export async function getLinkNeighbors(
 
   const nodes = await hydrateNodes(
     userId,
-    refs.map((r) => ({ kind: r.kind, id: r.id }))
+    refs.map((r) => ({ kind: r.kind, id: r.id })),
+    facetVisibilityScope
   );
   return refs.map((r) => {
     const node = nodes.get(`${r.kind}:${r.id}`);
@@ -358,11 +366,16 @@ export async function getObjectGraph(
   userId: string,
   kind: LinkEndpointType,
   id: string,
-  extraNeighbors: GraphNeighbor[] = []
+  extraNeighbors: GraphNeighbor[] = [],
+  workspaceId?: string | null
 ): Promise<GraphEnvelope> {
+  const facetVisibilityScope = await resolveFacetVisibilityScope(
+    userId,
+    workspaceId
+  );
   const [selfMap, linkNeighbors] = await Promise.all([
-    hydrateNodes(userId, [{ kind, id }]),
-    getLinkNeighbors(userId, kind, id),
+    hydrateNodes(userId, [{ kind, id }], facetVisibilityScope),
+    getLinkNeighbors(userId, kind, id, facetVisibilityScope),
   ]);
 
   const object: GraphNode = selfMap.get(`${kind}:${id}`) ?? {

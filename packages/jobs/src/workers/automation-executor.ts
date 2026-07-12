@@ -1746,7 +1746,10 @@ async function executePlaybookRun(
           stepState: firstStageKey ? { currentStep: firstStageKey } : {},
         })
         .onConflictDoUpdate({
-          target: [playbookEnrollments.playbookId, playbookEnrollments.entityId],
+          target: [
+            playbookEnrollments.playbookId,
+            playbookEnrollments.entityId,
+          ],
           set: { status: "active", updatedAt: new Date() },
         });
     } catch (err) {
@@ -1896,9 +1899,23 @@ async function executeAutomationFlow(params: {
       .where(eq(users.id, ownerId))
       .limit(1);
 
-    const boundChannelId =
+    // Channel resolution (runs-substrate rule: automation = ONE channel for all
+    // its runs). An explicit trigger-bound channel wins (e.g. a Discord-triggered
+    // automation posts back to its source channel); otherwise resolve THE
+    // automation's durable run channel so every run's activity lands in one room.
+    const triggerChannelId =
       (automation.triggerConfig as AutomationTriggerConfig | null)?.channelId ??
       undefined;
+    const boundChannelId =
+      triggerChannelId ??
+      (
+        await new ChannelRepository(db).ensureAutomationRunChannel(
+          automationId,
+          ownerId,
+          workspaceId ?? undefined,
+          automation.name ?? undefined
+        )
+      ).id;
 
     const opened = await openRunSession({
       userId: ownerId,

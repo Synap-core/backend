@@ -26,6 +26,7 @@ import {
   inArray,
   isNull,
   loadFacetSlugsBatch,
+  type FacetVisibilityScope,
 } from "@synap/database";
 import {
   projectLensWhere,
@@ -46,6 +47,7 @@ import {
   type QueryUnderstanding,
 } from "./understand-query.js";
 import { createLogger } from "@synap-core/core";
+import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 
 const logger: any = createLogger({ module: "retrieval" });
 
@@ -133,7 +135,8 @@ type EntityRow = typeof entities.$inferSelect & {
 async function fetchOrdered(
   ids: string[],
   userId: string,
-  projectId?: string | null
+  projectId: string | null | undefined,
+  facetVisibilityScope: FacetVisibilityScope
 ): Promise<EntityRow[]> {
   if (ids.length === 0) return [];
   // Defense-in-depth: gate on the loaded row's userId even though every id
@@ -184,7 +187,8 @@ async function fetchOrdered(
   // no role carry no `facetSlugs`.
   const facetSlugsById = await loadFacetSlugsBatch(
     db,
-    rows.map((r) => r.id)
+    rows.map((r) => r.id),
+    facetVisibilityScope
   );
 
   const byId = new Map<string, EntityRow>(
@@ -289,6 +293,10 @@ export async function retrieve(
 ): Promise<RetrieveResult> {
   const { query, userId, workspaceId, projectId, catalog } = params;
   const limit = params.limit ?? 20;
+  const facetVisibilityScope = await resolveFacetVisibilityScope(
+    userId,
+    workspaceId
+  );
 
   const understanding = understandQuery(query, catalog);
   const embedding = await embedQuery(query); // once; reused across fused passes
@@ -302,7 +310,15 @@ export async function retrieve(
 
   // 1. Recall passes — semantic + lexical, unscoped baseline + type-scoped.
   const passes = await Promise.all([
-    hybridRecall({ query, userId, workspaceId, projectIds, limit, embedding }),
+    hybridRecall({
+      query,
+      userId,
+      workspaceId,
+      projectIds,
+      limit,
+      embedding,
+      facetVisibilityScope,
+    }),
     ...understanding.profileTypes.slice(0, 2).map((slug) =>
       hybridRecall({
         query,
@@ -312,6 +328,7 @@ export async function retrieve(
         projectIds,
         limit,
         embedding,
+        facetVisibilityScope,
       })
     ),
   ]);
@@ -350,9 +367,15 @@ export async function retrieve(
           userId,
           workspaceId,
           limit,
+          facetVisibilityScope,
         });
         if (r2.ids.length > 0) {
-          const rows2 = await fetchOrdered(r2.ids, userId, projectId);
+          const rows2 = await fetchOrdered(
+            r2.ids,
+            userId,
+            projectId,
+            facetVisibilityScope
+          );
           return {
             entities: rows2.slice(0, limit) as Record<string, unknown>[],
             understanding,
@@ -368,7 +391,12 @@ export async function retrieve(
     return { entities: [], understanding, source, verdict: "empty" };
   }
 
-  const ordered = await fetchOrdered(fusedIds, userId, projectId);
+  const ordered = await fetchOrdered(
+    fusedIds,
+    userId,
+    projectId,
+    facetVisibilityScope
+  );
 
   // 4. Rank — resolve the ACTIVE strategy (pod_settings JSONB; default 'baseline'
   //    so this changes nothing until a pod admin opts in) then rank + slice.

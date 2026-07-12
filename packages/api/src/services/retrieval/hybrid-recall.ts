@@ -17,10 +17,12 @@ import {
   drizzleSql,
   resolveSlugKind,
   loadFacetSlugsBatch,
+  type FacetVisibilityScope,
 } from "@synap/database";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
+import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 
 // Degradation is graceful but not invisible: the `source` flag signals a
 // vector-skip at the API boundary, and these debug logs let a pod operator see
@@ -95,6 +97,8 @@ export interface HybridRecallParams {
    * skip the vector half (Typesense-only).
    */
   embedding?: number[] | null;
+  /** Pre-resolved once by composite retrieval to avoid repeated membership reads. */
+  facetVisibilityScope?: FacetVisibilityScope;
 }
 
 export interface HybridRecallResult {
@@ -106,6 +110,9 @@ export async function hybridRecall(
   params: HybridRecallParams
 ): Promise<HybridRecallResult> {
   const { query, userId, workspaceId, profileSlug, projectIds, limit } = params;
+  const facetVisibilityScope =
+    params.facetVisibilityScope ??
+    (await resolveFacetVisibilityScope(userId, workspaceId));
   // When a project lens is active, widen the recall budget so the project rows
   // aren't crowded out before the in-query filter applies (esp. the Typesense
   // half, which filters its hit list rather than constraining the index query).
@@ -207,7 +214,11 @@ export async function hybridRecall(
   if (matchByFacet && profileSlug) {
     const union = [...new Set([...vectorIds, ...keywordIds])];
     if (union.length > 0) {
-      const slugsById = await loadFacetSlugsBatch(db, union);
+      const slugsById = await loadFacetSlugsBatch(
+        db,
+        union,
+        facetVisibilityScope
+      );
       const wears = (id: string): boolean =>
         slugsById.get(id)?.includes(profileSlug) ?? false;
       vectorIds = vectorIds.filter(wears);

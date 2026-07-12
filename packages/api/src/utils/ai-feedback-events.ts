@@ -19,7 +19,12 @@
 
 import { randomUUID } from "crypto";
 import { auditLog } from "./audit-log.js";
-import { AI_DECISION, AI_CORRECTION } from "../lib/ai-events.js";
+import {
+  AI_DECISION,
+  AI_CORRECTION,
+  AI_PROCESSING,
+  CAPTURE_TRACE_KIND,
+} from "../lib/ai-events.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "ai-feedback-events" });
@@ -86,6 +91,58 @@ export async function emitAiCorrection(opts: {
     logger.warn(
       { err, subjectId: opts.subjectId, kind: opts.data.kind },
       "ai_correction emit failed (operation preserved)"
+    );
+  }
+}
+
+/**
+ * Record a self-diagnosis TRACE — a point where the capture pipeline silently
+ * dropped/degraded/coerced something. Keyed by `captureId` (the capture's
+ * correlationId) so a diagnose door can return the whole capture's story. Every
+ * trace carries a machine-readable `reason` + a `fixHint` so both the AI and the
+ * user get "here's what happened and what to do." Best-effort: NEVER throws, so
+ * instrumenting a drop can't regress the zero-friction capture guarantee.
+ */
+export async function emitCaptureTrace(opts: {
+  captureId: string;
+  userId: string;
+  workspaceId?: string | null;
+  /** Which pipeline stage: "facet_attach" | "slug_coerce" | "materialize_skip" | … */
+  component: string;
+  /** Machine-readable cause: "kind_mismatch" | "not_in_creatable_catalog" | … */
+  reason: string;
+  /** The affected entity/tempId, when there is one. */
+  subjectId?: string;
+  /** A one-line, actionable fix hint for the AI/user. */
+  fixHint?: string;
+  /** Extra structured detail (e.g. applicableKinds, fromSlug/toSlug). */
+  detail?: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    await auditLog({
+      subjectType: AI_PROCESSING,
+      action: opts.component,
+      phase: "completed",
+      subjectId: opts.subjectId ?? opts.captureId,
+      userId: opts.userId,
+      workspaceId: opts.workspaceId ?? undefined,
+      source: "api",
+      // The captureId is the join key — carried in BOTH the column and data.kind's
+      // sibling so the diagnose door can group a whole capture's trace by it.
+      correlationId: opts.captureId,
+      data: {
+        kind: CAPTURE_TRACE_KIND,
+        component: opts.component,
+        reason: opts.reason,
+        ...(opts.fixHint ? { fixHint: opts.fixHint } : {}),
+        ...(opts.detail ?? {}),
+        correlationId: opts.captureId,
+      },
+    });
+  } catch (err) {
+    logger.warn(
+      { err, captureId: opts.captureId, component: opts.component },
+      "capture trace emit failed (operation preserved)"
     );
   }
 }

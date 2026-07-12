@@ -1,0 +1,61 @@
+import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const thisFile = fileURLToPath(import.meta.url);
+const apiRoot = path.resolve(here, "..");
+const backendRoot = path.resolve(here, "../../../..");
+
+function read(relativePath: string): string {
+  return fs.readFileSync(path.resolve(backendRoot, relativePath), "utf8");
+}
+
+describe("facet visibility call doors", () => {
+  it("keeps the unfiltered loader out of every API source file", () => {
+    const stack = [apiRoot];
+    const sources: string[] = [];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const absolute = path.join(current, entry.name);
+        if (entry.isDirectory()) stack.push(absolute);
+        else if (entry.name.endsWith(".ts") && absolute !== thisFile)
+          sources.push(fs.readFileSync(absolute, "utf8"));
+      }
+    }
+
+    expect(sources.join("\n")).not.toContain(
+      "loadAllFacetSlugsBatchForTrustedIndexing"
+    );
+  });
+
+  it("reserves the trusted loader for search indexing and annotates view rows", () => {
+    const indexing = read("packages/search/src/services/indexing-service.ts");
+    const views = read("packages/api/src/routers/views.ts");
+
+    expect(indexing).toContain("loadAllFacetSlugsBatchForTrustedIndexing");
+    expect(views).toContain("loadFacetSlugsBatch(");
+    expect(views).toContain(
+      "facetSlugs: facetSlugsByEntity.get(entity.id) ?? []"
+    );
+    expect(views).toContain("entities: annotatedEntities");
+  });
+
+  it("keeps Hub reads and both graph halves on the same explicit visibility scope", () => {
+    const hubEntities = read(
+      "packages/api/src/routers/hub-protocol/rest/entities.ts"
+    );
+    const graph = read("packages/api/src/routers/graph.ts");
+    const relations = read("packages/api/src/routers/relations.ts");
+
+    expect(hubEntities).toContain(
+      "await resolveFacetVisibilityScope(authUserId)"
+    );
+    expect(graph).toContain("workspaceId: input.workspaceId");
+    expect(relations).toContain(
+      "resolveFacetVisibilityScope(\n        ctx.userId,\n        input.workspaceId"
+    );
+  });
+});

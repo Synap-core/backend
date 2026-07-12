@@ -75,6 +75,7 @@ import { auditLog } from "../utils/audit-log.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
+import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
 import {
   syncRelationToPropertyOnCreate,
   syncRelationToPropertyOnDelete,
@@ -820,9 +821,15 @@ export const relationsRouter = router({
         entityId: z.string().uuid(),
         /** Maximum items per source (default 50) */
         limit: z.number().min(1).max(200).default(50),
+        /** Explicit role-visibility lens. Omit for the complete user floor. */
+        workspaceId: z.string().uuid().nullable().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
+      const facetVisibilityScope = await resolveFacetVisibilityScope(
+        ctx.userId,
+        input.workspaceId
+      );
       const [
         graphRelations,
         propertyLinks,
@@ -942,7 +949,8 @@ export const relationsRouter = router({
         });
         const facetSlugsByEntity = await loadFacetSlugsBatch(
           db,
-          fetched.map((e) => e.id)
+          fetched.map((e) => e.id),
+          facetVisibilityScope
         );
         for (const e of fetched) {
           entityMap.set(e.id, {

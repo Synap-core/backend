@@ -24,6 +24,16 @@ import { events, drizzleSql } from "@synap/database";
 export const AI_DECISION = "ai_decision";
 /** `events.subject_type` for a user reversal of an AI decision. */
 export const AI_CORRECTION = "ai_correction";
+/**
+ * `events.subject_type` for a self-diagnosis TRACE — a point where the capture
+ * pipeline silently dropped/degraded/coerced something (a facet, an entity, a
+ * relation, content). Keyed by the capture's `correlationId` (the captureId) so
+ * the operating AI (and the user) can ask "what happened to this capture and
+ * WHY" via a door instead of SSH-ing the host. Best-effort, never fails capture.
+ */
+export const AI_PROCESSING = "ai_processing";
+/** `data.kind` for an AI_PROCESSING event — a captured self-diagnosis trace. */
+export const CAPTURE_TRACE_KIND = "capture_trace";
 
 /** `data.kind` discriminator — pairs a decision with the correction that reverses it. */
 export const AI_KIND = {

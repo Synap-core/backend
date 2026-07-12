@@ -87,7 +87,10 @@ import {
   createRelationsFromRefs,
 } from "../utils/materialize-composite.js";
 import { makeExternalLinkIdempotency } from "../utils/entity-link-idempotency.js";
-import { emitAiDecision } from "../utils/ai-feedback-events.js";
+import {
+  emitAiDecision,
+  emitCaptureTrace,
+} from "../utils/ai-feedback-events.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 
 const logger = createLogger({ module: "capture-router" });
@@ -1743,7 +1746,21 @@ export const captureRouter = router({
       const tempIdToEntityId = new Map(
         created.map((c) => [c.tempId, c.entityId])
       );
+      // The capture's self-diagnosis join key — minted here (before the first
+      // instrumentable drop) and threaded into the proposal below so the routing
+      // decision, the entity stamp, and every capture-trace share ONE id.
+      const captureId = randomUUID();
       let facetsAttached = 0;
+      // Self-diagnosis: facets the pipeline dropped (the exemplar-bug class —
+      // the IS no longer eats role facets, but this governed door still can:
+      // not-a-role / applicableKinds mismatch / property-invalid). Surfaced in
+      // the response AND emitted as a capture-trace so "why did the facet drop?"
+      // is a diagnose-door query, not an SSH into the host.
+      const facetsFailed: Array<{
+        entityId: string;
+        roleSlug: string;
+        reason: string;
+      }> = [];
       for (const e of input.entities) {
         if (!e.facets?.length) continue;
         const parentEntityId = tempIdToEntityId.get(e.tempId);
@@ -1752,8 +1769,26 @@ export const captureRouter = router({
           const contextEntityId = f.contextTempId
             ? tempIdToEntityId.get(f.contextTempId)
             : undefined;
+          const recordFacetDrop = (reason: string) => {
+            facetsFailed.push({
+              entityId: parentEntityId,
+              roleSlug: f.profileSlug,
+              reason,
+            });
+            void emitCaptureTrace({
+              captureId,
+              userId,
+              workspaceId: workspaceId ?? null,
+              component: "facet_attach",
+              reason,
+              subjectId: parentEntityId,
+              fixHint:
+                "This role is a FACET, not an entity kind. Check the role's applicableKinds includes the parent's kind, and attach via attach_facet on the existing entity (never create a role-typed entity).",
+              detail: { roleSlug: f.profileSlug },
+            });
+          };
           try {
-            await entitiesCaller.attachFacet({
+            const r = await entitiesCaller.attachFacet({
               entityId: parentEntityId,
               profileSlug: f.profileSlug,
               properties: f.properties,
@@ -1765,12 +1800,22 @@ export const captureRouter = router({
               workspaceId: workspaceId ?? undefined,
               source: "user",
             });
-            facetsAttached++;
+            // attachFacet returns a status/outcome even when it does NOT attach
+            // (e.g. governance routed it to a proposal). Only a true "attached"
+            // counts; anything else is a (soft) drop worth surfacing.
+            const status = (r as { status?: string } | undefined)?.status;
+            if (status && status !== "attached" && status !== "exists") {
+              recordFacetDrop(status);
+            } else {
+              facetsAttached++;
+            }
           } catch (err) {
+            const reason = err instanceof Error ? err.message : "attach_failed";
             logger.warn(
               { err, entityId: parentEntityId, roleSlug: f.profileSlug },
-              "capture.execute: facet attach skipped (unknown/misapplied role or attach failure)"
+              "capture.execute: facet attach dropped (unknown/misapplied role or attach failure)"
             );
+            recordFacetDrop(reason);
           }
         }
       }
@@ -1870,6 +1915,11 @@ export const captureRouter = router({
             source: "api",
             summary: buildCaptureSummary(operations),
             data: {
+              // Unify the whole capture under the pre-minted captureId — the
+              // routing decision, the entity provenance stamp, AND every
+              // capture-trace share this id, so the diagnose door returns one
+              // capture's complete story.
+              correlationId: captureId,
               operations,
               source: "capture",
               materialized: { entityIds: materializedEntityIds },
@@ -2096,6 +2146,11 @@ export const captureRouter = router({
       return {
         created,
         relations: createdRelations,
+        // The capture's self-diagnosis id + any role facets the door dropped —
+        // so the caller (and a diagnose query keyed on captureId) can see "filed
+        // N, dropped M facets — why". Empty array on the happy path.
+        captureId,
+        ...(facetsFailed.length ? { facetsFailed } : {}),
         // Routing outcome (present only when routing engaged) — the surface can
         // show "moved to X" / offer to confirm a suggested switch.
         ...(routing?.movedToWorkspace

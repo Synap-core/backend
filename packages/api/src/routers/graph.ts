@@ -21,6 +21,7 @@ import {
   isNull,
   desc,
   profileSlugScopeCondition,
+  loadFacetSlugsBatch,
 } from "@synap/database";
 import { entities, relations } from "@synap/database/schema";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
@@ -34,6 +35,7 @@ import {
 } from "../services/object-graph/graph-service.js";
 import { relationsRouter } from "./relations.js";
 import type { LinkEndpointType } from "@synap/playbooks";
+import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
 
 /**
  * Get a single node with full graph context
@@ -76,6 +78,7 @@ export const graphRouter = router({
         const conns = await relCaller.getConnections({
           entityId: input.id,
           limit: 100,
+          workspaceId: input.workspaceId,
         });
         extra = connectionsToNeighbors(conns.connections);
       }
@@ -83,7 +86,8 @@ export const graphRouter = router({
         ctx.userId,
         input.type as LinkEndpointType,
         input.id,
-        extra
+        extra,
+        input.workspaceId
       );
     }),
 
@@ -272,6 +276,9 @@ export const graphRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      const facetVisibilityScope = await resolveFacetVisibilityScope(
+        ctx.userId
+      );
       const entityRows = await db.query.entities.findMany({
         where: and(
           userVisibleWhere(entities.workspaceId, ctx.userId),
@@ -280,7 +287,7 @@ export const graphRouter = router({
           // across all the user's workspaces (undefined lens + owner floor).
           input.profileSlug
             ? await profileSlugScopeCondition(db, input.profileSlug, {
-                userId: ctx.userId,
+                ...facetVisibilityScope,
               })
             : undefined
         ),
@@ -310,7 +317,18 @@ export const graphRouter = router({
         ),
       });
 
-      return { entities: entityRows, relations: relationRows };
+      const facetSlugsByEntity = await loadFacetSlugsBatch(
+        db,
+        ids,
+        facetVisibilityScope
+      );
+      return {
+        entities: entityRows.map((entity) => ({
+          ...entity,
+          facetSlugs: facetSlugsByEntity.get(entity.id) ?? [],
+        })),
+        relations: relationRows,
+      };
     }),
 
   /**
@@ -350,13 +368,16 @@ export const graphRouter = router({
       }
 
       // Global stats
+      const facetVisibilityScope = await resolveFacetVisibilityScope(
+        ctx.userId
+      );
       const allEntities = await db.query.entities.findMany({
         where: and(
           eq(entities.userId, ctx.userId),
           // Polymorphic (Kind + Facets) — same routing as getFull above.
           input.entityType
             ? await profileSlugScopeCondition(db, input.entityType, {
-                userId: ctx.userId,
+                ...facetVisibilityScope,
               })
             : undefined
         ),

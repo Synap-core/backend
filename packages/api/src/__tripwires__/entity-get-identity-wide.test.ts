@@ -29,6 +29,9 @@ describe("entities.get identity-wide contract", () => {
     expect(getSource).toContain("entityWorkspaceId");
     expect(getSource).toContain("getEffectiveFacets(database, entity.id");
     expect(getSource).toContain("allowedWorkspaceIds");
+    expect(getSource).toContain("effectivePropertiesByWorkspace");
+    expect(getSource).toContain("stableAllowedWorkspaceIds.map");
+    expect(getSource).toContain("await Promise.all");
   });
 
   it("limits the unscoped role envelope to the caller's workspace floor", () => {

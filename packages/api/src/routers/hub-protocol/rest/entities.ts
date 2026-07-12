@@ -27,6 +27,7 @@ import {
 import { inArray } from "drizzle-orm";
 import { storage } from "@synap/storage";
 import { userVisibleWhere } from "../../../utils/user-visible-where.js";
+import { resolveFacetVisibilityScope } from "../../../utils/workspace-membership.js";
 
 import { uploadBufferAsFileEntity, MAX_FILE_SIZE } from "../../file-upload.js";
 import { relationsRouter } from "../../relations.js";
@@ -1866,7 +1867,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
     // meaningful `.code`/`.name` may sit one or two levels down (verified
     // live: kind-as-facet attach still 500'd with only a top-level check).
     let cursor: unknown = err;
-    for (let depth = 0; cursor && typeof cursor === "object" && depth < 4; depth++) {
+    for (
+      let depth = 0;
+      cursor && typeof cursor === "object" && depth < 4;
+      depth++
+    ) {
       const code = (cursor as { code?: unknown }).code;
       if (code === "BAD_REQUEST") return 400;
       if (code === "FORBIDDEN" || code === "UNAUTHORIZED") return 403;
@@ -1950,10 +1955,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
       ) {
         return c.json({ error: "Access denied to entity's workspace" }, 403);
       }
-      const facets = await getEffectiveFacets(db, entityId, {
-        userId: authUserId,
-        workspaceId: entity.workspaceId ?? null,
-      });
+      const facets = await getEffectiveFacets(
+        db,
+        entityId,
+        await resolveFacetVisibilityScope(authUserId)
+      );
       return c.json(
         { facets: facets as unknown as Array<Record<string, unknown>> },
         200

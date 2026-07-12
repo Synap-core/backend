@@ -340,6 +340,53 @@ export class ChannelRepository {
   }
 
   /**
+   * Get or create THE channel for an automation — ONE durable channel that holds
+   * ALL of that automation's runs (the runs-substrate rule: automation = one
+   * channel for all its runs; playbook = one channel per run). Keyed on
+   * `contextObjectType='automation' + contextObjectId=automationId` so every run
+   * resolves the same room. `openRunSession` reuses the one active session per
+   * channel, so sequential runs share this channel as distinct sessions (the
+   * "AI responses inside" the automation's channel).
+   *
+   * A FEED channel is the intended vehicle — the schema's own `feedScope` doc
+   * names "automation results" as the workspace-feed use. Resolver-only (no
+   * unique index yet): the oldest-wins read keeps it deterministic if a rare
+   * first-run race ever inserts two.
+   */
+  async ensureAutomationRunChannel(
+    automationId: string,
+    ownerId: string,
+    workspaceId?: string,
+    title?: string
+  ): Promise<Channel> {
+    const [existing] = await this.db
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.contextObjectType, "automation"),
+          eq(channels.contextObjectId, automationId),
+          eq(channels.status, ChannelStatus.ACTIVE)
+        )
+      )
+      .orderBy(asc(channels.createdAt))
+      .limit(1);
+
+    if (existing) return existing;
+
+    return await this.create({
+      userId: ownerId,
+      workspaceId,
+      title: title ? `Runs · ${title}` : undefined,
+      channelType: ChannelType.FEED,
+      scope: workspaceId ? ChannelScope.WORKSPACE : ChannelScope.POD,
+      feedScope: workspaceId ? FeedScope.WORKSPACE : FeedScope.USER,
+      contextObjectType: "automation",
+      contextObjectId: automationId,
+    });
+  }
+
+  /**
    * Get or create the user's MAIN personal AI thread — the orchestrator thread.
    *
    * Canonical resolver for jobs/system producers that want "the user's personal

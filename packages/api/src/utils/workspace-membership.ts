@@ -62,3 +62,34 @@ export async function validateWorkspaceAccess(
 
   return Array.from(ids);
 }
+
+/**
+ * Resolve the canonical role/facet read scope for a user-facing API call.
+ * Explicit workspace lenses are silently intersected with the caller's access;
+ * no-lens reads receive the complete user floor. `null` deliberately means the
+ * caller's pod-wide roles only.
+ */
+export async function resolveFacetVisibilityScope(
+  userId: string,
+  workspaceId?: string | null
+): Promise<{
+  userId: string;
+  workspaceId?: string | null;
+  allowedWorkspaceIds?: string[];
+}> {
+  if (workspaceId === null) return { userId, workspaceId: null };
+
+  if (workspaceId !== undefined) {
+    const allowedWorkspaceIds = await validateWorkspaceAccess(userId, [
+      workspaceId,
+    ]);
+    return allowedWorkspaceIds.includes(workspaceId)
+      ? { userId, workspaceId }
+      : { userId, allowedWorkspaceIds: [] };
+  }
+
+  return {
+    userId,
+    allowedWorkspaceIds: await validateWorkspaceAccess(userId),
+  };
+}

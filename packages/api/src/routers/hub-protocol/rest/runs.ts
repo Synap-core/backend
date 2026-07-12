@@ -21,6 +21,7 @@ import { db, eq, inArray, playbookRuns } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { createLinks } from "../../../services/links/links-service.js";
+import { listRuns, getRun } from "../../../services/runs/index.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -29,6 +30,10 @@ import {
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
+
+// ── Unified-run read schemas (the cross-flow diagnose door) ──────────────────
+
+const FlowTypeSchema = z.enum(["automation", "playbook", "capture", "session"]);
 
 // ── Wire schemas ─────────────────────────────────────────────────────────────
 
@@ -53,6 +58,99 @@ const CaptureResponseSchema = z.object({
 });
 
 export function registerRunsRoutes(app: HubHono): void {
+  // ── GET /runs — the unified cross-flow run feed (read door) ────────────────
+  // Lets the operating AI / CLI ask "what did I do?" across automation, playbook,
+  // capture, and session runs — the same UnifiedRun the browser Runs view reads.
+  // USER-floored: the acting user comes from the auth middleware, NEVER a query
+  // param (mirrors /observability's read-path asymmetry — no cross-user IDOR).
+  registerOpenApi(app, {
+    method: "get",
+    path: "/runs",
+    tags: ["Runs"],
+    summary: "List runs across flows (unified feed)",
+    description:
+      "Newest-first run feed across automation / playbook / capture / session. " +
+      "Filter to one ledger with flowType, or one flow with flowId. This is the " +
+      "AI/CLI diagnose door: a capture run's activity (via GET /runs/{id}) is its " +
+      "correlationId-keyed decision + trace events — what happened and why.",
+    responses: {
+      200: {
+        description: "Run feed",
+        schema: z.object({ runs: z.array(z.any()) }),
+      },
+      403: { description: "Forbidden", schema: ErrorSchema },
+    },
+  });
+
+  app.get("/runs", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthorized" }, 401);
+
+    const ft = c.req.query("flowType");
+    const parsedFt = ft ? FlowTypeSchema.safeParse(ft) : null;
+    const flowId = c.req.query("flowId") || undefined;
+    const limitRaw = Number(c.req.query("limit"));
+    const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;
+
+    const runs = await listRuns({
+      userId,
+      flowType: parsedFt?.success ? parsedFt.data : undefined,
+      flowId,
+      limit,
+    });
+    return c.json({ runs });
+  });
+
+  // ── GET /runs/{id} — one run + its activity timeline ───────────────────────
+  registerOpenApi(app, {
+    method: "get",
+    path: "/runs/{id}",
+    tags: ["Runs"],
+    summary: "Get one run + its activity timeline",
+    description:
+      "Returns the run and its flow-agnostic activity: automation steps, or a " +
+      "capture's decision/trace events (component/reason/fixHint — the diagnose " +
+      "story). Requires flowType (the id space differs per ledger).",
+    request: {
+      params: z.object({ id: z.string() }),
+      query: z.object({ flowType: FlowTypeSchema }),
+    },
+    responses: {
+      200: { description: "Run detail", schema: z.any() },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Run not found", schema: ErrorSchema },
+    },
+  });
+
+  app.get("/runs/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthorized" }, 401);
+
+    const parsedFt = FlowTypeSchema.safeParse(c.req.query("flowType"));
+    if (!parsedFt.success) {
+      return c.json({ error: "flowType query param is required" }, 400);
+    }
+    const detail = await getRun({
+      userId,
+      flowType: parsedFt.data,
+      id: c.req.param("id"),
+    });
+    if (!detail) return c.json({ error: "Run not found" }, 404);
+    return c.json(detail);
+  });
+
   registerOpenApi(app, {
     method: "post",
     path: "/runs/{runId}/capture",

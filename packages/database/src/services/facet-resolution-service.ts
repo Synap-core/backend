@@ -41,19 +41,26 @@ export interface EffectiveFacet {
   effectiveProperties: EffectiveProperty[];
 }
 
+export interface FacetVisibilityScope {
+  userId: string;
+  workspaceId?: string | null;
+  /** Required for identity-wide/no-lens reads to enforce the caller's floor. */
+  allowedWorkspaceIds?: string[];
+}
+
 /**
  * Batch-load live facet (role-profile) slugs for a set of entity ids → a
- * Map<entityId, slug[]>. One query for the whole batch. UNFILTERED lens — this
- * is the raw entity→facet-slug join used by indexing (per-entity search docs)
- * and the object-graph subtype hydrator; caller-side visibility is enforced
- * elsewhere. Entities with no live facet are simply absent from the map.
+ * Map<entityId, slug[]>. One query for the whole batch. Every user-facing call
+ * must supply a visibility scope; the only unfiltered wrapper is named for the
+ * trusted indexing job below. Entities with no live facet are absent.
  *
  * The ONE implementation of this join — previously hand-rolled byte-identically
  * in @synap/search's indexing-service and @synap/api's graph-service.
  */
-export async function loadFacetSlugsBatch(
+async function loadFacetSlugsBatchInternal(
   db: PostgresJsDatabase<typeof schema>,
-  entityIds: string[]
+  entityIds: string[],
+  visibility?: FacetVisibilityScope
 ): Promise<Map<string, string[]>> {
   if (entityIds.length === 0) return new Map();
   const rows = await db
@@ -63,7 +70,8 @@ export async function loadFacetSlugsBatch(
     .where(
       and(
         inArray(entityFacets.entityId, entityIds),
-        isNull(entityFacets.deletedAt)
+        isNull(entityFacets.deletedAt),
+        ...(visibility ? facetVisibilityConditions(visibility) : [])
       )
     );
 
@@ -74,6 +82,30 @@ export async function loadFacetSlugsBatch(
     else out.set(row.entityId, [row.slug]);
   }
   return out;
+}
+
+/**
+ * User-facing batch annotation. The caller must provide either a verified
+ * explicit workspace lens or `allowedWorkspaceIds` for an identity-wide read.
+ */
+export async function loadFacetSlugsBatch(
+  db: PostgresJsDatabase<typeof schema>,
+  entityIds: string[],
+  visibility: FacetVisibilityScope
+): Promise<Map<string, string[]>> {
+  return loadFacetSlugsBatchInternal(db, entityIds, visibility);
+}
+
+/**
+ * TRUSTED INDEXING ONLY. Search documents are stored with all role slugs and
+ * query-time access control applies the user floor. Never use this in an API
+ * response, user-facing filter, graph, relation, or retrieval path.
+ */
+export async function loadAllFacetSlugsBatchForTrustedIndexing(
+  db: PostgresJsDatabase<typeof schema>,
+  entityIds: string[]
+): Promise<Map<string, string[]>> {
+  return loadFacetSlugsBatchInternal(db, entityIds);
 }
 
 /**
@@ -173,7 +205,7 @@ export async function resolveRolePayload(
 export function facetRoleExists(
   db: PostgresJsDatabase<typeof schema>,
   roleProfileIds: string[],
-  opts: { userId: string; workspaceId?: string | null }
+  opts: FacetVisibilityScope
 ): SQL {
   return exists(
     db
@@ -207,7 +239,7 @@ export function facetRoleExists(
 export function profileScopeConditions(
   db: PostgresJsDatabase<typeof schema>,
   profileRows: Array<{ id: string; profileKind: "kind" | "role" }>,
-  opts: { userId: string; workspaceId?: string | null }
+  opts: FacetVisibilityScope
 ): SQL | undefined {
   const kindIds = profileRows
     .filter((p) => p.profileKind !== "role")
@@ -241,7 +273,7 @@ export function profileScopeConditions(
 export async function profileSlugScopeCondition(
   db: PostgresJsDatabase<typeof schema>,
   profileSlug: string,
-  opts: { userId: string; workspaceId?: string | null }
+  opts: FacetVisibilityScope
 ): Promise<SQL> {
   // ALL rows for the slug, not findFirst: one slug can be carried by several
   // profile rows (e.g. a system row + a workspace-scope twin — the perso pod's
@@ -280,11 +312,7 @@ export async function profileSlugScopeCondition(
 export async function getEffectiveFacets(
   db: PostgresJsDatabase<typeof schema>,
   entityId: string,
-  opts: {
-    userId: string;
-    workspaceId?: string | null;
-    allowedWorkspaceIds?: string[];
-  }
+  opts: FacetVisibilityScope
 ): Promise<EffectiveFacet[]> {
   const profileResolution = new ProfileResolutionService(db);
   const { workspaceId } = opts;
@@ -306,17 +334,20 @@ export async function getEffectiveFacets(
   });
   const profileById = new Map(profileRows.map((p) => [p.id, p]));
 
-  const results: EffectiveFacet[] = [];
-  for (const facet of facets) {
-    const profile = profileById.get(facet.profileId);
-    if (!profile) continue; // orphaned facet (profile deleted) — skip
-    const propertyWorkspaceId =
-      workspaceId === undefined ? (facet.workspaceId ?? null) : workspaceId;
-    const effectiveProperties = await profileResolution.getEffectiveProperties(
-      profile.id,
-      propertyWorkspaceId
-    );
-    results.push({ facet, profile, effectiveProperties });
-  }
-  return results;
+  const resolved = await Promise.all(
+    facets.map(async (facet): Promise<EffectiveFacet | null> => {
+      const profile = profileById.get(facet.profileId);
+      if (!profile) return null; // orphaned facet (profile deleted) — skip
+      const propertyWorkspaceId =
+        workspaceId === undefined ? (facet.workspaceId ?? null) : workspaceId;
+      const effectiveProperties =
+        await profileResolution.getEffectiveProperties(
+          profile.id,
+          propertyWorkspaceId
+        );
+      return { facet, profile, effectiveProperties };
+    })
+  );
+
+  return resolved.filter((item): item is EffectiveFacet => item !== null);
 }

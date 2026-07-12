@@ -39,6 +39,7 @@ import {
   profiles,
   relations,
   profileScopeConditions,
+  loadFacetSlugsBatch,
   ViewFilterCompiler,
   PropertyMergingService,
   ViewDefaultColumnsService,
@@ -58,6 +59,7 @@ import { verifyPermission, getWorkspaceMembership } from "@synap/database";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { randomUUID } from "crypto";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
+import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
 import {
   userVisibleWhere,
   workspaceLensWhere,
@@ -859,6 +861,10 @@ export const viewsRouter = router({
       const conditions: any[] = [];
 
       const lensWorkspaceId = view.workspaceId ?? null;
+      const facetVisibilityScope = await resolveFacetVisibilityScope(
+        ctx.userId,
+        lensWorkspaceId
+      );
       // includePodWide MUST be true: pod-scoped entities (person/company and any
       // profile whose entityScope is 'pod') live with workspaceId IS NULL and are
       // visible in EVERY workspace. A workspace-scoped view narrows to its own
@@ -889,10 +895,11 @@ export const viewsRouter = router({
           where: inArray(profiles.id, view.scopeProfileIds),
           columns: { id: true, profileKind: true },
         });
-        const scopeCondition = profileScopeConditions(db, scopeProfiles, {
-          userId: ctx.userId,
-          workspaceId: lensWorkspaceId,
-        });
+        const scopeCondition = profileScopeConditions(
+          db,
+          scopeProfiles,
+          facetVisibilityScope
+        );
         // All scope ids resolved to nothing (deleted profiles) → match no rows
         // rather than leaving the scope unfiltered.
         conditions.push(scopeCondition ?? pgSql`false`);
@@ -1017,6 +1024,16 @@ export const viewsRouter = router({
         });
       }
 
+      const facetSlugsByEntity = await loadFacetSlugsBatch(
+        db,
+        fetchedEntities.map((entity) => entity.id),
+        facetVisibilityScope
+      );
+      const annotatedEntities = fetchedEntities.map((entity) => ({
+        ...entity,
+        facetSlugs: facetSlugsByEntity.get(entity.id) ?? [],
+      }));
+
       // Get relations between entities
       const entityIds = fetchedEntities.map((e) => e.id);
       const fetchedRelations =
@@ -1057,7 +1074,7 @@ export const viewsRouter = router({
         view,
         query,
         config: view.config || {},
-        entities: fetchedEntities,
+        entities: annotatedEntities,
         relations: fetchedRelations,
         columns: finalColumns,
       };

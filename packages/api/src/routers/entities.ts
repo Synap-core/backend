@@ -32,6 +32,7 @@ import {
   FacetRepository,
   getEffectiveFacets,
   loadFacetSlugsBatch,
+  type FacetVisibilityScope,
   facetRoleExists,
   facetVisibilityConditions,
   profileSlugScopeCondition,
@@ -83,6 +84,7 @@ import {
 import { accessScopeWhere, projectLensWhere } from "../utils/project-scope.js";
 import { resolveContentTarget } from "../import/materialize-document.js";
 import { createLogger } from "@synap-core/core";
+import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
 
 const logger = createLogger({ module: "entities-router" });
 
@@ -162,11 +164,15 @@ function toApiEntity(entity: any, facetSlugs?: string[]): Entity {
  * the hats (display name / color come from the profile catalog it already
  * holds). Rows wearing no role simply carry no `facetSlugs`.
  */
-async function toApiEntitiesWithFacets(rows: any[]): Promise<Entity[]> {
+async function toApiEntitiesWithFacets(
+  rows: any[],
+  visibility: FacetVisibilityScope
+): Promise<Entity[]> {
   if (rows.length === 0) return [];
   const slugsById = await loadFacetSlugsBatch(
     db,
-    rows.map((r) => r.id)
+    rows.map((r) => r.id),
+    visibility
   );
   return rows.map((r) => toApiEntity(r, slugsById.get(r.id)));
 }
@@ -535,6 +541,10 @@ export const entitiesRouter = router({
     .query(async ({ input, ctx }) => {
       const lensWorkspaceId =
         input.workspaceId !== undefined ? input.workspaceId : ctx.workspaceId;
+      const facetVisibilityScope = await resolveFacetVisibilityScope(
+        ctx.userId,
+        input.projectId ? undefined : lensWorkspaceId
+      );
 
       // Resolve the role slug to its profile id(s) — every same-slug row (a
       // facet may sit on a system row OR a workspace-scope twin). Non-role or
@@ -553,10 +563,7 @@ export const entitiesRouter = router({
       const conditions = [
         inArray(entityFacets.profileId, roleProfileIds),
         isNull(entityFacets.deletedAt),
-        ...facetVisibilityConditions({
-          userId: ctx.userId,
-          workspaceId: lensWorkspaceId,
-        }),
+        ...facetVisibilityConditions(facetVisibilityScope),
         isNull(entities.deletedAt),
         entityVisibleWhere(ctx.userId),
         ...(input.projectId
@@ -1377,6 +1384,10 @@ export const entitiesRouter = router({
       // callers are unaffected (they already resolve to pod-wide-only below).
       const lensWorkspaceId =
         input.workspaceId !== undefined ? input.workspaceId : ctx.workspaceId;
+      const facetVisibilityScope = await resolveFacetVisibilityScope(
+        ctx.userId,
+        input.projectId ? undefined : lensWorkspaceId
+      );
       // The scope rule (unified, floor-first):
       //   • PROJECT lens → the full user floor (incl. the project-membership
       //     branch, so a member sees the project ACROSS workspaces); the
@@ -1439,10 +1450,7 @@ export const entitiesRouter = router({
           // Role rows: match entities carrying a live facet, via the same
           // one-door EXISTS the `facetSlug` filter uses.
           slugBranches.push(
-            facetRoleExists(database, roleProfileIds, {
-              userId: ctx.userId,
-              workspaceId: lensWorkspaceId,
-            })
+            facetRoleExists(database, roleProfileIds, facetVisibilityScope)
           );
         }
         if (hasKindRow) {
@@ -1505,10 +1513,7 @@ export const entitiesRouter = router({
         }
         if (facetProfileIds.length > 0) {
           conditions.push(
-            facetRoleExists(db, facetProfileIds, {
-              userId: ctx.userId,
-              workspaceId: lensWorkspaceId,
-            })
+            facetRoleExists(db, facetProfileIds, facetVisibilityScope)
           );
         } else {
           // Unknown facetSlug — no entity can match; short-circuit to empty.
@@ -1530,7 +1535,7 @@ export const entitiesRouter = router({
       const total = totalRow[0]?.count ?? 0;
 
       const { items, pagination } = buildPaginatedResponse(
-        await toApiEntitiesWithFacets(results),
+        await toApiEntitiesWithFacets(results, facetVisibilityScope),
         input,
         total
       );
@@ -1587,7 +1592,12 @@ export const entitiesRouter = router({
         limit: input.limit,
       });
 
-      return { entities: await toApiEntitiesWithFacets(results) };
+      return {
+        entities: await toApiEntitiesWithFacets(results, {
+          userId: ctx.userId,
+          workspaceId: null,
+        }),
+      };
     }),
 
   /**
@@ -1642,7 +1652,12 @@ export const entitiesRouter = router({
         }
       );
 
-      return { entities: await toApiEntitiesWithFacets(results) };
+      return {
+        entities: await toApiEntitiesWithFacets(results, {
+          userId: ctx.userId,
+          allowedWorkspaceIds: validatedIds,
+        }),
+      };
     }),
 
   /**
@@ -1719,6 +1734,10 @@ export const entitiesRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      const facetVisibilityScope = await resolveFacetVisibilityScope(
+        ctx.userId,
+        ctx.workspaceId
+      );
       // Floor: every search result must belong to the caller. This prevents
       // pod-personal entities (workspaceId IS NULL) that belong to OTHER users
       // from leaking through — both the pod-scoped-profile branch (which
@@ -1732,10 +1751,11 @@ export const entitiesRouter = router({
         // entities.list, through the shared one-door helper.
         const database = await getDb();
         conditions.push(
-          await profileSlugScopeCondition(database, input.profileSlug, {
-            userId: ctx.userId,
-            workspaceId: ctx.workspaceId,
-          })
+          await profileSlugScopeCondition(
+            database,
+            input.profileSlug,
+            facetVisibilityScope
+          )
         );
 
         // For workspace-scoped profiles, also narrow to the active workspace
@@ -1769,7 +1789,9 @@ export const entitiesRouter = router({
         limit: input.limit,
       });
 
-      return { entities: await toApiEntitiesWithFacets(results) };
+      return {
+        entities: await toApiEntitiesWithFacets(results, facetVisibilityScope),
+      };
     }),
 
   /**
@@ -1816,6 +1838,10 @@ export const entitiesRouter = router({
         entity: z.any(),
         profile: z.any().optional(),
         effectiveProperties: z.array(z.any()).optional(),
+        /** Stable kind-property overlays keyed by every workspace in the user floor. */
+        effectivePropertiesByWorkspace: z
+          .record(z.string(), z.array(z.any()))
+          .optional(),
         /**
          * Every live role the user may see, independent of the active
          * workspace lens. Additive/optional — present only on the
@@ -1927,33 +1953,58 @@ export const entitiesRouter = router({
       const resolutionService = new ProfileResolutionService(database);
       const { validateWorkspaceAccess } =
         await import("../utils/workspace-membership.js");
-      const allowedWorkspaceIds = await validateWorkspaceAccess(ctx.userId);
       // A single-object query has one stable cache identity. Its kind schema is
       // resolved from the object's own scope, never from request/header state.
       const entityWorkspaceId = entity.workspaceId ?? null;
-      const profile = await resolutionService.resolveProfile(
-        entity.type,
-        ctx.userId,
-        entityWorkspaceId
+      const [allowedWorkspaceIds, profile] = await Promise.all([
+        validateWorkspaceAccess(ctx.userId),
+        resolutionService.resolveProfile(
+          entity.type,
+          ctx.userId,
+          entityWorkspaceId
+        ),
+      ]);
+      const stableAllowedWorkspaceIds = [...allowedWorkspaceIds].sort();
+
+      // Keep the identity response lens-free while preserving every accessible
+      // kind overlay. All overlay and role resolutions run concurrently; the
+      // active Browser surface selects from the stable envelope client-side.
+      const [effectiveProperties, workspacePropertyEntries, facets] =
+        await Promise.all([
+          profile
+            ? resolutionService.getEffectiveProperties(
+                profile.id,
+                entityWorkspaceId
+              )
+            : Promise.resolve(undefined),
+          profile
+            ? Promise.all(
+                stableAllowedWorkspaceIds.map(
+                  async (workspaceId) =>
+                    [
+                      workspaceId,
+                      await resolutionService.getEffectiveProperties(
+                        profile.id,
+                        workspaceId
+                      ),
+                    ] as const
+                )
+              )
+            : Promise.resolve([]),
+          getEffectiveFacets(database, entity.id, {
+            userId: ctx.userId,
+            allowedWorkspaceIds: stableAllowedWorkspaceIds,
+          }),
+        ]);
+      const effectivePropertiesByWorkspace = Object.fromEntries(
+        workspacePropertyEntries
       );
-
-      const effectiveProperties = profile
-        ? await resolutionService.getEffectiveProperties(
-            profile.id,
-            entityWorkspaceId
-          )
-        : undefined;
-
-      // Fetch the complete user-visible role envelope once. The Browser uses
-      // explicit surface.workspaceId only to foreground a role client-side.
-      const facets = await getEffectiveFacets(database, entity.id, {
-        userId: ctx.userId,
-        allowedWorkspaceIds,
-      });
 
       return {
         entity: typedEntity,
-        ...(profile ? { profile, effectiveProperties } : {}),
+        ...(profile
+          ? { profile, effectiveProperties, effectivePropertiesByWorkspace }
+          : {}),
         // Spread into anonymous objects: interfaces lack index signatures, so
         // EntityFacet/Profile aren't assignable to the Record-typed output
         // schema directly. Field name is `facets` — the shipped browser-host
