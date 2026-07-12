@@ -79,6 +79,7 @@ import {
   syncRelationToPropertyOnCreate,
   syncRelationToPropertyOnDelete,
 } from "../utils/property-relation-sync.js";
+import { inheritRelationWorkspaceId } from "../lib/relation-workspace-inherit.js";
 
 /**
  * Administer-the-anchor authz (chantier α, GO-LIVE control #1). Granting anchor
@@ -683,6 +684,24 @@ export const relationsRouter = router({
         }
       }
 
+      // D4: the edge INHERITS its endpoints' lens — this is data PLACEMENT, kept
+      // orthogonal to governance (`effectiveWorkspaceId` still gates the write +
+      // stamps the audit/side-effects). Resolved ONCE, here, so the proposal
+      // persists it (I3) and the materializer reads `data.workspaceId` back
+      // verbatim — the auto-approved and proposal-gated paths place identically.
+      const placementDb = await getDb();
+      const endpointRows = await placementDb.query.entities.findMany({
+        where: inArray(entities.id, [
+          input.sourceEntityId,
+          input.targetEntityId,
+        ]),
+        columns: { id: true, workspaceId: true },
+      });
+      const relationWorkspaceId = inheritRelationWorkspaceId(
+        endpointRows.map((e) => e.workspaceId),
+        effectiveWorkspaceId
+      );
+
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
@@ -701,6 +720,9 @@ export const relationsRouter = router({
           sourceEntityId: input.sourceEntityId,
           targetEntityId: input.targetEntityId,
           type: input.type,
+          // I3: persist the resolved D4 placement so materializeRelation reads it
+          // back (its `data.workspaceId ?? workspaceId ?? null` inherit path).
+          workspaceId: relationWorkspaceId,
         },
       });
 
@@ -727,7 +749,7 @@ export const relationsRouter = router({
             sourceEntityId: input.sourceEntityId,
             targetEntityId: input.targetEntityId,
             type: input.type,
-            workspaceId: effectiveWorkspaceId,
+            workspaceId: relationWorkspaceId,
             userId: ctx.userId,
             metadata: input.metadata,
           },
