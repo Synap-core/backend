@@ -23,6 +23,7 @@ import {
   and,
   getDb,
   materializeEntity,
+  resolveImportEntityPlacement,
   EventRepository,
   ChannelRepository,
 } from "@synap/database";
@@ -454,6 +455,14 @@ async function createEntityFromItem(
   // bookmark (no human clicked, no agent authored it). Funnel through the
   // governed materializer so provenance is stamped explicitly rather than
   // defaulting to "human".
+  // D1: the feed's workspace is a CONTEXT signal, not a hard pin — route the
+  // bookmark's placement through the one door so a pod-scope kind lands pod-wide
+  // (NULL) while a workspace-scoped one stays in the feed's lens.
+  const resolvedWorkspaceId = await resolveImportEntityPlacement(database, {
+    userId,
+    profileSlug: "bookmark",
+    sourceWorkspaceId: workspaceId ?? null,
+  });
   const { entity } = await materializeEntity(
     {
       profileSlug: "bookmark",
@@ -461,7 +470,7 @@ async function createEntityFromItem(
       preview: item.excerpt?.slice(0, 1000),
       properties: props,
       userId,
-      workspaceId: workspaceId ?? null,
+      workspaceId: resolvedWorkspaceId,
     },
     {
       db: database,
@@ -496,9 +505,9 @@ async function postToProactiveFeed(
   // Resolve the user's feed channel through the canonical race-safe door — active
   // + oldest-wins, so a post-0182 'merged' duplicate is never targeted (a raw
   // findFirst without a status filter could resolve a dead feed → posts vanish).
-  const feedChannel = await new ChannelRepository(db).ensureProactiveFeedChannel(
-    userId
-  );
+  const feedChannel = await new ChannelRepository(
+    db
+  ).ensureProactiveFeedChannel(userId);
 
   // Build markdown summary
   const lines = [`## New Items Discovered (${highlightedItems.length})`];

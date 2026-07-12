@@ -45,6 +45,7 @@ import {
   BYOA_DEFAULT_ROUTE_CONFIDENCE,
   type WorkspaceRoutingMode,
 } from "./capture-routing.js";
+import { ProfileResolutionService } from "./profile-resolution-service.js";
 
 type Db = PostgresJsDatabase<typeof schema>;
 
@@ -93,6 +94,40 @@ export function resolveEntityWorkspacePlacement(input: {
   if (input.workspaceScoped) return input.ambientWorkspaceId;
   const scope = input.profileEntityScope ?? "workspace";
   return scope === "pod" ? null : input.ambientWorkspaceId;
+}
+
+/**
+ * Ingestion-door placement (decision D1) — the ONE glue every bulk/feed/upload
+ * importer uses instead of hard-pinning the source workspace. An imported
+ * person/company is a pod-wide thing that happens to have been *seen* in a
+ * workspace: the source workspace is a CONTEXT signal, never a hard pin. This
+ * fetches the profile's `entityScope` and runs the door so a pod-scope kind
+ * lands pod-wide (NULL) while a genuinely workspace-scoped role stays in the
+ * workspace its ontology enables (rung 2) or, failing that, the source lens.
+ *
+ * `EntityRepository.create` stores whatever `workspaceId` it is given verbatim
+ * (it no longer re-derives scope), so the importer MUST resolve here first.
+ */
+export async function resolveImportEntityPlacement(
+  db: Db,
+  input: {
+    userId: string;
+    profileSlug: string;
+    /** The import/feed's workspace — a CONTEXT signal (D1), not a hard pin. */
+    sourceWorkspaceId: string | null;
+  }
+): Promise<string | null> {
+  const entityScope = await new ProfileResolutionService(db).getEntityScope(
+    input.profileSlug,
+    input.sourceWorkspaceId
+  );
+  const placement = await resolveWorkspacePlacement(db, {
+    userId: input.userId,
+    kindSlug: input.profileSlug,
+    entityScope,
+    ambientWorkspaceId: input.sourceWorkspaceId,
+  });
+  return placement.workspaceId;
 }
 
 // ── The door ────────────────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ import {
   EntityUpsertService,
   extractSignalsFromProperties,
   eventRepository,
+  resolveImportEntityPlacement,
 } from "@synap/database";
 import { randomUUID } from "crypto";
 import { emitSideEffects } from "@synap/events";
@@ -61,6 +62,24 @@ export async function handleLinkedInBulkImport(
   const db = await getDb();
   const upsertSvc = new EntityUpsertService(db, eventRepository);
 
+  // D1: an imported LinkedIn connection is a pod-wide person that was merely
+  // *seen* in this workspace — route placement through the one door (source ws
+  // = context signal, not a hard pin) so a pod-scope kind lands pod-wide (NULL).
+  // Memoized per profileSlug (only "person"/"contact") to keep the door's member
+  // query off the per-contact hot path.
+  const placementCache = new Map<string, string | null>();
+  const placementFor = async (profileSlug: string): Promise<string | null> => {
+    if (placementCache.has(profileSlug))
+      return placementCache.get(profileSlug) ?? null;
+    const resolved = await resolveImportEntityPlacement(db, {
+      userId,
+      profileSlug,
+      sourceWorkspaceId: workspaceId,
+    });
+    placementCache.set(profileSlug, resolved);
+    return resolved;
+  };
+
   let created = 0;
   let updated = 0;
   let matched = 0;
@@ -91,7 +110,7 @@ export async function handleLinkedInBulkImport(
           source: "linkedin",
           externalId: contact.externalId,
           signals: extractSignalsFromProperties(properties, "linkedin"),
-          workspaceId,
+          workspaceId: await placementFor(profileSlug),
           userId,
         });
 

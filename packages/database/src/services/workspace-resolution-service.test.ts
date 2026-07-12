@@ -7,8 +7,12 @@
  * loadRoutableMemberWorkspaces), so the mock returns full rows and lets the door
  * do the excluding — that is exactly the code path we want to cover.
  */
-import { describe, it, expect } from "vitest";
-import { resolveWorkspacePlacement } from "./workspace-resolution-service.js";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import {
+  resolveWorkspacePlacement,
+  resolveImportEntityPlacement,
+} from "./workspace-resolution-service.js";
+import { ProfileResolutionService } from "./profile-resolution-service.js";
 
 const USER = "user-1";
 const WS_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
@@ -350,5 +354,53 @@ describe("resolveWorkspacePlacement — rung 6 (K1 parity)", () => {
       ambientWorkspaceId: null,
     });
     expect(r).toMatchObject({ workspaceId: null, rung: 6 });
+  });
+});
+
+// ── Ingestion-door glue (D1) — imported things route through the door, source
+// workspace is a CONTEXT signal, never a hard pin. Mocks getEntityScope so the
+// wiring (scope fetched → threaded into the resolver) is proven; the rung logic
+// itself is covered by the resolveWorkspacePlacement suites above.
+describe("resolveImportEntityPlacement (D1 ingestion glue)", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("pod-scope import → NULL entity, even though a source workspace was supplied", async () => {
+    vi.spyOn(
+      ProfileResolutionService.prototype,
+      "getEntityScope"
+    ).mockResolvedValue("pod");
+    const db = makeDb({
+      members: [WS_A],
+      workspaces: [{ id: WS_A, name: "CRM" }],
+      profiles: [
+        { id: "p", slug: "person", scope: "system", workspaceId: null },
+      ],
+    });
+    const r = await resolveImportEntityPlacement(db, {
+      userId: USER,
+      profileSlug: "person",
+      sourceWorkspaceId: WS_A,
+    });
+    expect(r).toBeNull();
+  });
+
+  it("workspace-scope import stays in its ontology lens (rung 2), not hard-pinned", async () => {
+    vi.spyOn(
+      ProfileResolutionService.prototype,
+      "getEntityScope"
+    ).mockResolvedValue("workspace");
+    const db = makeDb({
+      members: [WS_A],
+      workspaces: [{ id: WS_A, name: "CRM" }],
+      profiles: [
+        { id: "p", slug: "contact", scope: "workspace", workspaceId: WS_A },
+      ],
+    });
+    const r = await resolveImportEntityPlacement(db, {
+      userId: USER,
+      profileSlug: "contact",
+      sourceWorkspaceId: WS_A,
+    });
+    expect(r).toBe(WS_A);
   });
 });
