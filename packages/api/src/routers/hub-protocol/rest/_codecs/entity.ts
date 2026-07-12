@@ -132,14 +132,34 @@ export const CreateEntityRequestSchema = z
       ),
     facets: z
       .array(
-        z.object({
-          slug: z.string(),
-          properties: z.record(z.string(), z.unknown()).optional(),
-        })
+        // Accept `profileSlug` as an alias for `slug` — the /structure and tRPC
+        // facet contracts name the role's identifier `profileSlug`, and BYOA
+        // integrators reasonably reuse that shape here (live 400 observed
+        // 2026-07-11 when a dogfood client sent profileSlug). Canonical wire
+        // name stays `slug`; the alias is normalized before validation.
+        z.preprocess(
+          (raw) => {
+            if (
+              raw &&
+              typeof raw === "object" &&
+              !("slug" in raw) &&
+              "profileSlug" in raw &&
+              typeof (raw as { profileSlug: unknown }).profileSlug === "string"
+            ) {
+              const { profileSlug, ...rest } = raw as Record<string, unknown>;
+              return { ...rest, slug: profileSlug };
+            }
+            return raw;
+          },
+          z.object({
+            slug: z.string(),
+            properties: z.record(z.string(), z.unknown()).optional(),
+          })
+        )
       )
       .optional()
       .describe(
-        "Kind + Facets: role-profiles to attach to the new entity in the same call (each via the governed attachFacet door). Applied only when the entity materializes."
+        "Kind + Facets: role-profiles to attach to the new entity in the same call (each via the governed attachFacet door). Applied only when the entity materializes. `slug` is canonical; `profileSlug` is accepted as an alias for parity with the /structure and tRPC facet shapes."
       ),
   })
   .openapi("CreateEntityRequest");
