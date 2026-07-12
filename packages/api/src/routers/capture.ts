@@ -13,7 +13,6 @@ import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import type { Context } from "../context.js";
 import { entitiesRouter } from "./entities.js";
 import { requireUserId, requireWorkspaceId } from "../utils/user-scoped.js";
-import { getUserWorkspaceIds } from "../utils/workspace-membership.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import {
   resolveIntelligenceService,
@@ -52,6 +51,8 @@ import {
   resolveIdentity,
   extractIdentitySignals,
   resolveRolePayload,
+  resolveWorkspacePlacement,
+  type ResolutionRung,
 } from "@synap/database";
 import {
   userVisibleWhere,
@@ -71,10 +72,7 @@ import {
   EXACT_MATCH_CONFIDENCE,
   FUZZY_MATCH_CONFIDENCE,
 } from "../lib/ai-events.js";
-import {
-  resolveCaptureRouting,
-  type CaptureRoutingResult,
-} from "../lib/capture-routing.js";
+import { type CaptureRoutingResult } from "../lib/capture-routing.js";
 import { isRoutableWorkspaceType } from "../lib/routing-candidates.js";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
@@ -1362,13 +1360,17 @@ export const captureRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      // Workspace placement — THE shared routing decision (see resolveCaptureRouting).
-      // A direct `targetWorkspaceId` override always wins (a caller that already
-      // resolved the workspace). Otherwise, when the caller forwards the AI's
-      // routing hints, apply auto/ask/locked so every door (MCP, REST, CLI,
+      const database = await getDb();
+      // Workspace placement — THE one door (WorkspaceResolutionService, I1). A
+      // direct `targetWorkspaceId` override always wins (rung 1: a caller that
+      // already resolved the workspace). Otherwise, when the caller forwards the
+      // AI's routing hints, the door's rung-5 tie-break applies auto/ask/locked
+      // exactly as the old inline gate did, so every door (MCP, REST, CLI,
       // Raycast, import) routes identically. No hints → today's ambient behavior.
       let workspaceId: string | null | undefined;
       let routing: CaptureRoutingResult | undefined;
+      let placementRung: ResolutionRung | undefined;
+      let placementReason: string | undefined;
       if (input.targetWorkspaceId) {
         workspaceId = input.targetWorkspaceId;
       } else if (input.aiWorkspaceId && ctx.workspaceId) {
@@ -1384,21 +1386,47 @@ export const captureRouter = router({
             input.aiWorkspaceId
           ).catch(() => undefined);
         }
-        routing = resolveCaptureRouting({
+        const placement = await resolveWorkspacePlacement(database, {
+          userId,
+          ambientWorkspaceId: ctx.workspaceId,
+          aiHint: {
+            workspaceId: input.aiWorkspaceId,
+            confidence: input.aiWorkspaceConfidence,
+            reason: input.aiWorkspaceReason,
+          },
           mode,
-          aiWorkspaceId: input.aiWorkspaceId,
-          aiConfidence: input.aiWorkspaceConfidence,
-          aiReason: input.aiWorkspaceReason,
-          currentWorkspaceId: ctx.workspaceId,
-          memberWorkspaceIds: await getUserWorkspaceIds(userId),
           minConfidence,
         });
-        workspaceId = routing.workspaceId;
+        workspaceId = placement.workspaceId;
+        placementRung = placement.rung;
+        placementReason = placement.reason;
+        // Map the door decision back to the surface's routing shape (movedTo /
+        // pendingWorkspaceSwitch) the response + telemetry already consume.
+        if (placement.ask) {
+          routing = {
+            workspaceId: placement.workspaceId ?? ctx.workspaceId,
+            pendingWorkspaceSwitch: {
+              suggestedWorkspaceId:
+                placement.candidates[0]?.id ?? input.aiWorkspaceId,
+              reason: input.aiWorkspaceReason ?? null,
+              confidence: input.aiWorkspaceConfidence ?? null,
+            },
+          };
+        } else if (
+          placement.rung === 5 &&
+          placement.workspaceId &&
+          placement.workspaceId !== ctx.workspaceId
+        ) {
+          routing = {
+            workspaceId: placement.workspaceId,
+            movedToWorkspace: placement.workspaceId,
+          };
+        } else {
+          routing = { workspaceId: placement.workspaceId ?? ctx.workspaceId };
+        }
       } else {
         workspaceId = ctx.workspaceId;
       }
-
-      const database = await getDb();
       // Shared singleton — a fresh EventRepository has no registered hooks, so
       // its emitCompleted() append would silently never reach the
       // realtime/materialization/sync hooks.
@@ -1950,6 +1978,10 @@ export const captureRouter = router({
                 chosenWorkspaceId: routing?.movedToWorkspace ?? workspaceId,
                 confidence: input.aiWorkspaceConfidence ?? null,
                 reason: input.aiWorkspaceReason ?? null,
+                // I6: which ladder rung decided + its code-generated reason
+                // (additive — dashboards can now attribute a route to a rung).
+                rung: placementRung ?? null,
+                routeReason: placementReason ?? null,
                 mode: input.workspaceRouting ?? "auto",
                 applied: Boolean(routing?.movedToWorkspace),
                 currentWorkspaceId: ctx.workspaceId,

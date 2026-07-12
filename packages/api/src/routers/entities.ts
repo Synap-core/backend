@@ -2402,10 +2402,41 @@ export const entitiesRouter = router({
         contextEntityTitle = contextEntity?.title ?? undefined;
       }
 
-      const facetWorkspaceId =
-        input.workspaceId !== undefined
-          ? input.workspaceId
-          : (parent.workspaceId ?? null);
+      // Facet lens follows the parent by default. But when the parent is
+      // pod-wide (workspaceId null) and the caller didn't pin a lens, the role
+      // itself may be enabled in exactly one workspace — derive that through the
+      // one door (rung 2) so a pod-wide entity's role-hat still lands in the
+      // domain that enabled it. Deterministic-only: no aiHint / no ASK, so an
+      // ambiguous or unimplied role keeps the parent's pod-wide null lens (never
+      // a silent guess on a governed write).
+      let facetWorkspaceId: string | null;
+      if (input.workspaceId !== undefined) {
+        facetWorkspaceId = input.workspaceId;
+      } else if (parent.workspaceId != null) {
+        facetWorkspaceId = parent.workspaceId;
+      } else {
+        const facetSlug =
+          input.profileSlug ??
+          (
+            await db.query.profiles.findFirst({
+              where: eq(profiles.id, input.profileId!),
+              columns: { slug: true },
+            })
+          )?.slug;
+        if (facetSlug) {
+          const facetPlacement = await resolveWorkspacePlacement(db, {
+            userId: ctx.userId,
+            facetSlugs: [facetSlug],
+            ambientWorkspaceId: null,
+          });
+          // Only a definitive ontology pick (rung 2, single survivor) moves the
+          // facet off pod-wide; candidates / no-signal keep the null lens.
+          facetWorkspaceId =
+            facetPlacement.rung === 2 ? facetPlacement.workspaceId : null;
+        } else {
+          facetWorkspaceId = null;
+        }
+      }
       const governanceWorkspaceId = facetWorkspaceId ?? ctx.workspaceId ?? null;
 
       // Fast-fail BEFORE governance: a structurally impossible attach (target

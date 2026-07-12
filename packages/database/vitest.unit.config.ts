@@ -17,6 +17,7 @@ export default defineConfig({
       "src/conversions/*.test.ts",
       "src/services/identity-resolution-service.test.ts",
       "src/services/profile-resolution-service.test.ts",
+      "src/services/workspace-resolution-service.test.ts",
     ],
     env: {
       NODE_ENV: "test",
