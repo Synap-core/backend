@@ -1133,14 +1133,20 @@ export const relationsRouter = router({
       // Resolve relation ID if not provided directly
       let relationId = input.id;
       if (!relationId) {
+        // D4: a (source,target,type) triple resolves to ONE canonical edge —
+        // its placement is a function of the endpoints, not of the ambient
+        // workspace. Filtering by effectiveWorkspaceId here made a pod-wide
+        // edge (workspaceId NULL, e.g. between two pod-wide entities)
+        // unresolvable from any workspace context, throwing NOT_FOUND on an
+        // edge that plainly exists. Matches the id-less conflict-recovery
+        // lookup on the single-create door above, which never filtered by
+        // workspace either. The block below still gates the write on the
+        // row's REAL workspace once resolved.
         const existing = await database.query.relations.findFirst({
           where: and(
             eq(relations.sourceEntityId, input.sourceEntityId!),
             eq(relations.targetEntityId, input.targetEntityId!),
-            ...(input.type ? [eq(relations.type, input.type)] : []),
-            ...(effectiveWorkspaceId
-              ? [eq(relations.workspaceId, effectiveWorkspaceId as any)]
-              : [])
+            ...(input.type ? [eq(relations.type, input.type)] : [])
           ),
           columns: { id: true },
         });
@@ -1468,14 +1474,33 @@ export const relationsRouter = router({
         relationDefsCreated++;
       }
 
+      // D4: an edge's placement is a function of its endpoints, not of who's
+      // asking — so idempotency (and creation, below) must NOT filter/stamp
+      // by the ambient workspace alone. Batch-load every endpoint's scope
+      // once, mirroring the single-create door's inheritRelationWorkspaceId
+      // usage, so bulk and single create place the SAME (source,target,type)
+      // edge identically (I3) instead of reintroducing the four-door bug on
+      // this door. This also matches the single-create conflict-recovery
+      // lookup a few lines up, which already resolves existence by
+      // (source,target,type) alone, no workspaceId filter.
+      const endpointIds = Array.from(
+        new Set(
+          input.relations.flatMap((r) => [r.sourceEntityId, r.targetEntityId])
+        )
+      );
+      const endpointRows = await database.query.entities.findMany({
+        where: inArray(entities.id, endpointIds),
+        columns: { id: true, workspaceId: true },
+      });
+      const endpointWorkspaceById = new Map(
+        endpointRows.map((e) => [e.id, e.workspaceId])
+      );
+
       // 2. Check for existing relations (idempotency)
       const existingRelations = await database.query.relations.findMany({
-        where: and(
-          eq(relations.workspaceId, effectiveWorkspaceId),
-          inArray(
-            relations.type,
-            input.relations.map((r) => r.type)
-          )
+        where: inArray(
+          relations.type,
+          input.relations.map((r) => r.type)
         ),
         columns: {
           id: true,
@@ -1511,12 +1536,19 @@ export const relationsRouter = router({
         }
 
         try {
+          const relationWorkspaceId = inheritRelationWorkspaceId(
+            [
+              endpointWorkspaceById.get(rel.sourceEntityId) ?? null,
+              endpointWorkspaceById.get(rel.targetEntityId) ?? null,
+            ],
+            effectiveWorkspaceId
+          );
           await relationRepo.create(
             {
               sourceEntityId: rel.sourceEntityId,
               targetEntityId: rel.targetEntityId,
               type: rel.type,
-              workspaceId: effectiveWorkspaceId,
+              workspaceId: relationWorkspaceId,
               userId: ctx.userId,
               metadata: rel.metadata,
             },

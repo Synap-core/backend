@@ -314,7 +314,7 @@ export async function traverseEntityGraph(params: {
               WHERE user_id = ${userId}
                 AND type = ANY(${relationshipTypes})
                 AND (source_entity_id = ${node.entityId} OR target_entity_id = ${node.entityId})
-                AND workspace_id = ANY(${workspaceIds})
+                AND (workspace_id = ANY(${workspaceIds}) OR workspace_id IS NULL)
               LIMIT 50
             `
           : await sql<typeof rows>`
@@ -332,7 +332,7 @@ export async function traverseEntityGraph(params: {
               FROM relations
               WHERE user_id = ${userId}
                 AND (source_entity_id = ${node.entityId} OR target_entity_id = ${node.entityId})
-                AND workspace_id = ANY(${workspaceIds})
+                AND (workspace_id = ANY(${workspaceIds}) OR workspace_id IS NULL)
               LIMIT 50
             `
           : await sql<typeof rows>`
