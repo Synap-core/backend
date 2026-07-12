@@ -1446,6 +1446,10 @@ export const captureRouter = router({
         const placement = await resolveWorkspacePlacement(database, {
           userId,
           ambientWorkspaceId: ctx.workspaceId,
+          // Rung 3: a bound focus session outranks a plain AI guess (rung 5)
+          // when it resolves — sessionId is already on this input for the
+          // session→produced link below, just not yet consulted for placement.
+          context: input.sessionId ? { sessionId: input.sessionId } : undefined,
           aiHint: {
             workspaceId: input.aiWorkspaceId,
             confidence: input.aiWorkspaceConfidence,
