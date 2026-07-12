@@ -131,11 +131,16 @@ export function registerCapabilitiesCatalogRoutes(app: HubHono): void {
       const acting = await resolveActingContext(c, { workspaceId });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
+      // ?extraKey= resolves a specific key/name even if excluded from the
+      // default-sync list (syncByDefault=false) — the CLI's fallback when a
+      // name search comes up empty, before it gives up.
+      const extraKey = c.req.query("extraKey");
       const capabilities = await buildCapabilityCatalog({
         // workspaceId is a required, validated query param here (wsCheck above),
         // so the membership branch of resolveActingContext returns it non-null.
         workspaceId: wsCheck.data,
         userId: acting.userId,
+        ...(extraKey ? { extraKey } : {}),
       });
       return c.json({ capabilities }, 200);
     } catch (err) {

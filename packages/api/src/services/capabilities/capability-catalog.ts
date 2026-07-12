@@ -32,7 +32,10 @@ import type { CapabilityDefinition } from "@synap/playbooks";
 
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { resolveNangoConnector } from "../../connectors/index.js";
-import { fetchCPCapabilityTemplates } from "./cp-template-client.js";
+import {
+  fetchCPCapabilityTemplates,
+  fetchCPCapabilityTemplateByKey,
+} from "./cp-template-client.js";
 
 // ── Contract (matched verbatim by the CLI being built in parallel) ────────────
 
@@ -227,6 +230,9 @@ function extractInstallParams(
 export interface CapabilityCatalogContext {
   workspaceId: string;
   userId: string;
+  /** Resolve this key/name even if excluded from the default-sync list
+   *  (syncByDefault=false) — see `loadTemplates`'s doc. */
+  extraKey?: string;
 }
 
 // ── Verb type heuristic ───────────────────────────────────────────────────────
@@ -466,14 +472,41 @@ interface TemplateEntry {
  * blocks on the CP. On a cold first boot (empty cache) `fetchCPCapabilityTemplates`
  * does ONE inline CP fetch to populate it. Never throws — returns [] worst case.
  */
-async function loadTemplates(): Promise<TemplateEntry[]> {
+/**
+ * @param extraKey — an explicit key/name to resolve even if it's excluded from
+ * the default-sync list (syncByDefault=false, e.g. a paid third-party connector
+ * like Unipile). Appended via ONE extra by-key CP lookup — see
+ * `fetchCPCapabilityTemplateByKey`'s doc for why it's never merged into the
+ * cached bulk list. No-op if already present or not found (never throws).
+ */
+async function loadTemplates(extraKey?: string): Promise<TemplateEntry[]> {
   const cpItems = await fetchCPCapabilityTemplates();
-  return cpItems.map((item) => ({
+  const entries = cpItems.map((item) => ({
     key: item.key,
     name: item.name,
     description: item.description ?? null,
     def: item.definition,
   }));
+
+  if (extraKey) {
+    const lower = extraKey.toLowerCase();
+    const alreadyPresent = entries.some(
+      (t) => t.key.toLowerCase() === lower || t.name.toLowerCase() === lower
+    );
+    if (!alreadyPresent) {
+      const byKey = await fetchCPCapabilityTemplateByKey(extraKey);
+      if (byKey) {
+        entries.push({
+          key: byKey.key,
+          name: byKey.name,
+          description: byKey.description ?? null,
+          def: byKey.definition,
+        });
+      }
+    }
+  }
+
+  return entries;
 }
 
 // ── The builder ───────────────────────────────────────────────────────────────
@@ -481,7 +514,7 @@ async function loadTemplates(): Promise<TemplateEntry[]> {
 export async function buildCapabilityCatalog(
   ctx: CapabilityCatalogContext
 ): Promise<CapabilityCard[]> {
-  const { workspaceId, userId } = ctx;
+  const { workspaceId, userId, extraKey } = ctx;
 
   // 1. Installed containers visible to the caller: pod-wide (NULL) + this
   //    workspace, narrowed by the user-visible predicate (membership floor).
@@ -556,7 +589,7 @@ export async function buildCapabilityCatalog(
   const skillById = new Map(skillRows.map((s) => [s.id, s]));
 
   // 4. Available templates (DB + on-disk family set).
-  const templates = await loadTemplates();
+  const templates = await loadTemplates(extraKey);
   const templateByName = new Map<string, TemplateEntry>();
   for (const t of templates) templateByName.set(t.name.toLowerCase(), t);
 
