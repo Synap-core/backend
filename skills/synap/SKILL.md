@@ -1746,6 +1746,102 @@ The point of the flywheel is that mistakes are **visible and fixable**, not sile
 
 ---
 
+## Workspace design — is this concern a WORKSPACE, or something smaller?
+
+Before you create a workspace, run the decision rule. A workspace (an operational **domain**) is the heaviest structure in the pod — it owns kinds, confers roles, carries its own team and automations. Most new concerns are NOT domains; they are a **hat**, an **initiative**, or a **stage**. Creating a workspace for one of those is the anti-pattern that fragments the graph. Decide first, then create.
+
+## The decision rule — a concern earns a workspace ONLY if ALL FOUR hold
+
+1. **Owns kinds** — it is source-of-truth for a noun nothing else owns (CRM owns `person`/`company`; Operations owns `engagement`/`deliverable`). If it only *reads* or *annotates* another domain's kinds, it is not a domain.
+2. **Own team** — a distinct set of operators/collaborators works it (separation of *who*, not just *what*).
+3. **Native automations/tools** — it runs behavior its neighbors don't (its own capabilities, playbooks, triggers).
+4. **Stable** — it persists across clients and campaigns. If it is per-client or per-campaign, it is time-bound, not a domain.
+
+**All four, or it is not a workspace.** Then fork it to the right lighter structure:
+
+| If the concern is… | It is a… | Substrate | Example |
+| --- | --- | --- | --- |
+| a **role/hat** an existing entity wears in a domain | **Facet** | `attach_facet` (`profileKind: "role"`) | `client`, `sponsor`, `prospect`, `investor` |
+| a **cross-cutting, time-bound initiative** spanning domains | **Project** | `create_project` (a lens) | a campaign, an engagement, a launch |
+| a **stage/filter WITHIN a domain** | **State/View** | a `status` property def + a view | pipeline stage, "active"/"archived" |
+
+## The decision procedure (follow in order)
+
+1. **Name the source-of-truth noun.** What kind would this workspace *own* that no existing workspace owns? Run `list_profiles` — if the noun already lives in another domain, you have a facet or a project, not a domain. STOP.
+2. **Test all four conditions.** Owns kinds AND own team AND native automations AND stable. Any one fails → fork below.
+3. **If it's a hat** (a status/role on an entity that already exists elsewhere) → resolve the entity, `attach_facet`. Never a workspace, never a second entity.
+4. **If it's time-bound work across domains** → `create_project` and set it as the lens; the work files into it from whatever workspace holds the data.
+5. **If it's a stage inside a domain** → add a `status` property def (`create_property_def`) and a view; don't split the stage into its own space.
+6. **Only if all four held** → `create_workspace` (propose it — workspace creation is a deliberate move, offer it to the user; see `lenses.md`). Then declare how it lives in the graph (see `workspace-edges.md`).
+
+## The CRM corollary — the load-bearing example
+
+Operational state — **prospect → client → delivered** — is a **FLOW across domains**, expressed as **facets + a triggered project**, NEVER as workspaces and NEVER by bolting delivery onto the identity domain.
+
+- CRM = **who** (owns `person`/`company`, confers the `lead`/`client` facets).
+- Operations = **what we do for them** (owns `engagement`/`contract`/`deliverable`).
+- The bridge: attaching the `client` facet in CRM **triggers** an engagement project in Operations (see the *triggers* edge in `workspace-edges.md`).
+
+Bolting delivery-ops onto CRM was the anti-pattern: it made one workspace own two unrelated source-of-truth concerns and blurred *who* the entity is with *what work* is happening. Split by ownership; bridge by facet + trigger.
+
+## Why this matters
+
+A workspace is a boundary; a facet/project/state is a connection. Boundaries fragment the graph — they should be rare and earned. When you catch yourself about to create a workspace, check the four conditions: nine times out of ten the honest answer is a facet on an entity that already exists, a project that spans what's already there, or a status field on a kind you already own.
+
+---
+
+## Workspace edges — how a domain LIVES IN THE GRAPH
+
+A workspace is never an island. Before you create one (or reason about an existing one), map its **edges**: what it consumes, what it provides, what it triggers, what subject it shares, what spans it. Domains are wired together by a small, fixed taxonomy — and each edge type maps to a specific substrate. Knowing the taxonomy is what lets you reason about a new domain's *position* instead of dropping it in disconnected.
+
+> The two graphs are orthogonal. This is the **data-flow graph** (what reads/writes/triggers what) — the one we model. The **org graph** (who owns/operates a domain) is workspace membership only. "Comms contains Marketing" is org; the *data* edge is "Marketing **consumes** Comms' brand." Keep them separate so a team reorg never rewires the data graph.
+
+## The four edge types (and their substrate)
+
+| Edge | Meaning | Direction | Substrate | Example |
+| --- | --- | --- | --- | --- |
+| **Provides / Consumes** | a domain *reads* another's data (read redirect) | A ← B | `defaultSources` / `sourceRoles` on the consuming workspace | Content **consumes** Comms' voice/ICP |
+| **Triggers** | an event in A causes *work written* into B | A ⇒ B | automation + `resolveWorkspacePlacement` (run-in-A → write-B) | a `client` facet in CRM ⇒ an engagement in Operations |
+| **Shares subject** | the same atom wears a different facet per domain | A ⟷ B | `entity_facets` (one entity, per-domain roles) | one company is `lead` in CRM, `client` in Ops |
+| **Spans** | a time-bound initiative crosses domains | A—B—C | `projects` (a cross-cutting lens) | one campaign spans Marketing + Content + Social |
+
+Read the whole graph as: **Provides/Consumes** = the read wiring · **Triggers** = the write/event wiring · **Shares subject** = shared identity · **Spans** = shared initiative.
+
+## Reason about position BEFORE you create
+
+When `workspace-design.md`'s rule says "yes, this is a domain," don't stop at creating it — place it in the graph:
+
+1. **What does it consume?** Which existing domains' data does it read? Those become its `defaultSources` (provides/consumes edges).
+2. **What does it provide?** Which domains will read *its* output? (Declared on the consumer's side, but know the answer.)
+3. **What does it trigger — and what triggers it?** Which facet/event in a neighbor should spin up work here, or here into a neighbor? That's the automation + placement wiring (Wave 2 processor behavior).
+4. **What subject does it share?** Which atoms already exist elsewhere that this domain will confer a new facet on? (Resolve identity first, `attach_facet` — never a duplicate.)
+5. **What projects span it?** Which cross-cutting initiatives will pull its data alongside other domains'?
+
+A domain that consumes nothing and provides nothing is a smell — re-check the decision rule; it may be a facet or a project after all.
+
+## Declaring provides/consumes on an existing workspace
+
+Edges used to be settable only at template-authoring time or through the tRPC UI. The agnostic door for setting them on a live workspace is the governed MCP/Hub tool **`declare_workspace_source`** (equivalently `synap_update_workspace`): it sets `defaultSources` / `sourceRoles` on an existing workspace so the generic edge-resolver can redirect its reads to the providing domain.
+
+- Use it when a domain should start reading another's data (e.g. point Marketing at Comms for brand/ICP).
+- It is a **governed write** — a `"proposed"` response is normal, not an error (see `writes.md`).
+- Setting the edge is what makes cross-workspace reads resolve generically, instead of each domain re-deriving its sources by hand.
+
+## The reference wiring (worked example)
+
+The 6-domain reference enterprise, read as edges:
+
+- **Communication** owns voice/narrative/ICP/assets — *provides* → Marketing, Content.
+- **Content** owns asset/carousel/video — *consumes* Comms; *provides* → Social, Marketing.
+- **Marketing** owns campaign/funnel — *consumes* Comms + Content; *provides* brief → Social; ⇒ *triggers* leads → CRM.
+- **Social** owns channel/post/schedule — *consumes* Content + Marketing; *provides* signals → Marketing/CRM.
+- **CRM** owns person/company, confers `lead`/`client` — *consumes* Social signals; `client` facet ⇒ *triggers* → Operations.
+- **Operations** owns engagement/contract/deliverable — *consumes* CRM; delivery proof ⇒ *feeds* → Content/Marketing.
+
+Every arrow above is one of the four edge types. That is the whole model: name the arrows, pick the substrate, wire it — then the domain is a citizen of the graph, not an island.
+
+---
+
 ## When you need more
 
 - Linking conventions, auto-sync table, relation types → **`linking.md`**

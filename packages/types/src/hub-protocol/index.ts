@@ -151,6 +151,7 @@ export enum StreamEventType {
   ENTITIES = "entities",
   BRANCH_DECISION = "branch_decision",
   ROUTE_TO_CHANNEL = "route_to_channel",
+  PROPOSAL = "proposal",
   COMPLETE = "complete",
   ERROR = "error",
 }
@@ -169,6 +170,7 @@ export interface HubStreamEvent {
     reason: string;
     contextEntity?: { id: string; type?: string; title?: string };
   };
+  proposal?: CreatedProposal;
   data?: unknown;
   error?: string;
 }

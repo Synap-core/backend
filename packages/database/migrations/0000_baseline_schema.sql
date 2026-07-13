@@ -49,6 +49,9 @@ ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "email_verified" boolean DEFAULT fa
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "avatar_url" text;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "timezone" text DEFAULT 'UTC';
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "locale" text DEFAULT 'en';
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "control_plane_user_id" text;
+CREATE UNIQUE INDEX IF NOT EXISTS "users_control_plane_user_id_unique"
+  ON "users" ("control_plane_user_id") WHERE "control_plane_user_id" IS NOT NULL;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "user_type" text DEFAULT 'human';
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_metadata" jsonb;
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "kratos_identity_id" text;

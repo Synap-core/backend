@@ -138,6 +138,8 @@ export interface IntelligenceHubRequest {
    * so proposals from this run link to the user-visible goal-bound session.
    */
   focusSessionId?: string;
+  /** Abort the in-flight Pod → Intelligence Service request (never serialized). */
+  signal?: AbortSignal;
 }
 
 // ── Bulk CSV-mapping analysis types ─────────────────────────────────────────
@@ -321,14 +323,18 @@ const RETRY_DELAYS_MS = [500, 1_000];
 async function fetchWithTimeout(
   url: string,
   options: RequestInit,
-  timeoutMs = FETCH_TIMEOUT_MS
+  timeoutMs = FETCH_TIMEOUT_MS,
+  externalSignal?: AbortSignal
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromCaller = () => controller.abort();
+  externalSignal?.addEventListener("abort", abortFromCaller, { once: true });
   try {
     return await fetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", abortFromCaller);
   }
 }
 
@@ -550,7 +556,8 @@ export class IntelligenceHubClient {
         },
         // Streaming yields progressively; a 30s TOTAL abort wrongly kills a
         // stream that is still producing tokens. Use the longer chat timeout.
-        CHAT_FETCH_TIMEOUT_MS
+        CHAT_FETCH_TIMEOUT_MS,
+        request.signal
       );
     } catch (error) {
       recordFailure(this.baseUrl);
@@ -607,6 +614,11 @@ export class IntelligenceHubClient {
         yield {
           type: "route_to_channel",
           routing: frame.routing as HubStreamEvent["routing"],
+        };
+      } else if (frame.type === "proposal" && frame.proposal) {
+        yield {
+          type: "proposal",
+          proposal: frame.proposal as HubStreamEvent["proposal"],
         };
       } else if (frame.type === "error") {
         sawTerminalFrame = true;

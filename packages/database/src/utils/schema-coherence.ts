@@ -363,6 +363,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "agent_metadata",
     addedBy: "0032_ai_agent_users.sql (custom)",
   },
+  {
+    table: "users",
+    column: "control_plane_user_id",
+    addedBy: "0188_control_plane_member_activations.sql",
+  },
 
   // widget_definitions
   {

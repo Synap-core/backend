@@ -513,6 +513,10 @@ export function registerProjectsRoutes(app: HubHono): void {
 
     const perm = await checkPermissionOrPropose({
       userId,
+      // Bug fix (object-proposal manifest W1): forward the auto-injected agent
+      // identity so an agent-authored project create is GOVERNED (routes to a
+      // proposal) instead of auto-applying. Undefined for operator requests.
+      agentUserId: c.get("agentUserId") as string | undefined,
       workspaceId: body.workspaceId ?? undefined,
       subjectType: "project",
       action: "create",

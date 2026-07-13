@@ -24,6 +24,8 @@ inline-patterns.md
 focus-sessions.md
 automations.md
 diagnostics.md
+workspace-design.md
+workspace-edges.md
 more.md
 viewframe-cells.md
 authentication.md

@@ -383,6 +383,19 @@ export interface WorkspaceDefaultSource {
 }
 
 /**
+ * Deliberate product-surface policy for the existing CRM workspace.
+ *
+ * This is presentation/product policy, not an authorization boundary: actual
+ * access remains workspace-membership based. Keeping it on the workspace lets
+ * Browser and the standalone CRM render the same focused experience without
+ * inventing a second CRM workspace or data model.
+ */
+export interface CrmWorkspacePolicy {
+  surface: "pipeline" | "full";
+  postWin: "handoff" | "client";
+}
+
+/**
  * Provenance record for a workspace composed via `definition.extends`
  * (Wave 7 / north star §10 — workspace composition). One entry per resolved
  * source. COPY semantics: the imported profiles/views are independent copies
@@ -408,6 +421,9 @@ export interface WorkspaceSettings {
   theme?: string;
   aiEnabled?: boolean;
   allowExternalSharing?: boolean;
+
+  /** Product-surface policy for a CRM workspace. */
+  crm?: CrmWorkspacePolicy;
 
   // ─── Workspace Directory / Capability Source Contract ───────────────────────
   /**

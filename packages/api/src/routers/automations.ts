@@ -235,7 +235,22 @@ export const automationsRouter = router({
           // EventSources — normalize via the canonical guard before this reaches
           // the top-level event source.
           source: normalizeEventSource(input.source),
-          data: { name: input.name, triggerType: input.triggerType },
+          // Widened (object-proposal manifest W1): carry the FULL create input so
+          // an approved proposal materializes a real automation via
+          // automationsRouter.create — not just a labelled shell. This branch is
+          // the AI/agent-only governance path (guarded by `if (input.agentUserId)`
+          // above), and only the PROPOSED (pending) row's stored data changes; the
+          // operator direct-create insert below is byte-untouched.
+          data: {
+            name: input.name,
+            description: input.description,
+            triggerType: input.triggerType,
+            triggerConfig: input.triggerConfig,
+            flowDefinition: input.flowDefinition,
+            status: input.status,
+            metadata: input.metadata,
+            state: input.state,
+          },
         });
         if ("denied" in perm && perm.denied) {
           throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });

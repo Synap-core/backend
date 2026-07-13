@@ -24,6 +24,7 @@ import { createLogger } from "@synap-core/core";
 import { db } from "../client-pg.js";
 import { users } from "../schema/users.js";
 import { workspaces, workspaceMembers } from "../schema/workspaces.js";
+import { controlPlaneMemberActivations } from "../schema/control-plane-member-activations.js";
 
 const logger = createLogger({ module: "user-provisioning" });
 
@@ -43,6 +44,206 @@ export interface SeedAdminUserResult {
   workspaceId: string;
   /** True if the `users` row pre-existed prior to this call. */
   alreadyExisted: boolean;
+}
+
+export interface ActivateControlPlaneMemberInput {
+  /** CP-generated idempotency key for this accepted invite. */
+  activationId: string;
+  /** Stable CP account id. It is never inferred from an email address. */
+  controlPlaneUserId: string;
+  /** Pod-local Kratos identity id, resolved by the HTTP layer. */
+  kratosIdentityId: string;
+  email: string;
+  name?: string;
+  workspaceId: string;
+  role: "admin" | "editor" | "viewer";
+}
+
+export interface ActivateControlPlaneMemberResult {
+  userId: string;
+  workspaceId: string;
+  role: "admin" | "editor" | "viewer";
+  alreadyActivated: boolean;
+  membershipCreated: boolean;
+}
+
+/**
+ * Project a Control Plane invitation into one Pod workspace.
+ *
+ * This intentionally does not call `seedAdminUser`: invited members must not
+ * receive a personal workspace, an owner role, or a personal agent. The
+ * Control Plane owns lifecycle/orchestration; the Pod only applies this signed
+ * command atomically and records its receipt for retry safety.
+ */
+export async function activateControlPlaneMember(
+  input: ActivateControlPlaneMemberInput
+): Promise<ActivateControlPlaneMemberResult> {
+  const activationId = input.activationId.trim();
+  const controlPlaneUserId = input.controlPlaneUserId.trim();
+  const identityId = input.kratosIdentityId.trim();
+  const workspaceId = input.workspaceId.trim();
+  const email = normalizeEmail(input.email);
+  const name = input.name?.trim() || null;
+
+  if (
+    !activationId ||
+    !controlPlaneUserId ||
+    !identityId ||
+    !workspaceId ||
+    !email
+  ) {
+    throw new Error(
+      "activateControlPlaneMember: required activation claims are missing"
+    );
+  }
+
+  const result = await db.transaction(async (tx) => {
+    const receipt = await tx.query.controlPlaneMemberActivations.findFirst({
+      where: eq(controlPlaneMemberActivations.activationId, activationId),
+    });
+    if (receipt) {
+      const matches =
+        receipt.controlPlaneUserId === controlPlaneUserId &&
+        receipt.userId === identityId &&
+        receipt.workspaceId === workspaceId &&
+        receipt.role === input.role;
+      if (!matches) {
+        throw new Error(
+          "activateControlPlaneMember: activationId was already used for a different grant"
+        );
+      }
+      return {
+        userId: identityId,
+        workspaceId,
+        role: input.role,
+        alreadyActivated: true,
+        membershipCreated: false,
+      } as const;
+    }
+
+    const [mappedUser, identityUser, emailUser, workspace] = await Promise.all([
+      tx.query.users.findFirst({
+        where: eq(users.controlPlaneUserId, controlPlaneUserId),
+        columns: { id: true },
+      }),
+      tx.query.users.findFirst({
+        where: eq(users.id, identityId),
+        columns: { id: true, controlPlaneUserId: true },
+      }),
+      tx.query.users.findFirst({
+        where: eq(users.email, email),
+        columns: { id: true },
+      }),
+      tx.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspaceId),
+        columns: { id: true },
+      }),
+    ]);
+
+    if (!workspace) {
+      throw new Error(
+        "activateControlPlaneMember: requested workspace does not exist"
+      );
+    }
+    if (mappedUser && mappedUser.id !== identityId) {
+      throw new Error(
+        "activateControlPlaneMember: Control Plane account is already mapped to another Pod identity"
+      );
+    }
+    if (
+      identityUser?.controlPlaneUserId &&
+      identityUser.controlPlaneUserId !== controlPlaneUserId
+    ) {
+      throw new Error(
+        "activateControlPlaneMember: Pod identity is already mapped to another Control Plane account"
+      );
+    }
+    if (emailUser && emailUser.id !== identityId) {
+      throw new Error(
+        "activateControlPlaneMember: email is already mapped to another Pod identity"
+      );
+    }
+
+    await tx
+      .insert(users)
+      .values({
+        id: identityId,
+        email,
+        name,
+        emailVerified: true,
+        userType: "human",
+        kratosIdentityId: identityId,
+        controlPlaneUserId,
+        lastSyncedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: users.id,
+        set: {
+          email,
+          name,
+          emailVerified: true,
+          userType: "human",
+          kratosIdentityId: identityId,
+          controlPlaneUserId,
+          lastSyncedAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
+
+    const existingMembership = await tx.query.workspaceMembers.findFirst({
+      where: and(
+        eq(workspaceMembers.userId, identityId),
+        eq(workspaceMembers.workspaceId, workspaceId)
+      ),
+      columns: { id: true, role: true },
+    });
+    const membershipCreated = !existingMembership;
+    if (!existingMembership) {
+      await tx.insert(workspaceMembers).values({
+        workspaceId,
+        userId: identityId,
+        role: input.role,
+      });
+    } else if (
+      existingMembership.role !== "owner" &&
+      existingMembership.role !== input.role
+    ) {
+      // CP is authoritative for invited-member roles, but a pre-existing owner
+      // can never be silently demoted by an invite retry.
+      await tx
+        .update(workspaceMembers)
+        .set({ role: input.role })
+        .where(eq(workspaceMembers.id, existingMembership.id));
+    }
+
+    await tx.insert(controlPlaneMemberActivations).values({
+      activationId,
+      controlPlaneUserId,
+      userId: identityId,
+      workspaceId,
+      role: input.role,
+    });
+
+    return {
+      userId: identityId,
+      workspaceId,
+      role: input.role,
+      alreadyActivated: false,
+      membershipCreated,
+    } as const;
+  });
+
+  logger.info(
+    {
+      activationId,
+      controlPlaneUserId,
+      userId: result.userId,
+      workspaceId,
+      alreadyActivated: result.alreadyActivated,
+    },
+    "activateControlPlaneMember: member projected into requested workspace"
+  );
+  return result;
 }
 
 /**

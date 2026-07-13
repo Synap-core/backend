@@ -1009,6 +1009,46 @@ export const tools = {
         },
       },
       {
+        name: "synap_declare_workspace_source",
+        description:
+          "Declare a cross-workspace DATA EDGE on an EXISTING workspace by setting/merging its edge fields. `sourceRoles` = per-domain role this workspace plays (provider | consumer | provider-consumer), e.g. Marketing consumes Comms → { comms: 'consumer' }. `defaultSources` = per-domain the workspace to READ that domain from (the source of truth), e.g. { comms: { workspaceId: '<comms-ws-id>' } }. MERGES per-domain — existing domains and all other settings are preserved, never clobbered. Use this to wire the enterprise graph (provides/consumes) instead of copying data between workspaces. Editor+ membership required.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: {
+              type: "string",
+              description:
+                "The workspace to declare the edge ON (the subject).",
+            },
+            sourceRoles: {
+              type: "object",
+              description:
+                "Domain → role map. Values: 'provider' | 'consumer' | 'provider-consumer'. Example: { \"comms\": \"consumer\" }. Merged per-domain into the existing map.",
+              additionalProperties: {
+                type: "string",
+                enum: ["provider", "consumer", "provider-consumer"],
+              },
+            },
+            defaultSources: {
+              type: "object",
+              description:
+                'Domain → default source workspace to read that domain from. Each value: { workspaceId (required), capability?, profileSlug?, label? }. Example: { "comms": { "workspaceId": "<uuid>" } }. Merged per-domain.',
+              additionalProperties: {
+                type: "object",
+                properties: {
+                  workspaceId: { type: "string" },
+                  capability: { type: "string" },
+                  profileSlug: { type: "string" },
+                  label: { type: "string" },
+                },
+                required: ["workspaceId"],
+              },
+            },
+          },
+          required: ["workspaceId"],
+        },
+      },
+      {
         name: "synap_create_project",
         description:
           "Create a project — a cross-cutting lens for an initiative/venture that organizes entities across workspaces (a workspace is a domain lens; a project cuts across them). workspaceId = its HOME workspace (optional).",

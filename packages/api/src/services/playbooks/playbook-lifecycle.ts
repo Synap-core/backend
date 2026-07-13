@@ -36,7 +36,7 @@ import {
 } from "../links/links-service.js";
 
 /** Resolve a playbook's goalTemplate against caller-supplied param values. */
-function resolveGoal(
+export function resolveGoal(
   goalTemplate: string,
   params: Record<string, unknown>
 ): string {

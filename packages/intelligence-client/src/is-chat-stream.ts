@@ -28,6 +28,7 @@ export interface ISChatStreamFrame {
   entities?: unknown;
   decision?: unknown;
   routing?: unknown;
+  proposal?: unknown;
   data?: { content?: string; [k: string]: unknown };
   error?: string;
 }

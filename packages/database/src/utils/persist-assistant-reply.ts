@@ -30,6 +30,8 @@ import {
 } from "../schema/index.js";
 
 export interface PersistAssistantReplyParams {
+  /** Preallocated by the durable chat-turn owner when this is an interactive turn. */
+  assistantId?: string;
   channelId: string;
   /** The assistant's reply text. */
   content: string;
@@ -80,7 +82,7 @@ export async function persistAssistantReply(
     );
   }
 
-  const assistantId = randomUUID();
+  const assistantId = params.assistantId ?? randomUUID();
   const hash = computeMessageHash(assistantId, params.content, previousHash);
 
   await db.insert(messages).values({

@@ -34,6 +34,7 @@ import {
   channels,
   entities,
   focusSessions,
+  links,
   profiles,
   profileWorkspaceAccess,
   workspaces,
@@ -251,6 +252,50 @@ async function loadRoutingMemberIds(db: Db, userId: string): Promise<string[]> {
   return [...ids];
 }
 
+/**
+ * The rung-4 feeds seam — read the materialized workspace-edge graph so a
+ * DECLARED provider/feeds-source can tie-break placement.
+ *
+ * `settings.defaultSources` (stored on a CONSUMER workspace) is backfilled into
+ * first-class `workspace --feeds--> workspace` rows in `links` (provider →
+ * consumer). This returns the PROVIDER (feeds-source) workspace ids that feed
+ * `consumerWorkspaceId` — i.e. every `P` with `P --feeds--> consumer` — so the
+ * resolver can prefer the declared source-of-truth workspace among candidates.
+ *
+ * Kind-scoped: a feeds edge whose declared kind (`metadata.profileSlug`) is set
+ * only counts when it matches one of `kindSlugs`; an UNqualified edge (no
+ * profileSlug) is domain-wide and always counts. So a workspace that declares an
+ * edge for an unrelated kind never influences THIS kind's placement.
+ *
+ * Edge invariant (see `schema/links.ts`): `feeds` governs LENS PROPAGATION,
+ * never data movement — the caller therefore only ever uses this to pick AMONG
+ * already-valid candidates, never to relocate data to a brand-new workspace.
+ */
+async function loadFeedsProviders(
+  db: Db,
+  consumerWorkspaceId: string,
+  kindSlugs: string[]
+): Promise<Set<string>> {
+  const rows = await db.query.links.findMany({
+    where: and(
+      eq(links.linkType, "feeds"),
+      eq(links.fromType, "workspace"),
+      eq(links.toType, "workspace"),
+      eq(links.toId, consumerWorkspaceId)
+    ),
+    columns: { fromId: true, metadata: true },
+  });
+  const providers = new Set<string>();
+  for (const r of rows) {
+    const meta = (r.metadata ?? {}) as { profileSlug?: string | null };
+    const slug = meta.profileSlug ?? null;
+    // A kind-qualified edge only applies to its own kind; unqualified = any kind.
+    if (slug && kindSlugs.length > 0 && !kindSlugs.includes(slug)) continue;
+    providers.add(r.fromId);
+  }
+  return providers;
+}
+
 function describeSlugs(slugs: string[]): string {
   if (slugs.length === 1) return `role '${slugs[0]}'`;
   return `roles ${slugs.map((s) => `'${s}'`).join(", ")}`;
@@ -400,8 +445,9 @@ export async function resolveWorkspacePlacement(
   }
 
   // ── Rung 4 — relational gravity (the lens of linked entities) ──
-  // Minimal this wave: only the linked entities' own workspaces. SEAM: `feeds`
-  // edges become an additional candidate signal in Wave 4 (hook here).
+  // Two signals: (a) the linked entities' own workspaces, and (b) the `feeds`
+  // edge graph (wired below) — a DECLARED provider/feeds-source tie-breaks an
+  // otherwise-ambiguous candidate set toward the source-of-truth workspace.
   if (input.relatedEntityIds && input.relatedEntityIds.length > 0) {
     const map = await getMemberMap();
     const rows = await db.query.entities.findMany({
@@ -435,6 +481,32 @@ export async function resolveWorkspacePlacement(
     }
     if (linked.size > 1 && candidates.length === 0) {
       candidates = [...linked].map((id) => ({ id, name: map.get(id)!.name }));
+    }
+  }
+
+  // ── Rung 4 (feeds seam) — a DECLARED provider/feeds-source tie-breaks the
+  // candidate set toward the source-of-truth workspace. Reads the materialized
+  // `workspace --feeds--> workspace` edge graph (links), never re-parsing JSONB.
+  // STRICTLY additive: only consulted when a prior rung left >1 candidates (real
+  // ambiguity), and it only ever PICKS one of those already-valid candidates —
+  // honouring the feeds invariant "lens propagation, never data movement". A
+  // clean single-winner (rungs 1–3, or rung-4 relational) is never touched, so
+  // existing data with a deterministic placement is never re-routed.
+  if (candidates.length > 1 && ambient) {
+    const providers = await loadFeedsProviders(db, ambient, slugs);
+    const preferred = candidates.filter((c) => providers.has(c.id));
+    if (preferred.length === 1) {
+      const w = preferred[0];
+      const map = await getMemberMap();
+      const ambientName = map.get(ambient)?.name ?? "this workspace";
+      return {
+        workspaceId: w.id,
+        rung: 4,
+        reason: `workspace '${ambientName}' consumes '${w.name}' (declared feeds edge) → placed in the source-of-truth workspace`,
+        confidence: 1,
+        candidates: [],
+        ask: false,
+      };
     }
   }
 

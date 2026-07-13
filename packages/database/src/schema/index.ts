@@ -4,6 +4,7 @@
 
 // Core user management (Kratos identity cache)
 export * from "./users.js";
+export * from "./control-plane-member-activations.js";
 
 export * from "./events.js";
 export * from "./entities.js";
@@ -12,6 +13,7 @@ export * from "./entity-facets.js";
 export * from "./documents.js";
 export * from "./relations.js";
 export * from "./messages.js";
+export * from "./chat-turns.js";
 export * from "./knowledge-facts.js";
 export * from "./ai-suggestions.js";
 export * from "./api-keys.js";

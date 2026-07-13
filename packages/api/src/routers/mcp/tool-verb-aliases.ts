@@ -46,6 +46,10 @@ export const MCP_TOOL_TEACHING_KEYS: Record<string, string[]> = {
   synap_update_session: ["synap_update_session"],
   synap_complete_session: ["synap_complete_session"],
   synap_create_workspace: ["create_workspace"],
+  synap_declare_workspace_source: [
+    "declare_workspace_source",
+    "synap_declare_workspace_source",
+  ],
   synap_create_project: ["synap_create_project"],
   synap_list_projects: ["synap_list_projects"],
   synap_list_profiles: ["list_profiles"],

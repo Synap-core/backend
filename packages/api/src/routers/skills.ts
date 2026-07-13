@@ -78,7 +78,13 @@ export async function insertSkillGoverned(
     workspaceId: values.workspaceId ?? undefined,
     subjectType: "skill",
     action: "create",
-    data: { id: skillId, name: values.name },
+    // Widened (object-proposal manifest W1): carry the FULL insert values so an
+    // approved proposal materializes a real skill (kind/code/body/scope/
+    // providerSpec/…) via the SAME insertSkillGoverned door — not just a label.
+    // `values` is exactly the skill insert shape; only the PROPOSED (pending)
+    // row's stored data widens — the granted-path insert below reads `values`
+    // and `skillId` unchanged, so the direct-create path is byte-identical.
+    data: { id: skillId, ...values },
   });
 
   if ("denied" in perm && perm.denied) {
@@ -300,7 +306,29 @@ export const skillsRouter = router({
         workspaceId: input.workspaceId,
         subjectType: "skill",
         action: "create",
-        data: { id: skillId, name: input.name },
+        // Widened (object-proposal manifest W1): carry the FULL resolved insert
+        // shape (matching insertSkillGoverned's `values`) so an approved proposal
+        // materializes a real skill via the shared insertSkillGoverned door. Only
+        // the PROPOSED (pending) row's stored data widens — the granted-path
+        // insert below is byte-untouched. `kind` is the DERIVED kind (not raw
+        // input.kind) so the materialized skill's kind matches the direct path.
+        data: {
+          id: skillId,
+          userId,
+          workspaceId: input.workspaceId ?? null,
+          kind,
+          scope: input.scope,
+          agentTypes: input.agentTypes ?? null,
+          name: input.name,
+          description: input.description,
+          body: input.body ?? null,
+          code: input.code ?? null,
+          providerSpec: input.providerSpec ?? null,
+          parameters: input.parameters || {},
+          category: input.category,
+          executionMode: input.executionMode,
+          timeoutSeconds: input.timeoutSeconds,
+        },
         agentUserId: input.agentUserId,
       });
 

@@ -55,6 +55,7 @@ import { auditLog } from "../utils/audit-log.js";
 import {
   instantiateSession,
   promoteSessionToPlaybook,
+  resolveGoal,
 } from "../services/playbooks/playbook-lifecycle.js";
 import { runPlaybook } from "../services/playbooks/run-playbook.js";
 import { materializePlaybookCronAutomation } from "../services/playbooks/cron-automation.js";
@@ -942,7 +943,26 @@ export const playbooksRouter = router({
         action: "create",
         source: input.source,
         reasoning: input.reasoning,
-        data: { name: input.name, executor: input.executor },
+        // Widened (object-proposal manifest W1): carry the FULL create input so
+        // an approved proposal materializes a real playbook via playbooksRouter
+        // .create — not just a labelled shell. Only the PROPOSED (pending) row's
+        // stored data changes; the granted/direct-create insert below is
+        // untouched. goalTemplate is required by createInputSchema, so without
+        // this the approve-path materialization would fail zod validation.
+        data: {
+          name: input.name,
+          description: input.description,
+          goalTemplate: input.goalTemplate,
+          params: input.params,
+          inputStrategy: input.inputStrategy,
+          channelSpec: input.channelSpec,
+          expectedOutputs: input.expectedOutputs,
+          stages: input.stages,
+          subjectProfile: input.subjectProfile,
+          schedule: input.schedule,
+          executor: input.executor,
+          status: input.status,
+        },
       });
 
       if ("denied" in perm && perm.denied) {
@@ -1217,7 +1237,19 @@ export const playbooksRouter = router({
         action: "create",
         source: input.source,
         reasoning: input.reasoning,
-        data: { playbookId: input.playbookId, name: playbook.name },
+        // The focus_session/create executor requires `goal` — without it an
+        // approved instantiate proposal throws "Focus session proposal is
+        // missing goal". Resolve the playbook's goalTemplate against params NOW
+        // (propose time), matching the direct instantiateSession path so the
+        // materialized session's goal is identical whether approved or direct.
+        data: {
+          playbookId: input.playbookId,
+          name: playbook.name,
+          goal: resolveGoal(
+            playbook.goalTemplate,
+            (input.params ?? {}) as Record<string, unknown>
+          ),
+        },
       });
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
@@ -1286,10 +1318,21 @@ export const playbooksRouter = router({
         agentUserId: input.agentUserId,
         workspaceId: session.workspaceId,
         subjectType: "playbook",
-        action: "create",
+        // Split the overloaded `playbook/create` key: raw create (name +
+        // executor + goalTemplate) and promote (sessionId → snapshot a session)
+        // both used to emit `playbook/create`, so ONE executor could not
+        // materialize both. Promote now emits `playbook/promote` → its own clean
+        // executor (playbooksRouter.promote). `requiredPermissionFor("promote")`
+        // fail-closes to "write" (identical to "create"), so RBAC/governance is
+        // unchanged; only the proposalType string (and thus the apply key) forks.
+        action: "promote",
         source: input.source,
         reasoning: input.reasoning,
-        data: { sessionId: input.sessionId, name: input.name },
+        data: {
+          sessionId: input.sessionId,
+          name: input.name,
+          description: input.description,
+        },
       });
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });

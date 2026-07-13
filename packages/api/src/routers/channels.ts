@@ -111,6 +111,16 @@ import { emitSideEffects, getBoss } from "@synap/events";
 import { searchService } from "@synap/search";
 import { AgentRepository } from "@synap/database";
 import { resolveVaultReferences } from "../utils/vault-resolver.js";
+import {
+  createOrGetChatTurnWithUserMessage,
+  finishChatTurn,
+  getChatTurnByRequest,
+  getChatTurnForUser,
+} from "../services/chat-turns/chat-turn-store.js";
+import {
+  activateChatTurn,
+  completeActiveChatTurn,
+} from "../services/chat-turns/chat-turn-runtime.js";
 
 const logger = createLogger({ module: "channels" });
 
@@ -154,6 +164,48 @@ export const TurnContextSchema = z
     }
   });
 export type TurnContext = z.infer<typeof TurnContextSchema>;
+
+const CONTEXT_OBJECT_TYPE_VALUES = ["entity", "document", "view"] as const;
+
+/**
+ * Shared wire contract for the tRPC mutation and the canonical HTTP sender
+ * stream. Keeping this schema in one place prevents their authorization and
+ * workflow inputs from drifting apart.
+ */
+export const channelSendMessageInputSchema = z.object({
+  /** Client-generated retry key. Canonical HTTP streaming requires it; legacy tRPC remains compatible. */
+  clientRequestId: z.string().uuid().optional(),
+  /** When omitted, backend creates a new channel and returns its id. */
+  channelId: z.string().uuid().optional(),
+  content: z.string().min(1).max(50_000),
+  workspaceId: z.string().uuid().optional(),
+  /** UUID of the agent to use — validated against agents table */
+  agentId: z.string().uuid().optional(),
+  /** @mention handle, e.g. "cto" or "ai" — resolved to agent slug for this call only */
+  agentHandle: z.string().optional(),
+  /** Originating channel ID when spawning a new THREAD from a non-AI channel */
+  parentChannelId: z.string().uuid().optional(),
+  /** Entity IDs of uploaded files to attach to this message */
+  attachmentEntityIds: z.array(z.string().uuid()).max(10).optional(),
+  /** Deep Analysis mode — routes to the COMPLEX tier (Opus) for max reasoning quality */
+  deepAnalysis: z.boolean().optional(),
+  /** Channel type for resolving default channel when channelId is omitted (V2 vocab) */
+  channelType: z
+    .enum([
+      ChannelType.PERSONAL,
+      ChannelType.THREAD,
+      ChannelType.SUB_THREAD,
+      ChannelType.AGENT_COLLAB,
+    ])
+    .optional(),
+  contextObjectId: z.string().uuid().optional(),
+  contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
+  branchPurpose: z.string().max(500).optional(),
+  /** Exclude both messages from durable channel history. */
+  ephemeral: z.boolean().optional(),
+  /** Compact, generic per-turn context; intentionally flat and bounded. */
+  turnContext: TurnContextSchema.optional(),
+});
 
 /** Redact credential-like entry keys before persisting or forwarding context. */
 export function redactTurnContext(turnContext: TurnContext): TurnContext {
@@ -282,8 +334,6 @@ const CHANNEL_TYPE_VALUES = [
   ChannelType.EXTERNAL,
   ChannelType.AGENT_COLLAB,
 ] as const;
-
-const CONTEXT_OBJECT_TYPE_VALUES = ["entity", "document", "view"] as const;
 
 // ── MCP server list cache ────────────────────────────────────────────────────
 // Avoid a DB query on every message send. TTL = 30s (short enough to pick up
@@ -1458,45 +1508,7 @@ export const channelsRouter = router({
    */
   sendMessage: protectedProcedure
     .use(aiRateLimitMiddleware)
-    .input(
-      z.object({
-        /** When omitted, backend creates a new channel and returns its id. */
-        channelId: z.string().uuid().optional(),
-        content: z.string().min(1).max(50_000),
-        workspaceId: z.string().uuid().optional(),
-        /** UUID of the agent to use — validated against agents table */
-        agentId: z.string().uuid().optional(),
-        /** @mention handle, e.g. "cto" or "ai" — resolved to agent slug for this call only */
-        agentHandle: z.string().optional(),
-        /** Originating channel ID when spawning a new THREAD from a non-AI channel */
-        parentChannelId: z.string().uuid().optional(),
-        /** Entity IDs of uploaded files to attach to this message */
-        attachmentEntityIds: z.array(z.string().uuid()).max(10).optional(),
-        /** Deep Analysis mode — routes to the COMPLEX tier (Opus) for max reasoning quality */
-        deepAnalysis: z.boolean().optional(),
-        /** Channel type for resolving default channel when channelId is omitted (V2 vocab) */
-        channelType: z
-          .enum([
-            ChannelType.PERSONAL,
-            ChannelType.THREAD,
-            ChannelType.SUB_THREAD,
-            ChannelType.AGENT_COLLAB,
-          ])
-          .optional(),
-        contextObjectId: z.string().uuid().optional(),
-        contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
-        branchPurpose: z.string().max(500).optional(),
-        /**
-         * Ephemeral turn — the user message AND the assistant reply are delivered
-         * live over the realtime socket but excluded from channel history, so
-         * they disappear on reload. Powers "catch me up" recaps: visible live,
-         * gone on refresh. No @mention notifications fire for ephemeral messages.
-         */
-        ephemeral: z.boolean().optional(),
-        /** Compact, generic per-turn context; intentionally flat and bounded. */
-        turnContext: TurnContextSchema.optional(),
-      })
-    )
+    .input(channelSendMessageInputSchema)
     .mutation(async ({ input, ctx }) => {
       // protectedProcedure guarantees userId — narrow type for Drizzle compatibility
       const userId = ctx.userId!;
@@ -1507,6 +1519,36 @@ export const channelsRouter = router({
       const turnContext = input.turnContext
         ? redactTurnContext(input.turnContext)
         : undefined;
+
+      // A clientRequestId names one user intent, including Home's first turn
+      // before it has a channel id. Check it before resolving/creating a
+      // channel so a network retry cannot create a second room or model run.
+      if (input.clientRequestId) {
+        const existingTurn = await getChatTurnByRequest({
+          userId,
+          requestId: input.clientRequestId,
+        });
+        if (existingTurn) {
+          const existingAssistant = await db.query.messages.findFirst({
+            where: eq(messages.id, existingTurn.assistantMessageId),
+            columns: { content: true },
+          });
+          return {
+            channelId: existingTurn.channelId,
+            messageId: existingTurn.assistantMessageId,
+            content: existingAssistant?.content ?? "",
+            entities: [],
+            branchDecision: undefined,
+            branchThread: undefined,
+            aiSteps: [],
+            createdProposals: [],
+            turnId: existingTurn.id,
+            userMessageId: existingTurn.userMessageId,
+            assistantMessageId: existingTurn.assistantMessageId,
+            reused: true,
+          };
+        }
+      }
 
       // Resolve @mention handle → agent slug (for per-call override, not stored on channel)
       const resolvedHandle = input.agentHandle
@@ -1665,14 +1707,28 @@ export const channelsRouter = router({
 
       // Save user message
       const userMessageId = randomUUID();
+      const assistantMessageId = randomUUID();
       const userMessageHash = computeMessageHash(userMessageId, content);
-
-      await db.insert(messages).values({
+      let durableTurn:
+        | Awaited<ReturnType<typeof createOrGetChatTurnWithUserMessage>>["turn"]
+        | undefined;
+      let turnAbortController: AbortController | undefined;
+      let socketTurnSeq = 0;
+      const turnEnvelope = (type: string) =>
+        durableTurn
+          ? {
+              type,
+              turnId: durableTurn.id,
+              channelId,
+              seq: ++socketTurnSeq,
+            }
+          : { type };
+      const userMessage = {
         id: userMessageId,
         channelId,
         role: MessageRole.USER,
         content,
-        userId: userId,
+        userId,
         previousHash: "",
         hash: userMessageHash,
         sessionId: activeSessionId ?? undefined,
@@ -1684,6 +1740,67 @@ export const channelsRouter = router({
               } as (typeof messages.$inferInsert)["metadata"],
             }
           : {}),
+      };
+
+      if (input.clientRequestId) {
+        const claimed = await createOrGetChatTurnWithUserMessage({
+          turn: {
+            channelId,
+            userId,
+            requestId: input.clientRequestId,
+            userMessageId,
+            assistantMessageId,
+          },
+          userMessage,
+        });
+        durableTurn = claimed.turn;
+
+        // The unique `(user, channel, request)` key is the only authority for
+        // retry behaviour. A reconnect must attach to its original turn, never
+        // write another user message or invoke the model a second time.
+        if (!claimed.created) {
+          const existingAssistant = await db.query.messages.findFirst({
+            where: eq(messages.id, durableTurn.assistantMessageId),
+            columns: { content: true },
+          });
+          return {
+            channelId,
+            messageId: durableTurn.assistantMessageId,
+            content: existingAssistant?.content ?? "",
+            entities: [],
+            branchDecision: undefined,
+            branchThread: undefined,
+            aiSteps: [],
+            createdProposals: [],
+            turnId: durableTurn.id,
+            userMessageId: durableTurn.userMessageId,
+            assistantMessageId: durableTurn.assistantMessageId,
+            reused: true,
+          };
+        }
+
+        turnAbortController = activateChatTurn(durableTurn.id);
+      } else {
+        await db.insert(messages).values(userMessage);
+      }
+
+      // Additive lifecycle event. Existing Socket.IO consumers can ignore it;
+      // the canonical HTTP sender stream uses it to establish turnId exactly
+      // when the triggering message becomes durable.
+      emitChatEvent({
+        event: EventNames.CHAT_STREAM,
+        data: {
+          threadId: channelId,
+          ...turnEnvelope("start"),
+          isComplete: false,
+          triggerMessageId: userMessageId,
+          userMessageId,
+          turnId: durableTurn?.id,
+          assistantMessageId: durableTurn?.assistantMessageId,
+        },
+        workspaceId: workspaceId ?? null,
+        userId,
+        channelId,
       });
 
       // Human @mention notifications — DISTINCT from agent @handles (which route
@@ -2052,6 +2169,7 @@ export const channelsRouter = router({
         toolName: string;
         description: string;
       }> = [];
+      const emittedProposalIds = new Set<string>();
       let hubResponse: Partial<HubResponse> = { content: "" };
 
       // Effective agent type: @mention override → assignedAgentId (or legacy senderAgentId) → default
@@ -2155,13 +2273,41 @@ export const channelsRouter = router({
       // 8-minute hard deadline — if the IS hangs mid-stream, break out and
       // emit a complete event so the frontend is never permanently stuck.
       const streamDeadline = new AbortController();
+      let streamDeadlineExceeded = false;
       const streamDeadlineTimer = setTimeout(
         () => {
           logger.error({ channelId }, "Stream deadline exceeded — aborting");
+          streamDeadlineExceeded = true;
           streamDeadline.abort();
         },
         8 * 60 * 1000
       );
+      // The durable cancellation flag is polled as well as using the local
+      // controller. That makes a Stop request sent to another API replica
+      // reach the worker currently executing this turn.
+      const cancellationPoll = durableTurn
+        ? setInterval(() => {
+            void getChatTurnForUser({ turnId: durableTurn.id, userId })
+              .then((turn) => {
+                if (
+                  turn?.cancelRequested &&
+                  !turnAbortController?.signal.aborted
+                ) {
+                  logger.info(
+                    { channelId, turnId: durableTurn?.id },
+                    "Observed durable chat cancellation"
+                  );
+                  turnAbortController?.abort();
+                }
+              })
+              .catch((error) => {
+                logger.warn(
+                  { err: error, turnId: durableTurn?.id },
+                  "Could not poll chat cancellation"
+                );
+              });
+          }, 500)
+        : undefined;
 
       // Merge workspace-level agentPersonality into agentConfig so the IS picks it up.
       // Channel agentConfig takes precedence (more specific) over workspace defaults.
@@ -2201,7 +2347,17 @@ export const channelsRouter = router({
         }
       }
 
+      let receivedStreamOutput = false;
+      let turnCancelled = false;
+      let terminalTurnFailure:
+        | { status: "failed" | "cancelled"; error: string }
+        | undefined;
       try {
+        // Both the durable Stop action and the hard deadline must interrupt
+        // the actual Pod -> IS fetch, not merely stop consuming its iterator.
+        const streamSignal = turnAbortController
+          ? AbortSignal.any([turnAbortController.signal, streamDeadline.signal])
+          : streamDeadline.signal;
         const streamRequest = {
           query: content,
           threadId: channelId,
@@ -2239,19 +2395,23 @@ export const channelsRouter = router({
           // this as its wire contract evolves; keeping it optional preserves all
           // existing Browser, Relay, API, and MCP callers.
           ...(turnContext ? { turnContext } : {}),
+          signal: streamSignal,
         };
         const stream = resolvedService.client.sendMessageStream(streamRequest);
 
         for await (const chunk of stream) {
-          if (streamDeadline.signal.aborted) break;
+          if (streamDeadline.signal.aborted) {
+            throw new Error("AI response timed out");
+          }
           if (chunk.type === "chunk" && chunk.content) {
+            receivedStreamOutput = true;
             fullContent += chunk.content;
 
             emitChatEvent({
               event: EventNames.CHAT_STREAM,
               data: {
                 threadId: channelId,
-                type: "chunk",
+                ...turnEnvelope("delta"),
                 content: chunk.content,
                 isComplete: false,
               },
@@ -2260,6 +2420,7 @@ export const channelsRouter = router({
               channelId,
             });
           } else if (chunk.type === "step" && chunk.step) {
+            receivedStreamOutput = true;
             aiSteps.push(chunk.step);
 
             emitChatEvent({
@@ -2268,9 +2429,29 @@ export const channelsRouter = router({
                 threadId: channelId,
                 messageId: userMessageId,
                 step: chunk.step,
+                ...(durableTurn
+                  ? {
+                      turnId: durableTurn.id,
+                      channelId,
+                      seq: socketTurnSeq + 1,
+                    }
+                  : {}),
               },
               workspaceId: workspaceId ?? null,
               userId: userId,
+              channelId,
+            });
+            // Canonical Socket observer envelope for other Browser clients.
+            // Keep the legacy ai:step event above for existing consumers.
+            emitChatEvent({
+              event: EventNames.CHAT_STREAM,
+              data: {
+                threadId: channelId,
+                ...turnEnvelope("step"),
+                step: chunk.step,
+              },
+              workspaceId: workspaceId ?? null,
+              userId,
               channelId,
             });
           } else if (chunk.type === "entities" && chunk.entities) {
@@ -2332,6 +2513,52 @@ export const channelsRouter = router({
                 "emitTyped failed"
               );
             });
+          } else if (chunk.type === "proposal" && chunk.proposal) {
+            const proposal = chunk.proposal;
+            if (
+              !createdProposals.some(
+                (item) => item.proposalId === proposal.proposalId
+              )
+            ) {
+              createdProposals.push(proposal);
+              emittedProposalIds.add(proposal.proposalId);
+              emitChatEvent({
+                event: EventNames.AI_PROPOSAL,
+                data: {
+                  threadId: channelId,
+                  messageId: userMessageId,
+                  proposalId: proposal.proposalId,
+                  toolName: proposal.toolName,
+                  description: proposal.description,
+                  agentUserId: agentUserId ?? resolvedService.agentUserId,
+                  ...(durableTurn
+                    ? {
+                        turnId: durableTurn.id,
+                        channelId,
+                        seq: socketTurnSeq + 1,
+                      }
+                    : {}),
+                },
+                workspaceId: workspaceId ?? null,
+                userId,
+                channelId,
+              });
+              emitChatEvent({
+                event: EventNames.CHAT_STREAM,
+                data: {
+                  threadId: channelId,
+                  ...turnEnvelope("proposal"),
+                  proposal: {
+                    proposalId: proposal.proposalId,
+                    toolName: proposal.toolName,
+                    description: proposal.description,
+                  },
+                },
+                workspaceId: workspaceId ?? null,
+                userId,
+                channelId,
+              });
+            }
           } else if (chunk.type === "error") {
             // An IS SSE error is terminal for this turn. Treat it like a
             // transport failure so the established non-streaming fallback can
@@ -2354,12 +2581,22 @@ export const channelsRouter = router({
                   }>
                 | undefined;
               if (incoming?.length) {
-                createdProposals.push(...incoming);
+                for (const proposal of incoming) {
+                  if (
+                    !createdProposals.some(
+                      (item) => item.proposalId === proposal.proposalId
+                    )
+                  ) {
+                    createdProposals.push(proposal);
+                  }
+                }
               }
             }
 
             // Notify client of each proposal created during this AI response
             for (const cp of createdProposals) {
+              if (emittedProposalIds.has(cp.proposalId)) continue;
+              emittedProposalIds.add(cp.proposalId);
               emitChatEvent({
                 event: EventNames.AI_PROPOSAL,
                 data: {
@@ -2410,6 +2647,7 @@ export const channelsRouter = router({
           }
         }
       } catch (streamError) {
+        turnCancelled = turnAbortController?.signal.aborted === true;
         const streamErrMsg =
           streamError instanceof Error
             ? streamError.message
@@ -2426,149 +2664,212 @@ export const channelsRouter = router({
             isAbort: streamErrMsg.includes("abort"),
             isAuthError: isStreamAuthError,
           },
-          "Streaming error, falling back to non-streaming"
+          turnCancelled || receivedStreamOutput
+            ? "Streaming stopped after output; preserving the single canonical turn"
+            : "Streaming error before output, falling back to non-streaming"
         );
 
-        // Trigger auto-repair on auth errors so the next request succeeds
-        if (isStreamAuthError) {
-          try {
-            const { markServiceCredentialError } =
-              await import("../utils/credential-auto-repair.js");
-            markServiceCredentialError();
-          } catch {
-            /* best-effort */
-          }
-        }
-
-        emitChatEvent({
-          event: SERVER_CONVERSATION_EVENTS.CHAT_STREAM_ERROR,
-          data: {
-            threadId: channelId,
-            error:
-              streamError instanceof Error
-                ? streamError.message
-                : "Streaming failed",
-            fallback: true,
-          },
-          workspaceId: workspaceId ?? null,
-          userId: userId,
-          channelId,
-        });
-
-        try {
-          hubResponse = await resolvedService.client.sendMessage({
-            query: content,
-            threadId: channelId,
+        // Once a sender has received any model/tool output, a non-streaming
+        // retry could produce a different answer for the same durable user
+        // message. Never make that second invocation. Cancellation is equally
+        // terminal: the abort signal already reached the IS request.
+        if (turnCancelled || streamDeadlineExceeded || receivedStreamOutput) {
+          const error = turnCancelled
+            ? "Chat turn cancelled"
+            : streamDeadlineExceeded
+              ? "The AI response timed out. Please try again."
+              : streamErrMsg;
+          terminalTurnFailure = {
+            status: turnCancelled ? "cancelled" : "failed",
+            error,
+          };
+          emitChatEvent({
+            event: SERVER_CONVERSATION_EVENTS.CHAT_STREAM_ERROR,
+            data: {
+              threadId: channelId,
+              error,
+              fallback: false,
+              cancelled: turnCancelled,
+            },
+            workspaceId: workspaceId ?? null,
             userId: userId,
-            agentId: resolvedAgentId,
-            agentType: effectiveAgentType,
-            workspaceId,
-            sourceMessageId: userMessageId,
-            agentUserId: agentUserId ?? resolvedService.agentUserId,
-            mcpServers: mcpServersList,
-            ...getPodCallback(),
-            channelKind,
-            focusSessionId: activeFocusSessionId,
+            channelId,
           });
-        } catch (fallbackError) {
-          // Both stream and non-streaming fallback failed — Intelligence Hub is down
-          const errorDetail =
-            fallbackError instanceof Error
-              ? fallbackError.message
-              : String(fallbackError);
-          const isCircuit = errorDetail.includes("circuit open");
-          const isTimeout =
-            errorDetail.includes("abort") || errorDetail.includes("timeout");
-
-          logger.error(
-            { err: fallbackError, channelId, isCircuit, isTimeout },
-            "Both streaming and non-streaming IS calls failed"
-          );
-
-          // User-facing message with actionable context
-          const isAuthError =
-            errorDetail.includes("401") ||
-            errorDetail.includes("Unauthorized") ||
-            errorDetail.includes("credential");
-          if (isAuthError) {
-            // Auto-repair: request fresh credentials from CP in the background.
-            // The current request fails gracefully, but the next one should succeed.
+          emitChatEvent({
+            event: EventNames.CHAT_STREAM,
+            data: {
+              threadId: channelId,
+              ...turnEnvelope("error"),
+              error: {
+                code: turnCancelled
+                  ? "CHAT_TURN_CANCELLED"
+                  : "CHAT_TURN_FAILED",
+                message: error,
+                recoverable: false,
+              },
+            },
+            workspaceId: workspaceId ?? null,
+            userId,
+            channelId,
+          });
+        } else {
+          // Trigger auto-repair on auth errors so the next request succeeds
+          if (isStreamAuthError) {
             try {
               const { markServiceCredentialError } =
                 await import("../utils/credential-auto-repair.js");
               markServiceCredentialError();
             } catch {
-              // Non-critical — auto-repair is best-effort
+              /* best-effort */
             }
-            fullContent =
-              "The AI service credentials are being refreshed automatically. Please try again in a moment.";
-          } else if (isCircuit) {
-            fullContent =
-              "The AI service is recovering from a temporary overload. Please wait 30 seconds and try again.";
-          } else if (isTimeout) {
-            fullContent =
-              "The AI service took too long to respond. This usually resolves on its own — please try again.";
-          } else {
-            fullContent =
-              "The AI service is temporarily unavailable. Please try again in a moment.";
           }
 
           emitChatEvent({
             event: SERVER_CONVERSATION_EVENTS.CHAT_STREAM_ERROR,
             data: {
               threadId: channelId,
-              error: errorDetail,
-              fallback: false,
+              error:
+                streamError instanceof Error
+                  ? streamError.message
+                  : "Streaming failed",
+              fallback: true,
             },
             workspaceId: workspaceId ?? null,
             userId: userId,
             channelId,
           });
-        }
 
-        fullContent = hubResponse?.content || fullContent || "";
+          try {
+            hubResponse = await resolvedService.client.sendMessage({
+              query: content,
+              threadId: channelId,
+              userId: userId,
+              agentId: resolvedAgentId,
+              agentType: effectiveAgentType,
+              workspaceId,
+              sourceMessageId: userMessageId,
+              agentUserId: agentUserId ?? resolvedService.agentUserId,
+              mcpServers: mcpServersList,
+              ...getPodCallback(),
+              channelKind,
+              focusSessionId: activeFocusSessionId,
+            });
+          } catch (fallbackError) {
+            // Both stream and non-streaming fallback failed — Intelligence Hub is down
+            const errorDetail =
+              fallbackError instanceof Error
+                ? fallbackError.message
+                : String(fallbackError);
+            const isCircuit = errorDetail.includes("circuit open");
+            const isTimeout =
+              errorDetail.includes("abort") || errorDetail.includes("timeout");
 
-        // Recover any proposals created during the (failed) stream or fallback response
-        const fallbackProposals = hubResponse.createdProposals ?? [];
-        if (fallbackProposals.length > 0) {
-          createdProposals.push(...fallbackProposals);
-          for (const cp of fallbackProposals) {
+            logger.error(
+              { err: fallbackError, channelId, isCircuit, isTimeout },
+              "Both streaming and non-streaming IS calls failed"
+            );
+
+            // The response never began, so this is a terminal turn error rather
+            // than an assistant reply. Persisting a synthetic error as an AI
+            // message makes transcript identity and retry semantics ambiguous.
+            const isAuthError =
+              errorDetail.includes("401") ||
+              errorDetail.includes("Unauthorized") ||
+              errorDetail.includes("credential");
+            if (isAuthError) {
+              // Auto-repair: request fresh credentials from CP in the background.
+              // The current request fails gracefully, but the next one should succeed.
+              try {
+                const { markServiceCredentialError } =
+                  await import("../utils/credential-auto-repair.js");
+                markServiceCredentialError();
+              } catch {
+                // Non-critical — auto-repair is best-effort
+              }
+            }
+
+            terminalTurnFailure = {
+              status: "failed",
+              error: isAuthError
+                ? "The AI service credentials are being refreshed. Please try again shortly."
+                : isCircuit
+                  ? "The AI service is recovering from a temporary overload. Please try again shortly."
+                  : isTimeout
+                    ? "The AI service took too long to respond. Please try again."
+                    : "The AI service is temporarily unavailable. Please try again shortly.",
+            };
+
             emitChatEvent({
-              event: EventNames.AI_PROPOSAL,
+              event: SERVER_CONVERSATION_EVENTS.CHAT_STREAM_ERROR,
               data: {
                 threadId: channelId,
-                messageId: userMessageId,
-                proposalId: cp.proposalId,
-                toolName: cp.toolName,
-                description: cp.description,
-                agentUserId: agentUserId ?? resolvedService.agentUserId,
+                error: errorDetail,
+                fallback: false,
               },
               workspaceId: workspaceId ?? null,
               userId: userId,
               channelId,
             });
           }
+
+          if (!terminalTurnFailure) {
+            fullContent = hubResponse?.content || fullContent || "";
+          }
+
+          // Recover any proposals created during the (failed) stream or fallback response
+          const fallbackProposals = hubResponse.createdProposals ?? [];
+          if (fallbackProposals.length > 0) {
+            for (const cp of fallbackProposals) {
+              if (
+                !createdProposals.some(
+                  (item) => item.proposalId === cp.proposalId
+                )
+              ) {
+                createdProposals.push(cp);
+              }
+              if (emittedProposalIds.has(cp.proposalId)) continue;
+              emittedProposalIds.add(cp.proposalId);
+              emitChatEvent({
+                event: EventNames.AI_PROPOSAL,
+                data: {
+                  threadId: channelId,
+                  messageId: userMessageId,
+                  proposalId: cp.proposalId,
+                  toolName: cp.toolName,
+                  description: cp.description,
+                  agentUserId: agentUserId ?? resolvedService.agentUserId,
+                },
+                workspaceId: workspaceId ?? null,
+                userId: userId,
+                channelId,
+              });
+            }
+          }
         }
       } finally {
         clearTimeout(streamDeadlineTimer);
-        // If the 8-minute deadline fired and we got no content (IS permanently hung),
-        // emit a completion event so the frontend is never left waiting forever.
-        if (streamDeadline.signal.aborted && !fullContent) {
-          emitChatEvent({
-            event: EventNames.CHAT_STREAM,
-            data: {
-              threadId: channelId,
-              type: "complete",
-              isComplete: true,
-              timedOut: true,
-              agentType: effectiveAgentType,
-            },
-            workspaceId: workspaceId ?? null,
-            userId: userId,
-            channelId,
-          });
-          fullContent = "The AI response timed out. Please try again.";
+        if (cancellationPoll) clearInterval(cancellationPoll);
+        if (streamDeadlineExceeded && !terminalTurnFailure) {
+          terminalTurnFailure = {
+            status: "failed",
+            error: "The AI response timed out. Please try again.",
+          };
         }
+      }
+
+      if (terminalTurnFailure) {
+        if (durableTurn) {
+          await finishChatTurn({
+            turnId: durableTurn.id,
+            status: terminalTurnFailure.status,
+            error: terminalTurnFailure.error,
+          });
+          completeActiveChatTurn(durableTurn.id);
+        }
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: terminalTurnFailure.error,
+        });
       }
 
       // Save assistant message — via the shared hash-chain writer
@@ -2582,8 +2883,13 @@ export const channelsRouter = router({
         agentType: effectiveAgentType,
       };
 
-      const { assistantId: assistantMessageId, hash: assistantMessageHash } =
-        await persistAssistantReply({
+      let persistedAssistantMessageId: string;
+      let assistantMessageHash: string;
+      try {
+        const persisted = await persistAssistantReply({
+          ...(durableTurn
+            ? { assistantId: durableTurn.assistantMessageId }
+            : {}),
           channelId,
           userMessageId,
           triggerContent: content,
@@ -2608,6 +2914,64 @@ export const channelsRouter = router({
               }
             : null,
         });
+        persistedAssistantMessageId = persisted.assistantId;
+        assistantMessageHash = persisted.hash;
+      } catch (error) {
+        if (durableTurn) {
+          const detail =
+            error instanceof Error
+              ? error.message
+              : "Could not persist the AI response";
+          await finishChatTurn({
+            turnId: durableTurn.id,
+            status: "failed",
+            error: detail,
+          });
+          completeActiveChatTurn(durableTurn.id);
+        }
+        throw error;
+      }
+
+      // The durable path preallocates the id; retain a defensive assertion so
+      // a future writer change cannot silently reintroduce flash/reconciliation
+      // bugs between the live bubble and persisted message.
+      if (
+        durableTurn &&
+        persistedAssistantMessageId !== durableTurn.assistantMessageId
+      ) {
+        await finishChatTurn({
+          turnId: durableTurn.id,
+          status: "failed",
+          error: "Persisted assistant message did not match chat turn",
+        });
+        completeActiveChatTurn(durableTurn.id);
+        throw new Error("Persisted assistant message did not match chat turn");
+      }
+
+      if (durableTurn) {
+        await finishChatTurn({
+          turnId: durableTurn.id,
+          status: turnCancelled ? "cancelled" : "completed",
+        });
+        completeActiveChatTurn(durableTurn.id);
+        // Publish completion only after the assistant row is durable. The SSE
+        // sender owns its own final frame; this envelope is for Socket
+        // observers on other Browser clients.
+        emitChatEvent({
+          event: EventNames.CHAT_STREAM,
+          data: {
+            threadId: channelId,
+            ...turnEnvelope("complete"),
+            triggerMessageId: userMessageId,
+            userMessageId,
+            assistantMessageId: persistedAssistantMessageId,
+            createdProposals,
+          },
+          workspaceId: workspaceId ?? null,
+          userId,
+          channelId,
+        });
+      }
 
       // Lazily enroll the human owner + AI agent in channel_members so
       // listRoomMembers returns real data for personal channels that were
@@ -2831,6 +3195,14 @@ export const channelsRouter = router({
         branchDecision,
         branchThread: branchChannel,
         aiSteps,
+        createdProposals,
+        ...(durableTurn
+          ? {
+              turnId: durableTurn.id,
+              userMessageId: durableTurn.userMessageId,
+              assistantMessageId: durableTurn.assistantMessageId,
+            }
+          : {}),
       };
     }),
 

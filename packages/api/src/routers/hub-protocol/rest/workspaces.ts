@@ -187,6 +187,53 @@ export function registerWorkspacesRoutes(app: HubHono): void {
   });
 
   registerOpenApi(app, {
+    method: "patch",
+    path: "/workspaces/{workspaceId}/source-edges",
+    tags: ["Workspaces"],
+    summary: "Declare workspace data edges (sourceRoles / defaultSources)",
+    description:
+      "Set/merge the workspace-EDGE fields on an existing workspace: " +
+      "`sourceRoles` (domain → provider|consumer|provider-consumer) and " +
+      "`defaultSources` (domain → source workspace to read from). Merges " +
+      "per-domain — existing domains and all other settings are preserved, " +
+      "never clobbered. Editor+ membership required.",
+    request: {
+      params: zOpenapi.object({ workspaceId: zOpenapi.string() }),
+      body: zOpenapi.object({
+        sourceRoles: zOpenapi
+          .record(
+            zOpenapi.string(),
+            zOpenapi.enum(["provider", "consumer", "provider-consumer"])
+          )
+          .optional(),
+        defaultSources: zOpenapi
+          .record(
+            zOpenapi.string(),
+            zOpenapi.object({
+              workspaceId: zOpenapi.string(),
+              capability: zOpenapi.string().optional(),
+              profileSlug: zOpenapi.string().optional(),
+              label: zOpenapi.string().optional(),
+            })
+          )
+          .optional(),
+      }),
+    },
+    responses: {
+      200: {
+        description: "Merged edge fields",
+        schema: zOpenapi.record(zOpenapi.string(), zOpenapi.unknown()),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: {
+        description: "Forbidden — not an editor+ member",
+        schema: ErrorSchema,
+      },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
     method: "get",
     path: "/workspaces/{workspaceId}/governance",
     tags: ["Workspaces", "Governance"],
@@ -1177,6 +1224,83 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         "PATCH /workspaces/:workspaceId/delivery-preferences failed"
       );
       return c.json({ error: "Failed to set delivery preferences" }, 500);
+    }
+  });
+
+  /**
+   * PATCH /workspaces/:workspaceId/source-edges
+   *
+   * Agnostic edge-declaration door (Enterprise-OS Wave 0). Set/merge the two
+   * workspace-EDGE fields — `sourceRoles` + `defaultSources` — on an existing
+   * workspace, so an agent can DECLARE a data edge ("Marketing consumes Comms")
+   * without template authoring or the tRPC UI. Reuses the canonical
+   * non-clobbering `mergeSettings` path (via `mergeWorkspaceSourceEdges`) and
+   * ONLY exposes the two edge fields — no other settings key is writable here.
+   * Governed by `assertWorkspaceWrite` (editor+ membership on the row).
+   *
+   * `/:workspaceId/source-edges` is a distinct literal suffix, so it never
+   * collides with the static `/workspaces/*` routes registered above.
+   */
+  app.patch("/workspaces/:workspaceId/source-edges", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+
+    const userId = c.get("userId") as string;
+    const workspaceId = c.req.param("workspaceId");
+    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const { WorkspaceSourceEdgeInputSchema, mergeWorkspaceSourceEdges } =
+      await import("../../../services/workspace-edge-service.js");
+    const parsed = WorkspaceSourceEdgeInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid edge fields", details: parsed.error.issues },
+        400
+      );
+    }
+    if (!parsed.data.sourceRoles && !parsed.data.defaultSources) {
+      return c.json(
+        { error: "Provide at least one of: sourceRoles, defaultSources" },
+        400
+      );
+    }
+
+    // Governed write: editor+ membership on THIS workspace.
+    const { assertWorkspaceWrite } =
+      await import("../../../utils/workspace-write-access.js");
+    try {
+      await assertWorkspaceWrite(db, userId, { workspaceId });
+    } catch {
+      return c.json(
+        { error: "You are not an editor+ member of this workspace." },
+        403
+      );
+    }
+
+    try {
+      const result = await mergeWorkspaceSourceEdges(
+        workspaceId,
+        parsed.data,
+        userId
+      );
+      return c.json({ ok: true, workspaceId, ...result });
+    } catch (err) {
+      logger.error(
+        { err, userId, workspaceId },
+        "PATCH /workspaces/:workspaceId/source-edges failed"
+      );
+      return c.json({ error: "Failed to declare workspace edges" }, 500);
     }
   });
 

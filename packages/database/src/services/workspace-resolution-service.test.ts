@@ -37,6 +37,12 @@ interface Seed {
   sessionWorkspaceId?: string | null;
   entities?: { workspaceId: string | null }[];
   podReadable?: string[];
+  /** `workspace --feeds--> workspace` rows (rung-4 feeds seam). */
+  feedsLinks?: {
+    fromId: string;
+    toId: string;
+    metadata?: { profileSlug?: string | null };
+  }[];
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -90,6 +96,18 @@ function makeDb(seed: Seed): any {
       entities: {
         findMany: async () =>
           (seed.entities ?? []).map((e) => ({ workspaceId: e.workspaceId })),
+      },
+      links: {
+        // Rung-4 feeds seam: `loadFeedsProviders` queries `to_id = consumer`.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        findMany: async (args: any) => {
+          const consumerId = args?.where; // opaque drizzle expr in prod; mock filters by seed
+          void consumerId;
+          return (seed.feedsLinks ?? []).map((l) => ({
+            fromId: l.fromId,
+            metadata: l.metadata ?? {},
+          }));
+        },
       },
     },
   };
@@ -263,6 +281,62 @@ describe("resolveWorkspacePlacement — rung 4 (relational)", () => {
       relatedEntityIds: ["e1", "e2"],
     });
     expect(r).toMatchObject({ workspaceId: WS_A, rung: 4 });
+  });
+});
+
+describe("resolveWorkspacePlacement — rung 4 (feeds seam)", () => {
+  // Multi-candidate ontology (the kind is enabled in both A + B), ambient = A.
+  // A declares it CONSUMES B (B --feeds--> A). The feeds seam tie-breaks toward
+  // B, the declared source-of-truth, instead of falling to the rung-6 ambient.
+  it("declared provider/feeds-source tie-breaks the candidate set (rung 4)", async () => {
+    const db = makeDb({
+      members: [WS_A, WS_B],
+      workspaces: [
+        { id: WS_A, name: "Marketing" },
+        { id: WS_B, name: "Comms" },
+      ],
+      profiles: [
+        { id: "p1", slug: "asset", scope: "workspace", workspaceId: WS_A },
+        { id: "p2", slug: "asset", scope: "workspace", workspaceId: WS_B },
+      ],
+      // Comms (WS_B) --feeds--> Marketing (WS_A): Marketing consumes Comms.
+      feedsLinks: [{ fromId: WS_B, toId: WS_A }],
+    });
+    const r = await resolveWorkspacePlacement(db, {
+      userId: USER,
+      kindSlug: "asset",
+      ambientWorkspaceId: WS_A,
+    });
+    expect(r.rung).toBe(4);
+    expect(r.workspaceId).toBe(WS_B);
+    expect(r.reason).toContain("feeds edge");
+  });
+
+  // A kind-qualified feeds edge for a DIFFERENT kind must not tie-break — so a
+  // declared edge never re-routes an unrelated kind's placement.
+  it("kind-mismatched feeds edge is ignored → falls through to rung 6", async () => {
+    const db = makeDb({
+      members: [WS_A, WS_B],
+      workspaces: [
+        { id: WS_A, name: "Marketing" },
+        { id: WS_B, name: "Comms" },
+      ],
+      profiles: [
+        { id: "p1", slug: "asset", scope: "workspace", workspaceId: WS_A },
+        { id: "p2", slug: "asset", scope: "workspace", workspaceId: WS_B },
+      ],
+      // The edge concerns 'lead', not the 'asset' being placed → no signal.
+      feedsLinks: [
+        { fromId: WS_B, toId: WS_A, metadata: { profileSlug: "lead" } },
+      ],
+    });
+    const r = await resolveWorkspacePlacement(db, {
+      userId: USER,
+      kindSlug: "asset",
+      ambientWorkspaceId: WS_A,
+    });
+    expect(r.rung).toBe(6);
+    expect(r.workspaceId).toBe(WS_A);
   });
 });
 

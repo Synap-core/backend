@@ -1247,6 +1247,51 @@ export async function executeMCPToolViaHubProtocol(
       return ok({ workspaceId: newWsId, created });
     }
 
+    // Agnostic edge-declaration door (Enterprise-OS Wave 0). Set/merge the two
+    // workspace-EDGE fields — `sourceRoles` (domain → provider|consumer|
+    // provider-consumer) + `defaultSources` (domain → source workspace) — on an
+    // EXISTING workspace, so an agent can DECLARE an edge (e.g. "Marketing
+    // consumes Comms") without touching template authoring or the tRPC UI door.
+    // Tightly scoped: ONLY these two edge fields are agent-writable here — no
+    // other settings key (aiGovernance/visibility/…) is reachable. MERGES
+    // per-domain via the canonical mergeSettings path — never clobbers.
+    case "synap_declare_workspace_source": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      const workspaceId = args.workspaceId as string | undefined;
+      if (typeof workspaceId !== "string" || workspaceId.trim() === "") {
+        return ok({ error: "workspaceId is required" });
+      }
+      const { WorkspaceSourceEdgeInputSchema, mergeWorkspaceSourceEdges } =
+        await import("../../services/workspace-edge-service.js");
+      const parsed = WorkspaceSourceEdgeInputSchema.safeParse({
+        sourceRoles: args.sourceRoles,
+        defaultSources: args.defaultSources,
+      });
+      if (!parsed.success) {
+        return ok({
+          error: "Invalid edge fields",
+          details: parsed.error.issues,
+        });
+      }
+      if (!parsed.data.sourceRoles && !parsed.data.defaultSources) {
+        return ok({
+          error: "Provide at least one of: sourceRoles, defaultSources",
+        });
+      }
+      // Governed write: editor+ membership on THIS workspace (the canonical
+      // write-side floor). The acting agent identity (when an agent key is
+      // remapped) is what must hold membership.
+      const { assertWorkspaceWrite } =
+        await import("../../utils/workspace-write-access.js");
+      await assertWorkspaceWrite(db, agentUserId ?? userId, { workspaceId });
+      const result = await mergeWorkspaceSourceEdges(
+        workspaceId,
+        parsed.data,
+        userId
+      );
+      return ok({ status: "updated", workspaceId, ...result });
+    }
+
     case "synap_create_project": {
       requireScope(apiKeyScopes, "mcp.write", toolName);
       if (typeof args.name !== "string" || args.name.trim() === "") {

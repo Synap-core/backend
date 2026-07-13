@@ -64,6 +64,21 @@ import { queryChannelMessages } from "../utils/query-channel-messages.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { createLogger } from "@synap-core/core";
 import { authMiddleware } from "@synap/auth";
+import { createContext } from "../context.js";
+import { channelSendMessageInputSchema, channelsRouter } from "./channels.js";
+import { runWithChatTurnObserver } from "../utils/chat-turn-observer.js";
+import {
+  createChatTurnFrameSequencer,
+  encodeAiSdkUiMessageStreamFrame,
+  type ChatTurnFrame,
+} from "../utils/chat-turn-sse.js";
+import {
+  appendChatTurnEvent,
+  getChatTurnEvents,
+  getChatTurnForUser,
+  requestChatTurnCancellation,
+} from "../services/chat-turns/chat-turn-store.js";
+import { abortActiveChatTurn } from "../services/chat-turns/chat-turn-runtime.js";
 
 const logger = createLogger({ module: "chat-stream" });
 
@@ -94,6 +109,227 @@ export const chatStreamApp = new Hono<{
 // requirement co-located with the route — if someone mounts this app at
 // a different prefix, the auth travels with it.
 chatStreamApp.use("*", authMiddleware);
+
+/**
+ * POST /api/chat/turns
+ *
+ * The sender's authoritative stream. It invokes the same protected tRPC
+ * procedure as Browser chat, so user persistence, proposal governance,
+ * sessions, side effects, and observer Socket.IO fanout stay single-sourced.
+ */
+chatStreamApp.post("/turns", async (c) => {
+  const userId = c.get("userId");
+  if (!userId) return c.json({ error: "Unauthorized" }, 401);
+
+  let input: z.infer<typeof channelSendMessageInputSchema>;
+  try {
+    const parsed = channelSendMessageInputSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.issues },
+        400
+      );
+    }
+    // A retry key is mandatory for the canonical HTTP sender. tRPC remains
+    // backward-compatible for older/non-SSE callers, but HTTP must never risk
+    // invoking an agent twice after a network retry.
+    if (!parsed.data.clientRequestId) {
+      return c.json({ error: "clientRequestId is required" }, 400);
+    }
+    input = parsed.data;
+  } catch {
+    return c.json({ error: "Request body must be valid JSON" }, 400);
+  }
+
+  // Reuse the already authenticated Hono session when constructing the exact
+  // context used by tRPC. This keeps protectedProcedure, audit logging, read
+  // only checks, and AI rate limiting active for HTTP senders too.
+  const context = await createContext(c.req.raw, c);
+  if (!context.authenticated || context.userId !== userId) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const encoder = new TextEncoder();
+  // A browser closing its SSE reader must not stop the authoritative turn or
+  // its journal. It merely detaches this response; a reconnect replays the
+  // same durable events with the same clientRequestId.
+  let clientDetached = false;
+  let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const frames = createChatTurnFrameSequencer();
+
+  let durableWrites = Promise.resolve();
+  const writeStored = (frame: ChatTurnFrame | undefined) => {
+    if (!frame || clientDetached || !controllerRef) return;
+    try {
+      controllerRef.enqueue(
+        encoder.encode(encodeAiSdkUiMessageStreamFrame(frame))
+      );
+    } catch {
+      clientDetached = true;
+    }
+  };
+  const write = (frame: ChatTurnFrame | undefined) => {
+    if (!frame) return;
+    // Journal authority is independent from this response writer. Queue it
+    // before attempting enqueue so a close race cannot drop the frame that a
+    // reconnect needs to recover the turn.
+    durableWrites = durableWrites
+      .then(async () => {
+        if (!frame.turnId) return;
+        await appendChatTurnEvent({
+          turnId: frame.turnId,
+          type: frame.type,
+          eventId: frame.eventId,
+          payload: frame,
+        });
+      })
+      .catch((error) => {
+        logger.error(
+          { err: error, turnId: frame.turnId },
+          "Failed to persist chat turn event"
+        );
+      });
+    try {
+      if (!clientDetached && controllerRef) {
+        controllerRef.enqueue(
+          encoder.encode(encodeAiSdkUiMessageStreamFrame(frame))
+        );
+      }
+    } catch {
+      clientDetached = true;
+    }
+  };
+
+  /**
+   * A duplicate POST is a reconnect, not another model invocation. Replay the
+   * immutable journal and keep following it until the original worker reaches
+   * a terminal state. This also covers a browser reconnect after the original
+   * SSE connection died mid-turn.
+   */
+  const replayExistingTurn = async (turnId: string) => {
+    let afterSeq = 0;
+    while (!clientDetached) {
+      const events = await getChatTurnEvents({ turnId, afterSeq });
+      for (const event of events) {
+        writeStored(event.payload as ChatTurnFrame);
+        afterSeq = event.seq;
+        const frame = event.payload as ChatTurnFrame;
+        if (frame.type === "complete" || frame.type === "error") return;
+      }
+      const turn = await getChatTurnForUser({ turnId, userId });
+      if (!turn) return;
+      if (turn.status !== "running") {
+        // `channels.sendMessage` finishes domain persistence before this route
+        // appends its canonical terminal frame. Do not close the reconnect in
+        // that small window: wait for the journal's complete/error authority.
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+        continue;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+    }
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controllerRef = controller;
+      const caller = channelsRouter.createCaller(context);
+
+      void runWithChatTurnObserver(
+        (event) => write(frames.fromBroadcast(event)),
+        () => caller.sendMessage(input)
+      )
+        .then(async (result) => {
+          if (result.reused && typeof result.turnId === "string") {
+            await replayExistingTurn(result.turnId);
+            return;
+          }
+          await durableWrites;
+          write(frames.complete(result));
+          await durableWrites;
+        })
+        .catch(async (error) => {
+          write(frames.error(error));
+          await durableWrites;
+        })
+        .finally(() => {
+          if (!clientDetached) controller.close();
+        });
+    },
+    cancel() {
+      // Client detachment only ends this HTTP reader. A visible Stop uses the
+      // explicit /turns/:id/cancel endpoint, which reaches the active IS fetch.
+      clientDetached = true;
+    },
+  });
+
+  return c.newResponse(stream, 200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+    "x-vercel-ai-ui-message-stream": "v1",
+  });
+});
+
+/** Replay immutable events after a reconnect. `after` is exclusive. */
+chatStreamApp.get("/turns/:turnId/events", async (c) => {
+  const userId = c.get("userId");
+  if (!userId) return c.json({ error: "Unauthorized" }, 401);
+  const turnId = c.req.param("turnId");
+  const afterRaw = c.req.query("after");
+  const after = afterRaw === undefined ? undefined : Number(afterRaw);
+  if (after !== undefined && (!Number.isInteger(after) || after < 0)) {
+    return c.json({ error: "after must be a non-negative integer" }, 400);
+  }
+  const turn = await getChatTurnForUser({ turnId, userId });
+  if (!turn) return c.json({ error: "Chat turn not found" }, 404);
+
+  const events = await getChatTurnEvents({ turnId, afterSeq: after });
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const event of events) {
+        controller.enqueue(
+          encoder.encode(
+            encodeAiSdkUiMessageStreamFrame(event.payload as ChatTurnFrame)
+          )
+        );
+      }
+      if (turn.status !== "running") controller.close();
+      else {
+        // This endpoint is a deterministic catch-up snapshot, not a second
+        // active stream owner. The client reconnects with the next `after` if
+        // the original sender connection died while the turn remains active.
+        controller.close();
+      }
+    },
+  });
+  return c.newResponse(stream, 200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    "x-vercel-ai-ui-message-stream": "v1",
+  });
+});
+
+/** Request real cancellation: marks the durable turn then aborts its active IS fetch. */
+chatStreamApp.post("/turns/:turnId/cancel", async (c) => {
+  const userId = c.get("userId");
+  if (!userId) return c.json({ error: "Unauthorized" }, 401);
+  const turn = await requestChatTurnCancellation({
+    turnId: c.req.param("turnId"),
+    userId,
+  });
+  if (!turn)
+    return c.json({ error: "Chat turn not found or no longer active" }, 404);
+  return c.json({
+    turnId: turn.id,
+    cancelled: true,
+    abortDelivered: abortActiveChatTurn(turn.id),
+    // A different replica observes cancelRequested through the turn worker's
+    // short poll, so 200 always means cancellation is durably scheduled.
+    cancellationScheduled: true,
+  });
+});
 
 chatStreamApp.post("/stream", async (c) => {
   // Session auth is enforced by the router-level `authMiddleware` above.

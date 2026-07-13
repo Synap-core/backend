@@ -131,6 +131,11 @@ export const projectsRouter = router({
     .mutation(async ({ input, ctx }) => {
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
+        // Bug fix (object-proposal manifest W1): forward the acting agent
+        // identity so an agent-authored project create is GOVERNED (routes to a
+        // proposal via the agent ladder) instead of auto-applying as if the human
+        // operator created it. Undefined for operator/human requests — unchanged.
+        agentUserId: ctx.agentUserId ?? undefined,
         workspaceId: ctx.workspaceId,
         subjectType: "project",
         action: "create",

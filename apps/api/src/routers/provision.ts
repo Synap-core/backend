@@ -10,6 +10,7 @@
  *   POST /api/provision/register-intelligence — IS self-registers its API key via CP-signed JWT
  *   POST /api/provision/reset-intelligence    — Clear stale IS registration (CP-JWT auth)
  *   POST /api/provision/seed-admin            — Atomic admin seeding (Kratos + users + workspace)
+ *   POST /api/provision/activate-member        — Project a CP member grant into one workspace
  *   POST /api/provision/admin-recovery-link   — Generate Kratos password-recovery link for admin (CP-JWT auth)
  *   GET  /api/provision/status                — Public status check (includes IS credential probe)
  *   POST /api/provision/disconnect            — Remove CP connection (admin only, uses CP JWT)
@@ -42,6 +43,7 @@ import {
   ApiKeyRepository,
   sql,
   seedAdminUser,
+  activateControlPlaneMember,
   TrustedIssuerService,
 } from "@synap/database";
 import {
@@ -1005,6 +1007,210 @@ provisionRouter.post("/seed-admin", async (c) => {
       },
       500
     );
+  }
+});
+
+// ─── POST /api/provision/activate-member ───────────────────────────────────
+//
+// Control Plane → Pod member projection. This endpoint deliberately consumes a
+// signed command only: it never redeems/checks an invite with the Control Plane
+// and it never changes the existing Pod-only invitation/Kratos flows.
+//
+// Required JWT claims:
+// { type: "member_activation", podId, sub: controlPlaneUserId, email, name?,
+//   workspaceId, role: "admin"|"editor"|"viewer", activationId,
+//   aud: <pod PUBLIC_URL> }
+//
+// activationId is CP-owned retry identity. The DB service makes replays of the
+// same command a no-op and rejects a reused id with different grant details.
+provisionRouter.post("/activate-member", async (c) => {
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    logger.error(
+      "activate-member refused: PUBLIC_URL is required for audience checks"
+    );
+    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
+  }
+
+  const authHeader = c.req.header("Authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  }
+  const token = authHeader.slice(7).trim();
+  if (!token)
+    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+
+  // The provision connection pins the CP issuer and pod identity locally. This
+  // is in addition to JWT audience validation, so a valid token for another
+  // registered pod cannot be replayed here.
+  let cpUrl: string | undefined;
+  let registeredPodId: string | undefined;
+  try {
+    const db = await getDb();
+    const workspace = await db.query.workspaces.findFirst({
+      columns: { settings: true },
+    });
+    const controlPlane = (workspace?.settings as Record<string, unknown> | null)
+      ?.controlPlane as { url?: string; podId?: string } | undefined;
+    cpUrl = controlPlane?.url;
+    registeredPodId = controlPlane?.podId;
+  } catch (err) {
+    logger.warn(
+      { err },
+      "activate-member: could not read Control Plane settings"
+    );
+  }
+
+  const payload = await verifyCpJwtWithTrust<{
+    type: string;
+    podId: string;
+    sub: string;
+    email: string;
+    name?: string;
+    workspaceId: string;
+    role: "admin" | "editor" | "viewer";
+    activationId: string;
+  }>(token, { pinnedIssuer: cpUrl, audience: podPublicUrl });
+  if (!payload) {
+    logger.warn({ cpUrl }, "activate-member: token verification failed");
+    return c.json({ error: "Invalid or expired member activation token" }, 401);
+  }
+  if (payload.type !== "member_activation") {
+    return c.json(
+      { error: "Invalid token type — expected 'member_activation'" },
+      400
+    );
+  }
+  // A member activation is valid only after this Pod has been registered with
+  // the Control Plane. Trusting an issuer alone is not enough: before a Pod
+  // has a CP pod id, it has no authoritative workspace mapping to receive.
+  if (!registeredPodId) {
+    return c.json(
+      { error: "Pod is not registered with the Control Plane" },
+      409
+    );
+  }
+  if (payload.podId !== registeredPodId) {
+    logger.warn(
+      { jwtPodId: payload.podId, registeredPodId },
+      "activate-member: podId mismatch — rejecting"
+    );
+    return c.json({ error: "Token was not issued for this pod" }, 403);
+  }
+
+  const claims = z
+    .object({
+      sub: z.string().min(1),
+      email: z.string().email(),
+      name: z.string().max(500).optional(),
+      workspaceId: z.string().uuid(),
+      role: z.enum(["admin", "editor", "viewer"]),
+      activationId: z.string().uuid(),
+    })
+    .safeParse(payload);
+  if (!claims.success) {
+    return c.json({ error: "Member activation token has invalid claims" }, 400);
+  }
+
+  const {
+    sub: controlPlaneUserId,
+    email: rawEmail,
+    name,
+    workspaceId,
+    role,
+    activationId,
+  } = claims.data;
+  const email = rawEmail.trim().toLowerCase();
+  const kratosAdminUrl =
+    process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
+
+  // CP is allowed to create the target identity on a dedicated pod. The
+  // placeholder credential is never returned or used interactively; the CP
+  // continues to own the user's email/password/session lifecycle.
+  let identityId: string | null = null;
+  try {
+    const lookup = await fetch(
+      `${kratosAdminUrl}/admin/identities?credentials_identifier=${encodeURIComponent(email)}`,
+      { signal: AbortSignal.timeout(8_000) }
+    );
+    if (!lookup.ok) {
+      logger.error(
+        { status: lookup.status, email },
+        "activate-member: Kratos lookup failed"
+      );
+      return c.json(
+        { error: "Pod auth service rejected identity lookup" },
+        503
+      );
+    }
+    const identities = (await lookup.json()) as Array<{ id: string }>;
+    identityId = identities[0]?.id ?? null;
+  } catch (err) {
+    logger.error({ err, email }, "activate-member: Kratos lookup unavailable");
+    return c.json({ error: "Pod auth service unavailable" }, 503);
+  }
+
+  if (!identityId) {
+    try {
+      const created = await fetch(`${kratosAdminUrl}/admin/identities`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          schema_id: "default",
+          traits: { email, ...(name ? { name } : {}) },
+          credentials: {
+            password: {
+              config: { password: randomBytes(32).toString("base64url") },
+            },
+          },
+          metadata_public: {
+            createdVia: "control-plane-member-activation",
+            controlPlaneUserId,
+            activatedAt: new Date().toISOString(),
+          },
+          verifiable_addresses: [
+            { value: email, verified: true, via: "email", status: "completed" },
+          ],
+        }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!created.ok) {
+        const detail = await created.text().catch(() => "");
+        logger.error(
+          { status: created.status, detail: detail.slice(0, 300), email },
+          "activate-member: Kratos identity creation failed"
+        );
+        return c.json({ error: "Failed to create Pod identity" }, 502);
+      }
+      identityId = ((await created.json()) as { id: string }).id;
+    } catch (err) {
+      logger.error(
+        { err, email },
+        "activate-member: Kratos identity creation unavailable"
+      );
+      return c.json({ error: "Pod auth service unavailable" }, 503);
+    }
+  }
+
+  try {
+    const result = await activateControlPlaneMember({
+      activationId,
+      controlPlaneUserId,
+      kratosIdentityId: identityId,
+      email,
+      name,
+      workspaceId,
+      role,
+    });
+    return c.json({ success: true, ...result });
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Member activation failed";
+    logger.warn(
+      { err, controlPlaneUserId, workspaceId, activationId },
+      "activate-member: projection rejected"
+    );
+    return c.json({ error: message }, 409);
   }
 });
 

@@ -11,6 +11,7 @@
  */
 
 import { dispatchWebhooksForEvent } from "./webhook-delivery.js";
+import { notifyChatTurnObserver } from "./chat-turn-observer.js";
 
 function getRealtimeUrl(): string {
   return process.env.REALTIME_URL || "http://localhost:4001";
@@ -63,6 +64,10 @@ async function attemptEmit(
  */
 export function emitChatEvent(options: ChatBroadcastOptions): void {
   const { event, data, workspaceId, userId, channelId, viewId } = options;
+  // The sender's SSE connection observes this exact event in-process. This is
+  // deliberately synchronous and best-effort; the existing bridge remains the
+  // observer transport for all other surfaces.
+  notifyChatTurnObserver(options);
   if (!workspaceId && !userId && !channelId && !viewId) return;
 
   const url = `${getRealtimeUrl()}/bridge/emit`;

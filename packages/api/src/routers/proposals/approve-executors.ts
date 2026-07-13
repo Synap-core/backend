@@ -56,6 +56,9 @@ import {
   registerProposalExecutor,
   type StoredProposalData,
 } from "./execution-registry.js";
+// Type-only (erased at compile) so it can't trip the skills.ts circular-import
+// the value paths below avoid via dynamic `import("../skills.js")`.
+import type { InsertSkillGovernedInput } from "../skills.js";
 
 let registered = false;
 
@@ -823,6 +826,334 @@ export function registerApproveExecutors(): void {
       };
       await viewCaller.create(
         createArgs as Parameters<typeof viewCaller.create>[0]
+      );
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── skill / create ───────────────────────────────────────────────────────────
+  // (object-proposal manifest W1) A gated skill create (agent-authored, or a
+  // member whose role lacks `create`) lands here on approval. Materializes via
+  // the SAME insertSkillGoverned door the direct paths use — re-run as the
+  // APPROVER (no agentUserId ⇒ the re-entrant gate auto-grants for the operator
+  // authority), so audit / side-effects / born-approved rules match the direct
+  // create exactly. The propose gate widened `data` to the full insert shape, so
+  // kind/code/body/scope/providerSpec/… all flow through here.
+  //
+  // targetId NOTE (decision B): insertSkillGoverned mints its own skillId and
+  // ignores a caller-supplied id, so the materialized skill's id is NOT yet the
+  // proposal's pre-minted targetId — adoption is a follow-up (see wave report).
+  registerProposalExecutor({
+    key: "skill/create",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const name = innerData.name as string | undefined;
+      if (!name) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Skill proposal is missing name",
+        });
+      }
+
+      // Idempotency: insertSkillGoverned mints a fresh id each run, so a
+      // re-approve without this guard would double-create.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const { insertSkillGoverned } = await import("../skills.js");
+      const result = await insertSkillGoverned({
+        ...(innerData as Record<string, unknown>),
+        // Own the skill as the APPROVER (mirrors project/view) — no agentUserId
+        // so the re-entrant gate auto-grants for the operator authority. `id` in
+        // innerData is stripped by insertSkillGoverned (it mints its own).
+        userId,
+        agentUserId: undefined,
+        auditSource: "proposal_approval",
+      } as unknown as InsertSkillGovernedInput);
+      if (result.status === "denied") {
+        throw new TRPCError({ code: "FORBIDDEN", message: result.reason });
+      }
+      if (result.status === "proposed") {
+        // The approver IS the authority — the re-entrant gate should auto-grant.
+        // A nested proposal means the approver lacks create rights; surface it
+        // rather than silently flipping the proposal APPROVED with nothing built.
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Skill approval unexpectedly re-proposed",
+        });
+      }
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── automation / create ──────────────────────────────────────────────────────
+  // (object-proposal manifest W1) A gated automation create (agent-authored —
+  // the automations router only gates the `agentUserId` path) lands here on
+  // approval. Materializes via the SAME automationsRouter.create the direct path
+  // uses — re-run as the APPROVER with NO agentUserId, which takes the operator
+  // branch (RBAC verify, then direct insert, never re-propose). The propose gate
+  // widened `data` to the full create input, so triggerConfig / flowDefinition /
+  // status / metadata / state all flow through (flowDefinition is required).
+  //
+  // targetId NOTE (decision B): automationsRouter.create does not accept a
+  // caller-supplied id (DB-generated) — adoption is a follow-up.
+  registerProposalExecutor({
+    key: "automation/create",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const name = innerData.name as string | undefined;
+      const triggerType = innerData.triggerType as string | undefined;
+      const flowDefinition = innerData.flowDefinition;
+      if (!name || !triggerType || !flowDefinition) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Automation proposal is missing name/triggerType/flowDefinition",
+        });
+      }
+
+      // Idempotency: createCaller mints a fresh automation id each run.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const { automationsRouter } = await import("../automations.js");
+      const automationCaller = automationsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+      } as unknown as Context);
+      const createArgs = {
+        workspaceId: proposal.workspaceId ?? undefined,
+        name,
+        description: innerData.description as string | undefined,
+        triggerType,
+        triggerConfig: innerData.triggerConfig as
+          | Record<string, unknown>
+          | undefined,
+        flowDefinition,
+        status: innerData.status as string | undefined,
+        metadata: innerData.metadata as Record<string, unknown> | undefined,
+        state: innerData.state as Record<string, unknown> | undefined,
+      };
+      await automationCaller.create(
+        createArgs as Parameters<typeof automationCaller.create>[0]
+      );
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── playbook / create ────────────────────────────────────────────────────────
+  // (object-proposal manifest W1) A gated playbook RAW create lands here on
+  // approval (the promote path emits `playbook/promote` — its own executor
+  // below — so this key materializes exactly one shape). Materializes via the
+  // SAME playbooksRouter.create the direct path uses — re-run as the APPROVER
+  // with NO agentUserId + no source, so the gate auto-grants for the operator.
+  // The propose gate widened `data` to the full create input (goalTemplate is
+  // required by createInputSchema).
+  //
+  // targetId NOTE (decision B): playbooksRouter.create does not accept a
+  // caller-supplied id (DB-generated) — adoption is a follow-up.
+  registerProposalExecutor({
+    key: "playbook/create",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const name = innerData.name as string | undefined;
+      const goalTemplate = innerData.goalTemplate as string | undefined;
+      if (!name || !goalTemplate) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Playbook proposal is missing name/goalTemplate",
+        });
+      }
+      const workspaceId = proposal.workspaceId ?? null;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Playbook creation proposal is missing a valid workspaceId",
+        });
+      }
+
+      // Idempotency: createCaller mints a fresh playbook id each run.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const membership = await getWorkspaceMembership(db, workspaceId, userId);
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+      const { playbooksRouter } = await import("../playbooks.js");
+      const playbookCaller = playbooksRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId,
+        workspaceRole: membership.role,
+      } as unknown as Context);
+      const createArgs = {
+        name,
+        description: innerData.description as string | undefined,
+        goalTemplate,
+        params: innerData.params as Record<string, unknown>[] | undefined,
+        inputStrategy: innerData.inputStrategy as
+          | Record<string, unknown>
+          | undefined,
+        channelSpec: innerData.channelSpec as
+          | Record<string, unknown>
+          | undefined,
+        expectedOutputs: innerData.expectedOutputs as
+          | Record<string, unknown>[]
+          | undefined,
+        stages: innerData.stages as Record<string, unknown>[] | undefined,
+        subjectProfile: innerData.subjectProfile as
+          | Record<string, unknown>
+          | undefined,
+        schedule: innerData.schedule,
+        executor: innerData.executor,
+        status: innerData.status,
+      };
+      await playbookCaller.create(
+        createArgs as Parameters<typeof playbookCaller.create>[0]
+      );
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── playbook / promote ───────────────────────────────────────────────────────
+  // (object-proposal manifest W1) A gated session→playbook PROMOTE lands here on
+  // approval (the promote gate emits `playbook/promote`, distinct from raw
+  // create). Materializes via the SAME playbooksRouter.promote the direct path
+  // uses — re-run as the APPROVER with NO agentUserId + no source; promote is a
+  // protectedProcedure that loads the session by id and gates on the LOADED
+  // session's workspace, so the caller ctx needs only userId. The stored `data`
+  // carries { sessionId, name, description } — the rest is snapshotted FROM the
+  // session by promoteSessionToPlaybook, so no further widening is needed.
+  //
+  // targetId NOTE (decision B): promoteSessionToPlaybook mints the playbook id —
+  // adoption is a follow-up.
+  registerProposalExecutor({
+    key: "playbook/promote",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const sessionId = innerData.sessionId as string | undefined;
+      if (!sessionId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Playbook promote proposal is missing sessionId",
+        });
+      }
+
+      // Idempotency: promoteSessionToPlaybook mints a fresh playbook id each run.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const { playbooksRouter } = await import("../playbooks.js");
+      const playbookCaller = playbooksRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+      } as unknown as Context);
+      const promoteArgs = {
+        sessionId,
+        name: innerData.name as string | undefined,
+        description: innerData.description as string | undefined,
+      };
+      await playbookCaller.promote(
+        promoteArgs as Parameters<typeof playbookCaller.promote>[0]
       );
 
       await db

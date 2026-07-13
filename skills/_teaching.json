@@ -149,6 +149,28 @@
     "alwaysOn": false,
     "summary": "Diagnose what an AI did (runs door): read a capture's trace + fixHints instead of guessing when it didn't do what you expected."
   },
+  "synap/workspace-design": {
+    "teachesTools": [
+      "create_workspace",
+      "create_profile",
+      "create_property_def",
+      "attach_facet"
+    ],
+    "skillGroup": "core",
+    "alwaysOn": false,
+    "summary": "The decision rule — is a concern a WORKSPACE (owns kinds + own team + native automations + stable) or a Facet (hat) / Project (initiative) / State (stage)? Plus the CRM corollary."
+  },
+  "synap/workspace-edges": {
+    "teachesTools": [
+      "create_workspace",
+      "attach_facet",
+      "declare_workspace_source",
+      "synap_update_workspace"
+    ],
+    "skillGroup": "core",
+    "alwaysOn": false,
+    "summary": "The edge taxonomy — provides/consumes (defaultSources), triggers (run-in-A→write-B), shares-subject (facets), spans (projects) — and the declare_workspace_source door to wire a live workspace into the graph."
+  },
   "synap/viewframe-cells": {
     "teachesTools": ["generate_widget", "create_cell"],
     "skillGroup": "build",

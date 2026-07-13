@@ -119,6 +119,8 @@ export interface WorkspaceDefinitionInput {
   workspaceVisibility?: WorkspaceVisibility;
   /** Capability ids this workspace provides or consumes. */
   workspaceCapabilities?: string[];
+  /** Product-surface policy for the existing CRM workspace. */
+  crm?: WorkspaceSettings["crm"];
   /** Domain → provider/consumer role map. */
   sourceRoles?: Record<string, WorkspaceSourceRole>;
   /** Domain/capability → default source workspace references. */
@@ -398,6 +400,12 @@ const WorkspaceDefinitionSchema = z
     workspaceSubtype: z.string().optional(),
     workspaceVisibility: z.string().optional(),
     workspaceCapabilities: z.array(z.string()).optional(),
+    crm: z
+      .object({
+        surface: z.enum(["pipeline", "full"]),
+        postWin: z.enum(["handoff", "client"]),
+      })
+      .optional(),
     sourceRoles: z.record(z.string(), z.unknown()).optional(),
     defaultSources: z.record(z.string(), z.unknown()).optional(),
   })
@@ -572,6 +580,9 @@ export async function createWorkspaceFromDefinition(
   }
   if (definition.workspaceCapabilities) {
     settings.workspaceCapabilities = definition.workspaceCapabilities;
+  }
+  if (definition.crm) {
+    settings.crm = definition.crm;
   }
   if (definition.sourceRoles) {
     settings.sourceRoles = definition.sourceRoles;
