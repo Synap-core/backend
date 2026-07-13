@@ -37,10 +37,16 @@ export async function latestEventTimestamps(
       )
     )
     .groupBy(events.subjectId);
+  // `sql<Date>` is a type ASSERTION, not a coercion: postgres.js returns a
+  // MAX(timestamp) aggregate as a string, not a Date. Coerce here so the
+  // declared `Map<string, Date>` is honest and callers can trust it.
   return new Map(
     rows
-      .filter((r): r is { subjectId: string; lastSeen: Date } => !!r.subjectId)
-      .map((r) => [r.subjectId, r.lastSeen])
+      .filter((r) => !!r.subjectId)
+      .map((r) => [
+        r.subjectId,
+        r.lastSeen instanceof Date ? r.lastSeen : new Date(r.lastSeen),
+      ])
   );
 }
 

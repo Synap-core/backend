@@ -113,8 +113,12 @@ export function horizonScore<T extends HorizonRow>(
     .map((row, i) => {
       // Q — fused recall position, normalized so the top hit = 1.
       const Q = n <= 1 ? 1 : (n - 1 - i) / (n - 1);
-      // R — recency from the event-chain last-touch, else `updatedAt`.
-      const ts = opts.lastTouch.get(row.id) ?? toDate(row.updatedAt);
+      // R — recency from the event-chain last-touch, else `updatedAt`. Run the
+      // last-touch value through `toDate` too: a raw SQL aggregate (MAX) can
+      // arrive as a string despite the Map's declared `Date` type, and calling
+      // `.getTime()` on a string throws (the pure scorer must not trust caller
+      // types — same defensiveness as temporal-signal's `recencyScore`).
+      const ts = toDate(opts.lastTouch.get(row.id)) ?? toDate(row.updatedAt);
       const R = recency(ts, opts.now, halfLife);
       // F — reinforcement, log-compressed then normalized to the pool max.
       const vc = opts.viewCounts.get(row.id) ?? 0;
