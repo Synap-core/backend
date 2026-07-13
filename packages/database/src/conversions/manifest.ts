@@ -701,6 +701,78 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       statusFrom: "researchStatus",
       contextFromProperty: "projectId",
     },
+
+    // ─── Enterprise-OS Wave 1: campaign schema-drift repair ────────────────
+    //
+    // `campaign` drifted across THREE workspace templates, each declaring it as
+    // its own WORKSPACE-scope `kind` with divergent property_defs:
+    //   • content-os.yaml — 12 props, Title-case status enum
+    //   • crm.yaml        — 6 props, camelCase (CRM is being de-scoped to
+    //                        identity, so its campaign is retired here)
+    //   • marketing.yaml  — 10 props, semanticSlug `marketing.campaign`, the
+    //                        richest funnel props — the RATIFIED canonical
+    // A pod built from several of these templates therefore carries multiple
+    // WORKSPACE-scope `campaign` profile rows. Canonical: ONE pod-wide
+    // `campaign` kind based on marketing's def (funnel props: campaign-status
+    // [planning|active|paused|completed|cancelled], campaign-channel,
+    // campaign-goal, campaign-target-audience, campaign-start-date,
+    // campaign-end-date, campaign-budget, campaign-lead-count,
+    // campaign-conversion-rate, campaign-notes). content-os's campaign folds in
+    // as a superset; CRM's is removed.
+    //
+    // Same shape as the w4 knowledge cleanup (seed → dedupeProfileRows →
+    // reconcileEntityScope): seed the canonical pod-scope row, collapse every
+    // drifted same-slug workspace row onto it, then align entity scope. All
+    // three are idempotent and dry-run-first; deactivation of the drained
+    // duplicate rows is gated behind --destructive-tail.
+
+    // (1) Seed the canonical pod-wide `campaign` kind. slug is `campaign` — the
+    // shared slug EVERY template uses (marketing carries it plus a
+    // semanticSlug) — so the dedupe below can collapse the drifted rows onto
+    // it; the marketing semantic identity is recorded in uiHints.semanticSlug.
+    // Create-if-missing (an existing system `campaign` row is left untouched).
+    // The 10 funnel property_defs are NOT seeded here — SeedKindProfileOp seeds
+    // only the profile row; property_defs arrive via template instantiation and
+    // are repointed onto this canonical row by the dedupe.
+    {
+      op: "seedKindProfile",
+      opKey: "w4.seed.campaign",
+      slug: "campaign",
+      displayName: "Campaign",
+      entityScope: "pod",
+      uiHints: {
+        icon: "megaphone",
+        color: "#EC4899",
+        description:
+          "A marketing campaign — email, social, event, content, or partnership",
+        semanticSlug: "marketing.campaign",
+      },
+    },
+
+    // (2) Collapse the drifted workspace-scope `campaign` rows (content-os,
+    // crm, marketing) into the seeded pod-scope system row. canonical:'system'
+    // makes resolveDedupTarget prefer the seeded system row; every other active
+    // same-slug row's entities / entity_facets / property_defs /
+    // profile_properties / views repoint onto it (each collision-skipped).
+    // Idempotent; drained rows are deactivated only under --destructive-tail.
+    {
+      op: "dedupeProfileRows",
+      opKey: "w4.dedupe.campaign",
+      slug: "campaign",
+      canonical: "system",
+    },
+
+    // (3) Align stored entity scope with the now pod-scope `campaign` profile:
+    // an entity repointed in (2) still carries its old workspace_id, so re-null
+    // it (pod→NULL only) so the pod-wide lens sees every campaign everywhere.
+    // Scoped to `campaign` because the global w4.reconcile-entity-scope op runs
+    // EARLIER in the manifest — before this seed exists — so it cannot catch
+    // these rows.
+    {
+      op: "reconcileEntityScope",
+      opKey: "w4.reconcile.campaign",
+      slug: "campaign",
+    },
   ],
 };
 

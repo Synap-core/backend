@@ -18,13 +18,15 @@
  * ONLY the two edge keys back through `mergeSettings` — every other top-level
  * settings key (aiGovernance, visibility, onboarding, …) is preserved untouched.
  *
- * Governance: this helper does NOT gate — each door asserts the write first
- * (`assertWorkspaceWrite`, the editor+ membership floor keyed off the workspace
- * row) exactly as the other workspace-scoped mutations do, then calls this.
- * Workspace-settings updates have no proposal materializer, so the door gates
- * with membership rather than `checkPermissionOrPropose` (whose proposal would
- * never re-apply the settings on approval) — matching the two sibling
- * settings-merge Hub endpoints.
+ * Governance: this helper does NOT gate — it is the APPLY function. Each door
+ * gates FIRST via `checkPermissionOrPropose({ subjectType:"workspace",
+ * action:"declare_source" })` (Enterprise-OS Wave 0 made this a governed write,
+ * because declaring an edge rewires pod-wide cross-workspace read routing). On a
+ * GRANT (operator authority / whitelisted agent) the door calls this immediately;
+ * on a PROPOSE the door returns the proposal and this runs later, as the approver,
+ * from the `workspace/declare_source` proposal executor
+ * (routers/proposals/approve-executors.ts). Either way the caller has already
+ * authorized the write for `workspaceId` before calling.
  */
 
 import { z } from "zod";
@@ -32,7 +34,11 @@ import {
   db,
   getDb,
   workspaces,
+  links,
   eq,
+  and,
+  ne,
+  drizzleSql,
   eventRepository,
   WorkspaceRepository,
   type WorkspaceSourceRole,
@@ -120,6 +126,61 @@ export async function mergeWorkspaceSourceEdges(
   // emitCompleted() append would silently never reach the realtime/sync hooks.
   const workspaceRepo = new WorkspaceRepository(dbConn, eventRepository);
   await workspaceRepo.mergeSettings(workspaceId, patch, userId);
+
+  // Close the loop: materialize each declared `defaultSources[domain]` as the
+  // `provider --feeds--> consumer` link the PLACEMENT ladder's rung-4 reads
+  // (`loadFeedsProviders`), so a freshly-declared edge is live immediately —
+  // NOT dormant until the manual `backfill-default-sources-edges` script runs.
+  // Best-effort: `settings.defaultSources` is the source of truth (the IS
+  // resolver reads it directly); the link is a placement optimization, so a
+  // link hiccup must not lose the settings write. `createLinks` dedups on the
+  // (from,to,type) edge (ON CONFLICT DO NOTHING), so re-declaring is idempotent.
+  if (input.defaultSources) {
+    try {
+      const entries = Object.entries(input.defaultSources);
+      // Retire the stale edge for a re-declared domain: when a domain's provider
+      // is reassigned (A→B), the old `A --feeds--> consumer` link must be removed
+      // so the materialized graph keeps mirroring `settings.defaultSources` 1:1 —
+      // otherwise `loadFeedsProviders` returns BOTH A and B forever.
+      for (const [domain, source] of entries) {
+        await db
+          .delete(links)
+          .where(
+            and(
+              eq(links.toType, "workspace"),
+              eq(links.toId, workspaceId),
+              eq(links.linkType, "feeds"),
+              drizzleSql`${links.metadata}->>'domain' = ${domain}`,
+              ne(links.fromId, source.workspaceId)
+            )
+          );
+      }
+      const feedsLinks = entries.map(([domain, source]) => ({
+        workspaceId,
+        fromType: "workspace" as const,
+        fromId: source.workspaceId,
+        toType: "workspace" as const,
+        toId: workspaceId,
+        linkType: "feeds" as const,
+        // `profileSlug` scopes the edge to ONE kind — `loadFeedsProviders` reads
+        // `metadata->>'profileSlug'` to decide kind-qualified vs domain-wide, so
+        // it MUST be carried or every declared edge becomes unconditionally
+        // domain-wide (the caller's kind-scoping is silently dropped).
+        metadata: {
+          domain,
+          capability: source.capability ?? null,
+          profileSlug: source.profileSlug ?? null,
+          label: source.label ?? null,
+        },
+      }));
+      if (feedsLinks.length) await createLinks(feedsLinks);
+    } catch (err) {
+      logger.warn(
+        { err, workspaceId },
+        "feeds-link materialization failed (edge declared; placement seam falls back to backfill)"
+      );
+    }
+  }
 
   return { sourceRoles: mergedRoles, defaultSources: mergedSources };
 }

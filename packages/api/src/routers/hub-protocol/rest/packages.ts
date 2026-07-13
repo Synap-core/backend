@@ -14,6 +14,9 @@ import {
   loadCapabilityTemplate,
 } from "../../../services/capabilities/create-from-definition.js";
 import { createLoopFromDefinition } from "../../../services/loops/create-from-definition.js";
+import { resolvePackageDependencies } from "../../../services/package-dependency-resolver.js";
+import type { WorkspaceDefinitionInput } from "@synap/database";
+import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { auditLog } from "../../../utils/audit-log.js";
 import { createHubProtocolCallerContext } from "../utils.js";
@@ -134,6 +137,20 @@ const PackageApplySchema = z.object({
   automations: z.array(AutomationSchema).optional(),
   playbooks: z.array(PlaybookSchema).optional(),
   loops: z.array(LoopSchema).optional(),
+  // Template-composition dependencies — resolved BEFORE the workspace step.
+  // Mirrors TemplateDependency in @synap-core/workspace-templates verbatim.
+  dependencies: z
+    .array(
+      z.object({
+        slug: z.string().min(1),
+        kind: z
+          .enum(["workspace", "capability", "automation"])
+          .default("workspace"),
+        relation: z.enum(["compose", "require"]).default("require"),
+        reason: z.string().optional(),
+      })
+    )
+    .optional(),
 });
 
 // ─── Route registration ──────────────────────────────────────────────────────
@@ -160,33 +177,139 @@ export function registerPackagesRoutes(app: HubHono): void {
     if ("proposalId" in perm)
       return c.json({ status: "proposed", proposalId: perm.proposalId }, 202);
 
-    // ── Step 1: Create workspace ──────────────────────────────────────────
+    // ── Step 0: Resolve template-composition dependencies ─────────────────
+    // Runs AFTER permission, BEFORE the workspace step. Installs missing
+    // built-in `workspace` dependencies (deps-first, cycle-guarded) and, for a
+    // `compose` dependency, resolves the BASE workspace this package overlays.
+    let composeTargetWorkspaceId: string | undefined;
+    if (body.dependencies?.length) {
+      try {
+        const dep = await resolvePackageDependencies({
+          definition: body,
+          userId,
+          agentUserId,
+        });
+        result.dependencies = dep.installed;
+        composeTargetWorkspaceId = dep.composeTargetWorkspaceId;
+        // A compose was requested but its base could not be resolved (e.g. a
+        // private CP-only base with no built-in template). Do NOT fall back to
+        // creating a rogue overlay workspace — surface the reason instead.
+        if (dep.composeRequested && !composeTargetWorkspaceId) {
+          const unresolved = dep.installed.find(
+            (d) => d.relation === "compose"
+          );
+          return c.json(
+            {
+              error: "compose base not available",
+              detail:
+                unresolved?.message ??
+                "the compose base template must be installed on the pod first",
+              dependencies: dep.installed,
+            },
+            422
+          );
+        }
+      } catch (e) {
+        // Cycle, >1 compose dep, or wrong-kind compose → a clear 422.
+        return c.json(
+          {
+            error: "Dependency resolution failed",
+            detail: (e as Error).message,
+          },
+          422
+        );
+      }
+    }
+
+    // ── Step 1: Create workspace (or compose overlay onto the base) ───────
     let workspaceId: string | undefined;
-    try {
-      const ws = await createWorkspaceFromDefinitionIdempotent({
-        definition: body as any,
-        userId,
-        proposalId: body._meta?.slug ?? undefined,
-        workspaceName: body.workspaceName,
-        templateId: body._meta?.slug ?? undefined,
-        packageSlug: body._meta?.slug,
-        workspaceType: body.workspaceType,
-      });
-      workspaceId = ws.workspaceId;
-      result.workspace = { status: "created", workspaceId };
-      auditLog({
-        subjectType: "workspace",
-        subjectId: workspaceId,
-        action: "create",
-        phase: "completed",
-        userId,
-        data: { templateSlug: body._meta?.slug },
-      });
-    } catch (e) {
-      return c.json(
-        { error: "Workspace creation failed", detail: (e as Error).message },
-        500
-      );
+    if (composeTargetWorkspaceId) {
+      // COMPOSE: this package is an OVERLAY. Layer its profiles/roles/relations/
+      // views ADDITIVELY onto the base workspace — never create a second one,
+      // never delete/overwrite base schema. Write-gate the base (defense in
+      // depth: the resolver already restricts to editor+ memberships).
+      try {
+        const { db, workspaces, eq } = await import("@synap/database");
+        const [baseWs] = await db
+          .select({
+            id: workspaces.id,
+            ownerId: workspaces.ownerId,
+          })
+          .from(workspaces)
+          .where(eq(workspaces.id, composeTargetWorkspaceId))
+          .limit(1);
+        if (!baseWs) throw new Error("compose base workspace not found");
+        await assertWorkspaceWrite(db, userId, {
+          workspaceId: baseWs.id,
+          ownerId: baseWs.ownerId,
+        });
+
+        const { reconcileWorkspaceFromDefinition } =
+          await import("@synap/database");
+        const report = await reconcileWorkspaceFromDefinition({
+          workspaceId: composeTargetWorkspaceId,
+          userId,
+          // The apply payload (a PackageDefinition) is structurally a superset of
+          // the fields reconcile reads — workspaceSubtype/workspaceVisibility/
+          // workspaceCapabilities/profiles/views/entityLinks all share names +
+          // shapes with WorkspaceDefinitionInput. Bounded boundary cast (not
+          // `any`, so downstream type-safety is preserved).
+          definition: body as unknown as WorkspaceDefinitionInput,
+        });
+        workspaceId = composeTargetWorkspaceId;
+        result.workspace = {
+          status: "composed",
+          workspaceId,
+          onto: composeTargetWorkspaceId,
+          reconcile: {
+            profilesAdded: report.profiles.added,
+            propertiesAdded: report.properties.added.length,
+            viewsAdded: report.views.added,
+            entityLinksAdded: report.entityLinks.added,
+            propertyConflicts: report.properties.conflicts,
+          },
+        };
+        auditLog({
+          subjectType: "workspace",
+          subjectId: workspaceId,
+          action: "update",
+          phase: "completed",
+          userId,
+          data: { templateSlug: body._meta?.slug, composed: true },
+        });
+      } catch (e) {
+        return c.json(
+          { error: "Compose overlay failed", detail: (e as Error).message },
+          500
+        );
+      }
+    } else {
+      try {
+        const ws = await createWorkspaceFromDefinitionIdempotent({
+          definition: body as any,
+          userId,
+          proposalId: body._meta?.slug ?? undefined,
+          workspaceName: body.workspaceName,
+          templateId: body._meta?.slug ?? undefined,
+          packageSlug: body._meta?.slug,
+          workspaceType: body.workspaceType,
+        });
+        workspaceId = ws.workspaceId;
+        result.workspace = { status: "created", workspaceId };
+        auditLog({
+          subjectType: "workspace",
+          subjectId: workspaceId,
+          action: "create",
+          phase: "completed",
+          userId,
+          data: { templateSlug: body._meta?.slug },
+        });
+      } catch (e) {
+        return c.json(
+          { error: "Workspace creation failed", detail: (e as Error).message },
+          500
+        );
+      }
     }
 
     // ── Step 1b: Enroll the acting agent as a member of the workspace it just

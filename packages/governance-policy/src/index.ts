@@ -356,6 +356,7 @@ export type KnownGovernanceAction =
   | "arrange"
   | "invite"
   | "recap"
+  | "declare_source"
   | "write";
 
 /**
@@ -417,6 +418,9 @@ export function requiredPermissionFor(
     action === "invite" ||
     // run-session-recap.ts gates the recap write under this verb.
     action === "recap" ||
+    // Enterprise-OS Wave 0: declaring a workspace data edge
+    // (synap_declare_workspace_source / Hub source-edges) is a governed write.
+    action === "declare_source" ||
     action === "write"
   ) {
     return "write";

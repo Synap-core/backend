@@ -119,6 +119,10 @@ async function main(): Promise<void> {
         const metadata = JSON.stringify({
           domain,
           capability: source.capability ?? null,
+          // Carry profileSlug so the feeds edge stays kind-scoped in the ladder
+          // (loadFeedsProviders reads metadata->>'profileSlug'); dropping it made
+          // every backfilled edge unconditionally domain-wide.
+          profileSlug: source.profileSlug ?? null,
           label: source.label ?? null,
         });
         await sql`

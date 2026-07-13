@@ -196,7 +196,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       "`sourceRoles` (domain → provider|consumer|provider-consumer) and " +
       "`defaultSources` (domain → source workspace to read from). Merges " +
       "per-domain — existing domains and all other settings are preserved, " +
-      "never clobbered. Editor+ membership required.",
+      "never clobbered. Editor+ membership required. GOVERNED: rewiring " +
+      "cross-workspace read routing goes through review — an agent caller " +
+      "gets `{ status: 'proposed', proposalId }` (applied on approval); an " +
+      "operator-authority caller applies immediately (`{ status: 'updated' }`).",
     request: {
       params: zOpenapi.object({ workspaceId: zOpenapi.string() }),
       body: zOpenapi.object({
@@ -1276,25 +1279,53 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       );
     }
 
-    // Governed write: editor+ membership on THIS workspace.
-    const { assertWorkspaceWrite } =
-      await import("../../../utils/workspace-write-access.js");
-    try {
-      await assertWorkspaceWrite(db, userId, { workspaceId });
-    } catch {
-      return c.json(
-        { error: "You are not an editor+ member of this workspace." },
-        403
-      );
+    // GOVERNED write (Enterprise-OS Wave 0): declaring a data edge rewires
+    // pod-wide cross-workspace read routing, so it goes through the review
+    // membrane, not immediate apply. `checkPermissionOrPropose` runs the
+    // canonical RBAC floor (action `declare_source` → "write" permission = the
+    // same editor+ floor `assertWorkspaceWrite` enforced) and then the
+    // agent-governance ladder: an IS/agent caller (agentUserId set) routes to a
+    // PROPOSAL, applied on approval by the `workspace/declare_source` executor;
+    // an operator-authority caller is GRANTED and applies immediately here
+    // (byte-identical to the pre-governance path). agentUserId is the acting
+    // agent identity set on an agent-key request (never a body field).
+    const agentUserId = c.get("agentUserId") as string | undefined;
+    const { checkPermissionOrPropose } =
+      await import("../../../utils/permission-check.js");
+    const perm = await checkPermissionOrPropose({
+      userId,
+      agentUserId,
+      workspaceId,
+      subjectType: "workspace",
+      action: "declare_source",
+      source: "intelligence",
+      data: {
+        sourceRoles: parsed.data.sourceRoles,
+        defaultSources: parsed.data.defaultSources,
+      },
+    });
+    if ("denied" in perm && perm.denied) {
+      return c.json({ error: perm.reason }, 403);
+    }
+    if ("proposalId" in perm) {
+      return c.json({
+        status: "proposed",
+        workspaceId,
+        proposalId: perm.proposalId,
+        summary: perm.summary,
+        reviewPath: perm.reviewPath,
+        reviewUrl: perm.reviewUrl,
+      });
     }
 
+    // Granted (operator authority) → apply immediately.
     try {
       const result = await mergeWorkspaceSourceEdges(
         workspaceId,
         parsed.data,
-        userId
+        agentUserId ?? userId
       );
-      return c.json({ ok: true, workspaceId, ...result });
+      return c.json({ ok: true, status: "updated", workspaceId, ...result });
     } catch (err) {
       logger.error(
         { err, userId, workspaceId },

@@ -10570,7 +10570,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					id: string;
 					errorMessage: string | null;
-					status: "completed" | "running" | "failed";
+					status: "running" | "completed" | "failed";
 					startedAt: Date;
 					completedAt: Date | null;
 					threadId: string;
@@ -10596,7 +10596,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string | null;
 				id: string;
 				errorMessage: string | null;
-				status: "completed" | "running" | "failed";
+				status: "running" | "completed" | "failed";
 				startedAt: Date;
 				completedAt: Date | null;
 				threadId: string;

@@ -164,8 +164,7 @@
     "teachesTools": [
       "create_workspace",
       "attach_facet",
-      "declare_workspace_source",
-      "synap_update_workspace"
+      "synap_declare_workspace_source"
     ],
     "skillGroup": "core",
     "alwaysOn": false,

@@ -1278,16 +1278,54 @@ export async function executeMCPToolViaHubProtocol(
           error: "Provide at least one of: sourceRoles, defaultSources",
         });
       }
-      // Governed write: editor+ membership on THIS workspace (the canonical
-      // write-side floor). The acting agent identity (when an agent key is
-      // remapped) is what must hold membership.
-      const { assertWorkspaceWrite } =
-        await import("../../utils/workspace-write-access.js");
-      await assertWorkspaceWrite(db, agentUserId ?? userId, { workspaceId });
+      // GOVERNED write (Enterprise-OS Wave 0): declaring a data edge rewires
+      // pod-wide cross-workspace read routing, so it goes through the review
+      // membrane, not immediate apply. `checkPermissionOrPropose` runs the
+      // canonical RBAC floor (action `declare_source` → "write" permission =
+      // the same editor+ floor `assertWorkspaceWrite` enforced) and then the
+      // agent-governance ladder: an agent-remapped key routes to a PROPOSAL
+      // (declare_source is not auto-approved), while a plain operator (no
+      // agentUserId, source "api") is the authority and is GRANTED. On grant we
+      // apply immediately via `mergeWorkspaceSourceEdges` (byte-identical to the
+      // pre-governance path); the proposed branch returns the proposal and does
+      // NOT apply — the `workspace/declare_source` executor materializes it on
+      // approval.
+      const { checkPermissionOrPropose } =
+        await import("../../utils/permission-check.js");
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId: agentUserId ?? undefined,
+        workspaceId,
+        subjectType: "workspace",
+        action: "declare_source",
+        source: "api",
+        data: {
+          sourceRoles: parsed.data.sourceRoles,
+          defaultSources: parsed.data.defaultSources,
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        return ok({ error: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return ok({
+          status: "proposed",
+          message:
+            "Workspace edge declaration proposed for review (rewiring cross-workspace reads is governed) — it applies on approval.",
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+          workspaceId,
+        });
+      }
+      // Granted (operator authority) → apply immediately. Attribute on the same
+      // acting identity (agent when remapped, else operator).
+      const actingUserId = agentUserId ?? userId;
       const result = await mergeWorkspaceSourceEdges(
         workspaceId,
         parsed.data,
-        userId
+        actingUserId
       );
       return ok({ status: "updated", workspaceId, ...result });
     }

@@ -1597,6 +1597,88 @@ export function registerApproveExecutors(): void {
     },
   });
 
+  // ── workspace / declare_source ───────────────────────────────────────────────
+  // (Enterprise-OS Wave 0, now GOVERNED) A gated `synap_declare_workspace_source`
+  // / Hub `PATCH /workspaces/:id/source-edges` (agent-authored, or a member whose
+  // role lacks `write`) lands here on approval. Rewiring pod-wide cross-workspace
+  // read routing must go through review, not apply immediately — so this executor
+  // is what makes approval actually merge the edge. Materializes via the SAME
+  // `mergeWorkspaceSourceEdges` apply fn the direct/auto-approve path uses — re-run
+  // as the APPROVER (userId) so the settings merge + `feeds`-link materialization
+  // attribute to the reviewer. Without this executor the `*/*` catch-all would flip
+  // the proposal APPROVED (emit `.validated`) but NEVER merge the edge — the
+  // cross-workspace reads would silently never redirect.
+  //
+  // DATA-SHAPE NOTE: the propose gate stores exactly `{ sourceRoles,
+  // defaultSources }` in the proposal `data.data` — the full input
+  // `mergeWorkspaceSourceEdges` needs. The target workspace is `proposal.workspaceId`
+  // (the consumer workspace the edge is declared ON), the SAME workspace the gate
+  // RBAC-checked (mirrors project/create using proposal.workspaceId).
+  registerProposalExecutor({
+    key: "workspace/declare_source",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const workspaceId = proposal.workspaceId ?? null;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace source-edge proposal is missing a valid workspaceId",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch, so skip if
+      // this proposal was already materialized (a re-approve would re-merge —
+      // harmless (mergeSettings is idempotent) but the guard mirrors the siblings).
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const { WorkspaceSourceEdgeInputSchema, mergeWorkspaceSourceEdges } =
+        await import("../../services/workspace-edge-service.js");
+      const parsed = WorkspaceSourceEdgeInputSchema.safeParse({
+        sourceRoles: innerData.sourceRoles,
+        defaultSources: innerData.defaultSources,
+      });
+      if (
+        !parsed.success ||
+        (!parsed.data.sourceRoles && !parsed.data.defaultSources)
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Workspace source-edge proposal is missing sourceRoles/defaultSources",
+        });
+      }
+
+      // Apply as the APPROVER — the same door the granted/direct path calls.
+      await mergeWorkspaceSourceEdges(workspaceId, parsed.data, userId);
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
   // ── messaging.external.send (proposalType-only) ─────────────────────────────
   registerProposalExecutor({
     key: "messaging.external.send",

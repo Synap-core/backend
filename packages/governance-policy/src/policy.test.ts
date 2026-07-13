@@ -68,6 +68,7 @@ const INVENTORIED_VERBS: Record<string, RequiredPermission> = {
   arrange: "write", // hub-protocol/views.ts bento.arrange
   invite: "write", // member.invite (ADMIN_ACTIONS-gated on top)
   recap: "write", // run-session-recap.ts recap write
+  declare_source: "write", // workspace source-edge declaration (Enterprise-OS Wave 0)
   write: "write", // filesystem.write
 };
 
@@ -895,7 +896,9 @@ describe("constants are intact", () => {
     ).toBe(false);
     // Data creates stay instant — the reversal is surgical, not a blanket gate.
     expect(isAutoApproved("entity.create", DEFAULT_AUTO_APPROVE)).toBe(true);
-    expect(isAutoApproved("automation.create", DEFAULT_AUTO_APPROVE)).toBe(true);
+    expect(isAutoApproved("automation.create", DEFAULT_AUTO_APPROVE)).toBe(
+      true
+    );
   });
 
   // "channel.create" is ALSO absent from the lists (same surface-visibility

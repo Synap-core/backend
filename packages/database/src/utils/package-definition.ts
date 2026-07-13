@@ -187,6 +187,43 @@ export interface OnboardingSpec {
   doneWhen?: string;
 }
 
+// ─── Template-composition dependencies ───────────────────────────────────────
+//
+// A dependency this package declares on ANOTHER template/package. The install
+// resolver (`POST /api/hub/packages/apply` → `resolvePackageDependencies`) reads
+// these to build the pod's template graph: every dependency is ensured present
+// before this package is applied — missing built-in `workspace` templates install
+// first (topologically) — and a `compose` dependency LAYERS this package's schema
+// additively onto the dependency's workspace instead of creating a second
+// workspace. Mirrors `TemplateDependency` in @synap-core/workspace-templates
+// VERBATIM so the wire shape never drifts.
+
+export type PackageDependencyKind = "workspace" | "capability" | "automation";
+export type PackageDependencyRelation = "compose" | "require";
+
+export interface TemplateDependency {
+  /** Slug of the template/package this one depends on. */
+  slug: string;
+  /**
+   * What the dependency is. Default `'workspace'`. Only `'workspace'`
+   * dependencies can be `compose`d; `'capability'`/`'automation'` are always
+   * `require`d present without merging.
+   */
+  kind?: PackageDependencyKind;
+  /**
+   * How this template relates to the dependency:
+   * - `'compose'`: this template is an OVERLAY on the dependency's workspace.
+   *   The base is installed first if absent, then this template's profiles /
+   *   roles / relations / views are applied ADDITIVELY onto the base workspace
+   *   — no separate workspace is created for this template.
+   * - `'require'` (default): the dependency must be present on the pod as its
+   *   own artifact, but this template does not merge into it.
+   */
+  relation?: PackageDependencyRelation;
+  /** Short human reason shown in the install-time "this also installs…" prompt. */
+  reason?: string;
+}
+
 // ─── The unified definition ──────────────────────────────────────────────────
 
 export interface PackageDefinition {
@@ -242,4 +279,11 @@ export interface PackageDefinition {
    * the shared `onboard` skill reads). Written to workspace.settings.onboarding.
    */
   onboarding?: OnboardingSpec;
+  /**
+   * Template-composition dependencies — other templates this package needs. The
+   * install resolver installs missing built-in `workspace` dependencies first
+   * and, for a `compose` dependency, layers this package additively onto the
+   * dependency's workspace. See {@link TemplateDependency}.
+   */
+  dependencies?: TemplateDependency[];
 }

@@ -353,6 +353,9 @@ importers:
       '@synap-core/types':
         specifier: workspace:*
         version: link:../types
+      '@synap-core/workspace-templates':
+        specifier: latest
+        version: 0.5.0
       '@synap/ai':
         specifier: workspace:*
         version: link:../ai
@@ -846,7 +849,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^1.6.1
-        version: 1.6.1(@types/node@25.0.7)(@vitest/ui@4.0.17)(lightningcss@1.32.0)
+        version: 1.6.1(@types/node@25.0.7)(@vitest/ui@4.0.17(vitest@4.0.17))(lightningcss@1.32.0)
 
   packages/playbooks: {}
 
@@ -997,7 +1000,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^1.0.4
-        version: 1.6.1(@types/node@22.19.5)(@vitest/ui@4.0.17)(lightningcss@1.32.0)
+        version: 1.6.1(@types/node@22.19.5)(@vitest/ui@4.0.17(vitest@4.0.17))(lightningcss@1.32.0)
 
   packages/test-e2e:
     dependencies:
@@ -1046,7 +1049,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^1.3.1
-        version: 1.6.1(@types/node@20.19.28)(@vitest/ui@4.0.17)(lightningcss@1.32.0)
+        version: 1.6.1(@types/node@20.19.28)(@vitest/ui@4.0.17(vitest@4.0.17))(lightningcss@1.32.0)
 
   packages/types:
     dependencies:
@@ -1478,11 +1481,11 @@ packages:
 
   '@esbuild-kit/core-utils@3.3.2':
     resolution: {integrity: sha512-sPRAnw9CdSsRmEtnsl2WXWdyquogVpB3yZ3dgwJfe8zrOzTsV7cJvmwrKVa+0ma5BoiGJ+BoqkMvawbayKUsqQ==}
-    deprecated: 'Merged into tsx: https://tsx.is'
+    deprecated: 'Merged into tsx: https://tsx.hirok.io'
 
   '@esbuild-kit/esm-loader@2.6.5':
     resolution: {integrity: sha512-FxEMIkJKnodyA1OaCUoEvbYRkoZlLZ4d/eXFu9Fh8CbBBgP5EmZxrfTRyN0qpXZ4vOvqnE5YdRdcrmUUXuU+dA==}
-    deprecated: 'Merged into tsx: https://tsx.is'
+    deprecated: 'Merged into tsx: https://tsx.hirok.io'
 
   '@esbuild-plugins/node-globals-polyfill@0.2.3':
     resolution: {integrity: sha512-r3MIryXDeXDOZh7ih1l/yE9ZLORCd5e8vWg02azWRGj5SPTuoh69A2AIyn0Z31V/kHBfZ4HgWJ+OK3GTTwLmnw==}
@@ -6784,10 +6787,6 @@ packages:
     resolution: {integrity: sha512-PMSmkqxr106Xa156c2M265Z+FTrPl+oxd/rgOQy2tijQeK5TxQ43psO1ZCwhVOSdnn+RzkzlRz/eY4BgJBYVpg==}
     hasBin: true
 
-  js-yaml@4.1.1:
-    resolution: {integrity: sha512-qQKT4zQxXl8lLwBtHMWwaTcGfFOZviOJet3Oy/xmGk2gZH677CJM9EvtfdSkgWcATZhj/55JZ0rmy3myCT5lsA==}
-    hasBin: true
-
   js-yaml@4.3.0:
     resolution: {integrity: sha512-1td788aAnnZ5qs7V2QIRl1owjtYpbKt749Y3xauqQgwIIGF/xXWz1wMTEBx5O3LK3lXLVuqXPdPxj2BoFHaW9Q==}
     hasBin: true
@@ -8555,6 +8554,7 @@ packages:
 
   uuid@10.0.0:
     resolution: {integrity: sha512-8XkAphELsDnEGrDxUOHB3RGvXz6TeuYSGEZBOjtTtPm2lwhGBjLgOzLHB63IUWfBpNucQjND6d3AOudO+H3RWQ==}
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   uuid@9.0.1:
@@ -10026,7 +10026,7 @@ snapshots:
       globals: 14.0.0
       ignore: 5.3.2
       import-fresh: 3.3.1
-      js-yaml: 4.1.1
+      js-yaml: 4.3.0
       minimatch: 10.0.3
       strip-json-comments: 3.1.1
     transitivePeerDependencies:
@@ -16184,10 +16184,6 @@ snapshots:
       argparse: 1.0.10
       esprima: 4.0.1
 
-  js-yaml@4.1.1:
-    dependencies:
-      argparse: 2.0.1
-
   js-yaml@4.3.0:
     dependencies:
       argparse: 2.0.1
@@ -18256,7 +18252,7 @@ snapshots:
       tsx: 4.21.0
       yaml: 2.8.2
 
-  vitest@1.6.1(@types/node@20.19.28)(@vitest/ui@4.0.17)(lightningcss@1.32.0):
+  vitest@1.6.1(@types/node@20.19.28)(@vitest/ui@4.0.17(vitest@4.0.17))(lightningcss@1.32.0):
     dependencies:
       '@vitest/expect': 1.6.1
       '@vitest/runner': 1.6.1
@@ -18291,7 +18287,7 @@ snapshots:
       - supports-color
       - terser
 
-  vitest@1.6.1(@types/node@22.19.5)(@vitest/ui@4.0.17)(lightningcss@1.32.0):
+  vitest@1.6.1(@types/node@22.19.5)(@vitest/ui@4.0.17(vitest@4.0.17))(lightningcss@1.32.0):
     dependencies:
       '@vitest/expect': 1.6.1
       '@vitest/runner': 1.6.1
@@ -18326,7 +18322,7 @@ snapshots:
       - supports-color
       - terser
 
-  vitest@1.6.1(@types/node@25.0.7)(@vitest/ui@4.0.17)(lightningcss@1.32.0):
+  vitest@1.6.1(@types/node@25.0.7)(@vitest/ui@4.0.17(vitest@4.0.17))(lightningcss@1.32.0):
     dependencies:
       '@vitest/expect': 1.6.1
       '@vitest/runner': 1.6.1

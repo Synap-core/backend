@@ -29,10 +29,10 @@ A domain that consumes nothing and provides nothing is a smell — re-check the 
 
 ## Declaring provides/consumes on an existing workspace
 
-Edges used to be settable only at template-authoring time or through the tRPC UI. The agnostic door for setting them on a live workspace is the governed MCP/Hub tool **`declare_workspace_source`** (equivalently `synap_update_workspace`): it sets `defaultSources` / `sourceRoles` on an existing workspace so the generic edge-resolver can redirect its reads to the providing domain.
+Edges used to be settable only at template-authoring time or through the tRPC UI. The agnostic door for setting them on a live workspace is the governed MCP tool **`synap_declare_workspace_source`** (Hub REST: `PATCH /workspaces/:id/source-edges`): it merges `defaultSources` / `sourceRoles` on an existing workspace so the generic edge-resolver can redirect its reads to the providing domain, and it materializes the `feeds` link the placement ladder reads.
 
 - Use it when a domain should start reading another's data (e.g. point Marketing at Comms for brand/ICP).
-- It is a **governed write** — a `"proposed"` response is normal, not an error (see `writes.md`).
+- It is a **governed write** — a `{ status: "proposed", proposalId }` response is NORMAL, not an error. Because declaring an edge rewires where the pod's cross-workspace reads land, it goes through review: when you (an agent) call it, it is **proposed for a human to approve**, and the edge only goes live on approval (the `workspace/declare_source` proposal executor then runs the same merge). Tell the user it's **proposed for review** and share the review link — don't claim the edge is already live. (An operator calling it directly with their own authority applies immediately and gets `{ status: "updated" }`.)
 - Setting the edge is what makes cross-workspace reads resolve generically, instead of each domain re-deriving its sources by hand.
 
 ## The reference wiring (worked example)

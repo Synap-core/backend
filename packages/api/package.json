@@ -54,6 +54,7 @@
     "@synap-core/core": "workspace:*",
     "@synap-core/hub-protocol": "workspace:*",
     "@synap-core/types": "workspace:*",
+    "@synap-core/workspace-templates": "latest",
     "@synap/ai": "workspace:*",
     "@synap/ai-embeddings": "workspace:*",
     "@synap/auth": "workspace:*",
