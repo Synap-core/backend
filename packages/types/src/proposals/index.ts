@@ -207,6 +207,17 @@ export interface ProposalReviewGraph {
     sourceRef?: string;
     /** Ref into `entities[]` when the target endpoint is part of this graph. */
     targetRef?: string;
+    /**
+     * Stable per-item address for this relation within the proposal — the
+     * positional `$relN` ordinal (N = index among create_relation ops, in
+     * operations order). The per-item review UI keys a relation's disposition
+     * (accept/edit/reject) by this ref, exactly as an entity's disposition is
+     * keyed by its `entities[].ref` ($opN / op `ref`). Minted in
+     * `buildProposalGraph`; `approve` recomputes the same ordinal to map a
+     * `$relN` disposition back to the Nth create_relation op. Mirrors the
+     * frontend `@synap-core/proposal-types` shape exactly.
+     */
+    itemRef?: string;
   }>;
   entityCount: number;
   relationCount: number;
@@ -404,6 +415,23 @@ export interface ProposalMaterializedRecord {
 }
 
 /**
+ * Per-item reviewer decision on ONE graph item of a composite proposal
+ * (Phase 2, per-item accept/edit/reject). Keyed in
+ * `ProposalDataLifecycle.dispositions` by the item's ref — an entity's
+ * `entities[].ref` ($opN / op `ref`) or a relation's `$relN` ordinal. Persisted
+ * verbatim by `approve` so the partial-apply decision is durable and each
+ * reasoned reject feeds the flywheel item-scoped. Rides in `proposals.data` —
+ * NO migration, NO new status enum (the row stays whole-`approved`).
+ */
+export interface ProposalItemDisposition {
+  status: "accept" | "reject" | "edit";
+  reasonCode?: ProposalRejectionReasonCode;
+  reason?: string;
+  /** Edited entity fields for an `edit`-status entity item. */
+  edits?: Record<string, unknown>;
+}
+
+/**
  * Lifecycle fields every stored-proposal variant may carry. Stamped onto the
  * `proposals.data` JSONB after approval / revert (no schema change). Shared base
  * so each variant — request-shaped, document-content, composite — accepts them
@@ -412,6 +440,12 @@ export interface ProposalMaterializedRecord {
 export interface ProposalDataLifecycle {
   /** Set by approve — what this proposal produced (drives revert). */
   materialized?: ProposalMaterializedRecord;
+  /**
+   * Set by approve on a COMPOSITE proposal when the reviewer applied it
+   * per-item (Phase 2). Keyed by item ref. Absent ⇒ the whole proposal was
+   * applied (apply-all). Only the APPLIED ops appear in `materialized`.
+   */
+  dispositions?: Record<string, ProposalItemDisposition>;
   /** Set by revert — who/when/why the proposal's effect was undone. */
   revertedBy?: string;
   revertedAt?: string;

@@ -7856,6 +7856,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				proposalId: string;
 				reason?: string | undefined;
+				reasonCode?: "other" | "wrong_entity" | "duplicate" | "wrong_kind_or_facet" | "wrong_link_type" | "wrong_workspace" | "bad_data" | "not_relevant" | undefined;
 			};
 			output: {
 				success: boolean;
@@ -7916,6 +7917,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				proposalIds: string[];
 				reason?: string | undefined;
+				reasonCode?: "other" | "wrong_entity" | "duplicate" | "wrong_kind_or_facet" | "wrong_link_type" | "wrong_workspace" | "bad_data" | "not_relevant" | undefined;
 			};
 			output: {
 				success: boolean;
@@ -14853,6 +14855,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				source?: "user" | "system" | "ai" | "intelligence" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
+				profileKind?: "role" | "kind" | undefined;
+				applicableKinds?: string[] | undefined;
 			};
 			output: {
 				profile: {
