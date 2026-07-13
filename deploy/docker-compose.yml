@@ -188,6 +188,10 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
       PUBLIC_URL: ${PUBLIC_URL:-}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      # Must match the backend's BRIDGE_SECRET so /bridge/emit is authenticated
+      # in production. When unset, the bridge keeps its existing local-dev
+      # compatibility behavior.
+      BRIDGE_SECRET: ${BRIDGE_SECRET:-}
       DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap
       KRATOS_PUBLIC_URL: http://kratos:4433
       STORAGE_PROVIDER: minio

@@ -587,6 +587,7 @@ export class IntelligenceHubClient {
       throw new Error("No response body");
     }
 
+    let sawTerminalFrame = false;
     for await (const frame of iterateISChatStream(response)) {
       if (frame.type === "content" && frame.content) {
         yield { type: "chunk", content: frame.content };
@@ -608,13 +609,19 @@ export class IntelligenceHubClient {
           routing: frame.routing as HubStreamEvent["routing"],
         };
       } else if (frame.type === "error") {
+        sawTerminalFrame = true;
         yield { type: "error", error: frame.error };
       } else if (frame.type === "complete") {
+        sawTerminalFrame = true;
         yield { type: "complete", data: frame.data };
       }
     }
-    // Terminal synthetic complete (preserves prior on-`done` behavior).
-    yield { type: "complete" };
+    // Some older/custom Intelligence Services close the stream without a
+    // terminal frame. Preserve that compatibility, but never manufacture a
+    // second completion after an explicit complete (or error) frame.
+    if (!sawTerminalFrame) {
+      yield { type: "complete" };
+    }
     recordSuccess(this.baseUrl);
   }
 

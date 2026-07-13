@@ -2332,6 +2332,14 @@ export const channelsRouter = router({
                 "emitTyped failed"
               );
             });
+          } else if (chunk.type === "error") {
+            // An IS SSE error is terminal for this turn. Treat it like a
+            // transport failure so the established non-streaming fallback can
+            // recover; otherwise the loop would persist a blank or partial
+            // assistant message as if the response succeeded.
+            throw new Error(
+              chunk.error ?? "Intelligence service stream failed"
+            );
           } else if (chunk.type === "complete") {
             if (chunk.data) {
               const data = chunk.data as Partial<HubResponse>;
@@ -2381,6 +2389,10 @@ export const channelsRouter = router({
                 type: "complete",
                 isComplete: true,
                 agentType: completedAgentType,
+                // Live proposal chips must be available on the same terminal
+                // event as the answer. The separate ai:proposal event remains
+                // for existing observers.
+                createdProposals,
                 // Originating user message id — lets the FE pair this completion
                 // to its trigger deterministically (replaces clock-skew guessing
                 // in useCatchMeUp). Additive; existing consumers ignore it.
