@@ -1248,14 +1248,24 @@ export const entitiesRouter = router({
       }
 
       // 3b. Auto-sync entity_id properties → relations (non-blocking)
+      //
+      // Use earlyResolvedProfile.id (the profile `effectiveProperties` were
+      // actually validated/submitted against), NOT createdEntity.profileId —
+      // when profileSlug resolved to a ROLE, EntityRepository.create's
+      // adapter repoints the row onto the role's applicable KIND, so
+      // createdEntity.profileId is the kind's id. Relation-typed property
+      // defs (valueType=ENTITY_ID) that live on the ROLE profile would then
+      // never be found by profileId lookup and silently stop syncing.
+      // earlyResolvedProfile is identical to createdEntity.profileId in the
+      // non-role case, so this is a no-op behavior change there.
       if (
-        createdEntity.profileId &&
+        earlyResolvedProfile &&
         effectiveProperties &&
         Object.keys(effectiveProperties).length > 0
       ) {
         syncPropertyToRelations(
           createdEntity.id,
-          createdEntity.profileId,
+          earlyResolvedProfile.id,
           governanceWorkspaceId,
           ctx.userId,
           {}, // old properties = empty (new entity)
@@ -1336,6 +1346,34 @@ export const entitiesRouter = router({
       // (empty when none requested); a direct field, not a conditional spread,
       // so the union stays `.id`-narrowable for the door's many callers.
       const createdFacets = await attachRequestedFacets(createdEntity.id);
+
+      // If profileSlug itself resolved to a ROLE, EntityRepository.create's
+      // adapter silently attached it as a facet (never a second entity) — that
+      // facet is invisible above (attachRequestedFacets only sees input.facets)
+      // so a caller creating profileSlug:"client" would otherwise get back
+      // `entity.type:"person"` + `facets:[]`, with the submitted role nowhere
+      // in the response. Surface it explicitly.
+      if (earlyResolvedProfile?.profileKind === "role") {
+        const facetRepo = new FacetRepository(database, eventRepo);
+        const liveFacets = await facetRepo.getByEntity(createdEntity.id, {
+          userId: ctx.userId,
+          workspaceId: governanceWorkspaceId,
+        });
+        const adapterFacet = liveFacets.find(
+          (f) => f.profileId === earlyResolvedProfile.id
+        );
+        if (
+          adapterFacet &&
+          !createdFacets.some((f) => f.facetId === adapterFacet.id)
+        ) {
+          createdFacets.push({
+            slug: earlyResolvedProfile.slug,
+            status: "attached",
+            outcome: "attached",
+            facetId: adapterFacet.id,
+          });
+        }
+      }
 
       return {
         status: "created",
