@@ -38,6 +38,7 @@ export * from "./proposal-repository.js";
 export * from "./role-repository.js";
 export * from "./api-key-repository.js";
 export * from "./channel-repository.js";
+export * from "./user-resource-state-repository.js";
 export * from "./user-entity-state-repository.js";
 export * from "./agent-repository.js";
 export * from "./secrets-vault-repository.js";

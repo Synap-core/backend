@@ -38,7 +38,7 @@ const SCOPED_TABLES = [
   "sourceConfigs",
   "sourceSubscriptions",
   "userPreferences",
-  "userEntityState",
+  "userResourceState",
   "agentConfigs",
 ];
 const SCOPED_TABLES_RE = `/^(${SCOPED_TABLES.join("|")})$/`;

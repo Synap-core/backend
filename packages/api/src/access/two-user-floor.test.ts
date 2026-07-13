@@ -6,7 +6,7 @@
  *   - workspace DATA (entities/documents/cells/artifacts/views/channels/
  *     automations/playbooks) is SHARED among the workspace's members;
  *   - user-PERSONAL data (secrets, apiKeys, notifications, userPreferences,
- *     userEntityState, a `sharedScope='user'` command) is OWNER-ONLY;
+ *     userResourceState, a `sharedScope='user'` command) is OWNER-ONLY;
  *   - a NULL-workspace (pod-global) row is readable pod-wide but not owned by a
  *     single user for these personal tables (they carry a `user` floor, so NULL
  *     never leaks).
@@ -35,7 +35,7 @@ import {
   apiKeys,
   notifications,
   userPreferences,
-  userEntityState,
+  userResourceState,
   intelligenceCommands,
   automations,
   cellInstances,
@@ -63,7 +63,7 @@ const USER_PRIVATE: [string, object][] = [
   ["apiKeys", apiKeys],
   ["notifications", notifications],
   ["userPreferences", userPreferences],
-  ["userEntityState", userEntityState],
+  ["userResourceState", userResourceState],
 ];
 
 // The workspace-SHARED collaborative tables (workspace-rule): reads are gated on

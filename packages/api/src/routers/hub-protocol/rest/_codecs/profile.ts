@@ -24,6 +24,19 @@ export const WireProfileSchema = z
     uiHints: z.record(z.string(), z.unknown()).optional(),
     icon: z.string().nullable().optional(),
     color: z.string().nullable().optional(),
+    profileKind: z
+      .enum(["kind", "role"])
+      .optional()
+      .describe(
+        "kind = primary entity type; role = attachable facet on an existing entity."
+      ),
+    applicableKinds: z
+      .array(z.string())
+      .nullable()
+      .optional()
+      .describe(
+        "For role profiles, the primary-kind slugs this facet may attach to."
+      ),
     createdAt: z.union([z.string(), z.date()]).optional(),
     updatedAt: z.union([z.string(), z.date()]).optional(),
   })
@@ -55,6 +68,19 @@ export const WireProfileDigestSchema = z
     entityScope: z.enum(["pod", "workspace"]).optional(),
     description: z.string().nullable().optional(),
     icon: z.string().nullable().optional(),
+    profileKind: z
+      .enum(["kind", "role"])
+      .optional()
+      .describe(
+        "kind = primary entity type; role = attachable facet on an existing entity."
+      ),
+    applicableKinds: z
+      .array(z.string())
+      .nullable()
+      .optional()
+      .describe(
+        "For role profiles, the primary-kind slugs this facet may attach to."
+      ),
   })
   .openapi("ProfileDigest");
 

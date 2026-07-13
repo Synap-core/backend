@@ -56,6 +56,7 @@ export interface CreateViewInput {
 }
 
 export interface UpdateViewInput {
+  type?: string;
   name?: string;
   description?: string;
   scopeProfileIds?: string[];
@@ -149,6 +150,7 @@ export class ViewRepository extends BaseRepository<
     };
 
     if (data.name !== undefined) updateData.name = data.name;
+    if (data.type !== undefined) updateData.type = data.type;
     if (data.description !== undefined)
       updateData.description = data.description;
     if (data.scopeProfileIds !== undefined) {

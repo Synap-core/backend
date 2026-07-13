@@ -100,6 +100,17 @@ describe("ViewRepository", () => {
         })
       );
     });
+
+    it("persists a renderer type change", async () => {
+      await viewRepo.update("view-1", { type: "masonry" }, "user-1");
+
+      const updateChain = mockDb.update.mock.results[0]?.value as {
+        set: ReturnType<typeof vi.fn>;
+      };
+      expect(updateChain.set).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "masonry" })
+      );
+    });
   });
 
   describe("delete", () => {

@@ -11,7 +11,9 @@ import { relationDefs } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { auditLog } from "../utils/audit-log.js";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { scopedDb, AccessContext } from "../access/index.js";
+import { randomUUID } from "crypto";
 
 const logger = createLogger({ module: "relation-defs-router" });
 
@@ -54,8 +56,43 @@ export const relationDefsRouter = router({
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       const repo = new RelationDefRepository(db);
+      const relationDefId = randomUUID();
+      const correlationId = randomUUID();
+
+      const requestedEvent = await auditLog({
+        subjectType: "relation_def",
+        action: "create",
+        phase: "requested",
+        subjectId: relationDefId,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        correlationId,
+        data: input,
+      });
+      const permission = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        subjectType: "relation_def",
+        action: "create",
+        source: "user",
+        correlationId,
+        requestedEventId: requestedEvent?.id,
+        data: { id: relationDefId, ...input },
+      });
+      if ("denied" in permission && permission.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: permission.reason });
+      }
+      if ("proposalId" in permission) {
+        return {
+          relationDef: null,
+          status: "proposed" as const,
+          proposalId: permission.proposalId,
+          message: "Relationship type creation proposed for review",
+        };
+      }
 
       const def = await repo.create({
+        id: relationDefId,
         slug: input.slug,
         displayName: input.displayName,
         description: input.description,
@@ -65,13 +102,14 @@ export const relationDefsRouter = router({
         isDirectional: input.isDirectional,
       });
 
-      auditLog({
+      await auditLog({
         subjectType: "relation_def",
         action: "create",
         phase: "completed",
         subjectId: def.id,
         userId: ctx.userId,
         workspaceId: ctx.workspaceId,
+        correlationId,
         data: { slug: def.slug, displayName: def.displayName },
       });
 
@@ -80,7 +118,7 @@ export const relationDefsRouter = router({
         "Relation definition created"
       );
 
-      return { relationDef: def };
+      return { relationDef: def, status: "created" as const };
     }),
 
   /**

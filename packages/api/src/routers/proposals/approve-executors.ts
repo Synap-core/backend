@@ -653,10 +653,10 @@ export function registerApproveExecutors(): void {
         | "detail"
         | "dashboard"
         | undefined;
-      const ref = innerData.ref as RendererRef | undefined;
+      const ref = innerData.ref as RendererRef | null | undefined;
       const scope =
         (innerData.scope as "workspace" | "pod" | undefined) ?? "workspace";
-      if (!profileSlug || !slot || !ref) {
+      if (!profileSlug || !slot || ref === undefined) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Renderer proposal is missing profileSlug/slot/ref",

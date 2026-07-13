@@ -14,6 +14,7 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
 
 export interface CreateRelationDefInput {
+  id?: string;
   slug: string;
   displayName: string;
   description?: string;
@@ -68,6 +69,7 @@ export class RelationDefRepository {
     const [def] = await this.db
       .insert(relationDefs)
       .values({
+        ...(input.id ? { id: input.id } : {}),
         slug: input.slug,
         displayName: input.displayName,
         description: input.description,

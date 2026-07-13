@@ -41,6 +41,9 @@ import type {
   HubProfile,
   HubPropertyDef,
   HubDiscoverResult,
+  HubDiscoverOptions,
+  HubOrientOptions,
+  HubOrientResult,
   HubThread,
   HubMessage,
   HubThreadContext,
@@ -53,9 +56,27 @@ import type {
   HubGovernanceResult,
   CreateThreadInput,
   CreateRelationInput,
+  AttachFacetInput,
   CreateViewInput,
+  UpdateViewInput,
+  ArrangeBentoViewInput,
+  HubBentoArrangementResult,
   ExecuteCommandInput,
   CreateDocumentInput,
+  UpdateDocumentInput,
+  CreateDocumentProposalInput,
+  HubDocumentProposalResult,
+  HubCapability,
+  HubCapabilityCatalogResult,
+  ExecuteCapabilityInput,
+  ExecuteCapabilityResult,
+  ListAgentSkillsOptions,
+  HubAgentSkillsResult,
+  HubAgentSkill,
+  GetCapabilityBriefsInput,
+  HubCapabilityBriefsResult,
+  SubmitCaptureGraphInput,
+  SubmitCaptureGraphResult,
   HubAutomation,
   CreateAutomationInput,
   UpdateAutomationInput,
@@ -387,9 +408,19 @@ export class HubRestClient {
   }
 
   async createEntity(input: CreateEntityInput): Promise<HubGovernanceResult> {
+    const { content, url, status, priority, dueDate, properties, ...rest } =
+      input;
     return this.request<HubGovernanceResult>("POST", "/api/hub/entities", {
-      ...input,
-      workspaceId: input.workspaceId ?? this.workspaceId,
+      ...rest,
+      workspaceId: rest.workspaceId ?? this.workspaceId,
+      ...(content !== undefined ? { content } : {}),
+      properties: {
+        ...properties,
+        ...(url !== undefined ? { url } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(priority !== undefined ? { priority } : {}),
+        ...(dueDate !== undefined ? { dueDate } : {}),
+      },
     });
   }
 
@@ -400,10 +431,22 @@ export class HubRestClient {
     // Backend may return a full entity (approved) or a governance envelope
     // (proposed/denied). Callers MUST check `status` first when governance
     // is likely — e.g., agent-owned workspaces, destructive updates.
+    const { properties, content, url, status, priority, dueDate, ...rest } =
+      input;
     return this.request<HubEntity | HubGovernanceResult>(
       "PATCH",
       `/api/hub/entities/${id}`,
-      input
+      {
+        ...rest,
+        metadata: {
+          ...properties,
+          ...(content !== undefined ? { content } : {}),
+          ...(url !== undefined ? { url } : {}),
+          ...(status !== undefined ? { status } : {}),
+          ...(priority !== undefined ? { priority } : {}),
+          ...(dueDate !== undefined ? { dueDate } : {}),
+        },
+      }
     );
   }
 
@@ -485,6 +528,29 @@ export class HubRestClient {
   }
 
   /**
+   * Attach a role-profile through the canonical governed facet door. A result
+   * may be `proposed`; callers must surface its review information instead of
+   * claiming the role was applied.
+   */
+  async attachFacet(input: AttachFacetInput): Promise<HubGovernanceResult> {
+    const userId = await this.resolveUserId();
+    return this.request<HubGovernanceResult>(
+      "POST",
+      `/api/hub/entities/${input.entityId}/facets`,
+      {
+        userId,
+        profileSlug: input.profileSlug,
+        profileId: input.profileId,
+        workspaceId: input.workspaceId ?? this.workspaceId,
+        contextEntityId: input.contextEntityId,
+        status: input.status,
+        properties: input.properties,
+        reasoning: input.reasoning,
+      }
+    );
+  }
+
+  /**
    * Delete a relation by ID (get from getRelations()).
    */
   async deleteRelation(relationId: string): Promise<void> {
@@ -552,6 +618,23 @@ export class HubRestClient {
     );
   }
 
+  // ─── Session orientation & profile discovery ─────────────────────────────
+
+  /**
+   * Canonical session bootstrap shared by the MCP, CLI, and external surfaces.
+   * It is deliberately a lens map, not a profile/schema dump; use discover()
+   * only for the selected profiles needed by the next action.
+   */
+  async orient(options?: HubOrientOptions): Promise<HubOrientResult> {
+    const params = new URLSearchParams();
+    if (options?.detail) params.set("detail", options.detail);
+    if (options?.scope?.length) params.set("scope", options.scope.join(","));
+    if (options?.workspaceId) params.set("workspaceId", options.workspaceId);
+    if (options?.projectId) params.set("projectId", options.projectId);
+    const qs = params.toString() ? `?${params}` : "";
+    return this.request<HubOrientResult>("GET", `/api/hub/orient${qs}`);
+  }
+
   // ─── Profiles & Schema ────────────────────────────────────────────────────
 
   /**
@@ -559,9 +642,13 @@ export class HubRestClient {
    * Always call before creating entities to discover what types are available.
    * Returns system profiles (always present) + custom workspace profiles.
    */
-  async listProfiles(workspaceId: string): Promise<HubProfile[]> {
+  async listProfiles(
+    workspaceId: string,
+    options?: { detail?: "full" }
+  ): Promise<HubProfile[]> {
     const userId = await this.resolveUserId();
     const params = new URLSearchParams({ userId, workspaceId });
+    if (options?.detail) params.set("detail", options.detail);
     const result = await this.request<
       HubProfile[] | HubListResponse<HubProfile>
     >("GET", `/api/hub/profiles?${params}`);
@@ -591,10 +678,18 @@ export class HubRestClient {
    * schemas (including custom workspace profiles) and the canonical CLI
    * command map. Replaces static skill file profile descriptions.
    */
-  async discover(workspaceId?: string): Promise<HubDiscoverResult> {
+  async discover(
+    options?: string | HubDiscoverOptions
+  ): Promise<HubDiscoverResult> {
     const userId = await this.resolveUserId();
-    const wsId = workspaceId ?? this.workspaceId ?? "";
+    const normalized =
+      typeof options === "string" ? { workspaceId: options } : (options ?? {});
+    const wsId = normalized.workspaceId ?? this.workspaceId ?? "";
     const params = new URLSearchParams({ userId, workspaceId: wsId });
+    if (normalized.summary !== undefined)
+      params.set("summary", String(normalized.summary));
+    if (normalized.profileSlugs?.length)
+      params.set("profileSlugs", normalized.profileSlugs.join(","));
     return this.request<HubDiscoverResult>(
       "GET",
       `/api/hub/discover?${params}`
@@ -896,7 +991,57 @@ export class HubRestClient {
       type: input.type,
       profileId: input.profileSlug,
       config: input.config,
+      metadata: input.metadata,
+      agentUserId: input.agentUserId,
+      reasoning: input.reasoning,
+      sourceMessageId: input.sourceMessageId,
     });
+  }
+
+  /** Update a view through the existing governed Hub route. */
+  async updateView(
+    viewId: string,
+    input: UpdateViewInput
+  ): Promise<HubView | HubGovernanceResult> {
+    const userId = input.userId ?? (await this.resolveUserId());
+    return this.request<HubView | HubGovernanceResult>(
+      "PATCH",
+      `/api/hub/views/${viewId}`,
+      {
+        userId,
+        workspaceId: input.workspaceId ?? this.workspaceId,
+        name: input.name,
+        config: input.config,
+        metadata: input.metadata,
+        agentUserId: input.agentUserId,
+        reasoning: input.reasoning,
+        sourceMessageId: input.sourceMessageId,
+      }
+    );
+  }
+
+  /** Replace a bento view's widget arrangement through the existing Hub route. */
+  async arrangeBentoView(
+    viewId: string,
+    input: ArrangeBentoViewInput
+  ): Promise<HubBentoArrangementResult> {
+    const userId = input.userId ?? (await this.resolveUserId());
+    const workspaceId = input.workspaceId ?? this.workspaceId;
+    if (!workspaceId) {
+      throw new Error("workspaceId is required for arrangeBentoView");
+    }
+    return this.request<HubBentoArrangementResult>(
+      "POST",
+      `/api/hub/views/${viewId}/arrange`,
+      {
+        userId,
+        workspaceId,
+        widgets: input.widgets,
+        agentUserId: input.agentUserId,
+        reasoning: input.reasoning,
+        sourceMessageId: input.sourceMessageId,
+      }
+    );
   }
 
   // ─── Documents ────────────────────────────────────────────────────────────
@@ -907,10 +1052,11 @@ export class HubRestClient {
   async getDocument(documentId: string): Promise<HubDocument> {
     const userId = await this.resolveUserId();
     const params = new URLSearchParams({ userId });
-    return this.request<HubDocument>(
+    const result = await this.request<HubDocument | { document: HubDocument }>(
       "GET",
       `/api/hub/documents/${documentId}?${params}`
     );
+    return "document" in result ? result.document : result;
   }
 
   /**
@@ -926,7 +1072,140 @@ export class HubRestClient {
       workspaceId: input.workspaceId ?? this.workspaceId,
       title: input.title,
       content: input.content ?? "",
+      type: input.type,
+      reasoning: input.reasoning,
+      agentUserId: input.agentUserId,
+      sourceMessageId: input.sourceMessageId,
+      sessionId: input.sessionId,
     });
+  }
+
+  /** Propose a full document-content replacement through the governed Hub route. */
+  async updateDocument(
+    documentId: string,
+    input: UpdateDocumentInput
+  ): Promise<HubDocumentProposalResult> {
+    const userId = await this.resolveUserId();
+    return this.request<HubDocumentProposalResult>(
+      "PATCH",
+      `/api/hub/documents/${documentId}`,
+      {
+        userId,
+        content: input.content,
+        title: input.title,
+        agentUserId: input.agentUserId,
+        sourceMessageId: input.sourceMessageId,
+        sessionId: input.sessionId,
+      }
+    );
+  }
+
+  /** Submit a structured, reviewable document-edit proposal. */
+  async createDocumentProposal(
+    input: CreateDocumentProposalInput
+  ): Promise<HubDocumentProposalResult> {
+    const userId = await this.resolveUserId();
+    return this.request<HubDocumentProposalResult>(
+      "POST",
+      "/api/hub/documents/proposals",
+      {
+        userId,
+        ...input,
+      }
+    );
+  }
+
+  // ─── Capabilities & teaching substrate ───────────────────────────────────
+
+  /** Flat capability read-model. Prefer getCapabilityCatalog() for presentation. */
+  async listCapabilities(options?: {
+    workspaceId?: string;
+  }): Promise<HubCapability[]> {
+    const workspaceId = options?.workspaceId ?? this.workspaceId;
+    if (!workspaceId) {
+      throw new Error("workspaceId is required for listCapabilities");
+    }
+    const params = new URLSearchParams({ workspaceId });
+    const result = await this.request<{ capabilities: HubCapability[] }>(
+      "GET",
+      `/api/hub/capabilities?${params}`
+    );
+    return result.capabilities;
+  }
+
+  /** Status-computed, pack-grouped capability catalog for every external surface. */
+  async getCapabilityCatalog(options?: {
+    workspaceId?: string;
+    extraKey?: string;
+  }): Promise<HubCapabilityCatalogResult> {
+    const workspaceId = options?.workspaceId ?? this.workspaceId;
+    if (!workspaceId) {
+      throw new Error("workspaceId is required for getCapabilityCatalog");
+    }
+    const params = new URLSearchParams({ workspaceId });
+    if (options?.extraKey) params.set("extraKey", options.extraKey);
+    return this.request<HubCapabilityCatalogResult>(
+      "GET",
+      `/api/hub/capabilities/catalog?${params}`
+    );
+  }
+
+  /** Run one registered capability through the shared governance gate. */
+  async executeCapability(
+    input: ExecuteCapabilityInput
+  ): Promise<ExecuteCapabilityResult> {
+    return this.request<ExecuteCapabilityResult>(
+      "POST",
+      "/api/hub/capabilities/execute",
+      {
+        ...input,
+        workspaceId: input.workspaceId ?? this.workspaceId,
+      }
+    );
+  }
+
+  /** List the compact system teaching catalog, or search the available skill index. */
+  async listAgentSkills(
+    options?: ListAgentSkillsOptions
+  ): Promise<HubAgentSkillsResult> {
+    const params = new URLSearchParams();
+    if (options?.topic) params.set("topic", options.topic);
+    if (options?.query) params.set("q", options.query);
+    if (options?.tag) params.set("tag", options.tag);
+    if (options?.system !== undefined)
+      params.set("system", String(options.system));
+    if (options?.limit !== undefined)
+      params.set("limit", String(options.limit));
+    if (options?.offset !== undefined)
+      params.set("offset", String(options.offset));
+    const qs = params.toString() ? `?${params}` : "";
+    return this.request<HubAgentSkillsResult>(
+      "GET",
+      `/api/hub/agent-skills${qs}`
+    );
+  }
+
+  /** Load one skill body only when it is relevant to the agent's next action. */
+  async getAgentSkillBySlug(slug: string): Promise<HubAgentSkill> {
+    return this.request<HubAgentSkill>(
+      "GET",
+      `/api/hub/agent-skills/by-slug/${encodeURIComponent(slug)}`
+    );
+  }
+
+  /** Compose just-in-time teaching and governance briefs for selected tools. */
+  async getCapabilityBriefs(
+    input: GetCapabilityBriefsInput
+  ): Promise<HubCapabilityBriefsResult> {
+    if (input.tools.length === 0) return { briefs: {} };
+    const workspaceId = input.workspaceId ?? this.workspaceId;
+    const params = new URLSearchParams({ tools: input.tools.join(",") });
+    if (workspaceId) params.set("workspaceId", workspaceId);
+    if (input.door) params.set("door", input.door);
+    return this.request<HubCapabilityBriefsResult>(
+      "GET",
+      `/api/hub/briefs?${params}`
+    );
   }
 
   // ─── Commands & Agents ────────────────────────────────────────────────────
@@ -1038,6 +1317,37 @@ export class HubRestClient {
         entities: input.entities,
         relations: input.relations ?? [],
         workspaceId: input.workspaceId ?? this.workspaceId,
+        // Keep this exact routing bundle in lockstep with CaptureExecuteInput
+        // and the REST codec. Dropping it here silently made CLI/Raycast capture
+        // behave differently from MCP despite all three using the same backend.
+        projectId: input.projectId,
+        workspaceRouting: input.workspaceRouting,
+        aiWorkspaceId: input.aiWorkspaceId,
+        aiWorkspaceConfidence: input.aiWorkspaceConfidence,
+        aiWorkspaceReason: input.aiWorkspaceReason,
+      }
+    );
+  }
+
+  /**
+   * Submit a designed entity graph as ONE reviewable composite proposal.
+   *
+   * This is intentionally distinct from captureExecute(): execute materializes
+   * a prior structure result immediately, while this door keeps an autonomous
+   * graph plan reviewable and applies entities, relations, and bindings together
+   * only after approval.
+   */
+  async submitCaptureGraph(
+    input: SubmitCaptureGraphInput
+  ): Promise<SubmitCaptureGraphResult> {
+    return this.request<SubmitCaptureGraphResult>(
+      "POST",
+      "/api/hub/capture/graph",
+      {
+        ...input,
+        workspaceId: input.workspaceId ?? this.workspaceId,
+        relations: input.relations ?? [],
+        bindings: input.bindings ?? [],
       }
     );
   }

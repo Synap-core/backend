@@ -23,6 +23,18 @@ import {
   type HubHono,
 } from "./_shared.js";
 
+const ProfileRendererContentKindSchema = z.enum([
+  "entity-detail",
+  "entity-profile",
+  "collection",
+]);
+const LegacyRendererSlotSchema = z.enum(["list", "detail", "dashboard"]);
+const legacySlotToContentKind = {
+  list: "collection",
+  detail: "entity-detail",
+  dashboard: "entity-profile",
+} as const;
+
 export function registerProfilesRoutes(app: HubHono): void {
   // ── OpenAPI metadata for /profiles + /property-defs routes ───────────────
   registerOpenApi(app, {
@@ -38,7 +50,7 @@ export function registerProfilesRoutes(app: HubHono): void {
     responses: {
       200: {
         description:
-          "Array of profiles. Default: lightweight digest (id, slug, displayName, entityScope, description, icon). Pass ?detail=full for the complete row.",
+          "Array of profiles. Default: lightweight digest (id, slug, displayName, entityScope, description, icon, profileKind, applicableKinds). Pass ?detail=full for the complete row.",
         schema: z.union([
           z.array(WireProfileDigestSchema),
           z.array(WireProfileSchema),
@@ -114,7 +126,8 @@ export function registerProfilesRoutes(app: HubHono): void {
    * GET /profiles?userId=...&workspaceId=...&detail=full
    *
    * Default (no `detail` param): lightweight digest per profile —
-   *   { id, slug, displayName, entityScope, description, icon }
+   *   { id, slug, displayName, entityScope, description, icon,
+   *     profileKind, applicableKinds }
    * Pass `?detail=full` to receive the complete profile row.
    */
   app.get("/profiles", async (c) => {
@@ -151,6 +164,8 @@ export function registerProfilesRoutes(app: HubHono): void {
           entityScope?: string;
           description?: string | null;
           icon?: string | null;
+          profileKind?: "kind" | "role";
+          applicableKinds?: string[] | null;
         }>
       ).map((p) => ({
         id: p.id,
@@ -159,6 +174,9 @@ export function registerProfilesRoutes(app: HubHono): void {
         entityScope: p.entityScope,
         description: p.description ?? null,
         icon: p.icon ?? null,
+        // An omitted discriminator is a legacy primary kind, never a role.
+        profileKind: p.profileKind ?? "kind",
+        applicableKinds: p.applicableKinds ?? null,
       }));
       return c.json(digests);
     } catch (err) {
@@ -400,21 +418,25 @@ export function registerProfilesRoutes(app: HubHono): void {
     tags: ["Profiles"],
     summary: "Get the effective renderer(s) for a profile",
     description:
-      "Returns the RendererTarget resolved for the given profile in the given workspace. Resolution order: workspace overlay → profile system default → hardcoded fallback. Omit `slot` to receive both list and detail in one round trip. Spec: synap-team-docs/content/team/platform/profile-renderer.mdx",
+      "Returns the RendererTarget resolved for the given profile in the given workspace. Resolution order: workspace overlay → profile system default → hardcoded fallback. Omit `contentKind` to receive all profile renderer kinds in one round trip. Spec: synap-team-docs/content/team/platform/profile-renderer.mdx",
     request: {
       query: z.object({
         userId: z.string(),
         workspaceId: z.string().uuid(),
-        slot: z.enum(["list", "detail"]).optional(),
+        contentKind: ProfileRendererContentKindSchema.optional(),
+        slot: LegacyRendererSlotSchema.optional().describe(
+          "Deprecated alias: list → entity-profile, detail → entity-detail, dashboard → collection."
+        ),
       }),
     },
     responses: {
       200: {
         description:
-          "Object with `list` and/or `detail` fields. Each is a RendererTarget (or null when a single slot was requested).",
+          "ContentKind-keyed renderer map. Unrequested kinds are null when `contentKind` is supplied.",
         schema: z.object({
-          list: z.record(z.string(), z.unknown()).nullable(),
-          detail: z.record(z.string(), z.unknown()).nullable(),
+          "entity-detail": z.record(z.string(), z.unknown()).nullable(),
+          "entity-profile": z.record(z.string(), z.unknown()).nullable(),
+          collection: z.record(z.string(), z.unknown()).nullable(),
         }),
       },
       400: { description: "Missing required query param", schema: ErrorSchema },
@@ -424,7 +446,8 @@ export function registerProfilesRoutes(app: HubHono): void {
   });
 
   /**
-   * GET /profiles/:slug/renderers?userId=...&workspaceId=...&slot=...
+   * GET /profiles/:slug/renderers?userId=...&workspaceId=...&contentKind=...
+   * `slot` remains an additive legacy alias while callers migrate.
    */
   app.get("/profiles/:slug/renderers", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
@@ -435,6 +458,7 @@ export function registerProfilesRoutes(app: HubHono): void {
     }
     const userId = c.req.query("userId");
     const workspaceId = c.req.query("workspaceId");
+    const contentKindRaw = c.req.query("contentKind");
     const slotRaw = c.req.query("slot");
     const profileSlug = c.req.param("slug");
 
@@ -444,10 +468,38 @@ export function registerProfilesRoutes(app: HubHono): void {
     if (!profileSlug) {
       return c.json({ error: "profile slug is required" }, 400);
     }
-    if (slotRaw && slotRaw !== "list" && slotRaw !== "detail") {
-      return c.json({ error: "slot must be 'list' or 'detail'" }, 400);
+    const parsedContentKind =
+      ProfileRendererContentKindSchema.optional().safeParse(contentKindRaw);
+    if (!parsedContentKind.success) {
+      return c.json(
+        {
+          error:
+            "contentKind must be 'entity-detail', 'entity-profile', or 'collection'",
+        },
+        400
+      );
     }
-    const slot = slotRaw as "list" | "detail" | undefined;
+    const parsedSlot = LegacyRendererSlotSchema.optional().safeParse(slotRaw);
+    if (!parsedSlot.success) {
+      return c.json(
+        { error: "slot must be 'list', 'detail', or 'dashboard'" },
+        400
+      );
+    }
+    const slotKind = parsedSlot.data
+      ? legacySlotToContentKind[parsedSlot.data]
+      : undefined;
+    if (
+      parsedContentKind.data &&
+      slotKind &&
+      parsedContentKind.data !== slotKind
+    ) {
+      return c.json(
+        { error: "contentKind and slot refer to different renderer kinds" },
+        400
+      );
+    }
+    const contentKind = parsedContentKind.data ?? slotKind;
 
     try {
       const caller = await getCaller(c, { userId, workspaceId });
@@ -455,7 +507,7 @@ export function registerProfilesRoutes(app: HubHono): void {
         userId,
         workspaceId,
         profileSlug,
-        slot,
+        contentKind,
       });
       return c.json(result);
     } catch (err) {

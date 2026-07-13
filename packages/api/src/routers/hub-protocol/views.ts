@@ -108,8 +108,9 @@ export const hubViewsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const userId = ctx.userId!;
       const callerContext = await createHubProtocolCallerContext(
-        input.userId,
+        userId,
         ctx.scopes || [],
         input.workspaceId ?? null,
         ctx.sourceMessageId ?? undefined
@@ -150,20 +151,34 @@ export const hubViewsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const userId = ctx.userId!;
       // Resolve workspaceId — look it up if not provided
       let workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
-      if (!workspaceId) {
-        const db = await getDb();
-        const view = await db.query.views.findFirst({
-          where: eq(views.id, input.viewId),
-          columns: { workspaceId: true },
+      const db = await getDb();
+      const view = await db.query.views.findFirst({
+        where: and(eq(views.id, input.viewId), eq(views.userId, userId)),
+        columns: { workspaceId: true },
+      });
+      if (!view) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
+      }
+      if (workspaceId && workspaceId !== view.workspaceId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "View does not belong to the requested workspace",
         });
-        workspaceId = view?.workspaceId ?? undefined;
+      }
+      workspaceId = view.workspaceId ?? undefined;
+      if (!workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "workspaceId is required for view updates",
+        });
       }
 
       // Governance check — view.update is NOT in auto-approve whitelist
       const perm = await checkPermissionOrPropose({
-        userId: input.userId,
+        userId,
         agentUserId: input.agentUserId,
         workspaceId,
         subjectType: "view",
@@ -198,7 +213,7 @@ export const hubViewsRouter = router({
 
       // Execute the update
       const callerContext = await createHubProtocolCallerContext(
-        input.userId,
+        userId,
         ctx.scopes || [],
         workspaceId,
         ctx.sourceMessageId ?? undefined
@@ -237,9 +252,22 @@ export const hubViewsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const userId = ctx.userId!;
+      const db = await getDb();
+      const view = await db.query.views.findFirst({
+        where: and(
+          eq(views.id, input.viewId),
+          eq(views.workspaceId, input.workspaceId),
+          eq(views.userId, userId)
+        ),
+        columns: { id: true },
+      });
+      if (!view) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
+      }
       // Permission check — bento.arrange is in DEFAULT_AUTO_APPROVE
       const perm = await checkPermissionOrPropose({
-        userId: input.userId,
+        userId,
         agentUserId: input.agentUserId,
         workspaceId: input.workspaceId,
         subjectType: "bento",
@@ -279,7 +307,6 @@ export const hubViewsRouter = router({
       }));
 
       // Update the view config
-      const db = await getDb();
       await db
         .update(views)
         .set({
@@ -289,7 +316,8 @@ export const hubViewsRouter = router({
         .where(
           and(
             eq(views.id, input.viewId),
-            eq(views.workspaceId, input.workspaceId)
+            eq(views.workspaceId, input.workspaceId),
+            eq(views.userId, userId)
           )
         );
 

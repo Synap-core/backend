@@ -41,12 +41,28 @@ import type {
 
 const CAPTURE_PROPOSAL_TYPE = "capture.graph";
 
+/**
+ * Server-side scope — narrows the feed to a lens WITHIN the user floor, so the
+ * Activity telescope's altitudes (workspace / project / entity-focus) filter at
+ * the DB instead of client-side over one page. Each is applied only where the
+ * ledger carries the column (automation runs have no project/subject → they are
+ * excluded when project/entity scope is set; see listRuns).
+ */
+export interface RunScope {
+  workspaceId?: string;
+  projectId?: string;
+  /** Entity-focus: runs about / touching this entity. */
+  subjectEntityId?: string;
+}
+
 export interface ListRunsInput {
   userId: string;
   /** Restrict to one ledger; omit for the merged cross-flow feed. */
   flowType?: FlowType;
   /** Restrict to one flow's runs (automationId / playbookId). */
   flowId?: string;
+  /** Narrow to a workspace / project / entity lens (within the user floor). */
+  scope?: RunScope;
   /** Per-flow cap before the merge; the merged result is also capped. */
   limit?: number;
 }
@@ -73,6 +89,7 @@ function sessionStatus(s: string): RunStatus {
 async function listAutomationRuns(
   userId: string,
   flowId: string | undefined,
+  scope: RunScope,
   limit: number
 ): Promise<UnifiedRun[]> {
   const rows = await db
@@ -102,7 +119,10 @@ async function listAutomationRuns(
     .where(
       and(
         userVisibleWhere(automationRuns.workspaceId, userId),
-        flowId ? eq(automationRuns.automationId, flowId) : undefined
+        flowId ? eq(automationRuns.automationId, flowId) : undefined,
+        scope.workspaceId
+          ? eq(automationRuns.workspaceId, scope.workspaceId)
+          : undefined
       )
     )
     .orderBy(desc(automationRuns.startedAt))
@@ -132,6 +152,7 @@ async function listAutomationRuns(
 async function listPlaybookRuns(
   userId: string,
   flowId: string | undefined,
+  scope: RunScope,
   limit: number
 ): Promise<UnifiedRun[]> {
   const rows = await db
@@ -156,7 +177,16 @@ async function listPlaybookRuns(
     .where(
       and(
         userVisibleWhere(playbookRuns.workspaceId, userId),
-        flowId ? eq(playbookRuns.playbookId, flowId) : undefined
+        flowId ? eq(playbookRuns.playbookId, flowId) : undefined,
+        scope.workspaceId
+          ? eq(playbookRuns.workspaceId, scope.workspaceId)
+          : undefined,
+        scope.projectId
+          ? eq(focusSessions.projectId, scope.projectId)
+          : undefined,
+        scope.subjectEntityId
+          ? eq(focusSessions.subjectEntityId, scope.subjectEntityId)
+          : undefined
       )
     )
     .orderBy(desc(playbookRuns.startedAt))
@@ -182,6 +212,7 @@ async function listPlaybookRuns(
 
 async function listCaptureRuns(
   userId: string,
+  scope: RunScope,
   limit: number
 ): Promise<UnifiedRun[]> {
   // A capture run = one auto-approved `capture.graph` proposal. Its correlationId
@@ -202,7 +233,18 @@ async function listCaptureRuns(
     .where(
       and(
         eq(proposals.proposalType, CAPTURE_PROPOSAL_TYPE),
-        userVisibleWhere(proposals.workspaceId, userId)
+        userVisibleWhere(proposals.workspaceId, userId),
+        scope.workspaceId
+          ? eq(proposals.workspaceId, scope.workspaceId)
+          : undefined,
+        scope.projectId ? eq(proposals.projectId, scope.projectId) : undefined,
+        // Entity-focus: captures that materialized this entity (any of the
+        // produced ids, not just the primary). JSONB containment on the array.
+        scope.subjectEntityId
+          ? drizzleSql`${proposals.data}->'materialized'->'entityIds' @> ${JSON.stringify(
+              [scope.subjectEntityId]
+            )}::jsonb`
+          : undefined
       )
     )
     .orderBy(desc(proposals.createdAt))
@@ -241,6 +283,7 @@ async function listCaptureRuns(
 
 async function listSessionRuns(
   userId: string,
+  scope: RunScope,
   limit: number
 ): Promise<UnifiedRun[]> {
   // Standalone agent/interactive sessions only — playbook- and automation-origin
@@ -265,7 +308,16 @@ async function listSessionRuns(
         isNull(focusSessions.playbookId),
         // metadata.automationId absent → not an automation-origin run session
         // (those already surface via the automation ledger — no double-count).
-        drizzleSql`${focusSessions.metadata}->>'automationId' IS NULL`
+        drizzleSql`${focusSessions.metadata}->>'automationId' IS NULL`,
+        scope.workspaceId
+          ? eq(focusSessions.workspaceId, scope.workspaceId)
+          : undefined,
+        scope.projectId
+          ? eq(focusSessions.projectId, scope.projectId)
+          : undefined,
+        scope.subjectEntityId
+          ? eq(focusSessions.subjectEntityId, scope.subjectEntityId)
+          : undefined
       )
     )
     .orderBy(desc(focusSessions.startedAt))
@@ -297,18 +349,23 @@ async function listSessionRuns(
  */
 export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
   const { userId, flowType, flowId } = input;
+  const scope = input.scope ?? {};
   const perFlow = Math.min(input.limit ?? 25, 100);
 
+  // Automation runs carry no project/subject, so a project- or entity-focus lens
+  // excludes them entirely (rather than filtering to nothing per-query).
+  const automationExcluded = !!(scope.projectId || scope.subjectEntityId);
+
   const jobs: Array<Promise<UnifiedRun[]>> = [];
-  if (!flowType || flowType === "automation")
-    jobs.push(listAutomationRuns(userId, flowId, perFlow));
+  if ((!flowType || flowType === "automation") && !automationExcluded)
+    jobs.push(listAutomationRuns(userId, flowId, scope, perFlow));
   if (!flowType || flowType === "playbook")
-    jobs.push(listPlaybookRuns(userId, flowId, perFlow));
+    jobs.push(listPlaybookRuns(userId, flowId, scope, perFlow));
   // capture/session have no per-flow id, so a flowId filter excludes them.
   if ((!flowType || flowType === "capture") && !flowId)
-    jobs.push(listCaptureRuns(userId, perFlow));
+    jobs.push(listCaptureRuns(userId, scope, perFlow));
   if ((!flowType || flowType === "session") && !flowId)
-    jobs.push(listSessionRuns(userId, perFlow));
+    jobs.push(listSessionRuns(userId, scope, perFlow));
 
   const merged = (await Promise.all(jobs)).flat();
   // Dedupe by (flowType,id) — a defensive guard against a run row being
@@ -345,7 +402,7 @@ export async function getRun(
 
   if (flowType === "automation") {
     const [run] = await listRunsById(
-      () => listAutomationRuns(userId, undefined, 100),
+      () => listAutomationRuns(userId, undefined, {}, 100),
       id
     );
     if (!run) return null;
@@ -368,7 +425,10 @@ export async function getRun(
   }
 
   if (flowType === "capture") {
-    const [run] = await listRunsById(() => listCaptureRuns(userId, 200), id);
+    const [run] = await listRunsById(
+      () => listCaptureRuns(userId, {}, 200),
+      id
+    );
     if (!run || !run.correlationId) return run ? { run, activity: [] } : null;
     const rows = await db
       .select({
@@ -411,8 +471,8 @@ export async function getRun(
   // single lifecycle marker (the UI opens `run.channelId` for the messages).
   const source =
     flowType === "playbook"
-      ? () => listPlaybookRuns(userId, undefined, 200)
-      : () => listSessionRuns(userId, 200);
+      ? () => listPlaybookRuns(userId, undefined, {}, 200)
+      : () => listSessionRuns(userId, {}, 200);
   const [run] = await listRunsById(source, id);
   if (!run) return null;
   const activity: RunActivityItem[] = [

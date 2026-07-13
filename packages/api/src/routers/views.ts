@@ -1304,6 +1304,7 @@ export const viewsRouter = router({
         input.id,
         {
           name: input.name,
+          type: input.type,
           description: input.description,
           scopeProfileIds: input.scopeProfileIds,
           scopeMode: input.scopeMode,

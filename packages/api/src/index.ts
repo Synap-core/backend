@@ -170,6 +170,7 @@ export { ensureDefaultWhiteboard } from "@synap/database";
 import { eventsRouter } from "./routers/events.js";
 import { captureRouter } from "./routers/capture.js";
 import { entitiesRouter } from "./routers/entities.js";
+import { resourceStateRouter } from "./routers/resource-state.js";
 
 import { channelsRouter as chatRouter } from "./routers/channels.js";
 import { proposalsRouter } from "./routers/proposals.js"; // NEW
@@ -241,6 +242,11 @@ registerRouter("entities", entitiesRouter, {
   version: "1.0.0",
   source: "core",
   description: "Entity management API",
+});
+registerRouter("resourceState", resourceStateRouter, {
+  version: "1.0.0",
+  source: "core",
+  description: "Per-user resource presentation and explicit-open state",
 });
 
 registerRouter("chat", chatRouter, {

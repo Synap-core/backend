@@ -10,7 +10,7 @@
  * bump script (which also updates the pod's `/health` literal in
  * `apps/api/src/index.ts`).
  */
-export const API_TYPES_VERSION = "1.18.3";
+export const API_TYPES_VERSION = "1.21.1";
 
 /** Parsed semver major of the locally-pinned `@synap-core/api-types`. */
 export const API_TYPES_MAJOR = majorOf(API_TYPES_VERSION);

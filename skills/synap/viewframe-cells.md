@@ -13,7 +13,9 @@ ViewFrame is the standard way to create custom data visualizations in Synap. Use
 ### What ViewFrame Is
 
 - A sandboxed iframe that renders **one ES module** that default-exports a React component (or plain JS)
-- Dependencies resolved at runtime via **esm.sh import maps** built from the `deps` map — no build step required
+- Keep generated cells self-contained. The CLI can analyse bare imports into a
+  `deps` map, but the current Hub `cells/define` persistence path does not yet
+  retain that map, so external runtime dependencies are not a reliable contract.
 - The host injects a `SynapWidget` bridge for data access and shell actions
 - Security: `sandbox="allow-scripts allow-modals allow-popups"`, no `allow-same-origin`, no cookies, no pod token
 
@@ -43,18 +45,13 @@ Content-Type: application/json
   "typeKey": "deal-stage-funnel",        // optional — derived from name if omitted
   "description": "Funnel chart of deal pipeline stages",  // optional
   "defaultSize": { "w": 8, "h": 6 },    // optional
-  "deps": {                              // optional — npm packages pinned for the import map
-    "recharts": "2.12.0",
-    "@tanstack/react-table": "8"
-  }
+  "deps": { "recharts": "2.12.0" }    // accepted for forward compatibility; not persisted yet
 }
 ```
 
-**`deps` rules:**
-
-- Keys are npm package names (`pkg` or `@scope/pkg`). URLs and protocols are rejected.
-- Values are version strings or `"latest"` — used verbatim in the esm.sh import map URL.
-- Maximum 30 entries. Omit `deps` (or pass `{}`) for React-only cells (React is always available).
+**`deps` status:** the CLI accepts a JSON map for forward compatibility, but
+the current server stores `{}`. Do not make a generated cell depend on an
+external package until the persistence contract is upgraded and verified.
 
 **`workspaceId` is intentionally omitted** — cells defined without it are pod-global (`workspaceId IS NULL`), visible in every workspace the user owns. Pass `workspaceId` only when you explicitly want a cell scoped to a single workspace.
 
@@ -106,21 +103,21 @@ The cell appears immediately in the side panel with "Q2 Revenue Report" as the t
 ### CLI commands (when running as Claude Code / OpenClaw agent)
 
 ```bash
-# Build a multi-file cell source into a single ES module bundle + emit deps map
-synap cell build <entry>           # e.g. synap cell build ./src/my-chart.tsx
-# → prints bundled source to stdout and writes deps.json alongside the entry
+# Build a multi-file cell source into a single ES module bundle
+synap cell build <entry> --out ./dist/my-chart.js
+# → writes the bundle and prints the inferred deps JSON
 
 # Push a built cell (source + deps) to the pod
 synap cell define \
   --name "My Chart" \
-  --source ./dist/my-chart.js \
-  --deps ./deps.json \
-  [--typeKey my-chart] \
+  --file ./dist/my-chart.js \
+  --deps '{"recharts":"2.12.0"}' \
+  [--type-key my-chart] \
   [--workspace <id>]
 
-# Document operations (attach prose or reports to entities)
-synap doc create --title "Q2 Report" --content ./report.md --entity <entityId>
-synap doc update <docId> --content ./updated-report.md
+# Document operations
+synap doc create --title "Q2 Report" --file ./report.md
+synap doc update <docId> --file ./updated-report.md
 
 # Arrange widgets on an existing bento view
 synap view arrange <viewId> --blocks '[{"id":"b1","kind":"widget","widgetKind":"generated:my-chart","layout":{"x":0,"y":0,"w":8,"h":6}}]'

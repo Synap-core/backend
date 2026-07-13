@@ -12,6 +12,10 @@ export interface CaptureGraphEntity {
   ref: string;
   profileSlug: string;
   title?: string;
+  /** Short descriptive body retained on the approved entity. */
+  description?: string;
+  /** Long-form body; approval materializes it through the canonical document path. */
+  content?: string;
   properties?: Record<string, unknown>;
   existingEntityId?: string;
   /**

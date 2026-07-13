@@ -56,7 +56,6 @@ import {
   views,
   workspaces,
   entityExternalLinks,
-  userEntityState,
   profiles,
   entityFacets,
 } from "@synap/database/schema";
@@ -1944,46 +1943,6 @@ export const entitiesRouter = router({
       if (!entity) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
       }
-
-      // Reinforcement signal (memory-salience substrate, Wave 2 Phase 1):
-      // fire-and-forget access bump on SINGLE-entity opens only. This just
-      // accumulates data (viewCount / lastViewedAt) so the signal is warm when
-      // Phase 2 ranking lands — no read-behaviour change here. NOT wired into the
-      // bulk list/`getEntities` path: bumping per-row there would amplify a 50-row
-      // list into 50 writes and hammer the rate-limit-sensitive pod. It must NEVER
-      // block or fail the fetch, so it is not awaited in the response path and all
-      // errors are swallowed at debug level.
-      void (async () => {
-        try {
-          const now = new Date();
-          await db
-            .insert(userEntityState)
-            .values({
-              userId: ctx.userId,
-              itemId: entity.id,
-              itemType: "entity",
-              viewCount: 1,
-              lastViewedAt: now,
-            })
-            .onConflictDoUpdate({
-              target: [
-                userEntityState.userId,
-                userEntityState.itemId,
-                userEntityState.itemType,
-              ],
-              set: {
-                viewCount: drizzleSql`${userEntityState.viewCount} + 1`,
-                lastViewedAt: now,
-                updatedAt: now,
-              },
-            });
-        } catch (err) {
-          logger.debug(
-            { err, entityId: entity.id },
-            "[entities.get] access-bump upsert failed (non-fatal)"
-          );
-        }
-      })();
 
       const typedEntity = toApiEntity(entity);
 

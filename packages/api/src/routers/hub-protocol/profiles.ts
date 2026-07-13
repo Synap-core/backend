@@ -15,7 +15,9 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import type { RendererRef } from "@synap/database";
+import { and, db, eq, isNull, or, widgetDefinitions } from "@synap/database";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { profilesRouter as regularProfilesRouter } from "../profiles.js";
@@ -24,40 +26,31 @@ import { createHubProtocolCallerContext } from "./utils.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { setProfileRenderer } from "../../services/profiles/set-profile-renderer.js";
 import { createAndLinkPropertyDef } from "../../services/profiles/create-and-link-property-def.js";
-import { getDb, eq } from "@synap/database";
-import { widgetDefinitions } from "@synap/database/schema";
 
 /**
- * Build a RendererRef from a cellKey — mirrors the browser's buildCellRendererRef
- * so both surfaces produce a renderable ref. A generated/published cell (a
- * widget_definition, e.g. `generated:*`) is NOT a registered cellRegistry key; it
- * renders only through the `iframe-widget` host by its typeKey. So when the cellKey
- * names a widget_definition, wrap it as `{ cellKey:'iframe-widget', props:{ typeKey } }`;
- * an already-wrapped `iframe-widget` ref or a genuinely-registered built-in cellKey
- * passes through unchanged. Without this, an agent-bound renderer (cellKey = the
- * create_cell typeKey) resolves to nothing at render time.
+ * Frame definitions are registered directly. Sandboxed iframe/native widgets
+ * still resolve through the generic iframe host.
  */
-async function buildCellRendererRef(
+export function buildCellRendererRef(
   cellKey: string,
-  props?: Record<string, unknown>
-): Promise<RendererRef> {
-  if (cellKey !== "iframe-widget") {
-    const db = await getDb();
-    const rows = await db
-      .select({ id: widgetDefinitions.id })
-      .from(widgetDefinitions)
-      .where(eq(widgetDefinitions.typeKey, cellKey))
-      .limit(1);
-    if (rows.length > 0) {
-      return {
-        kind: "cell",
-        cellKey: "iframe-widget",
-        props: { typeKey: cellKey, ...(props ?? {}) },
-      };
-    }
+  props?: Record<string, unknown>,
+  rendererType?: string | null
+): RendererRef {
+  if (rendererType === "iframe" || rendererType === "native") {
+    return {
+      kind: "cell",
+      cellKey: "iframe-widget",
+      props: { typeKey: cellKey, ...(props ?? {}) },
+    };
   }
   return { kind: "cell", cellKey, props: props ?? {} };
 }
+
+const ProfileRendererContentKindSchema = z.enum([
+  "entity-detail",
+  "entity-profile",
+  "collection",
+]);
 
 export const hubProfilesRouter = router({
   /**
@@ -69,16 +62,27 @@ export const hubProfilesRouter = router({
       z.object({
         userId: z.string(),
         workspaceId: z.string().uuid(),
+        /** Narrow an already-oriented read to these profile slugs. */
+        profileSlugs: z.array(z.string().min(1).max(100)).max(50).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
+      // The REST door accepts `userId` for legacy clients, but reads must stay
+      // on the authenticated API-key owner. Reusing a body/query user id here
+      // would let a caller reconstruct another user's caller context.
+      const userId = ctx.userId;
+      if (!userId) {
+        throw new TRPCError({ code: "UNAUTHORIZED" });
+      }
       const callerContext = await createHubProtocolCallerContext(
-        input.userId,
+        userId,
         ctx.scopes || [],
         input.workspaceId
       );
       const caller = regularProfilesRouter.createCaller(callerContext);
-      return caller.list();
+      return caller.list(
+        input.profileSlugs ? { profileSlugs: input.profileSlugs } : undefined
+      );
     }),
 
   /**
@@ -145,18 +149,28 @@ export const hubProfilesRouter = router({
         userId: z.string(),
         workspaceId: z.string().uuid(),
         profileId: z.string().uuid().optional(),
+        /** Target several already-resolved profiles without loading all schemas. */
+        profileIds: z.array(z.string().uuid()).max(50).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
+      // See listProfiles: `input.userId` is legacy transport data, never the
+      // authorization identity for a read.
+      const userId = ctx.userId;
+      if (!userId) {
+        throw new TRPCError({ code: "UNAUTHORIZED" });
+      }
       const callerContext = await createHubProtocolCallerContext(
-        input.userId,
+        userId,
         ctx.scopes || [],
         input.workspaceId
       );
       const caller = regularPropertyDefsRouter.createCaller(callerContext);
-      const result = await caller.list();
-      // Optionally filter by profileId
-      if (input.profileId) {
+      const profileIds =
+        input.profileIds ?? (input.profileId ? [input.profileId] : undefined);
+      const result = await caller.list(profileIds ? { profileIds } : undefined);
+      // Preserve the legacy single-profile response shape for existing callers.
+      if (input.profileId && !input.profileIds) {
         return {
           propertyDefs: result.propertyDefs.filter(
             (d: any) => d.profileId === input.profileId
@@ -167,11 +181,11 @@ export const hubProfilesRouter = router({
     }),
 
   /**
-   * Get the effective renderer for a profile in a workspace, by slot.
+   * Get the effective renderer for a profile in a workspace, by content kind.
    * External agents (Eve, IS) use this to discover how to surface an
    * entity profile without going through tRPC. Requires hub-protocol.read.
    *
-   * Returns both slots when `slot` is omitted. Resolution mirrors the regular
+   * Returns all content kinds when omitted. Resolution mirrors the regular
    * tRPC procedure (workspace overlay → profile default → hardcoded fallback).
    */
   getEffectiveRenderers: scopedProcedure(["hub-protocol.read"])
@@ -180,19 +194,23 @@ export const hubProfilesRouter = router({
         userId: z.string(),
         workspaceId: z.string().uuid(),
         profileSlug: z.string(),
-        slot: z.enum(["list", "detail"]).optional(),
+        contentKind: ProfileRendererContentKindSchema.optional(),
       })
     )
     .query(async ({ input, ctx }) => {
+      const userId = ctx.userId;
+      if (!userId) {
+        throw new TRPCError({ code: "UNAUTHORIZED" });
+      }
       const callerContext = await createHubProtocolCallerContext(
-        input.userId,
+        userId,
         ctx.scopes || [],
         input.workspaceId
       );
       const caller = regularProfilesRouter.createCaller(callerContext);
-      // TODO(slot): hub exposed a slot param the renderer API doesn't accept
       return caller.getEffectiveRenderers({
         profileSlug: input.profileSlug,
+        contentKind: input.contentKind,
       });
     }),
 
@@ -228,9 +246,22 @@ export const hubProfilesRouter = router({
     .mutation(async ({ input }) => {
       const scope = input.scope ?? "workspace";
       const workspaceId = input.workspaceId ?? null;
-      const ref: RendererRef = await buildCellRendererRef(
+      const definition = await db.query.widgetDefinitions.findFirst({
+        where: and(
+          eq(widgetDefinitions.typeKey, input.cellKey),
+          workspaceId
+            ? or(
+                eq(widgetDefinitions.workspaceId, workspaceId),
+                isNull(widgetDefinitions.workspaceId)
+              )
+            : isNull(widgetDefinitions.workspaceId)
+        ),
+        columns: { rendererType: true },
+      });
+      const ref: RendererRef = buildCellRendererRef(
         input.cellKey,
-        input.props
+        input.props,
+        definition?.rendererType
       );
 
       const perm = await checkPermissionOrPropose({

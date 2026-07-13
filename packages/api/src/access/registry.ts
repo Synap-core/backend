@@ -37,7 +37,7 @@ import {
   sourceConfigs,
   sourceSubscriptions,
   userPreferences,
-  userEntityState,
+  userResourceState,
   agentConfigs,
 } from "@synap/database/schema";
 import { and, eq, isNotNull, isNull, or } from "drizzle-orm";
@@ -308,11 +308,11 @@ registerVisibility({
   rule: { kind: "user", userColumn: userPreferences.userId },
 });
 registerVisibility({
-  table: userEntityState,
-  query: () => db.query.userEntityState,
-  // Composite key (userId, itemId, itemType); starred/pinned/view state is
+  table: userResourceState,
+  query: () => db.query.userResourceState,
+  // Composite key (userId, resourceId, resourceType); state is
   // strictly per-user. No workspace column.
-  rule: { kind: "user", userColumn: userEntityState.userId },
+  rule: { kind: "user", userColumn: userResourceState.userId },
 });
 
 // ── USER-OWNED, workspace-lensed tables (owner floor AND workspace lens) ──────

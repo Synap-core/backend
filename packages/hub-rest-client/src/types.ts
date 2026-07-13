@@ -28,6 +28,15 @@ export interface HubEntity {
   dueDate?: string;
   content?: string;
   url?: string;
+  /** Short, server-generated summary suitable for lists and agent context. */
+  preview?: string | null;
+  /** Optional long-form summary returned by entity detail routes. */
+  description?: string | null;
+  /** Linked versioned document, when this entity has long-form content. */
+  documentId?: string | null;
+  /** System-managed fields returned by the canonical entity wire codec. */
+  systemData?: Record<string, unknown>;
+  version?: number;
 }
 
 export interface HubDocument {
@@ -37,6 +46,9 @@ export interface HubDocument {
   workspaceId: string | null;
   createdAt: string;
   updatedAt: string;
+  userId?: string;
+  type?: "text" | "markdown" | "code" | "html" | "pdf" | "docx";
+  language?: string | null;
 }
 
 export interface HubChannel {
@@ -140,6 +152,49 @@ export interface CreateDocumentInput {
   content?: string;
   workspaceId?: string;
   entityId?: string;
+  type?: HubDocument["type"];
+  reasoning?: string;
+  agentUserId?: string;
+  sourceMessageId?: string;
+  sessionId?: string;
+}
+
+/** Full-document replacement input for PATCH /documents/:id. */
+export interface UpdateDocumentInput {
+  content: string;
+  title?: string;
+  agentUserId?: string;
+  sourceMessageId?: string;
+  sessionId?: string;
+}
+
+export interface HubDocumentChange {
+  op: "insert" | "delete" | "replace";
+  position?: number;
+  range?: [number, number];
+  text?: string;
+}
+
+/** Submit a governed edit proposal without replacing a document directly. */
+export interface CreateDocumentProposalInput {
+  documentId: string;
+  agentUserId?: string;
+  threadId?: string;
+  sourceMessageId?: string;
+  sessionId?: string;
+  proposalType?: "ai_edit" | "user_suggestion" | "review_comment";
+  changes: HubDocumentChange[];
+  proposedContent: string;
+  originalContent?: string;
+}
+
+/** Proposal rows vary slightly by pod version; these stable fields are shared. */
+export interface HubDocumentProposalResult {
+  id?: string;
+  proposalId?: string;
+  status?: string;
+  reviewUrl?: string;
+  [key: string]: unknown;
 }
 
 export interface StoreMemoryInput {
@@ -226,7 +281,17 @@ export interface CaptureProposal {
   profileSlug: string;
   title: string;
   description?: string;
+  /** Long-form body preserved through plan → commit as a linked document. */
+  content?: string;
   properties?: Record<string, unknown>;
+  /** Role profiles proposed alongside the primary kind. */
+  facets?: Array<{
+    profileSlug: string;
+    status?: string;
+    properties?: Record<string, unknown>;
+    /** Batch-local entity reference used by captureExecute. */
+    contextTempId?: string;
+  }>;
   confidence: number;
   action: "create" | "link" | "dismiss";
   linkedEntityId?: string;
@@ -248,6 +313,8 @@ export interface CaptureRelation {
 export interface CaptureStructureResponse {
   proposals: CaptureProposal[];
   relations: CaptureRelation[];
+  /** The intelligence service was unavailable, so the pod returned a raw-note fallback. */
+  degraded?: boolean;
   followUp: string | StructuredFollowUp | null;
   formSpec?: DynamicFormSpec | null;
   targetWorkspaceId?: string | null;
@@ -272,9 +339,21 @@ export interface CaptureExecuteInput {
     title: string;
     description?: string;
     properties?: Record<string, unknown>;
-    action: "create" | "link" | "dismiss";
+    /** Legacy structure-output field; the execute route ignores it. */
+    action?: "create" | "link" | "dismiss";
     linkedEntityId?: string;
     confidence?: number;
+    /** Long-form body materialized as a linked document by the capture pipeline. */
+    content?: string;
+    /** Reuse an existing entity instead of creating one for this batch entry. */
+    existingEntityId?: string;
+    /** Role profiles to attach after the primary kind materializes. */
+    facets?: Array<{
+      profileSlug: string;
+      status?: string;
+      properties?: Record<string, unknown>;
+      contextTempId?: string;
+    }>;
   }>;
   relations?: CaptureRelation[];
   /** Cross-cutting project lens to file the created entities into. */
@@ -288,6 +367,60 @@ export interface CaptureExecuteInput {
   aiWorkspaceId?: string | null;
   aiWorkspaceConfidence?: number | null;
   aiWorkspaceReason?: string | null;
+}
+
+/** One planned entity in the proposal-first graph capture door. */
+export interface CaptureGraphEntity {
+  /** Batch-local ID used by relations and bindings. Must be unique per request. */
+  ref: string;
+  profileSlug: string;
+  title?: string;
+  /** Short descriptive body retained on the approved entity. */
+  description?: string;
+  /** Long-form body materialized through the canonical document path on approval. */
+  content?: string;
+  properties?: Record<string, unknown>;
+  /** Link this graph node to an existing entity rather than creating it. */
+  existingEntityId?: string;
+  /** Role profiles to attach after the primary kind materializes. */
+  facets?: Array<{
+    profileSlug: string;
+    status?: string;
+    properties?: Record<string, unknown>;
+    contextRef?: string;
+  }>;
+}
+
+export interface CaptureGraphRelation {
+  sourceRef: string;
+  targetRef: string;
+  type: string;
+}
+
+/** Optional post-approval external-channel binding for an entity in the graph. */
+export interface CaptureGraphBinding {
+  externalChannelId: string;
+  entityRef: string;
+  branchPurpose?: "client-comms" | "team";
+  title?: string;
+}
+
+/** Input for POST /capture/graph. The server always creates one composite proposal. */
+export interface SubmitCaptureGraphInput {
+  workspaceId?: string | null;
+  entities: CaptureGraphEntity[];
+  relations?: CaptureGraphRelation[];
+  bindings?: CaptureGraphBinding[];
+  summary?: string;
+}
+
+export interface SubmitCaptureGraphResult {
+  proposalId?: string;
+  entityCount: number;
+  relationCount: number;
+  bindingCount: number;
+  reviewUrl?: string;
+  summary: string;
 }
 
 export interface CaptureExecuteResponse {
@@ -414,6 +547,10 @@ export interface HubProfile {
   icon?: string;
   color?: string;
   properties?: HubPropertyDef[];
+  /** Primary entity kind or attachable role/facet. Defaults to kind on old pods. */
+  profileKind?: "kind" | "role";
+  /** Kinds this role can be attached to; null means the pod did not constrain it. */
+  applicableKinds?: string[] | null;
 }
 
 export interface HubPropertyDef {
@@ -449,14 +586,75 @@ export interface HubDiscoverProfile {
   scope: "pod" | "workspace";
   description?: string | null;
   icon?: string | null;
-  properties: HubDiscoverProperty[];
-  createCommand: string;
+  /** Omitted by the summary tier. */
+  properties?: HubDiscoverProperty[];
+  /** Omitted by the summary tier. */
+  createCommand?: string;
+  profileKind?: "kind" | "role";
+  applicableKinds?: string[] | null;
 }
 
 export interface HubDiscoverResult {
   profiles: HubDiscoverProfile[];
   commands: Record<string, string>;
   hint: string;
+}
+
+/** Progressive-disclosure controls for GET /discover. */
+export interface HubDiscoverOptions {
+  workspaceId?: string;
+  /** Return the digest tier without property schemas. */
+  summary?: boolean;
+  /** Limit full discovery to these profile slugs when the pod supports it. */
+  profileSlugs?: string[];
+}
+
+export type HubOrientScope = "workspaces" | "projects" | "profiles";
+export type HubOrientDetail = "light" | "full";
+
+export interface HubOrientProfile {
+  slug: string;
+  name: string;
+  profileKind: "kind" | "role";
+  applicableKinds?: string[] | null;
+}
+
+export interface HubOrientWorkspace {
+  id: string;
+  name: string;
+  domain: string | null;
+  entityCount: number;
+  onboarding?: Record<string, unknown>;
+  description?: string | null;
+  profiles?: HubOrientProfile[];
+}
+
+export interface HubOrientProject {
+  id: string;
+  name: string;
+  description: string | null;
+  status: string | null;
+  workspaceId: string | null;
+  homeWorkspace: string | null;
+}
+
+/** Canonical session bootstrap response shared by MCP, CLI, and REST surfaces. */
+export interface HubOrientResult {
+  me: { userId: string; scopes: string[] };
+  detail: HubOrientDetail;
+  projects: HubOrientProject[];
+  projectCount: number;
+  workspaces: HubOrientWorkspace[];
+  workspaceCount: number;
+  profiles: HubOrientProfile[];
+  note: string;
+}
+
+export interface HubOrientOptions {
+  detail?: HubOrientDetail;
+  scope?: HubOrientScope[];
+  workspaceId?: string;
+  projectId?: string;
 }
 
 // ─── Threads & Channels ──────────────────────────────────────────────────────
@@ -537,6 +735,9 @@ export interface HubView {
   profileSlug?: string;
   workspaceId?: string;
   config?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  profileId?: string | null;
+  userId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -628,13 +829,201 @@ export interface CreateRelationInput {
   userId?: string;
 }
 
+/** Attach an existing role-profile to a primary-kind entity. */
+export interface AttachFacetInput {
+  entityId: string;
+  profileSlug?: string;
+  profileId?: string;
+  workspaceId?: string | null;
+  contextEntityId?: string | null;
+  status?: string;
+  properties?: Record<string, unknown>;
+  reasoning?: string;
+}
+
 export interface CreateViewInput {
   name: string;
   type: HubView["type"];
   profileSlug?: string;
   workspaceId: string;
   config?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
   userId?: string;
+  agentUserId?: string;
+  reasoning?: string;
+  sourceMessageId?: string;
+}
+
+export interface UpdateViewInput {
+  name?: string;
+  config?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  workspaceId?: string;
+  userId?: string;
+  agentUserId?: string;
+  reasoning?: string;
+  sourceMessageId?: string;
+}
+
+export interface BentoWidgetInput {
+  /** Canonical Hub-router field naming the cell type. */
+  key: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  config?: Record<string, unknown>;
+  props?: Record<string, unknown>;
+}
+
+export interface ArrangeBentoViewInput {
+  workspaceId?: string;
+  userId?: string;
+  widgets: BentoWidgetInput[];
+  agentUserId?: string;
+  reasoning?: string;
+  sourceMessageId?: string;
+}
+
+export interface HubBentoArrangementResult {
+  status: string;
+  viewId?: string;
+  widgetCount?: number;
+  message?: string;
+  proposalId?: string;
+  reviewUrl?: string;
+}
+
+// ─── Capabilities & teaching substrate ─────────────────────────────────────
+
+export interface HubCapabilityVerb {
+  id?: string;
+  verbId?: string;
+  label?: string;
+  type?: "read" | "write";
+  enabled?: boolean;
+  granted?: boolean;
+  runnable?: boolean;
+  governance?: "auto" | "propose";
+  effectiveExecMode?: string;
+  govDefault?: string;
+  [key: string]: unknown;
+}
+
+/** Flat capability read-model for callers that need every granted verb. */
+export interface HubCapability {
+  id?: string;
+  name?: string;
+  key?: string;
+  kind?: string;
+  description?: string | null;
+  verbs?: HubCapabilityVerb[];
+  governance?: Record<string, unknown>;
+  approved?: boolean;
+  [key: string]: unknown;
+}
+
+export interface HubCapabilityCatalogConnection {
+  required: boolean;
+  kind: "provider" | "vault" | null;
+  provider?: string;
+  state: "connected" | "missing" | "expired";
+  account?: string;
+}
+
+export interface HubCapabilityCatalogCard {
+  id: string | null;
+  key: string;
+  name: string;
+  description?: string | null;
+  source: "installed" | "available";
+  status:
+    | "available"
+    | "needs_connection"
+    | "connected"
+    | "draft"
+    | "ready"
+    | "partial";
+  connection?: HubCapabilityCatalogConnection;
+  verbs: Array<{
+    verbId: string;
+    label: string;
+    type: "read" | "write";
+    enabled: boolean;
+    governance: "auto" | "propose";
+    runnable: boolean;
+  }>;
+  nextAction: {
+    kind: "add" | "connect" | "enable" | "run" | "none";
+    hint: string;
+  };
+}
+
+export interface HubCapabilityCatalogResult {
+  capabilities: HubCapabilityCatalogCard[];
+}
+
+export interface ExecuteCapabilityInput {
+  verbId?: string;
+  skillId?: string;
+  parameters?: Record<string, unknown>;
+  workspaceId?: string;
+  connectionSelector?: {
+    connectionId?: string;
+    contextObjectId?: string;
+  };
+}
+
+export type ExecuteCapabilityResult =
+  | {
+      status: "run" | "dry-run";
+      skillId: string;
+      result?: unknown;
+      dryRun?: boolean;
+    }
+  | { proposed: true; proposalId: string; reviewUrl?: string };
+
+export interface HubAgentSkill {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  topics: string[];
+  body: string | null;
+  source: string | null;
+  author: string | null;
+  version: string | null;
+  tags: string[];
+  teachesTools: string[];
+  skillGroup: string | null;
+  alwaysOn: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ListAgentSkillsOptions {
+  topic?: string;
+  query?: string;
+  tag?: string;
+  /** Restrict to the seeded system/* teaching catalog. */
+  system?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface HubAgentSkillsResult {
+  skills: HubAgentSkill[];
+  total: number;
+}
+
+export interface GetCapabilityBriefsInput {
+  tools: string[];
+  workspaceId?: string;
+  door?: "chat" | "automation";
+}
+
+export interface HubCapabilityBriefsResult {
+  briefs: Record<string, string>;
 }
 
 export interface ExecuteCommandInput {

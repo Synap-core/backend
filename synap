@@ -3813,7 +3813,7 @@ cmd_reset() {
             proposals, reasoning_traces,
             relations, relation_defs, property_defs,
             resource_shares, roles, skills, tags, views,
-            inbox_items, user_entity_state, user_preferences,
+            inbox_items, user_resource_state, user_preferences,
             agents, ai_suggestions, command_runs,
             intelligence_commands, intelligence_services,
             background_tasks, admin_invitations,
@@ -4040,5 +4040,4 @@ case "${1:-help}" in
         exit 1
         ;;
 esac
-
 

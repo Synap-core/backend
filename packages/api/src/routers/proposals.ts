@@ -72,8 +72,6 @@ import type {
   CompositeProposalData,
   CompositeCreateEntityOp,
   CompositeCreateRelationOp,
-  CompositeProposalOperation,
-  ProposalItemDisposition,
 } from "@synap-core/types/proposals";
 import { storage } from "@synap/storage";
 import {
@@ -81,6 +79,10 @@ import {
   type ProposalExecutorDeps,
 } from "./proposals/execution-registry.js";
 import { registerApproveExecutors } from "./proposals/approve-executors.js";
+import {
+  applyGraphDispositions,
+  type GraphDispositionMap,
+} from "./proposals/graph-dispositions.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { auditLog } from "../utils/audit-log.js";
@@ -994,145 +996,6 @@ function buildProposalGraph(
 }
 
 // ---------------------------------------------------------------------------
-// Per-item dispositions (Phase 2) — partial-apply a composite (graph) proposal
-// ---------------------------------------------------------------------------
-
-// A reviewer decision on a single graph item rides in `approve`'s optional
-// `dispositions` map and is persisted verbatim into `proposals.data.dispositions`
-// (`ProposalItemDisposition`, keyed by the item's ref — `$opN`/op `ref` for an
-// entity, `$relN` for a relation). Absent map ⇒ apply-all (today's
-// whole-proposal behavior, byte-identical).
-type GraphDispositionMap = Record<string, ProposalItemDisposition>;
-
-/** Merge reviewer edits onto a create_entity op (title/description/profileSlug
- * replace; properties merge). Only known fields are applied — an unknown edit
- * key is ignored rather than injected into the op. */
-function applyEntityEdits(
-  op: CompositeCreateEntityOp,
-  edits: Record<string, unknown>
-): CompositeCreateEntityOp {
-  const next: CompositeCreateEntityOp = { ...op };
-  if (typeof edits.title === "string") next.title = edits.title;
-  if (typeof edits.description === "string")
-    next.description = edits.description;
-  if (typeof edits.profileSlug === "string" && edits.profileSlug.length > 0)
-    next.profileSlug = edits.profileSlug;
-  if (typeof edits.content === "string") next.content = edits.content;
-  if (
-    edits.properties != null &&
-    typeof edits.properties === "object" &&
-    !Array.isArray(edits.properties)
-  ) {
-    next.properties = {
-      ...(op.properties ?? {}),
-      ...(edits.properties as Record<string, unknown>),
-    };
-  }
-  return next;
-}
-
-/**
- * Filter a composite proposal's operations by per-item dispositions (Phase 2).
- *
- *  - entity op `status:'reject'`  → DROPPED (never materialized).
- *  - entity op `status:'edit'`    → its `edits` merged onto the op (this is the
- *    channel that fixes the edit-persistence bug — the edited title/props now
- *    reach `entityCaller.create` instead of the executors re-reading the
- *    original data).
- *  - CASCADE: any `create_relation` whose sourceRef/targetRef points at a
- *    rejected entity (matched against ALL of that entity's aliases — `$opN`,
- *    op `ref`, `$primary` for the first entity, and `existingEntityId`) is
- *    auto-dropped, so no dangling ref survives (`resolveCompositeRef` would
- *    otherwise mis-resolve an `existingEntityId` alias to a real edge).
- *  - relation op `status:'reject'` → DROPPED.
- *  - CASCADE: a facet whose `contextRef` points at a rejected entity is dropped
- *    from a KEPT entity op (else pass 1.5's `resolveCompositeRef` throws).
- *
- * Pure/DB-free. Entity/relation item refs are computed IDENTICALLY to
- * `buildProposalGraph` so a `$relN`/`$opN`/`ref` disposition maps to the same op.
- */
-function applyGraphDispositions(
-  operations: CompositeProposalOperation[],
-  dispositions: GraphDispositionMap
-): CompositeProposalOperation[] {
-  // Pass A — collect the aliases of every REJECTED entity (for cascade matching).
-  const rejectedAliases = new Set<string>();
-  let firstEntitySeen = false;
-  operations.forEach((op, index) => {
-    if (op.op !== "create_entity") return;
-    const entityOp = op as CompositeCreateEntityOp;
-    const itemRef = entityOp.ref ?? opRef(index);
-    const isFirst = !firstEntitySeen;
-    firstEntitySeen = true;
-    if (dispositions[itemRef]?.status !== "reject") return;
-    rejectedAliases.add(opRef(index));
-    if (entityOp.ref) rejectedAliases.add(entityOp.ref);
-    if (isFirst) rejectedAliases.add(PRIMARY_REF);
-    if (entityOp.existingEntityId)
-      rejectedAliases.add(entityOp.existingEntityId);
-  });
-
-  // Pass B — rebuild the op list applying reject/edit + cascade.
-  let relOrdinal = 0;
-  const filtered: CompositeProposalOperation[] = [];
-  operations.forEach((op, index) => {
-    if (op.op === "create_entity") {
-      const entityOp = op as CompositeCreateEntityOp;
-      const itemRef = entityOp.ref ?? opRef(index);
-      const disp = dispositions[itemRef];
-      if (disp?.status === "reject") return; // dropped
-      let next =
-        disp?.status === "edit" && disp.edits
-          ? applyEntityEdits(entityOp, disp.edits)
-          : entityOp;
-      // Cascade-drop facets whose contextRef points at a rejected entity.
-      if (next.facets && next.facets.length > 0) {
-        const keptFacets = next.facets.filter(
-          (f) => !f.contextRef || !rejectedAliases.has(f.contextRef)
-        );
-        if (keptFacets.length !== next.facets.length) {
-          next = { ...next, facets: keptFacets };
-        }
-      }
-      filtered.push(next);
-      return;
-    }
-    if (op.op === "create_relation") {
-      const relOp = op as CompositeCreateRelationOp;
-      const itemRef = `$rel${relOrdinal}`;
-      relOrdinal++;
-      if (dispositions[itemRef]?.status === "reject") return; // explicit reject
-      // Cascade: an endpoint that is a rejected entity → drop this relation.
-      if (
-        rejectedAliases.has(relOp.sourceRef) ||
-        rejectedAliases.has(relOp.targetRef)
-      ) {
-        return;
-      }
-      filtered.push(relOp);
-      return;
-    }
-    filtered.push(op);
-  });
-
-  // Invariant guard: no kept relation may still point at a rejected entity
-  // alias (a cascade bug). Unreachable if pass B is correct; throws loudly
-  // rather than letting a dangling ref reach materialize.
-  for (const op of filtered) {
-    if (op.op !== "create_relation") continue;
-    const relOp = op as CompositeCreateRelationOp;
-    if (
-      rejectedAliases.has(relOp.sourceRef) ||
-      rejectedAliases.has(relOp.targetRef)
-    ) {
-      throw new Error(
-        "applyGraphDispositions: dangling relation endpoint survived cascade-reject"
-      );
-    }
-  }
-
-  return filtered;
-}
 
 function toProposalReviewEvent(event: {
   id: string;
@@ -2023,9 +1886,20 @@ export const proposalsRouter = router({
         // to the whole-proposal path). `materializeCompositeGraph` is already
         // per-op resilient and needs no internal change — the cascade guarantees
         // no dangling ref reaches it.
-        const dispositions = input.dispositions as
+        // Source of truth = the dispositions persisted incrementally by
+        // `rejectItem` (immediate-commit deny), MERGED with any map the client
+        // sends on Approve (which wins for last-second changes). Either alone
+        // works — a purely staged client, or a purely immediate-commit flow.
+        const persistedDisp = (
+          payload as { dispositions?: GraphDispositionMap }
+        ).dispositions;
+        const clientDisp = input.dispositions as
           | GraphDispositionMap
           | undefined;
+        const dispositions: GraphDispositionMap | undefined =
+          persistedDisp || clientDisp
+            ? { ...(persistedDisp ?? {}), ...(clientDisp ?? {}) }
+            : undefined;
         const operationsToMaterialize =
           dispositions && Object.keys(dispositions).length > 0
             ? applyGraphDispositions(payload.operations, dispositions)
@@ -2145,6 +2019,7 @@ export const proposalsRouter = router({
                 externalId: b.externalChannelId,
                 userId,
                 workspaceId: proposal.workspaceId,
+                requireExistingWorkspace: true,
                 title: b.title ?? b.externalChannelId,
               });
               await db
@@ -2450,6 +2325,114 @@ export const proposalsRouter = router({
         }
       }
 
+      return { success: true };
+    }),
+
+  /**
+   * Per-item deny that COMMITS IMMEDIATELY (not staged until Approve). Persists
+   * the disposition into `data.dispositions[itemRef]` AND emits the item-scoped
+   * flywheel correction the moment a reviewer denies a single graph item. This
+   * makes a deny durable + verifiable even if the reviewer never clicks Approve;
+   * `approve` reads this persisted map (merged with any client-sent map) as the
+   * source of truth. Same authority ladder as `reject`.
+   */
+  rejectItem: protectedProcedure
+    .input(
+      z.object({
+        proposalId: z.string(),
+        /** The item's ref: `$opN`/op `ref` for an entity, `$relN` for a relation. */
+        itemRef: z.string(),
+        reason: z.string().optional(),
+        reasonCode: z.enum(PROPOSAL_REJECTION_REASONS).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const proposal = await db.query.proposals.findFirst({
+        where: eq(proposals.id, input.proposalId),
+        columns: { workspaceId: true, data: true, correlationId: true },
+      });
+      if (!proposal)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
+      await assertCanReviewProposal({
+        proposal: { workspaceId: proposal.workspaceId, data: proposal.data },
+        userId,
+        action: "reject",
+      });
+
+      const disp = {
+        status: "reject" as const,
+        ...(input.reason ? { reason: input.reason } : {}),
+        ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
+      };
+      const data = (proposal.data ?? {}) as Record<string, unknown>;
+      const dispositions = {
+        ...((data.dispositions as Record<string, unknown>) ?? {}),
+        [input.itemRef]: disp,
+      };
+      await db
+        .update(proposals)
+        .set({
+          data: { ...data, dispositions } as never,
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      // Flywheel — the reasoned per-item rejection, emitted immediately (not at
+      // Approve). Best-effort: never fail the deny.
+      if (input.reason || input.reasonCode) {
+        await emitAiCorrection({
+          action: "reject_item",
+          userId,
+          subjectId: input.itemRef,
+          workspaceId: proposal.workspaceId ?? undefined,
+          data: {
+            kind: AI_KIND.EXTRACT,
+            correlationId: proposal.correlationId ?? input.proposalId,
+            itemRef: input.itemRef,
+            ...(input.reason ? { reason: input.reason } : {}),
+            ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
+          },
+        });
+      }
+      return { success: true };
+    }),
+
+  /** Undo a per-item deny — remove the item's disposition (restore to accept). */
+  restoreItem: protectedProcedure
+    .input(z.object({ proposalId: z.string(), itemRef: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const proposal = await db.query.proposals.findFirst({
+        where: eq(proposals.id, input.proposalId),
+        columns: { workspaceId: true, data: true },
+      });
+      if (!proposal)
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
+      await assertCanReviewProposal({
+        proposal: { workspaceId: proposal.workspaceId, data: proposal.data },
+        userId,
+        action: "reject",
+      });
+
+      const data = (proposal.data ?? {}) as Record<string, unknown>;
+      const dispositions = {
+        ...((data.dispositions as Record<string, unknown>) ?? {}),
+      };
+      delete dispositions[input.itemRef];
+      await db
+        .update(proposals)
+        .set({
+          data: { ...data, dispositions } as never,
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
       return { success: true };
     }),
 

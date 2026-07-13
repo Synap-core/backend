@@ -38,7 +38,8 @@ export interface SetProfileRendererInput {
   workspaceId: string | null;
   profileSlug: string;
   slot: RendererSlot;
-  ref: RendererRef;
+  /** `null` clears a workspace override; pod defaults cannot be cleared here. */
+  ref: RendererRef | null;
   scope: RendererScope;
 }
 
@@ -52,6 +53,12 @@ export async function setProfileRenderer(
   const db = await getDb();
 
   if (scope === "pod") {
+    if (ref === null) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Pod-scoped profile renderer defaults cannot be cleared",
+      });
+    }
     // System default: profiles.default_{list,detail,dashboard}_renderer.
     const profileRepo = new ProfileRepository(db);
     const resolutionService = new ProfileResolutionService(db);
@@ -110,11 +117,19 @@ export async function setProfileRenderer(
     Record<string, RendererRef | undefined>
   >;
   const profileEntry = { ...(current[profileSlug] ?? {}) };
-  profileEntry[contentKind] = ref;
+  if (ref === null) {
+    delete profileEntry[contentKind];
+  } else {
+    profileEntry[contentKind] = ref;
+  }
   const nextProfileRenderers: Record<
     string,
     Record<string, RendererRef | undefined>
   > = { ...current, [profileSlug]: profileEntry };
+
+  if (Object.keys(profileEntry).length === 0) {
+    delete nextProfileRenderers[profileSlug];
+  }
 
   await workspaceRepo.mergeSettings(
     workspaceId,

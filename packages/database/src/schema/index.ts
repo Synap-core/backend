@@ -34,6 +34,7 @@ export * from "./enrichments.js";
 
 // Life Feed schemas
 export * from "./inbox-items.js";
+export * from "./user-resource-state.js";
 export * from "./user-entity-state.js";
 
 // Intelligence Service Registry

@@ -8,6 +8,10 @@
 
 // Direct re-exports from database
 export type {
+  UserResourceState,
+  NewUserResourceState,
+  UserResourceType,
+  ResourceSemanticSize,
   UserEntityState,
   NewUserEntityState,
   EntityEnrichment,

@@ -54,6 +54,8 @@ export async function resolveExternalChannel(args: {
   externalId: string;
 }): Promise<{
   id: string;
+  userId: string;
+  workspaceId: string | null;
   contextObjectId: string | null;
   branchPurpose: string | null;
 } | null> {
@@ -63,7 +65,13 @@ export async function resolveExternalChannel(args: {
       eq(channels.externalSource, args.provider),
       eq(channels.externalId, args.externalId)
     ),
-    columns: { id: true, contextObjectId: true, branchPurpose: true },
+    columns: {
+      id: true,
+      userId: true,
+      workspaceId: true,
+      contextObjectId: true,
+      branchPurpose: true,
+    },
     // Deterministic oldest-wins so a duplicate external channel resolves to a
     // stable survivor run-to-run.
     orderBy: [asc(channels.createdAt)],
@@ -71,6 +79,8 @@ export async function resolveExternalChannel(args: {
   return row
     ? {
         id: row.id,
+        userId: row.userId,
+        workspaceId: row.workspaceId,
         contextObjectId: row.contextObjectId,
         branchPurpose: row.branchPurpose,
       }
@@ -94,6 +104,38 @@ export interface ResolveOrCreateExternalChannelArgs {
   preview?: string;
   /** Timestamp of the last message (ISO/string); defaults to now. */
   lastMessageAt?: string;
+  /**
+   * Proposal approval must never rebind a channel that belongs to another
+   * workspace, even when the same operator owns both. Explicit user-driven
+   * relink flows leave this false and make that move separately.
+   */
+  requireExistingWorkspace?: boolean;
+}
+
+export class ExternalChannelOwnershipError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ExternalChannelOwnershipError";
+  }
+}
+
+function assertExternalChannelOwner(
+  existing: { userId: string; workspaceId: string | null },
+  args: ResolveOrCreateExternalChannelArgs
+): void {
+  if (existing.userId !== args.userId) {
+    throw new ExternalChannelOwnershipError(
+      "External channel belongs to a different user"
+    );
+  }
+  if (
+    args.requireExistingWorkspace &&
+    existing.workspaceId !== args.workspaceId
+  ) {
+    throw new ExternalChannelOwnershipError(
+      "External channel belongs to a different workspace"
+    );
+  }
 }
 
 /**
@@ -112,6 +154,7 @@ export async function resolveOrCreateExternalChannel(
   });
 
   if (existing) {
+    assertExternalChannelOwner(existing, args);
     await db
       .update(channels)
       .set({
@@ -220,6 +263,7 @@ export async function resolveOrCreateExternalChannel(
       `Failed to resolve-or-create EXTERNAL channel for ${args.provider}:${args.externalId} after conflict`
     );
   }
+  assertExternalChannelOwner(survivor, args);
   return { channelId: survivor.id, contextObjectId: survivor.contextObjectId };
 }
 

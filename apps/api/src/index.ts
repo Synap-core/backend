@@ -290,7 +290,7 @@ app.get("/health", (c) => {
     // detect stale pinned types. Kept in sync with
     // packages/api-types/package.json#version by
     // packages/api-types/scripts/check-and-bump.mjs — do not hand-edit.
-    apiTypesVersion: "1.18.3",
+    apiTypesVersion: "1.21.1",
     mode: "multi-user",
     auth: "ory-stack",
   });
@@ -1867,9 +1867,8 @@ await (async () => {
     return;
   }
   try {
-    const { sql, runConversions, CONVERSION_MANIFEST } = await import(
-      "@synap/database"
-    );
+    const { sql, runConversions, CONVERSION_MANIFEST } =
+      await import("@synap/database");
     const summary = await runConversions(sql, CONVERSION_MANIFEST, {
       dryRun: false,
       destructiveTail: false,

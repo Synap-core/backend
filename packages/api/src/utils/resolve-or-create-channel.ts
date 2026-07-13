@@ -62,7 +62,11 @@ export type ContextObjectType =
   | "project"
   | "task"
   | "user"
-  | "external";
+  | "external"
+  // A pending proposal — the target of an on-demand "discuss/refine this
+  // proposal with the AI" thread (one dedup'd thread per proposal). The channel
+  // binds to the proposal so getThreadContext can hydrate it into the prompt.
+  | "proposal";
 
 export const CONTEXT_OBJECT_TYPE_VALUES = [
   "workspace",
@@ -73,6 +77,7 @@ export const CONTEXT_OBJECT_TYPE_VALUES = [
   "task",
   "user",
   "external",
+  "proposal",
 ] as const satisfies ReadonlyArray<ContextObjectType>;
 
 export interface ResolveOrCreateChannelParams {

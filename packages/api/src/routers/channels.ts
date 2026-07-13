@@ -804,6 +804,7 @@ export const channelsRouter = router({
             "task",
             "user",
             "external",
+            "proposal",
           ])
           .optional(),
         contextObjectId: z.string().uuid().optional(),

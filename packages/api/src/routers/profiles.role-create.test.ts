@@ -111,6 +111,7 @@ vi.mock("@synap/database/schema", () => ({
 
 import { profilesRouter } from "./profiles.js";
 import { createContext } from "../context.js";
+import { checkPermissionOrPropose } from "../utils/permission-check.js";
 
 async function callerCtx() {
   const ctx = await createContext(new Request("http://localhost:3000"));
@@ -175,6 +176,37 @@ describe("profiles.create — role (facet type) minting", () => {
       })
     ).rejects.toThrow(TRPCError);
 
+    expect(h.createCalls).toHaveLength(0);
+  });
+
+  it("preserves role semantics when profile creation becomes a proposal", async () => {
+    vi.mocked(checkPermissionOrPropose).mockResolvedValueOnce({
+      proposalId: "proposal-1",
+    } as never);
+    const caller = profilesRouter.createCaller(await callerCtx());
+
+    const result = await caller.create({
+      slug: "advisor",
+      displayName: "Advisor",
+      scope: "workspace",
+      entityScope: "workspace",
+      profileKind: "role",
+      applicableKinds: ["person"],
+    });
+
+    expect(result).toMatchObject({
+      status: "proposed",
+      proposalId: "proposal-1",
+    });
+    expect(checkPermissionOrPropose).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          profileKind: "role",
+          applicableKinds: ["person"],
+          entityScope: "workspace",
+        }),
+      })
+    );
     expect(h.createCalls).toHaveLength(0);
   });
 });

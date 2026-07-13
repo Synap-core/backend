@@ -28,6 +28,10 @@ import type { RendererRef } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import {
+  setProfileRenderer,
+  type RendererSlot,
+} from "../services/profiles/set-profile-renderer.js";
 import { auditLog } from "../utils/audit-log.js";
 import { randomUUID } from "crypto";
 
@@ -107,6 +111,12 @@ const ProfileContentKindSchema = z.enum([
 ]);
 type ProfileContentKind = z.infer<typeof ProfileContentKindSchema>;
 
+const PROFILE_CONTENT_KIND_TO_SLOT: Record<ProfileContentKind, RendererSlot> = {
+  collection: "list",
+  "entity-detail": "detail",
+  "entity-profile": "dashboard",
+};
+
 export const profilesRouter = router({
   /**
    * List accessible profiles (system + workspace + user)
@@ -117,6 +127,8 @@ export const profilesRouter = router({
         .object({
           /** When true, excludes profiles marked hideFromCreate in uiHints (file, capture, anchor, etc.) */
           creatableOnly: z.boolean().optional(),
+          /** Narrow an already-oriented read to these profile slugs. */
+          profileSlugs: z.array(z.string().min(1).max(100)).optional(),
         })
         .optional()
     )
@@ -133,7 +145,8 @@ export const profilesRouter = router({
       // here so the documented workspace-less contract is unchanged.
       let profiles = await profileRepo.getAccessibleProfiles(
         ctx.userId,
-        ctx.workspaceId ?? ""
+        ctx.workspaceId ?? "",
+        input?.profileSlugs ? { slugs: input.profileSlugs } : undefined
       );
 
       if (input?.creatableOnly) {
@@ -327,7 +340,11 @@ export const profilesRouter = router({
           displayName: input.displayName,
           parentProfileId: input.parentProfileId,
           uiHints: input.uiHints,
+          defaultValues: input.defaultValues,
           scope: input.scope,
+          entityScope: input.entityScope,
+          profileKind: input.profileKind,
+          applicableKinds: input.applicableKinds,
         },
       });
 
@@ -360,6 +377,7 @@ export const profilesRouter = router({
       }
 
       const profile = await profileRepo.create({
+        id: profileId,
         slug: input.slug,
         displayName: input.displayName,
         parentProfileId: input.parentProfileId,
@@ -1149,6 +1167,11 @@ export const profilesRouter = router({
    * This is the workspace-level write path. To change the profile's own
    * system default (visible to every workspace using it), use `update` with
    * `defaultListRenderer` / `defaultDetailRenderer`.
+   *
+   * Governance follows the authenticated actor from context. Trusted operators
+   * apply immediately; agent/AI and under-authorized writes become the existing
+   * `profile/renderer.set` proposal and materialize through the same service
+   * after approval.
    */
   setProfileRendererOverride: workspaceProcedure
     .input(
@@ -1159,49 +1182,44 @@ export const profilesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const db = await getDb();
-      // Shared singleton — see note above.
-      const eventRepo = eventRepository;
-      const workspaceRepo = new WorkspaceRepository(db, eventRepo);
-
-      const workspace = await db.query.workspaces.findFirst({
-        where: eq(workspaces.id, ctx.workspaceId),
+      const slot = PROFILE_CONTENT_KIND_TO_SLOT[input.contentKind];
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        agentUserId: ctx.agentUserId ?? undefined,
+        workspaceId: ctx.workspaceId,
+        subjectType: "profile",
+        action: "renderer.set",
+        source: ctx.source ?? undefined,
+        sourceMessageId: ctx.sourceMessageId ?? undefined,
+        sessionId: ctx.sessionId ?? undefined,
+        projectId: ctx.projectId ?? undefined,
+        data: {
+          profileSlug: input.profileSlug,
+          slot,
+          scope: "workspace",
+          ref: input.ref,
+        },
       });
-      if (!workspace) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Workspace not found",
-        });
+
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          success: false,
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+        };
       }
 
-      const settings = (workspace.settings ?? {}) as Record<string, unknown>;
-      const current = (settings.profileRenderers ?? {}) as Record<
-        string,
-        Record<string, RendererRef | undefined>
-      >;
-      const profileEntry = { ...(current[input.profileSlug] ?? {}) };
-
-      if (input.ref === null) {
-        delete profileEntry[input.contentKind];
-      } else {
-        profileEntry[input.contentKind] = input.ref;
-      }
-
-      const nextProfileRenderers: Record<
-        string,
-        Record<string, RendererRef | undefined>
-      > = { ...current, [input.profileSlug]: profileEntry };
-
-      // Drop empty per-profile entries to keep the settings JSONB tidy.
-      if (Object.keys(profileEntry).length === 0) {
-        delete nextProfileRenderers[input.profileSlug];
-      }
-
-      await workspaceRepo.mergeSettings(
-        ctx.workspaceId,
-        { profileRenderers: nextProfileRenderers },
-        ctx.userId
-      );
+      await setProfileRenderer({
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        profileSlug: input.profileSlug,
+        slot,
+        ref: input.ref,
+        scope: "workspace",
+      });
 
       logger.info(
         {
@@ -1213,7 +1231,11 @@ export const profilesRouter = router({
         "Profile renderer override updated"
       );
 
-      return { success: true };
+      return {
+        success: true,
+        status: "applied" as const,
+        proposalId: null,
+      };
     }),
 
   /**

@@ -738,13 +738,14 @@ export function registerCaptureRoutes(app: HubHono): void {
         403
       );
     }
-    const userId = c.get("userId") as string;
     const body = (await c.req.json().catch(() => null)) as {
       workspaceId?: string;
       entities?: Array<{
         ref: string;
         profileSlug: string;
         title?: string;
+        description?: string;
+        content?: string;
         properties?: Record<string, unknown>;
         existingEntityId?: string;
         facets?: Array<{
@@ -770,6 +771,13 @@ export function registerCaptureRoutes(app: HubHono): void {
     if (!body || !Array.isArray(body.entities) || body.entities.length === 0) {
       return c.json({ error: "entities[] is required (at least one)" }, 400);
     }
+    // This is a governed graph proposal, but its workspace still sets the
+    // proposal's audience and approval surface. Bind it to the authenticated
+    // principal and membership-check the requested workspace before accepting
+    // any graph refs; otherwise an API key could queue work in a foreign lens.
+    const acting = await resolveActingContext(c, body);
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    const { userId, workspaceId } = acting;
     // Refs must be unique; relations must reference known refs (fail loud — a
     // dangling ref would silently drop the link at materialization time).
     const refs = new Set<string>();
@@ -818,7 +826,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       // producers (Cal.com webhook/backfill) go through the SAME door path.
       const result = await submitCaptureGraph({
         userId,
-        workspaceId: body.workspaceId ?? null,
+        workspaceId,
         entities: body.entities,
         relations,
         bindings,
@@ -827,7 +835,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       logger.info(
         {
           userId,
-          workspaceId: body.workspaceId,
+          workspaceId,
           entityCount: result.entityCount,
           relationCount: result.relationCount,
           proposalId: result.proposalId,

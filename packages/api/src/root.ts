@@ -3,6 +3,7 @@ import { setupRouter } from "./routers/setup.js";
 import { eventsRouter } from "./routers/events.js";
 import { captureRouter } from "./routers/capture.js";
 import { entitiesRouter } from "./routers/entities.js";
+import { resourceStateRouter } from "./routers/resource-state.js";
 import { channelsRouter as chatRouter } from "./routers/channels.js";
 import { proposalsRouter } from "./routers/proposals.js";
 import { suggestionsRouter } from "./routers/suggestions.js";
@@ -76,6 +77,7 @@ export const coreRouter = router({
   events: eventsRouter,
   capture: captureRouter,
   entities: entitiesRouter,
+  resourceState: resourceStateRouter,
   chat: chatRouter,
   proposals: proposalsRouter,
   suggestions: suggestionsRouter,

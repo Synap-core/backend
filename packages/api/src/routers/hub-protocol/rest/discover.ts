@@ -1,16 +1,17 @@
 /**
  * Hub Protocol REST — /discover
  *
- * Single endpoint for AI agent session bootstrap. Returns all entity profiles
- * with their property schemas, plus the canonical CLI command tree.
+ * Single endpoint for AI agent session bootstrap. Returns entity profiles with
+ * their property schemas, plus the canonical CLI command tree.
  *
  * Agents call this once per session instead of relying on static skill file
  * descriptions, which drift as custom profiles are added or changed.
  *
  * Tiers:
  *   ?summary=true  — slugs + displayNames + scopes + entityCounts. ~2KB. Call first.
- *   (default)       — full property schemas + create commands. Call on the 3-5
- *                     profiles you actually need after orienting.
+ *   ?profileSlugs=task,person — full schemas only for named profiles. Use this
+ *                     after the summary tier instead of loading every schema.
+ *   (default)       — full property schemas + create commands for every profile.
  */
 
 import { z } from "@hono/zod-openapi";
@@ -47,6 +48,32 @@ const ApplicableKindsSchema = z
   .describe(
     "For profileKind='role': the kind slugs this role may attach to (null/absent = any kind)."
   );
+
+const ProfileSlugListSchema = z
+  .string()
+  .trim()
+  .refine(
+    (value) =>
+      value
+        .split(",")
+        .map((slug) => slug.trim())
+        .every((slug) => /^[a-z0-9][a-z0-9-]*$/.test(slug)),
+    "profileSlugs must be a comma-separated list of profile slugs"
+  )
+  .refine(
+    (value) => value.split(",").filter(Boolean).length <= 50,
+    "profileSlugs supports at most 50 profiles per request"
+  )
+  .describe(
+    "Comma-separated profile slugs to return with property schemas, e.g. task,person. Omit to load every profile schema."
+  );
+
+const DiscoverQuerySchema = z.object({
+  userId: z.string().min(1),
+  workspaceId: z.string().uuid(),
+  summary: z.enum(["true", "false"]).optional(),
+  profileSlugs: ProfileSlugListSchema.optional(),
+});
 
 /** Summary tier — lightweight, no property schemas, no entity counts. */
 export const DiscoverProfileSummarySchema = z.object({
@@ -111,9 +138,10 @@ export function registerDiscoverRoutes(app: HubHono): void {
     tags: ["System"],
     summary: "Runtime discovery — profiles + command tree",
     description:
-      "Returns all entity profiles with property schemas and the CLI command tree. " +
+      "Returns entity profiles with property schemas and the CLI command tree. " +
       "AI agents call this once at session start for ground-truth schema instead of relying on static skill descriptions. " +
-      "Pass ?summary=true for a lightweight (~2KB) tier with entity counts per profile but no property schemas.",
+      "Pass ?summary=true for a lightweight (~2KB) tier with no property schemas, then pass ?profileSlugs=task,person to load schemas only for the profiles you need.",
+    request: { query: DiscoverQuerySchema },
     responses: {
       200: { description: "Discovery payload", schema: DiscoverResponseSchema },
       400: { description: "Missing required query param", schema: ErrorSchema },
@@ -130,24 +158,35 @@ export function registerDiscoverRoutes(app: HubHono): void {
       );
     }
 
-    const userId = c.req.query("userId");
-    const workspaceId = c.req.query("workspaceId");
-    const summary = c.req.query("summary") === "true";
-
-    if (!userId || !workspaceId) {
-      return c.json({ error: "userId and workspaceId are required" }, 400);
+    const query = DiscoverQuerySchema.safeParse({
+      userId: c.req.query("userId"),
+      workspaceId: c.req.query("workspaceId"),
+      summary: c.req.query("summary"),
+      profileSlugs: c.req.query("profileSlugs"),
+    });
+    if (!query.success) {
+      return c.json(
+        {
+          error:
+            "userId and workspaceId are required; profileSlugs must be a comma-separated list of profile slugs when supplied",
+        },
+        400
+      );
     }
+    const { userId, workspaceId, profileSlugs } = query.data;
+    const summary = query.data.summary === "true";
+    const selectedSlugs = profileSlugs
+      ? [...new Set(profileSlugs.split(",").map((slug) => slug.trim()))]
+      : undefined;
 
     try {
       const caller = await getCaller(c, { userId, workspaceId });
 
-      const [profilesRaw, defsRaw] = await Promise.all([
-        caller.profiles.listProfiles({ userId, workspaceId }),
-        // Skip property defs in summary mode — saves ~176KB of response payload
-        summary
-          ? Promise.resolve(null)
-          : caller.profiles.listPropertyDefs({ userId, workspaceId }),
-      ]);
+      const profilesRaw = await caller.profiles.listProfiles({
+        userId,
+        workspaceId,
+        ...(selectedSlugs ? { profileSlugs: selectedSlugs } : {}),
+      });
 
       // tRPC returns wrapped shapes: { profiles: [...] } and { propertyDefs: [...] }
       const profiles = (Array.isArray(profilesRaw)
@@ -164,9 +203,13 @@ export function registerDiscoverRoutes(app: HubHono): void {
         applicableKinds?: string[] | null;
       }[];
 
+      const selectedProfiles = selectedSlugs
+        ? profiles.filter((profile) => selectedSlugs.includes(profile.slug))
+        : profiles;
+
       // ── Summary tier: slugs + displayNames + scopes only (~2KB) ──
       if (summary) {
-        const summaryProfiles = profiles.map((p) => ({
+        const summaryProfiles = selectedProfiles.map((p) => ({
           slug: p.slug,
           displayName: p.displayName,
           scope: (p.entityScope ?? "workspace") as "pod" | "workspace",
@@ -182,11 +225,23 @@ export function registerDiscoverRoutes(app: HubHono): void {
             discover: "synap discover --json",
             orient: "synap orient --json",
           },
-          hint: "Summary tier — no property schemas. Call /discover (without ?summary=true) on the 3-5 profiles you intend to use for full property detail + create commands.",
+          hint: "Summary tier — no property schemas. Call /discover?profileSlugs=task,person for full property detail + create commands only for the profiles you intend to use.",
         });
       }
 
       // ── Full tier: property schemas + create commands ──
+      // A selected schema read must not fan out into every profile's property
+      // definitions. The hub caller delegates the filter to the repository.
+      const defsRaw =
+        selectedSlugs && selectedProfiles.length === 0
+          ? { propertyDefs: [] }
+          : await caller.profiles.listPropertyDefs({
+              userId,
+              workspaceId,
+              ...(selectedSlugs
+                ? { profileIds: selectedProfiles.map((profile) => profile.id) }
+                : {}),
+            });
       const allDefs = (Array.isArray(defsRaw)
         ? defsRaw
         : ((defsRaw as unknown as { propertyDefs: unknown[] }).propertyDefs ??
@@ -201,7 +256,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
         defsByProfileId.get(def.profileId)!.push(def);
       }
 
-      const discoveredProfiles = profiles.map((p) => {
+      const discoveredProfiles = selectedProfiles.map((p) => {
         const defs = defsByProfileId.get(p.id) ?? [];
         const properties = defs.map((d) => {
           const options =
@@ -256,7 +311,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
           create_relation:
             "synap create relation --source <id> --target <id> --type <type> --json",
         },
-        hint: "Use `createCommand` per profile as a template. Call `synap discover --profiles` to see only profiles, `--commands` for only the command tree.",
+        hint: "Use `createCommand` per profile as a template. Start with `summary=true`, then pass `profileSlugs` for only the schemas you need. Call `synap discover --profiles` to see only profiles, `--commands` for only the command tree.",
       });
     } catch (err) {
       logger.error({ err }, "discover failed");

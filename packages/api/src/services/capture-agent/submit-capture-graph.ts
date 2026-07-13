@@ -112,6 +112,8 @@ export async function submitCaptureGraph(
       ref: e.ref,
       profileSlug: e.profileSlug,
       title: e.title ?? e.ref,
+      ...(e.description ? { description: e.description } : {}),
+      ...(e.content ? { content: e.content } : {}),
       properties: e.properties ?? {},
       ...(e.existingEntityId ? { existingEntityId: e.existingEntityId } : {}),
       ...(e.facets ? { facets: e.facets } : {}),

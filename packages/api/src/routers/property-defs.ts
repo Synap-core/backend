@@ -49,27 +49,44 @@ export const propertyDefsRouter = router({
    *
    * Uses workspaceProcedure so ctx.workspaceId is available.
    */
-  list: workspaceProcedure.query(async ({ ctx }) => {
-    const db = await getDb();
-    const propertyDefRepo = new PropertyDefRepository(db);
-    const profileRepo = new ProfileRepository(db);
+  list: workspaceProcedure
+    .input(
+      z
+        .object({
+          /**
+           * Optional targeted read for callers that need schemas for only a
+           * few already-resolved profiles. Omit to preserve the full listing.
+           */
+          profileIds: z.array(z.string().uuid()).optional(),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const db = await getDb();
+      const propertyDefRepo = new PropertyDefRepository(db);
+      const profileRepo = new ProfileRepository(db);
 
-    // Get profiles accessible to this workspace, then return their property defs
-    // plus any global (profileId IS NULL) defs — filtered through this
-    // workspace's lens so overlays owned by other workspaces don't leak.
-    const accessibleProfiles = await profileRepo.getAccessibleProfiles(
-      ctx.userId,
-      ctx.workspaceId
-    );
-    const accessibleProfileIds = accessibleProfiles.map((p) => p.id);
+      // Get profiles accessible to this workspace, then return their property defs
+      // plus any global (profileId IS NULL) defs — filtered through this
+      // workspace's lens so overlays owned by other workspaces don't leak.
+      const requestedProfileIds = input?.profileIds;
+      const accessibleProfiles = await profileRepo.getAccessibleProfiles(
+        ctx.userId,
+        ctx.workspaceId,
+        requestedProfileIds ? { ids: requestedProfileIds } : undefined
+      );
+      const accessibleProfileIds = accessibleProfiles.map((p) => p.id);
+      const profileIds = requestedProfileIds
+        ? requestedProfileIds.filter((id) => accessibleProfileIds.includes(id))
+        : accessibleProfileIds;
 
-    const propertyDefs = await propertyDefRepo.listForProfiles(
-      accessibleProfileIds,
-      ctx.workspaceId
-    );
+      const propertyDefs = await propertyDefRepo.listForProfiles(
+        profileIds,
+        ctx.workspaceId
+      );
 
-    return { propertyDefs };
-  }),
+      return { propertyDefs };
+    }),
 
   /**
    * Get property definition by slug — optionally scoped by profile + workspace.

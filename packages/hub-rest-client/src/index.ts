@@ -48,6 +48,8 @@ export type {
   // Core entity types
   HubEntity,
   HubDocument,
+  HubDocumentChange,
+  HubDocumentProposalResult,
   HubChannel,
   HubWorkspace,
   HubWorkspacesListResponse,
@@ -68,6 +70,14 @@ export type {
   HubDiscoverResult,
   HubDiscoverProfile,
   HubDiscoverProperty,
+  HubDiscoverOptions,
+  HubOrientScope,
+  HubOrientDetail,
+  HubOrientProfile,
+  HubOrientWorkspace,
+  HubOrientProject,
+  HubOrientResult,
+  HubOrientOptions,
   // Threads & Channels
   HubThread,
   HubMessage,
@@ -76,6 +86,7 @@ export type {
   HubProposal,
   // Views
   HubView,
+  HubBentoArrangementResult,
   // Search
   HubSearchResult,
   // Commands & Agents
@@ -85,11 +96,25 @@ export type {
   HubUserContext,
   // Governance
   HubGovernanceResult,
+  // Capabilities & teaching substrate
+  HubCapabilityVerb,
+  HubCapability,
+  HubCapabilityCatalogConnection,
+  HubCapabilityCatalogCard,
+  HubCapabilityCatalogResult,
+  ExecuteCapabilityResult,
+  HubAgentSkill,
+  ListAgentSkillsOptions,
+  HubAgentSkillsResult,
+  GetCapabilityBriefsInput,
+  HubCapabilityBriefsResult,
   // Input types — Entity
   CreateEntityInput,
   UpdateEntityInput,
   // Input types — Documents
   CreateDocumentInput,
+  UpdateDocumentInput,
+  CreateDocumentProposalInput,
   // Input types — Memory
   StoreMemoryInput,
   // Input types — Channels
@@ -98,6 +123,9 @@ export type {
   CreateRelationInput,
   CreateThreadInput,
   CreateViewInput,
+  UpdateViewInput,
+  BentoWidgetInput,
+  ArrangeBentoViewInput,
   ExecuteCommandInput,
   // Setup
   AgentSetupResult,
@@ -108,6 +136,11 @@ export type {
   CaptureStructureResponse,
   CaptureExecuteInput,
   CaptureExecuteResponse,
+  CaptureGraphEntity,
+  CaptureGraphRelation,
+  CaptureGraphBinding,
+  SubmitCaptureGraphInput,
+  SubmitCaptureGraphResult,
   AskResponse,
   AskAnswerBlock,
 } from "./types.js";

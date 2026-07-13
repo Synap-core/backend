@@ -20,6 +20,10 @@ import {
   channels,
 } from "@synap/database/schema";
 import { inArray, eq } from "@synap/database";
+import {
+  renderProposalForPrompt,
+  type ProposalPromptContext,
+} from "../proposals/render-for-prompt.js";
 
 export const contextRouter = router({
   /**
@@ -43,6 +47,8 @@ export const contextRouter = router({
           workspaceId: channels.workspaceId,
           contextSummary: channels.contextSummary,
           metadata: channels.metadata,
+          contextObjectType: channels.contextObjectType,
+          contextObjectId: channels.contextObjectId,
         })
         .from(channels)
         .where(eq(channels.id, input.threadId))
@@ -123,6 +129,15 @@ export const contextRouter = router({
         }));
       }
 
+      // On-demand "discuss/refine this proposal" threads bind to the proposal via
+      // the channel's primary contextObject (not a context-item). Hydrate it so
+      // the agent sees the proposal it may revise (via update_proposal) — and
+      // surface `proposalId` explicitly so the tool has its target.
+      let linkedProposal: ProposalPromptContext | null = null;
+      if (thread?.contextObjectType === "proposal" && thread?.contextObjectId) {
+        linkedProposal = await renderProposalForPrompt(thread.contextObjectId);
+      }
+
       return {
         thread: {
           id: threadResult.channel.id,
@@ -133,6 +148,9 @@ export const contextRouter = router({
               threadResult.channel.senderAgentId) ||
             undefined,
         },
+        ...(linkedProposal
+          ? { proposalId: linkedProposal.id, linkedProposal }
+          : {}),
         contextSummary: thread?.contextSummary ?? null,
         metadata: thread?.metadata ?? null,
         messages: messagesResult.messages.map((m) => ({

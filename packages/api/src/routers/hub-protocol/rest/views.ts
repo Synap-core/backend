@@ -18,6 +18,7 @@ import {
   hasScope,
   logger,
   resolveActorId,
+  resolveActingContext,
   type HubHono,
 } from "./_shared.js";
 
@@ -158,23 +159,30 @@ export function registerViewsRoutes(app: HubHono): void {
       sourceMessageId?: string;
     };
     try {
+      const acting = await resolveActingContext(c, {
+        userId: body.userId,
+        ...(typeof body.workspaceId === "string"
+          ? { workspaceId: body.workspaceId }
+          : {}),
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
       const actorResolution = await resolveActorId(
         resolvedAgentUserId,
-        body.userId
+        acting.userId
       );
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       const actorId = actorResolution.actorId;
       const caller = await getCaller(c, {
         userId: actorId,
-        workspaceId: body.workspaceId ?? null,
+        workspaceId: acting.workspaceId,
         sourceMessageId: body.sourceMessageId,
       });
       const result = await caller.views.createView({
-        userId: body.userId,
-        workspaceId: body.workspaceId ?? null,
+        userId: acting.userId,
+        workspaceId: acting.workspaceId,
         name: body.name,
         type: body.type,
         profileId: body.profileId,
@@ -212,24 +220,31 @@ export function registerViewsRoutes(app: HubHono): void {
       sourceMessageId?: string;
     };
     try {
+      const acting = await resolveActingContext(c, {
+        userId: body.userId,
+        ...(typeof body.workspaceId === "string"
+          ? { workspaceId: body.workspaceId }
+          : {}),
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
       const actorResolution = await resolveActorId(
         resolvedAgentUserId,
-        body.userId
+        acting.userId
       );
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       const actorId = actorResolution.actorId;
       const caller = await getCaller(c, {
         userId: actorId,
-        workspaceId: body.workspaceId,
+        workspaceId: acting.workspaceId,
         sourceMessageId: body.sourceMessageId,
       });
       const result = await caller.views.updateView({
-        userId: body.userId,
+        userId: acting.userId,
         viewId,
-        workspaceId: body.workspaceId,
+        workspaceId: acting.workspaceId ?? undefined,
         name: body.name,
         config: body.config,
         metadata: body.metadata,
@@ -261,20 +276,30 @@ export function registerViewsRoutes(app: HubHono): void {
       return c.json({ error: "Invalid JSON body" }, 400);
     }
 
-    const actorId = c.get("userId") as string;
-    if (!actorId) return c.json({ error: "Unauthorized" }, 401);
-
     try {
+      const acting = await resolveActingContext(c, {
+        userId: body?.userId,
+        ...(typeof body?.workspaceId === "string"
+          ? { workspaceId: body.workspaceId }
+          : {}),
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      if (!acting.workspaceId) {
+        return c.json({ error: "workspaceId is required" }, 400);
+      }
+      if (!acting.userId) {
+        return c.json({ error: "Authenticated user is required" }, 401);
+      }
       const caller = await getCaller(c, {
-        userId: actorId,
-        workspaceId: body.workspaceId,
+        userId: acting.userId,
+        workspaceId: acting.workspaceId,
         sourceMessageId: body.sourceMessageId,
       });
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
       const result = await caller.views.arrangeBento({
-        userId: body.userId,
-        workspaceId: body.workspaceId,
+        userId: acting.userId,
+        workspaceId: acting.workspaceId,
         viewId,
         widgets: body.widgets,
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),

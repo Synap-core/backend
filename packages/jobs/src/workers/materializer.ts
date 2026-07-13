@@ -14,6 +14,7 @@
  * - entity: create, update, delete
  * - entity_facet: attach, update, detach
  * - profile: create, update, delete
+ * - relation_def: create
  * - view: create, update, delete
  */
 
@@ -28,6 +29,7 @@ import {
   EventRepository,
   ViewRepository,
   ProfileRepository,
+  RelationDefRepository,
   FacetRepository,
   type ProfileScope,
   sql,
@@ -138,6 +140,15 @@ export async function handleMaterialize(
         break;
       case "profile":
         await materializeProfile(action, subjectId, userId, workspaceId, data);
+        break;
+      case "relation_def":
+        await materializeRelationDef(
+          action,
+          subjectId,
+          userId,
+          workspaceId,
+          data
+        );
         break;
       case "view":
         await materializeView(action, subjectId, userId, workspaceId, data);
@@ -525,16 +536,28 @@ async function materializeProfile(
       profileWorkspaceId = undefined;
     } else if (scope === "workspace") {
       profileWorkspaceId = workspaceId;
+    } else if (scope === "shared") {
+      profileWorkspaceId = workspaceId;
     } else if (scope === "user") {
       profileUserId = userId;
     }
 
     await profileRepo.create({
+      id: subjectId,
       slug: data.slug as string,
       displayName: (data.displayName as string) || (data.slug as string),
       parentProfileId: (data.parentProfileId as string) || undefined,
       uiHints: (data.uiHints as Record<string, unknown>) || undefined,
+      defaultValues:
+        (data.defaultValues as Record<string, unknown>) || undefined,
       scope: scope as ProfileScope,
+      entityScope: (data.entityScope as "pod" | "workspace") || "workspace",
+      profileKind: (data.profileKind as "kind" | "role") || "kind",
+      applicableKinds: Array.isArray(data.applicableKinds)
+        ? data.applicableKinds.filter(
+            (value): value is string => typeof value === "string"
+          )
+        : undefined,
       userId: profileUserId,
       workspaceId: profileWorkspaceId,
     });
@@ -547,6 +570,29 @@ async function materializeProfile(
   } else if (action === "delete") {
     await profileRepo.delete(subjectId);
   }
+}
+
+async function materializeRelationDef(
+  action: string,
+  subjectId: string,
+  userId: string,
+  workspaceId: string | undefined,
+  data: Record<string, unknown>
+): Promise<void> {
+  if (action !== "create" || !workspaceId) return;
+  const database = await getDb();
+  const repo = new RelationDefRepository(database);
+  await repo.create({
+    id: subjectId,
+    slug: data.slug as string,
+    displayName: (data.displayName as string) || (data.slug as string),
+    description: data.description as string | undefined,
+    workspaceId,
+    userId,
+    uiHints: (data.uiHints as Record<string, unknown>) || undefined,
+    isDirectional:
+      typeof data.isDirectional === "boolean" ? data.isDirectional : undefined,
+  });
 }
 
 /**

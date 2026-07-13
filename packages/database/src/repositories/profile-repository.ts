@@ -18,6 +18,7 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
 
 export interface CreateProfileInput {
+  id?: string;
   slug: string;
   displayName: string;
   parentProfileId?: string;
@@ -66,6 +67,12 @@ export interface CreateProfileInput {
   aiPosture?: AiPosture | null;
 }
 
+/** Optional narrowing for callers that already resolved profile identity. */
+export interface AccessibleProfileFilters {
+  ids?: string[];
+  slugs?: string[];
+}
+
 export class ProfileRepository {
   constructor(private db: PostgresJsDatabase<typeof schema>) {}
 
@@ -89,6 +96,7 @@ export class ProfileRepository {
     const [profile] = await this.db
       .insert(profiles)
       .values({
+        ...(input.id ? { id: input.id } : {}),
         slug: input.slug,
         displayName: input.displayName,
         parentProfileId: input.parentProfileId || null,
@@ -299,8 +307,17 @@ export class ProfileRepository {
    */
   async getAccessibleProfiles(
     userId: string,
-    workspaceId: string
+    workspaceId: string,
+    filters?: AccessibleProfileFilters
   ): Promise<Profile[]> {
+    // An explicit empty selection means no profile rows. This is useful for
+    // progressive schema reads and avoids emitting an invalid `IN ()` clause.
+    if (
+      (filters?.ids !== undefined && filters.ids.length === 0) ||
+      (filters?.slugs !== undefined && filters.slugs.length === 0)
+    ) {
+      return [];
+    }
     // A workspace-less context (capture/structure when no workspace is active,
     // hydration onboarding) passes "" here. The workspace-scoped predicates bind
     // workspaceId into UUID columns, so binding "" makes Postgres throw
@@ -364,11 +381,20 @@ export class ProfileRepository {
       );
     }
 
+    const selectionConditions = [
+      eq(profiles.isActive, true),
+      or(...scopeBranches),
+    ];
+    if (filters?.ids)
+      selectionConditions.push(inArray(profiles.id, filters.ids));
+    if (filters?.slugs)
+      selectionConditions.push(inArray(profiles.slug, filters.slugs));
+
     const rows = await this.db
       .selectDistinctOn([profiles.id], { p: profiles })
       .from(profiles)
       .leftJoin(profileWorkspaceAccess, joinCondition)
-      .where(and(eq(profiles.isActive, true), or(...scopeBranches)))
+      .where(and(...selectionConditions))
       .orderBy(profiles.id, profiles.displayName);
 
     return rows.map((r) => r.p);

@@ -19,12 +19,21 @@ import { listRuns, getRun } from "../services/runs/index.js";
 const flowType = z.enum(["automation", "playbook", "capture", "session"]);
 
 export const runsRouter = router({
-  /** Newest-first run feed across flows (or one flow via `flowType`/`flowId`). */
+  /** Newest-first run feed across flows (or one flow via `flowType`/`flowId`).
+   *  `scope` narrows to a workspace / project / entity lens at the DB (within the
+   *  user floor) — the Activity telescope's altitude filters. */
   list: protectedProcedure
     .input(
       z.object({
         flowType: flowType.optional(),
         flowId: z.string().uuid().optional(),
+        scope: z
+          .object({
+            workspaceId: z.string().uuid().optional(),
+            projectId: z.string().uuid().optional(),
+            subjectEntityId: z.string().uuid().optional(),
+          })
+          .optional(),
         limit: z.number().min(1).max(100).optional(),
       })
     )

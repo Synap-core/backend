@@ -1,190 +1,96 @@
-/**
- * User Entity State Repository
- *
- * Tracks user-specific interactions with entities and inbox items.
- * Uses itemId/itemType pattern to support multiple item types.
- */
-
-import { eq, and, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
+import type { UserEntityState } from "../schema/user-entity-state.js";
 import {
-  userEntityState,
-  type UserEntityState,
-} from "../schema/user-entity-state.js";
+  UserResourceStateRepository,
+  type UpdateUserResourceStateData,
+} from "./user-resource-state-repository.js";
 
-export interface UpdateUserEntityStateData {
-  starred?: boolean;
-  pinned?: boolean;
-  lastViewedAt?: Date;
+type LegacyItemType = "entity" | "inbox_item";
+
+function toLegacy(
+  state: Awaited<ReturnType<UserResourceStateRepository["get"]>>
+): UserEntityState | undefined {
+  if (!state) return undefined;
+  return {
+    ...state,
+    itemId: state.resourceId,
+    itemType: state.resourceType,
+    lastViewedAt: state.lastOpenedAt,
+    viewCount: state.openCount,
+  };
 }
 
+/** @deprecated Compatibility adapter. Use UserResourceStateRepository. */
 export class UserEntityStateRepository {
-  constructor(private db: PostgresJsDatabase<typeof schema>) {}
+  private readonly resources: UserResourceStateRepository;
 
-  /**
-   * Get or create user entity state
-   */
+  constructor(db: PostgresJsDatabase<typeof schema>) {
+    this.resources = new UserResourceStateRepository(db);
+  }
+
   async getOrCreate(
     userId: string,
     itemId: string,
-    itemType: "entity" | "inbox_item" = "entity"
+    itemType: LegacyItemType = "entity"
   ): Promise<UserEntityState> {
-    // Try to get existing
-    const [existing] = await this.db
-      .select()
-      .from(userEntityState)
-      .where(
-        and(
-          eq(userEntityState.userId, userId),
-          eq(userEntityState.itemId, itemId),
-          eq(userEntityState.itemType, itemType)
-        )
-      )
-      .limit(1);
-
-    if (existing) return existing;
-
-    // Create new
-    const [state] = await this.db
-      .insert(userEntityState)
-      .values({
-        userId,
-        itemId,
-        itemType,
-        starred: false,
-        pinned: false,
-        viewCount: 0,
-      })
-      .returning();
-
-    return state;
+    const existing = await this.resources.get(userId, itemId, itemType);
+    const state =
+      existing ?? (await this.resources.update(userId, itemId, itemType, {}));
+    return toLegacy(state)!;
   }
 
-  /**
-   * Update user entity state (starred/pinned)
-   */
   async update(
     userId: string,
     itemId: string,
-    data: UpdateUserEntityStateData,
-    itemType: "entity" | "inbox_item" = "entity"
+    data: UpdateUserResourceStateData & { lastViewedAt?: Date },
+    itemType: LegacyItemType = "entity"
   ): Promise<UserEntityState> {
-    const [state] = await this.db
-      .insert(userEntityState)
-      .values({
-        userId,
-        itemId,
-        itemType,
-        ...data,
-      })
-      .onConflictDoUpdate({
-        target: [
-          userEntityState.userId,
-          userEntityState.itemId,
-          userEntityState.itemType,
-        ],
-        set: {
-          ...data,
-          updatedAt: new Date(),
-        },
-      })
-      .returning();
-
-    return state;
+    const { lastViewedAt, ...rest } = data;
+    const state = await this.resources.update(userId, itemId, itemType, {
+      ...rest,
+      ...(lastViewedAt ? { lastOpenedAt: lastViewedAt } : {}),
+    });
+    return toLegacy(state)!;
   }
 
-  /**
-   * Track entity view (high-frequency, direct write)
-   */
   async trackView(
     userId: string,
     itemId: string,
-    itemType: "entity" | "inbox_item" = "entity"
+    itemType: LegacyItemType = "entity"
   ): Promise<void> {
-    await this.db
-      .insert(userEntityState)
-      .values({
-        userId,
-        itemId,
-        itemType,
-        lastViewedAt: new Date(),
-        viewCount: 1,
-      })
-      .onConflictDoUpdate({
-        target: [
-          userEntityState.userId,
-          userEntityState.itemId,
-          userEntityState.itemType,
-        ],
-        set: {
-          lastViewedAt: new Date(),
-          viewCount: sql`${userEntityState.viewCount} + 1`,
-          updatedAt: new Date(),
-        },
-      });
+    await this.resources.recordOpen(userId, itemId, itemType);
   }
 
-  /**
-   * Get user's starred items
-   */
   async getStarred(
     userId: string,
-    itemType?: "entity" | "inbox_item"
+    itemType?: LegacyItemType
   ): Promise<UserEntityState[]> {
-    const conditions = [
-      eq(userEntityState.userId, userId),
-      eq(userEntityState.starred, true),
-    ];
-
-    if (itemType) {
-      conditions.push(eq(userEntityState.itemType, itemType));
-    }
-
-    return await this.db
-      .select()
-      .from(userEntityState)
-      .where(and(...conditions));
+    const states = await this.resources.listFlagged(
+      userId,
+      "starred",
+      itemType
+    );
+    return states.map((state) => toLegacy(state)!);
   }
 
-  /**
-   * Get user's pinned items
-   */
   async getPinned(
     userId: string,
-    itemType?: "entity" | "inbox_item"
+    itemType?: LegacyItemType
   ): Promise<UserEntityState[]> {
-    const conditions = [
-      eq(userEntityState.userId, userId),
-      eq(userEntityState.pinned, true),
-    ];
-
-    if (itemType) {
-      conditions.push(eq(userEntityState.itemType, itemType));
-    }
-
-    return await this.db
-      .select()
-      .from(userEntityState)
-      .where(and(...conditions));
+    const states = await this.resources.listFlagged(userId, "pinned", itemType);
+    return states.map((state) => toLegacy(state)!);
   }
 
-  /**
-   * Delete user entity state
-   */
   async delete(
     userId: string,
     itemId: string,
-    itemType: "entity" | "inbox_item" = "entity"
+    itemType: LegacyItemType = "entity"
   ): Promise<void> {
-    await this.db
-      .delete(userEntityState)
-      .where(
-        and(
-          eq(userEntityState.userId, userId),
-          eq(userEntityState.itemId, itemId),
-          eq(userEntityState.itemType, itemType)
-        )
-      );
+    await this.resources.delete(userId, itemId, itemType);
   }
 }
+
+export type UpdateUserEntityStateData = UpdateUserResourceStateData & {
+  lastViewedAt?: Date;
+};

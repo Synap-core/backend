@@ -52,9 +52,10 @@ export const documentsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const userId = ctx.userId!;
       const documentId = randomUUID();
       // Prefer explicit agentUserId from request; API key owner is a system account.
-      const agentUserId = input.agentUserId ?? input.userId;
+      const agentUserId = input.agentUserId ?? userId;
       const correlationId = randomUUID();
       const requestedEvent = await auditLog({
         subjectType: "document",
@@ -69,7 +70,7 @@ export const documentsRouter = router({
           title: input.title,
           type: input.type,
           workspaceId: input.workspaceId ?? null,
-          userId: input.userId,
+          userId,
         },
       });
 
@@ -93,7 +94,7 @@ export const documentsRouter = router({
           // Content stored inline — written to MinIO only when approved
           content: input.content,
           workspaceId: input.workspaceId ?? null,
-          userId: input.userId,
+          userId,
         },
       });
 
@@ -124,7 +125,7 @@ export const documentsRouter = router({
       const extension = docType === "markdown" ? "md" : docType;
       const content = input.content || "";
       const storageKey = storage.buildPath(
-        input.userId,
+        userId,
         "document",
         documentId,
         extension
@@ -134,7 +135,7 @@ export const documentsRouter = router({
       });
       const versionId = randomUUID();
       const snapshot = await uploadDocumentVersionSnapshot({
-        userId: input.userId,
+        userId,
         documentId,
         versionId,
         documentType: docType,
@@ -152,7 +153,7 @@ export const documentsRouter = router({
           storageKey: metadata.path,
           size: metadata.size,
           mimeType: "text/markdown",
-          userId: input.userId,
+          userId,
           workspaceId: input.workspaceId ?? null,
           currentVersion: 1,
           lastSavedVersion: 1,
@@ -267,6 +268,7 @@ export const documentsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const userId = ctx.userId!;
       const { db, eq } = await import("@synap/database");
       const { documents, entities } = await import("@synap/database/schema");
 
@@ -283,21 +285,27 @@ export const documentsRouter = router({
           message: "Document not found",
         });
       }
+      if (doc.userId !== userId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Access denied to document",
+        });
+      }
 
       const entity = await db.query.entities.findFirst({
         where: eq(entities.documentId, input.documentId),
       });
 
-      const workspaceId = entity?.workspaceId || input.userId;
+      const workspaceId = entity?.workspaceId ?? doc.workspaceId ?? null;
 
-      const createdBy = input.agentUserId ?? input.userId;
+      const createdBy = input.agentUserId ?? userId;
       const sourceMessageId =
         input.sourceMessageId ?? ctx.sourceMessageId ?? undefined;
       const threadId = input.threadId ?? undefined;
 
       const sessionId = ctx.sessionId ?? undefined;
       const { proposal } = await createEventBackedProposal({
-        userId: createdBy,
+        userId,
         workspaceId,
         targetType: "document",
         targetId: input.documentId,
@@ -323,7 +331,7 @@ export const documentsRouter = router({
       });
 
       const { broadcastSuccess } = await import("@synap/jobs");
-      await broadcastSuccess(input.userId, "ai:proposal", {
+      await broadcastSuccess(userId, "ai:proposal", {
         proposalId: proposal.id,
         operation: "create",
       });

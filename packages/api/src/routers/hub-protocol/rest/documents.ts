@@ -17,6 +17,7 @@ import {
   hasScope,
   logger,
   resolveActorId,
+  resolveActingContext,
   verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
@@ -110,23 +111,30 @@ export function registerDocumentsRoutes(app: HubHono): void {
       sessionId?: string;
     };
     try {
+      const acting = await resolveActingContext(c, {
+        userId: body.userId,
+        ...(typeof body.workspaceId === "string"
+          ? { workspaceId: body.workspaceId }
+          : {}),
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const actorResolution = await resolveActorId(
         body.agentUserId,
-        body.userId
+        acting.userId
       );
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
       // resolveActorId kept for its validation side-effect; return value unused.
       const sessionId = body.sessionId ?? c.req.header("x-session-id") ?? null;
       const caller = await getCaller(c, {
-        workspaceId: body.workspaceId ?? null,
-        userId: body.userId,
+        workspaceId: acting.workspaceId,
+        userId: acting.userId,
         sourceMessageId: body.sourceMessageId,
         sessionId,
       });
       const result = await caller.documents.createDocument({
-        userId: body.userId,
-        workspaceId: body.workspaceId ?? null,
+        userId: acting.userId,
+        workspaceId: acting.workspaceId,
         title: body.title,
         content: body.content ?? "",
         type: body.type ?? "markdown",
@@ -151,10 +159,8 @@ export function registerDocumentsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
     const documentId = c.req.param("documentId");
-    const userId = c.req.query("userId");
-    if (!userId) {
-      return c.json({ error: "userId query is required" }, 400);
-    }
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
     try {
       // A single-document fetch resolves visibility from the user floor —
       // verified below against the document's OWN workspace. No lens is threaded
@@ -215,9 +221,8 @@ export function registerDocumentsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
     const documentId = c.req.param("documentId");
-    const userId =
-      c.req.query("userId") ?? (c.get("userId") as string | undefined);
-    if (!userId) return c.json({ error: "userId is required" }, 400);
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
 
     try {
       const caller = await getCaller(c, { userId });
@@ -290,10 +295,15 @@ export function registerDocumentsRoutes(app: HubHono): void {
     } = body.data;
 
     try {
+      const acting = await resolveActingContext(c, { userId });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = bodyAgentUserId ?? ctxAgentUserId;
       // Document ownership check in tRPC uses the caller's userId — pass the human.
-      const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
+      const actorResolution = await resolveActorId(
+        resolvedAgentUserId,
+        acting.userId
+      );
       if ("error" in actorResolution)
         return c.json({ error: actorResolution.error }, 400);
 
@@ -310,17 +320,17 @@ export function registerDocumentsRoutes(app: HubHono): void {
       const sessionId =
         body.data.sessionId ?? c.req.header("x-session-id") ?? null;
       const caller = await getCaller(c, {
-        userId,
+        userId: acting.userId,
         sourceMessageId,
         sessionId,
       });
       const current = await caller.documents.getDocument({
         documentId,
-        userId,
+        userId: acting.userId,
       });
       const result = await caller.documents.createDocumentProposal({
         documentId,
-        userId,
+        userId: acting.userId,
         agentUserId: resolvedAgentUserId,
         sourceMessageId,
         proposalType: "ai_edit",
@@ -371,6 +381,16 @@ export function registerDocumentsRoutes(app: HubHono): void {
       originalContent?: string;
     };
     try {
+      const acting = await resolveActingContext(c, { userId: body.userId });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
+      const actorResolution = await resolveActorId(
+        resolvedAgentUserId,
+        acting.userId
+      );
+      if ("error" in actorResolution)
+        return c.json({ error: actorResolution.error }, 400);
       const sessionId = body.sessionId ?? c.req.header("x-session-id") ?? null;
       const caller = await getCaller(c, {
         sourceMessageId: body.sourceMessageId,
@@ -378,8 +398,8 @@ export function registerDocumentsRoutes(app: HubHono): void {
       });
       const result = await caller.documents.createDocumentProposal({
         documentId: body.documentId,
-        userId: body.userId,
-        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        userId: acting.userId,
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         threadId: body.threadId,
         sourceMessageId: body.sourceMessageId,
         proposalType: body.proposalType ?? "ai_edit",
