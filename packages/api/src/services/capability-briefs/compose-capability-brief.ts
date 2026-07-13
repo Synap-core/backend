@@ -153,6 +153,21 @@ const TOOL_METADATA: Record<
     postureSlug: null,
     isWrite: false,
   },
+  synap_list_profiles: {
+    governance: null, // read-only discovery, no checkPermissionOrPropose door
+    postureSlug: null,
+    isWrite: false,
+  },
+  synap_attach_facet: {
+    governance: { subjectType: "facet", action: "attach" },
+    postureSlug: null, // varies by the target role's own profileSlug — no single kind
+    isWrite: true,
+  },
+  synap_detach_facet: {
+    governance: { subjectType: "facet", action: "detach" },
+    postureSlug: null,
+    isWrite: true,
+  },
 };
 
 // ── Skills lookup cache (teaching core) — 60s TTL, keyed by the queried key set ──

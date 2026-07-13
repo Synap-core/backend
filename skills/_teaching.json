@@ -287,10 +287,18 @@
     "summary": "Entity scope: pod-wide vs workspace-scoped profiles."
   },
   "synap-schema/extend-vs-create": {
-    "teachesTools": ["create_property_def", "create_profile"],
+    "teachesTools": [
+      "create_property_def",
+      "create_profile",
+      "entity.create",
+      "create_entity",
+      "entity_facet.attach",
+      "entity_facet.detach",
+      "list_profiles"
+    ],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "When to extend an existing profile vs create a new one."
+    "summary": "When to extend an existing profile, create a new one, or attach a facet (Kind + Facets, the deal precedent)."
   },
   "synap-schema/more": {
     "teachesTools": [],
