@@ -293,8 +293,24 @@ export class EntityRepository extends BaseRepository<
       }
       // Validate the role's properties against the ROLE profile up front, so
       // a bad payload fails BEFORE the kind entity is inserted (no orphan).
+      // Merge data.title in first — a converted role can carry a vestigial
+      // required `title` def left over from when it was a kind (e.g.
+      // `contact`), and the caller supplies title at the top level (the
+      // common frontend/API pattern), not inside `properties`. Mirrors the
+      // identical merge the non-role path below already does, and does NOT
+      // disable enforceRequired wholesale (unlike attach()'s enforceRequired:
+      // false) — a role's OWN required fields (e.g. knowledge's ek_type)
+      // must still fail loud here; only the vestigial-title case is real.
+      const roleTitleAlreadyInProps =
+        data.properties && "title" in data.properties;
+      const propsToValidateForRole: Record<string, unknown> = {
+        ...data.properties,
+      };
+      if (data.title !== undefined && !roleTitleAlreadyInProps) {
+        propsToValidateForRole["title"] = data.title;
+      }
       const facetValidation = await this.propertyValidation.validateProperties(
-        data.properties ?? {},
+        propsToValidateForRole,
         profile.id,
         data.workspaceId ?? null
       );
@@ -308,7 +324,13 @@ export class EntityRepository extends BaseRepository<
         );
       }
       roleFacetProfile = profile;
-      roleFacetProperties = facetValidation.normalized;
+      roleFacetProperties = { ...facetValidation.normalized };
+      if (!roleTitleAlreadyInProps) {
+        // title was merged in ONLY to satisfy a vestigial required def — it
+        // belongs on the kind entity (see comment below), not duplicated
+        // onto the facet's own properties.
+        delete roleFacetProperties["title"];
+      }
       profile = target;
       // The role's data lives on the facet; the kind entity carries only the
       // identity columns (title/preview/document).
