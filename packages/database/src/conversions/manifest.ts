@@ -176,6 +176,23 @@ export interface ConversionManifest {
   ops: ConversionOp[];
 }
 
+// Shared propertyMapping for the knowledge/research family's w4 conversion
+// and its w5 drift-repair re-run (same fields, fresh opKey — see the W5
+// section below). One literal object referenced by both ops so the two can
+// never silently drift apart.
+const KNOWLEDGE_PROPERTY_MAPPING: Record<string, string> = {
+  ek_type: "ek_type",
+  ek_claim: "ek_claim",
+  ek_why: "ek_why",
+  ek_evidence: "ek_evidence",
+};
+const RESEARCH_PROPERTY_MAPPING: Record<string, string> = {
+  researchStatus: "researchStatus",
+  questionId: "questionId",
+  conclusion: "conclusion",
+  researchConfidence: "researchConfidence",
+};
+
 /**
  * The Wave 3A manifest.
  *
@@ -529,12 +546,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       slug: "research",
       targetKindSlug: "item",
       applicableKinds: ["item"],
-      propertyMapping: {
-        researchStatus: "researchStatus",
-        questionId: "questionId",
-        conclusion: "conclusion",
-        researchConfidence: "researchConfidence",
-      },
+      propertyMapping: RESEARCH_PROPERTY_MAPPING,
       statusFrom: "researchStatus",
       contextFromProperty: "projectId",
     },
@@ -606,12 +618,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       slug: "knowledge",
       targetKindSlug: "item",
       applicableKinds: ["item"],
-      propertyMapping: {
-        ek_type: "ek_type",
-        ek_claim: "ek_claim",
-        ek_why: "ek_why",
-        ek_evidence: "ek_evidence",
-      },
+      propertyMapping: KNOWLEDGE_PROPERTY_MAPPING,
     },
 
     // Duplicate-row note: the live perso pod has TWO `knowledge` profile
@@ -682,12 +689,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       slug: "knowledge",
       targetKindSlug: "item",
       applicableKinds: ["item"],
-      propertyMapping: {
-        ek_type: "ek_type",
-        ek_claim: "ek_claim",
-        ek_why: "ek_why",
-        ek_evidence: "ek_evidence",
-      },
+      propertyMapping: KNOWLEDGE_PROPERTY_MAPPING,
     },
     {
       op: "convertToFacet",
@@ -695,12 +697,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       slug: "research",
       targetKindSlug: "item",
       applicableKinds: ["item"],
-      propertyMapping: {
-        researchStatus: "researchStatus",
-        questionId: "questionId",
-        conclusion: "conclusion",
-        researchConfidence: "researchConfidence",
-      },
+      propertyMapping: RESEARCH_PROPERTY_MAPPING,
       statusFrom: "researchStatus",
       contextFromProperty: "projectId",
     },

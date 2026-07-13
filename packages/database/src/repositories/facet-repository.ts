@@ -47,6 +47,18 @@ export interface AttachFacetInput {
    */
   skipValidation?: boolean;
 
+  /**
+   * Suppress the repository's standard `entity_facets.create.completed`
+   * event. Callers that run `attach()` inside a caller-owned transaction
+   * (e.g. `EntityRepository.create`'s role-adapter) pass `skipEvent: true`
+   * because `this.eventRepo` writes on its OWN connection, not the passed-in
+   * `tx` — emitting from inside the transaction would durably record the
+   * event even if the transaction later rolls back. The caller is
+   * responsible for emitting the event itself, after the transaction
+   * commits, via `emitAttachCompletedEvent()`.
+   */
+  skipEvent?: boolean;
+
   // Provenance — mirrors CreateEntityInput.
   createdByKind?: "human" | "ai_agent" | "system";
   createdByUserId?: string;
@@ -194,7 +206,9 @@ export class FacetRepository extends BaseRepository<
         } as NewEntityFacet)
         .returning();
 
-      await this.emitCompleted("create", facet, userId);
+      if (!data.skipEvent) {
+        await this.emitCompleted("create", facet, userId);
+      }
       return facet;
     } catch (error) {
       if (this.isUniqueViolation(error)) {
@@ -208,6 +222,19 @@ export class FacetRepository extends BaseRepository<
       }
       throw error;
     }
+  }
+
+  /**
+   * Emit the `entity_facets.create.completed` event for a facet attached
+   * with `skipEvent: true`. Call this on a FacetRepository instance built
+   * with the OUTER (non-transactional) db — after the caller's transaction
+   * has committed — never from inside the transaction itself.
+   */
+  async emitAttachCompletedEvent(
+    facet: EntityFacet,
+    userId: string
+  ): Promise<void> {
+    await this.emitCompleted("create", facet, userId);
   }
 
   /** BaseRepository contract — delegates to `attach()` (the real name). */

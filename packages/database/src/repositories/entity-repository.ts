@@ -11,6 +11,7 @@ import type * as schema from "../schema/index.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import { FacetRepository } from "./facet-repository.js";
+import type { EntityFacet } from "../schema/entity-facets.js";
 import type { Entity, NewEntity } from "../schema/entities.js";
 import {
   ProfileResolutionService,
@@ -255,6 +256,20 @@ export class EntityRepository extends BaseRepository<
     // the attach door instead.
     let roleFacetProfile: typeof profile | null = null;
     let roleFacetProperties: Record<string, unknown> = {};
+    if (profile.profileKind === "role" && data.skipValidation) {
+      // skipValidation (trusted seeds/imports) intentionally bypasses the
+      // adapter — but that means a seed/template referencing a role slug
+      // directly reintroduces the exact drift this feature exists to close,
+      // silently. No shipped automation/template does this today (checked),
+      // but there's no structural guard against a future one doing so — log
+      // loud so it's visible in practice instead of a quiet ontology drift.
+      console.warn(
+        `EntityRepository.create: skipValidation created an entity directly ` +
+          `on role profile '${profile.slug}' (profileId=${profile.id}) — this ` +
+          `bypasses the role→kind+facet adapter and violates one-entity-one-kind. ` +
+          `The caller should target the role's applicable kind and attach '${profile.slug}' as a facet instead.`
+      );
+    }
     if (profile.profileKind === "role" && !data.skipValidation) {
       const applicable = profile.applicableKinds ?? [];
       if (applicable.length !== 1) {
@@ -387,13 +402,22 @@ export class EntityRepository extends BaseRepository<
       // the stricter 1a check is deliberate: legacy capture flows depend on
       // required-def failures like a missing ek_type surfacing early).
       const roleProfileId = roleFacetProfile.id;
+      // The facet's own completed event must NOT fire from inside this
+      // transaction: EventRepository writes on its own connection, separate
+      // from `tx` — an in-transaction emit would durably record the event
+      // even if the transaction later fails to commit. attach() is called
+      // with skipEvent:true; the facet row is captured and its event is
+      // emitted below, once the transaction has actually resolved — the
+      // same ordering this method already uses for the entity's own event
+      // (emitCompleted after, never inside, the write).
+      let attachedFacet: EntityFacet | undefined;
       entity = await this.db.transaction(async (tx: any) => {
         const [row] = await tx
           .insert(entities)
           .values(insertValues)
           .returning();
         const facetRepo = new FacetRepository(tx, this.eventRepo);
-        await facetRepo.attach(
+        attachedFacet = await facetRepo.attach(
           {
             entityId: row.id,
             profileId: roleProfileId,
@@ -401,6 +425,7 @@ export class EntityRepository extends BaseRepository<
             workspaceId: effectiveWorkspaceId,
             properties: roleFacetProperties,
             skipValidation: true,
+            skipEvent: true,
             createdByKind: provenance.createdByKind,
             createdByUserId: provenance.createdByUserId,
             agentUserId: data.agentUserId,
@@ -411,6 +436,10 @@ export class EntityRepository extends BaseRepository<
         );
         return row as Entity;
       });
+      if (attachedFacet) {
+        const outerFacetRepo = new FacetRepository(this.db, this.eventRepo);
+        await outerFacetRepo.emitAttachCompletedEvent(attachedFacet, userId);
+      }
     } else {
       const [row] = await this.db
         .insert(entities)
