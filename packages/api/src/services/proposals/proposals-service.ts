@@ -67,22 +67,29 @@ export async function countPendingProposals(
 }
 
 /**
- * Revise the human-readable `summary` / `reasoning` COLUMNS of a still-pending
- * proposal. No-op fields are ignored by the caller (which requires at least
- * one). Only pending proposals are touched (the WHERE guards it).
+ * Revise the human-readable `summary` / `reasoning` of a still-pending
+ * proposal. These are NOT columns on `proposals` — they live inside the
+ * `data` JSONB payload (read back via `request.summary` / `request.reasoning`
+ * in `buildProposalReviewModel`) — so the update merges into `data` rather
+ * than setting phantom columns. No-op fields are ignored by the caller
+ * (which requires at least one). Only pending proposals are touched (the
+ * WHERE guards it).
  */
 export async function reviseProposal(params: {
   proposalId: string;
   summary?: string;
   reasoning?: string;
 }): Promise<void> {
-  const updateData: { summary?: string; reasoning?: string } = {};
-  if (params.summary !== undefined) updateData.summary = params.summary;
-  if (params.reasoning !== undefined) updateData.reasoning = params.reasoning;
+  const patch: { summary?: string; reasoning?: string } = {};
+  if (params.summary !== undefined) patch.summary = params.summary;
+  if (params.reasoning !== undefined) patch.reasoning = params.reasoning;
 
   await db
     .update(proposals)
-    .set({ ...updateData, updatedAt: new Date() })
+    .set({
+      data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`,
+      updatedAt: new Date(),
+    })
     .where(
       and(
         eq(proposals.id, params.proposalId),

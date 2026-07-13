@@ -52,6 +52,7 @@ import {
   SYSTEM_RELATION_TYPES,
   inArray,
   loadFacetSlugsBatch,
+  isNull,
 } from "@synap/database";
 import {
   relations,
@@ -70,9 +71,10 @@ import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { getLinksFor } from "../services/links/links-service.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
-import { VISIBLE_TO } from "../utils/project-scope.js";
+import { VISIBLE_TO, accessScopeWhere } from "../utils/project-scope.js";
 import { auditLog } from "../utils/audit-log.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
+import { workspaceLensWhere } from "../utils/user-visible-where.js";
 import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
@@ -81,6 +83,11 @@ import {
   syncRelationToPropertyOnDelete,
 } from "../utils/property-relation-sync.js";
 import { inheritRelationWorkspaceId } from "../lib/relation-workspace-inherit.js";
+import {
+  filterUnavailableEntityConnections,
+  structuralNeighbor,
+  type EntityConnection,
+} from "../services/object-graph/entity-connections.js";
 
 /**
  * Administer-the-anchor authz (chantier α, GO-LIVE control #1). Granting anchor
@@ -109,6 +116,46 @@ async function assertAnchorAdmin(
  * Direction schema for relation queries
  */
 const DirectionSchema = z.enum(["source", "target", "both"]).default("both");
+
+/**
+ * Entity rows use the data-table access resolver: pod-personal rows stay
+ * owner-gated, workspace rows follow membership, and exposed rows remain
+ * visible through their anchor. The optional workspace is a narrowing lens.
+ */
+function entityConnectionVisibilityWhere(
+  userId: string,
+  workspaceId?: string | null
+) {
+  return accessScopeWhere({
+    workspaceIdColumn: entities.workspaceId,
+    entityIdColumn: entities.id,
+    ownerColumn: entities.userId,
+    userId,
+    workspaceLens: workspaceId,
+  });
+}
+
+/** Channels have their own visibility rules because a NULL workspace is private. */
+function channelConnectionVisibilityWhere(
+  userId: string,
+  workspaceId?: string | null
+) {
+  if (workspaceId === undefined) return channelVisibilityWhere(userId);
+  if (workspaceId === null) {
+    return and(isNull(channels.workspaceId), eq(channels.userId, userId));
+  }
+  return and(
+    eq(channels.workspaceId, workspaceId),
+    channelVisibilityWhere(userId)
+  );
+}
+
+function focusSessionConnectionVisibilityWhere(workspaceId?: string | null) {
+  if (workspaceId === undefined) return undefined;
+  return workspaceId === null
+    ? isNull(focusSessions.workspaceId)
+    : eq(focusSessions.workspaceId, workspaceId);
+}
 
 /**
  * Generic built-in relation types introduced by "impact-aware writes". These
@@ -824,17 +871,17 @@ export const relationsRouter = router({
     }),
 
   /**
-   * Get all connections for an entity — unified across three sources:
+   * Get all connections for an entity across the complete local graph:
    *
    * 1. **Semantic graph relations** (`relations` table) — typed graph edges
    *    created manually, by AI, or via the whiteboard.
    *
-   * 2. **Structural property links** (`entity_property_index`) — entities whose
-   *    `entity_id` properties point to this entity. These come from the profile
-   *    schema and represent structural "belongs to / assigned to" style links.
+   * 2. **Structural property links** (`entity_property_index`) — inbound and
+   *    outbound `entity_id` properties from the profile schema.
    *
-   * 3. **Channel connections** (`channel_context_items`) — channels that
-   *    created, updated, or referenced this entity.
+   * 3. **Channel connections** — channels that touched or are about the entity.
+   *
+   * 4. **Focus sessions** — sessions whose subject is this entity.
    *
    * Use this endpoint to build a unified "Connections" panel on an entity card
    * or to traverse the full knowledge graph around any entity.
@@ -869,6 +916,11 @@ export const relationsRouter = router({
           // multi-user pod (the agent only ever sees ITS operator's data).
           where: and(
             eq(relations.userId, ctx.userId),
+            workspaceLensWhere(
+              relations.workspaceId,
+              ctx.userId,
+              input.workspaceId
+            ),
             or(
               eq(relations.sourceEntityId, input.entityId),
               eq(relations.targetEntityId, input.entityId)
@@ -878,34 +930,60 @@ export const relationsRouter = router({
           limit: input.limit,
         }),
 
-        // ── 2. Structural property links (reverse lookup via index) ──────────
-        // Find all entities whose entity_id properties point TO this entity.
-        // Uses the entity_property_index.value_entity_id column (indexed).
+        // ── 2. Structural property links (both directions via index) ────────
+        // Find entity_id properties pointing TO this entity and properties ON
+        // this entity that point elsewhere. The source entity is joined here so
+        // deleted/inaccessible inbound rows never become graph neighbours.
         db
           .select({
             sourceEntityId: entityPropertyIndex.entityId,
+            targetEntityId: entityPropertyIndex.valueEntityId,
             propertyDefId: entityPropertyIndex.propertyDefId,
             propertySlug: propertyDefs.slug,
             propertyUiHints: propertyDefs.uiHints,
           })
           .from(entityPropertyIndex)
+          .innerJoin(entities, eq(entityPropertyIndex.entityId, entities.id))
           .innerJoin(
             propertyDefs,
             eq(entityPropertyIndex.propertyDefId, propertyDefs.id)
           )
-          .where(eq(entityPropertyIndex.valueEntityId, input.entityId))
+          .where(
+            and(
+              isNull(entities.deletedAt),
+              entityConnectionVisibilityWhere(ctx.userId, input.workspaceId),
+              or(
+                eq(entityPropertyIndex.entityId, input.entityId),
+                eq(entityPropertyIndex.valueEntityId, input.entityId)
+              )
+            )
+          )
           .limit(input.limit),
 
         // ── 3. Channel connections ───────────────────────────────────────────
-        db.query.channelContextItems.findMany({
-          where: and(
-            eq(channelContextItems.objectId, input.entityId),
-            eq(channelContextItems.objectType, ChannelContextObjectType.ENTITY),
-            eq(channelContextItems.userId, ctx.userId)
-          ),
-          orderBy: (ci, { desc }) => [desc(ci.createdAt)],
-          limit: input.limit,
-        }),
+        db
+          .select({
+            channelId: channelContextItems.channelId,
+            relationshipType: channelContextItems.relationshipType,
+            createdAt: channelContextItems.createdAt,
+            channelTitle: channels.title,
+            channelWorkspaceId: channels.workspaceId,
+          })
+          .from(channelContextItems)
+          .innerJoin(channels, eq(channelContextItems.channelId, channels.id))
+          .where(
+            and(
+              eq(channelContextItems.objectId, input.entityId),
+              eq(
+                channelContextItems.objectType,
+                ChannelContextObjectType.ENTITY
+              ),
+              eq(channelContextItems.userId, ctx.userId),
+              channelConnectionVisibilityWhere(ctx.userId, input.workspaceId)
+            )
+          )
+          .orderBy(desc(channelContextItems.createdAt))
+          .limit(input.limit),
 
         // ── 4. Channels whose context IS this entity ─────────────────────────
         // channels.contextObjectId = entityId: the channel opened ON the entity
@@ -922,7 +1000,7 @@ export const relationsRouter = router({
             // does (which hits /channels → channelVisibilityWhere). Owner-pinning
             // here made a workspace member see the channel in the IS tool but not
             // in the graph.
-            channelVisibilityWhere(ctx.userId)
+            channelConnectionVisibilityWhere(ctx.userId, input.workspaceId)
           ),
           orderBy: (ch, { desc }) => [desc(ch.createdAt)],
           limit: input.limit,
@@ -934,7 +1012,8 @@ export const relationsRouter = router({
         db.query.focusSessions.findMany({
           where: and(
             eq(focusSessions.subjectEntityId, input.entityId),
-            eq(focusSessions.userId, ctx.userId)
+            eq(focusSessions.userId, ctx.userId),
+            focusSessionConnectionVisibilityWhere(input.workspaceId)
           ),
           orderBy: (fs, { desc }) => [desc(fs.startedAt)],
           limit: input.limit,
@@ -953,7 +1032,10 @@ export const relationsRouter = router({
         if (otherId !== null) entityIdsToFetch.add(otherId);
       }
       for (const link of propertyLinks) {
-        entityIdsToFetch.add(link.sourceEntityId);
+        if (link.targetEntityId !== null) {
+          entityIdsToFetch.add(link.sourceEntityId);
+          entityIdsToFetch.add(link.targetEntityId);
+        }
       }
 
       // Fetch all referenced entities in one query, plus their live facet
@@ -967,8 +1049,9 @@ export const relationsRouter = router({
       if (entityIdsToFetch.size > 0) {
         const fetched = await db.query.entities.findMany({
           where: and(
-            eq(entities.userId, ctx.userId),
-            or(...[...entityIdsToFetch].map((id) => eq(entities.id, id)))
+            inArray(entities.id, [...entityIdsToFetch]),
+            isNull(entities.deletedAt),
+            entityConnectionVisibilityWhere(ctx.userId, input.workspaceId)
           ),
         });
         const facetSlugsByEntity = await loadFacetSlugsBatch(
@@ -986,33 +1069,7 @@ export const relationsRouter = router({
 
       // ── Shape the result ──────────────────────────────────────────────────
 
-      type Connection = {
-        entityId: string;
-        entity: ConnectedEntity | null;
-        label: string;
-        direction: "outgoing" | "incoming" | "structural";
-        source:
-          | "graph"
-          | "property"
-          | "thread"
-          | "context_channel"
-          | "focus_session";
-        relationType?: string;
-        /** Slug of the property that holds the link (e.g. "assignee", "project") */
-        propertySlug?: string;
-        /** Human-readable label of that property */
-        propertyLabel?: string;
-        channelId?: string;
-        channelRelationshipType?: string;
-        /** For context_channel: the channel title. */
-        channelTitle?: string | null;
-        /** For focus_session: the session goal and lifecycle state. */
-        focusSessionGoal?: string;
-        focusSessionStatus?: string;
-        createdAt?: Date | null;
-      };
-
-      const connections: Connection[] = [];
+      const connections: EntityConnection[] = [];
 
       for (const rel of graphRelations) {
         const isOutgoing = rel.sourceEntityId === input.entityId;
@@ -1026,20 +1083,27 @@ export const relationsRouter = router({
           label: rel.type,
           direction: isOutgoing ? "outgoing" : "incoming",
           source: "graph",
+          relationId: rel.id,
           relationType: rel.type,
           createdAt: rel.createdAt,
         });
       }
 
       for (const link of propertyLinks) {
+        const structural = structuralNeighbor(
+          input.entityId,
+          link.sourceEntityId,
+          link.targetEntityId
+        );
+        if (!structural) continue;
         const uiHints = (link.propertyUiHints ?? {}) as Record<string, unknown>;
         const propertyLabel =
           (uiHints.label as string | undefined) ?? link.propertySlug ?? "link";
         connections.push({
-          entityId: link.sourceEntityId,
-          entity: entityMap.get(link.sourceEntityId) ?? null,
+          entityId: structural.entityId,
+          entity: entityMap.get(structural.entityId) ?? null,
           label: propertyLabel,
-          direction: "structural",
+          direction: structural.direction,
           source: "property",
           propertySlug: link.propertySlug ?? undefined,
           propertyLabel,
@@ -1049,13 +1113,15 @@ export const relationsRouter = router({
 
       for (const ci of channelLinks) {
         connections.push({
-          entityId: ci.objectId,
+          entityId: ci.channelId,
           entity: null,
-          label: ci.relationshipType,
+          label: ci.channelTitle ?? ci.relationshipType,
           direction: "incoming",
           source: "thread",
           channelId: ci.channelId,
           channelRelationshipType: ci.relationshipType,
+          channelTitle: ci.channelTitle,
+          channelWorkspaceId: ci.channelWorkspaceId,
           createdAt: ci.createdAt,
         });
       }
@@ -1069,6 +1135,7 @@ export const relationsRouter = router({
           source: "context_channel",
           channelId: ch.id,
           channelTitle: ch.title,
+          channelWorkspaceId: ch.workspaceId,
           createdAt: ch.createdAt,
         });
       }
@@ -1080,21 +1147,32 @@ export const relationsRouter = router({
           label: fs.goal,
           direction: "incoming",
           source: "focus_session",
+          focusSessionId: fs.id,
           focusSessionGoal: fs.goal,
           focusSessionStatus: fs.status,
+          focusSessionWorkspaceId: fs.workspaceId,
           createdAt: fs.createdAt,
         });
       }
 
+      const visibleConnections =
+        filterUnavailableEntityConnections(connections);
+
       return {
-        connections,
+        connections: visibleConnections,
         counts: {
-          total: connections.length,
-          graph: graphRelations.length,
-          structural: propertyLinks.length,
-          threads: channelLinks.length,
-          contextChannels: contextChannels.length,
-          focusSessions: subjectSessions.length,
+          total: visibleConnections.length,
+          graph: visibleConnections.filter((c) => c.source === "graph").length,
+          structural: visibleConnections.filter((c) => c.source === "property")
+            .length,
+          threads: visibleConnections.filter((c) => c.source === "thread")
+            .length,
+          contextChannels: visibleConnections.filter(
+            (c) => c.source === "context_channel"
+          ).length,
+          focusSessions: visibleConnections.filter(
+            (c) => c.source === "focus_session"
+          ).length,
         },
       };
     }),

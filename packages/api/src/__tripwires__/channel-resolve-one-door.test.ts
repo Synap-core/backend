@@ -5,8 +5,9 @@ import { join, relative } from "path";
 /**
  * TRIPWIRE — the one-per-user channels (FEED, PERSONAL) have ONE resolve door.
  *
- * A FEED (proactive) and a PERSONAL (per-agent) channel are singletons: exactly
- * one active row per user (per user×agent for personal). Their uniqueness is
+ * A FEED (proactive) and the active PERSONAL conversation (per-agent) have one
+ * resolve door: exactly one active row per user (per user×agent for personal).
+ * PERSONAL history may contain many archived rows. Active-row uniqueness is
  * enforced by the partial indexes cut in migration 0182
  * (channels_user_feed_uniq, channels_user_agent_personal_uniq). BEFORE 0182 the
  * indexes keyed on the retired `thread_kind` column and enforced nothing, so six

@@ -86,6 +86,10 @@ import {
   ensureAgentInstanceThread,
   ensureProactiveFeedChannel,
   getAgentIdBySlug,
+  startNewPersonalConversation,
+  closePersonalConversation,
+  reopenPersonalConversation,
+  listPersonalConversationHistory,
 } from "../utils/personal-channel.js";
 import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { SERVER_CONVERSATION_EVENTS } from "../realtime/socket-events.js";
@@ -109,6 +113,68 @@ import { AgentRepository } from "@synap/database";
 import { resolveVaultReferences } from "../utils/vault-resolver.js";
 
 const logger = createLogger({ module: "channels" });
+
+const TURN_CONTEXT_SENSITIVE_KEY =
+  /(?:api[-_]?key|authorization|cookie|credential|email|password|phone|private|secret|token)/i;
+const TURN_CONTEXT_MAX_SERIALIZED_LENGTH = 8_000;
+
+const TurnContextValueSchema = z.union([
+  z.string().max(400),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+  z.array(z.string().max(128)).max(12),
+]);
+
+const TurnContextEntrySchema = z
+  .object({
+    key: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z][A-Za-z0-9_.:-]*$/),
+    value: TurnContextValueSchema,
+  })
+  .strict();
+
+/**
+ * Bounded, surface-agnostic per-turn context. Entries deliberately stay flat:
+ * callers can attach compact hints without smuggling an unbounded UI state or
+ * a deeply nested arbitrary payload into chat history or the Intelligence Hub.
+ */
+export const TurnContextSchema = z
+  .object({ entries: z.array(TurnContextEntrySchema).min(1).max(20) })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (JSON.stringify(value).length > TURN_CONTEXT_MAX_SERIALIZED_LENGTH) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `turnContext may not exceed ${TURN_CONTEXT_MAX_SERIALIZED_LENGTH} serialized characters`,
+      });
+    }
+  });
+export type TurnContext = z.infer<typeof TurnContextSchema>;
+
+/** Redact credential-like entry keys before persisting or forwarding context. */
+export function redactTurnContext(turnContext: TurnContext): TurnContext {
+  return {
+    entries: turnContext.entries.map((entry) =>
+      TURN_CONTEXT_SENSITIVE_KEY.test(entry.key)
+        ? { ...entry, value: "[redacted]" }
+        : entry
+    ),
+  };
+}
+
+/** Channel kinds whose user turns receive the internal memory-session boundary. */
+export function usesInternalSessionBoundary(channelType: ChannelType): boolean {
+  return (
+    channelType === ChannelType.PERSONAL ||
+    channelType === ChannelType.THREAD ||
+    channelType === ChannelType.AGENT_COLLAB ||
+    channelType === ChannelType.GROUP
+  );
+}
 
 /**
  * Derive the set of @handle spellings a human's display name could be mentioned
@@ -1426,6 +1492,8 @@ export const channelsRouter = router({
          * gone on refresh. No @mention notifications fire for ephemeral messages.
          */
         ephemeral: z.boolean().optional(),
+        /** Compact, generic per-turn context; intentionally flat and bounded. */
+        turnContext: TurnContextSchema.optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1435,6 +1503,9 @@ export const channelsRouter = router({
       const content = input.content;
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
       const requestedAgentId: string | undefined = input.agentId;
+      const turnContext = input.turnContext
+        ? redactTurnContext(input.turnContext)
+        : undefined;
 
       // Resolve @mention handle → agent slug (for per-call override, not stored on channel)
       const resolvedHandle = input.agentHandle
@@ -1504,7 +1575,11 @@ export const channelsRouter = router({
       // visibility predicate so workspace membership alone is not enough to
       // post in private channels (THREAD/PERSONAL) that belong to someone else.
       const channel = await db.query.channels.findFirst({
-        where: and(eq(channels.id, channelId), channelVisibilityWhere(userId)),
+        where: and(
+          eq(channels.id, channelId),
+          eq(channels.status, ChannelStatus.ACTIVE),
+          channelVisibilityWhere(userId)
+        ),
       });
 
       if (!channel) {
@@ -1531,11 +1606,7 @@ export const channelsRouter = router({
       // Get or create an active session for this channel so messages are session-scoped.
       // This is idempotent — the IS also calls getOrCreate, they'll both resolve to the same session.
       let activeSessionId: string | undefined;
-      if (
-        channel.channelType === ChannelType.THREAD ||
-        channel.channelType === ChannelType.AGENT_COLLAB ||
-        channel.channelType === ChannelType.GROUP
-      ) {
+      if (usesInternalSessionBoundary(channel.channelType)) {
         try {
           const existingSession = await db.query.sessions.findFirst({
             where: and(
@@ -1605,6 +1676,13 @@ export const channelsRouter = router({
         hash: userMessageHash,
         sessionId: activeSessionId ?? undefined,
         ephemeral: input.ephemeral ?? false,
+        ...(turnContext
+          ? {
+              metadata: {
+                turnContext,
+              } as (typeof messages.$inferInsert)["metadata"],
+            }
+          : {}),
       });
 
       // Human @mention notifications — DISTINCT from agent @handles (which route
@@ -2123,7 +2201,7 @@ export const channelsRouter = router({
       }
 
       try {
-        const stream = resolvedService.client.sendMessageStream({
+        const streamRequest = {
           query: content,
           threadId: channelId,
           userId: userId,
@@ -2156,7 +2234,12 @@ export const channelsRouter = router({
           // Active focus session — when set, IS tags all hub calls with X-Session-Id
           // so proposals link to this user-visible, goal-bound session.
           focusSessionId: activeFocusSessionId,
-        });
+          // Flat, redacted per-turn context. The IntelligenceHubClient forwards
+          // this as its wire contract evolves; keeping it optional preserves all
+          // existing Browser, Relay, API, and MCP callers.
+          ...(turnContext ? { turnContext } : {}),
+        };
+        const stream = resolvedService.client.sendMessageStream(streamRequest);
 
         for await (const chunk of stream) {
           if (streamDeadline.signal.aborted) break;
@@ -2968,6 +3051,128 @@ export const channelsRouter = router({
       }
 
       return { channels: channelsWithFlags };
+    }),
+
+  /**
+   * Start a fresh private Personal conversation. The current active template
+   * conversation for this user and agent is archived first and remains in
+   * History; generic PERSONAL resolve-or-create semantics are unchanged.
+   */
+  startNewPersonalConversation: protectedProcedure
+    .input(z.object({ agentId: z.string().uuid().optional() }))
+    .mutation(async ({ input, ctx }) => {
+      const agentId = await resolveAgentId(input.agentId);
+      const result = await startNewPersonalConversation(ctx.userId, agentId);
+
+      for (const archivedChannelId of result.archivedChannelIds) {
+        emitChatEvent({
+          event: "channel:archived",
+          data: { channelId: archivedChannelId, userId: ctx.userId },
+          userId: ctx.userId,
+          channelId: archivedChannelId,
+        });
+      }
+      emitChatEvent({
+        event: "channel:created",
+        data: { channelId: result.channel.id, userId: ctx.userId },
+        userId: ctx.userId,
+        channelId: result.channel.id,
+      });
+
+      return result;
+    }),
+
+  /**
+   * List only archived template PERSONAL conversations for History. Agent
+   * instance DMs and merged duplicate rows are intentionally excluded.
+   */
+  listPersonalConversationHistory: protectedProcedure
+    .input(
+      z.object({
+        agentId: z.string().uuid().optional(),
+        limit: z.number().int().min(1).max(100).default(20),
+        offset: z.number().int().min(0).default(0),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const agentId = await resolveAgentId(input.agentId);
+      const items = await listPersonalConversationHistory(
+        ctx.userId,
+        agentId,
+        input.limit + 1,
+        input.offset
+      );
+      const hasMore = items.length > input.limit;
+
+      return {
+        items: hasMore ? items.slice(0, input.limit) : items,
+        pagination: {
+          hasMore,
+          limit: input.limit,
+          offset: input.offset,
+        },
+      };
+    }),
+
+  /**
+   * Reopen a conversation selected from History. It is restored as the only
+   * active template PERSONAL conversation for its original assigned agent.
+   */
+  reopenPersonalConversation: protectedProcedure
+    .input(z.object({ channelId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const result = await reopenPersonalConversation(
+        ctx.userId,
+        input.channelId
+      );
+      if (!result) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Archived personal conversation not found",
+        });
+      }
+
+      for (const archivedChannelId of result.archivedChannelIds) {
+        emitChatEvent({
+          event: "channel:archived",
+          data: { channelId: archivedChannelId, userId: ctx.userId },
+          userId: ctx.userId,
+          channelId: archivedChannelId,
+        });
+      }
+      emitChatEvent({
+        event: "channel:updated",
+        data: { channelId: result.channel.id, userId: ctx.userId },
+        userId: ctx.userId,
+        channelId: result.channel.id,
+      });
+
+      return result;
+    }),
+
+  /** Close the active template Personal conversation without deleting History. */
+  closePersonalConversation: protectedProcedure
+    .input(z.object({ channelId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const channel = await closePersonalConversation(
+        ctx.userId,
+        input.channelId
+      );
+      if (!channel) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Active personal conversation not found",
+        });
+      }
+
+      emitChatEvent({
+        event: "channel:archived",
+        data: { channelId: channel.id, userId: ctx.userId },
+        userId: ctx.userId,
+        channelId: channel.id,
+      });
+
+      return { channel };
     }),
 
   /**

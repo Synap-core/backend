@@ -103,6 +103,10 @@ export const hubProfilesRouter = router({
         uiHints: z.record(z.string(), z.unknown()).optional(),
         reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
+        /** Kind vs role profile. Omit → 'kind'. 'role' mints a facet type. */
+        profileKind: z.enum(["kind", "role"]).optional(),
+        /** For profileKind='role': base-kind slugs this role can attach to. */
+        applicableKinds: z.array(z.string()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -124,6 +128,10 @@ export const hubProfilesRouter = router({
         scope: "workspace",
         source: "intelligence",
         agentUserId: input.agentUserId,
+        ...(input.profileKind ? { profileKind: input.profileKind } : {}),
+        ...(input.applicableKinds
+          ? { applicableKinds: input.applicableKinds }
+          : {}),
       });
     }),
 

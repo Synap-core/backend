@@ -35,7 +35,15 @@ import {
   clampWindowDays,
   decisionCorrelationKeyExpr,
   eventKindExpr,
+  reasonCodeExpr,
 } from "../../../lib/ai-events.js";
+
+const ByReasonCodeSchema = z
+  .object({
+    reasonCode: z.string().nullable(),
+    count: z.number(),
+  })
+  .openapi("RoutingHealthByReasonCode");
 
 const ByTargetWorkspaceSchema = z
   .object({
@@ -79,6 +87,12 @@ const RoutingHealthSchema = z
     maturityDays: z.number(),
     byTargetWorkspace: z.array(ByTargetWorkspaceSchema),
     calibration: z.array(CalibrationBucketSchema),
+    // WHY users reject (Phase 1 reasoned-rejection loop): a breakdown of
+    // structured `reasonCode`s carried on `ai_correction` (kind=extract)
+    // events — i.e. whole-proposal rejects via `proposals.reject`/
+    // `batchReject`. Independent of the routing (kind=route) decision/
+    // correction data above; additive, doesn't touch existing fields.
+    byReasonCode: z.array(ByReasonCodeSchema),
     windowDays: z.number(),
     generatedAt: z.string(),
   })
@@ -166,6 +180,29 @@ export function registerObservabilityRoutes(app: HubHono): void {
 
       const totalDecisions = decisionRows.length;
 
+      // Reject reasonCode breakdown — independent of the ROUTE decision/
+      // correction rows above (this reads EXTRACT corrections, i.e. whole-
+      // proposal rejects), so compute it regardless of totalDecisions.
+      const reasonCodeRows = await db
+        .select({ reasonCode: reasonCodeExpr })
+        .from(events)
+        .where(
+          and(
+            eq(events.userId, userId),
+            eq(events.subjectType, AI_CORRECTION),
+            drizzleSql`${eventKindExpr} = ${AI_KIND.EXTRACT}`,
+            gte(events.timestamp, since)
+          )
+        );
+      const reasonCodeCounts = new Map<string | null, number>();
+      for (const r of reasonCodeRows) {
+        const key = r.reasonCode ?? null;
+        reasonCodeCounts.set(key, (reasonCodeCounts.get(key) ?? 0) + 1);
+      }
+      const byReasonCode = Array.from(reasonCodeCounts.entries())
+        .map(([reasonCode, count]) => ({ reasonCode, count }))
+        .sort((a, b) => b.count - a.count);
+
       if (totalDecisions === 0) {
         return c.json(
           {
@@ -179,6 +216,7 @@ export function registerObservabilityRoutes(app: HubHono): void {
             maturityDays: MATURITY_DAYS,
             byTargetWorkspace: [],
             calibration: [],
+            byReasonCode,
             windowDays,
             generatedAt: new Date().toISOString(),
           },
@@ -343,6 +381,7 @@ export function registerObservabilityRoutes(app: HubHono): void {
           maturityDays: MATURITY_DAYS,
           byTargetWorkspace,
           calibration,
+          byReasonCode,
           windowDays,
           generatedAt: new Date().toISOString(),
         },

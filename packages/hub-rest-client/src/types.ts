@@ -363,22 +363,30 @@ export interface HubGraphResult {
 }
 
 /**
- * A single link returned by getConnections() — unified view across three sources:
+ * A single link returned by getConnections() across the local graph:
  *  - `"graph"` : an explicit row in the relations table
- *  - `"property"` : derived from another entity's `entity_id` property pointing here
- *  - `"thread"` : a chat thread created, updated, or referenced this entity
+ *  - `"property"` : an inbound or outbound `entity_id` property edge
+ *  - `"thread"` / `"context_channel"` : a channel that touched or is about this entity
+ *  - `"focus_session"` : a session anchored to this entity
  */
 export interface HubConnection {
   entityId: string;
   entity: HubEntity | null;
   label: string;
   direction: "outgoing" | "incoming" | "structural";
-  source: "graph" | "property" | "thread";
+  source: "graph" | "property" | "thread" | "context_channel" | "focus_session";
+  relationId?: string;
   relationType?: string;
   propertySlug?: string;
   propertyLabel?: string;
   channelId?: string;
   channelRelationshipType?: string;
+  channelTitle?: string | null;
+  channelWorkspaceId?: string | null;
+  focusSessionId?: string;
+  focusSessionGoal?: string;
+  focusSessionStatus?: string;
+  focusSessionWorkspaceId?: string | null;
   createdAt?: string | null;
 }
 
@@ -389,6 +397,8 @@ export interface HubConnectionsResult {
     graph: number;
     structural: number;
     threads: number;
+    contextChannels?: number;
+    focusSessions?: number;
   };
 }
 

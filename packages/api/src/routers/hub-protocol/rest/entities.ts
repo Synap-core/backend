@@ -630,7 +630,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
       const caller = relationsRouter.createCaller(
         ctx as Parameters<typeof relationsRouter.createCaller>[0]
       );
-      const result = await caller.getConnections({ entityId, limit });
+      const result = await caller.getConnections({
+        entityId,
+        limit,
+        workspaceId: workspaceId ?? undefined,
+      });
       return c.json(result, 200);
     } catch (err) {
       logger.error({ err, entityId }, "getConnections failed");

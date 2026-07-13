@@ -77,6 +77,15 @@ export interface McpServerConfig {
   enabled?: boolean;
 }
 
+/**
+ * Ephemeral caller-supplied context for one agent turn.
+ *
+ * The Intelligence Service validates and bounds this before it reaches a prompt.
+ * It remains generic so callers can describe a current surface without coupling
+ * this transport package to a particular UI.
+ */
+export type TurnContext = Record<string, unknown>;
+
 export interface IntelligenceHubRequest {
   query: string;
   threadId: string;
@@ -105,6 +114,8 @@ export interface IntelligenceHubRequest {
   /** Entity context: channel is scoped to this entity (thread + contextObjectType='entity') */
   contextObjectType?: string;
   contextObjectId?: string;
+  /** Ephemeral, untrusted context about the caller's current surface for this turn only. */
+  turnContext?: TurnContext;
   /**
    * Subject entity this conversation is about (e.g. the bound client). When set,
    * the IS loads it and injects its name + key props into the prompt — sent as
@@ -389,14 +400,15 @@ export class IntelligenceHubClient {
               workspaceSettings: request.workspaceSettings,
               channelKind: request.channelKind,
               focusSessionId: request.focusSessionId,
-              // Subject-aware turn: map the bound entity onto the IS's existing
-              // contextObjectType/Id seam so it injects the "## Context Entity" block.
-              ...(request.contextEntityId
-                ? {
-                    contextObjectType: "entity",
-                    contextObjectId: request.contextEntityId,
-                  }
-                : {}),
+              // A bound subject entity retains precedence over the generic
+              // context-object fields, while callers without one now forward
+              // their existing context-object seam unchanged.
+              contextObjectType: request.contextEntityId
+                ? "entity"
+                : request.contextObjectType,
+              contextObjectId:
+                request.contextEntityId ?? request.contextObjectId,
+              turnContext: request.turnContext,
               // Forced skill (Discord `/skill <name>`): the IS injects this
               // skill's content into the system prompt for this turn.
               ...(request.forcedSkillName
@@ -529,6 +541,11 @@ export class IntelligenceHubClient {
             workspaceSettings: request.workspaceSettings,
             channelKind: request.channelKind,
             focusSessionId: request.focusSessionId,
+            contextObjectType: request.contextEntityId
+              ? "entity"
+              : request.contextObjectType,
+            contextObjectId: request.contextEntityId ?? request.contextObjectId,
+            turnContext: request.turnContext,
           }),
         },
         // Streaming yields progressively; a 30s TOTAL abort wrongly kills a

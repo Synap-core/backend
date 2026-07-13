@@ -37,6 +37,7 @@ import {
   linkEntityToProject,
   setChannelBranchPurpose,
   ChannelFirewallImmutableError,
+  isFacetVisibleForLens,
 } from "@synap/database";
 import type { EventRecord } from "@synap/database";
 import {
@@ -44,6 +45,7 @@ import {
   workspaces,
   focusSessions,
   entityFacets,
+  profiles,
 } from "@synap/database/schema";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import type {
@@ -61,6 +63,8 @@ import {
   buildFallbackTitle,
   isLikelyUUID,
   opRef,
+  PRIMARY_REF,
+  PROPOSAL_REJECTION_REASONS,
 } from "@synap-core/types/proposals";
 import type {
   UpdateRequest,
@@ -404,6 +408,10 @@ async function enrichProposalsForDisplay(
   // of the role's properties can be diffed against the proposed values.
   const relationEndpointIds: string[] = [];
   const facetIds: string[] = [];
+  // Roles v2: entity ids for which the graph needs the entity's CURRENT roles
+  // (isNew:false) — composite create_entity ops that link a PRE-EXISTING entity
+  // (`existingEntityId`) rather than minting a new one. Batch-joined below.
+  const existingRoleEntityIds: string[] = [];
   rows.forEach((row, idx) => {
     const request = requests[idx]!;
     const payload =
@@ -417,9 +425,18 @@ async function enrichProposalsForDisplay(
     const raw = row.data as StoredProposalData | null | undefined;
     if (isCompositeProposalData(raw)) {
       for (const op of raw.operations) {
-        if (op.op !== "create_relation") continue;
-        if (isLikelyUUID(op.sourceRef)) relationEndpointIds.push(op.sourceRef);
-        if (isLikelyUUID(op.targetRef)) relationEndpointIds.push(op.targetRef);
+        if (op.op === "create_relation") {
+          if (isLikelyUUID(op.sourceRef))
+            relationEndpointIds.push(op.sourceRef);
+          if (isLikelyUUID(op.targetRef))
+            relationEndpointIds.push(op.targetRef);
+        } else if (
+          op.op === "create_entity" &&
+          op.existingEntityId &&
+          isLikelyUUID(op.existingEntityId)
+        ) {
+          existingRoleEntityIds.push(op.existingEntityId);
+        }
       }
     }
     if (row.targetType === "facet" && row.proposalType === "update") {
@@ -436,6 +453,7 @@ async function enrichProposalsForDisplay(
     ...relationEndpointIds,
   ]);
   const uniqueFacetIds = uniqueStrings(facetIds);
+  const uniqueRoleEntityIds = uniqueStrings(existingRoleEntityIds);
   const userIds = uniqueStrings(
     rows.flatMap((row, idx) => [
       row.agentUserId ?? undefined,
@@ -450,77 +468,126 @@ async function enrichProposalsForDisplay(
   ).filter(isLikelyUUID);
 
   const eventRepo = new EventRepository(sql);
-  const [entityRows, userRows, traceEntries, facetRows] = await Promise.all([
-    entityIds.length > 0
-      ? db
-          .select({
-            id: entities.id,
-            title: entities.title,
-            preview: entities.preview,
-            type: entities.type,
-            properties: entities.properties,
-            workspaceId: entities.workspaceId,
-          })
-          .from(entities)
-          .where(inArray(entities.id, entityIds))
-      : Promise.resolve([]),
-    userIds.length > 0
-      ? db
-          .select({
-            id: users.id,
-            name: users.name,
-            email: users.email,
-            userType: users.userType,
-            agentMetadata: users.agentMetadata,
-          })
-          .from(users)
-          .where(inArray(users.id, userIds))
-      : Promise.resolve([]),
-    // ONE batched query for ALL correlation ids on this page (was N+1: one
-    // round-trip per proposal → pool exhaustion). Grouped in memory below.
-    correlationIds.length > 0
-      ? eventRepo
-          .getCorrelatedEventsBatch(correlationIds, userId)
-          .then((events) => {
-            const grouped = new Map<string, EventRecord[]>();
-            for (const ev of events) {
-              const key = ev.correlationId;
-              if (!key) continue;
-              const bucket = grouped.get(key);
-              if (bucket) bucket.push(ev);
-              else grouped.set(key, [ev]);
-            }
-            return Array.from(grouped.entries()) as Array<
-              readonly [string, EventRecord[]]
-            >;
-          })
-      : Promise.resolve([] as Array<readonly [string, EventRecord[]]>),
-    // B4: current role-facet state for facet-UPDATE proposals (live-current
-    // before→after). One batched query for every facetId on the page.
-    uniqueFacetIds.length > 0
-      ? db
-          .select({
-            id: entityFacets.id,
-            status: entityFacets.status,
-            properties: entityFacets.properties,
-            workspaceId: entityFacets.workspaceId,
-          })
-          .from(entityFacets)
-          .where(inArray(entityFacets.id, uniqueFacetIds))
-      : Promise.resolve(
-          [] as Array<{
-            id: string;
-            status: string | null;
-            properties: unknown;
-            workspaceId: string | null;
-          }>
-        ),
-  ]);
+  const [entityRows, userRows, traceEntries, facetRows, roleFacetRows] =
+    await Promise.all([
+      entityIds.length > 0
+        ? db
+            .select({
+              id: entities.id,
+              title: entities.title,
+              preview: entities.preview,
+              type: entities.type,
+              properties: entities.properties,
+              workspaceId: entities.workspaceId,
+            })
+            .from(entities)
+            .where(inArray(entities.id, entityIds))
+        : Promise.resolve([]),
+      userIds.length > 0
+        ? db
+            .select({
+              id: users.id,
+              name: users.name,
+              email: users.email,
+              userType: users.userType,
+              agentMetadata: users.agentMetadata,
+            })
+            .from(users)
+            .where(inArray(users.id, userIds))
+        : Promise.resolve([]),
+      // ONE batched query for ALL correlation ids on this page (was N+1: one
+      // round-trip per proposal → pool exhaustion). Grouped in memory below.
+      correlationIds.length > 0
+        ? eventRepo
+            .getCorrelatedEventsBatch(correlationIds, userId)
+            .then((events) => {
+              const grouped = new Map<string, EventRecord[]>();
+              for (const ev of events) {
+                const key = ev.correlationId;
+                if (!key) continue;
+                const bucket = grouped.get(key);
+                if (bucket) bucket.push(ev);
+                else grouped.set(key, [ev]);
+              }
+              return Array.from(grouped.entries()) as Array<
+                readonly [string, EventRecord[]]
+              >;
+            })
+        : Promise.resolve([] as Array<readonly [string, EventRecord[]]>),
+      // B4: current role-facet state for facet-UPDATE proposals (live-current
+      // before→after). One batched query for every facetId on the page.
+      uniqueFacetIds.length > 0
+        ? db
+            .select({
+              id: entityFacets.id,
+              status: entityFacets.status,
+              properties: entityFacets.properties,
+              workspaceId: entityFacets.workspaceId,
+              userId: entityFacets.userId,
+            })
+            .from(entityFacets)
+            .where(inArray(entityFacets.id, uniqueFacetIds))
+        : Promise.resolve(
+            [] as Array<{
+              id: string;
+              status: string | null;
+              properties: unknown;
+              workspaceId: string | null;
+              userId: string;
+            }>
+          ),
+      // Roles v2: CURRENT live role-facets of every pre-existing entity a composite
+      // op links (`existingEntityId`), joined to profiles for the role slug. ONE
+      // batched query for the whole page; the per-proposal workspace lens (MF2) is
+      // applied in memory below so a role in another workspace can't leak.
+      uniqueRoleEntityIds.length > 0
+        ? db
+            .select({
+              entityId: entityFacets.entityId,
+              profileSlug: profiles.slug,
+              status: entityFacets.status,
+              workspaceId: entityFacets.workspaceId,
+              userId: entityFacets.userId,
+            })
+            .from(entityFacets)
+            .innerJoin(profiles, eq(entityFacets.profileId, profiles.id))
+            .where(
+              and(
+                inArray(entityFacets.entityId, uniqueRoleEntityIds),
+                isNull(entityFacets.deletedAt)
+              )
+            )
+        : Promise.resolve(
+            [] as Array<{
+              entityId: string;
+              profileSlug: string;
+              status: string | null;
+              workspaceId: string | null;
+              userId: string;
+            }>
+          ),
+    ]);
 
   const entityById = new Map(entityRows.map((row) => [row.id, row]));
   const userById = new Map(userRows.map((row) => [row.id, row]));
   const traceByCorrelationId = new Map<string, EventRecord[]>(traceEntries);
   const facetById = new Map(facetRows.map((row) => [row.id, row]));
+  // Roles v2: group live role-facets by their entity id (unfiltered — the
+  // workspace lens is applied per-proposal below via `rolesForLens`).
+  const roleFacetsByEntityId = new Map<
+    string,
+    Array<{
+      profileSlug: string;
+      status: string | null;
+      workspaceId: string | null;
+      userId: string;
+    }>
+  >();
+  for (const rf of roleFacetRows) {
+    const bucket = roleFacetsByEntityId.get(rf.entityId);
+    if (bucket) bucket.push(rf);
+    else roleFacetsByEntityId.set(rf.entityId, [rf]);
+  }
   // B2 + MF2 (workspace scoping): resolve a batch-joined entity title by id, but
   // ONLY when the endpoint entity is visible under the proposal's own workspace
   // lens — same workspace as the proposal, or pod-wide (workspaceId null, visible
@@ -616,11 +683,45 @@ async function enrichProposalsForDisplay(
       const facetRow = fid ? facetById.get(fid) : undefined;
       if (
         facetRow &&
-        (facetRow.workspaceId === null ||
-          facetRow.workspaceId === row.workspaceId)
+        isFacetVisibleForLens(facetRow, row.workspaceId, userId)
       ) {
         reviewCurrent = { properties: facetRow.properties };
       }
+    }
+
+    // Roles v2: the CURRENT roles of every pre-existing entity this composite
+    // links, filtered to THIS proposal's workspace lens + owner floor via the
+    // shared `isFacetVisibleForLens` predicate (the in-memory twin of
+    // `facetVisibilityConditions()` — SSOT, no hand-copied rule). Keyed by
+    // entity id → `buildProposalGraph` attaches them to the matching
+    // `existingEntityId` op as `isNew:false` roles.
+    let existingRolesByEntityId:
+      | Map<string, Array<{ profileSlug: string; status?: string | null }>>
+      | undefined;
+    if (
+      roleFacetsByEntityId.size > 0 &&
+      isCompositeProposalData(row.data as StoredProposalData | null | undefined)
+    ) {
+      const lensWorkspaceId = row.workspaceId;
+      const scoped = new Map<
+        string,
+        Array<{ profileSlug: string; status?: string | null }>
+      >();
+      for (const [eid, facets] of roleFacetsByEntityId) {
+        const visible = facets.filter((f) =>
+          isFacetVisibleForLens(f, lensWorkspaceId, userId)
+        );
+        if (visible.length > 0) {
+          scoped.set(
+            eid,
+            visible.map((f) => ({
+              profileSlug: f.profileSlug,
+              status: f.status,
+            }))
+          );
+        }
+      }
+      if (scoped.size > 0) existingRolesByEntityId = scoped;
     }
 
     return {
@@ -645,6 +746,7 @@ async function enrichProposalsForDisplay(
         targetName,
         current: reviewCurrent,
         resolveEntityTitle: resolveEntityTitleScoped,
+        existingRolesByEntityId,
         events: request.correlationId
           ? (traceByCorrelationId.get(request.correlationId) ?? [])
           : [],
@@ -667,6 +769,12 @@ function buildProposalReviewModel(params: {
   };
   /** B2: resolve a real entity title by id for composite relation endpoints. */
   resolveEntityTitle?: (entityId: string) => string | undefined;
+  /** Roles v2: CURRENT roles (lens-filtered) of pre-existing entities the graph
+   * links, keyed by entity id — attached as `isNew:false` roles. */
+  existingRolesByEntityId?: Map<
+    string,
+    Array<{ profileSlug: string; status?: string | null }>
+  >;
   events: Awaited<ReturnType<EventRepository["getCorrelatedEvents"]>>;
 }): ProposalReviewModel {
   const {
@@ -676,6 +784,7 @@ function buildProposalReviewModel(params: {
     targetName,
     current,
     resolveEntityTitle,
+    existingRolesByEntityId,
     events,
   } = params;
   const requestData =
@@ -684,7 +793,7 @@ function buildProposalReviewModel(params: {
   // the flat `changes` model can't express. Detect and build a `graph` instead.
   const rawData = row.data as StoredProposalData | null | undefined;
   const graph = isCompositeProposalData(rawData)
-    ? buildProposalGraph(rawData, resolveEntityTitle)
+    ? buildProposalGraph(rawData, resolveEntityTitle, existingRolesByEntityId)
     : undefined;
   // Durable before-snapshot captured at proposal-creation time (entity updates).
   // Preferred over the live `current` entity so the diff survives approval and
@@ -742,10 +851,17 @@ function buildProposalReviewModel(params: {
  *
  * Pass 1: walk the create_entity ops, assigning each a stable ref (its own `ref`
  * or the positional `$opN`) and recording ref→title so relations can show human
- * labels; also collect inline role-profile facets (`op.facets`) into the graph.
+ * labels. ROLES v2: each entity carries its `roles[]` — a KIND wears its roles.
+ * Inline `op.facets` become `isNew:true` roles (this proposal ATTACHES them);
+ * for an op that links a PRE-EXISTING entity (`existingEntityId`), that entity's
+ * CURRENT live roles (looked up in the lens-filtered `existingRolesByEntityId`
+ * map built in `enrichProposalsForDisplay`) become `isNew:false` roles — showing
+ * the entity's existing roles as context beside the new one.
  * Pass 2: map each create_relation's source/target refs to those titles; a ref
  * that is a real, pre-existing entity UUID resolves to that entity's real title
- * via `resolveEntityTitle` (B2 — was a bare `entity <8hex>` shortId).
+ * via `resolveEntityTitle` (B2 — was a bare `entity <8hex>` shortId). When an
+ * endpoint is one of THIS proposal's entities, its canonical entity ref is also
+ * emitted (`sourceRef`/`targetRef`) so the UI can link the row to the entity.
  *
  * `resolveEntityTitle` looks up a batch-joined entity title by id (populated in
  * `enrichProposalsForDisplay` for every UUID referenced as a relation endpoint).
@@ -755,11 +871,19 @@ function buildProposalReviewModel(params: {
  */
 function buildProposalGraph(
   data: CompositeProposalData,
-  resolveEntityTitle?: (entityId: string) => string | undefined
+  resolveEntityTitle?: (entityId: string) => string | undefined,
+  existingRolesByEntityId?: Map<
+    string,
+    Array<{ profileSlug: string; status?: string | null }>
+  >
 ): ProposalReviewGraph {
   const refToTitle = new Map<string, string>();
+  // Every ref alias ($opN / op `ref` / $primary / a linked entity's UUID) → the
+  // CANONICAL entity ref (the value in `entities[].ref`), so a relation endpoint
+  // that is one of this proposal's entities resolves to that entity's ref.
+  const refAliasToCanonical = new Map<string, string>();
   const entities: ProposalReviewGraph["entities"] = [];
-  const facets: ProposalReviewGraph["facets"] = [];
+  let firstEntitySeen = false;
 
   data.operations.forEach((op, index) => {
     if (op.op !== "create_entity") return;
@@ -770,24 +894,48 @@ function buildProposalGraph(
     // Positional ref always resolves too (a relation may reference $opN even
     // when the op carries its own ref).
     refToTitle.set(opRef(index), title);
+    // Canonical-ref aliases: positional, own ref, $primary (first entity only),
+    // and a linked pre-existing entity's UUID all point at this entity's ref.
+    refAliasToCanonical.set(ref, ref);
+    refAliasToCanonical.set(opRef(index), ref);
+    if (entityOp.ref) refAliasToCanonical.set(entityOp.ref, ref);
+    if (!firstEntitySeen) refAliasToCanonical.set(PRIMARY_REF, ref);
+    if (entityOp.existingEntityId)
+      refAliasToCanonical.set(entityOp.existingEntityId, ref);
+    firstEntitySeen = true;
+
+    // ROLES v2: a KIND carries its roles ON the entity. Existing roles first
+    // (isNew:false, from live entity_facets of a linked pre-existing entity),
+    // then the roles this proposal attaches (isNew:true, from inline op.facets).
+    const roles: NonNullable<ProposalReviewGraph["entities"][number]["roles"]> =
+      [];
+    if (entityOp.existingEntityId) {
+      for (const existing of existingRolesByEntityId?.get(
+        entityOp.existingEntityId
+      ) ?? []) {
+        roles.push({
+          profileSlug: existing.profileSlug,
+          isNew: false,
+          ...(existing.status ? { status: existing.status } : {}),
+        });
+      }
+    }
+    for (const facet of entityOp.facets ?? []) {
+      roles.push({
+        profileSlug: facet.profileSlug,
+        isNew: true,
+        ...(facet.status ? { status: facet.status } : {}),
+      });
+    }
+
     entities.push({
       ref,
       profileSlug: entityOp.profileSlug,
       title,
       propertyCount: Object.keys(entityOp.properties ?? {}).length,
       hasContent: !!entityOp.content,
+      ...(roles.length > 0 ? { roles } : {}),
     });
-    // B3: surface inline role-profile facets so a composite that attaches roles
-    // (e.g. a person materialized as a "client" + "investor") shows a role count
-    // in the review summary instead of hiding them entirely.
-    for (const facet of entityOp.facets ?? []) {
-      facets.push({
-        entityRef: ref,
-        entityLabel: title,
-        profileSlug: facet.profileSlug,
-        ...(facet.status ? { status: facet.status } : {}),
-      });
-    }
   });
 
   const labelForRef = (ref: string): string => {
@@ -807,20 +955,30 @@ function buildProposalGraph(
   for (const op of data.operations) {
     if (op.op !== "create_relation") continue;
     const relOp = op as CompositeCreateRelationOp;
+    const sourceRef = refAliasToCanonical.get(relOp.sourceRef);
+    const targetRef = refAliasToCanonical.get(relOp.targetRef);
     relations.push({
       type: relOp.type,
       sourceLabel: labelForRef(relOp.sourceRef),
       targetLabel: labelForRef(relOp.targetRef),
+      ...(sourceRef ? { sourceRef } : {}),
+      ...(targetRef ? { targetRef } : {}),
     });
   }
+
+  // facetCount = number of NEWLY-attached roles across all entities (isNew).
+  const facetCount = entities.reduce(
+    (sum, entity) =>
+      sum + (entity.roles?.filter((role) => role.isNew).length ?? 0),
+    0
+  );
 
   return {
     entities,
     relations,
-    facets,
     entityCount: entities.length,
     relationCount: relations.length,
-    facetCount: facets.length,
+    facetCount,
   };
 }
 
@@ -1978,6 +2136,8 @@ export const proposalsRouter = router({
       z.object({
         proposalId: z.string(),
         reason: z.string().optional(),
+        /** Structured rejection taxonomy — Phase 1 reasoned-rejection loop. */
+        reasonCode: z.enum(PROPOSAL_REJECTION_REASONS).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1992,6 +2152,7 @@ export const proposalsRouter = router({
           targetType: true,
           workspaceId: true,
           proposalType: true,
+          correlationId: true,
           data: true,
         },
       });
@@ -2041,6 +2202,28 @@ export const proposalsRouter = router({
           "rejected",
           userId
         );
+
+        // Feedback signal — a human rejected a capture-originated proposal,
+        // i.e. corrected the AI's extraction decision behind it. Same gate as
+        // `revert`: only decision-linked (capture.graph) proposals carry a
+        // correlationId worth scoring. Best-effort: never fail the reject.
+        if (
+          proposal.proposalType === "capture.graph" &&
+          proposal.correlationId
+        ) {
+          await emitAiCorrection({
+            action: "reject",
+            userId,
+            subjectId: input.proposalId,
+            workspaceId: proposal.workspaceId ?? undefined,
+            data: {
+              kind: AI_KIND.EXTRACT,
+              correlationId: proposal.correlationId,
+              ...(input.reason ? { reason: input.reason } : {}),
+              ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
+            },
+          });
+        }
       }
 
       return { success: true };
@@ -2713,6 +2896,8 @@ export const proposalsRouter = router({
       z.object({
         proposalIds: z.array(z.string()).min(1).max(50),
         reason: z.string().optional(),
+        /** Structured rejection taxonomy — Phase 1 reasoned-rejection loop. */
+        reasonCode: z.enum(PROPOSAL_REJECTION_REASONS).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2724,7 +2909,12 @@ export const proposalsRouter = router({
         // `requireUserId` (any member could reject any proposal by id).
         const target = await db.query.proposals.findFirst({
           where: eq(proposals.id, proposalId),
-          columns: { workspaceId: true, data: true },
+          columns: {
+            workspaceId: true,
+            data: true,
+            proposalType: true,
+            correlationId: true,
+          },
         });
         if (!target) continue;
         await assertCanReviewProposal({
@@ -2757,6 +2947,23 @@ export const proposalsRouter = router({
             "rejected",
             userId
           );
+
+          // Feedback signal — same gate/shape as `reject` (mirroring `revert`):
+          // only decision-linked (capture.graph) proposals worth scoring.
+          if (target.proposalType === "capture.graph" && target.correlationId) {
+            await emitAiCorrection({
+              action: "reject",
+              userId,
+              subjectId: proposalId,
+              workspaceId: updated.workspaceId ?? undefined,
+              data: {
+                kind: AI_KIND.EXTRACT,
+                correlationId: target.correlationId,
+                ...(input.reason ? { reason: input.reason } : {}),
+                ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
+              },
+            });
+          }
         }
       }
 

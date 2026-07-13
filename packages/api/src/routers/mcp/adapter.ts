@@ -783,6 +783,38 @@ export async function executeMCPToolViaHubProtocol(
       return ok(result);
     }
 
+    // Mint a NEW role type (Kind + Facets). Goes through the SAME governed door
+    // as tRPC/Hub profile creation (hub-protocol profiles.createProfile →
+    // regular profiles.create → checkPermissionOrPropose). profileKind:'role'
+    // + a non-empty applicableKinds is what makes it an attachable facet type
+    // rather than a primary entity kind.
+    case "synap_define_role": {
+      requireScope(apiKeyScopes, "mcp.write", toolName);
+      const applicableKinds =
+        Array.isArray(args.applicableKinds) && args.applicableKinds.length > 0
+          ? (args.applicableKinds as string[])
+          : ["company", "person"];
+      const uiHints: Record<string, unknown> = {};
+      if (typeof args.icon === "string") uiHints.icon = args.icon;
+      if (typeof args.description === "string")
+        uiHints.description = args.description;
+      const result = await caller.profiles.createProfile({
+        userId,
+        workspaceId: args.workspaceId as string,
+        slug: args.slug as string,
+        displayName: args.displayName as string,
+        profileKind: "role",
+        applicableKinds,
+        ...(Object.keys(uiHints).length > 0 ? { uiHints } : {}),
+        ...(args.properties
+          ? { defaultValues: args.properties as Record<string, unknown> }
+          : {}),
+        reasoning: "Role type defined via MCP synap_define_role",
+        ...(agentUserId ? { agentUserId } : {}),
+      });
+      return ok(result);
+    }
+
     // (synap_send_message removed — synap_post_message supersedes it: it handles
     // thread creation from a channelId and can trigger an AI response. One
     // messaging tool, not two.)

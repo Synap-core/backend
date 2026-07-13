@@ -221,6 +221,14 @@ export const profilesRouter = router({
         source: z.enum(["user", "ai", "intelligence", "system"]).optional(),
         reasoning: z.string().optional(),
         agentUserId: z.string().uuid().optional(),
+        /**
+         * Kind vs role profile. Omit → 'kind' (a normal entity type). 'role'
+         * mints an attachable facet type (Kind + Facets) — requires
+         * applicableKinds to declare which base kinds it can attach to.
+         */
+        profileKind: z.enum(["kind", "role"]).optional(),
+        /** For profileKind='role': base-kind slugs this role can attach to. */
+        applicableKinds: z.array(z.string()).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -246,6 +254,19 @@ export const profilesRouter = router({
           await profileRepo.grantAccess(existing.id, ctx.workspaceId);
         }
         return { profile: existing, existing: true };
+      }
+
+      // A role profile (attachable facet type) MUST declare which base kinds it
+      // can attach to — otherwise it could never be attached to anything.
+      if (
+        input.profileKind === "role" &&
+        (!input.applicableKinds || input.applicableKinds.length === 0)
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "A role profile requires a non-empty applicableKinds (the base kinds it can attach to)",
+        });
       }
 
       // Validate parent profile if provided
@@ -348,6 +369,10 @@ export const profilesRouter = router({
         entityScope: input.entityScope,
         userId,
         workspaceId,
+        ...(input.profileKind ? { profileKind: input.profileKind } : {}),
+        ...(input.applicableKinds
+          ? { applicableKinds: input.applicableKinds }
+          : {}),
       });
 
       // For shared profiles, grant access to the creating workspace + any extra workspaces

@@ -522,10 +522,10 @@ export class HubRestClient {
   }
 
   /**
-   * Unified view of everything connected to an entity. Merges three sources:
+   * Unified view of everything connected to an entity across the local graph:
    *   1. Graph relations — explicit rows in the relations table (both directions)
-   *   2. Structural links — entities whose `entity_id` properties point to this entity
-   *   3. Thread connections — chat threads that touched this entity
+   *   2. Structural links — inbound and outbound `entity_id` property edges
+   *   3. Channel and focus-session connections around this entity
    *
    * Prefer this over `getRelations()` / `traverseGraph()` when you want the complete
    * picture — those only see the relations table and miss property-based links that

@@ -53,6 +53,12 @@ export const decisionCorrelationKeyExpr = drizzleSql<
 >`${events.data}->>'correlationId'`;
 /** The `data.kind` discriminator, extracted from any ai_* event. */
 export const eventKindExpr = drizzleSql<string | null>`${events.data}->>'kind'`;
+/** The freeform human rejection reason, extracted from an `ai_correction`'s `data`. */
+export const reasonExpr = drizzleSql<string | null>`${events.data}->>'reason'`;
+/** The structured rejection taxonomy code, extracted from an `ai_correction`'s `data`. */
+export const reasonCodeExpr = drizzleSql<
+  string | null
+>`${events.data}->>'reasonCode'`;
 
 // ── Capture-routing tunables ────────────────────────────────────────────────
 // Re-exported from the zero-dependency `routing-tunables` leaf so importers can

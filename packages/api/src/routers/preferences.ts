@@ -347,6 +347,42 @@ export const preferencesRouter = router({
       return { success: true, preferences: newPrefs };
     }),
 
+  /** Persist how the user opens the Companion across Browser sessions. */
+  setCompanionMode: protectedProcedure
+    .input(
+      z.object({
+        mode: z.enum(["builtin", "terminal", "headless"]).nullable(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const current = await ctx.db.query.userPreferences.findFirst({
+        where: eq(userPreferences.userId, ctx.userId),
+      });
+      const currentPrefs = (current?.intelligenceServicePreferences ||
+        {}) as Record<string, unknown>;
+      const newPrefs = { ...currentPrefs };
+
+      if (input.mode) newPrefs.companionMode = input.mode;
+      else delete newPrefs.companionMode;
+
+      await ctx.db
+        .insert(userPreferences)
+        .values({
+          userId: ctx.userId,
+          intelligenceServicePreferences: newPrefs,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: userPreferences.userId,
+          set: {
+            intelligenceServicePreferences: newPrefs,
+            updatedAt: new Date(),
+          },
+        });
+
+      return { success: true, preferences: newPrefs };
+    }),
+
   /**
    * Set intelligence service for a capability
    */

@@ -3655,32 +3655,32 @@ export interface ProposalReviewGraph {
 		title: string;
 		propertyCount: number;
 		hasContent: boolean;
+		/**
+		 * Roles (facets) this KIND wears — the facet model made legible on the
+		 * entity itself. Includes the entity's EXISTING roles (`isNew:false`,
+		 * resolved from live `entity_facets` for ops that reference a pre-existing
+		 * entity) and the roles this proposal ATTACHES (`isNew:true`, from the op's
+		 * inline `facets`). A new role is emphasized in the UI ("Grimkujow becomes a
+		 * Lead"). Mirrors the frontend `@synap-core/proposal-types` shape exactly.
+		 */
+		roles?: Array<{
+			profileSlug: string;
+			isNew: boolean;
+			status?: string;
+		}>;
 	}>;
 	relations: Array<{
 		type: string;
 		sourceLabel: string;
 		targetLabel: string;
-	}>;
-	/**
-	 * Role-profile facets attached inline by the graph's create_entity ops
-	 * (`CompositeCreateEntityOp.facets`). Previously uncounted, so a composite
-	 * that attached roles rendered them nowhere in the review summary. Each entry
-	 * points at the entity it decorates via `entityRef` (the same ref key the
-	 * `entities[]` list uses) and carries the resolved parent title (`entityLabel`).
-	 */
-	facets: Array<{
-		/** Ref of the create_entity op this facet attaches to (matches entities[].ref). */
-		entityRef: string;
-		/** Resolved title of the parent entity (for display without a second lookup). */
-		entityLabel: string;
-		/** Role-profile slug being attached (e.g. "client", "investor"). */
-		profileSlug: string;
-		/** Optional domain status the role is attached with. */
-		status?: string;
+		/** Ref into `entities[]` when the source endpoint is part of this graph. */
+		sourceRef?: string;
+		/** Ref into `entities[]` when the target endpoint is part of this graph. */
+		targetRef?: string;
 	}>;
 	entityCount: number;
 	relationCount: number;
-	/** Number of inline facet attaches across all create_entity ops. */
+	/** Count of newly-attached roles (`isNew`) across all entities. */
 	facetCount: number;
 }
 export interface ProposalReviewModel {
@@ -3964,6 +3964,19 @@ export interface ImportAnalysisPlan {
 	columnMappings: ColumnMappingProposal[];
 	warnings: string[];
 	overallConfidence: number;
+}
+export interface PersonalConversationTransition {
+	channel: Channel;
+	archivedChannelIds: string[];
+}
+export interface PersonalConversationHistoryItem {
+	channel: Channel;
+	/** Channel title, falling back to the latest user turn or a neutral label. */
+	title: string;
+	/** Bounded latest user-message excerpt for history scanning. */
+	preview: string | null;
+	lastActivity: Date;
+	messageCount: number;
 }
 export interface SearchResult {
 	id: string;
@@ -4756,6 +4769,38 @@ export type ExecuteCapabilityResult = {
 	kind: "not_found";
 	message: string;
 };
+/**
+ * Shared shape and pure helpers for the entity-data half of the object graph.
+ *
+ * The relations router owns the database read; this module keeps the resulting
+ * connection semantics consistent for that router and graph-service consumers.
+ */
+export type EntityConnectionSource = "graph" | "property" | "thread" | "context_channel" | "focus_session";
+export interface EntityConnection {
+	entityId: string;
+	entity: {
+		title?: string | null;
+		type?: string | null;
+		workspaceId?: string | null;
+		facetSlugs?: string[] | null;
+	} | null;
+	label: string;
+	direction: "outgoing" | "incoming" | "structural";
+	source: EntityConnectionSource;
+	relationId?: string;
+	relationType?: string;
+	propertySlug?: string;
+	propertyLabel?: string;
+	channelId?: string;
+	channelRelationshipType?: string;
+	channelTitle?: string | null;
+	channelWorkspaceId?: string | null;
+	focusSessionId?: string;
+	focusSessionGoal?: string;
+	focusSessionStatus?: string;
+	focusSessionWorkspaceId?: string | null;
+	createdAt?: Date | null;
+}
 /** A node in the pod graph — uniform across every object kind. */
 export interface GraphNode {
 	/** The object's table/kind (the link-endpoint type). */
@@ -5254,12 +5299,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceId: string | null;
 				targetProjectId: string | null;
 				formSpec: null;
-				dedupCandidates: Record<string, Array<{
+				dedupCandidates: Record<string, {
 					entityId: string;
 					title: string;
 					profileSlug: string;
 					score: number;
-				}>>;
+				}[]>;
 				degraded: true;
 				degradedReason: "is_auth_error" | "is_invalid_response" | "is_empty_result";
 			} | {
@@ -6439,6 +6484,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				contextObjectType?: "entity" | "view" | "document" | undefined;
 				branchPurpose?: string | undefined;
 				ephemeral?: boolean | undefined;
+				turnContext?: {
+					entries: {
+						key: string;
+						value: string | number | boolean | string[] | null;
+					}[];
+				} | undefined;
 			};
 			output: {
 				messageId: `${string}-${string}-${string}-${string}-${string}`;
@@ -6645,6 +6696,45 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					unreadCount: number;
 					counterpartUserId?: string | null;
 				})[];
+			};
+			meta: object;
+		}>;
+		startNewPersonalConversation: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentId?: string | undefined;
+			};
+			output: PersonalConversationTransition;
+			meta: object;
+		}>;
+		listPersonalConversationHistory: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				agentId?: string | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+			};
+			output: {
+				items: PersonalConversationHistoryItem[];
+				pagination: {
+					hasMore: boolean;
+					limit: number;
+					offset: number;
+				};
+			};
+			meta: object;
+		}>;
+		reopenPersonalConversation: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				channelId: string;
+			};
+			output: PersonalConversationTransition;
+			meta: object;
+		}>;
+		closePersonalConversation: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				channelId: string;
+			};
+			output: {
+				channel: Channel;
 			};
 			meta: object;
 		}>;
@@ -11379,44 +11469,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 			};
 			output: {
-				connections: {
-					entityId: string;
-					entity: ({
-						userId: string;
-						workspaceId: string | null;
-						agentUserId: string | null;
-						id: string;
-						type: string;
-						updatedAt: Date;
-						createdByUserId: string | null;
-						createdAt: Date;
-						correlationId: string | null;
-						profileId: string | null;
-						title: string | null;
-						preview: string | null;
-						documentId: string | null;
-						properties: unknown;
-						systemData: unknown;
-						version: number;
-						createdByKind: ProvenanceKind | null;
-						sourceProposalId: string | null;
-						deletedAt: Date | null;
-					} & {
-						facetSlugs?: string[];
-					}) | null;
-					label: string;
-					direction: "outgoing" | "incoming" | "structural";
-					source: "graph" | "property" | "thread" | "context_channel" | "focus_session";
-					relationType?: string;
-					propertySlug?: string;
-					propertyLabel?: string;
-					channelId?: string;
-					channelRelationshipType?: string;
-					channelTitle?: string | null;
-					focusSessionGoal?: string;
-					focusSessionStatus?: string;
-					createdAt?: Date | null;
-				}[];
+				connections: EntityConnection[];
 				counts: {
 					total: number;
 					graph: number;
@@ -13388,6 +13441,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		setDefaultCompanion: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentId: string | null;
+			};
+			output: {
+				success: boolean;
+				preferences: {
+					[x: string]: unknown;
+				};
+			};
+			meta: object;
+		}>;
+		setCompanionMode: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				mode: "builtin" | "terminal" | "headless" | null;
 			};
 			output: {
 				success: boolean;
@@ -17841,7 +17906,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				steps: RecipeStep[];
 				linkedEnvironmentId: string | null;
 				linkedAppSlug: string | null;
-				onFailure: "rollback" | "stop" | "continue";
+				onFailure: "continue" | "rollback" | "stop";
 				rollbackRecipeId: string | null;
 				recipeTemplate: "custom" | "kamal" | "docker-compose" | "git-pull" | null;
 			};

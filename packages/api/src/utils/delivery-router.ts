@@ -40,6 +40,7 @@ import {
   workspaces,
   messages,
   computeMessageHash,
+  isClientCommsFirewallTarget,
 } from "@synap/database";
 import {
   MessageRole,
@@ -337,10 +338,11 @@ async function deliverToExternal(
     //      unless the operator opts it in by labelling it 'team' (reversible — no
     //      immutable mark applied here). Unbound external channels (contextObjectId
     //      null, e.g. a team feed) keep the prior 'team-or-null is allowed' behavior.
-    const isEntityBoundExternal =
-      boundChannel.contextObjectId != null &&
-      boundChannel.branchPurpose !== "team";
-    if (boundChannel.branchPurpose === "client-comms" || isEntityBoundExternal) {
+    //
+    // Predicate extracted to the ONE shared `isClientCommsFirewallTarget`
+    // (@synap/database) so the mirror path (mirror-to-external.ts) enforces the
+    // IDENTICAL firewall — the two backend doors can no longer drift.
+    if (isClientCommsFirewallTarget(boundChannel)) {
       logger.warn(
         {
           domain: input.domain,

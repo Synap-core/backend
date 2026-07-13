@@ -16,13 +16,19 @@
  * producer's governance) and no network I/O. The reverse half (external→Synap)
  * already exists via `/discord/ingest` → `recordInboundMessage`.
  *
- * Guard here:
+ * Guards here:
  *   ECHO — `authorType='external'` means the message came FROM the platform
  *   (inbound); never push it back out.
  *
- * The FIREWALL (bot/AI output must never reach a client-comms channel) now lives
- * in the bridge, which reads `payload.authorType` + `payload.branchPurpose` FACTS
- * off the enqueued intent and drops what it must. This layer only emits facts.
+ *   FIREWALL (defense-in-depth) — autonomous AI/agent output (authorType other
+ *   than `human`) must NEVER reach a client-comms firewall target. The bridge
+ *   ALSO drops these (reading `payload.authorType` + `payload.branchPurpose`
+ *   FACTS off the intent), but we fail CLOSED here too so a bridge bug can't leak
+ *   agent output to a client. HUMAN-authored messages are LEGITIMATE client
+ *   delivery and pass unchanged (an APPROVED agent send goes through the api
+ *   `sendExternalMessage` door — HUMAN-stamped — not this mirror). The predicate
+ *   is the ONE shared `isClientCommsFirewallTarget`, identical to the one
+ *   `delivery-router.ts` (`deliverToExternal`) uses.
  */
 
 import { getDb } from "../client-pg.js";
@@ -30,6 +36,7 @@ import { channels, ChannelType } from "../schema/channels.js";
 import { MessageAuthorType } from "../schema/messages.js";
 import { eq } from "drizzle-orm";
 import { enqueueChannelEgress } from "./channel-egress.js";
+import { isClientCommsFirewallTarget } from "./client-comms-firewall.js";
 
 /** The channel fields the mirror needs. Pass the row to skip a lookup. */
 export interface MirrorChannelRef {
@@ -38,6 +45,10 @@ export interface MirrorChannelRef {
   externalId: string | null;
   externalChannelId?: string | null;
   branchPurpose: string | null;
+  /** The subject entity a bound external channel is "about" — read by the
+   * client-comms firewall (an entity-bound external channel that isn't 'team'
+   * is a conversation with that party). */
+  contextObjectId?: string | null;
   workspaceId?: string | null;
 }
 
@@ -86,6 +97,7 @@ export async function mirrorMessageToBoundExternal(
         externalId: true,
         externalChannelId: true,
         branchPurpose: true,
+        contextObjectId: true,
         workspaceId: true,
       },
     });
@@ -115,8 +127,25 @@ export async function mirrorMessageToBoundExternal(
     };
   }
 
-  // Enqueue an agnostic `post_message` intent. The bridge delivers it and owns
-  // the firewall — it reads `authorType` + `branchPurpose` FACTS to decide.
+  // FIREWALL (fail-closed, defense-in-depth) — autonomous AI/agent output must
+  // NEVER be enqueued for a client-comms firewall target. Only HUMAN-authored
+  // messages are legitimate client delivery (an approved agent send goes through
+  // the api `sendExternalMessage` door, HUMAN-stamped, not this mirror). The
+  // bridge drops these too, but we DROP here so a bridge bug can't leak. Predicate
+  // is the ONE shared `isClientCommsFirewallTarget` (see delivery-router.ts).
+  const isAutonomous = authorType !== MessageAuthorType.HUMAN;
+  if (
+    isAutonomous &&
+    isClientCommsFirewallTarget({
+      branchPurpose: channel.branchPurpose,
+      contextObjectId: channel.contextObjectId ?? null,
+    })
+  ) {
+    return { mirrored: false, reason: "blocked_client_comms_mirror" };
+  }
+
+  // Enqueue an agnostic `post_message` intent. The bridge delivers it and applies
+  // the SAME firewall — it reads `authorType` + `branchPurpose` FACTS to decide.
   await enqueueChannelEgress({
     externalSource: channel.externalSource,
     externalId,

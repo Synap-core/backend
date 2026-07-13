@@ -1,15 +1,16 @@
 /**
  * Unit tests for the generic Synap→external channel mirror.
  *
- * After the Wave C cutover the mirror is provider-AGNOSTIC: it ENQUEUES a
- * `post_message` egress intent instead of posting to Discord, and it no longer
- * owns the firewall (bot/AI vs client-comms) — that moved to the bridge, which
- * reads the `authorType` + `branchPurpose` FACTS off the intent. So the mirror's
- * remaining invariants are:
+ * The mirror is provider-AGNOSTIC: it ENQUEUES a `post_message` egress intent
+ * instead of posting to Discord. Its invariants:
  *   - ECHO: inbound-origin (authorType='external') messages are never enqueued.
  *   - Only EXTERNAL channels with an external id enqueue.
- *   - Bot/AI output STILL enqueues here (the bridge decides whether to drop it) —
- *     the enqueued payload carries the facts the bridge firewall needs.
+ *   - FIREWALL (fail-closed, defense-in-depth): AUTONOMOUS AI/agent output
+ *     (authorType !== 'human') to a client-comms firewall target is DROPPED here
+ *     (reason 'blocked_client_comms_mirror'), never enqueued — the same predicate
+ *     delivery-router.ts uses. HUMAN-authored messages to the SAME channel are
+ *     legitimate client delivery and STILL enqueue. Non-firewall channels (team /
+ *     null-purpose / unbound) enqueue regardless of authorType.
  *
  * `channel-egress` is mocked so no network/DB is touched; channels are passed
  * inline so `getDb` is never called.
@@ -38,6 +39,13 @@ const discordTeam = {
 };
 const discordComms = { ...discordTeam, branchPurpose: "client-comms" };
 const discordNullPurpose = { ...discordTeam, branchPurpose: null };
+// An external channel BOUND to a subject entity, NOT explicitly 'team' — the
+// second firewall case (a conversation with that party).
+const discordEntityBound = {
+  ...discordTeam,
+  branchPurpose: null,
+  contextObjectId: "entity-1",
+};
 
 beforeEach(() => {
   enqueueMock.mockReset();
@@ -87,39 +95,37 @@ describe("mirrorMessageToBoundExternal — agnostic enqueue", () => {
     });
   });
 
-  test("bot output to a client-comms channel STILL enqueues here (bridge drops it) — carrying branchPurpose", async () => {
+  test("FIREWALL: bot output to a client-comms channel is DROPPED (not enqueued)", async () => {
     const r = await mirrorMessageToBoundExternal({
       channel: discordComms,
       content: "automated",
       authorType: MessageAuthorType.BOT,
     });
-    expect(r.mirrored).toBe(true);
-    expect(enqueueMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "post_message",
-        payload: expect.objectContaining({
-          authorType: MessageAuthorType.BOT,
-          branchPurpose: "client-comms",
-        }),
-      })
-    );
+    expect(r.mirrored).toBe(false);
+    expect(r.reason).toBe("blocked_client_comms_mirror");
+    expect(enqueueMock).not.toHaveBeenCalled();
   });
 
-  test("ai_agent output enqueues with its authorType FACT", async () => {
+  test("FIREWALL: ai_agent output to a client-comms channel is DROPPED (not enqueued)", async () => {
     const r = await mirrorMessageToBoundExternal({
       channel: discordComms,
       content: "ai reply",
       authorType: MessageAuthorType.AI_AGENT,
     });
-    expect(r.mirrored).toBe(true);
-    expect(enqueueMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          authorType: MessageAuthorType.AI_AGENT,
-          branchPurpose: "client-comms",
-        }),
-      })
-    );
+    expect(r.mirrored).toBe(false);
+    expect(r.reason).toBe("blocked_client_comms_mirror");
+    expect(enqueueMock).not.toHaveBeenCalled();
+  });
+
+  test("FIREWALL: ai_agent output to an entity-bound (non-team) external channel is DROPPED", async () => {
+    const r = await mirrorMessageToBoundExternal({
+      channel: discordEntityBound,
+      content: "ai reply",
+      authorType: MessageAuthorType.AI_AGENT,
+    });
+    expect(r.mirrored).toBe(false);
+    expect(r.reason).toBe("blocked_client_comms_mirror");
+    expect(enqueueMock).not.toHaveBeenCalled();
   });
 
   test("null branchPurpose rides the intent as null (bridge decides)", async () => {
@@ -136,7 +142,7 @@ describe("mirrorMessageToBoundExternal — agnostic enqueue", () => {
     );
   });
 
-  test("human operator message enqueues with its authorType FACT", async () => {
+  test("FIREWALL PRESERVES DELIVERY: human operator message to a client-comms channel STILL enqueues", async () => {
     const r = await mirrorMessageToBoundExternal({
       channel: discordComms,
       content: "reply to client",
@@ -174,15 +180,17 @@ describe("mirrorMessageToBoundExternal — agnostic enqueue", () => {
     expect(enqueueMock).not.toHaveBeenCalled();
   });
 
-  test("a non-discord provider is agnostic — it enqueues with its own externalSource", async () => {
+  test("a non-discord provider is NOT mirrored yet — only Discord consumes the egress outbox", async () => {
+    // The provider guard deliberately gates the mirror to Discord (the only source
+    // with an egress consumer today); enqueuing telegram would pile up unconsumed
+    // rows and falsely report mirrored:true. This asserts that documented behavior.
     const r = await mirrorMessageToBoundExternal({
       channel: { ...discordTeam, externalSource: "telegram" },
       content: "x",
       authorType: MessageAuthorType.BOT,
     });
-    expect(r.mirrored).toBe(true);
-    expect(enqueueMock).toHaveBeenCalledWith(
-      expect.objectContaining({ externalSource: "telegram" })
-    );
+    expect(r.mirrored).toBe(false);
+    expect(r.reason).toBe("no_egress_consumer:telegram");
+    expect(enqueueMock).not.toHaveBeenCalled();
   });
 });

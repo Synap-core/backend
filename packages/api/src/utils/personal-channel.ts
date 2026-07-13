@@ -2,7 +2,8 @@
  * Thread bootstrap utilities.
  *
  * Channel model:
- *   - Per-agent thread: one private thread per (user × agent), pod-scoped.
+ *   - Per-agent Personal: one active private conversation per (user × agent),
+ *     pod-scoped, with archived conversations retained as history.
  *   - Workspace group: one shared thread per (user × workspace).
  *   - Proactive feed: AI-only broadcast channel, pod-scoped.
  */
@@ -13,6 +14,9 @@ import {
   eq,
   and,
   asc,
+  desc,
+  inArray,
+  isNull,
   isNotNull,
   drizzleSql,
   computeMessageHash,
@@ -27,6 +31,8 @@ import {
   ChannelScope,
   FeedScope,
   ChannelStatus,
+  sessions,
+  SessionStatus,
   MessageRole,
   MessageAuthorType,
   MessageCategory,
@@ -36,6 +42,8 @@ import type { Channel } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "personal-channel" });
+
+const notInstanceThread = drizzleSql`(${channels.metadata} ->> 'agentInstanceThread') IS NULL`;
 
 async function getSyncAgentId(slug: string): Promise<string | null> {
   const [agent] = await db
@@ -52,6 +60,307 @@ async function getSyncAgentId(slug: string): Promise<string | null> {
  */
 export async function getAgentIdBySlug(slug: string): Promise<string | null> {
   return getSyncAgentId(slug);
+}
+
+/**
+ * A template PERSONAL channel is the user-to-agent conversation managed by the
+ * per-(user, template-agent) active-row constraint. Agent-instance threads use
+ * the same channel type but are marked and have their own membership-based key.
+ */
+export function isTemplatePersonalChannel(
+  channel: Pick<Channel, "channelType" | "assignedAgentId" | "metadata">
+): boolean {
+  const metadata = channel.metadata;
+  const isAgentInstance =
+    typeof metadata === "object" &&
+    metadata !== null &&
+    "agentInstanceThread" in metadata &&
+    (metadata as { agentInstanceThread?: unknown }).agentInstanceThread ===
+      true;
+
+  return (
+    channel.channelType === ChannelType.PERSONAL &&
+    channel.assignedAgentId !== null &&
+    !isAgentInstance
+  );
+}
+
+export interface PersonalConversationTransition {
+  channel: Channel;
+  archivedChannelIds: string[];
+}
+
+export interface PersonalConversationHistoryItem {
+  channel: Channel;
+  /** Channel title, falling back to the latest user turn or a neutral label. */
+  title: string;
+  /** Bounded latest user-message excerpt for history scanning. */
+  preview: string | null;
+  lastActivity: Date;
+  messageCount: number;
+}
+
+/**
+ * Start a fresh Personal conversation for an agent. Existing active template
+ * conversations are archived first; archived conversations remain intact for
+ * History. This intentionally does not seed the onboarding welcome again.
+ */
+export async function startNewPersonalConversation(
+  userId: string,
+  agentId: string
+): Promise<PersonalConversationTransition> {
+  return db.transaction(async (tx) => {
+    const activeChannels = await tx
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.userId, userId),
+          eq(channels.assignedAgentId, agentId),
+          eq(channels.channelType, ChannelType.PERSONAL),
+          eq(channels.status, ChannelStatus.ACTIVE),
+          notInstanceThread
+        )
+      )
+      .for("update");
+    const archivedChannelIds = activeChannels.map((channel) => channel.id);
+    const now = new Date();
+
+    if (archivedChannelIds.length > 0) {
+      await tx
+        .update(channels)
+        .set({ status: ChannelStatus.ARCHIVED, updatedAt: now })
+        .where(inArray(channels.id, archivedChannelIds));
+      await tx
+        .update(sessions)
+        .set({ status: SessionStatus.CLOSED, endedAt: now })
+        .where(
+          and(
+            inArray(sessions.channelId, archivedChannelIds),
+            eq(sessions.status, SessionStatus.ACTIVE)
+          )
+        );
+    }
+
+    const [created] = await tx
+      .insert(channels)
+      .values({
+        userId,
+        workspaceId: null,
+        channelType: ChannelType.PERSONAL,
+        scope: ChannelScope.POD,
+        status: ChannelStatus.ACTIVE,
+        assignedAgentId: agentId,
+      })
+      .onConflictDoNothing({
+        target: [channels.userId, channels.assignedAgentId],
+        where: and(
+          eq(channels.channelType, ChannelType.PERSONAL),
+          isNotNull(channels.assignedAgentId),
+          eq(channels.status, ChannelStatus.ACTIVE),
+          notInstanceThread
+        ),
+      })
+      .returning();
+
+    if (created) return { channel: created, archivedChannelIds };
+
+    const [survivor] = await tx
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.userId, userId),
+          eq(channels.assignedAgentId, agentId),
+          eq(channels.channelType, ChannelType.PERSONAL),
+          eq(channels.status, ChannelStatus.ACTIVE),
+          notInstanceThread
+        )
+      )
+      .orderBy(asc(channels.createdAt))
+      .limit(1);
+    if (!survivor) {
+      throw new Error(
+        `Failed to start PERSONAL conversation for user=${userId} agent=${agentId}`
+      );
+    }
+    return { channel: survivor, archivedChannelIds };
+  });
+}
+
+/**
+ * Archive a template Personal conversation and close its active internal
+ * sessions. The row remains readable through History.
+ */
+export async function closePersonalConversation(
+  userId: string,
+  channelId: string
+): Promise<Channel | null> {
+  return db.transaction(async (tx) => {
+    const [channel] = await tx
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.id, channelId),
+          eq(channels.userId, userId),
+          eq(channels.channelType, ChannelType.PERSONAL),
+          eq(channels.status, ChannelStatus.ACTIVE),
+          isNotNull(channels.assignedAgentId),
+          notInstanceThread
+        )
+      )
+      .for("update")
+      .limit(1);
+    if (!channel) return null;
+
+    const now = new Date();
+    const [closed] = await tx
+      .update(channels)
+      .set({ status: ChannelStatus.ARCHIVED, updatedAt: now })
+      .where(eq(channels.id, channelId))
+      .returning();
+    await tx
+      .update(sessions)
+      .set({ status: SessionStatus.CLOSED, endedAt: now })
+      .where(
+        and(
+          eq(sessions.channelId, channelId),
+          eq(sessions.status, SessionStatus.ACTIVE)
+        )
+      );
+
+    return closed ?? null;
+  });
+}
+
+/**
+ * Reopen an archived template Personal conversation. It becomes the sole active
+ * conversation for its original agent; no agent configuration or membership
+ * data is rewritten.
+ */
+export async function reopenPersonalConversation(
+  userId: string,
+  channelId: string
+): Promise<PersonalConversationTransition | null> {
+  return db.transaction(async (tx) => {
+    const [target] = await tx
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.id, channelId),
+          eq(channels.userId, userId),
+          eq(channels.channelType, ChannelType.PERSONAL),
+          eq(channels.status, ChannelStatus.ARCHIVED),
+          isNotNull(channels.assignedAgentId),
+          notInstanceThread
+        )
+      )
+      .for("update")
+      .limit(1);
+    if (!target?.assignedAgentId) return null;
+
+    const activeChannels = await tx
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.userId, userId),
+          eq(channels.assignedAgentId, target.assignedAgentId),
+          eq(channels.channelType, ChannelType.PERSONAL),
+          eq(channels.status, ChannelStatus.ACTIVE),
+          notInstanceThread
+        )
+      )
+      .for("update");
+    const archivedChannelIds = activeChannels.map((channel) => channel.id);
+    const now = new Date();
+
+    if (archivedChannelIds.length > 0) {
+      await tx
+        .update(channels)
+        .set({ status: ChannelStatus.ARCHIVED, updatedAt: now })
+        .where(inArray(channels.id, archivedChannelIds));
+      await tx
+        .update(sessions)
+        .set({ status: SessionStatus.CLOSED, endedAt: now })
+        .where(
+          and(
+            inArray(sessions.channelId, archivedChannelIds),
+            eq(sessions.status, SessionStatus.ACTIVE)
+          )
+        );
+    }
+
+    const [reopened] = await tx
+      .update(channels)
+      .set({ status: ChannelStatus.ACTIVE, updatedAt: now })
+      .where(
+        and(
+          eq(channels.id, target.id),
+          eq(channels.status, ChannelStatus.ARCHIVED)
+        )
+      )
+      .returning();
+    if (!reopened) return null;
+
+    return { channel: reopened, archivedChannelIds };
+  });
+}
+
+/** List archived template Personal conversations for a specific agent. */
+export async function listPersonalConversationHistory(
+  userId: string,
+  agentId: string,
+  limit: number,
+  offset: number
+): Promise<PersonalConversationHistoryItem[]> {
+  const lastActivity = drizzleSql<Date>`COALESCE(MAX(${messages.timestamp}), ${channels.updatedAt})`;
+  const latestUserPreview = drizzleSql<string | null>`(
+    SELECT LEFT(history_message.content, 160)
+    FROM messages AS history_message
+    WHERE history_message.channel_id = ${channels.id}
+      AND history_message.role = ${MessageRole.USER}
+      AND history_message.deleted_at IS NULL
+      AND history_message.ephemeral = false
+    ORDER BY history_message.timestamp DESC
+    LIMIT 1
+  )`;
+  const rows = await db
+    .select({
+      channel: channels,
+      preview: latestUserPreview,
+      lastActivity,
+      messageCount: drizzleSql<number>`COUNT(${messages.id})::int`,
+    })
+    .from(channels)
+    .leftJoin(
+      messages,
+      and(
+        eq(messages.channelId, channels.id),
+        isNull(messages.deletedAt),
+        eq(messages.ephemeral, false)
+      )
+    )
+    .where(
+      and(
+        eq(channels.userId, userId),
+        eq(channels.assignedAgentId, agentId),
+        eq(channels.channelType, ChannelType.PERSONAL),
+        eq(channels.status, ChannelStatus.ARCHIVED),
+        notInstanceThread
+      )
+    )
+    .groupBy(channels.id)
+    .orderBy(desc(lastActivity), desc(channels.updatedAt))
+    .limit(limit)
+    .offset(offset);
+
+  return rows.map((row) => ({
+    ...row,
+    title: row.channel.title ?? row.preview ?? "New conversation",
+  }));
 }
 
 /**
@@ -91,8 +400,8 @@ async function seedWelcomeMessage(
 }
 
 /**
- * Get or create a private thread between a user and a specific agent.
- * Pod-scoped: one channel per (userId, agentId), shared across all workspaces.
+ * Resolve the active private conversation between a user and a specific agent.
+ * Pod-scoped: one active channel per (userId, agentId), shared across all workspaces.
  * Seeds a welcome message on first creation (orchestrator agent only).
  */
 export async function ensureAgentThread(
@@ -107,7 +416,6 @@ export async function ensureAgentThread(
   // here (and channels_user_agent_personal_uniq excludes marked rows) so two
   // instances of the same template never collide with — or resolve to — the
   // template DM.
-  const notInstanceThread = drizzleSql`(${channels.metadata} ->> 'agentInstanceThread') IS NULL`;
   const existing = await db.query.channels.findFirst({
     where: and(
       eq(channels.userId, userId),

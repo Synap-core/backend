@@ -44,8 +44,12 @@ import {
 } from "@synap/database";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { getLinksFor } from "../links/links-service.js";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import {
+  userVisibleWhere,
+  workspaceLensWhere,
+} from "../../utils/user-visible-where.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
+import type { EntityConnection } from "./entity-connections.js";
 
 /**
  * Kinds the graph envelope can focus on. Superset of `LinkEndpointType` so
@@ -135,13 +139,19 @@ interface KindSpec {
   table: any;
   name: string; // column name for the display name
   subtype?: string; // column name for the in-kind discriminator
+  deletedAt?: string;
 }
 
 /**
  * `project` is a `projects` table row — a first-class table, NOT an entity.
  */
 const KIND_TABLE: Record<string, KindSpec> = {
-  entity: { table: entities, name: "title", subtype: "type" },
+  entity: {
+    table: entities,
+    name: "title",
+    subtype: "type",
+    deletedAt: "deletedAt",
+  },
   project: { table: projects, name: "name", subtype: "status" },
   view: { table: views, name: "name", subtype: "type" },
   channel: { table: channels, name: "title", subtype: "channelType" },
@@ -152,7 +162,12 @@ const KIND_TABLE: Record<string, KindSpec> = {
   capability: { table: capabilities, name: "name" },
   command: { table: intelligenceCommands, name: "title" },
   automation: { table: automations, name: "name", subtype: "triggerType" },
-  document: { table: documents, name: "title", subtype: "type" },
+  document: {
+    table: documents,
+    name: "title",
+    subtype: "type",
+    deletedAt: "deletedAt",
+  },
   workspace: { table: workspaces, name: "name" },
 };
 
@@ -164,7 +179,8 @@ const KIND_TABLE: Record<string, KindSpec> = {
 export async function hydrateNodes(
   userId: string,
   refs: { kind: string; id: string }[],
-  facetVisibilityScope: FacetVisibilityScope
+  facetVisibilityScope: FacetVisibilityScope,
+  workspaceId?: string | null
 ): Promise<Map<string, GraphNode>> {
   const out = new Map<string, GraphNode>();
   if (refs.length === 0) return out;
@@ -209,12 +225,13 @@ export async function hydrateNodes(
         .where(
           and(
             inArray(t.id, ids),
+            spec.deletedAt ? isNull(t[spec.deletedAt]) : undefined,
             kind === "workspace"
               ? and(
                   isNull((t as typeof workspaces).archivedAt),
-                  userVisibleWhere(t.id, userId)
+                  workspaceLensWhere(t.id, userId, workspaceId)
                 )
-              : userVisibleWhere(t.workspaceId, userId)
+              : workspaceLensWhere(t.workspaceId, userId, workspaceId)
           )
         );
 
@@ -268,9 +285,10 @@ export async function getLinkNeighbors(
   userId: string,
   kind: LinkEndpointType,
   id: string,
-  facetVisibilityScope: FacetVisibilityScope
+  facetVisibilityScope: FacetVisibilityScope,
+  workspaceId?: string | null
 ): Promise<GraphNeighbor[]> {
-  const edges = await getLinksFor(userId, kind, id);
+  const edges = await getLinksFor(userId, kind, id, workspaceId);
   if (edges.length === 0) return [];
 
   // The "other" endpoint of each edge + the direction relative to the focus.
@@ -287,7 +305,8 @@ export async function getLinkNeighbors(
   const nodes = await hydrateNodes(
     userId,
     refs.map((r) => ({ kind: r.kind, id: r.id })),
-    facetVisibilityScope
+    facetVisibilityScope,
+    workspaceId
   );
   return refs.map((r) => {
     const node = nodes.get(`${r.kind}:${r.id}`);
@@ -317,58 +336,52 @@ export async function getLinkNeighbors(
  *   focus_session    → session  (focus_sessions.subjectEntityId: session about entity)
  */
 export function connectionsToNeighbors(
-  connections: {
-    entityId: string;
-    entity?: {
-      title?: string | null;
-      type?: string | null;
-      workspaceId?: string | null;
-      /**
-       * Live facet slugs (Kind+Facets), when the caller's Connection row
-       * carries them. Optional — callers that don't load facets simply omit
-       * it and `subtypes` falls back to `[type]`.
-       */
-      facetSlugs?: string[] | null;
-    } | null;
-    label: string;
-    direction: "outgoing" | "incoming" | "structural";
-    source:
-      | "graph"
-      | "property"
-      | "thread"
-      | "context_channel"
-      | "focus_session";
-    relationType?: string;
-    propertySlug?: string;
-    channelRelationshipType?: string;
-    channelTitle?: string | null;
-    focusSessionId?: string;
-    focusSessionGoal?: string;
-    focusSessionStatus?: string;
-  }[]
+  connections: EntityConnection[]
 ): GraphNeighbor[] {
-  return connections.map((c) => ({
-    kind: "entity",
-    id: c.entityId,
-    name: c.entity?.title ?? c.label ?? c.entityId,
-    subtype: c.entity?.type ?? null,
-    subtypes: [
-      ...(c.entity?.type ? [c.entity.type] : []),
-      ...(c.entity?.facetSlugs ?? []),
-    ],
-    workspaceId: c.entity?.workspaceId ?? null,
-    edgeType:
-      c.relationType ?? c.propertySlug ?? c.channelRelationshipType ?? c.label,
-    direction: c.direction,
-    via:
-      c.source === "graph"
-        ? "relations"
-        : c.source === "property"
-          ? "property"
-          : c.source === "focus_session"
-            ? "session"
-            : "channel",
-  }));
+  return connections.map((c) => {
+    const isEntity = c.source === "graph" || c.source === "property";
+    const isSession = c.source === "focus_session";
+    const id = isSession
+      ? (c.focusSessionId ?? c.entityId)
+      : isEntity
+        ? c.entityId
+        : (c.channelId ?? c.entityId);
+
+    return {
+      kind: isEntity ? "entity" : isSession ? "session" : "channel",
+      id,
+      name: isEntity
+        ? (c.entity?.title ?? c.label ?? id)
+        : isSession
+          ? (c.focusSessionGoal ?? c.label ?? id)
+          : (c.channelTitle ?? c.label ?? id),
+      subtype: isEntity ? (c.entity?.type ?? null) : null,
+      subtypes: isEntity
+        ? [
+            ...(c.entity?.type ? [c.entity.type] : []),
+            ...(c.entity?.facetSlugs ?? []),
+          ]
+        : [],
+      workspaceId: isEntity
+        ? (c.entity?.workspaceId ?? null)
+        : isSession
+          ? (c.focusSessionWorkspaceId ?? null)
+          : (c.channelWorkspaceId ?? null),
+      edgeType:
+        c.relationType ??
+        c.propertySlug ??
+        c.channelRelationshipType ??
+        c.label,
+      direction: c.direction,
+      via: isEntity
+        ? c.source === "graph"
+          ? "relations"
+          : "property"
+        : isSession
+          ? "session"
+          : "channel",
+    };
+  });
 }
 
 /**
@@ -389,8 +402,8 @@ export async function getObjectGraph(
     workspaceId
   );
   const [selfMap, linkNeighbors] = await Promise.all([
-    hydrateNodes(userId, [{ kind, id }], facetVisibilityScope),
-    getLinkNeighbors(userId, kind, id, facetVisibilityScope),
+    hydrateNodes(userId, [{ kind, id }], facetVisibilityScope, workspaceId),
+    getLinkNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
   ]);
 
   const object: GraphNode = selfMap.get(`${kind}:${id}`) ?? {

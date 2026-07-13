@@ -24,7 +24,7 @@ import {
 } from "@synap/database";
 import type { Link } from "@synap/database/schema";
 import type { LinkInput, LinkEndpointType } from "@synap/playbooks";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { workspaceLensWhere } from "../../utils/user-visible-where.js";
 
 /**
  * Dual-write hook: `automation --member_of--> playbook` is the legacy edge
@@ -146,7 +146,8 @@ export async function createLinks(inputs: LinkInput[]): Promise<Link[]> {
 export async function getLinksFor(
   userId: string,
   type: LinkEndpointType,
-  id: string
+  id: string,
+  workspaceId?: string | null
 ): Promise<Link[]> {
   const db = await getDb();
   const rows = await db
@@ -154,7 +155,7 @@ export async function getLinksFor(
     .from(links)
     .where(
       and(
-        userVisibleWhere(links.workspaceId, userId),
+        workspaceLensWhere(links.workspaceId, userId, workspaceId),
         or(
           and(eq(links.fromType, type), eq(links.fromId, id)),
           and(eq(links.toType, type), eq(links.toId, id))

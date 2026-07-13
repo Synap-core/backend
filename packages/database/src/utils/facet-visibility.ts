@@ -18,6 +18,37 @@
 import { type SQL, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import { entityFacets } from "../schema/entity-facets.js";
 
+/**
+ * In-memory twin of {@link facetVisibilityConditions} for the string / null lens
+ * cases — the ONE place the "is this facet visible under this lens?" rule lives
+ * for code that has already-loaded facet rows (e.g. the proposal-review enrich)
+ * rather than a SQL WHERE. Keep the two derivations in lockstep: this predicate
+ * IS the boolean form of the same two SQL clauses.
+ *
+ *   - lens `null`   → facet.workspaceId IS NULL  AND  userId === viewer
+ *   - lens `string` → (facet.workspaceId === lens OR NULL)
+ *                       AND (facet.workspaceId NOT NULL OR userId === viewer)
+ *
+ * The workspace clause mirrors the `workspaceId === null` / `!== undefined`
+ * branches; the AND'd owner-floor clause mirrors the always-appended
+ * `or(isNotNull(workspaceId), eq(userId, viewer))`. (The identity-wide
+ * `workspaceId === undefined` + `allowedWorkspaceIds` branch is SQL-only — this
+ * in-memory helper is used where the lens is a concrete workspace or pod-wide.)
+ */
+export function isFacetVisibleForLens(
+  facet: { workspaceId: string | null; userId?: string | null },
+  lensWorkspaceId: string | null,
+  viewerUserId: string
+): boolean {
+  const workspaceMatch =
+    lensWorkspaceId === null
+      ? facet.workspaceId === null
+      : facet.workspaceId === lensWorkspaceId || facet.workspaceId === null;
+  const ownerFloor =
+    facet.workspaceId !== null || facet.userId === viewerUserId;
+  return workspaceMatch && ownerFloor;
+}
+
 export function facetVisibilityConditions(opts: {
   userId: string;
   workspaceId?: string | null;

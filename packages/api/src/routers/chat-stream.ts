@@ -49,6 +49,7 @@ import {
   agents,
   workspaceMembers,
   messages,
+  ChannelStatus,
   MessageRole,
 } from "@synap/database/schema";
 import {
@@ -60,6 +61,7 @@ import {
   getAgentIdBySlug,
 } from "../utils/personal-channel.js";
 import { queryChannelMessages } from "../utils/query-channel-messages.js";
+import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { createLogger } from "@synap-core/core";
 import { authMiddleware } from "@synap/auth";
 
@@ -146,7 +148,11 @@ chatStreamApp.post("/stream", async (c) => {
   let resolvedChannelId: string;
   if (input.channelId) {
     const channel = await db.query.channels.findFirst({
-      where: eq(channels.id, input.channelId),
+      where: and(
+        eq(channels.id, input.channelId),
+        eq(channels.status, ChannelStatus.ACTIVE),
+        channelVisibilityWhere(userId)
+      ),
       columns: { id: true, workspaceId: true },
     });
     if (!channel) {

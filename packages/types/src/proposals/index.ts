@@ -34,6 +34,50 @@ export type ProposalStatusString =
 export type ProposalStatusFilter = "pending" | "validated" | "rejected" | "all";
 
 /**
+ * Structured whole-proposal rejection reason taxonomy — Phase 1 of the
+ * reasoned-rejection loop (`PROPOSAL-GRANULAR-REASONED-REVIEW-PLAN.md`, Fork 2A).
+ *
+ * PINNED CONTRACT — the enum MUST be byte-identical wherever it's consumed
+ * (backend `proposals.reject`/`batchReject` input, `emitAiCorrection` data,
+ * the `routing-health` `byReasonCode` breakdown, and the frontend
+ * `DenyProposalModal` chips). This is the SSOT: both sides import from here
+ * (`@synap-core/types` — the app's frontend package resolves it via a local
+ * symlink to `synap-backend/packages/types`, so this is a true single source,
+ * not a hand-synced copy).
+ *
+ * Each reject carries at most ONE structured code, always optional — a bare
+ * reject (no code, no freeform `reason`) still works.
+ */
+export const PROPOSAL_REJECTION_REASONS = [
+  "wrong_entity",
+  "duplicate",
+  "wrong_kind_or_facet",
+  "wrong_link_type",
+  "wrong_workspace",
+  "bad_data",
+  "not_relevant",
+  "other",
+] as const;
+
+export type ProposalRejectionReasonCode =
+  (typeof PROPOSAL_REJECTION_REASONS)[number];
+
+/** Human-readable label per code — drives the `DenyProposalModal` chips. */
+export const PROPOSAL_REJECTION_REASON_LABELS: Record<
+  ProposalRejectionReasonCode,
+  string
+> = {
+  wrong_entity: "Wrong entity",
+  duplicate: "Duplicate",
+  wrong_kind_or_facet: "Wrong kind/facet",
+  wrong_link_type: "Wrong link type",
+  wrong_workspace: "Wrong workspace",
+  bad_data: "Bad data",
+  not_relevant: "Not relevant",
+  other: "Other",
+};
+
+/**
  * Universal Update Request
  *
  * The standard envelope for all change requests in the system.
@@ -145,32 +189,28 @@ export interface ProposalReviewGraph {
     title: string;
     propertyCount: number;
     hasContent: boolean;
+    /**
+     * Roles (facets) this KIND wears — the facet model made legible on the
+     * entity itself. Includes the entity's EXISTING roles (`isNew:false`,
+     * resolved from live `entity_facets` for ops that reference a pre-existing
+     * entity) and the roles this proposal ATTACHES (`isNew:true`, from the op's
+     * inline `facets`). A new role is emphasized in the UI ("Grimkujow becomes a
+     * Lead"). Mirrors the frontend `@synap-core/proposal-types` shape exactly.
+     */
+    roles?: Array<{ profileSlug: string; isNew: boolean; status?: string }>;
   }>;
   relations: Array<{
     type: string;
     sourceLabel: string;
     targetLabel: string;
-  }>;
-  /**
-   * Role-profile facets attached inline by the graph's create_entity ops
-   * (`CompositeCreateEntityOp.facets`). Previously uncounted, so a composite
-   * that attached roles rendered them nowhere in the review summary. Each entry
-   * points at the entity it decorates via `entityRef` (the same ref key the
-   * `entities[]` list uses) and carries the resolved parent title (`entityLabel`).
-   */
-  facets: Array<{
-    /** Ref of the create_entity op this facet attaches to (matches entities[].ref). */
-    entityRef: string;
-    /** Resolved title of the parent entity (for display without a second lookup). */
-    entityLabel: string;
-    /** Role-profile slug being attached (e.g. "client", "investor"). */
-    profileSlug: string;
-    /** Optional domain status the role is attached with. */
-    status?: string;
+    /** Ref into `entities[]` when the source endpoint is part of this graph. */
+    sourceRef?: string;
+    /** Ref into `entities[]` when the target endpoint is part of this graph. */
+    targetRef?: string;
   }>;
   entityCount: number;
   relationCount: number;
-  /** Number of inline facet attaches across all create_entity ops. */
+  /** Count of newly-attached roles (`isNew`) across all entities. */
   facetCount: number;
 }
 

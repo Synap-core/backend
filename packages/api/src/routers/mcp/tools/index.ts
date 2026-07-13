@@ -521,6 +521,49 @@ export const tools = {
           required: [],
         },
       },
+      {
+        name: "synap_define_role",
+        description:
+          "Define a NEW role type (Kind + Facets) that can then be attached to entities via synap_attach_facet. A role — e.g. 'market-maker', 'sponsor', 'mentor' — is an attachable FACET, never its own entity. Use this ONLY when synap_list_profiles shows no existing role slug that fits; prefer attaching an existing role over minting a near-duplicate. applicableKinds declares which base kinds (e.g. 'company', 'person') the role can attach to and is REQUIRED (non-empty). Governed like any write: may return 'proposed' (a proposalId to review) — NEVER treat that as an error.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            slug: {
+              type: "string",
+              description:
+                "URL-safe role slug (lowercase, digits, hyphens), e.g. 'market-maker'.",
+            },
+            displayName: {
+              type: "string",
+              description: "Human-readable role name, e.g. 'Market Maker'.",
+            },
+            applicableKinds: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Base-kind slugs this role can attach to. REQUIRED, non-empty. Defaults to ['company','person'].",
+            },
+            description: {
+              type: "string",
+              description: "Optional description of what the role represents.",
+            },
+            icon: {
+              type: "string",
+              description: "Optional icon hint for the role.",
+            },
+            properties: {
+              type: "object",
+              description:
+                "Optional default property values for facets of this role.",
+            },
+            workspaceId: {
+              type: "string",
+              description: "Workspace to define the role in.",
+            },
+          },
+          required: ["slug", "displayName", "workspaceId"],
+        },
+      },
 
       // ── Session bootstrap & governance ─────────────────────────────────────
       {

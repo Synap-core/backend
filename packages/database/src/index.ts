@@ -88,6 +88,9 @@ export type {
   MirrorMessageParams,
   MirrorResult,
 } from "./utils/mirror-to-external.js";
+// The ONE pure client-comms firewall predicate — shared by the mirror
+// (mirror-to-external) and the routeSignal external door (delivery-router).
+export { isClientCommsFirewallTarget } from "./utils/client-comms-firewall.js";
 export { insertChannelMessage } from "./utils/insert-channel-message.js";
 export type {
   InsertChannelMessageParams,

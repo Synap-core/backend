@@ -94,11 +94,14 @@ const logger = createLogger({ module: "capture-router" });
 
 const FALLBACK_RELATION_TYPE = "relates_to";
 
+/** Canonical generic kind for unclassified capture material. */
+const DEFAULT_CAPTURE_PROFILE = "item";
+
 // ── ek_type inference (knowledge profile discriminator) ────────────────────
 // The `knowledge` profile requires an ek_type (gotcha|lesson|decision|reference).
 // IS structuring identifies the profile but does not always set ek_type — infer
 // it from the text via a keyword sniff so entity creation succeeds instead of
-// degrading to a note. ONE helper, called by both the single-entity (thought)
+// degrading to an item. ONE helper, called by both the single-entity (thought)
 // and multi-entity (structure) paths.
 function inferEkType(
   text: string
@@ -144,7 +147,7 @@ const DEDUP_SIMILARITY_FLOOR = 0.5;
 
 // Interactive-capture structure timeout. The client default is 25s; a longer
 // prose input decodes more entities and its generation can cross 25s, aborting
-// the backend→IS fetch → a null result → a degraded raw note (dogfooding hit
+// the backend→IS fetch → a null result → a degraded generic item (dogfooding hit
 // exactly this). The deep-import path already uses 60s; 45s is the interactive
 // budget (capture is optimistic/async — a slightly longer wait beats a degrade).
 const STRUCTURE_TIMEOUT_MS = 45_000;
@@ -159,6 +162,42 @@ type DedupCandidate = {
   profileSlug: string;
   score: number;
 };
+
+type DegradedCaptureReason =
+  | "is_auth_error"
+  | "is_invalid_response"
+  | "is_empty_result";
+
+/** Build the generic-item fallback proposal returned when IS cannot structure input. */
+export function buildDegradedCaptureFallback(
+  inputText: string,
+  degradedReason: DegradedCaptureReason
+) {
+  return {
+    proposals: [
+      {
+        tempId: "t1",
+        profileSlug: DEFAULT_CAPTURE_PROFILE,
+        title: inputText.slice(0, 80).trim(),
+        description: inputText.length > 80 ? inputText : undefined,
+        properties: { content: inputText },
+        confidence: 0.3,
+      },
+    ],
+    relations: [] as Array<{
+      sourceTempId: string;
+      targetTempId: string;
+      relationType: string;
+    }>,
+    followUp: null as string | StructuredFollowUp | null,
+    targetWorkspaceId: null as string | null,
+    targetProjectId: null as string | null,
+    formSpec: null,
+    dedupCandidates: {} as Record<string, DedupCandidate[]>,
+    degraded: true as const,
+    degradedReason,
+  };
+}
 
 /**
  * Semantic dedup — cosine search over the SAME pgvector infra the retrieval
@@ -214,7 +253,7 @@ async function semanticDedupCandidates(
     return rows.map((r) => ({
       entityId: r.entityId,
       title: r.title ?? "",
-      profileSlug: r.entityType || "note",
+      profileSlug: r.entityType || DEFAULT_CAPTURE_PROFILE,
       score: 1 - Number(r.distance),
     }));
   } catch (err) {
@@ -345,7 +384,7 @@ export const captureRouter = router({
       );
 
       // Step 1: Classify via Intelligence Service
-      let profileSlug = "note";
+      let profileSlug = DEFAULT_CAPTURE_PROFILE;
       let title = input.content.slice(0, 80).trim();
       let properties: Record<string, unknown> = {};
       let mode: "ai" | "fallback" = "fallback";
@@ -395,17 +434,17 @@ export const captureRouter = router({
         // credentials are bad — mark credential_error so the frontend can
         // drive re-provisioning. Every other failure (validation, timeout,
         // 5xx, network) is a transient/degraded condition: fall back to a
-        // note WITHOUT poisoning the credential status.
+        // item WITHOUT poisoning the credential status.
         if (err instanceof IntelligenceAuthError) {
           logger.warn(
             { err, userId, status: err.status },
-            "IS classification auth failure — marking credential_error, falling back to note"
+            "IS classification auth failure — marking credential_error, falling back to item"
           );
           markServiceCredentialError();
         } else {
           logger.warn(
             { err, userId },
-            "IS classification failed (non-auth) — falling back to note"
+            "IS classification failed (non-auth) — falling back to item"
           );
         }
       }
@@ -442,8 +481,8 @@ export const captureRouter = router({
         properties = { ...properties, content: inlineContent };
       }
 
-      // Salvage properties (kept for the note fallback): the generic content/url
-      // a note accepts — and the document link — so the user's body is never
+      // Salvage properties (kept for the item fallback): the generic content/url
+      // an item accepts — and the document link — so the user's body is never
       // lost regardless of which fallback path runs.
       const salvageProperties = {
         ...(input.url ? { url: input.url } : {}),
@@ -511,7 +550,7 @@ export const captureRouter = router({
       }
 
       const originalProfileSlug = profileSlug;
-      // Additive provenance: degradedFrom set only when the final note fallback
+      // Additive provenance: degradedFrom set only when the final item fallback
       // runs; propertiesDropped set only when the same-profile retry salvaged
       // the typed profile by dropping its properties.
       let degradedFrom: string | undefined;
@@ -536,7 +575,7 @@ export const captureRouter = router({
         // A PropertyValidationError means the PROFILE is valid but one of the
         // typed properties failed schema validation — salvage the typed profile
         // by retrying ONCE with the same profileSlug and properties stripped to
-        // the generic note-safe set, instead of throwing the profile away.
+        // the generic item-safe set, instead of throwing the profile away.
         const cause =
           err instanceof TRPCError ? (err.cause ?? undefined) : undefined;
         if (cause instanceof PropertyValidationError) {
@@ -556,13 +595,13 @@ export const captureRouter = router({
             entityId = (salvaged as { id: string }).id;
             propertiesDropped = true;
           } catch (retryErr) {
-            // Same-profile retry still failed — last resort: fall back to note.
+            // Same-profile retry still failed — last resort: fall back to item.
             logger.warn(
               { err: retryErr, userId, profileSlug },
-              "Same-profile retry failed, falling back to note"
+              "Same-profile retry failed, falling back to item"
             );
             const fallback = await entitiesCaller.create({
-              profileSlug: "note",
+              profileSlug: DEFAULT_CAPTURE_PROFILE,
               title,
               properties: salvageProperties,
               documentId,
@@ -571,18 +610,18 @@ export const captureRouter = router({
             });
             entityId = (fallback as { id: string }).id;
             degradedFrom = originalProfileSlug;
-            profileSlug = "note";
+            profileSlug = DEFAULT_CAPTURE_PROFILE;
             mode = "fallback";
           }
         } else {
           // Not a property validation error (e.g. profile not accessible) —
-          // stripping properties wouldn't help; fall back to note directly.
+          // stripping properties wouldn't help; fall back to item directly.
           logger.warn(
             { err, userId, profileSlug },
-            "Entity creation failed (non-validation), falling back to note"
+            "Entity creation failed (non-validation), falling back to item"
           );
           const fallback = await entitiesCaller.create({
-            profileSlug: "note",
+            profileSlug: DEFAULT_CAPTURE_PROFILE,
             title,
             properties: salvageProperties,
             documentId,
@@ -591,7 +630,7 @@ export const captureRouter = router({
           });
           entityId = (fallback as { id: string }).id;
           degradedFrom = originalProfileSlug;
-          profileSlug = "note";
+          profileSlug = DEFAULT_CAPTURE_PROFILE;
           mode = "fallback";
         }
       }
@@ -607,7 +646,7 @@ export const captureRouter = router({
         profileSlug,
         title,
         mode,
-        // Additive: original AI-chosen slug, only when the note fallback ran.
+        // Additive: original AI-chosen slug, only when the item fallback ran.
         ...(degradedFrom ? { degradedFrom } : {}),
         // Additive: true when the same-profile retry succeeded sans properties.
         ...(propertiesDropped ? { propertiesDropped: true as const } : {}),
@@ -669,7 +708,7 @@ export const captureRouter = router({
       const workspaceId = ctx.workspaceId; // string | null — pod-wide allowed
 
       // Text is optional now (a `file` may carry the payload instead); guard
-      // every `input.text` use. The note-fallback below needs SOME text, so use
+      // every `input.text` use. The item-fallback below needs SOME text, so use
       // a safe local that prefers text and falls back to a filename hint.
       const inputText =
         input.text ??
@@ -807,7 +846,7 @@ export const captureRouter = router({
         routingMemory = undefined;
       }
 
-      // Degraded fallback proposal — a single note carrying the raw text, so a
+      // Degraded fallback proposal — a single item carrying the raw text, so a
       // capture is never lost when the IS can't structure it. `degraded` +
       // `degradedReason` are ADDITIVE response fields (published api-types
       // clients that don't read them are unaffected) that tell the caller this
@@ -815,43 +854,8 @@ export const captureRouter = router({
       //   is_auth_error      — IS rejected the pod credentials (401/403)
       //   is_invalid_response — IS reachable but returned null (5xx/validation/
       //                         timeout/network) — NOT a credentials problem
-      const degradedFallback = (
-        degradedReason:
-          | "is_auth_error"
-          | "is_invalid_response"
-          | "is_empty_result"
-      ) => ({
-        proposals: [
-          {
-            tempId: "t1",
-            profileSlug: "note",
-            title: inputText.slice(0, 80).trim(),
-            description: inputText.length > 80 ? inputText : undefined,
-            properties: { content: inputText },
-            confidence: 0.3,
-          },
-        ],
-        relations: [] as Array<{
-          sourceTempId: string;
-          targetTempId: string;
-          relationType: string;
-        }>,
-        followUp: null as string | StructuredFollowUp | null,
-        targetWorkspaceId: null as string | null,
-        targetProjectId: null as string | null,
-        formSpec: null,
-        dedupCandidates: {} as Record<
-          string,
-          Array<{
-            entityId: string;
-            title: string;
-            profileSlug: string;
-            score: number;
-          }>
-        >,
-        degraded: true as const,
-        degradedReason,
-      });
+      const degradedFallback = (degradedReason: DegradedCaptureReason) =>
+        buildDegradedCaptureFallback(inputText, degradedReason);
 
       const structureInput = {
         text: input.text ?? "",
@@ -992,7 +996,7 @@ export const captureRouter = router({
 
       // Knowledge profile requires ek_type — infer from each entity's title when
       // IS omitted it (see inferEkType), so entity creation succeeds instead of
-      // degrading to note.
+      // degrading to item.
       for (const entity of structureResult.entities) {
         if (
           entity.profileSlug === "knowledge" &&
@@ -1012,7 +1016,7 @@ export const captureRouter = router({
       //   • ambiguous (rung-2 candidates >1): tie-break over ONLY those pre-approved
       //     candidates via the IS /api/workspace-tiebreak route (D3); abstain → stay
       //     put (never fall back to a full-catalog guess).
-      //   • no ontology signal (rung 6, e.g. a pod-wide note/knowledge): keep the
+      //   • no ontology signal (rung 6, e.g. a pod-wide item/knowledge): keep the
       //     IS's name-reconciled pick from step 1a.
       // Best-effort: a resolver/tie-break hiccup leaves the step-1a pick untouched.
       const routingSlugs = Array.from(
@@ -1160,7 +1164,9 @@ export const captureRouter = router({
                 .map((r) => ({
                   entityId: r.document.id as string,
                   title: (r.document.title as string) || "",
-                  profileSlug: (r.document.entityType as string) || "note",
+                  profileSlug:
+                    (r.document.entityType as string) ||
+                    DEFAULT_CAPTURE_PROFILE,
                   score: titleSimilarity(
                     entity.title,
                     (r.document.title as string) || ""
@@ -1234,7 +1240,7 @@ export const captureRouter = router({
         // when all searches succeeded.
         ...(dedupSkipped ? { dedupSkipped: true as const } : {}),
         // Forward the degraded signal from IS so callers can distinguish a
-        // real classification from a confidence-0.3 fallback note. The note is
+        // real classification from a confidence-0.3 fallback item. The item is
         // still written (preserving user text), but callers now know WHY.
         degraded: (structureResult as { degraded?: boolean }).degraded ?? false,
         ...((structureResult as { degradedReason?: string }).degradedReason !==
@@ -1505,7 +1511,7 @@ export const captureRouter = router({
       // AI's structure output), so it materializes through the SHARED composite
       // orchestrator with injected direct-write callers: the loop owns
       // ref-resolution + relation creation; the callers own write policy
-      // (content→document routing, retry-as-note, relation-slug fallback).
+      // (content→document routing, retry-as-item, relation-slug fallback).
 
       // Prefetch valid relation slugs for this workspace (avoids N+1).
       // Workspace-less callers (hydration) get the fallback only.
@@ -1626,7 +1632,7 @@ export const captureRouter = router({
         })),
       ];
 
-      // Direct-write entity caller: shared content routing + retry-as-note,
+      // Direct-write entity caller: shared content routing + retry-as-item,
       // returning the ACTUAL profile created so the response reflects
       // fallbacks. Routes through the main entity door (entities.create),
       // never entityRepo.create directly, so capture gets the same
@@ -1636,7 +1642,7 @@ export const captureRouter = router({
       // lenses. A pod-scope kind (person/company/… — entityScope='pod') is
       // created POD-WIDE (workspaceId=null) instead of force-stamped into the
       // routed workspace; the routed workspace instead becomes the workspaceId
-      // of its ATTACHED FACETS (below). Workspace-scoped kinds (task/note/item/
+      // of its ATTACHED FACETS (below). Workspace-scoped kinds (task/item/
       // deal/event…) keep the routed stamp — their documents/sessions/projects
       // link via the entity's workspaceId (load-bearing; do not break). Cache
       // per slug so a batch of many same-kind entities resolves scope once.
@@ -1662,8 +1668,8 @@ export const captureRouter = router({
           content?: string;
         }) => {
           // Pod-scope kinds land pod-wide (null workspace); workspace-scope
-          // kinds keep the routed stamp. The note fallback below is always a
-          // workspace kind, so it always keeps the routed stamp.
+          // kinds keep the routed stamp. The item fallback below is explicitly
+          // pinned to the routed workspace so degraded captures stay in-lane.
           const isPod = await isPodScopeProfile(op.profileSlug);
           const { documentId, inlineContent } = await resolveContentTarget({
             content: op.content,
@@ -1704,7 +1710,7 @@ export const captureRouter = router({
           } catch (err) {
             // PropertyValidationError = valid profile, invalid property. Salvage
             // the typed profile by retrying ONCE with the same slug, properties
-            // stripped, before falling back to note. The door wraps the original
+            // stripped, before falling back to item. The door wraps the original
             // error in a TRPCError; the original is preserved as `.cause`.
             const cause =
               err instanceof TRPCError ? (err.cause ?? undefined) : undefined;
@@ -1734,17 +1740,17 @@ export const captureRouter = router({
               } catch (retryErr) {
                 logger.warn(
                   { err: retryErr, profileSlug: op.profileSlug },
-                  "Same-profile retry failed, falling back to note"
+                  "Same-profile retry failed, falling back to item"
                 );
               }
             } else {
               logger.warn(
                 { err, profileSlug: op.profileSlug },
-                "Entity creation failed (non-validation), falling back to note"
+                "Entity creation failed (non-validation), falling back to item"
               );
             }
             const fallback = await entitiesCaller.create({
-              profileSlug: "note",
+              profileSlug: DEFAULT_CAPTURE_PROFILE,
               title: op.title,
               description: op.description,
               properties: salvageProperties,
@@ -1755,7 +1761,7 @@ export const captureRouter = router({
             });
             return {
               id: (fallback as { id: string }).id,
-              profileSlug: "note",
+              profileSlug: DEFAULT_CAPTURE_PROFILE,
               degradedFrom: op.profileSlug,
             };
           }
@@ -1815,7 +1821,7 @@ export const captureRouter = router({
         entityId: e.entityId,
         profileSlug: e.profileSlug,
         linked: e.linked,
-        // Additive: original slug when this entity was downgraded to a note.
+        // Additive: original slug when this entity was downgraded to an item.
         ...(e.degradedFrom ? { degradedFrom: e.degradedFrom } : {}),
         // Additive: true when the typed profile was salvaged sans properties.
         ...(e.propertiesDropped ? { propertiesDropped: true as const } : {}),
@@ -2158,7 +2164,7 @@ export const captureRouter = router({
             // WITHOUT clobbering entity.documentId. The primary may already
             // carry an extracted-content document (set by entityCaller.create
             // via resolveContentTarget → materializeContentDocument); overwriting
-            // documentId here would orphan that long-form note body. Instead we
+            // documentId here would orphan that long-form item body. Instead we
             // merge two properties — entityRepo.update MERGES properties (it does
             // NOT replace), and unknown property keys are preserved by the
             // validation service — so the extracted documentId stays intact.
