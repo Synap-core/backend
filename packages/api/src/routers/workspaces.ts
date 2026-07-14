@@ -2891,6 +2891,7 @@ export const workspacesRouter = router({
               // a superset of the fields reconcile reads — same as the Hub route.
               definition:
                 input.definition as unknown as WorkspaceDefinitionInput,
+              mergeCapabilities: true,
             });
             auditLog({
               subjectType: "workspaces",

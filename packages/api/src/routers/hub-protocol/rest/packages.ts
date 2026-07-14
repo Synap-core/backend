@@ -255,6 +255,7 @@ export function registerPackagesRoutes(app: HubHono): void {
           // shapes with WorkspaceDefinitionInput. Bounded boundary cast (not
           // `any`, so downstream type-safety is preserved).
           definition: body as unknown as WorkspaceDefinitionInput,
+          mergeCapabilities: true,
         });
         workspaceId = composeTargetWorkspaceId;
         result.workspace = {

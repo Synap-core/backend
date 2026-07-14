@@ -4873,10 +4873,13 @@ export interface GraphEnvelope {
  * What happened to a single dependency during resolution.
  *   - `found`          — a matching artifact already existed on the pod.
  *   - `installed`      — a built-in `workspace` template was materialized now.
- *   - `composed`       — the compose base was resolved and set as the overlay target.
  *   - `required-absent`— required but not present, and not auto-installable (surfaced).
+ *
+ * (A `compose` base surfaces as `found`/`installed` — it's the base that is
+ * found/installed; the OVERLAY is what composes onto it. The workspace-level
+ * `status:"composed"` in the apply response captures that outcome.)
  */
-export type PackageDependencyAction = "found" | "installed" | "composed" | "required-absent";
+export type PackageDependencyAction = "found" | "installed" | "required-absent";
 export interface ResolvedPackageDependency {
 	slug: string;
 	kind: PackageDependencyKind;

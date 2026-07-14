@@ -56,6 +56,13 @@ export interface ReconcileOptions {
   definition: WorkspaceDefinitionInput;
   /** Compute the diff without applying any write. */
   dryRun?: boolean;
+  /**
+   * Union new capabilities onto the live set instead of replacing wholesale.
+   * TRUE only for additive compose-overlay applies — NEVER for boot/manual
+   * "sync to canonical template" reconciles, or a capability removed from a
+   * template could never be removed live.
+   */
+  mergeCapabilities?: boolean;
 }
 
 export interface ReconcileReport {
@@ -136,8 +143,17 @@ export async function reconcileWorkspaceFromDefinition(
     settingsPatch.workspaceSubtype = definition.workspaceSubtype;
   if (definition.workspaceVisibility)
     settingsPatch.workspaceVisibility = definition.workspaceVisibility;
-  if (definition.workspaceCapabilities)
-    settingsPatch.workspaceCapabilities = definition.workspaceCapabilities;
+  if (definition.workspaceCapabilities) {
+    if (opts.mergeCapabilities) {
+      const liveCapabilities =
+        (ws.settings as WorkspaceSettings | null)?.workspaceCapabilities ?? [];
+      settingsPatch.workspaceCapabilities = Array.from(
+        new Set([...liveCapabilities, ...definition.workspaceCapabilities])
+      );
+    } else {
+      settingsPatch.workspaceCapabilities = definition.workspaceCapabilities;
+    }
+  }
   if (Object.keys(settingsPatch).length > 0) {
     report.settings.merged = Object.keys(settingsPatch);
     if (!dryRun)

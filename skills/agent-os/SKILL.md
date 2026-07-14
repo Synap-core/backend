@@ -42,11 +42,10 @@ dashboards, and (where relevant) capabilities + playbooks.
 | Template slug        | Workspace          | What it's for                                  |
 | -------------------- | ------------------ | ---------------------------------------------- |
 | `foundation`         | Foundation         | Strategic DNA — mission, audience, positioning |
-| `radar`              | Radar              | Competitors, market segments, trends           |
+| `ecosystem`          | Ecosystem          | Market actors, segments, trends, relationships |
 | `brand-library`      | Brand Library      | Brand voice, assets, tokens, components, rules |
 | `crm`                | CRM                | Contacts, companies, deals, pipeline           |
-| `content-os`         | Content OS         | Posts, campaigns, content calendar, brand      |
-| `content-studio`     | Content Studio     | Video/production pipeline                      |
+| `content-studio`     | Content Studio     | Posts, pillars, calendar + video/production    |
 | `marketing-campaign` | Marketing          | Campaigns, leads, channels                     |
 | `project-management` | Project Management | OKRs, projects, sprints, tasks                 |
 | `builder-workspace`  | Builder            | DevPlane + agents — building the product       |
