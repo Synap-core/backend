@@ -24,6 +24,8 @@ import { createLogger } from "@synap-core/core";
 import { db } from "../client-pg.js";
 import { users } from "../schema/users.js";
 import { workspaces, workspaceMembers } from "../schema/workspaces.js";
+import { projects } from "../schema/projects.js";
+import { projectMembers } from "../schema/project-members.js";
 import { controlPlaneMemberActivations } from "../schema/control-plane-member-activations.js";
 
 const logger = createLogger({ module: "user-provisioning" });
@@ -33,6 +35,8 @@ const normalizeEmail = (e: string) => e.trim().toLowerCase();
 export interface SeedAdminUserInput {
   /** Kratos identity id, pre-resolved by the caller (find-or-create via Kratos admin API). */
   kratosIdentityId: string;
+  /** Stable CP account id. Required by managed provisioning; absent in local mode. */
+  controlPlaneUserId?: string;
   email: string;
   name?: string;
   /** Whether the Kratos identity reports the email as verified. */
@@ -46,7 +50,7 @@ export interface SeedAdminUserResult {
   alreadyExisted: boolean;
 }
 
-export interface ActivateControlPlaneMemberInput {
+interface ActivateControlPlaneMemberBaseInput {
   /** CP-generated idempotency key for this accepted invite. */
   activationId: string;
   /** Stable CP account id. It is never inferred from an email address. */
@@ -55,20 +59,131 @@ export interface ActivateControlPlaneMemberInput {
   kratosIdentityId: string;
   email: string;
   name?: string;
-  workspaceId: string;
   role: "admin" | "editor" | "viewer";
 }
 
+export type ActivateControlPlaneMemberInput =
+  | (ActivateControlPlaneMemberBaseInput & {
+      scopeKind: "workspace";
+      workspaceId: string;
+      projectId?: never;
+    })
+  | (ActivateControlPlaneMemberBaseInput & {
+      scopeKind: "project";
+      projectId: string;
+      workspaceId?: never;
+    });
+
 export interface ActivateControlPlaneMemberResult {
   userId: string;
-  workspaceId: string;
+  scopeKind: "workspace" | "project";
+  workspaceId: string | null;
+  projectId: string | null;
   role: "admin" | "editor" | "viewer";
   alreadyActivated: boolean;
   membershipCreated: boolean;
 }
 
+export type BindExistingControlPlaneUserResult =
+  | {
+      status: "bound";
+      userId: string;
+      workspaceId: string | null;
+      projectId: string | null;
+    }
+  | {
+      status: "not-active";
+      reason:
+        | "identity-not-projected"
+        | "access-not-found"
+        | "control-plane-user-conflict"
+        | "pod-user-conflict";
+    };
+
 /**
- * Project a Control Plane invitation into one Pod workspace.
+ * Explicitly bind a CP identity to a user authenticated directly on this Pod.
+ *
+ * This is the safe bridge for "add an existing Pod by URL": the direct Pod
+ * session proves the user already has access, while the CP becomes the issuer
+ * for later sessions. This mutating primitive must only be called from an
+ * endpoint protected by a direct Pod session and a validated CP bind assertion.
+ * It deliberately cannot create users, workspaces, projects, or memberships.
+ */
+export async function bindExistingControlPlaneUser(input: {
+  controlPlaneUserId: string;
+  kratosIdentityId: string;
+}): Promise<BindExistingControlPlaneUserResult> {
+  const controlPlaneUserId = input.controlPlaneUserId.trim();
+  const identityId = input.kratosIdentityId.trim();
+  if (!controlPlaneUserId || !identityId) {
+    return { status: "not-active", reason: "identity-not-projected" };
+  }
+
+  return db.transaction(async (tx) => {
+    const [podUser, mappedUser, workspaceMembership, projectMembership] =
+      await Promise.all([
+        tx.query.users.findFirst({
+          where: eq(users.id, identityId),
+          columns: { id: true, controlPlaneUserId: true },
+        }),
+        tx.query.users.findFirst({
+          where: eq(users.controlPlaneUserId, controlPlaneUserId),
+          columns: { id: true },
+        }),
+        tx.query.workspaceMembers.findFirst({
+          where: eq(workspaceMembers.userId, identityId),
+          columns: { workspaceId: true },
+        }),
+        tx.query.projectMembers.findFirst({
+          where: eq(projectMembers.userId, identityId),
+          columns: { projectId: true },
+        }),
+      ]);
+
+    if (!podUser) {
+      return {
+        status: "not-active",
+        reason: "identity-not-projected",
+      } as const;
+    }
+    if (!workspaceMembership && !projectMembership) {
+      return { status: "not-active", reason: "access-not-found" } as const;
+    }
+    if (mappedUser && mappedUser.id !== identityId) {
+      return {
+        status: "not-active",
+        reason: "control-plane-user-conflict",
+      } as const;
+    }
+    if (
+      podUser.controlPlaneUserId &&
+      podUser.controlPlaneUserId !== controlPlaneUserId
+    ) {
+      return { status: "not-active", reason: "pod-user-conflict" } as const;
+    }
+
+    if (!podUser.controlPlaneUserId) {
+      await tx
+        .update(users)
+        .set({
+          controlPlaneUserId,
+          lastSyncedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, identityId));
+    }
+
+    return {
+      status: "bound",
+      userId: identityId,
+      workspaceId: workspaceMembership?.workspaceId ?? null,
+      projectId: projectMembership?.projectId ?? null,
+    } as const;
+  });
+}
+
+/**
+ * Project a Control Plane invitation into one exact Pod scope.
  *
  * This intentionally does not call `seedAdminUser`: invited members must not
  * receive a personal workspace, an owner role, or a personal agent. The
@@ -81,7 +196,10 @@ export async function activateControlPlaneMember(
   const activationId = input.activationId.trim();
   const controlPlaneUserId = input.controlPlaneUserId.trim();
   const identityId = input.kratosIdentityId.trim();
-  const workspaceId = input.workspaceId.trim();
+  const workspaceId =
+    input.scopeKind === "workspace" ? input.workspaceId.trim() : null;
+  const projectId =
+    input.scopeKind === "project" ? input.projectId.trim() : null;
   const email = normalizeEmail(input.email);
   const name = input.name?.trim() || null;
 
@@ -89,7 +207,7 @@ export async function activateControlPlaneMember(
     !activationId ||
     !controlPlaneUserId ||
     !identityId ||
-    !workspaceId ||
+    (input.scopeKind === "workspace" ? !workspaceId : !projectId) ||
     !email
   ) {
     throw new Error(
@@ -105,7 +223,9 @@ export async function activateControlPlaneMember(
       const matches =
         receipt.controlPlaneUserId === controlPlaneUserId &&
         receipt.userId === identityId &&
+        receipt.scopeKind === input.scopeKind &&
         receipt.workspaceId === workspaceId &&
+        receipt.projectId === projectId &&
         receipt.role === input.role;
       if (!matches) {
         throw new Error(
@@ -114,36 +234,72 @@ export async function activateControlPlaneMember(
       }
       return {
         userId: identityId,
+        scopeKind: input.scopeKind,
         workspaceId,
+        projectId,
         role: input.role,
         alreadyActivated: true,
         membershipCreated: false,
       } as const;
     }
 
-    const [mappedUser, identityUser, emailUser, workspace] = await Promise.all([
-      tx.query.users.findFirst({
-        where: eq(users.controlPlaneUserId, controlPlaneUserId),
-        columns: { id: true },
-      }),
-      tx.query.users.findFirst({
-        where: eq(users.id, identityId),
-        columns: { id: true, controlPlaneUserId: true },
-      }),
-      tx.query.users.findFirst({
-        where: eq(users.email, email),
-        columns: { id: true },
-      }),
-      tx.query.workspaces.findFirst({
-        where: eq(workspaces.id, workspaceId),
-        columns: { id: true },
-      }),
-    ]);
+    const [mappedUser, identityUser, emailUser, workspace, project] =
+      await Promise.all([
+        tx.query.users.findFirst({
+          where: eq(users.controlPlaneUserId, controlPlaneUserId),
+          columns: { id: true },
+        }),
+        tx.query.users.findFirst({
+          where: eq(users.id, identityId),
+          columns: { id: true, controlPlaneUserId: true },
+        }),
+        tx.query.users.findFirst({
+          where: eq(users.email, email),
+          columns: { id: true },
+        }),
+        workspaceId
+          ? tx.query.workspaces.findFirst({
+              where: eq(workspaces.id, workspaceId),
+              columns: { id: true, systemSlug: true, archivedAt: true },
+            })
+          : Promise.resolve(undefined),
+        projectId
+          ? tx.query.projects.findFirst({
+              where: eq(projects.id, projectId),
+              columns: { id: true, workspaceId: true, status: true },
+            })
+          : Promise.resolve(undefined),
+      ]);
 
-    if (!workspace) {
+    if (workspaceId && !workspace) {
       throw new Error(
         "activateControlPlaneMember: requested workspace does not exist"
       );
+    }
+    if (workspace?.archivedAt || workspace?.systemSlug) {
+      throw new Error(
+        "activateControlPlaneMember: requested workspace cannot accept external members"
+      );
+    }
+    if (projectId && (!project || project.status !== "active")) {
+      throw new Error(
+        "activateControlPlaneMember: requested project is not active"
+      );
+    }
+    if (project?.workspaceId) {
+      const parentWorkspace = await tx.query.workspaces.findFirst({
+        where: eq(workspaces.id, project.workspaceId),
+        columns: { systemSlug: true, archivedAt: true },
+      });
+      if (
+        !parentWorkspace ||
+        parentWorkspace.archivedAt ||
+        parentWorkspace.systemSlug
+      ) {
+        throw new Error(
+          "activateControlPlaneMember: project belongs to an unavailable workspace"
+        );
+      }
     }
     if (mappedUser && mappedUser.id !== identityId) {
       throw new Error(
@@ -190,43 +346,57 @@ export async function activateControlPlaneMember(
         },
       });
 
-    const existingMembership = await tx.query.workspaceMembers.findFirst({
-      where: and(
-        eq(workspaceMembers.userId, identityId),
-        eq(workspaceMembers.workspaceId, workspaceId)
-      ),
-      columns: { id: true, role: true },
-    });
+    const existingMembership = workspaceId
+      ? await tx.query.workspaceMembers.findFirst({
+          where: and(
+            eq(workspaceMembers.userId, identityId),
+            eq(workspaceMembers.workspaceId, workspaceId)
+          ),
+          columns: { id: true, role: true },
+        })
+      : await tx.query.projectMembers.findFirst({
+          where: and(
+            eq(projectMembers.userId, identityId),
+            eq(projectMembers.projectId, projectId!)
+          ),
+          columns: { id: true, role: true },
+        });
     const membershipCreated = !existingMembership;
     if (!existingMembership) {
-      await tx.insert(workspaceMembers).values({
-        workspaceId,
-        userId: identityId,
-        role: input.role,
-      });
-    } else if (
-      existingMembership.role !== "owner" &&
-      existingMembership.role !== input.role
-    ) {
-      // CP is authoritative for invited-member roles, but a pre-existing owner
-      // can never be silently demoted by an invite retry.
-      await tx
-        .update(workspaceMembers)
-        .set({ role: input.role })
-        .where(eq(workspaceMembers.id, existingMembership.id));
+      if (workspaceId) {
+        await tx.insert(workspaceMembers).values({
+          workspaceId,
+          userId: identityId,
+          role: input.role,
+        });
+      } else {
+        await tx.insert(projectMembers).values({
+          projectId: projectId!,
+          userId: identityId,
+          role: input.role,
+        });
+      }
+    } else if (existingMembership.role !== input.role) {
+      throw new Error(
+        "activateControlPlaneMember: existing Pod role differs from the requested grant"
+      );
     }
 
     await tx.insert(controlPlaneMemberActivations).values({
       activationId,
       controlPlaneUserId,
       userId: identityId,
+      scopeKind: input.scopeKind,
       workspaceId,
+      projectId,
       role: input.role,
     });
 
     return {
       userId: identityId,
+      scopeKind: input.scopeKind,
       workspaceId,
+      projectId,
       role: input.role,
       alreadyActivated: false,
       membershipCreated,
@@ -238,10 +408,12 @@ export async function activateControlPlaneMember(
       activationId,
       controlPlaneUserId,
       userId: result.userId,
+      scopeKind: result.scopeKind,
       workspaceId,
+      projectId,
       alreadyActivated: result.alreadyActivated,
     },
-    "activateControlPlaneMember: member projected into requested workspace"
+    "activateControlPlaneMember: member projected into requested scope"
   );
   return result;
 }
@@ -270,15 +442,38 @@ export async function seedAdminUser(
   if (!identityId) {
     throw new Error("seedAdminUser: kratosIdentityId is required");
   }
+  const controlPlaneUserId = input.controlPlaneUserId?.trim() || null;
   const name = input.name?.trim() || undefined;
   const emailVerified = input.emailVerified ?? true;
 
   const { workspaceId, alreadyExisted } = await db.transaction(async (tx) => {
     // Detect pre-existing users row for accurate alreadyExisted reporting.
-    const existingUser = await tx.query.users.findFirst({
-      where: eq(users.id, identityId),
-      columns: { id: true },
-    });
+    const [existingUser, mappedUser] = await Promise.all([
+      tx.query.users.findFirst({
+        where: eq(users.id, identityId),
+        columns: { id: true, controlPlaneUserId: true },
+      }),
+      controlPlaneUserId
+        ? tx.query.users.findFirst({
+            where: eq(users.controlPlaneUserId, controlPlaneUserId),
+            columns: { id: true },
+          })
+        : Promise.resolve(undefined),
+    ]);
+    if (mappedUser && mappedUser.id !== identityId) {
+      throw new Error(
+        "seedAdminUser: Control Plane account is already mapped to another Pod identity"
+      );
+    }
+    if (
+      existingUser?.controlPlaneUserId &&
+      controlPlaneUserId &&
+      existingUser.controlPlaneUserId !== controlPlaneUserId
+    ) {
+      throw new Error(
+        "seedAdminUser: Pod identity is already mapped to another Control Plane account"
+      );
+    }
 
     // Upsert users row. Kratos identity id is the canonical primary key.
     await tx
@@ -290,6 +485,7 @@ export async function seedAdminUser(
         emailVerified,
         userType: "human",
         kratosIdentityId: identityId,
+        ...(controlPlaneUserId ? { controlPlaneUserId } : {}),
         lastSyncedAt: new Date(),
       })
       .onConflictDoUpdate({
@@ -300,6 +496,7 @@ export async function seedAdminUser(
           emailVerified,
           userType: "human",
           kratosIdentityId: identityId,
+          ...(controlPlaneUserId ? { controlPlaneUserId } : {}),
           lastSyncedAt: new Date(),
           updatedAt: new Date(),
         },

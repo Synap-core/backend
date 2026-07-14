@@ -2560,6 +2560,32 @@ export const workspacesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // CRM workspace creation is an explicit Pod-owner action. The frontend
+      // also hides the action for members, but this server gate is the source
+      // of truth and prevents direct API calls from bypassing that policy.
+      if (input.appId === "crm" && !input.workspaceId) {
+        const podAdminWorkspace = await db.query.workspaces.findFirst({
+          where: eq(workspaces.systemSlug, "pod-admin"),
+          columns: { id: true },
+        });
+        const podAdminMembership = podAdminWorkspace
+          ? await db.query.workspaceMembers.findFirst({
+              where: and(
+                eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
+                eq(workspaceMembers.userId, ctx.userId),
+                inArray(workspaceMembers.role, ["owner", "admin"])
+              ),
+              columns: { id: true },
+            })
+          : null;
+        if (!podAdminMembership) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only a Pod owner can create a CRM workspace.",
+          });
+        }
+      }
+
       // Enforce tier access before creating. Self-hosted pods (no CP configured)
       // are always allowed. Throws FORBIDDEN if tier is insufficient.
       if (input.packageSlug) {

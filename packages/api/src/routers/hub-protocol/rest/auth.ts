@@ -19,7 +19,14 @@
 
 import { createRoute } from "@hono/zod-openapi";
 import jwt from "jsonwebtoken";
-import { db, apiKeys, users, eq, TrustedIssuerService } from "@synap/database";
+import {
+  db,
+  apiKeys,
+  users,
+  eq,
+  TrustedIssuerService,
+  TRUSTED_ISSUER_CAPABILITIES,
+} from "@synap/database";
 
 import { shortenKeyId } from "../../../utils/auth-error.js";
 import { verifyCpJwt } from "../../../utils/jwks-client.js";
@@ -168,7 +175,7 @@ export function registerAuthRoutes(app: HubHono): void {
 // is also rejected. Skipped for Phase 3 — single-node pods are fine.
 
 const GRANT_TYPE_JWT_BEARER = "urn:ietf:params:oauth:grant-type:jwt-bearer";
-const REQUIRED_ISSUER_SCOPE = "auth:exchange-user";
+const REQUIRED_ISSUER_SCOPE = TRUSTED_ISSUER_CAPABILITIES.USER_EXCHANGE;
 const MAX_ASSERTION_LIFETIME_SECONDS = 300; // 5 minutes
 const SESSION_LIFETIME_SECONDS = 86400; // 24h — Kratos default; informational only
 

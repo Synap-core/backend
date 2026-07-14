@@ -18,6 +18,21 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
+/**
+ * Pod-side capabilities granted to an external JWT issuer.
+ *
+ * Authentication and access mutation are deliberately separate: trusting an
+ * issuer to vouch for an already-linked user must never implicitly authorize
+ * that issuer to create Pod memberships.
+ */
+export const TRUSTED_ISSUER_CAPABILITIES = {
+  USER_EXCHANGE: "auth:exchange-user",
+  MEMBER_ACTIVATION: "membership:activate",
+} as const;
+
+export type TrustedIssuerCapability =
+  (typeof TRUSTED_ISSUER_CAPABILITIES)[keyof typeof TRUSTED_ISSUER_CAPABILITIES];
+
 export const trustedIssuers = pgTable("trusted_issuers", {
   id: uuid("id").primaryKey().defaultRandom(),
   issuerUrl: text("issuer_url").notNull().unique(),

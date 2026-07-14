@@ -58,6 +58,7 @@ import {
 } from "@synap/jobs";
 import crypto from "crypto";
 import { verifyCpJwtWithTrust } from "@synap/api";
+import { TRUSTED_ISSUER_CAPABILITIES } from "@synap/database";
 import {
   rateLimitMiddleware,
   aiRateLimitMiddleware,
@@ -815,7 +816,15 @@ app.post("/api/handshake", async (c) => {
       trialEnd?: string;
       /** Signed CP-selected workspace for a managed member session. */
       activeWorkspaceId?: string;
-    }>(token, { pinnedIssuer: issuerUrl, audience: podPublicUrl });
+      /** Signed CP-selected project. Project membership is independently authoritative. */
+      activeProjectId?: string;
+      /** Whether the CP relationship owns this Pod or only has member access. */
+      accessRelationship?: "owner" | "member";
+    }>(token, {
+      pinnedIssuer: issuerUrl,
+      audience: podPublicUrl,
+      requiredScope: TRUSTED_ISSUER_CAPABILITIES.USER_EXCHANGE,
+    });
 
     if (!payload) {
       apiLogger.warn(
@@ -853,6 +862,8 @@ app.post("/api/handshake", async (c) => {
       return c.json({ error: "Token missing email claim" }, 400);
     }
     const activeWorkspaceId = payload.activeWorkspaceId?.trim();
+    const activeProjectId = payload.activeProjectId?.trim();
+    const accessRelationship = payload.accessRelationship;
     if (
       activeWorkspaceId &&
       !z.string().uuid().safeParse(activeWorkspaceId).success
@@ -861,6 +872,12 @@ app.post("/api/handshake", async (c) => {
         { error: "Token contains an invalid active workspace" },
         400
       );
+    }
+    if (
+      activeProjectId &&
+      !z.string().uuid().safeParse(activeProjectId).success
+    ) {
+      return c.json({ error: "Token contains an invalid active project" }, 400);
     }
 
     const kratosAdminUrl =
@@ -928,22 +945,18 @@ app.post("/api/handshake", async (c) => {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // 2. No identity → behavior depends on pod mode.
+    // 2. A handshake only connects an existing Pod identity.
     //
-    // Dedicated pods:
-    //   Identity MUST already exist — seeded by /api/provision/seed-admin
-    //   during provisioning. Missing identity = provisioning incomplete.
-    //   Return 403 so the client shows "reseed required" rather than 500.
-    //
-    // Shared pods:
-    //   No provisioning flow. Auto-create on first handshake.
+    // Account and workspace creation are explicit setup actions. Authentication
+    // must never create either one as a side effect: after connecting, the app
+    // lists compatible workspaces and may offer creation to owners separately.
     // ──────────────────────────────────────────────────────────────────
     if (!identityId) {
-      // A managed member token is never an identity-provisioning capability.
-      // It must follow a completed CP activation command, otherwise a forged
-      // or out-of-order handshake on a shared pod could create an orphan
-      // Kratos identity before its grant is rejected below.
-      if (activeWorkspaceId) {
+      if (
+        activeWorkspaceId ||
+        activeProjectId ||
+        accessRelationship === "member"
+      ) {
         return c.json(
           {
             error:
@@ -953,157 +966,151 @@ app.post("/api/handshake", async (c) => {
           403
         );
       }
-      if (!config.server.sharedPodMode) {
+      apiLogger.warn(
+        { email },
+        "Handshake: no existing Kratos identity for Control Plane user"
+      );
+      return c.json(
+        {
+          error: "account_not_set_up",
+          code: "IDENTITY_NOT_FOUND",
+          message: "No account exists for this email on this pod.",
+          setupRequired: true,
+        },
+        403
+      );
+    }
+
+    // A signed active workspace/project is a managed-member handshake. Its
+    // identity and exact membership MUST have been projected earlier by
+    // /provision/activate-member.
+    // Authentication never falls back to user or workspace creation here.
+    try {
+      const { getDb, and, eq } = await import("@synap/database");
+      const { users, workspaceMembers, projectMembers, projects, workspaces } =
+        await import("@synap/database/schema");
+      const handshakeDb = await getDb();
+      const podUser = await handshakeDb.query.users.findFirst({
+        where: eq(users.id, identityId),
+        columns: { controlPlaneUserId: true },
+      });
+      let exactAccess = false;
+      if (activeProjectId) {
+        const project = await handshakeDb.query.projects.findFirst({
+          where: eq(projects.id, activeProjectId),
+          columns: { workspaceId: true, status: true },
+        });
+        const membership = await handshakeDb.query.projectMembers.findFirst({
+          where: and(
+            eq(projectMembers.userId, identityId),
+            eq(projectMembers.projectId, activeProjectId)
+          ),
+          columns: { id: true },
+        });
+        const parentWorkspace = project?.workspaceId
+          ? await handshakeDb.query.workspaces.findFirst({
+              where: eq(workspaces.id, project.workspaceId),
+              columns: { archivedAt: true, systemSlug: true },
+            })
+          : null;
+        const parentAvailable = project?.workspaceId
+          ? Boolean(
+              parentWorkspace &&
+              !parentWorkspace.archivedAt &&
+              !parentWorkspace.systemSlug
+            )
+          : true;
+        exactAccess = Boolean(
+          membership &&
+          project?.status === "active" &&
+          parentAvailable &&
+          (!activeWorkspaceId || project.workspaceId === activeWorkspaceId)
+        );
+      } else if (activeWorkspaceId) {
+        const [workspace, membership] = await Promise.all([
+          handshakeDb.query.workspaces.findFirst({
+            where: eq(workspaces.id, activeWorkspaceId),
+            columns: { archivedAt: true, systemSlug: true },
+          }),
+          handshakeDb.query.workspaceMembers.findFirst({
+            where: and(
+              eq(workspaceMembers.userId, identityId),
+              eq(workspaceMembers.workspaceId, activeWorkspaceId)
+            ),
+            columns: { id: true },
+          }),
+        ]);
+        exactAccess = Boolean(
+          membership &&
+          workspace &&
+          !workspace.archivedAt &&
+          !workspace.systemSlug
+        );
+      } else {
+        const [workspaceMembership, activeProjectMembership] =
+          await Promise.all([
+            handshakeDb.query.workspaceMembers.findFirst({
+              where: eq(workspaceMembers.userId, identityId),
+              columns: { id: true },
+            }),
+            handshakeDb
+              .select({ id: projectMembers.id })
+              .from(projectMembers)
+              .innerJoin(projects, eq(projects.id, projectMembers.projectId))
+              .where(
+                and(
+                  eq(projectMembers.userId, identityId),
+                  eq(projects.status, "active")
+                )
+              )
+              .limit(1),
+          ]);
+        exactAccess = Boolean(
+          workspaceMembership || activeProjectMembership.length > 0
+        );
+      }
+
+      if (
+        !podUser ||
+        podUser.controlPlaneUserId !== payload.sub ||
+        !exactAccess
+      ) {
         apiLogger.warn(
-          { email },
-          "Handshake: no Kratos identity for email on dedicated pod — provisioning incomplete (seed-admin must be re-run)"
+          {
+            identityId,
+            activeWorkspaceId,
+            activeProjectId,
+            controlPlaneUserId: payload.sub,
+          },
+          "Managed handshake rejected: CP mapping or exact Pod grant is absent"
         );
         return c.json(
           {
-            error: "account_not_set_up",
-            code: "IDENTITY_NOT_FOUND",
-            message:
-              "No account exists for this email on this pod. The pod may need to be re-provisioned (reseed-admin from the control plane dashboard).",
-            setupRequired: true,
+            error:
+              "This Control Plane account is not active in the requested Pod scope",
+            code: "CP_MEMBER_GRANT_NOT_ACTIVE",
           },
           403
         );
       }
-
-      // Shared pod path — auto-create identity. Handshake always uses the
-      // admin API to create sessions, so the password is never needed.
       apiLogger.info(
-        { email },
-        "Handshake (shared pod): auto-creating Kratos identity"
-      );
-      const placeholderPassword = crypto.randomBytes(32).toString("base64url");
-      let createResp: Response;
-      try {
-        createResp = await fetch(`${kratosAdminUrl}/admin/identities`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            schema_id: "default",
-            traits: { email },
-            credentials: {
-              password: { config: { password: placeholderPassword } },
-            },
-            metadata_public: {
-              createdVia: "handshake-shared",
-              createdAt: new Date().toISOString(),
-            },
-            verifiable_addresses: [
-              {
-                value: email,
-                verified: true,
-                via: "email",
-                status: "completed",
-              },
-            ],
-          }),
-          signal: AbortSignal.timeout(8_000),
-        });
-      } catch (err) {
-        apiLogger.error(
-          { err },
-          "Handshake: Kratos identity create threw (network)"
-        );
-        return c.json(
-          { error: "auth_service_unavailable", code: "KRATOS_UNREACHABLE" },
-          503
-        );
-      }
-      if (!createResp.ok) {
-        const errBody = await createResp.text();
-        apiLogger.error(
-          { status: createResp.status, body: errBody.slice(0, 500) },
-          "Handshake: failed to create Kratos identity on shared pod"
-        );
-        return c.json(
-          {
-            error: "Failed to provision user account",
-            code: "KRATOS_CREATE_FAILED",
-            detail: errBody.slice(0, 200),
-          },
-          500
-        );
-      }
-      const newIdentity = (await createResp.json()) as { id: string };
-      identityId = newIdentity.id;
-    }
-
-    // A signed active workspace is a managed-member handshake. Its identity and
-    // membership MUST have been projected earlier by /provision/activate-member.
-    // Do not fall back to seedAdminUser here: that helper creates a personal
-    // workspace/owner membership, which would leak a default space into a
-    // CRM-only invite. Legacy local/owner handshakes retain their existing
-    // provisioning behavior below.
-    try {
-      if (activeWorkspaceId) {
-        const { getDb, and, eq } = await import("@synap/database");
-        const { users, workspaceMembers } =
-          await import("@synap/database/schema");
-        const handshakeDb = await getDb();
-        const podUser = await handshakeDb.query.users.findFirst({
-          where: eq(users.id, identityId),
-          columns: { controlPlaneUserId: true },
-        });
-        const membership = await handshakeDb.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.userId, identityId),
-            eq(workspaceMembers.workspaceId, activeWorkspaceId)
-          ),
-          columns: { id: true },
-        });
-        if (
-          !podUser ||
-          podUser.controlPlaneUserId !== payload.sub ||
-          !membership
-        ) {
-          apiLogger.warn(
-            { identityId, activeWorkspaceId, controlPlaneUserId: payload.sub },
-            "Managed handshake rejected: CP mapping or workspace grant is absent"
-          );
-          return c.json(
-            {
-              error:
-                "This Control Plane account is not active in the requested workspace",
-              code: "CP_MEMBER_GRANT_NOT_ACTIVE",
-            },
-            403
-          );
-        }
-        apiLogger.info(
-          { email, identityId, activeWorkspaceId },
-          "Handshake accepted managed workspace grant"
-        );
-      } else {
-        const { seedAdminUser } = await import("@synap/database");
-        const seedResult = await seedAdminUser({
-          kratosIdentityId: identityId,
+        {
           email,
-          name: payload.name,
-          emailVerified: true,
-        });
-        apiLogger.info(
-          {
-            email,
-            identityId,
-            workspaceId: seedResult.workspaceId,
-            alreadyExisted: seedResult.alreadyExisted,
-          },
-          "Handshake ensured DB user and workspace membership"
-        );
-      }
+          identityId,
+          activeWorkspaceId,
+          activeProjectId,
+        },
+        "Handshake accepted existing explicitly linked Pod user"
+      );
     } catch (err) {
       apiLogger.error(
         { err, email, identityId },
-        "Handshake failed to ensure DB user/workspace membership"
+        "Handshake failed to verify the existing Pod relationship"
       );
       return c.json(
         {
-          error: "Failed to provision pod workspace",
-          code: "DB_WORKSPACE_SEED_FAILED",
+          error: "Failed to verify Pod access",
+          code: "DB_ACCESS_CHECK_FAILED",
         },
         500
       );

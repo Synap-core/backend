@@ -153,7 +153,9 @@ export class TrustedIssuerService {
    *
    * For each entry:
    * - If no row exists → insert with status "approved" and isBuiltIn = true.
-   * - If a row already exists → do nothing (never downgrade approved → pending).
+   * - If a built-in row already exists → add newly required built-in scopes
+   *   without removing any operator-approved scope.
+   * - If a non-built-in row already exists → leave it untouched.
    *
    * Safe to call on every pod boot — fully idempotent.
    */
@@ -168,7 +170,17 @@ export class TrustedIssuerService {
     for (const entry of entries) {
       const existing = await this.getByUrl(entry.issuerUrl);
       if (existing) {
-        // Already in the registry — leave it untouched (admin may have customised it)
+        if (existing.isBuiltIn) {
+          const allowedScopes = Array.from(
+            new Set([...existing.allowedScopes, ...entry.allowedScopes])
+          );
+          if (allowedScopes.length !== existing.allowedScopes.length) {
+            await db
+              .update(trustedIssuers)
+              .set({ allowedScopes, updatedAt: new Date() })
+              .where(eq(trustedIssuers.id, existing.id));
+          }
+        }
         continue;
       }
 

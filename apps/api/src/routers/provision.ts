@@ -10,13 +10,14 @@
  *   POST /api/provision/register-intelligence — IS self-registers its API key via CP-signed JWT
  *   POST /api/provision/reset-intelligence    — Clear stale IS registration (CP-JWT auth)
  *   POST /api/provision/seed-admin            — Atomic admin seeding (Kratos + users + workspace)
- *   POST /api/provision/activate-member        — Project a CP member grant into one workspace
+ *   POST /api/provision/activate-member        — Project a CP member grant into one exact scope
  *   POST /api/provision/admin-recovery-link   — Generate Kratos password-recovery link for admin (CP-JWT auth)
  *   GET  /api/provision/status                — Public status check (includes IS credential probe)
  *   POST /api/provision/disconnect            — Remove CP connection (admin only, uses CP JWT)
  *
  * Auth model:
- *   All mutating calls use a short-lived ES256 JWT signed by the Control Plane.
+ *   CP-originated mutations use a short-lived ES256 JWT. `/authorize-issuer`
+ *   instead requires both a direct Pod session and a signed CP bind assertion.
  *   Pods verify via CONTROL_PLANE_URL/.well-known/jwks.json (pinned at install time).
  *   seed-trust uses a "seed-trust"-typed JWT (trust registry empty on first call, so
  *   verification uses the pinned JWKS directly rather than the registry).
@@ -28,6 +29,7 @@ import { z } from "zod";
 import { randomUUID, randomBytes } from "crypto";
 import bcrypt from "bcrypt";
 import { createLogger } from "@synap-core/core";
+import { authMiddleware } from "@synap/auth";
 import {
   createAndVerifyHubInboundKey,
   toRegistrationTrace,
@@ -38,26 +40,36 @@ import {
   getDb,
   eq,
   and,
+  isNull,
   drizzleSql,
   EventRepository,
   ApiKeyRepository,
   sql,
   seedAdminUser,
   activateControlPlaneMember,
+  bindExistingControlPlaneUser,
   TrustedIssuerService,
+  TRUSTED_ISSUER_CAPABILITIES,
 } from "@synap/database";
 import {
   workspaces,
   intelligenceServices,
   users,
   workspaceMembers,
+  projects,
+  projectMembers,
   apiKeys,
 } from "@synap/database/schema";
 import { encryptServiceKey, resolveServiceKey } from "@synap/api";
 import { getSyncGenerationState } from "@synap/api";
+import { projectPodUserAccess } from "./provision-access.js";
 
 const logger = createLogger({ module: "provision" });
 const OPENCLAW_HUB_SCOPES = ["hub-protocol.read", "hub-protocol.write"];
+const CONTROL_PLANE_ISSUER_SCOPES = [
+  TRUSTED_ISSUER_CAPABILITIES.USER_EXCHANGE,
+  TRUSTED_ISSUER_CAPABILITIES.MEMBER_ACTIVATION,
+] as const;
 
 /**
  * Reports whether the pod's SMTP courier is wired to a real relay.
@@ -103,6 +115,281 @@ function courierStatus(): {
 
 export const provisionRouter = new Hono();
 
+// ─── POST /api/provision/authorize-issuer ───────────────────────────────────
+//
+// A locally authenticated Pod owner may explicitly authorize a generic issuer.
+// This is the safe bridge used when an existing self-hosted Pod is attached to
+// a Control Plane: the Pod remains authoritative for trust, while the CP only
+// orchestrates the request using the caller's one-time direct Pod session.
+//
+// Existing approved issuers are idempotently accepted for every authenticated
+// user; creating or re-approving trust requires an owner membership. Every
+// successful response includes the caller's Pod-authoritative access so the CP
+// can mirror the relationship without inventing broader permissions.
+provisionRouter.post("/authorize-issuer", authMiddleware, async (c) => {
+  const userId = c.get("userId" as never) as string | undefined;
+  if (!userId) return c.json({ error: "Unauthorized" }, 401);
+
+  const body = await c.req.json().catch(() => null);
+  const parsed = z
+    .object({
+      issuerUrl: z.string().url(),
+      podId: z.string().min(1),
+      bindingToken: z.string().min(1),
+    })
+    .safeParse(body);
+  if (!parsed.success) {
+    return c.json(
+      {
+        error: "issuerUrl, podId, and a signed bindingToken are required",
+      },
+      400
+    );
+  }
+
+  let issuerUrl: string;
+  let displayName: string;
+  try {
+    const url = new URL(parsed.data.issuerUrl);
+    const localDevelopmentIssuer =
+      url.protocol === "http:" &&
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+    if (url.protocol !== "https:" && !localDevelopmentIssuer) {
+      return c.json({ error: "Issuer must use HTTPS" }, 400);
+    }
+    if (
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      url.pathname !== "/"
+    ) {
+      return c.json(
+        {
+          error:
+            "Issuer URL must be an origin without credentials, path, query, or fragment",
+        },
+        400
+      );
+    }
+    issuerUrl = url.origin;
+    displayName = url.hostname;
+  } catch {
+    return c.json({ error: "issuerUrl is invalid" }, 400);
+  }
+
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
+  }
+
+  const bindingPayload = await verifyCpJwt<{
+    type: string;
+    sub: string;
+    email: string;
+    podId: string;
+  }>(parsed.data.bindingToken, issuerUrl, podPublicUrl);
+  const bindingClaims = z
+    .object({
+      type: z.literal("bind_user"),
+      sub: z.string().min(1),
+      email: z.string().email(),
+      podId: z.string().min(1),
+    })
+    .safeParse(bindingPayload);
+  if (
+    !bindingClaims.success ||
+    bindingClaims.data.podId !== parsed.data.podId
+  ) {
+    return c.json({ error: "Invalid Control Plane binding assertion" }, 401);
+  }
+
+  try {
+    const svc = new TrustedIssuerService();
+    const existing = await svc.getByUrl(issuerUrl);
+    const db = await getDb();
+    const [podUser, memberships, projectMemberships, podWorkspaces] =
+      await Promise.all([
+        db.query.users.findFirst({
+          where: eq(users.id, userId),
+          columns: { id: true, email: true },
+        }),
+        db
+          .select({
+            workspaceId: workspaceMembers.workspaceId,
+            role: workspaceMembers.role,
+            systemSlug: workspaces.systemSlug,
+          })
+          .from(workspaceMembers)
+          .innerJoin(
+            workspaces,
+            eq(workspaces.id, workspaceMembers.workspaceId)
+          )
+          .where(
+            and(
+              eq(workspaceMembers.userId, userId),
+              isNull(workspaces.archivedAt)
+            )
+          ),
+        db
+          .select({
+            projectId: projectMembers.projectId,
+            workspaceId: projects.workspaceId,
+            role: projectMembers.role,
+            status: projects.status,
+            workspaceArchivedAt: workspaces.archivedAt,
+            workspaceSystemSlug: workspaces.systemSlug,
+          })
+          .from(projectMembers)
+          .innerJoin(projects, eq(projects.id, projectMembers.projectId))
+          .leftJoin(workspaces, eq(workspaces.id, projects.workspaceId))
+          .where(eq(projectMembers.userId, userId)),
+        db.query.workspaces.findMany({
+          columns: { id: true, settings: true, systemSlug: true },
+        }),
+      ]);
+    if (!podUser) {
+      return c.json({ error: "Authenticated Pod user was not found" }, 403);
+    }
+    if (
+      podUser.email.trim().toLowerCase() !==
+      bindingClaims.data.email.trim().toLowerCase()
+    ) {
+      return c.json(
+        {
+          error: "Binding assertion does not match the authenticated Pod user",
+        },
+        403
+      );
+    }
+
+    const access = projectPodUserAccess(memberships, projectMemberships);
+    const registrations = podWorkspaces.flatMap((workspace) => {
+      const controlPlane = (
+        workspace.settings as Record<string, unknown> | null
+      )?.controlPlane as { url?: string; podId?: string } | undefined;
+      return controlPlane?.url || controlPlane?.podId
+        ? [{ workspaceId: workspace.id, ...controlPlane }]
+        : [];
+    });
+    const registrationConflict = registrations.some(
+      (registration) =>
+        (registration.url && registration.url !== issuerUrl) ||
+        (registration.podId && registration.podId !== parsed.data.podId)
+    );
+    if (registrationConflict) {
+      return c.json(
+        {
+          error:
+            "This Pod is already registered to a different Control Plane relationship",
+        },
+        409
+      );
+    }
+    const registrationMatches = registrations.some(
+      (registration) =>
+        registration.url === issuerUrl &&
+        registration.podId === parsed.data.podId
+    );
+    const alreadyApproved =
+      existing?.status === "approved" &&
+      CONTROL_PLANE_ISSUER_SCOPES.every((scope) =>
+        existing.allowedScopes.includes(scope)
+      );
+
+    const ownerMembership =
+      access.podRole === "owner" || access.podRole === "admin";
+    if ((!alreadyApproved || !registrationMatches) && !ownerMembership) {
+      return c.json(
+        {
+          error:
+            "A Pod owner must approve and register this Control Plane before members can connect",
+        },
+        403
+      );
+    }
+
+    if (!alreadyApproved) {
+      const issuer =
+        existing ??
+        (await svc.registerPending(issuerUrl, displayName, {
+          requestedVia: "pod-owner-session",
+          podId: parsed.data.podId,
+        }));
+      await svc.approve(
+        issuer.id,
+        userId,
+        Array.from(
+          new Set([...issuer.allowedScopes, ...CONTROL_PLANE_ISSUER_SCOPES])
+        )
+      );
+    }
+
+    if (!registrationMatches) {
+      const registrationWorkspace =
+        podWorkspaces.find(
+          (workspace) => workspace.systemSlug === "pod-admin"
+        ) ?? podWorkspaces[0];
+      if (!registrationWorkspace) {
+        return c.json({ error: "Pod has no workspace for registration" }, 409);
+      }
+      const settings =
+        (registrationWorkspace.settings as Record<string, unknown>) ?? {};
+      const current =
+        (settings.controlPlane as Record<string, unknown> | undefined) ?? {};
+      await db
+        .update(workspaces)
+        .set({
+          settings: {
+            ...settings,
+            controlPlane: {
+              ...current,
+              url: issuerUrl,
+              podId: parsed.data.podId,
+              connectedAt: current.connectedAt ?? new Date().toISOString(),
+            },
+          } as typeof registrationWorkspace.settings,
+          updatedAt: new Date(),
+        })
+        .where(eq(workspaces.id, registrationWorkspace.id));
+    }
+
+    const binding = await bindExistingControlPlaneUser({
+      controlPlaneUserId: bindingClaims.data.sub,
+      kratosIdentityId: userId,
+    });
+    if (binding.status !== "bound") {
+      return c.json(
+        { error: "Pod user could not be linked", reason: binding.reason },
+        409
+      );
+    }
+
+    logger.info(
+      {
+        issuerUrl,
+        podId: parsed.data.podId,
+        userId,
+        controlPlaneUserId: bindingClaims.data.sub,
+      },
+      "Pod user explicitly linked to approved Control Plane"
+    );
+    return c.json({
+      success: true,
+      issuerUrl,
+      podId: parsed.data.podId,
+      alreadyApproved,
+      access,
+    });
+  } catch (err) {
+    logger.error(
+      { err, issuerUrl, userId },
+      "Failed to authorize external issuer"
+    );
+    return c.json({ error: "Failed to authorize issuer" }, 500);
+  }
+});
+
 // ─── POST /api/provision/seed-trust ─────────────────────────────────────────
 //
 // Bootstrap endpoint: the Control Plane introduces itself to the pod as a
@@ -129,10 +416,9 @@ export const provisionRouter = new Hono();
 // Idempotent — safe to call multiple times (seedBuiltIn is a no-op if already present).
 
 provisionRouter.post("/seed-trust", async (c) => {
-  // CONTROL_PLANE_URL is set at install time by install.sh on managed pods.
-  // On self-hosted pods (no CP), it may be empty — in that case we fall back to
-  // OIDC-style discovery: the JWT's own `iss` claim determines the JWKS URL.
-  // This lets any self-hosted CP connect as long as it signs a valid ES256 JWT.
+  // CONTROL_PLANE_URL is set through the trusted provisioning channel on
+  // managed Pods. Self-hosted Pods must use /authorize-issuer, where their
+  // locally authenticated Pod owner makes the trust decision explicitly.
   const cpUrl = process.env.CONTROL_PLANE_URL || undefined;
   const podPublicUrl = process.env.PUBLIC_URL;
 
@@ -147,9 +433,13 @@ provisionRouter.post("/seed-trust", async (c) => {
   }
 
   if (!cpUrl) {
-    logger.warn(
-      "seed-trust: CONTROL_PLANE_URL not set — using OIDC-style issuer discovery (self-hosted mode). " +
-        "Set CONTROL_PLANE_URL in .env to restrict to a single trusted CP."
+    logger.warn("seed-trust refused: CONTROL_PLANE_URL is not pinned");
+    return c.json(
+      {
+        error:
+          "This Pod has no preconfigured Control Plane. A Pod owner must authorize the issuer with /api/provision/authorize-issuer.",
+      },
+      409
     );
   }
 
@@ -159,10 +449,8 @@ provisionRouter.post("/seed-trust", async (c) => {
   }
   const token = authHeader.slice(7);
 
-  // Verify against JWKS — bypasses trust registry (which is empty at bootstrap).
-  // When cpUrl is set (managed pods): pins to the pre-configured CP URL.
-  // When cpUrl is undefined (self-hosted): reads `iss` from the unverified JWT
-  // header and fetches JWKS from {iss}/.well-known/jwks.json (OIDC discovery).
+  // Verify against the install-time pinned JWKS. This endpoint bypasses the
+  // registry only because it creates the initial registry row.
   const payload = await verifyCpJwt<{ type: string }>(
     token,
     cpUrl,
@@ -186,10 +474,7 @@ provisionRouter.post("/seed-trust", async (c) => {
   }
   const { issuerUrl } = parsed.data;
 
-  // When CONTROL_PLANE_URL is pinned: enforce that the issuerUrl in the body
-  // matches it — prevents a valid CP JWT from registering a different issuer URL.
-  // When not pinned (self-hosted): accept what the token's iss claim asserts.
-  if (cpUrl && issuerUrl !== cpUrl) {
+  if (issuerUrl !== cpUrl) {
     logger.warn(
       { issuerUrl, cpUrl },
       "seed-trust rejected: issuerUrl does not match CONTROL_PLANE_URL"
@@ -216,6 +501,8 @@ provisionRouter.post("/seed-trust", async (c) => {
           "sync",
           "hub-protocol.read",
           "hub-protocol.write",
+          TRUSTED_ISSUER_CAPABILITIES.USER_EXCHANGE,
+          TRUSTED_ISSUER_CAPABILITIES.MEMBER_ACTIVATION,
         ],
       },
     ]);
@@ -316,6 +603,7 @@ provisionRouter.post("/connect", async (c) => {
     // No pinnedIssuer — trust is gated by trusted_issuers registry (seeded by /seed-trust).
     // The JWT's own `iss` claim is matched against the registry by verifyCpJwtWithTrust.
     audience: podPublicUrl,
+    requiredScope: "provision",
   });
 
   if (!payload) {
@@ -340,13 +628,47 @@ provisionRouter.post("/connect", async (c) => {
 
   try {
     const db = await getDb();
-    const ws = await db.query.workspaces.findFirst();
+    const podWorkspaces = await db.query.workspaces.findMany();
+    const ws =
+      podWorkspaces.find((workspace) => workspace.systemSlug === "pod-admin") ??
+      podWorkspaces[0];
     if (!ws) {
       return c.json({ error: "No workspace found on this pod" }, 404);
     }
 
     const existing = (ws.settings as Record<string, unknown>) ?? {};
     const existingCp = (existing.controlPlane as Record<string, unknown>) ?? {};
+    const registrations = podWorkspaces.flatMap((workspace) => {
+      const controlPlane = (
+        workspace.settings as Record<string, unknown> | null
+      )?.controlPlane as { url?: string; podId?: string } | undefined;
+      return controlPlane?.url || controlPlane?.podId ? [controlPlane] : [];
+    });
+
+    if (
+      registrations.some(
+        (registration) =>
+          (registration.url && registration.url !== controlPlaneUrl) ||
+          (registration.podId && registration.podId !== podId)
+      )
+    ) {
+      logger.warn(
+        {
+          requestedPodId: podId,
+          registeredPodId: existingCp.podId,
+          requestedControlPlaneUrl: controlPlaneUrl,
+          registeredControlPlaneUrl: existingCp.url,
+        },
+        "Control Plane connection rebind refused"
+      );
+      return c.json(
+        {
+          error:
+            "Pod is already registered to a different Control Plane relationship",
+        },
+        409
+      );
+    }
 
     // Build the updated controlPlane settings block
     const updatedSettings: Record<string, unknown> = { ...existing };
@@ -822,7 +1144,7 @@ provisionRouter.post("/reset-intelligence", async (c) => {
 //
 // Auth: Bearer <cpJwt> — CP-signed ES256 JWT, verified via JWKS + Trusted
 //   Issuers registry (same chain as /connect). Claims:
-//     { type: "seed-admin", email: string, name?: string, aud: <pod PUBLIC_URL> }
+//     { type: "seed-admin", sub: CP user id, podId, email, name?, aud }
 //   Audience MUST equal this pod's PUBLIC_URL (mandatory — prevents replay
 //   against another pod). If PUBLIC_URL is unset, the endpoint 500s.
 //
@@ -858,14 +1180,58 @@ provisionRouter.post("/seed-admin", async (c) => {
     return c.json({ error: "Missing or invalid Authorization header" }, 401);
   }
 
+  let registeredPodId: string | undefined;
+  let registeredIssuerUrl: string | undefined;
+  try {
+    const db = await getDb();
+    const registrationWorkspaces = await db.query.workspaces.findMany({
+      columns: { settings: true },
+    });
+    const registrations = new Map(
+      registrationWorkspaces.flatMap((workspace) => {
+        const controlPlane = (
+          workspace.settings as Record<string, unknown> | null
+        )?.controlPlane as { url?: string; podId?: string } | undefined;
+        return controlPlane?.url && controlPlane.podId
+          ? [
+              [
+                `${controlPlane.url}\u0000${controlPlane.podId}`,
+                controlPlane,
+              ] as const,
+            ]
+          : [];
+      })
+    );
+    if (registrations.size !== 1) {
+      return c.json(
+        {
+          error:
+            registrations.size === 0
+              ? "Pod is not registered with the Control Plane"
+              : "Pod has conflicting Control Plane registrations",
+        },
+        409
+      );
+    }
+    const registration = registrations.values().next().value;
+    registeredPodId = registration?.podId;
+    registeredIssuerUrl = registration?.url;
+  } catch (err) {
+    logger.error({ err }, "seed-admin: failed to read Pod registration");
+    return c.json({ error: "Failed to validate Pod registration" }, 500);
+  }
+
   const payload = await verifyCpJwtWithTrust<{
     type: string;
+    sub: string;
+    podId: string;
     email: string;
     name?: string;
     aud: string;
   }>(token, {
-    // No pinnedIssuer — trust is gated by trusted_issuers registry (seeded by /seed-trust).
+    pinnedIssuer: registeredIssuerUrl,
     audience: podPublicUrl,
+    requiredScope: "provision",
   });
 
   if (!payload) {
@@ -882,11 +1248,25 @@ provisionRouter.post("/seed-admin", async (c) => {
     );
   }
 
-  const email = (payload.email ?? "").trim().toLowerCase();
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return c.json({ error: "Invalid or missing email in token claims" }, 400);
+  const seedClaims = z
+    .object({
+      sub: z.string().min(1),
+      podId: z.string().min(1),
+      email: z.string().email(),
+      name: z.string().max(500).optional(),
+    })
+    .safeParse(payload);
+  if (!seedClaims.success) {
+    return c.json({ error: "Invalid or missing seed-admin claims" }, 400);
   }
-  const name = payload.name?.trim() || undefined;
+
+  if (seedClaims.data.podId !== registeredPodId) {
+    return c.json({ error: "Token was not issued for this Pod" }, 403);
+  }
+
+  const controlPlaneUserId = seedClaims.data.sub;
+  const email = seedClaims.data.email.trim().toLowerCase();
+  const name = seedClaims.data.name?.trim() || undefined;
 
   // ── Resolve Kratos identity (find-or-create via admin API) ────────────────
   //
@@ -930,6 +1310,7 @@ provisionRouter.post("/seed-admin", async (c) => {
           },
           metadata_public: {
             createdVia: "provision-seed",
+            controlPlaneUserId,
             setupRequired: false,
             seededAt: new Date().toISOString(),
           },
@@ -978,6 +1359,7 @@ provisionRouter.post("/seed-admin", async (c) => {
   try {
     const result = await seedAdminUser({
       kratosIdentityId,
+      controlPlaneUserId,
       email,
       name,
       emailVerified: true,
@@ -1018,8 +1400,10 @@ provisionRouter.post("/seed-admin", async (c) => {
 //
 // Required JWT claims:
 // { type: "member_activation", podId, sub: controlPlaneUserId, email, name?,
-//   workspaceId, role: "admin"|"editor"|"viewer", activationId,
-//   aud: <pod PUBLIC_URL> }
+//   scopeKind: "workspace", workspaceId, role, activationId, aud }
+// or
+// { type: "member_activation", podId, sub: controlPlaneUserId, email, name?,
+//   scopeKind: "project", projectId, role, activationId, aud }
 //
 // activationId is CP-owned retry identity. The DB service makes replays of the
 // same command a no-op and rejects a reused id with different grant details.
@@ -1047,13 +1431,35 @@ provisionRouter.post("/activate-member", async (c) => {
   let registeredPodId: string | undefined;
   try {
     const db = await getDb();
-    const workspace = await db.query.workspaces.findFirst({
+    const registrationWorkspaces = await db.query.workspaces.findMany({
       columns: { settings: true },
     });
-    const controlPlane = (workspace?.settings as Record<string, unknown> | null)
-      ?.controlPlane as { url?: string; podId?: string } | undefined;
-    cpUrl = controlPlane?.url;
-    registeredPodId = controlPlane?.podId;
+    const registrations = registrationWorkspaces.flatMap((workspace) => {
+      const controlPlane = (
+        workspace.settings as Record<string, unknown> | null
+      )?.controlPlane as { url?: string; podId?: string } | undefined;
+      return controlPlane?.url && controlPlane.podId ? [controlPlane] : [];
+    });
+    const uniqueRegistrations = new Map(
+      registrations.map((registration) => [
+        `${registration.url}\u0000${registration.podId}`,
+        registration,
+      ])
+    );
+    if (uniqueRegistrations.size > 1) {
+      logger.error(
+        "activate-member refused: conflicting Control Plane registrations exist"
+      );
+      return c.json(
+        { error: "Pod has conflicting Control Plane registrations" },
+        409
+      );
+    }
+    const registration = uniqueRegistrations.values().next().value as
+      | { url: string; podId: string }
+      | undefined;
+    cpUrl = registration?.url;
+    registeredPodId = registration?.podId;
   } catch (err) {
     logger.warn(
       { err },
@@ -1067,10 +1473,16 @@ provisionRouter.post("/activate-member", async (c) => {
     sub: string;
     email: string;
     name?: string;
-    workspaceId: string;
+    scopeKind: "workspace" | "project";
+    workspaceId?: string;
+    projectId?: string;
     role: "admin" | "editor" | "viewer";
     activationId: string;
-  }>(token, { pinnedIssuer: cpUrl, audience: podPublicUrl });
+  }>(token, {
+    pinnedIssuer: cpUrl,
+    audience: podPublicUrl,
+    requiredScope: TRUSTED_ISSUER_CAPABILITIES.MEMBER_ACTIVATION,
+  });
   if (!payload) {
     logger.warn({ cpUrl }, "activate-member: token verification failed");
     return c.json({ error: "Invalid or expired member activation token" }, 401);
@@ -1098,15 +1510,26 @@ provisionRouter.post("/activate-member", async (c) => {
     return c.json({ error: "Token was not issued for this pod" }, 403);
   }
 
+  const claimBase = {
+    sub: z.string().min(1),
+    email: z.string().email(),
+    name: z.string().max(500).optional(),
+    role: z.enum(["admin", "editor", "viewer"]),
+    activationId: z.string().uuid(),
+  } as const;
   const claims = z
-    .object({
-      sub: z.string().min(1),
-      email: z.string().email(),
-      name: z.string().max(500).optional(),
-      workspaceId: z.string().uuid(),
-      role: z.enum(["admin", "editor", "viewer"]),
-      activationId: z.string().uuid(),
-    })
+    .discriminatedUnion("scopeKind", [
+      z.object({
+        ...claimBase,
+        scopeKind: z.literal("workspace"),
+        workspaceId: z.string().uuid(),
+      }),
+      z.object({
+        ...claimBase,
+        scopeKind: z.literal("project"),
+        projectId: z.string().uuid(),
+      }),
+    ])
     .safeParse(payload);
   if (!claims.success) {
     return c.json({ error: "Member activation token has invalid claims" }, 400);
@@ -1116,11 +1539,71 @@ provisionRouter.post("/activate-member", async (c) => {
     sub: controlPlaneUserId,
     email: rawEmail,
     name,
-    workspaceId,
+    scopeKind,
     role,
     activationId,
   } = claims.data;
+  const workspaceId =
+    claims.data.scopeKind === "workspace" ? claims.data.workspaceId : null;
+  const projectId =
+    claims.data.scopeKind === "project" ? claims.data.projectId : null;
   const email = rawEmail.trim().toLowerCase();
+
+  // Reject invalid or internal targets before creating a Kratos identity. The
+  // database service repeats these checks transactionally before writing the
+  // membership, but this early guard avoids an orphan auth identity.
+  try {
+    const db = await getDb();
+    if (workspaceId) {
+      const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspaceId),
+        columns: { id: true, systemSlug: true, archivedAt: true },
+      });
+      if (!workspace || workspace.archivedAt || workspace.systemSlug) {
+        return c.json(
+          { error: "Requested workspace cannot accept external members" },
+          403
+        );
+      }
+    } else if (projectId) {
+      const project = await db.query.projects.findFirst({
+        where: eq(projects.id, projectId),
+        columns: { id: true, workspaceId: true, status: true },
+      });
+      if (!project || project.status !== "active") {
+        return c.json({ error: "Requested project is not active" }, 403);
+      }
+      if (project.workspaceId) {
+        const parentWorkspace = await db.query.workspaces.findFirst({
+          where: eq(workspaces.id, project.workspaceId),
+          columns: { id: true, systemSlug: true, archivedAt: true },
+        });
+        if (
+          !parentWorkspace ||
+          parentWorkspace.archivedAt ||
+          parentWorkspace.systemSlug
+        ) {
+          return c.json(
+            {
+              error: "Requested project is not available for external members",
+            },
+            403
+          );
+        }
+      }
+    }
+  } catch (err) {
+    logger.error(
+      { err, scopeKind, workspaceId, projectId },
+      "activate-member: target lookup failed"
+    );
+    return c.json({ error: "Failed to validate activation target" }, 500);
+  }
+
+  /*
+   * Claims were validated as an exact discriminated scope above. Keep the
+   * auth-identity work below independent from workspace/project projection.
+   */
   const kratosAdminUrl =
     process.env.KRATOS_ADMIN_URL || "http://localhost:4434";
 
@@ -1193,21 +1676,41 @@ provisionRouter.post("/activate-member", async (c) => {
   }
 
   try {
-    const result = await activateControlPlaneMember({
-      activationId,
-      controlPlaneUserId,
-      kratosIdentityId: identityId,
-      email,
-      name,
-      workspaceId,
-      role,
-    });
+    const result =
+      scopeKind === "workspace"
+        ? await activateControlPlaneMember({
+            activationId,
+            controlPlaneUserId,
+            kratosIdentityId: identityId,
+            email,
+            name,
+            scopeKind,
+            workspaceId: workspaceId!,
+            role,
+          })
+        : await activateControlPlaneMember({
+            activationId,
+            controlPlaneUserId,
+            kratosIdentityId: identityId,
+            email,
+            name,
+            scopeKind,
+            projectId: projectId!,
+            role,
+          });
     return c.json({ success: true, ...result });
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Member activation failed";
     logger.warn(
-      { err, controlPlaneUserId, workspaceId, activationId },
+      {
+        err,
+        controlPlaneUserId,
+        scopeKind,
+        workspaceId,
+        projectId,
+        activationId,
+      },
       "activate-member: projection rejected"
     );
     return c.json({ error: message }, 409);

@@ -8,6 +8,7 @@
 import { pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { users } from "./users.js";
 import { workspaces } from "./workspaces.js";
+import { projects } from "./projects.js";
 
 export const controlPlaneMemberActivations = pgTable(
   "control_plane_member_activations",
@@ -17,9 +18,16 @@ export const controlPlaneMemberActivations = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
-    workspaceId: uuid("workspace_id")
+    scopeKind: text("scope_kind")
       .notNull()
-      .references(() => workspaces.id, { onDelete: "restrict" }),
+      .default("workspace")
+      .$type<"workspace" | "project">(),
+    workspaceId: uuid("workspace_id").references(() => workspaces.id, {
+      onDelete: "restrict",
+    }),
+    projectId: uuid("project_id").references(() => projects.id, {
+      onDelete: "restrict",
+    }),
     role: text("role").notNull(),
     activatedAt: timestamp("activated_at", {
       mode: "date",

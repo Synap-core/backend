@@ -298,6 +298,8 @@ export async function verifyCpJwtWithTrust<T extends object>(
   opts: {
     pinnedIssuer?: string;
     audience: string;
+    /** Optional registry scope required by this specific endpoint. */
+    requiredScope?: string;
   }
 ): Promise<T | null> {
   // Pin to the configured CP URL (set at install time) when not explicitly
@@ -336,6 +338,16 @@ export async function verifyCpJwtWithTrust<T extends object>(
       logger.warn(
         { issuerUrl: iss, status: entry.status },
         "verifyCpJwtWithTrust: issuer registry entry is not approved — rejected"
+      );
+      return null;
+    }
+    if (
+      opts.requiredScope &&
+      !entry.allowedScopes.includes(opts.requiredScope)
+    ) {
+      logger.warn(
+        { issuerUrl: iss, requiredScope: opts.requiredScope },
+        "verifyCpJwtWithTrust: issuer is not approved for the required scope — rejected"
       );
       return null;
     }
